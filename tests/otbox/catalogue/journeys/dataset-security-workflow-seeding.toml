@@ -1,0 +1,69 @@
+name = "dataset-security-workflow-seeding"
+description = """
+Dataset security seeding (plan 092 R5/R6, Track 2): a workflow declares a
+security contract in its front matter, and `dataset new --workflow` seeds the
+dataset manifest's resolved security policy from that contract, pinning the
+source workflow digest. The resolved policy enables required + default-enabled
+tools in canonical order. Dataset security is owned by the manifest, not global
+config.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["build-publishable-dataset"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "write_file"
+id = "write-workflow"
+path = "secure-workflow.md"
+content = """
+---
+name: secure-workflow
+description: Curate rows with a security contract
+security:
+  required_tools: [regex, entropy]
+  optional_tools: [business_logic, path_anonymizer]
+  default_enabled_tools: [business_logic]
+  allow_disable_required: false
+---
+
+# secure-workflow
+
+Emit rows matching the dataset schema.
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "secure-ds", "--workflow", "{project}/secure-workflow.md", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-new"
+path = "dataset.security.source"
+equals = "workflow"
+
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "dataset-new"
+path = "dataset.security.enabled_tools"
+equals = ["regex", "entropy", "business_logic"]
+
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "dataset-new"
+path = "dataset.security.required_tools"
+equals = ["regex", "entropy"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-new"
+path = "dataset.security.required_satisfied"
+equals = true

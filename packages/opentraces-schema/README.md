@@ -23,9 +23,13 @@ line = record.to_jsonl_line()
 
 ## Version
 
-The schema version (`0.6.0`) lives in `src/opentraces_schema/version.py` as the
+The schema version (`0.7.0`) lives in `src/opentraces_schema/version.py` as the
 single source of truth. See [VERSION-POLICY.md](VERSION-POLICY.md) for semver
 semantics and the bump checklist.
+
+`0.7.0` adds the additive dataset security policy contract
+(`WorkflowSecurityContract`, `DatasetSecurityPolicy`, `DatasetManifest.security`);
+the `TraceRecord` wire shape is unchanged from `0.6.0`.
 
 `0.6.0` makes `TraceRecord.patches[]` the authoritative output spine for
 dev-time traces and removes the legacy unified-diff `Outcome.patch` field.

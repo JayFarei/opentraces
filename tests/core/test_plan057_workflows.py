@@ -144,3 +144,82 @@ def test_workflow_name_validation_rejects_paths():
 
     with pytest.raises(ValueError):
         create_workflow("")
+
+
+# --- Plan 092 Track 2 U6: nested YAML front matter + security contract -------
+
+
+def _write_workflow_md(tmp_path, body: str):
+    md = tmp_path / "wf.md"
+    md.write_text(body, encoding="utf-8")
+    return md
+
+
+def test_frontmatter_parses_nested_security_contract(tmp_path):
+    from opentraces.core.workflows import resolve_workflow_reference
+
+    md = _write_workflow_md(
+        tmp_path,
+        "---\n"
+        "name: secure-curator\n"
+        "description: Curate rows with a security contract\n"
+        "security:\n"
+        "  required_tools: [regex, entropy]\n"
+        "  optional_tools: [business_logic, path_anonymizer, classifier]\n"
+        "  default_enabled_tools: [business_logic]\n"
+        "  disallowed_tools: []\n"
+        "  allow_disable_required: false\n"
+        "---\n\n"
+        "# secure-curator\n\nEmit rows.\n",
+    )
+
+    pkg = resolve_workflow_reference(md)
+    assert pkg.name == "secure-curator"
+    assert pkg.description == "Curate rows with a security contract"
+    assert pkg.security is not None
+    assert pkg.security.required_tools == ["regex", "entropy"]
+    assert pkg.security.default_enabled_tools == ["business_logic"]
+    # The contract resolves required + default-enabled in canonical order.
+    assert pkg.security.resolved_enabled_tools() == ["regex", "entropy", "business_logic"]
+
+
+def test_frontmatter_without_security_block_has_no_contract(tmp_path):
+    from opentraces.core.workflows import resolve_workflow_reference
+
+    md = _write_workflow_md(
+        tmp_path,
+        "---\nname: plain-curator\ndescription: No security block\n---\n\n# plain-curator\n",
+    )
+    pkg = resolve_workflow_reference(md)
+    assert pkg.security is None
+
+
+def test_frontmatter_legacy_flat_fields_still_parse(tmp_path):
+    """Back-compat: flat key: value front matter still yields name/description."""
+    from opentraces.core.workflows import resolve_workflow_reference
+
+    md = _write_workflow_md(
+        tmp_path,
+        "---\nname: legacy-curator\ndescription: Legacy flat front matter\n---\n\n# legacy-curator\n",
+    )
+    pkg = resolve_workflow_reference(md)
+    assert pkg.name == "legacy-curator"
+    assert pkg.description == "Legacy flat front matter"
+
+
+def test_frontmatter_invalid_security_contract_is_rejected(tmp_path):
+    import pytest
+    from pydantic import ValidationError
+
+    from opentraces.core.workflows import resolve_workflow_reference
+
+    md = _write_workflow_md(
+        tmp_path,
+        "---\n"
+        "name: bad-curator\n"
+        "security:\n"
+        "  required_tools: [not_a_tool]\n"
+        "---\n\n# bad-curator\n",
+    )
+    with pytest.raises(ValidationError):
+        resolve_workflow_reference(md)

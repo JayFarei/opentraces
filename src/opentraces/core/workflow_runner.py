@@ -44,7 +44,6 @@ from .datasets import (
     save_manifest,
 )
 from .workflows import WorkflowPackage, load_workflow
-from ..security.privacy import DEFAULT_PRIVACY_TIER
 
 
 class ExecutorUnavailableError(RuntimeError):
@@ -129,6 +128,7 @@ def run_dataset_workflow(
         "scope": scope or {"scope": "all-projects"},
         "limit": limit,
         "privacy_tier": privacy_tier,
+        "security": dataset.manifest.security.model_dump(mode="json"),
         "trail_freshness_policy": trail_freshness_policy,
         "trail_freshness": trail_freshness,
     }
@@ -306,6 +306,9 @@ def _run_instructions(run_packet: dict[str, Any]) -> str:
         "`ot trace slice`, `ot trace map`, and `ot trace get` as needed. Emit plain JSONL rows "
         f"matching the schema to `{run_packet['output_path']}`.\n\n"
         f"Privacy tier for appended rows: `{run_packet.get('privacy_tier') or 'dataset default'}`.\n\n"
+        f"Security tools required by this dataset: "
+        f"`{', '.join((run_packet.get('security') or {}).get('required_tools') or []) or 'none'}`; "
+        f"enabled: `{', '.join((run_packet.get('security') or {}).get('enabled_tools') or []) or 'none'}`.\n\n"
         f"Trace Trail freshness policy: `{run_packet.get('trail_freshness_policy')}`.\n\n"
         f"Set `OT_DATASET_OUTPUT={run_packet['output_path']}` when running helper scripts.\n"
     )

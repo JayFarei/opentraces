@@ -10,8 +10,11 @@ from opentraces_schema import (
     DatasetRowIndexEntry,
     DatasetRunRecord,
     DatasetSchedule,
+    DatasetSecurityOverride,
+    DatasetSecurityPolicy,
     ExecutorConfig,
     WorkflowRef,
+    WorkflowSecurityContract,
 )
 
 
@@ -175,3 +178,96 @@ def test_plan057_literal_boundaries_reject_deferred_or_unknown_modes():
 
     with pytest.raises(ValidationError):
         WorkflowRef(skill="missing-digest", digest="")
+
+
+# --- Plan 092 Track 2: dataset security policy schema ------------------------
+
+
+def test_dataset_manifest_security_defaults_to_empty_policy():
+    manifest = DatasetManifest(
+        name="minimal",
+        schema={"path": "schemas/row.schema.json", "version": "1.0.0"},
+        workflow={"skill": "minimal-curator", "digest": "sha256:workflow"},
+    )
+    assert manifest.security == DatasetSecurityPolicy()
+    assert manifest.security.source == "default"
+    assert manifest.security.enabled_tools == []
+    # Round-trips through JSON unchanged (additive field is reader-compatible).
+    restored = DatasetManifest.model_validate_json(manifest.model_dump_json())
+    assert restored == manifest
+
+
+def test_workflow_security_contract_rejects_unknown_tool():
+    with pytest.raises(ValidationError):
+        WorkflowSecurityContract(required_tools=["not_a_real_tool"])
+
+
+def test_workflow_security_contract_rejects_incoherent_sets():
+    with pytest.raises(ValidationError):
+        WorkflowSecurityContract(required_tools=["regex"], disallowed_tools=["regex"])
+    with pytest.raises(ValidationError):
+        # default_enabled must be inside required ∪ optional
+        WorkflowSecurityContract(
+            required_tools=["regex"], default_enabled_tools=["entropy"]
+        )
+
+
+def test_policy_from_contract_seeds_required_plus_default_in_canonical_order():
+    contract = WorkflowSecurityContract(
+        required_tools=["entropy", "regex"],
+        optional_tools=["classifier", "business_logic"],
+        default_enabled_tools=["business_logic"],
+        disallowed_tools=["trufflehog"],
+        allow_disable_required=False,
+    )
+    policy = DatasetSecurityPolicy.from_contract(
+        contract, source_workflow_digest="sha256:wf"
+    )
+    assert policy.source == "workflow"
+    assert policy.source_workflow_digest == "sha256:wf"
+    # required (regex, entropy) + default_enabled (business_logic), canonical order.
+    assert policy.enabled_tools == ["regex", "entropy", "business_logic"]
+    assert policy.required_tools_satisfied() is True
+    assert policy.missing_required_tools() == []
+
+
+def test_policy_rejects_enabled_tool_outside_contract():
+    with pytest.raises(ValidationError):
+        DatasetSecurityPolicy(
+            required_tools=["regex"],
+            optional_tools=["entropy"],
+            enabled_tools=["regex", "classifier"],  # classifier not in contract
+        )
+
+
+def test_policy_rejects_enabling_disallowed_tool():
+    with pytest.raises(ValidationError):
+        DatasetSecurityPolicy(
+            optional_tools=["entropy"],
+            enabled_tools=["entropy"],
+            disallowed_tools=["entropy"],
+        )
+
+
+def test_policy_required_tool_must_be_enabled_or_overridden():
+    # Disabling a required tool without an override is invalid.
+    with pytest.raises(ValidationError):
+        DatasetSecurityPolicy(required_tools=["regex"], enabled_tools=[])
+    # With an explicit override it is allowed and recorded.
+    policy = DatasetSecurityPolicy(
+        required_tools=["regex"],
+        enabled_tools=[],
+        allow_disable_required=True,
+        overrides=[DatasetSecurityOverride(tool="regex", reason="legacy import")],
+    )
+    assert policy.required_tools_satisfied() is False
+    assert policy.missing_required_tools() == ["regex"]
+
+
+def test_policy_override_must_target_required_tool():
+    with pytest.raises(ValidationError):
+        DatasetSecurityPolicy(
+            optional_tools=["entropy"],
+            enabled_tools=["entropy"],
+            overrides=[DatasetSecurityOverride(tool="entropy")],
+        )

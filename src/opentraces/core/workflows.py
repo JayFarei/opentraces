@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Any
+
+import yaml
+from opentraces_schema import WorkflowSecurityContract
 
 from . import paths
 
@@ -26,6 +30,7 @@ class WorkflowPackage:
     description: str | None = None
     entrypoint: Path | None = None
     source_type: str = "package"
+    security: WorkflowSecurityContract | None = None
 
 
 def workflows_dir() -> Path:
@@ -159,6 +164,7 @@ def load_workflow(name: str) -> WorkflowPackage:
         digest=compute_workflow_digest(path),
         entrypoint=skill_path,
         source_type="package",
+        security=_workflow_security_contract(metadata),
     )
 
 
@@ -226,6 +232,7 @@ def resolve_workflow_reference(source: str | Path) -> WorkflowPackage:
             digest=compute_workflow_digest(path),
             entrypoint=path,
             source_type="file",
+            security=_workflow_security_contract(metadata),
         )
     if path.is_dir():
         entrypoint = _workflow_entrypoint(path)
@@ -238,6 +245,7 @@ def resolve_workflow_reference(source: str | Path) -> WorkflowPackage:
             digest=compute_workflow_digest(path),
             entrypoint=entrypoint,
             source_type="package",
+            security=_workflow_security_contract(metadata),
         )
     raise FileNotFoundError(f"workflow path not found: {source}")
 
@@ -348,7 +356,15 @@ def _workflow_entrypoint(path: Path) -> Path:
     raise ValueError(f"workflow package has no WORKFLOW.md or SKILL.md: {path}")
 
 
-def _read_skill_frontmatter(path: Path) -> dict[str, str]:
+def _read_skill_frontmatter(path: Path) -> dict[str, Any]:
+    """Parse a SKILL.md / WORKFLOW.md YAML front matter block.
+
+    Uses ``yaml.safe_load`` so nested blocks (e.g. a ``security:`` contract or a
+    ``requires:`` list) parse into real structures. Falls back to the legacy
+    flat ``key: value`` reader if the block is not valid YAML, so any front
+    matter that parsed before keeps parsing (back-compatible).
+    """
+
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
         return {}
@@ -356,6 +372,16 @@ def _read_skill_frontmatter(path: Path) -> dict[str, str]:
     if end == -1:
         return {}
     raw = text[4:end]
+    try:
+        loaded = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        loaded = None
+    if isinstance(loaded, dict):
+        return loaded
+    return _legacy_flat_frontmatter(raw)
+
+
+def _legacy_flat_frontmatter(raw: str) -> dict[str, str]:
     metadata: dict[str, str] = {}
     for line in raw.splitlines():
         if ":" not in line:
@@ -363,6 +389,15 @@ def _read_skill_frontmatter(path: Path) -> dict[str, str]:
         key, value = line.split(":", 1)
         metadata[key.strip()] = value.strip().strip("\"'")
     return metadata
+
+
+def _workflow_security_contract(metadata: dict[str, Any]) -> WorkflowSecurityContract | None:
+    """Build the workflow security contract from front matter, if declared."""
+
+    raw = metadata.get("security")
+    if not isinstance(raw, dict):
+        return None
+    return WorkflowSecurityContract.model_validate(raw)
 
 
 def _optional_str(value: object) -> str | None:

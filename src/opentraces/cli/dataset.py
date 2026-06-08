@@ -12,8 +12,12 @@ import click
 
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
+from opentraces_schema import DatasetSecurityPolicy
+
+from ._security_flags import SECURITY_TOOL_NAMES
 from ..core.datasets import (
     add_dataset_remote,
+    apply_dataset_security_edit,
     append_rows,
     create_dataset,
     DatasetRemotePermissionError,
@@ -35,6 +39,7 @@ from ..core.datasets import (
     read_rows_by_id,
     remove_dataset_remote,
     repo_id_from_remote,
+    save_manifest,
     set_dataset_remote_visibility,
     set_publication_review_status,
 )
@@ -75,6 +80,101 @@ def dataset_remote_group() -> None:
 @dataset_group.group("schedule", cls=OpentracesGroup)
 def dataset_schedule_group() -> None:
     """Manage local dataset schedules."""
+
+
+@dataset_group.command("security", cls=OpentracesCommand)
+@click.argument("name")
+@click.option(
+    "--tool",
+    "tools",
+    multiple=True,
+    type=click.Choice(SECURITY_TOOL_NAMES),
+    help="Security tool to enable or disable for this dataset.",
+)
+@click.option("--enable", is_flag=True, help="Enable every --tool for this dataset.")
+@click.option("--disable", is_flag=True, help="Disable every --tool for this dataset.")
+@click.option(
+    "--unsafe-override",
+    is_flag=True,
+    help="Allow disabling a required tool; the opt-out is recorded in the manifest.",
+)
+@click.option("--reason", default=None, help="Reason recorded with an unsafe override.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_security_cmd(
+    name: str,
+    tools: tuple[str, ...],
+    enable: bool,
+    disable: bool,
+    unsafe_override: bool,
+    reason: str | None,
+    as_json: bool,
+) -> None:
+    """Inspect or edit one dataset's security policy.
+
+    The dataset's security policy is owned by its workflow contract and stored
+    in the dataset manifest, not in global config. Optional tools can be toggled
+    per dataset; a required tool can only be disabled with ``--unsafe-override``
+    when the workflow contract permits it.
+    """
+    try:
+        dataset = load_dataset(name)
+    except FileNotFoundError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+
+    policy = dataset.manifest.security
+    changes = {"enabled": [], "disabled": []}
+    try:
+        if enable and disable:
+            raise ValueError("Use either --enable or --disable, not both")
+        if tools and not (enable or disable):
+            raise ValueError("--tool requires --enable or --disable")
+        if not tools and (enable or disable):
+            raise ValueError("--enable/--disable require at least one --tool")
+        if tools:
+            policy, changes = apply_dataset_security_edit(
+                policy,
+                enable=tools if enable else (),
+                disable=tools if disable else (),
+                unsafe_override=unsafe_override,
+                reason=reason,
+            )
+            updated = dataset.manifest.model_copy(update={"security": policy})
+            save_manifest(dataset.path, updated)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+
+    payload = {
+        "status": "ok",
+        "dataset": name,
+        "security": _dataset_security_payload(policy),
+        "changes": changes,
+    }
+    if as_json:
+        click.echo(_dump_json(payload))
+        return
+
+    click.echo(f"Dataset '{name}' security policy ({policy.source}):")
+    enabled_tools = policy.enabled_tools
+    click.echo("  enabled: " + (", ".join(enabled_tools) if enabled_tools else "none"))
+    if policy.required_tools:
+        click.echo("  required: " + ", ".join(policy.required_tools))
+    if changes["enabled"]:
+        click.echo("  changed on: " + ", ".join(changes["enabled"]))
+    if changes["disabled"]:
+        click.echo("  changed off: " + ", ".join(changes["disabled"]))
+    missing = policy.missing_required_tools()
+    if missing:
+        click.echo("  WARNING required tools disabled by override: " + ", ".join(missing))
+
+
+def _dataset_security_payload(policy: DatasetSecurityPolicy) -> dict[str, object]:
+    data = policy.model_dump(mode="json")
+    data["scope"] = "dataset"
+    data["required_satisfied"] = policy.required_tools_satisfied()
+    data["missing_required_tools"] = policy.missing_required_tools()
+    return data
 
 
 def _remote_probe(repo_id: str, token: str | None) -> dict | None:
@@ -573,7 +673,12 @@ def dataset_new(
 
     try:
         schema_payload = _load_schema_file(schema_file) if schema_file else None
-        workflow_skill, resolved_digest, workflow_config = _resolve_workflow_for_dataset(
+        (
+            workflow_skill,
+            resolved_digest,
+            workflow_config,
+            workflow_security,
+        ) = _resolve_workflow_for_dataset(
             workflow,
             workflow_digest,
         )
@@ -583,6 +688,7 @@ def dataset_new(
             workflow_skill=workflow_skill,
             workflow_digest=resolved_digest,
             workflow_config=workflow_config,
+            security=workflow_security,
             row_schema=schema_payload,
             candidate_query=_candidate_query_for_dataset(
                 dataset_name=name,
@@ -604,6 +710,7 @@ def dataset_new(
         click.echo(_dump_json(payload))
         return
     click.echo(f"Dataset created: {dataset.name}")
+    _render_dataset_security_hint(dataset)
 
 
 def _load_schema_file(schema_file: str) -> dict[str, object]:
@@ -663,11 +770,11 @@ def _candidate_query_for_dataset(
 def _resolve_workflow_for_dataset(
     workflow: str | None,
     workflow_digest: str,
-) -> tuple[str | None, str, dict[str, object] | None]:
+) -> tuple[str | None, str, dict[str, object] | None, DatasetSecurityPolicy | None]:
     if not workflow:
-        return None, workflow_digest, None
+        return None, workflow_digest, None, None
     if not _looks_like_workflow_path(workflow):
-        return workflow, workflow_digest, None
+        return workflow, workflow_digest, None, None
 
     package = resolve_workflow_reference(workflow)
     config: dict[str, object] = {
@@ -678,7 +785,14 @@ def _resolve_workflow_for_dataset(
         config["entrypoint"] = str(package.entrypoint)
     if package.description:
         config["description"] = package.description
-    return package.name, package.digest, config
+    security = (
+        DatasetSecurityPolicy.from_contract(
+            package.security, source_workflow_digest=package.digest
+        )
+        if package.security is not None
+        else None
+    )
+    return package.name, package.digest, config, security
 
 
 def _looks_like_workflow_path(value: str) -> bool:
@@ -795,6 +909,7 @@ def _create_manual_dataset(
         click.echo(_dump_json(payload))
         return
     click.echo(f"Manual dataset created: {dataset.name} ({len(rows)} row(s))")
+    _render_dataset_security_hint(dataset)
 
 
 @dataset_group.command("run", cls=OpentracesCommand)
@@ -1275,6 +1390,7 @@ def _dataset_payload(dataset) -> dict[str, object]:
         "name": dataset.name,
         "path": str(dataset.path),
         "manifest": dataset.manifest.model_dump(mode="json", by_alias=True, exclude_none=True),
+        "security": _dataset_security_payload(dataset.manifest.security),
     }
     # Surface the manual marker + row count for ad-hoc datasets so agents
     # can detect them without re-reading the manifest skill string.
@@ -1289,6 +1405,18 @@ def _dataset_payload(dataset) -> dict[str, object]:
     if rq is not None:
         payload["row_quality"] = rq
     return payload
+
+
+def _render_dataset_security_hint(dataset) -> None:
+    policy = dataset.manifest.security
+    enabled_tools = policy.enabled_tools
+    click.echo(
+        "Dataset security tools enabled: "
+        + (", ".join(enabled_tools) if enabled_tools else "none")
+    )
+    if policy.required_tools:
+        click.echo("Required by workflow: " + ", ".join(policy.required_tools))
+    click.echo(f"Manage with: opentraces dataset security {dataset.name}")
 
 
 def _remote_payload(summary) -> dict[str, object]:

@@ -136,6 +136,15 @@ class TestEnableState:
         """iter_enabled(None) has no implicit always-on tools."""
         assert {t.name for t in iter_enabled(None)} == set()
 
+    def test_schema_security_tool_vocab_matches_registry(self) -> None:
+        """Plan 092: the schema's SecurityToolName vocab must not drift from the
+        live registry order (the schema package stays standalone, so this is the
+        single cross-package guard)."""
+        from opentraces_schema.dataset import SECURITY_TOOL_ORDER
+
+        registry_order = tuple(t.name for t in iter_tools())
+        assert SECURITY_TOOL_ORDER == registry_order
+
 
 class TestDescribe:
     def test_describe_all_returns_tool_info_list(self) -> None:

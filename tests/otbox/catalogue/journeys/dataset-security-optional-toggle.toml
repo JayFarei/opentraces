@@ -1,0 +1,62 @@
+name = "dataset-security-optional-toggle"
+description = """
+Dataset security per-dataset toggle (plan 092 R7, Track 2): `dataset security
+<name> --tool <optional> --enable` edits only that dataset's manifest policy.
+Optional tools declared by the workflow contract can be toggled on per dataset
+without touching global config.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["build-publishable-dataset"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "write_file"
+id = "write-workflow"
+path = "secure-workflow.md"
+content = """
+---
+name: secure-workflow
+security:
+  required_tools: [regex, entropy]
+  optional_tools: [business_logic, path_anonymizer]
+  default_enabled_tools: [business_logic]
+---
+
+# secure-workflow
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "toggle-ds", "--workflow", "{project}/secure-workflow.md", "--json"]
+
+[[steps]]
+type = "cli"
+id = "enable-optional"
+argv = ["dataset", "security", "toggle-ds", "--tool", "path_anonymizer", "--enable", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "enable-optional"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "enable-optional"
+path = "security.scope"
+equals = "dataset"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "enable-optional"
+path = "security.enabled_tools"
+equals = ["regex", "entropy", "business_logic", "path_anonymizer"]
+
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "enable-optional"
+path = "changes.enabled"
+equals = ["path_anonymizer"]

@@ -46,6 +46,182 @@ class WorkflowRef(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+# Canonical security tool vocabulary (mirrors the runtime tool registry order in
+# `opentraces.security.tools._registry`). Kept here so dataset/workflow security
+# policy models can validate tool names and emit them in a stable order without
+# importing the runtime package. A test asserts this stays in sync with the
+# live registry.
+SECURITY_TOOL_ORDER: tuple[str, ...] = (
+    "regex",
+    "entropy",
+    "trufflehog",
+    "privacy_filter",
+    "llm_pii",
+    "business_logic",
+    "path_anonymizer",
+    "capsule_scope",
+    "classifier",
+)
+SecurityToolName = Literal[
+    "regex",
+    "entropy",
+    "trufflehog",
+    "privacy_filter",
+    "llm_pii",
+    "business_logic",
+    "path_anonymizer",
+    "capsule_scope",
+    "classifier",
+]
+DatasetSecuritySource = Literal["default", "workflow", "manual"]
+
+
+def _canonical_tool_order(names: "set[str] | frozenset[str]") -> list[str]:
+    return [name for name in SECURITY_TOOL_ORDER if name in names]
+
+
+class WorkflowSecurityContract(BaseModel):
+    """Security contract a dataset workflow declares in its front matter.
+
+    A workflow owns the security posture of the rows it projects: which tools
+    MUST run (``required_tools``), which MAY be toggled per dataset
+    (``optional_tools``), which are on by default (``default_enabled_tools``),
+    and which are forbidden (``disallowed_tools``). ``allow_disable_required``
+    governs whether a downstream dataset may disable a required tool at all.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_tools: list[SecurityToolName] = Field(default_factory=list)
+    optional_tools: list[SecurityToolName] = Field(default_factory=list)
+    default_enabled_tools: list[SecurityToolName] = Field(default_factory=list)
+    disallowed_tools: list[SecurityToolName] = Field(default_factory=list)
+    allow_disable_required: bool = False
+
+    @model_validator(mode="after")
+    def _coherent(self) -> "WorkflowSecurityContract":
+        req = set(self.required_tools)
+        opt = set(self.optional_tools)
+        dis = set(self.disallowed_tools)
+        dft = set(self.default_enabled_tools)
+        if req & dis:
+            raise ValueError(
+                f"tools cannot be both required and disallowed: {sorted(req & dis)}"
+            )
+        if opt & dis:
+            raise ValueError(
+                f"tools cannot be both optional and disallowed: {sorted(opt & dis)}"
+            )
+        if req & opt:
+            raise ValueError(
+                f"tools cannot be both required and optional: {sorted(req & opt)}"
+            )
+        stray_default = dft - (req | opt)
+        if stray_default:
+            raise ValueError(
+                "default_enabled_tools must be required or optional: "
+                f"{sorted(stray_default)}"
+            )
+        return self
+
+    def resolved_enabled_tools(self) -> list[str]:
+        """Tools enabled when a dataset is first seeded from this contract."""
+
+        return _canonical_tool_order(
+            set(self.required_tools) | set(self.default_enabled_tools)
+        )
+
+
+class DatasetSecurityOverride(BaseModel):
+    """Explicit, recorded unsafe override of a required security tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool: SecurityToolName
+    reason: str | None = None
+
+
+class DatasetSecurityPolicy(BaseModel):
+    """Resolved per-dataset security policy stored in the dataset manifest.
+
+    Seeded from a workflow's :class:`WorkflowSecurityContract` at
+    ``dataset new --workflow`` and edited only via ``dataset security <name>``.
+    Required tools stay enabled unless an explicit override is recorded.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: DatasetSecuritySource = "default"
+    source_workflow_digest: str | None = None
+    required_tools: list[SecurityToolName] = Field(default_factory=list)
+    optional_tools: list[SecurityToolName] = Field(default_factory=list)
+    enabled_tools: list[SecurityToolName] = Field(default_factory=list)
+    disallowed_tools: list[SecurityToolName] = Field(default_factory=list)
+    allow_disable_required: bool = False
+    overrides: list[DatasetSecurityOverride] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> "DatasetSecurityPolicy":
+        req = set(self.required_tools)
+        opt = set(self.optional_tools)
+        en = set(self.enabled_tools)
+        dis = set(self.disallowed_tools)
+        overridden = {o.tool for o in self.overrides}
+        if req & dis:
+            raise ValueError(
+                f"tools cannot be both required and disallowed: {sorted(req & dis)}"
+            )
+        stray_enabled = en - (req | opt)
+        if stray_enabled:
+            raise ValueError(
+                "enabled_tools must be declared required or optional: "
+                f"{sorted(stray_enabled)}"
+            )
+        if en & dis:
+            raise ValueError(
+                f"disallowed tools cannot be enabled: {sorted(en & dis)}"
+            )
+        # Required-tools subset invariant: every required tool stays enabled
+        # unless an explicit override records the unsafe opt-out.
+        missing_required = req - en - overridden
+        if missing_required:
+            raise ValueError(
+                "required tools must be enabled or explicitly overridden: "
+                f"{sorted(missing_required)}"
+            )
+        stray_override = overridden - req
+        if stray_override:
+            raise ValueError(
+                f"overrides may only target required tools: {sorted(stray_override)}"
+            )
+        return self
+
+    @classmethod
+    def from_contract(
+        cls,
+        contract: "WorkflowSecurityContract",
+        *,
+        source_workflow_digest: str | None = None,
+    ) -> "DatasetSecurityPolicy":
+        return cls(
+            source="workflow",
+            source_workflow_digest=source_workflow_digest,
+            required_tools=list(contract.required_tools),
+            optional_tools=list(contract.optional_tools),
+            enabled_tools=contract.resolved_enabled_tools(),
+            disallowed_tools=list(contract.disallowed_tools),
+            allow_disable_required=contract.allow_disable_required,
+        )
+
+    def required_tools_satisfied(self) -> bool:
+        """True when every required tool is enabled (no unsafe override gap)."""
+
+        return set(self.required_tools) <= set(self.enabled_tools)
+
+    def missing_required_tools(self) -> list[str]:
+        return _canonical_tool_order(set(self.required_tools) - set(self.enabled_tools))
+
+
 class ExecutorConfig(BaseModel):
     """Default automated and development executors for a local dataset."""
 
@@ -157,6 +333,7 @@ class DatasetManifest(BaseModel):
     publication_policy: DatasetPublicationPolicy = Field(
         default_factory=DatasetPublicationPolicy
     )
+    security: DatasetSecurityPolicy = Field(default_factory=DatasetSecurityPolicy)
 
     @model_validator(mode="after")
     def _active_remote_must_exist(self) -> "DatasetManifest":

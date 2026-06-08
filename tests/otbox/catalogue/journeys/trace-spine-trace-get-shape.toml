@@ -15,7 +15,7 @@ TraceRecord with the new spine shape:
   (e) `git_links: []` is kept (derived from `patches[].anchor` +
       `patches[].superseded_by` via the evidence_tier → tier mapping
       table in plan 080 Resolution C).
-  (f) `schema_version` reads `0.6.0`.
+  (f) `schema_version` reads the current schema version (`0.7.0`).
 
 Fails today because:
   - Phase A schema delta is brand new; no checkpoint covers the new

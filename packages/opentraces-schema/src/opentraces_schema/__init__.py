@@ -35,8 +35,11 @@ from .dataset import (
     DatasetRunRecord,
     DatasetSchedule,
     DatasetSchemaRef,
+    DatasetSecurityOverride,
+    DatasetSecurityPolicy,
     ExecutorConfig,
     WorkflowRef,
+    WorkflowSecurityContract,
 )
 from .trace_index import (
     CandidatePacket,
@@ -69,6 +72,8 @@ __all__ = [
     "DatasetRunRecord",
     "DatasetSchedule",
     "DatasetSchemaRef",
+    "DatasetSecurityOverride",
+    "DatasetSecurityPolicy",
     "Environment",
     "ExecutorConfig",
     "GitAnchor",
@@ -96,4 +101,5 @@ __all__ = [
     "TraceUnit",
     "VCS",
     "WorkflowRef",
+    "WorkflowSecurityContract",
 ]

@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.7.0] - 2026-06-08
+
+Adds the dataset security policy contract: a workflow declares the security
+posture of the rows it projects, and each dataset stores its resolved policy in
+the manifest. Additive only; existing parsers continue to work.
+
+See [RATIONALE-0.7.0.md](RATIONALE-0.7.0.md) for design notes.
+
+### Added
+
+**Dataset security policy (plan 092 Track 2)**
+
+- `WorkflowSecurityContract` model, a dataset workflow's declared security
+  contract (`required_tools`, `optional_tools`, `default_enabled_tools`,
+  `disallowed_tools`, `allow_disable_required`).
+- `DatasetSecurityPolicy` model, the resolved per-dataset policy stored on the
+  manifest, seeded from a workflow contract and pinned to the source workflow
+  digest. Carries `source`, `source_workflow_digest`, `required_tools`,
+  `optional_tools`, `enabled_tools`, `disallowed_tools`,
+  `allow_disable_required`, and recorded `overrides`.
+- `DatasetSecurityOverride` model, an explicit recorded unsafe opt-out of a
+  required security tool.
+- `DatasetManifest.security: DatasetSecurityPolicy`, an additive optional field
+  (defaults to an empty policy) so existing manifests load unchanged.
+- `SecurityToolName` Literal and `SECURITY_TOOL_ORDER` tuple, the canonical
+  security tool vocabulary kept in sync with the runtime tool registry.
+
+### Changed
+
+- `SCHEMA_VERSION` bumped to `0.7.0` (additive MINOR per VERSION-POLICY.md). The
+  `TraceRecord` wire shape is unchanged; only new dataset-control models are
+  added, so `migrate_record` is a transparent no-op across the
+  `0.6.0 -> 0.7.0` boundary.
+
 ## [0.6.0] - 2026-05-21
 
 Promotes trace patches to the authoritative dev-time output spine and removes

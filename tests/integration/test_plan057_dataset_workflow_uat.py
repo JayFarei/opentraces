@@ -219,6 +219,42 @@ def test_dataset_run_packet_carries_query_source_provenance():
     assert run_packet["source_provenance"]["query_fingerprint"]
 
 
+def test_dataset_run_packet_carries_resolved_security_policy(tmp_path):
+    """Plan 092 R9: the run packet exposes the dataset's resolved security
+    policy so the executor knows which tools are required/enabled."""
+    md = tmp_path / "secure.md"
+    md.write_text(
+        "---\nname: secure\nsecurity:\n"
+        "  required_tools: [regex, entropy]\n"
+        "  optional_tools: [business_logic]\n"
+        "  default_enabled_tools: [business_logic]\n"
+        "---\n\n# secure\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    assert runner.invoke(
+        dataset_group, ["new", "secure-ds", "--workflow", str(md), "--json"]
+    ).exit_code == 0
+    result = runner.invoke(
+        dataset_group,
+        ["run", "secure-ds", "--executor", "current-agent", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    run_packet = json.loads(
+        (
+            dataset_path("secure-ds")
+            / ".opentraces"
+            / "runs"
+            / payload["run_id"]
+            / "run_packet.json"
+        ).read_text()
+    )
+    assert run_packet["security"]["source"] == "workflow"
+    assert run_packet["security"]["required_tools"] == ["regex", "entropy"]
+    assert run_packet["security"]["enabled_tools"] == ["regex", "entropy", "business_logic"]
+
+
 def test_dataset_run_can_fail_on_stale_trail_freshness(monkeypatch):
     runner = CliRunner()
     _create_dataset(runner)

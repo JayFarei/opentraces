@@ -1,0 +1,51 @@
+name = "dataset-security-required-rejection"
+description = """
+Dataset security required-tool protection (plan 092 R8, Track 2): a required
+security tool cannot be disabled when the workflow contract forbids it.
+`dataset security <name> --tool <required> --disable` exits 2 with a message
+explaining the workflow contract forbids the opt-out, so required sanitization
+cannot be silently dropped.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["build-publishable-dataset"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "write_file"
+id = "write-workflow"
+path = "secure-workflow.md"
+content = """
+---
+name: secure-workflow
+security:
+  required_tools: [regex, entropy]
+  optional_tools: [business_logic]
+  allow_disable_required: false
+---
+
+# secure-workflow
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "locked-ds", "--workflow", "{project}/secure-workflow.md", "--json"]
+
+[[steps]]
+type = "cli"
+id = "disable-required"
+argv = ["dataset", "security", "locked-ds", "--tool", "regex", "--disable", "--json"]
+expect_returncode = 2
+
+[[assertions]]
+kind = "returncode"
+step = "disable-required"
+equals = 2
+
+[[assertions]]
+kind = "stderr_contains"
+step = "disable-required"
+value = "required security tool"

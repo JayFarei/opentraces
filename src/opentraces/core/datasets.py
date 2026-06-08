@@ -34,8 +34,11 @@ from opentraces_schema import (
     DatasetPublicationStateEntry,
     DatasetRemote,
     DatasetRowIndexEntry,
+    DatasetSecurityOverride,
+    DatasetSecurityPolicy,
     WorkflowRef,
 )
+from opentraces_schema.dataset import SECURITY_TOOL_ORDER
 
 from ..security import SECURITY_VERSION
 from ..security.dataset_rows import DatasetRowSecurity, sanitize_dataset_row
@@ -161,6 +164,7 @@ def create_dataset(
     identity: DatasetIdentity | dict[str, Any] | None = None,
     publication_policy: DatasetPublicationPolicy | dict[str, Any] | None = None,
     candidate_query: DatasetCandidateQuery | dict[str, Any] | None = None,
+    security: DatasetSecurityPolicy | dict[str, Any] | None = None,
     source_provenance: dict[str, Any] | None = None,
     replace: bool = False,
 ) -> LocalDataset:
@@ -189,6 +193,11 @@ def create_dataset(
     else:
         query_model = None
     provenance_payload = source_provenance or _source_provenance_for_query(query_model)
+    security_model = (
+        security
+        if isinstance(security, DatasetSecurityPolicy)
+        else DatasetSecurityPolicy.model_validate(security or {})
+    )
     workflow = WorkflowRef(
         skill=workflow_skill or f"{name}-workflow",
         digest=workflow_digest,
@@ -203,6 +212,7 @@ def create_dataset(
         identity=identity_model,
         candidate_query=query_model,
         publication_policy=policy_model,
+        security=security_model,
     )
     schema_digest = digest_payload(schema_payload)
     manifest.schema_ref.digest = schema_digest
@@ -224,6 +234,86 @@ def create_dataset(
     )
     save_manifest(root, manifest)
     return LocalDataset(name=name, path=root, manifest=manifest)
+
+
+def _canonical_tools(names: "set[str]") -> list[str]:
+    return [name for name in SECURITY_TOOL_ORDER if name in names]
+
+
+def apply_dataset_security_edit(
+    policy: DatasetSecurityPolicy,
+    *,
+    enable: "tuple[str, ...] | list[str]" = (),
+    disable: "tuple[str, ...] | list[str]" = (),
+    unsafe_override: bool = False,
+    reason: str | None = None,
+) -> tuple[DatasetSecurityPolicy, dict[str, list[str]]]:
+    """Edit a single dataset's resolved security policy.
+
+    Optional tools may be toggled freely (within the workflow contract). A
+    required tool can only be disabled when the workflow contract allows it
+    (``allow_disable_required``) AND the caller passes ``unsafe_override``; the
+    opt-out is then recorded as a :class:`DatasetSecurityOverride`. Returns the
+    new policy plus the enabled/disabled change delta.
+    """
+
+    enable_names = [n for n in dict.fromkeys(enable) if n]
+    disable_names = [n for n in dict.fromkeys(disable) if n]
+    overlap = set(enable_names) & set(disable_names)
+    if overlap:
+        raise ValueError(
+            f"security tool(s) both enabled and disabled: {', '.join(sorted(overlap))}"
+        )
+
+    contract_tools = set(policy.required_tools) | set(policy.optional_tools)
+    required = set(policy.required_tools)
+    disallowed = set(policy.disallowed_tools)
+    enabled_set = set(policy.enabled_tools)
+    overrides = {o.tool: o for o in policy.overrides}
+    before = set(enabled_set)
+
+    for tool in enable_names:
+        if tool in disallowed:
+            raise ValueError(f"{tool} is disallowed by the workflow security contract")
+        if tool not in contract_tools:
+            raise ValueError(
+                f"{tool} is not part of this dataset's security contract"
+            )
+        enabled_set.add(tool)
+        overrides.pop(tool, None)  # re-enabling a required tool clears its override
+
+    for tool in disable_names:
+        if tool not in contract_tools:
+            raise ValueError(
+                f"{tool} is not part of this dataset's security contract"
+            )
+        if tool in required:
+            if not policy.allow_disable_required:
+                raise ValueError(
+                    f"{tool} is a required security tool and the workflow contract "
+                    "forbids disabling it"
+                )
+            if not unsafe_override:
+                raise ValueError(
+                    f"{tool} is a required security tool; pass --unsafe-override to "
+                    "disable it (the opt-out is recorded in the manifest)"
+                )
+            overrides[tool] = DatasetSecurityOverride(tool=tool, reason=reason)
+        enabled_set.discard(tool)
+
+    new_policy = policy.model_copy(
+        update={
+            "enabled_tools": _canonical_tools(enabled_set),
+            "overrides": [
+                overrides[name] for name in SECURITY_TOOL_ORDER if name in overrides
+            ],
+        }
+    )
+    changes = {
+        "enabled": _canonical_tools(set(new_policy.enabled_tools) - before),
+        "disabled": _canonical_tools(before - set(new_policy.enabled_tools)),
+    }
+    return new_policy, changes
 
 
 def _source_provenance_for_query(
@@ -642,6 +732,12 @@ def _build_row_provenance(
             "security_version": row_security.security_version,
             "redactions_applied": row_security.redactions_applied,
         },
+        "security_policy": {
+            "source": dataset.manifest.security.source,
+            "enabled_tools": list(dataset.manifest.security.enabled_tools),
+            "required_tools": list(dataset.manifest.security.required_tools),
+            "required_satisfied": dataset.manifest.security.required_tools_satisfied(),
+        },
         "run": run_provenance or {},
     }
 
@@ -730,6 +826,9 @@ def evaluate_publication_state(
     """
 
     dataset = load_dataset(name)
+    # Plan 092 R10: a dataset whose required security tools are not satisfied
+    # (a required tool was disabled via unsafe override) cannot publish rows.
+    missing_required_tools = dataset.manifest.security.missing_required_tools()
     selected = set(row_ids or [])
     state = read_publication_state(name)
     rows_by_id = read_rows_by_id(name)
@@ -774,6 +873,8 @@ def evaluate_publication_state(
         )
         if security_stale:
             block_reasons.append("security_version_stale")
+        if missing_required_tools:
+            block_reasons.append("required_security_tools_missing")
         block_reasons = sorted(set(block_reasons))
         if block_reasons:
             status = "blocked"

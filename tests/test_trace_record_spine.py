@@ -237,10 +237,12 @@ class TestTraceRecordSpineShape:
         # The dumped shape must not contain a patch key either.
         assert "patch" not in o2.model_dump()
 
-    def test_schema_version_is_zero_six_zero(self):
-        assert SCHEMA_VERSION == "0.6.0"
+    def test_schema_version_is_current(self):
+        # 0.7.0 adds the additive dataset security policy models (plan 092);
+        # the TraceRecord wire shape is unchanged from 0.6.0.
+        assert SCHEMA_VERSION == "0.7.0"
         r = _minimal_record()
-        assert r.schema_version == "0.6.0"
+        assert r.schema_version == "0.7.0"
 
     def test_trace_record_jsonl_round_trip_preserves_patches(self):
         r = _minimal_record(

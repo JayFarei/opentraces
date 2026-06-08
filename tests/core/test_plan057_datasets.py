@@ -126,6 +126,97 @@ def test_append_rows_validates_schema_dedupes_and_rebuilds_row_index():
     assert read_row_index("grill-me-intents")[0].payload_hash == entries[0].payload_hash
 
 
+def test_append_row_provenance_records_dataset_security_policy():
+    """Plan 092 R9: row provenance records the policy tools used for the append."""
+    from opentraces.core.datasets import (
+        append_rows,
+        create_dataset,
+        read_row_provenance,
+    )
+    from opentraces_schema import DatasetSecurityPolicy
+
+    create_dataset(
+        "sec-prov",
+        workflow_skill="sec-curator",
+        workflow_digest="sha256:wf",
+        row_schema=_row_schema(),
+        security=DatasetSecurityPolicy(
+            source="workflow",
+            required_tools=["regex"],
+            optional_tools=["entropy"],
+            enabled_tools=["regex", "entropy"],
+        ),
+    )
+    row = {
+        "source_trace_id": "trace-1",
+        "source_unit_id": "tu:trace-1:trace",
+        "summary": "A row with a security policy.",
+    }
+    append_rows("sec-prov", [row], run_id="run_1")
+    provenance = read_row_provenance("sec-prov")
+    assert len(provenance) == 1
+    record = provenance[0] if isinstance(provenance, list) else next(iter(provenance.values()))
+    policy = record["security_policy"]
+    assert policy["source"] == "workflow"
+    assert policy["enabled_tools"] == ["regex", "entropy"]
+    assert policy["required_tools"] == ["regex"]
+    assert policy["required_satisfied"] is True
+
+
+def test_publish_check_blocks_rows_when_required_security_tools_missing():
+    """Plan 092 R10: a dataset whose required tools are disabled (via override)
+    cannot publish; evaluate_publication_state blocks every row."""
+    from opentraces.core.datasets import (
+        append_rows,
+        apply_dataset_security_edit,
+        create_dataset,
+        evaluate_publication_state,
+        load_dataset,
+        save_manifest,
+    )
+    from opentraces_schema import DatasetSecurityPolicy
+
+    create_dataset(
+        "sec-gate",
+        workflow_skill="sec-curator",
+        workflow_digest="sha256:wf",
+        row_schema=_row_schema(),
+        publication_policy={"review": "auto"},
+        security=DatasetSecurityPolicy(
+            source="workflow",
+            required_tools=["regex"],
+            enabled_tools=["regex"],
+            allow_disable_required=True,
+        ),
+    )
+    row = {
+        "source_trace_id": "trace-1",
+        "source_unit_id": "tu:trace-1:trace",
+        "summary": "A row guarded by a required tool.",
+    }
+    append_rows("sec-gate", [row], run_id="run_1", privacy_tier="low")
+
+    # With required tools satisfied, the row is publishable.
+    ok_state = evaluate_publication_state("sec-gate", privacy_tier="low")
+    statuses = {e.status for e in ok_state.rows.values()}
+    assert statuses == {"publishable"}
+
+    # Disable the required tool via unsafe override, then re-evaluate.
+    dataset = load_dataset("sec-gate")
+    new_policy, _ = apply_dataset_security_edit(
+        dataset.manifest.security,
+        disable=["regex"],
+        unsafe_override=True,
+        reason="testing the gate",
+    )
+    save_manifest(dataset.path, dataset.manifest.model_copy(update={"security": new_policy}))
+
+    blocked_state = evaluate_publication_state("sec-gate", privacy_tier="low")
+    entry = next(iter(blocked_state.rows.values()))
+    assert entry.status == "blocked"
+    assert "required_security_tools_missing" in entry.block_reasons
+
+
 def test_dry_run_preview_never_appends_or_updates_row_index():
     from opentraces.core.datasets import append_rows, create_dataset, dataset_path, read_row_index
 
