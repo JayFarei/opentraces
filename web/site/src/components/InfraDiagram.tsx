@@ -32,14 +32,16 @@ const workflowTree: TreeLine[] = [
 const datasetRows = ["pending", "pending", "approved", "pending"];
 
 // Each local stage syncs to its own Hugging Face destination.
+// Two real remote destinations, aligned beneath the bucket and dataset columns.
+// (The "ML Intern" node was README ASCII shorthand with no shipped command.)
 const remoteStages = [
-  { name: "HF private bucket", verb: "sync" },
-  { name: "ML Intern", verb: "run on HF" },
-  { name: "Hub dataset", verb: "push" },
+  { name: "HF private bucket", verb: "sync", col: 1 },
+  { name: "Hub dataset", verb: "publish", col: 5 },
 ];
 
 // Trace consumers — what you build on top of capture + pipeline.
-const consumers = [
+type Consumer = { tag: string; color: string; status?: string; title: string; desc: string };
+const consumers: Consumer[] = [
   {
     tag: "capsule",
     color: "var(--c-write)",
@@ -55,6 +57,7 @@ const consumers = [
   {
     tag: "standup",
     color: "var(--c-plan)",
+    status: "prototype",
     title: "Standup",
     desc: "A daily report rebuilt from yesterday's sessions: what was attempted, what landed, what failed, and what's still open before you start today.",
   },
@@ -67,6 +70,7 @@ const consumers = [
   {
     tag: "alerts",
     color: "var(--c-error)",
+    status: "mock",
     title: "Alerts",
     desc: "Standing alerts and reports over trace usage: failure rate, context waste, third-party tools, secrets, policy violations, or any pattern you care about.",
   },
@@ -176,8 +180,8 @@ export default function InfraDiagram() {
             {/* Remote band — each stage's HF destination, beneath its column */}
             <div className="pipe-remote-band">
               <div className="pipe-remote-grid">
-                {remoteStages.map((s, i) => (
-                  <div key={s.name} className="pipe-remote-col" style={{ gridColumn: i * 2 + 1 }}>
+                {remoteStages.map((s) => (
+                  <div key={s.name} className="pipe-remote-col" style={{ gridColumn: s.col }}>
                     <span className="pipe-cross">{"↓"} {s.verb}</span>
                     <div className="pipe-remote-chip">
                       <span className="pipe-hf-mark" aria-hidden="true" />
@@ -201,7 +205,10 @@ export default function InfraDiagram() {
       <div className="use-grid use-grid-consumers" style={{ marginTop: 20 }}>
         {consumers.map((c) => (
           <div key={c.tag} className="use-card" style={{ "--cc": c.color } as CSSProperties}>
-            <div className="use-card-tag">{c.tag}</div>
+            <div className="use-card-head">
+              <span className="use-card-tag">{c.tag}</span>
+              {c.status && <span className={`use-card-status ${c.status}`}>{c.status}</span>}
+            </div>
             <h4>{c.title}</h4>
             <p>{c.desc}</p>
           </div>

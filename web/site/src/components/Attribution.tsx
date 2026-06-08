@@ -106,10 +106,10 @@ export default function Attribution() {
       <div className="section-title">Who wrote this line of code?</div>
       <p className="section-sub" style={{ maxWidth: 620, marginBottom: 16 }}>
         When agents write most of the code, <strong style={{ color: "var(--text)" }}>git blame</strong> points at a user, not a session id.{" "}
-        <strong style={{ color: "var(--text)" }}>trail blame commit</strong> and <strong style={{ color: "var(--text)" }}>trail graph</strong>{" "}resolve every commit back to the traces that produced it — so you can see what worked and what didn&apos;t across your agent sessions.
+        <strong style={{ color: "var(--text)" }}>Trails</strong> resolve every commit back to the traces that produced it: <strong style={{ color: "var(--text)" }}>trail blame commit</strong> and <strong style={{ color: "var(--text)" }}>trail graph</strong> show what worked and what didn&apos;t across your agent sessions, and the percentage is how much of the commit each session is attributed, not a test-coverage number.
       </p>
       <p className="section-sub" style={{ maxWidth: 620 }}>
-        <strong style={{ color: "var(--text)" }}>Attribution</strong> search can surface as a semantic diff — added functions, modified classes, renamed files — so agents can pull up the session behind any change in a fraction of the tokens a line-level view would cost.
+        Blame renders as a semantic diff — added functions, modified classes, renamed symbols — so agents can pull up the session behind any change in a fraction of the tokens a line-level view would cost.
       </p>
 
       <div className="terminal attr-terminal">
@@ -175,7 +175,7 @@ function GraphView() {
         return (
           <div key={i} className="attr-row">
             <span className="di attr-tree">{line.tree}</span>
-            <span className="n">s:</span>
+            <span className="n">t:</span>
             <span className="w">{line.hash}</span>
             {line.counts && <Counts c={line.counts} />}
             {line.noun && <span className="di">{line.noun}</span>}
@@ -229,7 +229,7 @@ function BlameView() {
                 <span className="di">{branch}</span>
                 <span className="n">◆</span>
               </span>
-              <span className="n">s:</span>
+              <span className="n">t:</span>
               <span className="w">{t.hash}</span>
               <span className="di">{t.model}</span>
               <span className="di">·</span>

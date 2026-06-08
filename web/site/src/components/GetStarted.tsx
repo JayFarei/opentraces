@@ -21,9 +21,11 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 
 const terminalSteps = [
   { cmd: "pipx install opentraces", desc: "install the CLI" },
-  { cmd: "opentraces setup", desc: "one-time machine setup; repos auto-enroll on first session" },
+  { cmd: "opentraces setup", desc: "one-time machine setup; capture is passive under global tracking" },
   { cmd: "opentraces trace query --since 7d", desc: "search the private bucket of captured traces" },
-  { cmd: "opentraces dataset publish my-dataset", desc: "project rows with a workflow, then publish approved ones to HF" },
+  { cmd: "opentraces dataset run evals", desc: "project matching traces into reviewable rows with a workflow" },
+  { cmd: "opentraces dataset review approve evals", desc: "walk each row, check redactions, approve what is safe to share" },
+  { cmd: "opentraces dataset publish evals", desc: "ships only rows you approved; raw traces never leave the bucket" },
 ];
 
 const agentSteps = [
@@ -40,7 +42,7 @@ export default function GetStarted() {
       <div className="section-title">Capture privately, publish projected rows.</div>
       <p className="section-sub">
         Open data is the new open source. Your agent traces are the most valuable dataset
-        nobody is collecting. Start contributing to the commons.
+        nobody is collecting. Nothing leaves your machine until you approve and publish a dataset.
       </p>
 
       <div className="get-started-dual">

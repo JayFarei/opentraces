@@ -230,9 +230,9 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
           <div style={{ height: 16 }} />
           <h1>Open data is the new open source.</h1>
           <p className="hero-sub">
-            When LLMs drive the logic, traces become the real source: the record of decisions, tool calls, and reasoning behind the outcome.
+            Every coding session leaves the data you actually want: the prompts, tool calls, reasoning, and edits behind the outcome. When the terminal closes, it is gone.
             <br /><br />
-            open<strong>traces</strong> captures sessions into a private bucket, lets workflows project compliant dataset rows, and publishes only the reviewed rows you choose to share.
+            open<strong>traces</strong> captures it into a private bucket, links each edit to the commit that shipped it, and lets workflows project security-scanned, reviewed dataset rows you choose to share.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (

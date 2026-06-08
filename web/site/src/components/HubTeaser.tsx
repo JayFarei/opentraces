@@ -2,12 +2,18 @@ import Link from "next/link";
 import SectionRule from "./SectionRule";
 import HubWindow from "./HubWindow";
 
-const bullets = [
+const shipped = [
   "trace viewer · conversation + trail tabs · minimap · context-waste + run-health signals",
   "vcs trails · every commit resolved back to its sessions",
   "capsules · shareable bounded slices of a run",
-  "spotlight · search across the bucket, bm25 + semantic",
-  "evals, alerts, and a ⌘K command palette",
+  "spotlight · bm25 + semantic search across the bucket",
+  "⌘K command palette",
+];
+
+// Views that exist in the prototype but are not yet shipped in the CLI.
+const preview = [
+  "evals · scored rollouts",
+  "alerts · standing reports over trace usage",
 ];
 
 export default function HubTeaser() {
@@ -26,11 +32,21 @@ export default function HubTeaser() {
       </div>
 
       <div className="hub-teaser-foot">
-        <ul className="hub-teaser-bullets">
-          {bullets.map((b) => (
-            <li key={b}>{b}</li>
-          ))}
-        </ul>
+        <div className="hub-teaser-cols">
+          <ul className="hub-teaser-bullets">
+            {shipped.map((b) => (
+              <li key={b}>{b}</li>
+            ))}
+          </ul>
+          <div className="hub-teaser-preview">
+            <div className="hub-teaser-preview-label">in the prototype · not yet in the cli</div>
+            <ul className="hub-teaser-bullets muted">
+              {preview.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
         <Link className="btn btn-primary hub-teaser-cta" href="/hub">[open the hub]</Link>
       </div>
     </section>

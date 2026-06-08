@@ -1830,6 +1830,19 @@ tr:hover td { background: var(--surface-hover); }
 }
 .hub-teaser-bullets li::before { content: "· "; color: var(--text-muted); }
 .hub-teaser-cta { flex: 0 0 auto; }
+.hub-teaser-cols { display: flex; gap: 28px; flex: 1 1 auto; flex-wrap: wrap; align-items: flex-start; min-width: 0; }
+.hub-teaser-cols .hub-teaser-bullets { flex: 1 1 300px; }
+.hub-teaser-preview { flex: 0 1 auto; border-left: 1px solid var(--border); padding-left: 20px; }
+.hub-teaser-preview-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--fg-mute);
+  margin-bottom: 7px;
+}
+.hub-teaser-bullets.muted { gap: 4px; }
+.hub-teaser-bullets.muted li { color: var(--fg-mute); }
 
 /* /hub page */
 .hub-page-container { max-width: 1480px; padding: 0 20px; }
@@ -3013,10 +3026,40 @@ p {
   margin-bottom: 14px;
 }
 .feat-dot { width: 9px; height: 9px; border-radius: 3px; background: var(--fc); }
+.feature-cell { display: flex; flex-direction: column; }
+.feature-cell p { flex: 1 1 auto; }
+.feat-chip {
+  align-self: flex-start;
+  margin-top: 14px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Trace-consumer cards — colored tag + live-card left accent. */
 .use-card { border-left: 2px solid color-mix(in oklch, var(--cc, var(--border)) 55%, var(--border)); }
+.use-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .use-card-tag { color: var(--cc, var(--accent)); }
+.use-card-status {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-mute);
+  background: var(--surface-2);
+}
+.use-card-status.mock { color: var(--c-error); border-color: color-mix(in oklch, var(--c-error) 40%, var(--border)); }
 
 /* Larger Hub demo — centered breakout wider than the text column. */
 .hub-teaser-wide {

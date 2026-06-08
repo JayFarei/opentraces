@@ -41,12 +41,14 @@ const modes = [
   },
 ];
 
+// Each row names the tool that actually produces it (regex catches the email and
+// DB URL on its own; business_logic does AWS arns; path_anonymizer hashes the user).
 const redactionDemo = [
-  { label: "API key", original: "sk-proj-abc123def456ghi789...", redacted: "[API_KEY_1]" },
-  { label: "email", original: "jay@company.internal", redacted: "[EMAIL_1]" },
-  { label: "DB URL", original: "postgresql://admin:pass@db.internal:5432/prod", redacted: "[DB_URL_1]" },
-  { label: "AWS account", original: "arn:aws:iam::123456789012:role/deploy", redacted: "arn:aws:iam::[AWS_ACCOUNT_1]:role/deploy" },
-  { label: "path", original: "/Users/jayfarei/src/client-project/", redacted: "/Users/user/src/client-project/" },
+  { label: "API key", tool: "regex", original: "sk-proj-abc123def456ghi789...", redacted: "[API_KEY_1]" },
+  { label: "email", tool: "regex", original: "jay@company.internal", redacted: "[EMAIL_1]" },
+  { label: "DB URL", tool: "regex", original: "postgresql://admin:pass@db.internal:5432/prod", redacted: "[DB_URL_1]" },
+  { label: "AWS account", tool: "business_logic", original: "arn:aws:iam::123456789012:role/deploy", redacted: "arn:aws:iam::[AWS_ACCOUNT_1]:role/deploy" },
+  { label: "path", tool: "path_anonymizer", original: "/Users/jayfarei/src/client-project/", redacted: "/Users/3f9a1c/src/client-project/" },
 ];
 
 // The full v0.6.0 security registry: nine per-record tools across three
@@ -171,7 +173,10 @@ export default function PrivacyTrust() {
             <div style={{ padding: 16 }}>
               {redactionDemo.map((r) => (
                 <div key={r.label} style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>{r.label}</div>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 3 }}>
+                    <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase" }}>{r.label}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--c-read)" }}>{r.tool}</span>
+                  </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
                     <span style={{ color: "var(--red)", textDecoration: "line-through", opacity: 0.5, fontSize: 11, wordBreak: "break-all", minWidth: 0 }}>{r.original}</span>
                     <span style={{ color: "var(--text-dim)", fontSize: 10 }}>{"\u2192"}</span>
