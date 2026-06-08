@@ -5,6 +5,30 @@ import { useEffect, useState } from "react";
 
 const GH_URL = "https://github.com/JayFarei/opentraces";
 
+// Session-wide star cache so the nav badge resolves once and then renders
+// instantly (and identically) on every page — the bar never changes size as
+// you navigate. Pages that fetch the count server-side seed this via the prop;
+// the rest read it from /api/stars.
+let starCache: string | null = null;
+let starPromise: Promise<string> | null = null;
+function loadStars(): Promise<string> {
+  if (starCache != null) return Promise.resolve(starCache);
+  const promise =
+    starPromise ??
+    (starPromise = fetch("/api/stars")
+      .then((r) => r.json())
+      .then((d): string => (typeof d?.stars === "string" ? d.stars : "—"))
+      .then((v) => {
+        starCache = v;
+        return v;
+      })
+      .catch((): string => {
+        starCache = "—";
+        return "—";
+      }));
+  return promise;
+}
+
 function resolveTheme(): "dark" | "light" {
   const stored = localStorage.getItem("theme") as "dark" | "light" | null;
   if (stored) return stored;
@@ -54,11 +78,28 @@ function StarIcon() {
   );
 }
 
-export default function Nav({ stars }: { stars?: string }) {
+export default function Nav({ stars: initialStars }: { stars?: string }) {
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     typeof window === "undefined" ? "light" : resolveTheme(),
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  // The cache is read client-only so the first (hydration) render matches the
+  // server output (prop, or "—") and never mismatches; SPA navigations then pick
+  // up the cached value immediately.
+  const [stars, setStars] = useState<string | undefined>(
+    initialStars ?? (typeof window !== "undefined" ? starCache ?? undefined : undefined),
+  );
+
+  useEffect(() => {
+    if (initialStars) {
+      if (starCache == null) starCache = initialStars; // seed cache for other pages
+      return;
+    }
+    if (stars) return;
+    let alive = true;
+    loadStars().then((s) => { if (alive) setStars(s); });
+    return () => { alive = false; };
+  }, [initialStars, stars]);
   useEffect(() => {
     applyTheme(theme);
 
@@ -98,7 +139,9 @@ export default function Nav({ stars }: { stars?: string }) {
       <div className={`nav-links${menuOpen ? " nav-links-open" : ""}`}>
         <Link href="/schema" className="nav-link" onClick={() => setMenuOpen(false)}>schema</Link>
         <Link href="/explorer" className="nav-link" onClick={() => setMenuOpen(false)}>explorer</Link>
-        <Link href="/hub" className="nav-link" onClick={() => setMenuOpen(false)}>hub</Link>
+        <Link href="/hub" className="nav-link" onClick={() => setMenuOpen(false)}>
+          hub<span className="nav-new-pill">new</span>
+        </Link>
         <Link href="/docs" className="nav-link" onClick={() => setMenuOpen(false)}>docs</Link>
         <a href="/llms.txt" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>/llms.txt</a>
         <a
@@ -109,7 +152,7 @@ export default function Nav({ stars }: { stars?: string }) {
           onClick={() => setMenuOpen(false)}
           data-star-nav
         >
-          github{stars && <span className="nav-star-badge">&thinsp;[<StarIcon />{stars}]</span>}<ExternalArrow />
+          github<span className="nav-star-badge">&thinsp;[<StarIcon />{stars ?? "—"}]</span><ExternalArrow />
         </a>
         <span className="nav-divider" style={{ color: "var(--border)" }}>|</span>
         <button
