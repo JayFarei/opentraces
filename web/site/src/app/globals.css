@@ -2378,7 +2378,10 @@ tr:hover td { background: var(--surface-hover); }
   text-align: center;
 }
 @media (max-width: 640px) {
-  .hub-teaser-foot { flex-direction: column; align-items: stretch; }
+  .hub-teaser-foot { flex-direction: column; align-items: stretch; gap: 16px; }
+  /* In a column the pitch's `flex: 1 1 360px` would balloon to a 360px-tall box
+     and push the form down — collapse it to its natural height on mobile. */
+  .hub-teaser-pitch { flex: 0 0 auto; max-width: none; }
   .hub-teaser-cta-col { flex-basis: auto; width: 100%; }
   .ea-form { max-width: none; }
 }
@@ -2736,12 +2739,8 @@ tr:hover td { background: var(--surface-hover); }
   }
   .pipe-session-flow > .pipe-station-arrow { padding-top: 0; margin-left: 19px; }
 
-  /* keep the trace strip inside the box on narrow screens */
-  .pipe-minimap { gap: 1px; height: 26px; }
-  .pipe-minimap-seg { min-width: 1px; }
-
-  /* drop the desktop-only detail visuals */
-  .pipe-trace-legend,
+  /* drop the desktop-only detail visuals: trace strip + legend, commit graph */
+  .pipe-trace-block,
   .pipe-commit-block { display: none; }
 
   /* Drop centred above the now full-width bucket */
@@ -3539,11 +3538,14 @@ a:hover .openmake-mark {
   .hero-grid .terminal-body .rail-frame-label { padding-left: 2.2ch; }
 }
 @media (max-width: 680px) {
-  /* Hero CTAs fill the column and hold a fixed 3:2 proportion as they expand. */
+  /* Hero CTAs fill the column. flex-basis:auto keeps each button at least its
+     content width (no label wrap), and the 3:2 grow keeps their proportion as
+     they expand to fill the row. */
   .hero-cta-stack { width: 100%; max-width: none; }
-  .hero-cta { flex-wrap: nowrap; width: 100%; gap: 10px; }
-  .hero-cta .cta-copy-prompt { flex: 3 1 0; padding: 0 16px; }
-  .hero-cta .cta-secondary { flex: 2 1 0; padding: 0 14px; justify-content: center; }
+  .hero-cta { flex-wrap: nowrap; width: 100%; gap: 10px; align-items: stretch; }
+  .hero-cta .cta-copy-prompt { flex: 3 1 auto; padding: 0 14px; }
+  .hero-cta .cta-secondary { flex: 2 1 auto; padding: 0 12px; justify-content: center; white-space: nowrap; }
+  .hero-cta .cta-label { white-space: nowrap; }
 }
 @media (max-width: 600px) {
   .feature-grid, .use-grid { grid-template-columns: 1fr; }
