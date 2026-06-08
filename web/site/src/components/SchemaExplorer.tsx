@@ -13,7 +13,7 @@ export default function SchemaExplorer() {
       </p>
 
       <div className="schema-block">
-        <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`{`}
+        <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`{`}  <span className="schema-comment">{"// abridged · see /schema for exact field placement"}</span>
 {"\n"}  <span className="schema-key">&quot;schema_version&quot;</span>: <span className="schema-str">&quot;{latestVersion}&quot;</span>,
 {"\n"}  <span className="schema-key">&quot;trace_id&quot;</span>: <span className="schema-str">&quot;uuid&quot;</span>,
 {"\n"}  <span className="schema-key">&quot;execution_context&quot;</span>: <span className="schema-str">&quot;devtime&quot;</span>,
