@@ -1,53 +1,40 @@
 import Link from "next/link";
 import SectionRule from "./SectionRule";
 import HubWindow from "./HubWindow";
-
-const shipped = [
-  "trace viewer · conversation + trail tabs · minimap · context-waste + run-health signals",
-  "vcs trails · every commit resolved back to its sessions",
-  "capsules · shareable bounded slices of a run",
-  "spotlight · bm25 + semantic search across the bucket",
-  "⌘K command palette",
-];
-
-// Views that exist in the prototype but are not yet shipped in the CLI.
-const preview = [
-  "evals · scored rollouts",
-  "alerts · standing reports over trace usage",
-];
+import EarlyAccessForm from "./EarlyAccessForm";
 
 export default function HubTeaser() {
   return (
     <section>
-      <SectionRule label="sneak peek" />
-      <div className="section-title">Browse your traces in the Hub, not just the terminal.</div>
+      <SectionRule label="hub preview" />
+      <div className="section-title">Learn from your team data.</div>
       <p className="section-sub" style={{ maxWidth: 640, marginBottom: 24 }}>
-        The Hub is the desktop companion to the CLI, where the bucket, trails, context tree, and
-        datasets become browsable. Open a trace, read the conversation, follow the trail, watch the
-        run health, all without leaving the page.
+        Every run your team makes is data you can learn from. The Hub is the web companion to the
+        CLI, where your shared bucket, trails, context tree, and datasets become browsable, with
+        trace intelligence on top.
       </p>
 
       <div className="hub-teaser-wide">
         <HubWindow clipHeight={680} lazy address="opentraces.ai/hub" />
+        <Link className="hub-peel" href="/hub" aria-label="Learn more about the hub">
+          <span className="hub-peel-label">learn more about the hub</span>
+          <span className="hub-peel-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 7h10v10" />
+              <path d="M7 17 17 7" />
+            </svg>
+          </span>
+        </Link>
       </div>
 
       <div className="hub-teaser-foot">
-        <div className="hub-teaser-cols">
-          <ul className="hub-teaser-bullets">
-            {shipped.map((b) => (
-              <li key={b}>{b}</li>
-            ))}
-          </ul>
-          <div className="hub-teaser-preview">
-            <div className="hub-teaser-preview-label">in the prototype · not yet in the cli</div>
-            <ul className="hub-teaser-bullets muted">
-              {preview.map((b) => (
-                <li key={b}>{b}</li>
-              ))}
-            </ul>
-          </div>
+        <p className="hub-teaser-pitch">
+          Get early access for you and your team — a 15min call with the founder to get you set
+          up, plus unlimited trace intelligence credits while the Hub is in preview.
+        </p>
+        <div className="hub-teaser-cta-col">
+          <EarlyAccessForm />
         </div>
-        <Link className="btn btn-primary hub-teaser-cta" href="/hub">[open the hub]</Link>
       </div>
     </section>
   );

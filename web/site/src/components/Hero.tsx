@@ -3,46 +3,13 @@
 import Link from "next/link";
 import { useState } from "react";
 import Terminal from "./Terminal";
-import { AGENT_PROMPT } from "@/lib/agent-prompt";
+import CopyPromptButton from "./CopyPromptButton";
+import InstallsSparkline from "./InstallsSparkline";
+import AgentPromptCarousel from "./AgentPromptCarousel";
 import pkg from "@/lib/version.json";
 import type { HeroMetricItem } from "@/lib/homepage-metrics";
 
 const tabLabels = ["setup", "bucket", "trace", "trail", "ctx", "workflow", "dataset"];
-const AGENT_LINES = AGENT_PROMPT.split("\n").length;
-
-const installMethods = [
-  { label: "pipx", cmd: "pipx install opentraces", copyText: "pipx install opentraces" },
-  { label: "brew", cmd: "brew install [..] opentraces", copyText: "brew install JayFarei/opentraces/opentraces" },
-  { label: "skill", cmd: "npx skills add jayfarei/opentraces", copyText: "npx skills add jayfarei/opentraces" },
-  { label: "pi", cmd: "pi install npm:opentraces-pi", copyText: "pi install npm:opentraces-pi" },
-  { label: "agent", cmd: `agent setup prompt +${AGENT_LINES} lines`, copyText: AGENT_PROMPT, prefix: ">" },
-];
-
-function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
-  if (icon === "install") {
-    return (
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 2l5 2.5v5L8 12 3 9.5v-5L8 2Z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-        <path d="M3 4.5L8 7l5-2.5M8 7v5" fill="none" stroke="currentColor" strokeWidth="1.1" />
-      </svg>
-    );
-  }
-
-  if (icon === "download") {
-    return (
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 2v7m0 0 3-3m-3 3L5 6M3 12.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M3 4.5h10M3 8h10M3 11.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
-      <path d="M5 3v10M11 3v10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="square" />
-    </svg>
-  );
-}
 
 // ── Unified tab panel model ──────────────────────────────────
 // Every tab renders the same shape: a prompt+command line, a framed
@@ -77,11 +44,12 @@ const HERO_PANELS: Panel[] = [
       { label: "agents", value: "claude · codex · pi", valCls: "s", status: "ready" },
       { label: "hooks", value: "session capture", status: "on" },
       { label: "git + watcher", value: "post-commit · blame", status: "on" },
+      { label: "otel", value: "context-tree capture", status: "ready" },
       { label: "skill", value: "shared agent skill", status: "linked" },
       { label: "hf login", value: "alice-dev", valCls: "s", status: "auth" },
     ],
     footer: "Global tracking on — repos auto-enroll on first capture",
-    next: ["code as usual — no per-repo init needed", "opentraces bucket status"],
+    next: ["opentraces bucket status"],
   },
   {
     prompt: "~/my-project$",
@@ -216,75 +184,75 @@ function TabPanel({ panel }: { panel: Panel }) {
   );
 }
 
-export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
-  const [activeTab, setActiveTab] = useState(1);
-  const [installIdx, setInstallIdx] = useState(0);
+export default function Hero({
+  metrics,
+  agentPrompt,
+  installSeries,
+}: {
+  metrics: HeroMetricItem[];
+  agentPrompt: string;
+  installSeries: number[];
+}) {
+  const [activeTab, setActiveTab] = useState(0);
 
   const panel = HERO_PANELS[activeTab];
+  const installsValue = metrics.find((m) => m.icon === "install")?.value ?? "—";
 
   return (
     <section className="hero">
       <div className="hero-grid">
-        <div>
-          <div className="hero-pill">open traces &nbsp; v{pkg.version}</div>
+        <div className="hero-left">
+          <div className="hero-pill">opentraces &nbsp; v{pkg.version}</div>
           <div style={{ height: 16 }} />
-          <h1>Open data is the new open source.</h1>
+          <h1>Traces are the new source code.</h1>
           <p className="hero-sub">
-            Every coding session leaves the data you actually want: the prompts, tool calls, reasoning, and edits behind the outcome. When the terminal closes, it is gone.
+            The unit of work is no longer the diff. It is the session you run to produce it. Every prompt, tool call, and edit is behind the outcome.
             <br /><br />
-            open<strong>traces</strong> captures it into a private bucket, links each edit to the commit that shipped it, and lets workflows project security-scanned, reviewed dataset rows you choose to share.
+            opentraces, the open infrastructure for what your agents do, links every session to the commit that shipped it so your usage data compounds.
           </p>
-          <div className="hero-install-tabs">
-            {installMethods.map((m, i) => (
-              <button
-                key={m.label}
-                className={`hero-install-tab${i === installIdx ? " active" : ""}`}
-                onClick={() => setInstallIdx(i)}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-          <div className="hero-cli-wrap">
-            <span className="hero-cli-prefix">{installMethods[installIdx].prefix ?? "$"}</span>
-            <span className="hero-cli-input">{installMethods[installIdx].cmd}</span>
-            <span
-              className="hero-cli-copy"
-              title="Copy"
-              onClick={() => navigator.clipboard.writeText(installMethods[installIdx].copyText)}
-            >[cp]</span>
-          </div>
-          <div className="hero-actions">
-            <Link className="btn btn-primary hero-primary-cta" href="/docs/getting-started/quickstart">[start capturing]</Link>
-            <Link
-              className="hero-metric-strip"
-              href="/explorer"
-              aria-label={`Explore community traces. Installs ${metrics[0]?.value ?? "unavailable"}, stars ${metrics[1]?.value ?? "unavailable"}, traces ${metrics[2]?.value ?? "unavailable"}.`}
-            >
-              <span className="hero-metric-strip-default" aria-hidden="true">
-                {metrics.map((metric) => (
-                  <span key={metric.label} className="hero-metric-cell" data-metric-type={metric.icon} title={metric.title}>
-                    <span className="hero-metric-label">{metric.label}</span>
-                    <span className="hero-metric-bottom">
-                      <span className="hero-metric-icon">
-                        <MetricIcon icon={metric.icon} />
-                      </span>
-                      <span className="hero-metric-value">{metric.value}</span>
-                    </span>
-                  </span>
-                ))}
-              </span>
-              <span className="hero-metric-strip-hover" aria-hidden="true">[explore]</span>
+          <div className="hero-cta-stack">
+          <div className="hero-cta">
+            <CopyPromptButton prompt={agentPrompt} />
+            <Link className="cta-secondary" href="/docs">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <g fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <path d="M3.5 1.5 H10 L12.5 4 V14.5 H3.5 Z" />
+                  <path d="M10 1.5 V4 H12.5" />
+                  <line x1="5.5" y1="7" x2="10.5" y2="7" />
+                  <line x1="5.5" y1="9.5" x2="10.5" y2="9.5" />
+                  <line x1="5.5" y1="12" x2="9" y2="12" />
+                </g>
+              </svg>
+              <span>View Docs</span>
             </Link>
           </div>
+          <Link
+            className="hero-installs-card"
+            href="/explorer"
+            aria-label={`Community installs ${installsValue}. Explore community traces.`}
+          >
+            <span className="hero-installs-stat">
+              <span className="hero-installs-label">Installs</span>
+              <span className="hero-installs-value">{installsValue}</span>
+            </span>
+            <span className="hero-installs-spark-wrap" aria-hidden="true">
+              <InstallsSparkline points={installSeries} />
+              <span className="hero-installs-cta">
+                Explore the community
+                <span className="hero-installs-cta-arrow">→</span>
+              </span>
+            </span>
+          </Link>
+          </div>
         </div>
-        <div>
+        <div className="hero-terminal-col">
           <Terminal
             tabs={tabLabels.map((label, i) => ({
               label,
               active: i === activeTab,
             }))}
             onTabClick={setActiveTab}
+            footer={<AgentPromptCarousel />}
           >
             <TabPanel panel={panel} />
           </Terminal>

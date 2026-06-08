@@ -164,6 +164,17 @@ async function getPypiAllTimeDownloads(baseUrl: string): Promise<number | null> 
   return points.reduce((sum, point) => sum + point.value, 0);
 }
 
+// Recent daily install volume, for the unlabeled hero sparkline. Returns the
+// raw per-day values over the window (newest last); the sparkline normalizes
+// them, so absolute magnitude and units are intentionally not surfaced.
+async function getInstallSeries(baseUrl: string): Promise<number[]> {
+  const response = await fetchJson<TimeseriesResponse>(
+    `${baseUrl}/v1/projects/opentraces/timeseries?source=pypi&metric=downloads&window=90d`,
+  );
+
+  return (response?.series[0]?.points ?? []).map((point) => point.value);
+}
+
 export interface HeroMetricItem {
   icon: "install" | "download" | "trace";
   label: string;
@@ -174,15 +185,26 @@ export interface HeroMetricItem {
 export interface HomepageHeroData {
   metrics: HeroMetricItem[];
   stars: string;
+  installSeries: number[];
+}
+
+// Star count on its own, formatted exactly like the homepage badge ("—" when
+// unavailable). Used by /api/stars so the nav badge is identical on every page.
+export async function getGithubStars(): Promise<string> {
+  const baseUrl = getStatsApiBaseUrl();
+  const summary = baseUrl ? await getDistributionSummary(baseUrl) : null;
+  const githubStars = summary?.sources.github.metrics.stars?.value ?? null;
+  return formatCompact(githubStars);
 }
 
 export async function getHomepageHeroMetrics(): Promise<HomepageHeroData> {
   const baseUrl = getStatsApiBaseUrl();
 
-  const [summary, pypiAllTimeDownloads, communityStats] = await Promise.all([
+  const [summary, pypiAllTimeDownloads, communityStats, installSeries] = await Promise.all([
     baseUrl ? getDistributionSummary(baseUrl) : Promise.resolve(null),
     baseUrl ? getPypiAllTimeDownloads(baseUrl) : Promise.resolve(null),
     getCommunityDatasetStats(),
+    baseUrl ? getInstallSeries(baseUrl) : Promise.resolve([]),
   ]);
 
   const brewInstalls365d = summary?.sources.homebrew.metrics.installs_365d?.value ?? 0;
@@ -211,5 +233,6 @@ export async function getHomepageHeroMetrics(): Promise<HomepageHeroData> {
       },
     ],
     stars: formatCompact(githubStars),
+    installSeries,
   };
 }

@@ -12,7 +12,7 @@ const features = [
   { color: "var(--c-push)", title: "trace intelligence", cmd: "opentraces trace --run-intel", desc: "Derive-on-demand signals about a run: context waste, run health, and A/B compare of two traces. No LLM, nothing persisted." },
   { color: "var(--c-plan)", title: "workflow templates", cmd: "opentraces workflow create", desc: "Skill-format packages project raw trace evidence into schema-valid dataset rows for a chosen objective." },
   { color: "var(--c-write)", title: "dataset row review", cmd: "opentraces dataset review", desc: "Approve, reject, reset, schedule, and publish projected rows; raw traces never leave the bucket." },
-  { color: "var(--c-error)", title: "optional security tools", cmd: "opentraces security tools list", desc: "Nine detectors, transformers, and a judge run in one fixed order before egress, all explicit and default off." },
+  { color: "var(--c-error)", title: "security tools", cmd: "opentraces security tools list", desc: "Nine detectors, transformers, and a judge run in one fixed order before egress, all explicit and default off." },
   { color: "var(--c-think)", title: "agent-native cli", cmd: "every command --json", desc: "Structured JSON with next_steps on every command. Built for agents to drive agents." },
 ];
 

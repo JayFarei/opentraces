@@ -58,7 +58,10 @@ export default function HubWindow({
   const [scale, setScale] = useState(0);
   const [mounted, setMounted] = useState(!lazy);
   const [loaded, setLoaded] = useState(false);
-  const [theme, setTheme] = useState<Theme>(readSiteTheme);
+  // Start from a constant that matches SSR (the site's light :root default) so
+  // the poster src is identical on server + first client render — no hydration
+  // mismatch. The theme-sync effect below swaps to the real theme after mount.
+  const [theme, setTheme] = useState<Theme>("light");
 
   // Seed the Hub's boot theme BEFORE the iframe loads (it reads ot-theme on boot),
   // so it comes up matching the site rather than flashing its dark default.

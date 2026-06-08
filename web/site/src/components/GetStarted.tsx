@@ -2,40 +2,22 @@
 
 import Link from "next/link";
 import SectionRule from "./SectionRule";
+import CopyPromptButton from "./CopyPromptButton";
 
-function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
+function InstallCmd({ cmd, copy }: { cmd: string; copy?: string }) {
   return (
-    <div className="gs-row">
-      <div className="gs-cmd-box">
-        <span className="gs-cmd-text">{cmd}</span>
-        <button
-          className="gs-cmd-cp"
-          onClick={() => navigator.clipboard.writeText(cmd)}
-          title="Copy to clipboard"
-        >[cp]</button>
-      </div>
-      <div className="gs-desc">{desc}</div>
+    <div className="gs-cmd-box">
+      <span className="gs-cmd-text">{cmd}</span>
+      <button
+        className="gs-cmd-cp"
+        onClick={() => navigator.clipboard.writeText(copy ?? cmd)}
+        title="Copy to clipboard"
+      >[cp]</button>
     </div>
   );
 }
 
-const terminalSteps = [
-  { cmd: "pipx install opentraces", desc: "install the CLI" },
-  { cmd: "opentraces setup", desc: "one-time machine setup; capture is passive under global tracking" },
-  { cmd: "opentraces trace query --since 7d", desc: "search the private bucket of captured traces" },
-  { cmd: "opentraces dataset run evals", desc: "project matching traces into reviewable rows with a workflow" },
-  { cmd: "opentraces dataset review approve evals", desc: "walk each row, check redactions, approve what is safe to share" },
-  { cmd: "opentraces dataset publish evals", desc: "ships only rows you approved; raw traces never leave the bucket" },
-];
-
-const agentSteps = [
-  { cmd: "set up opentraces on my machine", desc: "walks install/auth/capture choices; repos then auto-enroll on first session" },
-  { cmd: "scaffold a dataset and run it over my latest traces", desc: "agent calls dataset new + dataset run to populate rows from your traces" },
-  { cmd: "review the dataset rows and approve the safe ones", desc: "agent walks each row, checks redactions, approves what's safe to share" },
-  { cmd: "publish the approved rows to HuggingFace", desc: "uploads approved rows to the configured dataset remote" },
-];
-
-export default function GetStarted() {
+export default function GetStarted({ agentPrompt }: { agentPrompt: string }) {
   return (
     <section>
       <SectionRule label="get started" />
@@ -45,28 +27,55 @@ export default function GetStarted() {
         nobody is collecting. Nothing leaves your machine until you approve and publish a dataset.
       </p>
 
-      <div className="get-started-dual">
-        <div className="get-started-col">
-          <div className="get-started-col-header">
-            <span className="get-started-col-icon">$</span> from your terminal
+      <div className="gs-options">
+        <div className="gs-option">
+          <div className="gs-option-header">
+            <span className="gs-option-icon">&gt;</span> Get my agent to install it
           </div>
-          {terminalSteps.map((s) => (
-            <CopyBox key={s.cmd} cmd={s.cmd} desc={s.desc} />
-          ))}
+          <p className="gs-option-desc">
+            Paste the setup prompt into Claude, Codex, or Pi. It installs the CLI,
+            authenticates, and turns on capture for you.
+          </p>
+          <div className="gs-option-action">
+            <CopyPromptButton prompt={agentPrompt} />
+          </div>
         </div>
 
-        <div className="get-started-col">
-          <div className="get-started-col-header">
-            <span className="get-started-col-icon">&gt;</span> from your agent
+        <div className="gs-option">
+          <div className="gs-option-header">
+            <span className="gs-option-icon">$</span> Install it yourself
           </div>
-          {agentSteps.map((s) => (
-            <CopyBox key={s.cmd} cmd={s.cmd} desc={s.desc} />
-          ))}
+          <p className="gs-option-desc">
+            One-line install with pipx or Homebrew, then run <code>opentraces setup</code> once.
+          </p>
+          <div className="gs-option-action">
+            <InstallCmd cmd="pipx install opentraces" />
+            <InstallCmd cmd="brew install [...] opentraces" copy="brew install JayFarei/opentraces/opentraces" />
+          </div>
         </div>
-      </div>
 
-      <div className="hero-actions" style={{ marginTop: 32 }}>
-        <Link className="btn btn-primary" href="/docs/getting-started/installation">[get started]</Link>
+        <div className="gs-option">
+          <div className="gs-option-header">
+            <span className="gs-option-icon">?</span> Learn more about it
+          </div>
+          <p className="gs-option-desc">
+            See how capture, datasets, and publishing fit together before you commit.
+          </p>
+          <div className="gs-option-action">
+            <Link className="cta-secondary gs-option-link" href="/docs">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <g fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <path d="M3.5 1.5 H10 L12.5 4 V14.5 H3.5 Z" />
+                  <path d="M10 1.5 V4 H12.5" />
+                  <line x1="5.5" y1="7" x2="10.5" y2="7" />
+                  <line x1="5.5" y1="9.5" x2="10.5" y2="9.5" />
+                  <line x1="5.5" y1="12" x2="9" y2="12" />
+                </g>
+              </svg>
+              <span>View Docs</span>
+            </Link>
+          </div>
+        </div>
       </div>
     </section>
   );

@@ -1,14 +1,58 @@
-import type { CSSProperties } from "react";
+import type { ComponentType, ReactNode } from "react";
 import SectionRule from "./SectionRule";
+import { ClaudeGlyph, CodexGlyph, PiGlyph } from "./AgentGlyphs";
+import HuggingFaceLogo from "./HuggingFaceLogo";
+import { EyeIcon, EditIcon, AnchorIcon, LineageIcon } from "./SessionIcons";
+import TraceMinimap from "./TraceMinimap";
+import CommitTree from "./CommitTree";
+import {
+  CapsuleIcon,
+  EvalIcon,
+  StandupIcon,
+  SpotlightIcon,
+  AlertIcon,
+  PrIcon,
+} from "./ConsumerIcons";
 
-const agents = ["claude", "codex", "pi"];
-
-// What capture answers — each question maps to a substrate in the bucket.
-const captureQuestions = [
-  { q: "what have I done?", a: "trace" },
-  { q: "what have I seen?", a: "ctx" },
-  { q: "how did my environment change?", a: "trail" },
+// What the trace colors mean — the action vocabulary, in canonical order.
+const TRACE_LEGEND = [
+  { c: "var(--c-user)", label: "prompt" },
+  { c: "var(--c-think)", label: "reasoning" },
+  { c: "var(--c-read)", label: "context" },
+  { c: "var(--c-exec)", label: "command" },
+  { c: "var(--c-write)", label: "edit" },
 ];
+
+// One station in the session story (sees → does → changes → lasts → lineage).
+function Station({
+  icon,
+  title,
+  sub,
+  agent,
+}: {
+  icon?: ReactNode;
+  title: string;
+  sub: string;
+  agent?: boolean;
+}) {
+  return (
+    <div className={`pipe-station${agent ? " pipe-station-agent" : ""}`}>
+      <div className="pipe-station-ico">
+        {agent ? (
+          <span className="pipe-station-agents">
+            <ClaudeGlyph className="pipe-station-glyph" />
+            <CodexGlyph className="pipe-station-glyph" />
+            <PiGlyph className="pipe-station-glyph" />
+          </span>
+        ) : (
+          icon
+        )}
+      </div>
+      <div className="pipe-station-t">{title}</div>
+      <div className="pipe-station-s">{sub}</div>
+    </div>
+  );
+}
 
 type TreeLine = [glyph: string, name: string, note?: string];
 
@@ -35,48 +79,45 @@ const datasetRows = ["pending", "pending", "approved", "pending"];
 // Two real remote destinations, aligned beneath the bucket and dataset columns.
 // (The "ML Intern" node was README ASCII shorthand with no shipped command.)
 const remoteStages = [
-  { name: "HF private bucket", verb: "sync", col: 1 },
-  { name: "Hub dataset", verb: "publish", col: 5 },
+  { name: "HF private bucket", verb: "sync", note: "synchronize a private bucket" },
+  { name: "Hub dataset", verb: "publish", note: "publish, private or public" },
 ];
 
-// Trace consumers — what you build on top of capture + pipeline.
-type Consumer = { tag: string; color: string; status?: string; title: string; desc: string };
+// Beyond training — what you build on top of capture + pipeline.
+// Each card is identified by an icon describing the workflow, not a color.
+type Consumer = {
+  Icon: ComponentType<{ className?: string }>;
+  title: string;
+  desc: string;
+};
 const consumers: Consumer[] = [
   {
-    tag: "capsule",
-    color: "var(--c-write)",
+    Icon: CapsuleIcon,
     title: "Trace Capsule",
     desc: "Share a real usage episode with a third party — attach the actual agent experience to a GitHub issue, not just a summary of the bug.",
   },
   {
-    tag: "skill eval",
-    color: "var(--c-exec)",
+    Icon: EvalIcon,
     title: "Skill Evaluation",
     desc: "Keep a versioned dataset of skill usage across traces, build a verifier per skill with the OT SDK, and score whether skill changes improve outcomes.",
   },
   {
-    tag: "standup",
-    color: "var(--c-plan)",
-    status: "prototype",
+    Icon: StandupIcon,
     title: "Standup",
     desc: "A daily report rebuilt from yesterday's sessions: what was attempted, what landed, what failed, and what's still open before you start today.",
   },
   {
-    tag: "spotlight",
-    color: "var(--c-read)",
+    Icon: SpotlightIcon,
     title: "Spotlight",
     desc: "QMD for agent traces. Search your traces mid-session, outside the loop, or for a handoff, so context travels between sessions without planning ahead.",
   },
   {
-    tag: "alerts",
-    color: "var(--c-error)",
-    status: "mock",
+    Icon: AlertIcon,
     title: "Alerts",
     desc: "Standing alerts and reports over trace usage: failure rate, context waste, third-party tools, secrets, policy violations, or any pattern you care about.",
   },
   {
-    tag: "intent pr",
-    color: "var(--c-git)",
+    Icon: PrIcon,
     title: "Intent Pull Request",
     desc: "Walk a PR's commits back to the originating sessions and compile the 'why' alongside the 'how' — intent, lineage, and evidence beside the diff.",
   },
@@ -104,43 +145,84 @@ export default function InfraDiagram() {
       <div className="pipeline">
         <div className="pipeline-scroll">
           <div className="pipeline-inner">
-            {/* Agent harness — capture answers three questions into the bucket */}
+            {/* Agent harnesses — what we capture in every session: what the agent
+                sees and does, what it changes, and which of those changes last. */}
             <div className="pipe-harness">
               <div className="pipe-harness-head">
-                <span className="pipe-harness-title">agent harness</span>
-                <span className="pipe-harness-chips">
-                  {agents.map((a) => (
-                    <span key={a} className="pipe-chip">{a}</span>
-                  ))}
-                </span>
+                <span className="pipe-harness-title">agent harnesses</span>
+                <span className="pipe-harness-note">captured in every session</span>
               </div>
-              <div className="pipe-harness-cap">capture via hooks</div>
-              <div className="pipe-harness-q">
-                {captureQuestions.map((it) => (
-                  <div key={it.a} className="pipe-q-row">
-                    <span className="pipe-q-text">{it.q}</span>
-                    <span className="pipe-q-arrow">{"→"}</span>
-                    <span className="pipe-q-sub">{it.a}</span>
+              <div className="pipe-session-flow">
+                <div className="pipe-session">
+                  <span className="pipe-session-tag">session</span>
+                  <div className="pipe-stations">
+                    <Station icon={<EyeIcon />} title="what it sees" sub="context · ctx" />
+                    <span className="pipe-station-arrow" aria-hidden="true">{"→"}</span>
+                    <Station agent title="what it does" sub="the agent · trace" />
+                    <span className="pipe-station-arrow" aria-hidden="true">{"→"}</span>
+                    <Station icon={<EditIcon />} title="what it changes" sub="environment · trail" />
                   </div>
-                ))}
+                  <div className="pipe-trace-block">
+                    <div className="pipe-trace-row">
+                      <span className="pipe-trace-label">trace</span>
+                      <TraceMinimap />
+                    </div>
+                    <div className="pipe-trace-legend">
+                      {TRACE_LEGEND.map((l) => (
+                        <span key={l.label} className="pipe-leg">
+                          <span className="pipe-leg-sw" style={{ background: l.c }} />
+                          {l.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <span className="pipe-station-arrow pipe-station-arrow-cross" aria-hidden="true">{"→"}</span>
+                <div className="pipe-after">
+                  <div className="pipe-after-row">
+                    <Station icon={<AnchorIcon />} title="what lasts" sub="in git history" />
+                    <span className="pipe-station-arrow" aria-hidden="true">{"→"}</span>
+                    <Station icon={<LineageIcon />} title="lineage" sub="survives git history" />
+                  </div>
+                  <div className="pipe-commit-block">
+                    <div className="pipe-commit-row">
+                      <span className="pipe-trace-label">commits</span>
+                      <CommitTree />
+                    </div>
+                    <div className="pipe-commit-legend">
+                      <span className="pipe-leg"><span className="pipe-cdot" />survives</span>
+                      <span className="pipe-leg"><span className="pipe-cdot pipe-cdot-hollow" />reverted</span>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="pipe-harness-write">write {"↓"}</div>
             </div>
 
-            {/* Local stages: bucket → workflow → dataset */}
+            {/* Captured data drops from the harness down into the bucket —
+                the start of one continuous rainbow line through to the dataset. */}
+            <div className="pipe-drop" aria-hidden="true">
+              <span className="pipe-drop-cell">
+                <span className="pipe-drop-line" />
+                <span className="pipe-drop-arrow" />
+              </span>
+            </div>
+
+            {/* Local stages: bucket → workflow → dataset. Each gap carries its
+                own full rainbow connector that flows toward the next stage. */}
             <div className="pipe-grid">
               <div className="pipe-card">
-                <div className="pipe-card-head"><strong style={{ color: "var(--c-read)" }}>bucket</strong> private capture store</div>
+                <div className="pipe-card-head"><strong style={{ color: "var(--c-read)" }}>bucket</strong> private evidence store</div>
                 <Tree lines={bucketTree} />
               </div>
 
-              <div className="pipe-col-arrow">
-                <span className="pipe-arrow-glyph">{"→"}</span>
-                <span className="pipe-arrow-lbl">project</span>
+              <div className="pipe-col-arrow" aria-hidden="true">
+                <span className="pipe-col-line" />
+                <span className="pipe-col-chevron" />
+                <span className="pipe-col-lbl">reads</span>
               </div>
 
               <div className="pipe-card">
-                <div className="pipe-card-head"><strong style={{ color: "var(--c-exec)" }}>workflow</strong> projects the bucket</div>
+                <div className="pipe-card-head"><strong style={{ color: "var(--c-exec)" }}>workflow</strong> dataset as code</div>
                 <div className="pipe-tabs">
                   {workflowTabs.map((t) => (
                     <span key={t} className="pipe-tab">{t}</span>
@@ -149,9 +231,10 @@ export default function InfraDiagram() {
                 <Tree lines={workflowTree} />
               </div>
 
-              <div className="pipe-col-arrow">
-                <span className="pipe-arrow-glyph">{"→"}</span>
-                <span className="pipe-arrow-lbl">rows</span>
+              <div className="pipe-col-arrow" aria-hidden="true">
+                <span className="pipe-col-line" />
+                <span className="pipe-col-chevron" />
+                <span className="pipe-col-lbl">builds</span>
               </div>
 
               <div className="pipe-card">
@@ -166,48 +249,56 @@ export default function InfraDiagram() {
                     </div>
                   ))}
                 </div>
-                <div className="pipe-rows-foot">security tools · regex · entropy</div>
+                <div className="pipe-rows-foot">reviewed · approved rows only</div>
               </div>
+
+              {/* Workflow + dataset are one unit — no dataset without its workflow. */}
+              <div className="pipe-pair-bracket">a dataset is built &amp; kept current by its workflow</div>
             </div>
 
-            {/* Local | Remote boundary */}
-            <div className="pipe-boundary">
-              <span className="pipe-tag pipe-tag-local">local · your machine</span>
-              <span className="pipe-boundary-line" />
-              <span className="pipe-tag pipe-tag-remote">remote · hugging face</span>
+            {/* Security boundary — local above the line, remote below it, with
+                security screening on the crossing. */}
+            <div className="pipe-security">
+              <span className="pipe-zone pipe-zone-local">local</span>
+              <div className="pipe-security-core">
+                <span className="pipe-security-rail" aria-hidden="true" />
+                <span className="pipe-security-head">security screening tools</span>
+                <span className="pipe-security-rail" aria-hidden="true" />
+              </div>
+              <span className="pipe-zone pipe-zone-remote">remote</span>
             </div>
 
-            {/* Remote band — each stage's HF destination, beneath its column */}
+            {/* Remote zone — each local stage's optional Hugging Face destination */}
             <div className="pipe-remote-band">
               <div className="pipe-remote-grid">
                 {remoteStages.map((s) => (
-                  <div key={s.name} className="pipe-remote-col" style={{ gridColumn: s.col }}>
+                  <div key={s.name} className="pipe-remote-col">
                     <span className="pipe-cross">{"↓"} {s.verb}</span>
                     <div className="pipe-remote-chip">
-                      <span className="pipe-hf-mark" aria-hidden="true" />
+                      <HuggingFaceLogo size={22} className="pipe-remote-logo" />
                       <span className="pipe-remote-name">{s.name}</span>
+                      <span className="pipe-remote-via">{s.note}</span>
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="pipe-loop-label">eval · training · scoring</div>
             </div>
+
           </div>
         </div>
       </div>
 
-      {/* Trace consumers — proof of value */}
-      <div className="pipe-proof-caption">trace consumers</div>
+      {/* Beyond training — what the trace infrastructure unlocks */}
+      <div className="pipe-proof-caption">beyond training</div>
       <p className="pipe-proof-sub">
-        Traces are not only logs. With capture and pipeline in place, they become retained evidence you can
-        search, secure, share, evaluate, and turn into new workflows.
+        Training data is just one use. Once your trace infrastructure is in place, you can leverage it to
+        fuel many more workflows.
       </p>
       <div className="use-grid use-grid-consumers" style={{ marginTop: 20 }}>
         {consumers.map((c) => (
-          <div key={c.tag} className="use-card" style={{ "--cc": c.color } as CSSProperties}>
+          <div key={c.title} className="use-card use-card-consumer">
             <div className="use-card-head">
-              <span className="use-card-tag">{c.tag}</span>
-              {c.status && <span className={`use-card-status ${c.status}`}>{c.status}</span>}
+              <span className="use-card-ico"><c.Icon /></span>
             </div>
             <h4>{c.title}</h4>
             <p>{c.desc}</p>

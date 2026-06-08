@@ -2,10 +2,13 @@ interface TerminalProps {
   tabs: { label: string; active?: boolean }[];
   title?: string;
   children: React.ReactNode;
+  /* Optional pane rendered inside the same frame, below the body, separated by
+     a single divider rule — e.g. the live agent composer fused to the terminal. */
+  footer?: React.ReactNode;
   onTabClick?: (index: number) => void;
 }
 
-export default function Terminal({ tabs, title, children, onTabClick }: TerminalProps) {
+export default function Terminal({ tabs, title, children, footer, onTabClick }: TerminalProps) {
   return (
     <div className="terminal">
       <div className="terminal-bar">
@@ -25,6 +28,7 @@ export default function Terminal({ tabs, title, children, onTabClick }: Terminal
       <div className="terminal-body">
         {children}
       </div>
+      {footer && <div className="terminal-footer">{footer}</div>}
     </div>
   );
 }
