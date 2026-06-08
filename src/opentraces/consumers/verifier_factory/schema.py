@@ -24,7 +24,7 @@ PACKAGE_SCHEMA_VERSION = "opentraces.skill_verifier_package.v1"
 ROW_SCHEMA_VERSION = "opentraces.skill_verifier_rows.v1"
 REPORT_SCHEMA_VERSION = "opentraces.skill_verifier_report.v1"
 
-# Rubric-centric verifier layer (additive; see runs/skill-verifier-factory/RUBRIC_DESIGN.md).
+# Rubric-centric verifier layer (additive; detailed design notes live outside the public package).
 # The rubric is a strict additive superset of the archetype; a legacy archetype round-trips
 # as a degenerate all-deterministic rubric.
 RUBRIC_SCHEMA_VERSION = "opentraces.skill_verifier_rubric.v1"

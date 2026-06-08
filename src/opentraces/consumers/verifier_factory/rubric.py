@@ -17,7 +17,7 @@ PROPOSES a rubric (criteria, bindings, judge methods, judging questions); the fa
 SCORES mechanically; a human APPROVES. The validators reject unknown keys, and
 DELIBERATELY exclude ``reward`` / ``gate`` / ``split`` / ``value`` / ``calibration`` /
 ``recommended`` — so a spec can declare WHAT to judge but never SET a score or its own
-optimization target. See ``runs/skill-verifier-factory/RUBRIC_DESIGN.md``.
+optimization target.
 """
 
 from __future__ import annotations

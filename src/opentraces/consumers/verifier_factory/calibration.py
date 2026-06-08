@@ -7,8 +7,7 @@ one tamper-resistant signal git gives us (commit-landing; Trail survival when pr
 only after a hard adversarial probe shows a marker-stuffed skill cannot move the rubric's
 verdict. Until then the rubric is BLOCKED with a named remedy, never a silent 1.0.
 
-Pure-Python, deterministic, network-free (no numpy/sklearn). See
-``runs/skill-verifier-factory/RUBRIC_DESIGN.md`` §5-§6.
+Pure-Python, deterministic, network-free (no numpy/sklearn).
 
 Trust posture (br/56): nothing here is author-settable. The agent proposes a rubric; this
 module computes the calibration; a human approves. Per the locked decisions: provisional

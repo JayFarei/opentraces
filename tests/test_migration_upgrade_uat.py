@@ -1,6 +1,6 @@
 """0.3.3 -> 0.4 upgrade-UAT, Phase 1 (pytest layer).
 
-Fixture-only / unit cases from runs/migration-0.3.3-to-0.4/UPGRADE-UAT-AUDIT.md.
+Fixture-only / unit cases from the 0.3.3 -> 0.4 upgrade-UAT audit.
 These pin upgrade behavior across the context-tree, security, post-processor,
 bucket-egress, and HF-publish code paths in isolation (no otbox checkpoints),
 all default-CI-safe. Phase 0 (the live read-path P0 fix + U-trace-1/U-trace-2
@@ -300,7 +300,7 @@ def test_u_hf_1_dataset_publish_does_not_reach_hfuploader():
 # Mirrors the S7 Layer-B discipline: skip when the isolated v0.3.3 venv is absent
 # so default CI stays green. The remaining two-venv parts that need a live agent
 # or network (real claude/OTLP capture, live HF publish) are documented as
-# runnable manual-UAT steps in runs/migration-0.3.3-to-0.4/MANUAL-UAT-TWO-VENV.md.
+# runnable manual-UAT steps in the archived two-venv upgrade notes.
 
 import subprocess
 import sys
