@@ -68,24 +68,38 @@ def setup_group(ctx: click.Context) -> None:
 
 
 def _wizard_confirm(prompt: str, *, default: bool, hint: str | None = None) -> bool:
-    """Ask a yes/no question with pyclack when available (for consistent
-    ◇ styling), else fall back to click.confirm.
+    """Ask a yes/no question in the setup wizard.
 
-    ``hint`` is shown in dim text under the prompt when using click — pyclack
-    doesn't have a hint slot on confirm, so we fold it into the prompt.
+    Rendered as a clack-style ``◇`` prompt but printed strictly sequentially —
+    no in-place cursor redraw. ``hint`` gets its own dim line under the prompt
+    so long hints never have to be folded into (and wrap) the question.
+
+    Why not pyclack here: ``pyclack.prompts.confirm`` saves an *absolute*
+    cursor position (``\\033[s``) and, on submit, restores it and rewrites the
+    frame in place. Once the wizard fills the screen and scrolls — which it
+    reliably does on a short or narrow terminal — that saved row is stale, so
+    the submitted frame clears and overwrites the wrong lines, mangling the
+    neighbouring status output. Sequential printing has nothing to go stale, so
+    it stays correct at any terminal size.
     """
-    full = prompt if not hint else f"{prompt} ({hint})"
-    try:
-        from pyclack.prompts import confirm as _pk_confirm
-        import asyncio as _asyncio
-        return bool(_asyncio.run(_pk_confirm(
-            full,
-            initial_value=default,
-            active="Yes",
-            inactive="No",
-        )))
-    except ImportError:
-        return click.confirm(f"    {full}", default=default)
+    symbol = click.style("◇", fg="cyan", bold=True)
+    bar = _cli._dim("│")
+    _cli.human_echo(f"{symbol}  {prompt}")
+    if hint:
+        _cli.human_echo(f"{bar}  {_cli._dim(hint)}")
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        raw = click.prompt(
+            f"{bar}  {suffix}",
+            default="y" if default else "n",
+            show_default=False,
+            prompt_suffix=" ",
+        ).strip().lower()
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        _cli.human_echo(f"{bar}  please answer y or n")
 
 
 def _configure_bucket_local(cfg) -> dict:
@@ -433,7 +447,7 @@ def _run_setup_wizard() -> None:
     track_global = _wizard_confirm(
         "track every project automatically?",
         default=(current_mode == "global"),
-        hint="global auto-enrolls Claude/Codex/Pi projects; manual mode or a per-project 'excluded' marker opts out",
+        hint="auto-enrolls Claude/Codex/Pi; opt out per project anytime",
     )
     new_mode = "global" if track_global else "manual"
     if new_mode != current_mode:
