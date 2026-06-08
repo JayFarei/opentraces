@@ -1,0 +1,1449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>opentraces.ai — section polish review</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-alt: #010409;
+    --surface: #161b22;
+    --surface-2: #1c2230;
+    --border: #30363d;
+    --border-soft: #21262d;
+    --fg: #e6edf3;
+    --fg-mute: #8b949e;
+    --fg-dim: #6e7681;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --amber: #d29922;
+    --red: #f85149;
+    --magenta: #db61a2;
+    --teal: #39c5cf;
+    --purple: #a371f7;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Geist Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 96px; }
+
+  /* header */
+  header.report {
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    background: var(--surface);
+    padding: 22px 24px;
+    margin-bottom: 28px;
+  }
+  header.report .eyebrow {
+    color: var(--fg-dim);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  header.report h1 {
+    font-size: 22px;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  header.report h1 .traces { color: var(--accent); }
+  header.report p.sub { color: var(--fg-mute); margin: 0 0 18px; font-size: 13px; }
+  .statgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .stat {
+    border: 1px solid var(--border-soft);
+    border-radius: 2px;
+    background: var(--bg-alt);
+    padding: 12px 14px;
+  }
+  .stat .n { font-size: 22px; font-weight: 600; line-height: 1; }
+  .stat .l { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 6px; }
+  .stat.ship .n { color: var(--green); }
+  .stat.revise .n { color: var(--amber); }
+  .stat.flag .n { color: var(--red); }
+
+  /* toc */
+  .toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 18px 0 0;
+  }
+  .toc a {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    text-decoration: none;
+    color: var(--fg-mute);
+    border: 1px solid var(--border-soft);
+    border-radius: 2px;
+    padding: 5px 10px;
+    font-size: 12px;
+    background: var(--bg-alt);
+  }
+  .toc a:hover { border-color: var(--accent); color: var(--fg); }
+  .dot { width: 7px; height: 7px; border-radius: 1px; display: inline-block; }
+  .dot.ship { background: var(--green); }
+  .dot.revise { background: var(--amber); }
+
+  /* section card */
+  .section {
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    background: var(--surface);
+    margin-bottom: 26px;
+    overflow: hidden;
+  }
+  .section.has-flag { border-color: #5c2326; }
+  .sec-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--bg-alt);
+  }
+  .sec-head .titlewrap { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .sec-head .idx { color: var(--fg-dim); font-size: 12px; }
+  .sec-head h2 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  .sec-head .file { color: var(--fg-dim); font-size: 11px; word-break: break-all; }
+  .badge {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 4px 11px;
+    border-radius: 2px;
+    border: 1px solid;
+    white-space: nowrap;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .badge.ship { color: var(--green); border-color: #2c5a32; background: rgba(63,185,80,0.08); }
+  .badge.revise { color: var(--amber); border-color: #5c4a1e; background: rgba(210,153,34,0.08); }
+
+  .sec-body { padding: 18px 20px 22px; }
+
+  .block { margin-bottom: 22px; }
+  .block:last-child { margin-bottom: 0; }
+  .block > h3 {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin: 0 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed var(--border-soft);
+  }
+  .summary-line {
+    color: var(--fg-mute);
+    font-size: 13px;
+    background: var(--bg-alt);
+    border: 1px solid var(--border-soft);
+    border-left: 2px solid var(--accent);
+    padding: 12px 14px;
+    border-radius: 2px;
+  }
+
+  ul.issues { list-style: none; margin: 0; padding: 0; }
+  ul.issues li {
+    position: relative;
+    padding: 7px 0 7px 20px;
+    border-bottom: 1px solid var(--border-soft);
+    color: var(--fg);
+    font-size: 13px;
+  }
+  ul.issues li:last-child { border-bottom: none; }
+  ul.issues li::before {
+    content: "›";
+    position: absolute;
+    left: 4px;
+    top: 7px;
+    color: var(--fg-dim);
+  }
+  ul.issues.accuracy li::before { content: "!"; color: var(--amber); font-weight: 700; }
+
+  /* accuracy flag callout */
+  .accuracy-flag {
+    border: 1px solid #5c2326;
+    border-left: 3px solid var(--red);
+    background: rgba(248,81,73,0.06);
+    border-radius: 2px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+  }
+  .accuracy-flag .flag-title {
+    color: var(--red);
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .accuracy-flag .flag-title .pill {
+    background: var(--red);
+    color: #0d1117;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-size: 10px;
+  }
+  .accuracy-flag .critic-notes {
+    color: var(--fg);
+    font-size: 12.5px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+  }
+
+  /* copy changes */
+  .copy-change {
+    border: 1px solid var(--border-soft);
+    border-radius: 2px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .copy-change:last-child { margin-bottom: 0; }
+  .cc-row { padding: 10px 13px; font-size: 12.5px; }
+  .cc-row.cur {
+    background: rgba(248,81,73,0.05);
+    border-left: 2px solid #6e3030;
+    color: var(--fg-mute);
+  }
+  .cc-row.prop {
+    background: rgba(63,185,80,0.05);
+    border-left: 2px solid #2c5a32;
+    border-top: 1px solid var(--border-soft);
+    color: var(--fg);
+  }
+  .cc-row .tag {
+    display: inline-block;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin-right: 8px;
+  }
+  .cc-row.cur .tag { color: var(--red); }
+  .cc-row.prop .tag { color: var(--green); }
+  .cc-why {
+    padding: 9px 13px;
+    background: var(--bg-alt);
+    border-top: 1px solid var(--border-soft);
+    color: var(--fg-dim);
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .cc-why b { color: var(--fg-mute); font-weight: 600; }
+  code, .mono { font-family: var(--mono); }
+  .cc-row code { color: var(--teal); word-break: break-word; }
+
+  /* visual changes */
+  .visual-change {
+    border: 1px solid var(--border-soft);
+    border-radius: 2px;
+    padding: 11px 13px;
+    margin-bottom: 10px;
+    background: var(--bg-alt);
+  }
+  .visual-change:last-child { margin-bottom: 0; }
+  .visual-change .vc-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+  .visual-change .vc-text { color: var(--fg); font-size: 12.5px; line-height: 1.55; }
+  .effort {
+    flex-shrink: 0;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 2px;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .effort.small { color: var(--green); border-color: #2c5a32; }
+  .effort.medium { color: var(--amber); border-color: #5c4a1e; }
+  .effort.large { color: var(--magenta); border-color: #5c2c47; }
+  .visual-change .vc-why {
+    color: var(--fg-dim);
+    font-size: 11.5px;
+    line-height: 1.5;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-soft);
+  }
+
+  /* top recommendation */
+  .toprec {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    background: linear-gradient(180deg, rgba(88,166,255,0.05), transparent);
+    border-radius: 2px;
+    padding: 14px 16px;
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--fg);
+  }
+  .toprec .lbl {
+    color: var(--accent);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  /* gaps list */
+  ul.gaps { list-style: none; margin: 8px 0 0; padding: 0; }
+  ul.gaps li {
+    position: relative;
+    padding: 6px 0 6px 18px;
+    font-size: 12px;
+    color: var(--fg-mute);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  ul.gaps li:last-child { border-bottom: none; }
+  ul.gaps li::before { content: "△"; position: absolute; left: 0; top: 6px; color: var(--amber); font-size: 10px; }
+  ul.gaps li.blocking::before { content: "✕"; color: var(--red); }
+  ul.gaps li.blocking { color: var(--fg); }
+
+  footer { margin-top: 40px; text-align: center; color: var(--fg-dim); font-size: 11px; }
+  a.top { color: var(--fg-dim); text-decoration: none; }
+  a.top:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="report" id="top">
+    <div class="eyebrow">section-by-section clarity + visual pass</div>
+    <h1>open<span class="traces">traces</span>.ai — landing page polish review</h1>
+    <p class="sub">improver proposals paired with adversarial-critic verdicts · 8 sections · ordered hero → get-started</p>
+    <div class="statgrid">
+      <div class="stat"><div class="n">8</div><div class="l">sections reviewed</div></div>
+      <div class="stat ship"><div class="n">6</div><div class="l">ship</div></div>
+      <div class="stat revise"><div class="n">2</div><div class="l">revise</div></div>
+      <div class="stat flag"><div class="n">2</div><div class="l">accuracy flags</div></div>
+    </div>
+    <div class="toc">
+      <a href="#hero"><span class="dot ship"></span>01 hero</a>
+      <a href="#features"><span class="dot ship"></span>02 features</a>
+      <a href="#hub-teaser"><span class="dot ship"></span>03 hub-teaser</a>
+      <a href="#privacy-trust"><span class="dot revise"></span>04 privacy-trust</a>
+      <a href="#attribution"><span class="dot revise"></span>05 attribution</a>
+      <a href="#infra-diagram"><span class="dot ship"></span>06 infra-diagram</a>
+      <a href="#schema-explorer"><span class="dot ship"></span>07 schema-explorer</a>
+      <a href="#get-started"><span class="dot ship"></span>08 get-started</a>
+    </div>
+  </header>
+
+  <!-- ================= HERO ================= -->
+  <section class="section" id="hero">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">01</span>
+        <h2>Hero</h2>
+        <span class="file">web/site/src/components/Hero.tsx</span>
+      </div>
+      <span class="badge ship">ship</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">Two-column hero: left has the eyebrow pill (open traces v0.4.0), the locked h1 "Open data is the new open source.", a two-paragraph subcopy, a 5-method install tab switcher with copy-to-clipboard, a [start capturing] CTA, and a hoverable community-metrics strip. Right is a 7-tab terminal (setup/bucket/trace/trail/ctx/workflow/dataset) where each tab renders a framed CLI panel showing a real command, a rail of labeled rows, a footer note, and suggested next commands.</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>The single clearest value prop never names the core problem. The thesis 'open data is the new open source' lands, but a first-time reader never sees the visceral pain it solves: agent sessions vanish when the terminal closes. The subcopy jumps straight to the mechanism (capture → project → publish) before establishing why anyone should care.</li>
+          <li>The capture → project → publish arc is buried in a 2-sentence paragraph and only legible if you already know the product. Nothing visual reinforces those three steps on the left column; the arc exists only implicitly in the 7 terminal tabs, which read as 7 peers, not one local-first pipeline crossing a publish boundary.</li>
+          <li>The 7 terminal tabs default to tab index 1 (bucket), so the first thing seen is 'private capture store' internals rather than the capture step that starts the story. No signal the tabs are ordered as a pipeline, no progress affordance, no indication of where the local/remote boundary sits.</li>
+          <li>'traces become the real source' is the crux but is stated as an assertion with no proof above the fold. The reader must infer what a trace contains (prompts, tool calls, reasoning, edits, outcome) from a dense subordinate clause; those concrete contents deserve to be foregrounded.</li>
+          <li>The [start capturing] CTA and the metric strip compete at the same visual weight with no hierarchy between 'install and run it' (primary) and 'browse what the community published' (secondary). A new visitor cannot tell whether the product is a personal CLI or a community dataset hub.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li>Subcopy says workflows 'project compliant dataset rows.' 'Compliant' overstates the guarantee — every security tool is default-OFF and opt-in per workflow, and the docs warn risk is "reduced, not removed." Use 'reviewed' / 'security-scanned' / 'schema-valid' which the product actually delivers.</li>
+          <li>The setup tab row 'git + watcher post-commit · blame on' slightly overstates the watcher (polling-based today; real-time inotify deferred) and conflates the watcher with blame, which is a separate opt-in 'setup git' correlator step.</li>
+          <li>The ctx tab footer 'Reconstruct the model's view at any step' is defensible (shipped framing) but is the closest-to-the-line claim — CLAUDE.md's honest-scope says the JSONL path returns a session-level approximation; true per-step only via the OTLP receiver. Keep, do not strengthen.</li>
+          <li>No mock-only Hub features leak into the hero (good). Intents-as-catalog, Evals/SOPs, Alerts/Slack, Self-Improving PRs, and Standup are correctly absent; the terminal panels correctly hedge ('remote ... manual', 'security regex · entropy opt-in'). Preserve this discipline.</li>
+          <li>Agents Pi/Codex/Claude shown as 'ready' in setup is accurate (Claude Code + Codex via hooks, Pi via npm); install paths are real shipped paths. No change needed; verified.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>When LLMs drive the logic, traces become the real source: the record of decisions, tool calls, and reasoning behind the outcome.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>When an agent writes the code, the diff is just the artifact. The trace is the source: the prompts, tool calls, reasoning, and edits that produced it. Today that record dies when the terminal closes.</div>
+          <div class="cc-why"><b>why</b> Names the core problem (the high-signal record vanishes), sharpens 'traces become the real source' from assertion into contrast (artifact vs source), and lists the concrete trace contents the product captures.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>open<b>traces</b> captures sessions into a private bucket, lets workflows project compliant dataset rows, and publishes only the reviewed rows you choose to share.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>open<b>traces</b> captures every session into a private, on-disk bucket, links each edit to the commit that accepted it, and lets workflows project security-scanned, reviewed dataset rows you can publish to Hugging Face. Capture is local-first; nothing leaves the machine until you approve it.</div>
+          <div class="cc-why"><b>why</b> 'compliant' overstates (all 9 tools default-OFF); replaced with 'security-scanned, reviewed.' Adds the Trail edit→commit linkage (a flagship real feature absent from the subcopy) and makes the local-first / approval boundary explicit.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>open traces &nbsp; v{pkg.version}</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>local-first · agent-native · v{pkg.version}</div>
+          <div class="cc-why"><b>why</b> The eyebrow pill currently restates the wordmark already in the nav. Spending it on the two differentiating properties front-loads positioning before the reader reaches the h1.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><code>&lt;Link className="btn btn-primary hero-primary-cta" href="/docs/getting-started/quickstart"&gt;[start capturing]&lt;/Link&gt;</code></div>
+          <div class="cc-row prop"><span class="tag">proposed</span>[start capturing] rendered next to a faint mono helper line: 'pipx install opentraces · setup · code as usual'</div>
+          <div class="cc-why"><b>why</b> The CTA stays, but a one-line mono caption makes the zero-config promise (README: 'code as usual') legible without another click, reinforcing that capture is passive.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a compact 3-step pipeline ribbon between subcopy and install tabs: three mono cells 'capture' → 'project' → 'publish', each with a one-word substrate hint (bucket / workflow / Hugging Face) and a vertical dashed divider before 'publish' to mark the local|remote boundary. Hovering a step highlights the matching terminal panel.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Makes the section's own thesis a visible object on the left column instead of prose; the dashed local/remote divider mirrors the README pipeline diagram convention.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Change the terminal default tab from index 1 (bucket) to index 2 (trace) OR group the 7 tabs into the 3 pipeline phases with thin separators. At minimum add a faint '01..07' or 'local · · · remote' rail under the tab strip. Mark the dataset tab (the only one that leaves the machine) with the existing colored 2px left-border 'live' treatment.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Defaulting to 'bucket' opens on an internals view; opening on 'trace' or signposting the phase grouping lets a first-time reader follow setup → … → publish. The colored border marks the one remote-touching step.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Promote trace 'contents' into a small static glyph row under the h1 (not inside the terminal): five mono tokens with action-palette colors — prompt (amber) · read (teal) · reason (slate) · write (magenta) · outcome (green) — echoing the TAO-loop glyphs in the README capture diagram.</div><span class="effort small">small</span></div>
+          <div class="vc-why">'traces become the real source' is asserted but never shown above the fold; a 5-token colored legend makes the trace's contents concrete, reuses the spec's action palette, and seeds the color vocabulary for the rest of the page.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Differentiate the [start capturing] primary CTA from the metric strip: keep [start capturing] as the bold bracket-button; demote the metric strip to a quieter secondary row with an explicit label like 'community traces →'. Add a hairline divider or extra gap.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Today personal-CLI action and community-hub browse sit at equal weight, blurring 'what is this.' A primary/secondary split resolves it and matches the real product shape (local CLI first).</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add the very faint flue-style grid/dot background texture called for in REDESIGN-SPEC.md behind the hero, and let the terminal window's bottom edge bleed slightly past the fold so it reads as 'a real tool with more below.' Keep traffic-light chrome and surfaces.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The spec explicitly calls for a subtle grid/dot texture currently absent; a slight terminal bleed adds depth and a scroll affordance. Pure styling, preserves all structure.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation</h3>
+        <div class="toprec">
+          <span class="lbl">★ make the section's own thesis visible and honest</span>
+          (1) Rewrite the subcopy so it first names the pain (the agent's prompts/tool-calls/reasoning/edits die when the terminal closes) then the mechanism, and replace 'compliant' with 'security-scanned, reviewed' plus the missing Trail edit→commit linkage. (2) Render capture → project → publish as a 3-cell mono ribbon on the left with a dashed local|remote divider, and re-signpost the 7 terminal tabs as that same ordered pipeline (default to 'trace', mark the publish 'dataset' tab with the colored live-border). Turns the strongest, most accurate parts into something graspable in one glance, in the existing terse/mono voice, without portraying any mock-only Hub feature as shipped.
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to watch (accuracy ok · ship)</h3>
+        <ul class="gaps">
+          <li>CTA helper 'install → setup → code as usual' should not read as 'init never needed' — README keeps a per-repo <code>opentraces init</code>; phrase as 'capture is passive under global tracking.'</li>
+          <li>Trace-contents legend labels (prompt/read/reason/write/outcome) are friendly simplifications, not verbatim schema enums; keep them conceptual, not exact field names.</li>
+          <li>The default-tab change to 'trace' opens on a view whose rows show survival states; the pipeline ribbon + 'local · · · remote' rail must carry ordering so 'trace' doesn't look like the starting step.</li>
+          <li>Keep the ctx footer 'Reconstruct the model's view at any step' unchanged; do not let any rewrite imply per-step fidelity on the JSONL path.</li>
+          <li>'agent-native' is accurate but the visual treatment must not imply a hosted/SaaS agent product; the differentiator is a local CLI that captures agent sessions.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <!-- ================= FEATURES ================= -->
+  <section class="section" id="features">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">02</span>
+        <h2>Features</h2>
+        <span class="file">web/site/src/components/Features.tsx</span>
+      </div>
+      <span class="badge ship">ship</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">A 9-cell bordered hairline grid, each cell a colored category dot + Space Grotesk title + Geist description: private trace bucket, trace discovery, optional security tools, trace trails, context tree, workflow templates, dataset row review, content-hash dedup, agent-native cli. Descriptions are accurate but jargon-dense and lead with internal nouns; the only per-cell visual is a colored dot.</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>Several descriptions lead with internal implementation nouns. 'private trace bucket' opens with 'Capture-time envelopes, patch history, trail/context companions, blobs, and manifests' before the reader knows the bucket is the private local store. 'trace discovery' says 'expose deterministic packets for workflow row builders' — opaque to a scanning developer.</li>
+          <li>The grid never states the single core value: agent sessions vanish when the terminal closes; opentraces keeps that evidence locally and git-linked. Each cell is a true capability but the section reads as nine disconnected nouns with no spine.</li>
+          <li>Card order is arbitrary and does not follow the real product flow (capture, search, link to git, reconstruct context, score, project to rows, review, publish, agent-drivable), so it does not teach the model of the product while scanning.</li>
+          <li>'workflow templates' buries the payoff (turn reviewed sessions into a publishable HuggingFace dataset). 'compliant rows' is undefined jargon.</li>
+          <li>The mono command names the descriptions lean on (trace query/map/slice/get, trail blame, ctx, dataset) are rendered as plain prose, so the terminal-native nature is told, not shown — a missed clarity and brand cue in a mono design system.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li><b>UNDERSELL/COUNT:</b> 'optional security tools' lists seven tools but the registry ships NINE — business_logic and capsule_scope are omitted (verified in _registry.py and README). The card also omits the two load-bearing guarantees: tools run in a FIXED canonical order and run BEFORE anything leaves the machine.</li>
+          <li><b>MISSING CAPABILITY:</b> Trace Intelligence (context-waste detector + run-health/run-intel + trace-compare A/B) is a real, shipped, derive-on-demand layer and a strong differentiator for the ML/eval audience, yet has no cell. The grid spends a slot on 'content-hash dedup' (murmur3) — real but low-level plumbing — instead.</li>
+          <li><b>OVERSTATED SPECIFICITY:</b> 'content-hash dedup' says 'murmur3 hashing blocks duplicates on the remote.' murmur3 is the per-edit capture hash; the push-time remote dedup keys on a content_hashes set — conflating capture hash with remote dedup. If kept, describe as content-addressed dedup.</li>
+          <li><b>MINOR:</b> 'trace discovery' is the product's Spotlight / Trace surface (BM25 + semantic). The 'deterministic packets for workflow row builders' framing overstates the workflow plumbing and undersells the primary value: search your own sessions mid-task. No mock-only features portrayed (correct).</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>private trace bucket</b> — Capture-time envelopes, patch history, trail/context companions, blobs, and manifests stay local until you sync them.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>private bucket</b> · <code>~/.opentraces/bucket</code> — Every captured session — prompts, tool calls, edits, reasoning, outcomes — lands in a local-first private bucket. Nothing leaves until you explicitly sync.</div>
+          <div class="cc-why"><b>why</b> Leads with what it is and why it matters instead of opening on storage internals that mean nothing to a scanning developer.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>trace discovery</b> — trace query, map, slice, and get expose deterministic packets for workflow row builders.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>search (spotlight)</b> · <code>trace query / map / slice / get</code> — BM25 + semantic search over a local index. Pull bounded slices of past sessions for context mid-task or a handoff, without loading full transcripts.</div>
+          <div class="cc-why"><b>why</b> Names the real subsystem (Spotlight), states the user-facing payoff, and drops the opaque 'deterministic packets for workflow row builders' framing.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>optional security tools</b> — Regex, entropy, TruffleHog, privacy-filter, LLM PII, path anonymization, and classifier are explicit and default off.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>security, default off</b> · <code>9 tools · fixed order</code> — Nine detectors, transformers and judges — regex, entropy, TruffleHog, privacy-filter, LLM PII, business-logic, path-anonymizer, capsule-scope, classifier — run in a fixed order before anything leaves the machine. All explicit, all default off.</div>
+          <div class="cc-why"><b>why</b> Corrects the count from 7 to the shipped 9 and adds the two real guarantees the card drops: fixed canonical order and runs before egress.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>trace trails</b> — trail blame commit, trail blame pr, trail graph, and trail track connect trace patches to Git survival.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>trails (git lineage)</b> · <code>trail blame / graph / track</code> — Link each edit to the commit that accepted it, then track survival across history — alive, transformed, reverted, or lost.</div>
+          <div class="cc-why"><b>why</b> Keeps the real commands but explains the value (edit-to-commit lineage + survival states) instead of the abstract 'connect trace patches to Git survival.'</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>context tree</b> — ctx commands reconstruct what the agent saw at a step and produce resume packets.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>context tree</b> · <code>ctx tree / reads / writes / resume</code> — Reconstruct what the LLM actually saw at a given step — system, messages, tools, runtime — and emit a packet to resume from there.</div>
+          <div class="cc-why"><b>why</b> Tightens to the real layers (system/messages/tool_registry/runtime_state) and keeps the resume-packet payoff. Surfacing ctx subcommands reinforces the terminal-native feel.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>workflow templates</b> — Skill-format packages project raw trace evidence into compliant rows for a chosen objective.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>datasets from sessions</b> · <code>workflow · dataset run</code> — Workflow skills project reviewed sessions into schema-valid dataset rows you can publish to HuggingFace — for training, evals, or scoring.</div>
+          <div class="cc-why"><b>why</b> States the actual destination and payoff (publishable HF dataset rows) instead of 'compliant rows for a chosen objective,' which never says what the rows are for.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>dataset row review</b> — Approve, reject, reset, schedule, and publish projected rows without pushing the raw bucket.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>review before publish</b> · <code>dataset review / approve / publish</code> — Approve or reject each projected row, schedule re-runs, and publish only what you cleared — the raw bucket never ships.</div>
+          <div class="cc-why"><b>why</b> Sharper on the guarantee (per-row gate; raw evidence stays local) and the human-in-the-loop value, the real selling point of review.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>content-hash dedup</b> — Reset state, switch machines, re-publish safely. murmur3 hashing blocks duplicates on the remote.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>trace intelligence</b> — Derive-on-demand run signals: context-waste (oversized output, repeated reads/searches), run-health (resteer / recovery / loop / failure), and A/B trace-compare. No LLM, nothing persisted.</div>
+          <div class="cc-why"><b>why</b> Replaces low-level plumbing with a real, shipped, high-signal capability missing from the grid and most relevant to the ML/eval audience. Dedup can be footnoted on the bucket card rather than owning a top-9 slot.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span><b>agent-native cli</b> — Every command emits structured JSON with next_steps. Built for agents to drive agents.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span><b>agent-native cli</b> · <code>--json · next_steps</code> — Every command emits structured JSON with next_steps. Built so your agents can drive opentraces directly — agents driving agents.</div>
+          <div class="cc-why"><b>why</b> Minor sharpening only; the claim is verified (cli/__init__.py). Adding the mono cmd chip matches the new visual pattern.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a mono command chip to each cell. Extend the feature object with an optional <code>cmd</code> field (e.g. 'trail blame / graph / track') rendered under the title in Geist Mono ~10px, --fg-mute, tinted toward the cell's color.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The descriptions already reference the exact commands; surfacing them makes the grid scannable (read the 9 verbs in 2 seconds), proves the features are real shipped commands, and leans into the mono/bracket design language.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Reorder the 9 cells to follow the real flow: 1) private bucket, 2) search (spotlight), 3) trails, 4) context tree, 5) trace intelligence, 6) datasets from sessions, 7) review before publish, 8) security default off, 9) agent-native cli. Optionally prefix each title with a faint mono index (01–09).</div><span class="effort small">small</span></div>
+          <div class="vc-why">Ordering by the actual capture→search→link→context→score→project→review→publish flow turns nine disconnected nouns into a narrative a reader absorbs while scanning, without adding copy.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Replace the static colored dot in .feat-mark with a tiny category glyph mapping to the action palette already in use (read=●, write=◆, exec/think=▮, git=◌, push=▲) — the same marks the README timeline uses. Keep the 26px tile; swap the 9px square for the glyph.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Reusing the in-product run marks ties the marketing grid to the in-product visual vocabulary (the spec's explicit goal) and gives each cell a meaningful, non-decorative icon.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a one-line section subhead under the 'features' SectionRule stating the core value once: 'the evidence of every agent session — prompts, edits, reasoning, outcomes — kept locally, git-linked, and private-first.' Style as --text-muted, ~60ch.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The grid never states the single value proposition; a single muted subhead gives the nine cells a spine without disturbing the terse voice.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Give the security cell a 'before egress' visual: a 2px left accent in --c-error plus a tiny inline mono ladder of the 9 tool names wrapping as chips, with a faint '→ before sync' affordance using the spec's → arrow convention.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Security/privacy-first is the central trust claim; a small visual showing nine tools gating the boundary before sync reinforces the 'default off, fixed order, runs before egress' guarantee.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation</h3>
+        <div class="toprec">
+          <span class="lbl">★ accuracy first, then scannability</span>
+          (1) Correct the security card from 7 to the shipped 9 tools and add the two real guarantees (fixed canonical order, runs before anything leaves the machine). (2) Swap the low-level 'content-hash dedup' cell for the missing, real 'trace intelligence' capability (context-waste / run-health / A/B compare) that the ML-and-evals audience cares about most. Then rewrite every description to lead with what-it-is/why-it-matters, add a Geist-Mono command chip to each cell, and reorder to follow the real capture→search→link→context→score→project→review→publish→drive flow.
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to watch (accuracy ok · ship)</h3>
+        <ul class="gaps">
+          <li>Trails copy compresses 8 real survival states into 4; fine as illustration but consider 'survival states: alive / transformed / reverted / lost / …' or '8 survival states' to avoid implying the set is exhaustive.</li>
+          <li>Dropping 'content-hash dedup' removes a real reassurance about safe re-publish / machine-switch; the proposed bucket copy doesn't actually include it — either add a clause ('content-addressed, safe to re-sync across machines') or accept the loss explicitly.</li>
+          <li>The reorder + 01-09 index and the glyph-swap are MEDIUM-effort and touch .feat-mark/CSS; the two accuracy fixes + cmd-chip + copy rewrites are the high-value, low-risk subset and should land first.</li>
+          <li>'schema-valid dataset rows' should be checked against the README's own wording for exact brand match — accurate, just confirm voice.</li>
+          <li>Ensure the rendered 9-name ladder uses the registry spelling (privacy-filter, business-logic, path-anonymizer, capsule-scope) consistently with the copy.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <!-- ================= HUB-TEASER ================= -->
+  <section class="section" id="hub-teaser">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">03</span>
+        <h2>HubTeaser</h2>
+        <span class="file">web/site/src/components/HubTeaser.tsx</span>
+      </div>
+      <span class="badge ship">ship</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">A "sneak peek" section with the headline "Browse your traces in the Hub, not just the terminal," a one-paragraph description, a scaled live HubWindow iframe peek (clipped to 680px) of the real prototype, a five-item bullet list of Hub capabilities, and an [open the hub] CTA. The bullets mix shipped/demonstrable features (trace viewer, trails, capsules, spotlight, command palette) with mock-only preview views (evals, alerts) presented with no preview/coming distinction.</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>The bullet list mixes two tiers without signaling it: things you can do today (trace viewer, trails, capsules, spotlight, command palette) sit next to forward-looking preview surfaces (evals, alerts) at identical visual weight, so a reader cannot tell what is real.</li>
+          <li>Bullet 1 is overloaded ('trace viewer · conversation + trail tabs · minimap · context-waste + run-health signals') — four distinct ideas in one line while later bullets are single concepts; the densest, most differentiating capability is hardest to parse.</li>
+          <li>The section never states the 'why it matters' the rest of the page establishes: the terminal closes and the evidence vanishes. The headline frames the Hub as a nicer way to 'browse,' which undersells it as cosmetic.</li>
+          <li>The relationship to the CLI is asserted ('desktop companion to the CLI') but not shown. A reader does not learn the Hub reads the same on-disk bucket the CLI writes — a view over your local data, not a separate cloud product.</li>
+          <li>Bullet 5 bundles three unlike things ('evals, alerts, and a ⌘K command palette') — two mock surfaces and one shipped interaction — burying the real ⌘K palette and laundering the previews past the reader.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li>Bullet 5 lists 'evals' and 'alerts' as Hub capabilities with no preview/coming label. Both are mock-only in the prototype (pages-evals.jsx is SOPs/violations; pages-alerts.jsx pushes to Slack with a hardcoded 'connected · 5 alerts piped'). Presenting them flat alongside real features overstates the product.</li>
+          <li>By association, bullet 5 risks implying the whole list is shipped. The sidebar's 'Trace intelligence PRO' group bundles Spotlight/Intents/Evals/Capsules/Alerts/Self-Improving, of which only Spotlight and Capsules are real; the teaser should not borrow that group's credibility for the mock members.</li>
+          <li><b>Understatement:</b> the four genuinely strong capabilities (trace viewer + tabs + minimap, context-waste/run-health, VCS trails resolving commits back to sessions, capsules, BM25+semantic spotlight) are real and should be stated with confidence — they currently share a flat list with the two mock items, diluting them.</li>
+          <li>The body copy paragraph is accurate (bucket, trails, context tree, datasets browsable; conversation, trail, run health) and should be preserved — the inaccuracy lives entirely in bullet 5.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>evals, alerts, and a ⌘K command palette</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>⌘K command palette · jump to any trace, dataset, or view</div>
+          <div class="cc-why"><b>why</b> Removes the two mock-only surfaces from a list that reads as shipped, letting the genuinely real ⌘K palette stand on its own. Move evals/alerts to a separately-labelled 'preview' line rather than smuggling them into the shipped list.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>trace viewer · conversation + trail tabs · minimap · context-waste + run-health signals</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>trace viewer · conversation + trail tabs, step minimap, context-waste + run-health signals inline</div>
+          <div class="cc-why"><b>why</b> Same four real concepts, but the grouping now reads as one capability with three facets instead of four equal fragments, matching the single-concept rhythm of the other bullets.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>spotlight · search across the bucket, bm25 + semantic</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>spotlight · search every trace in the bucket — bm25 + semantic, fully local</div>
+          <div class="cc-why"><b>why</b> Adds the differentiator that matters (search runs locally over your private bucket, nothing leaves the machine), reinforcing the local-first claim.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>The Hub is the desktop companion to the CLI, where the bucket, trails, context tree, and datasets become browsable. Open a trace, read the conversation, follow the trail, watch the run health, all without leaving the page.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>The Hub reads the same on-disk bucket the CLI writes — your captured sessions, trails, context tree, and datasets, made browsable. Open a trace, read the conversation, follow the trail to the commit that accepted it, watch the run health. Same local data, no terminal required.</div>
+          <div class="cc-why"><b>why</b> Sharpens 'companion to the CLI' into something concrete and true. 'follow the trail to the commit that accepted it' names the real Trails payoff; 'same local data' pre-empts the 'is this a cloud thing?' question.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Browse your traces in the Hub, not just the terminal.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Your sessions don't have to die in the terminal. Browse them in the Hub.</div>
+          <div class="cc-why"><b>why</b> Connects the section to the page's core problem instead of framing the Hub as a cosmetic nicety. Keeps the terse, lowercase-leaning voice and the terminal motif.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>(no current text — no preview/coming label anywhere in the section)</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Add a muted line beneath the bullets: 'preview · intents catalog, evals, alerts, self-improving PRs — in the prototype, not yet in the CLI'</div>
+          <div class="cc-why"><b>why</b> Lets the roadmap surfaces stay visible (they're in the clickable prototype) while drawing an honest, explicit line between shipped and preview. This is the accuracy-preserving home for evals/alerts after they leave bullet 5.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Split the five-item flat list into two tiers: a primary 'shipped / try it now' group (trace viewer, trails, capsules, spotlight, ⌘K palette) as the existing bullets, and a secondary muted 'preview' rail (intents catalog, evals, alerts, self-improving) smaller, in --fg-mute Geist Mono under a 'preview' eyebrow. Use the spec's colored 2px left-border only on the shipped group.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">The single highest-value change: makes the section honest at a glance (shipped vs preview) without hiding the roadmap, and gives real capabilities the visual confidence they earn. Resolves both the accuracy and the 'cannot tell what's real' issues.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a tiny 'live prototype' affordance near the HubWindow chrome: a small green dot + mono label ('live · runs in your browser') near the traffic-light bar, mirroring the /hub page's 'interactive prototype · runs entirely client-side' note the teaser omits.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Readers may assume the framed window is a static screenshot (poster-then-iframe). Signaling it's the real, clickable prototype increases trust and honestly frames the whole window as 'prototype.'</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Replace the plain section-title with a two-line treatment: a Space Grotesk display line ('Your sessions don't have to die in the terminal.') with a smaller Geist Mono eyebrow above reading 'cli → hub' (using the → affordance), reinforcing that the Hub is the same data viewed in a desktop surface.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Makes the CLI↔Hub relationship visible in the type hierarchy rather than buried in prose, using the established heading/eyebrow/→ language from the spec.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Annotate the clipped HubWindow peek with one or two small mono callout labels pinned to the fade edge ('conversation + trail tabs', 'run-health signals') pointing at the corresponding regions of the poster/iframe.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Turns the static peek into an explainer, tying the abstract bullet vocabulary to concrete on-screen elements. Labels reference only real, visible features so it stays accurate.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Tighten the foot layout so the shipped bullets and [open the hub] CTA read as one unit and the preview rail sits clearly below; on the mobile breakpoint ensure the preview rail collapses last and stays visually subordinate.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Preserves the existing two-column foot while making the new shipped-vs-preview hierarchy survive at narrow widths.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation</h3>
+        <div class="toprec">
+          <span class="lbl">★ separate shipped from preview, keep the roadmap visible</span>
+          Pull 'evals' and 'alerts' out of the shipped bullet list (mock-only prototype views) and split the section into two clearly-typed tiers: a confident 'shipped / try it now' group for the real capabilities (trace viewer + tabs + minimap, context-waste/run-health, VCS trails resolving commits back to sessions, capsules, local bm25+semantic spotlight, ⌘K palette) and a separate muted 'preview' rail for roadmap surfaces (intents catalog, evals, alerts, self-improving) labelled 'in the prototype, not yet in the CLI.' Fixes the one real accuracy violation while keeping the roadmap visible. Keep the body paragraph (it's accurate).
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to watch (accuracy ok · ship)</h3>
+        <ul class="gaps">
+          <li>Spotlight bullet says 'bm25 + semantic, fully local' (true of the shipped CLI) but the prototype page the teaser links to frames Spotlight as 'AI-graded search / Beta / responds in 10-90s' (LLM grader). The bullet is the right portrayal, but a click-through reader sees a different story; flag for the team and consider aligning the prototype copy.</li>
+          <li>Preview-rail wording should keep 'intents catalog' (the standing cross-trace catalog is the mock part); the per-burst intent object IS real (core/intent.py via trace map --bursts), so don't shorten to bare 'intents.'</li>
+          <li>The HubWindow callout labels are accurate only if pinned to regions actually visible in the 680px clip; verify the run-health chip and tabs are above the fade line before annotating.</li>
+          <li>'capsules · shareable bounded slices of a run' is real, but a Capsule shares a bounded usage EPISODE attached to a HF URL / GitHub issue, not a raw trace slice; avoid drifting 'slice' toward the separate trace-slice primitive.</li>
+          <li>The headline contraction is fine for voice; confirm it renders in Space Grotesk display weight and keep the 'cli → hub' eyebrow lowercase per the eyebrow convention.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <!-- ================= PRIVACY-TRUST ================= -->
+  <section class="section has-flag" id="privacy-trust">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">04</span>
+        <h2>PrivacyTrust</h2>
+        <span class="file">web/site/src/components/PrivacyTrust.tsx</span>
+      </div>
+      <span class="badge revise">revise</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="accuracy-flag">
+        <div class="flag-title"><span class="pill">accuracy_ok = false</span> critic blocks: tool attribution would push wrong labels into shipped copy</div>
+        <div class="critic-notes">No mock-only Hub feature is portrayed — the section is entirely about the real, shipped 9-tool security pipeline, and all structural claims verify against src (sk-proj regex secrets.py:94, db url secrets.py:235, business_logic redacts only the 12-digit AWS group, classifier drops matched_text/reason, pipeline.py re-sorts to canonical order, SECURITY_VERSION 0.6.0, all tools default OFF).
+
+BUT two PROPOSED changes would push inaccurate tool attribution into marketing copy:
+
+(1) EMAIL mis-attribution — the proposal attributes jay@company.internal to privacy_filter / llm_pii 'not regex'. This is wrong: the regex detector has an email_address pattern at secrets.py:269-270 and the allowlist does NOT cover @company.internal, so the email is caught by REGEX on its own. privacy_filter is an optional, model-dependent NER detector often unavailable. Correct attribution is regex.
+
+(2) PATH self-contradiction — the demo shows /Users/jayfarei/ → /Users/user/ (literal 'user'), which is EntityMap/normalize_user_paths, NOT the registry path_anonymizer tool, which HASHES via hash_username() to e.g. /Users/3f9a1c/. The proposal lists 'path→path_anonymizer' yet the shown token contradicts that tool.
+
+Both are EASY fixes: (a) label the email row 'regex'; (b) either drop the path row from any tool-attributed header or change the rendered token to a hash. Once corrected, the proposal contains no mock-only features and flips to ship.</div>
+      </div>
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">Leads with "Security tools are explicit, optional, and inspectable." and a two-column layout: left has a dense intro paragraph, a meta line (9 tools / canonical order / default off / SECURITY_VERSION 0.6.0), a tool registry showing the 9 tools grouped into detectors/transformers/judge (each badged "off"), and a "redaction preview" box with 5 before→after examples; the right column is a tabbed Explicit/Config mode selector with per-mode terminal transcripts. Content is accurate to the real v0.6.0 security pipeline.</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>The intro paragraph is a single 60+ word run-on packing four distinct ideas (default-off, opt-in, three-protocol fixed order, Pi raw bodies) into one block. The one trustworthy thing — 'nothing leaves your machine until you turn a named tool on' — is the tail of a sentence about ordering, not a headline.</li>
+          <li>The 'redaction preview' box and the tool registry above it are visually disconnected; nothing links which tool turns 'sk-proj-abc123…' into '[API_KEY_1]'. The cause→effect of the pipeline is left implicit.</li>
+          <li>'Pi raw provider bodies are default-off too…' is cryptic jargon stapled to a sentence about tool ordering; it should either be cut from the lede or given its own framed beat.</li>
+          <li>The three tool groups (detectors / transformers / judge) read as three parallel categories, not one sequential pipeline, even though the copy stresses a 'fixed order.' The most distinctive property (detector spans → transformer rewrite → judge verdict, in locked order) is asserted, not shown.</li>
+          <li>The meta line 'SECURITY_VERSION 0.6.0' is correct but unexplained on a marketing page — it reads like a build number; the point (security is versioned independently so detection changes are auditable) is lost.</li>
+          <li>The mode-selector intro 'Two ways to run tools in a bucket flow or dataset workflow' assumes the reader already knows what a 'bucket flow' and 'dataset workflow' are, making Explicit-vs-Config feel like a config-screen detail.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li>The redaction preview is accurate as a whole, but each example is produced by a DIFFERENT real tool and nothing attributes them (sk-proj → regex; postgresql:// → regex; email → regex via email_address pattern; arn:aws → business_logic). The demo visually implies one undifferentiated 'redaction' rather than the inspectable per-tool attribution the section sells. Opportunity, not an error.</li>
+          <li>The path example '/Users/jayfarei/…' → '/Users/user/…' matches EntityMap/normalize_user_paths (literal 'user'), NOT the registry path_anonymizer tool, which HASHES the username. Attributing this redaction to path_anonymizer would be off; keep generic or show a hashed token.</li>
+          <li>'business_logic' is noted only generically. Its real scope is narrower and more impressive: internal hostnames (.internal/.corp/.local), collab-tool URLs, DB connection strings (jdbc:/mongodb+srv://), AWS account ids. The DB-URL redaction shown (postgresql://) is caught by regex, NOT business_logic.</li>
+          <li>Everything else verified accurate: 9 tools, the exact three protocols, default-OFF for all, fixed canonical order, the re-sort-to-canonical guarantee so a judge never sees pre-redaction text, SECURITY_VERSION 0.6.0, and the explicit --tools / --use-config split. No mock-only Hub features here.</li>
+          <li>The classifier is correctly described as 'verdict, no mutation' / 'judge'. The real classifier judge deliberately drops matched_text/reason from its flag payload — a genuinely strong trust point currently unused in the copy.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Security tools are explicit, optional, and inspectable.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Nothing leaves your machine until you name the tool that lets it.</div>
+          <div class="cc-why"><b>why</b> The current title lists adjectives; the proposed line leads with the trust guarantee in the section's terse register, and 'name the tool' previews the --tools mechanism shown on the right. <b>Critic nit (non-blocking):</b> slightly loose — what is local-first is the bucket, and sanitize runs before sync; tighten if convenient.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Every per-record tool defaults off. A workflow opts into exactly the tools it needs, and they run in one fixed order: detectors that emit redactable spans, transformers that rewrite the record, then a judge that scores sensitivity without mutating anything. Pi raw provider bodies are default-off too, so retained blobs stay local and security-gated before any remote sync.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>All nine tools default off. A workflow opts into exactly the ones it needs, and they always run in the same locked order: detectors emit redactable spans, transformers rewrite the record, then a judge scores sensitivity without touching it. The order is enforced, so a judge never sees text a detector hasn't already scrubbed.</div>
+          <div class="cc-why"><b>why</b> Splits the 60-word run-on, drops the cryptic 'Pi raw provider bodies' clause from the lede, and adds the source-verified guarantee from pipeline.py (explicit tool lists re-sorted to canonical order so a judge can't observe pre-redaction text).</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>9 tools · canonical order · default off · SECURITY_VERSION 0.6.0</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>9 tools · canonical order · default off · versioned independently (SECURITY_VERSION 0.6.0)</div>
+          <div class="cc-why"><b>why</b> A bare version string reads like a build number; two words ('versioned independently') tell the reader detection logic is versioned separately from the CLI/schema so any change to what gets redacted is auditable.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Two ways to run tools in a bucket flow or dataset workflow.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Two ways to turn a tool on. Both are explicit; neither runs by default.</div>
+          <div class="cc-why"><b>why</b> Restates the Explicit/Config split as a trust statement, removes the forward-reference to unfamiliar terms, and reinforces the section's spine: opt-in, every time.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>redaction preview</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>redaction preview · regex + business_logic applied <span style="color:var(--amber)">[critic: API-key &amp; AWS rows OK; if extending, email = regex NOT privacy_filter; path = drop or hash]</span></div>
+          <div class="cc-why"><b>why</b> Naming the tools closes the cause→effect loop the section sells. The non-extended header is accurate for the API-key (regex) and AWS (business_logic) rows. <b>BLOCKING:</b> the proposal's extended header 'regex + business_logic + privacy_filter + path_anonymizer' mis-attributes the email and path rows — must be corrected before ship.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>{ di: "[off] business_logic detector" }</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>{ di: "[off] business_logic detector  # hostnames, DB URLs, AWS ids" }</div>
+          <div class="cc-why"><b>why</b> business_logic is the one tool whose name doesn't self-describe; a terminal-native trailing comment tells the reader what it redacts, verified against business_logic_tool.py.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Reframe the three tool groups from three parallel rows into one left-to-right ordered pipeline: detectors → transformers → judge, with a thin connecting rail (1px hairline + → affordances) and a small '1..6 / 7..8 / 9' index per stage to make the canonical order literal. Keep the existing chips and 'off' badges.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">The strongest, source-verified claim is the LOCKED order. A directional pipeline shows the order instead of asserting it, and visually justifies the 'canonical order' meta tag.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Wire the redaction preview to the registry: tag each redaction row with the tool chip that produced it (API key→regex, DB URL→regex, email→regex, AWS→business_logic, path→generic-or-hashed). On hover/focus of a tool chip, highlight the rows it produces (and vice versa).</div><span class="effort large">large</span></div>
+          <div class="vc-why">Turns 'inspectable' from a word into an interaction. The single highest-leverage change for the section's thesis. <b>Critic correction:</b> email is regex (not privacy_filter); path must show a hashed token if attributed to path_anonymizer, else stay generic.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a one-line 'trust rail' under the title, before the dense paragraph: [ local bucket ] → [ named tools, default off ] → [ redacted record ] → [ opt-in remote ], with the dashed local/remote boundary styled like the README pipeline diagram.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Establishes the private-first frame up front so the registry and demo land as 'this is the gate before anything syncs', reusing an established README idiom.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Promote the judge's artifact-safety property into the judge chip: when 'classifier' is shown, add a micro-caption 'verdict only · never echoes the matched value' (source: classifier_tool.py drops matched_text/reason).</div><span class="effort small">small</span></div>
+          <div class="vc-why">A concrete, real, reassuring detail (the sensitivity judge cannot leak the secret it flagged) currently unmentioned; strengthens the 'no mutation' note at near-zero space cost.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Move the 'Pi raw provider bodies are default-off' idea out of the lede into a small footnote under the redaction box: 'raw provider request/response bodies are default-off too — captured blobs stay local and security-gated before any sync.' Style as --text-dim mono.</div><span class="effort small">small</span></div>
+          <div class="vc-why">A real, good point that's unexplained jargon mid-paragraph; relocating de-clutters the lede and gives it a self-contained home where it reads as a reassurance.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Give the redaction before→after rows a consistent two-column grid (original left, redacted right) with a single shared '→' gutter, instead of inline flex-wrap where long strings (postgresql URL, arn) wrap unpredictably.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Pure legibility: the strongest visual proof in the section is the literal before/after; the longest examples currently wrap into a ragged block that undercuts the clean 'span in → token out' story.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation</h3>
+        <div class="toprec">
+          <span class="lbl">★ make 'explicit, optional, inspectable' literal — and fix the two attributions first</span>
+          (1) Lay the 9 tools out as one directional pipeline (detectors → transformers → judge) so the source-verified locked order is shown, not stated; (2) connect the redaction preview to that pipeline by attributing each before→after to the named tool that produced it — but correct the email row to <b>regex</b> and either drop the path row or render a hashed token before attributing it to path_anonymizer. Pair with a tighter lede (lead with the real guarantee plus the pipeline.py 'judge never sees un-scrubbed text' fact, split the run-on, move the Pi clause to a footnote). The content is accurate and free of mock-only features; the work is representation and the two attribution corrections.
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to resolve (verdict: revise)</h3>
+        <ul class="gaps">
+          <li class="blocking"><b>BLOCKING</b> — email row mis-labeled. jay@company.internal is caught by the regex detector's email_address pattern (secrets.py:269-270; allowlist :36-37 doesn't cover @company.internal). Label it 'regex', NOT 'privacy_filter'/'llm_pii'.</li>
+          <li class="blocking"><b>BLOCKING</b> — path-row attribution contradicts the rendered token. Demo shows literal '/Users/user/' (EntityMap), but path_anonymizer HASHES ('/Users/3f9a1c/'). Drop the path row from any tool-named header, keep it generic, or change the shown token to a hash.</li>
+          <li>Non-blocking: proposed title 'Nothing leaves your machine until you name the tool that lets it' is slightly loose — local-first is the bucket and sanitize runs before sync. Keep the README 'above the dashed line is local' framing or tighten.</li>
+          <li>Safe-to-ship parts (no change): non-extended header 'regex + business_logic applied' is accurate for API-key + AWS rows; DB URL = regex; the business_logic terminal comment matches describe(); the classifier 'verdict only · never echoes the matched value' caption is source-true; 'versioned independently (0.6.0)' matches version.py; the directional pipeline + 'judge never sees un-scrubbed text' match pipeline.py.</li>
+          <li>Once attributions (1) and (2) are corrected, the proposal contains no mock-only features and is design-consistent and clearer; it flips to ship.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <!-- ================= ATTRIBUTION ================= -->
+  <section class="section has-flag" id="attribution">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">05</span>
+        <h2>Attribution</h2>
+        <span class="file">web/site/src/components/Attribution.tsx</span>
+      </div>
+      <span class="badge revise">revise</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="accuracy-flag">
+        <div class="flag-title"><span class="pill">accuracy_ok = false</span> critic blocks: the proposal's central accuracy argument is wrong against source</div>
+        <div class="critic-notes">The proposal's COPY does not overstate any mock-only Hub feature; Trails, trail graph, trail blame commit, semantic diff, and the token-efficiency angle are all real. The copy rewrites are accurate and well-grounded. BUT the proposal's central ACCURACY ARGUMENT is materially wrong, so accuracy_ok = false to force a revise.
+
+DECISIVE FINDING (graph_renderer.py:451-479, _render_commit_line): the REAL `trail graph` commit line renders `c:&lt;sha&gt;  &lt;subject&gt;  &lt;pct&gt;%` where pct = attributed_ratio*100, colored GREEN &gt;=75% / YELLOW &gt;=50% / RED &lt;50%, and the dot itself is colored by the same thresholds. That is EXACTLY the mock's green '100%' / orange '35%' cov column. So the proposal's headline claim — that the cov column is a 'FABRICATED VISUAL' the product 'does not have' — is FALSE. The product renders this percentage, with this coloring, and it already IS attribution coverage. The real defect is far smaller: the unlabeled `cov` eyebrow could read as CI/test coverage. The honest fix is to LABEL it, not delete it.
+
+SECOND ERROR: the proposed replacement 'N traces · N files per-commit annotation' is itself unsupported — that is the `trail blame commit` SUMMARY line (cli/blame.py:254), not the graph commit row. Swapping cov% for it would introduce a NEW inaccuracy. The top_recommendation is built on this false premise.
+
+THIRD: the 's:' vs 't:' claim is half-right. BOTH prefixes are real: 't:' for canonical/ingested traces, 's:' for attribution-only upstream sessions. So 's:' is NOT 'drift' — it's a real CLI prefix. Correct guidance: the mock's traces are canonical so they should render 't:', but the framing that 's:' is invented misstates the product.</div>
+      </div>
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">Asks "Who wrote this line of code?" and contrasts git blame (points at a user) with `trail blame commit` + `trail graph` (resolve a commit back to the producing traces). Renders a two-pane dark terminal: a left "graph" pane showing an interleaved commit/session tree, and a right "blame" pane showing one commit decomposed into the traces that authored its diff, with per-trace percentages, semantic-diff bullets (Added/Modified), an "attributed" total, and a files list.</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>The section never names the load-bearing noun. The product calls this 'Trails' (Trace Trails) and the whole subsystem answers the headline, but 'Trail' only appears inside command names. A reader can't attach the concept to a name they'll see again in the docs/CLI.</li>
+          <li>The two panes have no explained relationship. They read as parallel screenshots, but the real story is overview-then-drilldown: `trail graph` gives the interleaved history, then `trail blame commit &lt;sha&gt;` zooms into ONE commit. The eyebrow labels don't convey the right pane is the left pane's blue-commit row exploded.</li>
+          <li>The `cov` column (100%, 100%, 100%, 35%) is unlabeled. With green/orange coloring next to a commit message it reads as test coverage or CI status.</li>
+          <li>The second paragraph buries the strongest point (semantic diff = cheap for agents) in passive, hedged phrasing: 'Attribution search CAN surface AS a semantic diff.' The 'can … as' construction makes a real, shipped capability sound conditional.</li>
+          <li>'so you can see what worked and what didn't across your agent sessions' is a soft, generic clause that doesn't connect to anything shown (no pass/fail or outcome signal in either pane).</li>
+          <li>The BlameView's single best number, '100% attributed', is visually the weakest element (a thin dim rule line). The payoff of the whole pane is not the focal point.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li><b>(proposal's claim — critic says this is FALSE):</b> the left-pane `cov` column was flagged as a 'fabricated visual' with 'no counterpart in real trail graph output.' Source contradicts this — graph_renderer.py:451-479 renders exactly this percentage with this coloring, and it already IS attribution coverage. The real, smaller issue is that the unlabeled `cov` eyebrow could read as CI/test coverage.</li>
+          <li><b>TERMINOLOGY:</b> the component uses 's:' for sessions in the graph pane and '◆ s:' in the blame pane, but the CLI prefixes canonical traces with 't:'. Per critic, BOTH 's:' and 't:' are real prefixes (t: = canonical/ingested, s: = attribution-only upstream sessions); the mock's traces are canonical so they should render 't:'.</li>
+          <li>The headline 'two-stage push' in COMMIT.msg is mock UI-feature copy, not the opentraces `bucket remote push` / `dataset publish` push — harmless in isolation but a needless near-collision on a page that also talks about pushing to HuggingFace.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Who wrote this line of code?</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Who wrote this line of code? <span style="color:var(--fg-dim)">(no change — keep verbatim)</span></div>
+          <div class="cc-why"><b>why</b> The headline is excellent and on-voice; the fix belongs in the sub-copy and eyebrow, not the title.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>When agents write most of the code, git blame points at a user, not a session id. trail blame commit and trail graph resolve every commit back to the traces that produced it — so you can see what worked and what didn't across your agent sessions.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>When agents write most of the code, git blame points at a human, not the session that actually authored the line. Trails are the git-anchored lineage from each commit back to the traces that produced it. trail graph walks that history; trail blame commit decomposes one commit into the traces behind its diff — and what fraction of the diff each one accounts for.</div>
+          <div class="cc-why"><b>why</b> Names the noun ('Trails'), replaces the soft 'see what worked' with the concrete payoff the BlameView actually renders (per-trace share + total attribution), and splits the two commands by role (walk vs decompose), setting up the panes as overview→drilldown. Critic: accurate.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Attribution search can surface as a semantic diff — added functions, modified classes, renamed files — so agents can pull up the session behind any change in a fraction of the tokens a line-level view would cost.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Blame renders as a semantic diff, not a wall of lines: added functions, modified classes, renamed symbols. An agent can pull the trace behind any change for a fraction of the tokens a line-by-line view would cost.</div>
+          <div class="cc-why"><b>why</b> Drops the hedged 'can surface as' for a direct present-tense claim that is fully shipped (entity_join.py: change_type added/modified/renamed). 'renamed symbols' is more accurate than 'renamed files.' Critic: fully accurate.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>opentraces trail graph --limit 4</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>opentraces trail graph --limit 4 <span style="color:var(--fg-dim)">(command unchanged)</span></div>
+          <div class="cc-why"><b>why</b> The command is real and correctly shaped. See visual changes for the cov-column handling. <b>Critic correction:</b> do NOT swap cov% for 'N traces · N files' (that's the blame summary line, not the graph row) — relabel the existing % instead.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>feat(viewer): hover actions, two-stage push</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>feat(viewer): hover actions for the trace timeline</div>
+          <div class="cc-why"><b>why</b> Removes the 'push' near-collision with opentraces' real bucket/dataset push verbs and keeps the sample commit self-evidently a UI feature. Critic: a fine taste call, not an accuracy fix.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text"><span style="color:var(--red)">[critic: do NOT execute as written]</span> Proposal: remove the green/orange `cov` column and replace with 'N traces · N files'. <b>Corrected guidance:</b> KEEP the real attribution %; just LABEL it (e.g. a tiny 'attributed' caption) so it doesn't read as CI/test coverage. The 'N traces · N files' swap would introduce a new inaccuracy.</div><span class="effort small">small</span></div>
+          <div class="vc-why">graph_renderer.py:451-479 renders this percentage with green/yellow/red coloring; it already IS attribution coverage. The defect is the unlabeled eyebrow, not a fabricated column.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Make the two panes legibly an overview→drilldown pair: dim mono caption under the graph pane ('pick a commit ↓') or a subtle highlight on the `ac019172` commit row (2px colored left-border) that visually 'is' the commit exploded on the right; echo the same hash in the blame pane's terminal-bar.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The panes currently read as two unrelated screenshots; a single highlighted row + directional cue turns them into one legible motion (history → one commit → its traces). Critic: keep — accurate and clarifying.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Promote the '100% attributed' total into the visual climax: render a compact attribution meter — a full-width mono bar segmented by the three traces in proportion (48% / 32% / 20%), each segment tinted with that trace's color, sitting directly under the commit header, with '94/94 lines · 100% attributed' as the label.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">The payoff of blame is 'we accounted for the entire diff, and here's who.' A proportional stacked bar makes the 100%-attributed claim instant and shows the 48/32/20 split spatially. Critic: good design, honest, climax-worthy — keep.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Align the mono prefixes/glyphs with the real CLI: use 't:' for the canonical traces shown (not 's:'), keep '◆' for traces and '●' for commits, and add a tiny inline legend ('● commit  ◆ trace').</div><span class="effort small">small</span></div>
+          <div class="vc-why">Matching the CLI prefix means a reader who runs the command sees the same tokens. <b>Critic correction:</b> use 't:' for the canonical traces shown, but acknowledge 's:' is a legitimately real prefix for non-canonical upstream sessions — don't frame it as invented.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">In BlameView, color each trace's hash with its own action-palette tint and reuse that tint in the attribution meter and its Added/Modified bullets, so trace→bar→meter are one visual chain. Use 3 distinct hues (teal/purple/magenta), not green/red which already carry add/delete semantics.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Ties each trace's identity, contribution, and share by color so the eye can follow one trace through the decomposition, avoiding a color-meaning collision with the +add/-del counts.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation (critic-corrected)</h3>
+        <div class="toprec">
+          <span class="lbl">★ relabel — don't delete — the real attribution %; ship the copy + meter</span>
+          The proposal's original top recommendation (delete the 'invented' cov column, replace with 'N traces · N files') is built on a false premise and must NOT be executed. Instead: RELABEL the real per-commit attribution % so it doesn't read as CI/test coverage; fix the s:/t: rows to 't:' for the canonical traces shown while acknowledging 's:' is a real prefix; and ship the genuinely accurate parts — the two copy rewrites (name 'Trails' + de-hedged 'Blame renders as a semantic diff'), 'renamed symbols' over 'renamed files', the overview→drilldown connective affordance, and the proportional 100%-attributed meter.
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to resolve (verdict: revise)</h3>
+        <ul class="gaps">
+          <li class="blocking"><b>FALSE central claim</b> — the `cov` % is NOT a fabricated CI/test signal. graph_renderer.py:451-479 renders `c:&lt;sha&gt; &lt;subject&gt; &lt;pct&gt;%` with pct=attributed_ratio*100 (green≥75/yellow≥50/red&lt;50). The % is REAL and already IS attribution coverage. Fix is to LABEL it, not delete.</li>
+          <li class="blocking"><b>FALSE replacement claim</b> — 'N traces · N files' is the `trail blame commit` summary line, NOT what graph commit rows emit. The proposed swap and the top_recommendation built on it would introduce a NEW inaccuracy. Do not execute.</li>
+          <li><b>OVERSTATED claim</b> — 's:' is NOT drift. Both 't:' (canonical) and 's:' (attribution-only upstream sessions) are real prefixes. The actionable point survives but narrower: the mock's traces are canonical so they should render 't:'.</li>
+          <li>Genuinely shippable/accurate parts to keep: the two copy rewrites; 'renamed symbols'; the overview→drilldown connective affordance; the proportional 100%-attributed meter. None depend on the false cov premise.</li>
+          <li>Net: copy is accurate and on-voice, clarity is genuinely improved, but the load-bearing accuracy/visual recommendation is wrong against source. Revise: relabel (don't delete) the real %, drop the 'N traces · N files'-on-graph swap, fix s:/t' rows, ship the copy + meter + connective changes.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <!-- ================= INFRA-DIAGRAM ================= -->
+  <section class="section" id="infra-diagram">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">06</span>
+        <h2>InfraDiagram</h2>
+        <span class="file">web/site/src/components/InfraDiagram.tsx</span>
+      </div>
+      <span class="badge ship">ship</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">A horizontally-scrolling "how it works" pipeline: an agent harness (claude/codex/pi) captures three questions into a private bucket, which projects through a workflow into a reviewed dataset; a local|remote boundary line sits beneath, with a remote band mapping each local column to an HF destination ("HF private bucket / ML Intern / Hub dataset"); below that a 6-card "trace consumers" grid (capsule, skill eval, standup, spotlight, alerts, intent pr).</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>The three local stage labels are terse to the point of opacity ('bucket / private capture store', 'workflow / projects the bucket', 'dataset / reviewed rows'). A first-time reader can't tell that workflow is a curation step, nor why a dataset is separate from the bucket. The load-bearing idea (raw private evidence → reviewed shareable rows) is never stated in words.</li>
+          <li>The remote band doesn't visually connect to its local column. 'ML Intern' under the 'workflow' column reads as a fourth product rather than 'the same workflow, run remotely.' The mapping stated in the source comment never reaches the reader.</li>
+          <li>The capture harness uses three rhetorical questions ('what have I done? → trace', etc.). The substrate names (trace/ctx/trail) are undefined at this point, so the answers land as jargon. The strongest real differentiators (git-linked Trails, the Context Tree) are reduced to one-word answers.</li>
+          <li>The dataset card foot 'security tools · regex · entropy' reads as if regex+entropy run automatically on every row, when all 9 tools are default-OFF and opt-in. The most trust-building fact (scan + redact happens locally, before anything leaves the machine) is not surfaced at the boundary where it matters.</li>
+          <li>The 'pipe-cross' verbs differ in kind ('sync', 'run on HF', 'push'). 'sync'/'push' are real CLI flows; 'run on HF' has no corresponding command, so three verbs imply three symmetric shipped actions when only two are.</li>
+          <li>The consumers grid is flat: 6 cards with no grouping or status, so the reader can't tell shipped commands (spotlight, capsule, intent pr, skill eval) from prototypes (standup) and mock-only ideas (alerts). The README frames these as 'from shipped commands to prototypes'; the landing erases that ordering.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li>'ML Intern' (verb 'run on HF') is portrayed as a concrete deployed remote node. It exists only as conceptual ASCII shorthand in README.md:96 and has NO backing command or module. Rendering it as a peer of the real 'HF private bucket' and 'Hub dataset' nodes overstates a not-shipped concept as a working service.</li>
+          <li>The 'standup' consumer card describes a working daily report with no qualifier. CLAUDE.md:70 states standup 'exists as a prototype (not yet wired into the CLI)'. Presenting it identically to shipped cards portrays a prototype as shipped.</li>
+          <li>The 'alerts' consumer card is portrayed as shipped. Alerts (incl. Slack routing) is MOCK-ONLY in the Hub preview; no `alerts` command or standing-alert engine exists. The card reads as a current feature.</li>
+          <li>The dataset card foot 'security tools · regex · entropy' implies these run as part of dataset projection. The security pipeline is default-OFF for every tool; this should read as 'opt-in', not always-on. It also under-states the real story: 9 named tools, fixed order, local-before-publish.</li>
+          <li>Minor: 'how did my environment change? → trail' understates the Trail's real strength (git-anchored survival: alive/transformed/reverted/lost), not merely 'environment change.'</li>
+          <li>'skill eval' says 'score whether skill changes improve outcomes' — per CLAUDE.md:71 the verifier on the current near-one-class bucket returns blocked_* (no calibrated reward yet). Soften 'score' to 'when trustworthy labels exist.'</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>{ name: "ML Intern", verb: "run on HF" },</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>{ name: "workflow run", verb: "run", preview: true },  // label 'preview', or remove this stage entirely</div>
+          <div class="cc-why"><b>why</b> 'ML Intern' is README ASCII shorthand with no shipped command. Either drop the middle remote node (cleanest) or rename to neutral 'workflow run' and mark preview. <b>Critic:</b> prefer removal — 'workflow run' invents a label matching no exact CLI verb.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>&lt;div className="pipe-rows-foot"&gt;security tools · regex · entropy&lt;/div&gt;</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>&lt;div className="pipe-rows-foot"&gt;scanned + redacted locally · 9 security tools, opt-in&lt;/div&gt;</div>
+          <div class="cc-why"><b>why</b> Surfaces the real trust story at the boundary (scan/redact on-machine before publish) and corrects the implication that regex+entropy run automatically.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>{ tag: "standup", title: "Standup", desc: "A daily report rebuilt from yesterday's sessions: what was attempted, what landed, what failed, and what's still open…" }</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>{ tag: "standup", status: "prototype", title: "Standup", desc: "A daily report rebuilt from yesterday's sessions…" }</div>
+          <div class="cc-why"><b>why</b> Standup is explicitly a prototype not wired into the CLI (CLAUDE.md:70). A 'prototype' status badge keeps the card while making the claim accurate.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>{ tag: "alerts", title: "Alerts", desc: "Standing alerts and reports over trace usage: failure rate, context waste, third-party tools, secrets, policy violations…" }</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>{ tag: "alerts", status: "preview", title: "Alerts", desc: "Standing alerts and reports over trace usage…" }</div>
+          <div class="cc-why"><b>why</b> Alerts (incl. Slack routing) is mock-only with no shipped command. A status badge prevents portraying it as current while preserving the roadmap signal. <b>Critic:</b> consider 'mock'/'coming' over 'preview' so a skimmer doesn't read it as imminent.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>&lt;strong&gt;workflow&lt;/strong&gt; projects the bucket</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>&lt;strong&gt;workflow&lt;/strong&gt; selects + projects rows</div>
+          <div class="cc-why"><b>why</b> 'projects the bucket' is opaque; 'selects + projects rows' conveys that the workflow is the curation step that makes the dataset distinct from the raw bucket.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>&lt;strong&gt;dataset&lt;/strong&gt; reviewed rows</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>&lt;strong&gt;dataset&lt;/strong&gt; reviewed, publishable rows</div>
+          <div class="cc-why"><b>why</b> Clarifies the dataset's purpose (the only stage that leaves the machine, and only after human review), reinforcing the local-first boundary.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Traces are not only logs. With capture and pipeline in place, they become retained evidence you can search, secure, share, evaluate, and turn into new workflows.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Traces are not only logs. The high-signal evidence of an agent session usually vanishes when the terminal closes. Captured locally and git-linked, it becomes retained evidence you can search, secure, share, evaluate, and turn into new workflows.</div>
+          <div class="cc-why"><b>why</b> States the core problem (the evidence vanishes) before the benefit list, giving the consumer grid a 'why it matters' anchor it currently lacks.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a one-line plain-language spine above the pipe-grid: a centered mono caption 'raw private evidence → reviewed rows → publishable dataset', between the harness block and the three local cards.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The three terse card labels never state the throughline in words; a single spine line makes the local stages legible at a glance. <b>Critic:</b> tighten to 'private bucket → workflow projects rows → reviewed dataset (publishable)' so it doesn't imply a 4th transformation.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Draw an explicit connector from each local column down through the local|remote boundary to its remote chip (thin vertical hairline per column, or boundary-line tick marks). Make the bucket→'HF private bucket', workflow→'workflow run', dataset→'Hub dataset' mapping visible.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">The remote chips are positionally under their columns but read as a disconnected second row; explicit connectors make 'each local stage syncs to its own HF destination' self-evident and remove the 'ML Intern is a separate product' impression.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Remove the middle remote node entirely and collapse the remote band to two real destinations ('HF private bucket' via sync, 'Hub dataset' via publish), with a single 'eval · training · scoring' loop label beneath. If kept, render it de-emphasized (dashed border, muted) with a 'preview' chip.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Eliminates the only fully-fictional node. The two-destination version is accurate, cleaner, and maps 1:1 to real commands (bucket remote push, dataset publish).</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Introduce a small status chip on consumer cards: a `status` field rendering a muted mono pill ('shipped' / 'prototype' / 'preview') top-right, color-keyed. Default shipped for capsule, spotlight, intent pr, skill eval; prototype for standup; preview for alerts.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">The flat 6-card grid erases the README's 'shipped commands to prototypes' ordering and is the section's biggest accuracy gap (a real `trail blame pr` looks identical to mock-only alerts). A small on-voice status pill fixes accuracy without removing roadmap cards.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Group the consumer grid into two labeled rows: a 'shipped' row (capsule, spotlight, intent pr, skill eval) and a 'preview' row (standup, alerts), separated by a faint pipe-foot-divider with a mono eyebrow ('shipped' / 'coming').</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Reinforces the status chips structurally and lets a skimming reader trust the top row immediately; matches the existing pipe-foot-divider pattern.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Reduce or remove the horizontal scroll dependency. The pipeline-inner has min-width 880px forcing a scroll mid-section; at ≤900px collapse the pipe-grid to a vertical stack (bucket / ↓ 'project' / workflow / ↓ 'rows' / dataset).</div><span class="effort large">large</span></div>
+          <div class="vc-why">A 'how it works' diagram that requires horizontal scrolling to see the dataset stage buries the payoff; a vertical fallback keeps the full flow on screen on the devices most developers use.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a faint 'local' tint/background wash behind the harness + three local cards (subtle --surface), distinct from the tinted --bg-alt remote band, so the local/remote split is felt as two zones, not just a line.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The local|remote boundary is the section's centerpiece but is currently a single 2px line; a two-zone tint makes 'everything above stays on your machine' immediately legible.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation</h3>
+        <div class="toprec">
+          <span class="lbl">★ fix the two accuracy gaps first, then clarity</span>
+          (1) Remove or de-emphasize the 'ML Intern' remote node (README ASCII shorthand with no shipped command), collapsing the remote band to the two real destinations (HF private bucket via sync, Hub dataset via publish). (2) Add a status chip to consumer cards so shipped commands (capsule, spotlight, intent pr, skill eval) are visibly distinct from the standup prototype and the mock-only alerts. Then add a one-line plain-language spine above the local cards and connect each local column to its remote chip, so the local/remote story actually reaches the reader.
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to watch (accuracy ok · ship)</h3>
+        <ul class="gaps">
+          <li>FALLBACK NAMING: the alternative 'workflow run' matches no exact CLI verb (real verbs are `dataset run`, `workflow create/list/…`). Prefer removing the middle remote node entirely; if a third node is kept for the eval/training/scoring loop, label it 'remote compute (preview)' not 'workflow run.'</li>
+          <li>STATUS VALUE for alerts: alerts is fully MOCK-ONLY (no engine, no command). Ensure the pill is visually clearly NON-shipped (muted/dim); consider 'mock' or 'coming' over 'preview' to be maximally honest.</li>
+          <li>SPINE WORDING: 'raw private evidence → reviewed rows → publishable dataset' conflates 'reviewed rows' and 'publishable dataset' as two stages, but the dataset IS the reviewed+publishable rows. Tighten to 'private bucket → workflow projects rows → reviewed dataset (publishable).'</li>
+          <li>GROUPED-ROWS LABEL: skill eval sits in 'shipped' while honestly returning blocked_* on the current bucket; keep it shipped (the framework IS shipped) but ensure its softened copy ('when trustworthy labels exist') renders.</li>
+          <li>VISUAL EFFORT vs PAYOFF: land the two accuracy fixes (remove ML Intern node + status pills) FIRST as small/medium commits; the spine, connectors, two-zone tint, and responsive stack are clarity polish that can follow without blocking.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <!-- ================= SCHEMA-EXPLORER ================= -->
+  <section class="section" id="schema-explorer">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">07</span>
+        <h2>SchemaExplorer</h2>
+        <span class="file">web/site/src/components/SchemaExplorer.tsx</span>
+      </div>
+      <span class="badge ship">ship</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">A "schema" eyebrow over a "TraceRecord" title and a one-line subtitle ("One trace spine, plus bucket companions for trail, context, and source evidence. Dataset rows are workflow projections over this record."), followed by a single 19-line syntax-highlighted JSON blob of a TraceRecord with a link to /schema. The whole thesis (spine + companions; rows are projections) lives only in the prose; the JSON is a flat dump with no visual structure conveying it.</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>The section's thesis (TraceRecord is a SPINE, companions and dataset rows are PROJECTIONS over it) is stated only in one sentence and not represented anywhere in the JSON, which is just a flat 19-line dump. A reader sees 'a schema', not 'a spine that other things project off of'.</li>
+          <li>The load-bearing idea is the cross-substrate JOIN KEYS — patches[].patch_id, steps[].context_node_id, context_tree_summary.active_path_leaf_id, outcome.commit_sha — but these critical lines are styled identically to throwaway fields like dependencies:['react','typescript']. Nothing tells the reader which are spine attachment points.</li>
+          <li>'bucket companions for trail, context, and source evidence' names three companions but the JSON shows no visual link between a record field and the companion it joins to. The relationship is asserted, not shown.</li>
+          <li>'Dataset rows are workflow projections over this record' is abstract and disconnected: there is no visual of a row, so 'projection' stays a word. The reader never sees what a projected row looks like next to the record it came from.</li>
+          <li>Three near-synonyms for the same idea ('trace spine', 'this record', 'bucket companions') appear without disambiguation; a first-time reader may read 'companions' as optional extras rather than the gzip JSONL sidecars the README defines.</li>
+          <li>The comment '// TAO loop' on steps[] is unexplained jargon at the exact spot a skimming reader lands. TAO (thought-action-observation) is never expanded; it reads as noise.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li>attribution is rendered as { files: [{ path, ranges }] } — the real schema nests ranges one level deeper under conversations[]: files[].conversations[].ranges[]. The simplification drops the conversation/contributor layer that is the whole point of attribution. Either restore conversations[] or label the blob 'abridged'. (Only real slip in the blob.)</li>
+          <li>The blob renders BOTH security: { scanned: true, … } AND metadata.security.tools_applied: ['regex','entropy']. Accurate (both real), but docs call top-level security.scanned 'legacy summary metadata'; consider demoting/annotating so the page doesn't teach the legacy shape as canonical.</li>
+          <li>tools_applied: ['regex','entropy'] is precise and safe — 2 of the 9 real, explicit, default-OFF tools. KEEP exactly as is; it correctly signals scanning is opt-in/named, not always-on.</li>
+          <li>outcome.committed:true / commit_sha and patches[].step_index are real and correctly portrayed as the Git-anchored spine — the strongest accurate part of the blob; make it MORE prominent.</li>
+          <li>context_tree_summary.active_path_leaf_id and steps[].context_node_id are both real Context Tree join keys. No mock-only Hub feature referenced anywhere — keep it that way; do not add an 'intents' field to dress up the record.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>One trace spine, plus bucket companions for trail, context, and source evidence. Dataset rows are workflow projections over this record.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>One record is the spine. It carries the join keys that link to the bucket's trail / context / source companions, and every dataset row you publish is a workflow projection over it. Capture once, project many.</div>
+          <div class="cc-why"><b>why</b> Names the mechanism (join keys link to companions) instead of just asserting the relationship; 'capture once, project many' makes the spine-vs-projection thesis stick in the terse house voice.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>"steps": [                          <span style="color:var(--fg-dim)">// TAO loop</span></div>
+          <div class="cc-row prop"><span class="tag">proposed</span>"steps": [                          <span style="color:var(--fg-dim)">// thought → action → observation</span></div>
+          <div class="cc-why"><b>why</b> 'TAO loop' is undecoded jargon at the reader's first landing point. Spelling it out keeps the mono voice, uses the existing arrow affordance, and matches the schema docs' own Step definition.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>"security": { "scanned": true, "redactions_applied": 2 },</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>"security": { "scanned": true, "redactions_applied": 2 },  <span style="color:var(--fg-dim)">// named tools, opt-in, run before anything leaves the machine</span></div>
+          <div class="cc-why"><b>why</b> Adds a one-line inline comment making the most important security truth explicit, preventing the page from implying always-on/magic scanning. Accurate to the 9-tool default-OFF registry.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Full schema docs →</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>all 15 models, every version →</div>
+          <div class="cc-why"><b>why</b> 'Full schema docs' is generic. The real /schema page is a versioned model browser (15 models, v0.1.0 through v0.6.0). Quantifying it is more honest and a stronger affordance.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a left gutter of small mono 'join-key' badges aligned to the four spine-attachment lines: steps[].context_node_id → 'ctx', patches[].patch_id → 'trail', context_tree_summary.active_path_leaf_id → 'ctx', attribution → 'source', outcome.commit_sha → 'git'. Use the action palette (teal=ctx, green=trail/git, amber=source).</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Directly visualizes the section's thesis ('the record carries join keys to companions') which is currently invisible. Makes the four load-bearing fields legible as a spine instead of styling them like dependencies:['react'].</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Below the JSON, add a 3-node horizontal lane diagram in the README's ASCII/box idiom: [ TraceRecord ] --patches[]--&gt; ( trail.jsonl.gz ) / --context_node_id--&gt; ( context.jsonl.gz ) / --attribution--&gt; ( sources.jsonl.gz ), then ( bucket ) --workflow project--&gt; [ dataset row ]. Reuse the exact companion filenames from the README.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">'spine + companions' and 'rows are projections' are spatial relationships trapped in one sentence; a small lane diagram shows the capture-once/project-many story in one glance and matches the README diagram language.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Split the single &lt;pre&gt; into a two-tier visual: render the ~4 spine/join-key lines at full opacity with a 2px colored left-border (spec's 'live emphasis'), and dim the ornamental lines (dependencies, metadata, legacy security.scanned) to --fg-dim. Keep it one code block.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Establishes hierarchy so a skimmer reads the spine, not 19 equal-weight lines. Uses an emphasis convention the spec already sanctions.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a one-line 'projection' preview under the JSON: a single collapsed dataset-row line, e.g. dataset row → { task, agent.model, patches[].file_path, outcome.success, security.tools_applied }, in dim mono, showing a row is a SUBSET projected from the record's own fields. Optionally a [show projection] bracket-toggle.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">Makes 'workflow projection over this record' concrete by showing a row as a literal subset of the fields above it — the single most clarifying visual this section can add, currently entirely absent.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Restore one level of the attribution shape OR mark it abridged: change files: [{ path, ranges }] to files: [{ path, conversations: [{ contributor, ranges }] }] (truncated with …), or append an inline comment // abridged — see /schema.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Fixes the only real accuracy slip in the blob (attribution.ranges actually nests under conversations[]) without bloating the block. A schema page should not teach a shape the schema does not have.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation</h3>
+        <div class="toprec">
+          <span class="lbl">★ make the spine-and-projection thesis visible (accuracy nearly clean)</span>
+          The accuracy is nearly clean (fix only the attribution nesting and frame the legacy security.scanned field); the real problem is that the thesis — TraceRecord is a SPINE, everything else PROJECTS over its join keys — lives only in one sentence while the JSON is a flat 19-line dump. Make it visible: (1) add left-gutter mono join-key badges (ctx / trail / source / git) on the four spine lines and dim the ornamental ones; (2) add a small README-idiom lane diagram (record → companions → dataset row); (3) show one collapsed dataset-row line so 'projection' becomes a literal visible subset. Tighten the subtitle to name the mechanism ('carries the join keys… capture once, project many') and decode 'TAO loop' inline.
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to watch (accuracy ok · ship)</h3>
+        <ul class="gaps">
+          <li>Lane-diagram edge labels: 'attribution → sources.jsonl.gz' is a presentation mapping, not a literal schema join key (unlike context_node_id → context tree). Verify each edge label against actual companion contents before shipping so the diagram doesn't assert a join the record doesn't carry.</li>
+          <li>Apply the attribution fix exactly (files:[{path, conversations:[{contributor, ranges}]}]) OR append '// abridged — see /schema'. This is the one real accuracy correction and must not be dropped.</li>
+          <li>'all 15 models, every version' is the v0.1.0 baseline count; the model list grows by 0.6.0 (Patch, GitAnchor, GitLink, dataset models). It matches what /schema says today, but keep the landing copy in sync to avoid an off-by-N mismatch.</li>
+          <li>The 'projection' preview lists security.tools_applied — confirm a published dataset workflow actually projects metadata.security.tools_applied (not legacy security.scanned) so the preview teaches the canonical surface.</li>
+          <li>Keep tools_applied:['regex','entropy'] exactly as-is; ensure no rewrite of the new inline security comment drifts toward implying always-on scanning — the 'opt-in, named' framing is load-bearing.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <!-- ================= GET-STARTED ================= -->
+  <section class="section" id="get-started">
+    <div class="sec-head">
+      <div class="titlewrap">
+        <span class="idx">08</span>
+        <h2>GetStarted</h2>
+        <span class="file">web/site/src/components/GetStarted.tsx</span>
+      </div>
+      <span class="badge ship">ship</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="block">
+        <h3>current summary</h3>
+        <div class="summary-line">A two-column "get started" section: a left "$ from your terminal" column with 4 copyable CLI commands (install, setup, trace query, dataset publish) and a right "> from your agent" column with 4 natural-language prompts (setup, scaffold+run dataset, review rows, publish). Each row is a bordered command box with a [cp] copy button plus a mono description. A single [get started] button links to the installation docs. Title is "Capture privately, publish projected rows." with a subtitle about open data being the new open source.</div>
+      </div>
+
+      <div class="block">
+        <h3>clarity issues</h3>
+        <ul class="issues">
+          <li>The two columns present the SAME four-step pipeline (install → setup → build/review dataset → publish) but never say so. They read as two unrelated lists rather than 'two front doors to one workflow', the actual point of the section.</li>
+          <li>The terminal column is not a coherent walkthrough: it jumps from step 3 'trace query' straight to step 4 'dataset publish', silently skipping dataset new/run/review steps that the agent column DOES show. Copying the four terminal commands in order would leave nothing to publish, and the mandatory review gate is invisible on the terminal side.</li>
+          <li>Steps have no ordering signal (no numbers, no connective arrows). 'one-time machine setup' is the only step hinting at sequence; the rest read as a flat menu, so the 'first run' narrative is lost.</li>
+          <li>The title 'Capture privately, publish projected rows.' is a slogan, not an orientation. A first-time visitor needs to know what the four steps ARE before being sold on 'projected rows', a term not defined here.</li>
+          <li>The subtitle ('Open data is the new open source…') duplicates the hero H1 framing and is pure pitch; it adds no first-run guidance and competes with the hero for the same line.</li>
+          <li>The agent column's value proposition (you can drive the whole pipeline by talking to your coding agent, because every command emits JSON) is never stated. The '>' header is the only cue.</li>
+          <li>No mention of the actual entry artifacts a first run produces (the private bucket, the committable .opentraces.json marker), so 'capture privately' has no concrete anchor.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>accuracy issues</h3>
+        <ul class="issues accuracy">
+          <li>The terminal column implies publishing is reachable right after 'trace query' (steps 3 then 4). In reality publish requires a dataset created, run, and with approved rows; raw traces are never published. This understates the review-required guarantee ('Datasets are projected rows, not raw trace uploads'). The agent column correctly shows new → run → review → publish; the terminal column should match. The one substantive correctness gap.</li>
+          <li>Terminal step 4 desc 'project rows with a workflow, then publish approved ones to HF' compresses three real steps (dataset new --workflow, dataset run, dataset review/approve) into one command (dataset publish) whose desc describes work that command does not itself do.</li>
+          <li>Minor: 'pipx install opentraces' is correctly the preferred install. But the section omits the agent-native install path 'npx skills add jayfarei/opentraces' that makes the agent column actually work — portraying the agent column without surfacing skill install slightly overstates how turnkey the agent path is.</li>
+          <li>No mock-only Hub features portrayed (correct). The section stays entirely within shipped CLI surface; do not add Intents catalog / Evals / Alerts / Self-Improving framing here.</li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>proposed copy changes</h3>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Capture privately, publish projected rows.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Install, capture, publish. Two ways in.</div>
+          <div class="cc-why"><b>why</b> The current title assumes you already know 'projected rows.' The section's job is install + first run, so the title should name the arc and signal the two-column structure (terminal vs agent).</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>Open data is the new open source. Your agent traces are the most valuable dataset nobody is collecting. Start contributing to the commons.</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>Same pipeline, two front doors: run the CLI yourself, or tell your coding agent. Every command emits JSON, so the agent can drive every step. Traces stay in a private local bucket until you approve and publish.</div>
+          <div class="cc-why"><b>why</b> The current subtitle repeats the hero's pitch and gives zero first-run orientation. The replacement explains the two columns, states the agent-native JSON fact, and reasserts the private-first / review-required guarantee. <b>Critic nit:</b> tighten to '…until you approve and publish a dataset' since you approve dataset ROWS, while raw traces leave only via opt-in `bucket remote push`.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>opentraces trace query --since 7d  (desc: search the private bucket of captured traces)</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>opentraces dataset new my-dataset --workflow ./workflows/bug-fix-curator/  (desc: project a dataset from your traces with a workflow)</div>
+          <div class="cc-why"><b>why</b> The terminal column skips dataset creation, so the four commands don't form a runnable path to publish. Replacing 'trace query' with 'dataset new' makes the terminal column mirror the agent column (new → run → review → publish). <b>Critic:</b> better to ADD this as a 5th row and keep 'trace query' — see gaps.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>opentraces dataset publish my-dataset  (desc: project rows with a workflow, then publish approved ones to HF)</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>opentraces dataset publish my-dataset  (desc: ships only rows you approved; raw traces never leave the bucket)</div>
+          <div class="cc-why"><b>why</b> The current description attributes work to dataset publish that it does not do (projecting rows, approving). The replacement describes exactly what publish does, reinforcing the private-by-default guarantee. Critic: matches quickstart.md step 8 verbatim in spirit.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>set up opentraces on my machine  (desc: walks install/auth/capture choices; repos then auto-enroll on first session)</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>set up opentraces on my machine  (desc: agent installs the skill, walks install/auth/capture as an interview; repos auto-enroll on first session)</div>
+          <div class="cc-why"><b>why</b> The agent path only works once the opentraces skill is installed (installation.md describes the agent setup as an interview). Naming the skill makes the agent column honest about what enables it.</div>
+        </div>
+
+        <div class="copy-change">
+          <div class="cc-row cur"><span class="tag">current</span>scaffold a dataset and run it over my latest traces  (desc: agent calls dataset new + dataset run to populate rows from your traces)</div>
+          <div class="cc-row prop"><span class="tag">proposed</span>scaffold a dataset and run it over my latest traces  (desc: agent calls dataset new + dataset run to project rows from your private bucket)</div>
+          <div class="cc-why"><b>why</b> Tightens to the real terms: rows are projected (not just 'populated') and come from the private bucket specifically. Keeps parity with the corrected terminal column.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>proposed visual changes</h3>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a thin numbered step rail down each column: render 01 / 02 / 03 / 04 in Geist Mono --fg-mute at the left edge of each gs-row, with a 1px vertical connector. Turns the two flat lists into ordered walkthroughs and asserts that row N on the left equals row N on the right.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The section's intent is 'install + first run' but there is no ordering or progression. Numbered rails make the sequence legible and let the eye pair terminal and agent paths step-for-step.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Give the two columns matching window chrome: wrap each in the existing terminal-bar / traffic-light frame used in the Hero. Label the left frame 'shell' and the right 'coding agent' in mono eyebrow style. Add a faint center seam or connective glyph captioned 'same pipeline'.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">The two columns currently share one undifferentiated grid, reading as one table. Framing each as its own window makes the terminal-vs-agent contrast the visual hero and ties it to the established design language.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a one-line 'local | remote' boundary marker between step 3 (build/review dataset) and step 4 (publish): a dashed hairline spanning both columns with a mono caption 'above: local + private · below: published to HuggingFace', echoing the README pipeline diagram's dashed sync line.</div><span class="effort small">small</span></div>
+          <div class="vc-why">The core promise is private-by-default with an explicit publish boundary, but nothing shows where 'leaves your machine' happens. A dashed boundary row makes the privacy guarantee visible exactly where it matters.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Style the agent column commands as chat-style prompts, not copyable shell boxes: keep the box but prefix each with a mono '>' caret and a subtle --c-user (amber) left-border, and replace [cp] on the agent side with a [paste to agent] affordance (or drop the copy button). Keep the terminal column's [cp] as-is.</div><span class="effort small">small</span></div>
+          <div class="vc-why">Both columns currently use identical copy boxes with [cp], implying the agent prompts are shell commands. Differentiating them makes it instantly clear the right side is natural language you say to an agent.</div>
+        </div>
+
+        <div class="visual-change">
+          <div class="vc-head"><div class="vc-text">Add a compact result strip under the dual columns showing what a first run produces: three mono chips '~/.opentraces/bucket (private)' · '.opentraces.json (committable)' · 'reviewed rows → HF', using the OT card/pill style.</div><span class="effort medium">medium</span></div>
+          <div class="vc-why">The section never shows the concrete artifacts of a first run, so 'capture privately' is abstract. Naming the bucket path, committable marker, and publish target grounds the promise (all accurate per quickstart.md) and gives a satisfying 'and now you have X' payoff.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>top recommendation</h3>
+        <div class="toprec">
+          <span class="lbl">★ make the two columns visibly the same ordered pipeline, two ways</span>
+          (1) Renumber both columns 01-04 with a step rail so left and right pair row-for-row; (2) replace terminal step 3 'trace query' with 'dataset new … --workflow …' and fix the publish description to 'ships only rows you approved; raw traces never leave the bucket' (today it skips straight from 'trace query' to 'dataset publish', breaking the runnable path and hiding the review gate); (3) frame each column in the existing terminal/traffic-light chrome labeled 'shell' vs 'coding agent' with a 'same pipeline' seam; (4) add a dashed local|remote boundary above the publish step. Keeps the section strictly within shipped CLI surface, corrects the one real accuracy gap, and turns a flat two-list layout into the section's actual story: one pipeline, two front doors, private until you approve.
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>critic gaps to watch (accuracy ok · ship)</h3>
+        <ul class="gaps">
+          <li>Subtitle imprecision: 'Traces stay in a private local bucket until you approve and publish' conflates raw traces (which leave only via opt-in `bucket remote push`) with projected dataset rows (the actual approve/publish unit). Tighten to '…until you approve and publish a dataset.'</li>
+          <li>Design-accuracy nuance: the medium-effort visual claims the Hero uses 'traffic-light chrome', but the live component renders a tab-label bar, NOT traffic-light dots (the spec language is on the proposal's side). Implementers should add dots or relabel as 'the existing .terminal-bar window chrome.'</li>
+          <li>The proposal keeps 4 rows by REPLACING 'trace query' with 'dataset new', losing the only surfaced search/Spotlight command (a real, distinctive shipped capability). Take the proposal's own option: a 5-row terminal column (install → setup → dataset new → dataset run/review → publish, plus trace query as an aside).</li>
+          <li>Parity gap: the corrected terminal column still compresses dataset new + run + review into fewer rows than the agent column. If the goal is 'row N left == row N right', add an explicit review/approve row (e.g. `opentraces dataset review approve my-dataset --all`) so the mandatory review gate is visible on BOTH sides.</li>
+          <li>Minor: 'repos auto-enroll on first session' is accurate but conditioned on `global` tracking mode (the default) and does NOT apply identically to Pi (explicit-consent per repo); don't read it as a universal guarantee across all agents.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div style="padding: 0 20px 14px;"><a class="top" href="#top">↑ back to top</a></div>
+  </section>
+
+  <footer>
+    opentraces.ai — section polish review · 8 sections · 6 ship / 2 revise · 2 accuracy flags (privacy-trust, attribution)<br>
+    improver proposals × adversarial-critic verdicts · generated artifact, no landing-page components were edited
+  </footer>
+
+</div>
+</body>
+</html>
