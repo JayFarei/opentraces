@@ -177,3 +177,32 @@ def test_bridge_status_reports_cli_and_project_state(tmp_path: Path) -> None:
     assert status["project"]["capture_enabled"] is True
     assert status["capture"]["raw_provider_bodies_default"] == "off"
     assert any(step["state"] == "needs_terminal" for step in status["checklist"])
+
+
+def test_pi_setup_plan_git_hook_reflects_real_state(tmp_path: Path) -> None:
+    """The git_hook step mirrors the real hook, not a static needs_terminal.
+
+    Regression: setup_plan_json hardcoded git_hook to ``needs_terminal`` and
+    never marked it optional, so the Pi startup status reported "1 setup step
+    missing" forever even after ``opentraces setup git`` had installed the hook.
+    """
+    from opentraces.capture.git import install as git_hook
+    from opentraces.capture.pi.install import setup_plan_json
+
+    project = tmp_path / "repo"
+    _enable_pi_capture(project)
+
+    def _git_step(plan: dict) -> dict:
+        return next(s for s in plan["steps"] if s["name"] == "git_hook")
+
+    # No git repo / no hook yet -> actionable needs_terminal.
+    assert _git_step(setup_plan_json(project_dir=project))["state"] == "needs_terminal"
+
+    # Initialize a repo and install the post-commit hook.
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    assert git_hook.install(project) is True
+
+    # Now the step reports ok and stops counting as missing.
+    assert _git_step(setup_plan_json(project_dir=project))["state"] == "ok"

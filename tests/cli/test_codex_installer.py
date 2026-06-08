@@ -142,6 +142,36 @@ def test_codex_installer_status_and_remove(tmp_path: Path) -> None:
     assert codex_install.status(hooks_dir=hooks_dir, hooks_file=hooks_file)["installed"] is False
 
 
+def test_codex_status_is_interpreter_agnostic(tmp_path: Path) -> None:
+    """A hook written by a different interpreter still reads as installed.
+
+    Regression: status() previously required a byte-exact command match
+    including the full interpreter path, so a hook written by an editable
+    ``.venv`` opentraces reported ``installed=False`` when checked by a pipx
+    opentraces (different ``sys.executable``).
+    """
+    hooks_dir = tmp_path / ".codex" / "hooks" / "opentraces"
+    hooks_file = tmp_path / ".codex" / "hooks.json"
+
+    codex_install.install(hooks_dir=hooks_dir, hooks_file=hooks_file)
+
+    # Rewrite every registered command to use a foreign interpreter path,
+    # keeping the opentraces module form intact (what a different venv writes).
+    config = json.loads(hooks_file.read_text())
+    foreign = "/some/other/venv/bin/python"
+    for event in codex_install.EVENT_SCRIPTS:
+        for entry in config["hooks"][event]:
+            for hook in entry.get("hooks", []):
+                cmd = hook.get("command", "")
+                if "opentraces.capture.codex_cli.hooks." in cmd:
+                    hook["command"] = foreign + cmd[cmd.index(" -m ") :]
+    hooks_file.write_text(json.dumps(config))
+
+    status = codex_install.status(hooks_dir=hooks_dir, hooks_file=hooks_file)
+    assert status["installed"] is True
+    assert all(status["registered"].values())
+
+
 def test_codex_installer_refuses_corrupt_hooks_json(tmp_path: Path) -> None:
     hooks_file = tmp_path / ".codex" / "hooks.json"
     hooks_file.parent.mkdir(parents=True)

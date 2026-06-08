@@ -124,6 +124,31 @@ def _already_registered(event_hooks: list, command: str) -> bool:
     return False
 
 
+def _module_registered(event_hooks: list, module_name: str) -> bool:
+    """Interpreter-agnostic registration check for status reporting.
+
+    ``_already_registered`` requires a byte-exact match including the full
+    interpreter path, so a hook written by one venv reads as missing when a
+    different ``opentraces`` (e.g. pipx vs an editable ``.venv``) runs the
+    check. For *status* we only care that an opentraces hook for this event
+    module is registered, regardless of which interpreter launches it.
+    """
+    module = f"opentraces.capture.codex_cli.hooks.{module_name}"
+    for entry in event_hooks:
+        if not isinstance(entry, dict):
+            continue
+        inner = entry.get("hooks")
+        if not isinstance(inner, list):
+            continue
+        for hook in inner:
+            if not isinstance(hook, dict):
+                continue
+            command = hook.get("command")
+            if _is_opentraces_command(command) and module in command:
+                return True
+    return False
+
+
 def _prune_stale_opentraces_hooks(event_hooks: list, command: str) -> list:
     kept = []
     for entry in event_hooks:
@@ -288,9 +313,8 @@ def status(
     if not isinstance(hooks_cfg, dict):
         hooks_cfg = {}
     for event, name in EVENT_SCRIPTS.items():
-        command = _hook_command(Path(name).stem)
         entries = hooks_cfg.get(event) or []
-        registered[event] = isinstance(entries, list) and _already_registered(entries, command)
+        registered[event] = isinstance(entries, list) and _module_registered(entries, Path(name).stem)
     installed = all(scripts_present.values()) and all(registered.values())
     return {
         "installer": "codex-cli",

@@ -159,6 +159,23 @@ def remove(
     return HookInstallResult(ok=True, removed=["package"] if removed else [], config_files=[path])
 
 
+def _git_hook_step(project_dir: Path) -> dict[str, Any]:
+    """Reflect the real post-commit hook state instead of a static placeholder.
+
+    The hook is installed from a terminal, so a not-yet-installed hook reports
+    ``needs_terminal`` (actionable). Once installed, it reports ``ok`` so the
+    Pi startup status stops counting it as a missing step forever.
+    """
+    try:
+        from ..git import install as git_hook
+
+        st = git_hook.status(project_dir)
+    except Exception:  # noqa: BLE001 - never block the setup plan on git probing
+        return {"name": "git_hook", "state": "needs_terminal", "command": "opentraces setup git"}
+    state = "ok" if st.get("installed") else "needs_terminal"
+    return {"name": "git_hook", "state": state, "command": "opentraces setup git"}
+
+
 def setup_plan_json(*, project_dir: Path, project: bool = False) -> dict[str, Any]:
     st = status(project=project, cwd=project_dir)
     project_st = status(project=True, cwd=project_dir) if not project else st
@@ -176,7 +193,7 @@ def setup_plan_json(*, project_dir: Path, project: bool = False) -> dict[str, An
             {"name": "pi_package", "state": "ok" if package_installed else "missing", "command": "pi install npm:opentraces-pi"},
             {"name": "opentraces_cli", "state": "ok" if bridge["cli"]["found"] else "missing", "commands": bridge["cli"].get("install_hints", [])},
             {"name": "project_capture", "state": "ok" if bridge.get("project", {}).get("capture_enabled", False) else "missing", "command": "opentraces init --agent pi"},
-            {"name": "git_hook", "state": "needs_terminal", "command": "opentraces setup git"},
+            _git_hook_step(project_dir),
             {"name": "hf_auth", "state": "needs_terminal", "optional": True, "command": "opentraces setup auth"},
             {"name": "bucket_remote", "state": "needs_terminal", "optional": True, "command": "opentraces setup bucket"},
         ],
