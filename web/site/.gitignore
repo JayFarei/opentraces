@@ -12,9 +12,15 @@
 
 # testing
 /coverage
+/test-results
+/playwright-report
+
+# local dev waitlist file-store fallback (lib/waitlist-store.ts)
+/.data
 
 # next.js
 /.next/
+/.next-test/
 /out/
 
 # production
@@ -32,6 +38,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but keep the no-secret template that documents required vars.
+!.env.example
 
 # vercel
 .vercel
@@ -44,3 +52,4 @@ src/lib/version.json
 next-env.d.ts
 site/node_modules/
 site/.next/
+.env*.local

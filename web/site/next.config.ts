@@ -55,6 +55,9 @@ try {
 }
 
 const nextConfig: NextConfig = {
+  // Override the build dir (e.g. to run a second isolated dev server for tests
+  // without clobbering the primary .next cache). Defaults to .next.
+  ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   transpilePackages: ["@opentraces/ui"],
   allowedDevOrigins: ["gabrieles-mac-mini-1.taila1b059.ts.net"],
   async headers() {

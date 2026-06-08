@@ -1,35 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
+import { selectStore } from "@/lib/waitlist-store";
 
 // Early-access waitlist endpoint.
 //
-// Storage: Vercel KV (Upstash Redis) via its REST API, hit directly with fetch so
-// there is NO npm dependency to install and the build never breaks. Provision a KV
-// store in the Vercel dashboard and it injects KV_REST_API_URL + KV_REST_API_TOKEN.
-// Until then the endpoint returns 503 (the form shows a friendly message), so the
-// site keeps building/deploying without the store configured.
+// Storage is pluggable (see lib/waitlist-store.ts): Vercel KV (Upstash Redis)
+// in production, a local JSON file in dev so the flow is provable end-to-end
+// with zero provisioning. When no store is available (production without KV)
+// the endpoint returns 503 and the form shows a friendly message, so the site
+// keeps building/deploying without the store configured.
 //
-// Dedup + timestamp in one op: ZADD waitlist NX <now> <email>  (NX => returns 0 if
-// the email already exists). Admin read: GET /api/waitlist?token=WAITLIST_ADMIN_TOKEN.
+// Anti-bot ("antibody"): a hidden honeypot field plus a best-effort per-IP rate
+// limit. Bots that fill the honeypot get a silent fake-success and are never
+// stored. Admin read: GET /api/waitlist with an "Authorization: Bearer <token>"
+// header (preferred — keeps the secret out of URLs/logs) or ?token=<token>.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const KV_URL = process.env.KV_REST_API_URL;
-const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-async function kv(cmd: (string | number)[]): Promise<unknown> {
-  const res = await fetch(KV_URL as string, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${KV_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(cmd),
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`kv ${res.status}`);
-  return (await res.json()).result;
+// Constant-time token check. Length is compared first (timingSafeEqual throws on
+// unequal-length buffers); the length of a random token is not itself a secret.
+function tokenMatches(provided: string | null, expected: string): boolean {
+  if (!provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 function notConfigured() {
@@ -40,14 +38,25 @@ function notConfigured() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!KV_URL || !KV_TOKEN) return notConfigured();
+  const store = selectStore();
+  if (!store) return notConfigured();
 
   let email = "";
+  let honeypot = "";
   try {
-    const body = (await req.json()) as { email?: unknown };
+    const body = (await req.json()) as { email?: unknown; company?: unknown };
     email = String(body?.email ?? "").trim().toLowerCase();
+    // Honeypot field. Real users never see or fill it; bots that auto-fill
+    // every input give themselves away here.
+    honeypot = String(body?.company ?? "").trim();
   } catch {
     return NextResponse.json({ ok: false, error: "invalid request" }, { status: 400 });
+  }
+
+  // Antibody: if the honeypot is filled, pretend it worked but store nothing.
+  // Returning success keeps the bot from probing for the real validation rules.
+  if (honeypot) {
+    return NextResponse.json({ ok: true, alreadyOnList: false });
   }
 
   if (!email || email.length > 254 || !EMAIL_RE.test(email)) {
@@ -57,12 +66,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Best-effort per-IP rate limit: 5 submissions / hour.
+  // Best-effort per-IP rate limit: default 5 submissions / hour. The limit is
+  // env-tunable (WAITLIST_RATE_LIMIT) so test/ops can raise it without weakening
+  // the production default.
+  const limit = Number(process.env.WAITLIST_RATE_LIMIT) || 5;
   const ip = (req.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
   try {
-    const n = await kv(["INCR", `wl:rl:${ip}`]);
-    if (n === 1) await kv(["EXPIRE", `wl:rl:${ip}`, 3600]);
-    if (typeof n === "number" && n > 5) {
+    const n = await store.incrWithTtl(`wl:rl:${ip}`, 3600);
+    if (n > limit) {
       return NextResponse.json(
         { ok: false, error: "too many requests, try again later" },
         { status: 429 },
@@ -73,8 +84,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const added = await kv(["ZADD", "waitlist", "NX", Date.now(), email]);
-    return NextResponse.json({ ok: true, alreadyOnList: added === 0 });
+    const { alreadyOnList } = await store.add(email, Date.now());
+    return NextResponse.json({ ok: true, alreadyOnList });
   } catch {
     return NextResponse.json(
       { ok: false, error: "could not save right now, please try again" },
@@ -85,15 +96,18 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const adminToken = process.env.WAITLIST_ADMIN_TOKEN;
-  const provided = req.nextUrl.searchParams.get("token");
-  if (!adminToken || provided !== adminToken) {
+  // Prefer the Authorization: Bearer header so the secret never lands in access
+  // logs / browser history / Referer. Fall back to ?token= for convenience.
+  const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const provided = bearer ?? req.nextUrl.searchParams.get("token");
+  if (!adminToken || !tokenMatches(provided, adminToken)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  if (!KV_URL || !KV_TOKEN) return notConfigured();
+  const store = selectStore();
+  if (!store) return notConfigured();
   try {
-    const count = await kv(["ZCARD", "waitlist"]);
-    const recent = await kv(["ZRANGE", "waitlist", "-50", "-1", "REV", "WITHSCORES"]);
-    return NextResponse.json({ ok: true, count, recent });
+    const { count, recent } = await store.recent(50);
+    return NextResponse.json({ ok: true, count, recent, backend: store.backend });
   } catch {
     return NextResponse.json({ ok: false, error: "read failed" }, { status: 500 });
   }
