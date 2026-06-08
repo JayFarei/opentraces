@@ -93,6 +93,12 @@ button { font-family: inherit; color: inherit; background: transparent; border: 
 }
 .app-shell[data-sb="collapsed"] { grid-template-columns: var(--sidebar-collapsed-w) 1fr; }
 
+/* Embed mode: the marketing /hub showcase boots one chromeless feature per
+   iframe (?embed=1&view=…). No sidebar, no topbar — the main panel fills the
+   canvas so each feature reads as a focused sub-artifact. */
+.app-shell[data-embed="1"] { grid-template-columns: 1fr; }
+.app-shell[data-embed="1"] .main { height: 100vh; }
+
 /* ─────────────  Sidebar  ───────────── */
 .sidebar {
   display: flex;

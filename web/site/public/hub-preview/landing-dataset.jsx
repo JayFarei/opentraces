@@ -325,6 +325,20 @@ function DatasetInbox({ ds }) {
   );
 }
 
+// Security + privacy tools that can be attached to a workflow. Mirrors the real
+// security tool registry (regex → entropy → trufflehog → privacy_filter →
+// llm_pii → business_logic → path_anonymizer → capsule_scope → classifier).
+const WF_SECURITY_TOOLS = [
+  { name: "Secret regex",        desc: "Built-in patterns for API keys, tokens, and credentials.", on: true },
+  { name: "Entropy scan",        desc: "Flags high-entropy strings that look like secrets.",        on: true },
+  { name: "TruffleHog",          desc: "Verified secret detection across hundreds of providers.",    on: true },
+  { name: "Path anonymizer",     desc: "Rewrites absolute home and project paths.",                  on: true },
+  { name: "PII filter",          desc: "On-device NER redacts names, emails, and personal data.",    on: false },
+  { name: "LLM PII review",      desc: "Second-pass model judgement on ambiguous PII.",              on: false },
+  { name: "Business-logic redaction", desc: "Your own rules for proprietary strings and values.",    on: false },
+  { name: "Sensitivity classifier", desc: "Tags each record so you gate what is allowed to publish.", on: false },
+];
+
 function DatasetWorkflow({ ds, runs, okCount, onSelectTrace }) {
   const wf = WORKFLOW_DEFS[ds.workflow];
   if (!wf) return <div style={{ padding: 24, color: "var(--fg-mute)" }}>No workflow attached.</div>;
@@ -368,6 +382,28 @@ function DatasetWorkflow({ ds, runs, okCount, onSelectTrace }) {
           <div className="k">Success</div>
           <div className="v mono">{Math.round((okCount / runs.length) * 100)}%</div>
         </div>
+      </div>
+
+      <div className="wf-sec-head">
+        <h3 className="repo-h3" style={{ marginTop: 24, marginBottom: 0 }}>Security &amp; privacy</h3>
+        <span className="wf-sec-count mono">
+          {WF_SECURITY_TOOLS.filter(t => t.on).length}/{WF_SECURITY_TOOLS.length} on
+        </span>
+      </div>
+      <p className="wf-sec-note">
+        Every row this workflow produces is scanned and redacted before it lands. Turn tools on per workflow.
+      </p>
+      <div className="wf-sec-grid">
+        {WF_SECURITY_TOOLS.map(t => (
+          <div key={t.name} className="wf-sec-tool" data-on={t.on ? "1" : "0"}>
+            <span className="wf-sec-dot" />
+            <div className="wf-sec-main">
+              <div className="wf-sec-name">{t.name}</div>
+              <div className="wf-sec-desc">{t.desc}</div>
+            </div>
+            <span className="wf-sec-state">{t.on ? "on" : "available"}</span>
+          </div>
+        ))}
       </div>
 
       <h3 className="repo-h3" style={{ marginTop: 24 }}>Instructions</h3>

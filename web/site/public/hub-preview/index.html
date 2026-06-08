@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="app.css" />
-<link rel="stylesheet" href="landing.css?v=4" />
+<link rel="stylesheet" href="landing.css?v=5" />
 <link rel="stylesheet" href="pages.css?v=4" />
 <link rel="stylesheet" href="pages-pulls.css?v=3" />
 <link rel="stylesheet" href="run-intel.css?v=1" />
@@ -30,8 +30,8 @@
 <body>
 <div id="root"></div>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
 <script type="text/babel" src="icons.jsx"></script>
@@ -68,6 +68,50 @@
 <script type="text/babel" src="command-palette.jsx"></script>
 
 <script type="text/babel">
+// ── Embed / deep-link mode ───────────────────────────────────────────────
+// The marketing site's /hub showcase embeds each feature as its own chromeless
+// iframe via ?embed=1&view=<id>&… . This parses those params once into the
+// App's initial nav state. When embed=1 the sidebar + topbar are not rendered,
+// so the artifact shows only the requested feature panel.
+function readHubInit() {
+  var p;
+  try { p = new URLSearchParams(window.location.search); } catch (e) { p = new URLSearchParams(""); }
+  var embed = p.get("embed") === "1";
+  var v = p.get("view");
+  var repo = p.get("repo");
+  var dataset = p.get("dataset");
+  var child = p.get("child");
+  var traceId = p.get("trace");
+  var tab = p.get("tab");
+  var pr = p.get("pr");
+  var pullId = pr ? (pr.indexOf("pr-") === 0 ? pr : "pr-" + pr) : null;
+  var base = {
+    embed: embed,
+    view: "traces-landing",
+    activeNav: "traces",
+    activeRepoId: null, activeRepoChild: null, expandedRepo: "jayfarei/opentraces",
+    activeDatasetId: null, activeDatasetChild: null, expandedDataset: null,
+    activeTraceId: null,
+    activeTab: tab === "trail" ? "trail" : "conversation",
+    pullId: pullId,
+  };
+  if (!v) return base;
+  if (v === "repo") {
+    var r = repo || "jayfarei/opentraces";
+    return Object.assign({}, base, { view: "repo", activeNav: "", activeRepoId: r, expandedRepo: r, activeRepoChild: child || "overview" });
+  }
+  if (v === "dataset") {
+    var d = dataset || "ds-edge-traces";
+    return Object.assign({}, base, { view: "dataset", activeNav: "", activeDatasetId: d, expandedDataset: d, activeDatasetChild: child || "overview" });
+  }
+  if (v === "trace") {
+    return Object.assign({}, base, { view: "trace", activeNav: "", activeTraceId: traceId || null });
+  }
+  var navFor = { "traces-landing": "traces", spotlight: "spotlight", intents: "intents", evals: "evals", capsules: "capsules", alerts: "alerts", improving: "improving", compare: "" };
+  return Object.assign({}, base, { view: v, activeNav: navFor[v] != null ? navFor[v] : "" });
+}
+var HUB_INIT = readHubInit();
+
 function App() {
   const [trace, setTrace] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
@@ -75,18 +119,19 @@ function App() {
 
   // App nav state
   // view: 'trace' (existing trace viewer), 'traces-landing', 'repo', 'dataset'
-  const [view, setView] = React.useState("traces-landing");
-  const [activeNav, setActiveNav] = React.useState("traces");
+  const embed = HUB_INIT.embed;
+  const [view, setView] = React.useState(HUB_INIT.view);
+  const [activeNav, setActiveNav] = React.useState(HUB_INIT.activeNav);
   const [expandedSections, setExpandedSections] = React.useState(["datasets", "repositories"]);
   const [searchQuery, setSearchQuery] = React.useState("");
-  const [activeTraceId, setActiveTraceId] = React.useState(null);
-  const [activeDatasetId, setActiveDatasetId] = React.useState(null);
-  const [activeDatasetChild, setActiveDatasetChild] = React.useState(null);
-  const [expandedDataset, setExpandedDataset] = React.useState(null);
-  const [activeRepoId, setActiveRepoId] = React.useState(null);
-  const [expandedRepo, setExpandedRepo] = React.useState("jayfarei/opentraces");
-  const [activeRepoChild, setActiveRepoChild] = React.useState(null);
-  const [activeTab, setActiveTab] = React.useState("conversation");
+  const [activeTraceId, setActiveTraceId] = React.useState(HUB_INIT.activeTraceId);
+  const [activeDatasetId, setActiveDatasetId] = React.useState(HUB_INIT.activeDatasetId);
+  const [activeDatasetChild, setActiveDatasetChild] = React.useState(HUB_INIT.activeDatasetChild);
+  const [expandedDataset, setExpandedDataset] = React.useState(HUB_INIT.expandedDataset);
+  const [activeRepoId, setActiveRepoId] = React.useState(HUB_INIT.activeRepoId);
+  const [expandedRepo, setExpandedRepo] = React.useState(HUB_INIT.expandedRepo);
+  const [activeRepoChild, setActiveRepoChild] = React.useState(HUB_INIT.activeRepoChild);
+  const [activeTab, setActiveTab] = React.useState(HUB_INIT.activeTab);
   const [focusedIdx, setFocusedIdx] = React.useState(0);
   const [openedStep, setOpenedStep] = React.useState(null);
   const [headerCompact, setHeaderCompact] = React.useState(false);
@@ -115,7 +160,7 @@ function App() {
     // key stay in sync. Without this the Hub's own sun/moon toggle silently
     // drifts from the site (the reported "click from the app vs site" bug).
     try {
-      if (window.parent && window.parent !== window) {
+      if (!embed && window.parent && window.parent !== window) {
         const p = window.parent.document.documentElement;
         p.setAttribute("data-theme", theme);
         p.classList.remove("theme-dark", "theme-light");
@@ -290,7 +335,8 @@ function App() {
   };
 
   return (
-    <div className="app-shell" data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
+    <div className="app-shell" data-embed={embed ? "1" : "0"} data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
+      {!embed && (
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
@@ -312,8 +358,10 @@ function App() {
         activeRepoChild={activeRepoChild}
         onSelectRepoChild={(rid, cid) => openRepo(rid, cid)}
       />
+      )}
 
       <div style={{display: "flex", flexDirection: "column", minWidth: 0}}>
+        {!embed && (
         <Topbar
           workspace="Jayfarei"
           project="test3"
@@ -327,6 +375,7 @@ function App() {
           traceShortId={trace?.trace_id?.slice(0, 7) || ""}
           onBack={() => setView("traces-landing")}
         />
+        )}
 
         <div className="main" ref={mainScrollRef} onScroll={(e) => {
           const y = e.currentTarget.scrollTop;
@@ -352,7 +401,7 @@ function App() {
           {view === "improving" && <SelfImprovingPage onSelectRepo={(id) => openRepo(id, "overview")} />}
           {view === "repo" && activeRepoId && (
             activeRepoChild === "pulls"
-              ? <RepoPullsPage repoId={activeRepoId} />
+              ? <RepoPullsPage repoId={activeRepoId} initialPullId={HUB_INIT.pullId} />
               : <RepoLanding repoId={activeRepoId} onSelectTrace={openTrace} />
           )}
           {view === "dataset" && activeDatasetId && (

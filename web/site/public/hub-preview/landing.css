@@ -2046,3 +2046,41 @@ button.pipe-node:hover { border-color: var(--border-strong); background: color-m
 
 /* Reset per-view: when not on trace view, the .main height/scroll is the wrapper */
 .main { height: calc(100vh - 56px); overflow-y: auto; }
+
+/* ── Workflow → Security & privacy panel ── */
+.wf-sec-head { display: flex; align-items: center; gap: 10px; }
+.wf-sec-count {
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--c-git); border: 1px solid color-mix(in srgb, var(--c-git) 40%, var(--border));
+  border-radius: 999px; padding: 2px 8px; align-self: center; margin-top: 24px;
+}
+.wf-sec-note { color: var(--fg-mute); font-size: 12.5px; line-height: 1.5; margin: 6px 0 12px; }
+.wf-sec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.wf-sec-tool {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.wf-sec-tool[data-on="1"] { border-color: color-mix(in srgb, var(--c-git) 40%, var(--border)); }
+.wf-sec-dot {
+  margin-top: 4px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--fg-mute); flex-shrink: 0;
+}
+.wf-sec-tool[data-on="1"] .wf-sec-dot {
+  background: var(--c-git);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-git) 20%, transparent);
+}
+.wf-sec-main { flex: 1; min-width: 0; }
+.wf-sec-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+.wf-sec-desc { font-size: 11.5px; color: var(--fg-mute); line-height: 1.4; margin-top: 2px; }
+.wf-sec-state {
+  font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--fg-mute);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px;
+  flex-shrink: 0; white-space: nowrap;
+}
+.wf-sec-tool[data-on="1"] .wf-sec-state {
+  color: var(--c-git); border-color: color-mix(in srgb, var(--c-git) 40%, var(--border));
+}
