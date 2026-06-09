@@ -207,10 +207,11 @@ def test_frontmatter_legacy_flat_fields_still_parse(tmp_path):
     assert pkg.description == "Legacy flat front matter"
 
 
-def test_frontmatter_invalid_security_contract_is_rejected(tmp_path):
-    import pytest
-    from pydantic import ValidationError
-
+def test_frontmatter_invalid_security_contract_degrades_to_none(tmp_path):
+    """An invalid `security:` contract (unknown tool) must not crash workflow
+    loading — load_workflow runs for every package in list_workflows(). It
+    degrades to no contract with a warning so one bad workflow cannot break the
+    whole listing; dataset creation surfaces the missing policy separately."""
     from opentraces.core.workflows import resolve_workflow_reference
 
     md = _write_workflow_md(
@@ -221,20 +222,18 @@ def test_frontmatter_invalid_security_contract_is_rejected(tmp_path):
         "  required_tools: [not_a_tool]\n"
         "---\n\n# bad-curator\n",
     )
-    with pytest.raises(ValidationError):
-        resolve_workflow_reference(md)
+    pkg = resolve_workflow_reference(md)
+    assert pkg.security is None
 
 
-def test_frontmatter_non_dict_security_block_raises(tmp_path):
-    """A present-but-malformed `security:` (e.g. a scalar typo) fails loudly
-    rather than silently dropping the contract."""
-    import pytest
-
+def test_frontmatter_non_dict_security_block_degrades_to_none(tmp_path):
+    """A scalar `security:` typo degrades to no contract (with a warning),
+    rather than raising and crashing `workflow list`."""
     from opentraces.core.workflows import resolve_workflow_reference
 
     md = _write_workflow_md(
         tmp_path,
         "---\nname: typo-curator\nsecurity: recommended\n---\n\n# typo-curator\n",
     )
-    with pytest.raises(ValueError):
-        resolve_workflow_reference(md)
+    pkg = resolve_workflow_reference(md)
+    assert pkg.security is None

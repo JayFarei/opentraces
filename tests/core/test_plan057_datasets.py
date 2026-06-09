@@ -197,6 +197,38 @@ def test_append_actually_runs_dataset_policy_tools():
     assert record["security_policy"]["tools_applied"] == ["regex", "entropy"]
 
 
+def test_empty_contract_policy_falls_back_to_tier_floor():
+    """Code-review #3/#8: a contract that enables NO tools must not ship rows
+    below the privacy-tier floor; sanitization falls back to the tier mapping."""
+    from opentraces.core.datasets import (
+        append_rows,
+        create_dataset,
+        read_row_provenance,
+    )
+    from opentraces_schema import DatasetSecurityPolicy
+
+    create_dataset(
+        "floor-ds",
+        workflow_skill="floor-curator",
+        workflow_digest="sha256:wf",
+        row_schema=_row_schema(),
+        security=DatasetSecurityPolicy(
+            source="workflow",
+            optional_tools=["business_logic"],
+            enabled_tools=[],  # optional tool left disabled -> nothing enabled
+        ),
+    )
+    row = {
+        "source_trace_id": "trace-1",
+        "source_unit_id": "tu:trace-1:trace",
+        "summary": "A row that must still get the tier floor.",
+    }
+    append_rows("floor-ds", [row], run_id="run_1", privacy_tier="medium")
+    record = next(iter(read_row_provenance("floor-ds").values()))
+    # The medium tier floor (regex + entropy) ran even though enabled_tools=[].
+    assert set(record["security_policy"]["tools_applied"]) == {"regex", "entropy"}
+
+
 def test_publish_check_blocks_rows_when_required_security_tools_missing():
     """Plan 092 R10: a dataset whose required tools are disabled (via override)
     cannot publish; evaluate_publication_state blocks every row."""

@@ -217,6 +217,8 @@ def test_dataset_security_edits_only_that_dataset_manifest(tmp_path):
     assert payload["security"]["scope"] == "dataset"
     assert "path_anonymizer" in payload["security"]["enabled_tools"]
     assert payload["changes"]["enabled"] == ["path_anonymizer"]
+    # A human edit marks the policy manually managed (was seeded "workflow").
+    assert payload["security"]["source"] == "manual"
 
     # ds-b is unchanged (per-dataset isolation).
     other = runner.invoke(main, ["dataset", "security", "ds-b", "--json"])

@@ -101,6 +101,9 @@ def sanitize_dataset_row(
             redactions_applied=report.redactions_applied,
             findings_count=len(report.findings),
             filtered=True,
-            tools_applied=tuple(effective_tools),
+            # Record the tools that ACTUALLY executed (sanitize_dict runs only
+            # detector-protocol tools), not the full requested set — a workflow
+            # may list tools that cannot run over a row dict.
+            tools_applied=tuple(report.tools_applied),
         ),
     )

@@ -301,14 +301,17 @@ def apply_dataset_security_edit(
             overrides[tool] = DatasetSecurityOverride(tool=tool, reason=reason)
         enabled_set.discard(tool)
 
-    new_policy = policy.model_copy(
-        update={
-            "enabled_tools": _canonical_tools(enabled_set),
-            "overrides": [
-                overrides[name] for name in SECURITY_TOOL_ORDER if name in overrides
-            ],
-        }
-    )
+    update: dict[str, Any] = {
+        "enabled_tools": _canonical_tools(enabled_set),
+        "overrides": [
+            overrides[name] for name in SECURITY_TOOL_ORDER if name in overrides
+        ],
+    }
+    # A human edit marks the policy as manually managed so downstream consumers
+    # can distinguish it from the untouched workflow seed.
+    if (enable_names or disable_names) and policy.source != "manual":
+        update["source"] = "manual"
+    new_policy = policy.model_copy(update=update)
     changes = {
         "enabled": _canonical_tools(set(new_policy.enabled_tools) - before),
         "disabled": _canonical_tools(before - set(new_policy.enabled_tools)),
@@ -567,14 +570,13 @@ def append_rows(
     current_line = _line_count(dataset.path / "data" / "train.jsonl")
     row_security_by_id: dict[str, DatasetRowSecurity] = {}
 
-    # When the dataset carries a workflow-seeded security contract, its enabled
-    # tools are authoritative and actually run over every row. Datasets without
-    # a contract (manual / ad-hoc) fall back to the coarse privacy-tier mapping.
+    # When the dataset's security policy enables tools, they are authoritative
+    # and run over every row. When the policy enables NOTHING (manual/ad-hoc
+    # dataset, or a contract whose tools are all disabled), fall back to the
+    # coarse privacy-tier mapping so rows never ship below the tier floor.
     security_policy = dataset.manifest.security
     policy_tools: list[str] | None = (
-        list(security_policy.enabled_tools)
-        if (security_policy.required_tools or security_policy.optional_tools)
-        else None
+        list(security_policy.enabled_tools) if security_policy.enabled_tools else None
     )
 
     for index, row in enumerate(rows, start=1):

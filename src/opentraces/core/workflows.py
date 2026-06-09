@@ -392,19 +392,38 @@ def _legacy_flat_frontmatter(raw: str) -> dict[str, str]:
 
 
 def _workflow_security_contract(metadata: dict[str, Any]) -> WorkflowSecurityContract | None:
-    """Build the workflow security contract from front matter, if declared."""
+    """Build the workflow security contract from front matter, if declared.
+
+    Resilient by design: a present-but-malformed ``security:`` block (a scalar
+    typo, an unknown tool, a forbidden extra key) must not crash workflow
+    loading — ``load_workflow`` is called for every package by
+    ``list_workflows()``, so one bad workflow would otherwise break the whole
+    listing. A malformed block degrades to no contract with a warning; callers
+    that need to enforce a contract (``dataset new``) surface the absence.
+    """
 
     if "security" not in metadata:
         return None
     raw = metadata.get("security")
     if not isinstance(raw, dict):
-        # A present-but-malformed `security:` block (e.g. a scalar typo) must
-        # fail loudly rather than silently disabling the contract.
-        raise ValueError(
-            "workflow front matter 'security' must be a mapping/block, got "
-            f"{type(raw).__name__}"
+        _warn_bad_security_contract(
+            f"expected a mapping/block, got {type(raw).__name__}"
         )
-    return WorkflowSecurityContract.model_validate(raw)
+        return None
+    try:
+        return WorkflowSecurityContract.model_validate(raw)
+    except Exception as exc:  # noqa: BLE001 — never break workflow loading
+        _warn_bad_security_contract(str(exc))
+        return None
+
+
+def _warn_bad_security_contract(detail: str) -> None:
+    import sys
+
+    print(
+        f"warning: ignoring invalid workflow 'security' contract ({detail})",
+        file=sys.stderr,
+    )
 
 
 def _optional_str(value: object) -> str | None:
