@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useRef, FormEvent } from "react";
 import Image from "next/image";
 
 const HF_API = "https://huggingface.co/api";
-const VIEWER = "https://datasets-server.huggingface.co";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 interface CacheEntry {
@@ -93,6 +92,16 @@ interface ReadmeStats {
   top_dependencies: [string, number][];
   agent_counts: Record<string, number>;
   model_counts: Record<string, number>;
+}
+
+interface MetadataInfoResponse {
+  ok: boolean;
+  info?: unknown;
+}
+
+interface MetadataReadmeResponse {
+  ok: boolean;
+  text?: string;
 }
 
 function aggregateReadmeStats(statsList: ReadmeStats[]): ReadmeStats | null {
@@ -247,10 +256,14 @@ export default function Dashboard() {
       // Much lighter than fetching full JSONL shards — README is a few KB
       async function fetchReadmeData(repoId: string, signal: AbortSignal): Promise<{ count: number; stats: ReadmeStats | null; schemaVersion: string | null }> {
         try {
-          const url = `https://huggingface.co/datasets/${repoId}/resolve/main/README.md`;
+          const url = `/api/hf-metadata?kind=readme&dataset=${encodeURIComponent(repoId)}`;
           const r = await fetch(url, { signal });
           if (!r.ok) return { count: 0, stats: null, schemaVersion: null };
-          const text = await r.text();
+          const payload = await r.json() as MetadataReadmeResponse;
+          if (!payload.ok || typeof payload.text !== "string") {
+            return { count: 0, stats: null, schemaVersion: null };
+          }
+          const text = payload.text;
 
           const countMatch = text.match(/\|\s*Total traces\s*\|\s*([\d,]+)\s*\|/i);
           const count = countMatch ? parseInt(countMatch[1].replace(/,/g, ""), 10) : 0;
@@ -301,11 +314,12 @@ export default function Dashboard() {
       const infoPromises = filtered.map(async (ds, idx) => {
         let serverCount = 0;
         try {
-          const r = await fetch(`${VIEWER}/info?dataset=${encodeURIComponent(ds.id)}`, { signal: sig });
+          const r = await fetch(`/api/hf-metadata?kind=info&dataset=${encodeURIComponent(ds.id)}`, { signal: sig });
           if (r.ok) {
-            const info = await r.json();
+            const payload = await r.json() as MetadataInfoResponse;
+            const info = payload.ok ? payload.info : null;
             // Config name varies per dataset — sum across all configs and splits
-            const datasetInfo = info?.dataset_info ?? {};
+            const datasetInfo = (info as { dataset_info?: Record<string, { splits?: Record<string, { num_examples?: number }> }> } | null)?.dataset_info ?? {};
             serverCount = Object.values(datasetInfo).reduce((total: number, config) => {
               const splits = (config as { splits?: Record<string, { num_examples?: number }> })?.splits ?? {};
               return total + Object.values(splits).reduce((s, split) => s + (split?.num_examples ?? 0), 0);

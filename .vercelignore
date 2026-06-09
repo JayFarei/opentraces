@@ -1,11 +1,16 @@
 # Exclude everything Vercel doesn't need (keep web/site/ and packages/opentraces-ui/)
 .venv/
+.venv*/
 __pycache__/
 *.pyc
 *.egg-info/
 dist/
 build/
 node_modules/
+**/node_modules/
+**/.next/
+**/dist/
+**/build/
 .pytest_cache/
 .git/
 .gstack/
