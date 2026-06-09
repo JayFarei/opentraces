@@ -91,6 +91,14 @@ def bucket_security_cmd(
         click.echo("  changed on: " + ", ".join(changes["enabled"]))
     if changes["disabled"]:
         click.echo("  changed off: " + ", ".join(changes["disabled"]))
+        # Bucket security flags are machine-global (shared with capture-time
+        # sanitization), so a policy can turn off tools enabled for other uses.
+        click.echo(
+            "  warning: these tools are now OFF machine-wide (bucket security "
+            "shares global config); re-enable with 'bucket security --tool "
+            "<name> --enable' if other workflows need them.",
+            err=True,
+        )
 
 
 @bucket_group.command("status", cls=OpentracesCommand)

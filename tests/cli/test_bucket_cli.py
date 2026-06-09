@@ -87,6 +87,40 @@ def test_setup_bucket_defaults_to_private_remote_when_authenticated(monkeypatch)
     assert load_config().bucket.remote.url == "hf://me/opentraces-bucket"
 
 
+def test_setup_bucket_json_applies_recommended_default_security(monkeypatch):
+    """Code-review #10: non-interactive / --json setup of a real HF bucket must
+    not configure a remote-syncing bucket with zero redaction; it applies the
+    safe 'recommended' baseline."""
+    from opentraces.core.config import load_config
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    monkeypatch.setattr(
+        "opentraces.cli._auth_identity",
+        lambda token: {"name": "me"} if token else None,
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup", "bucket", "--json"])
+
+    assert result.exit_code == 0, result.output
+    enabled = json.loads(result.output)["security_tools"]["enabled"]
+    assert enabled == ["regex", "entropy", "business_logic", "path_anonymizer", "classifier"]
+    assert load_config().security.regex.enabled is True
+
+
+def test_setup_bucket_explicit_flags_override_default(tmp_path):
+    """An explicit --enable-security-tool suppresses the recommended default."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "setup", "bucket", "--provider", "fake", "--fake-root", str(tmp_path / "r"),
+            "--enable-security-tool", "regex", "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["security_tools"]["enabled"] == ["regex"]
+
+
 def test_setup_bucket_requires_huggingface_auth(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)

@@ -140,15 +140,29 @@ def _prompt_bucket_security_policy(cfg) -> list[str]:
 
     policy = choices[idx - 1][0]
     if policy == "custom":
+        # Default each prompt to the tool's CURRENT state so pressing Enter
+        # preserves the existing setup; only suggest the recommended baseline
+        # when nothing is enabled yet. This stops a user who picks "custom" to
+        # ADD tools from silently disabling everything by declining prompts.
+        current = set(enabled_security_tool_names(cfg))
         enabled: list[str] = []
         for tool_name in SECURITY_TOOL_NAMES:
-            default = tool_name in RECOMMENDED_BUCKET_SECURITY_TOOLS
+            default = (
+                tool_name in current
+                if current
+                else tool_name in RECOMMENDED_BUCKET_SECURITY_TOOLS
+            )
             if _wizard_confirm(f"enable {tool_name}?", default=default):
                 enabled.append(tool_name)
         changes = set_security_tools_exact(cfg, enabled)
     else:
         changes = apply_bucket_security_policy(cfg, policy)
     _cli.save_config(cfg)
+    if changes["disabled"]:
+        _cli.human_echo(
+            "    note: bucket security flags are global; turned OFF: "
+            + ", ".join(changes["disabled"])
+        )
     _cli.human_echo(
         "    security tools: "
         + (", ".join(enabled_security_tool_names(cfg)) or "none")
@@ -346,16 +360,23 @@ def setup_bucket_cmd(
                     )
                 username = str(identity.get("name")) if identity.get("name") else None
             if (
-                provider != "fake"
-                and not as_json
+                provider == "huggingface"
                 and not no_security_prompt
                 and not enable_security_tools
                 and not disable_security_tools
-                and _cli._is_interactive_terminal()
             ):
-                security_changes["enabled"].extend(
-                    _prompt_bucket_security_policy(cfg)
-                )
+                if not as_json and _cli._is_interactive_terminal():
+                    security_changes["enabled"].extend(
+                        _prompt_bucket_security_policy(cfg)
+                    )
+                elif not enabled_security_tool_names(cfg):
+                    # Non-interactive / --json: never configure a remote-syncing
+                    # private bucket with zero redaction. Apply the safe
+                    # 'recommended' baseline the interactive default would pick.
+                    default_changes = apply_bucket_security_policy(cfg, "recommended")
+                    _cli.save_config(cfg)
+                    security_changes["enabled"].extend(default_changes["enabled"])
+                    security_changes["disabled"].extend(default_changes["disabled"])
             bucket = _configure_bucket_remote(
                 cfg,
                 provider=provider,
