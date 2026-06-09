@@ -23,7 +23,7 @@ HF_TOKEN_URL = "https://huggingface.co/oauth/token"
 HF_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 
 
-def _login_impl(token: bool) -> None:
+def _login_impl(token: bool, device_timeout: int | None = None) -> None:
     """Log in to HuggingFace Hub (like gh auth login)."""
     import opentraces.cli as _cli
     from ..core.config import save_credentials, clear_credentials, CREDENTIALS_PATH
@@ -56,7 +56,11 @@ def _login_impl(token: bool) -> None:
             clear_credentials()
         _login_with_token(save_credentials, CREDENTIALS_PATH)
     else:
-        _login_with_device_code(save_credentials, CREDENTIALS_PATH)
+        _login_with_device_code(
+            save_credentials,
+            CREDENTIALS_PATH,
+            device_timeout=device_timeout,
+        )
 
 
 def _logout_impl() -> None:
@@ -90,7 +94,20 @@ def _auth_status_impl() -> None:
     _cli.emit_json({"status": "ok", "authenticated": True, "username": username})
 
 
-def _login_with_device_code(save_credentials, credentials_path) -> None:
+def _auth_out_of_band_steps() -> list[str]:
+    return [
+        "Complete browser auth in a normal terminal with: opentraces auth login",
+        "For headless shells, run: opentraces auth login --token",
+        "Or export HF_TOKEN=hf_... in the environment and rerun: opentraces --json auth whoami",
+    ]
+
+
+def _login_with_device_code(
+    save_credentials,
+    credentials_path,
+    *,
+    device_timeout: int | None = None,
+) -> None:
     """OAuth device code flow. User authorizes in browser with a short code."""
     import opentraces.cli as _cli
     import time as _time
@@ -144,7 +161,12 @@ def _login_with_device_code(save_credentials, credentials_path) -> None:
     # Step 3: Poll for authorization
     click.echo("  Waiting for authorization...", nl=False)
 
-    deadline = _time.time() + expires_in
+    wait_seconds = (
+        min(expires_in, device_timeout)
+        if device_timeout is not None
+        else expires_in
+    )
+    deadline = _time.time() + wait_seconds
     access_token = None
 
     while _time.time() < deadline:
@@ -182,6 +204,22 @@ def _login_with_device_code(save_credentials, credentials_path) -> None:
 
     if not access_token:
         click.echo("\n  Timed out waiting for authorization.")
+        click.echo()
+        click.echo("Complete HuggingFace auth outside this agent session:")
+        for step in _auth_out_of_band_steps():
+            click.echo(f"  - {step}")
+        _cli.emit_json({
+            "status": "needs_action",
+            "authenticated": False,
+            "error": {
+                "code": "AUTH_TIMEOUT",
+                "kind": "auth",
+                "message": "Timed out waiting for HuggingFace device authorization.",
+                "retryable": True,
+            },
+            "next_steps": _auth_out_of_band_steps(),
+            "next_command": "opentraces auth login",
+        })
         sys.exit(3)
 
     click.echo(" done\n")

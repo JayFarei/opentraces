@@ -20,13 +20,20 @@ Ask which agents to connect.
 - Codex CLI: `opentraces setup codex-cli`
 - Pi: first `pi install npm:opentraces-pi`, then `opentraces setup pi --dry-run --json` or use `/ot-setup` inside Pi.
 Also run `opentraces setup skill` so supported agents can drive the CLI, and `opentraces setup git` for post-commit Trace Trails.
-For Codex, first confirm the terminal Codex CLI is installed and authenticated. This does not cover Codex Desktop. Codex hooks are observational; they must not approve or deny permission prompts. Pi setup manages package resources only; it does not silently install Python, start services, authenticate, or enable capture.
+Before installing a selected agent hook, check that agent's own CLI is installed and authenticated enough to start a session:
+- Claude Code: `command -v claude`; if missing or logged out, tell me to run `claude login` outside this session.
+- Codex CLI: `command -v codex`; if missing or logged out, tell me to run `codex login` outside this session. This does not cover Codex Desktop.
+- Pi: `command -v pi`; if missing or logged out, tell me to run `pi /login` outside this session before using Pi capture.
+Codex hooks are observational; they must not approve or deny permission prompts. Pi setup manages package resources only; it does not silently install Python, start services, authenticate, or enable capture.
 
 Step 4 - Authenticate:
-Run `opentraces auth whoami`.
-If unauthenticated, ask whether to log into HuggingFace now or skip. Auth is needed for bucket sync and dataset remotes; local capture works offline.
-- Browser/device flow: `opentraces auth login`
-- Headless/CI: `opentraces auth login --token` or set `HF_TOKEN`
+Run `opentraces --json auth whoami` and inspect the JSON.
+If already authenticated, continue.
+If unauthenticated, ask whether to connect HuggingFace now or skip. Auth is needed for bucket sync and dataset remotes; local capture works offline.
+- Browser/device flow: only run `opentraces auth login --device-timeout 180` if I can open the shown URL and enter the code while you wait. When the URL and code appear, clearly tell me: "Open the URL, enter the code, then come back here; this command is waiting." If it times out, stop and show the outside-session steps below.
+- Outside this session: tell me to run `opentraces auth login` in a normal terminal, or `opentraces auth login --token` for a personal token, or export `HF_TOKEN=hf_...`; then rerun `opentraces --json auth whoami`.
+- Skip for now: continue local-only and do not run `opentraces setup bucket --remote`.
+Do not ask me to paste an HF token into agent chat.
 
 Step 5 - Initialize a project when needed:
 If tracking mode is global, the project auto-enrolls on first capture. To enroll explicitly:
@@ -39,6 +46,7 @@ Step 6 - Optional bucket sync:
 Ask whether to configure private bucket sync. If yes:
 `opentraces setup bucket`
 `opentraces bucket remote status`
+Only run this after `opentraces --json auth whoami` reports authenticated. If auth is still missing, clearly say: "Bucket sync needs HuggingFace auth; run `opentraces auth login` outside this session, then rerun setup."
 
 Step 7 - Optional security tools:
 Ask: "Enable any extra security tools? All per-record tools are optional and default off."

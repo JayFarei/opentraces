@@ -1,0 +1,202 @@
+name = "prompt-install-auth-flow"
+description = """
+Prompt-driven install and auth flow from the homepage copy. This journey treats
+`web/site/src/content/agent-setup-prompt.md` as the contract, then runs the
+safe local setup steps in an isolated c-installed-source box across Claude
+Code, Codex CLI, Pi, shared skill links, git hooks, auth preflight, and the
+expected unauthenticated bucket gate.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = [
+  "connect-agent-runtime",
+  "configure-codex-runtime",
+  "connect-hf-identity",
+  "configure-bucket",
+  "verify-install",
+]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-installed-source"]
+status = "prompt-contract"
+
+[[steps]]
+type = "shell"
+id = "homepage-prompt-contract"
+argv = [
+  "python3",
+  "-c",
+  """
+import pathlib, sys
+prompt = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
+required = [
+    'opentraces --json auth whoami',
+    'opentraces auth login --device-timeout 180',
+    'outside this session',
+    'Do not ask me to paste an HF token into agent chat.',
+    'command -v claude',
+    'command -v codex',
+    'command -v pi',
+    'opentraces setup claude-code',
+    'opentraces setup codex-cli',
+    'opentraces setup pi --dry-run --json',
+    'opentraces setup skill',
+    'opentraces setup git',
+]
+missing = [item for item in required if item not in prompt]
+if missing:
+    print('missing prompt contract entries: ' + ', '.join(missing))
+    raise SystemExit(1)
+print('prompt contract ok')
+  """,
+  "{repo_root}/web/site/src/content/agent-setup-prompt.md",
+]
+
+[[steps]]
+type = "shell"
+id = "installed-cli-version"
+argv = [".testvenv/bin/opentraces", "--version"]
+
+[[steps]]
+type = "shell"
+id = "init-git-repo"
+argv = ["git", "init", "--quiet", "--initial-branch=main"]
+
+[[steps]]
+type = "cli"
+id = "tracking-global"
+argv = ["config", "tracking-mode", "global"]
+
+[[steps]]
+type = "cli"
+id = "setup-claude"
+argv = ["setup", "claude-code"]
+
+[[steps]]
+type = "cli"
+id = "setup-codex"
+argv = ["setup", "codex-cli"]
+
+[[steps]]
+type = "cli"
+id = "setup-pi"
+argv = ["setup", "pi", "--local", "--json"]
+
+[[steps]]
+type = "cli"
+id = "setup-skill"
+argv = ["setup", "skill"]
+
+[[steps]]
+type = "cli"
+id = "setup-git"
+argv = ["setup", "git"]
+
+[[steps]]
+type = "cli"
+id = "auth-whoami"
+argv = ["--json", "auth", "whoami"]
+
+[[steps]]
+type = "cli"
+id = "setup-bucket-no-auth"
+argv = ["setup", "bucket", "--json"]
+expect_returncode = 3
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "homepage-prompt-contract"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "installed-cli-version"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "setup-claude"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "setup-codex"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "setup-pi"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-pi"
+path = "state.installed"
+equals = true
+
+[[assertions]]
+kind = "returncode"
+step = "setup-skill"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "setup-git"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "auth-whoami"
+path = "authenticated"
+equals = false
+
+[[assertions]]
+kind = "returncode"
+step = "setup-bucket-no-auth"
+equals = 3
+
+[[assertions]]
+kind = "stderr_contains"
+step = "setup-bucket-no-auth"
+value = "opentraces auth login"
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor"
+value = "codex-cli"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor"
+value = "claude-code"
+
+[[assertions]]
+kind = "path_exists"
+path = "{home}/.claude/settings.json"
+
+[[assertions]]
+kind = "path_exists"
+path = "{home}/.codex/hooks.json"
+
+[[assertions]]
+kind = "path_exists"
+path = "{home}/.pi/agent/settings.json"
+
+[[assertions]]
+kind = "path_exists"
+path = "{home}/.agents/skills/opentraces/SKILL.md"
+
+[[assertions]]
+kind = "path_exists"
+path = "{project}/.git/hooks/opentraces-post-commit"

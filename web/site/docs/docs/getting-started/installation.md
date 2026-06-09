@@ -22,7 +22,7 @@ Installs the opentraces skill via [skills.sh](https://skills.sh) so your coding 
 
 ## Copy to your agent
 
-Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
+Paste this into your coding agent (Claude Code, Codex CLI, or Pi):
 
 ```
 {{AGENT_PROMPT}}

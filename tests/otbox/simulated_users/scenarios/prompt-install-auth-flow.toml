@@ -1,0 +1,16 @@
+name = "prompt-install-auth-flow"
+description = "Record the homepage prompt install/auth path in a real PTY and verify Claude, Codex, Pi, skill, git, auth, bucket, and doctor outcomes."
+agent = "hermes"
+binary_name = "./tests/otbox/simulated_users/_prompt_install_harness.py"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Run the homepage prompt install/auth verifier now."
+expect_regex = "PROMPT-INSTALL-AUTH-FLOW-PASS"
+timeout_s = 240
+
+[capture]
+artifact_dir = "prompt-install-auth-flow"
+expected_paths = ["src/app.py"]

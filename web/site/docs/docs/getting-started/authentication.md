@@ -17,6 +17,17 @@ By default, `opentraces auth login` starts Hugging Face's OAuth device flow in y
 
 The CLI requests the scopes it needs to read, create, push, delete, and change visibility on datasets in namespaces you belong to.
 
+When a coding agent is driving setup for you, use a bounded wait so the session
+does not hang if you cannot complete the browser step:
+
+```bash
+opentraces auth login --device-timeout 180
+```
+
+If that times out, complete auth outside the agent session with
+`opentraces auth login`, `opentraces auth login --token`, or `HF_TOKEN`, then
+verify with `opentraces --json auth whoami`.
+
 ## Token Login
 
 ```bash

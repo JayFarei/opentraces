@@ -54,5 +54,15 @@ value = "HuggingFace"
 
 [[assertions]]
 kind = "stdout_contains"
+step = "login-help"
+value = "--device-timeout"
+
+[[assertions]]
+kind = "stdout_contains"
 step = "logout-help"
 value = "Log out"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "setup-auth-help"
+value = "--device-timeout"

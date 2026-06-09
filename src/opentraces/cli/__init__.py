@@ -2203,7 +2203,13 @@ def _auth_group() -> None:
     is_flag=True,
     help="Paste a personal access token instead (headless / CI fallback).",
 )
-def _auth_login(token: bool) -> None:
+@click.option(
+    "--device-timeout",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Seconds to wait for browser/device authorization before returning with follow-up steps.",
+)
+def _auth_login(token: bool, device_timeout: int | None) -> None:
     """Log in to HuggingFace Hub.
 
     By default, opens a browser to authorize opentraces via HuggingFace's
@@ -2213,7 +2219,7 @@ def _auth_login(token: bool) -> None:
     token paste required. Use ``--token`` only when you cannot open a
     browser (e.g. CI, remote shells).
     """
-    _login_impl(token)
+    _login_impl(token, device_timeout=device_timeout)
 
 
 @_auth_group.command("logout")
@@ -2237,9 +2243,15 @@ from .installers import setup_group as _setup_group  # noqa: E402
     is_flag=True,
     help="Paste a personal access token instead (headless / CI fallback).",
 )
-def _setup_auth(token: bool) -> None:
+@click.option(
+    "--device-timeout",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Seconds to wait for browser/device authorization before returning with follow-up steps.",
+)
+def _setup_auth(token: bool, device_timeout: int | None) -> None:
     """Log in to HuggingFace Hub for dataset remotes."""
-    _login_impl(token)
+    _login_impl(token, device_timeout=device_timeout)
 
 
 # ---------------------------------------------------------------------------

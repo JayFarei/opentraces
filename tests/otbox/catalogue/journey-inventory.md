@@ -14,7 +14,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `auth` | _group_ | — | **unowned** | HuggingFace identity (login, logout, whoami). |
 | `auth login` | connect-hf-identity | bronze | connect-hf-identity | Log in to HuggingFace Hub. |
 | `auth logout` | connect-hf-identity | bronze | connect-hf-identity | Log out from HuggingFace Hub. |
-| `auth whoami` | connect-hf-identity | bronze | connect-hf-identity | Show the active HuggingFace identity. |
+| `auth whoami` | connect-hf-identity | silver | connect-hf-identity, prompt-install-auth-flow | Show the active HuggingFace identity. |
 | `bucket` | _group_ | — | **unowned** | Inspect and troubleshoot the local trace bucket. |
 | `bucket manifest` | inspect-private-storage | gold | bucket-inspect, bucket-manifest-v2-shape, mixed-agent-bucket-parity-pi, mixed-agent-bucket-parity, setup-bucket-migrates-old-layout | Materialize and print the local bucket manifest. |
 | `bucket prefetch` | restore-bucket-on-new-machine | bronze | live-hf-read-remote, maintenance-command-ownership | Eager-pull one trace's blobs from the configured remote. |
@@ -52,7 +52,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `config` | _group_ | — | **unowned** | Manage opentraces configuration. |
 | `config set` | configure-settings | gold | bucket-remote-sync-scope-per-trace, bucket-self-sufficient-context-tree-outcome-roundtrip, configure-settings | Set a configuration value. |
 | `config show` | configure-settings | silver | cli-lifecycle, configure-settings, migration-s8-config-forward-compat, migration-u-config-2-legacy-marker-loads | Display current configuration (secrets masked). |
-| `config tracking-mode` | configure-tracking-mode | bronze | maintenance-command-ownership | Show or set the project tracking mode (plan 081). |
+| `config tracking-mode` | configure-tracking-mode | silver | maintenance-command-ownership, prompt-install-auth-flow | Show or set the project tracking mode (plan 081). |
 | `ctx` | _group_ | gold | context-tree-demo-acceptance, context-tree-determinism, context-tree-outcome-3-teleport-resume-from-step-N, context-tree-outcome-4-checkpoint-for-experiments | Navigate the Context Tree: what the LLM saw at each step. |
 | `ctx anchor-for-step` | resume-from-context | silver | context-tree-temporal-anchor-precision | Print the trail_anchor_hint.commit_id for the ContextNode at STEP_INDEX. |
 | `ctx compactions` | inspect-context-tree | gold | codex-parity-compaction, codex-parity-subagent-compaction, context-tree-compaction-fidelity | List compaction boundaries for a trace. |
@@ -90,7 +90,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `dataset schedule show` | automate-dataset-runs | gold | automate-dataset-runs, dataset-sync-skill-history | Show one dataset workflow schedule. |
 | `dataset security` | build-publishable-dataset | bronze | dataset-security-optional-toggle, dataset-security-required-rejection | Inspect or edit one dataset's security policy. |
 | `dataset status` | build-publishable-dataset | bronze | build-publishable-dataset-shape | Show row count and publication-state breakdown for a dataset. |
-| `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
+| `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, prompt-install-auth-flow, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
 | `git-backfill` | attribution-backfill | silver | attribution-backfill, migration-u-trail-3-backfill-honest | Retroactively correlate inbox traces to past commits. |
 | `init` | onboard-repo | silver | migration-u-setup-3-init-idempotent, onboard-repo | Initialize opentraces in the current project. |
 | `remove` | offboard-repo | silver | cli-lifecycle, migration-u-config-5-remove-reports-deletion | Remove opentraces from the current project. |
@@ -101,15 +101,15 @@ the single source of truth. Drift fails CI under `--strict`.
 | `security tools list` | inspect-security-pipeline | gold | codex-parity-security-redaction, inspect-security-pipeline, migration-s8-config-forward-compat, security-sanitize-captured-content | List every registered tool with its current enable state. |
 | `setup` | onboard-integrations | bronze | onboard-integrations | Wire opentraces into your system. |
 | `setup auth` | connect-hf-identity | bronze | connect-hf-identity | Log in to HuggingFace Hub for dataset remotes. |
-| `setup bucket` | configure-bucket | gold | configure-bucket, live-hf-bucket-daemon-sync, live-hf-bucket-multi-trace, live-hf-bucket-roundtrip, live-hf-read-remote, migration-u-bucket-1-setup-no-adoption, setup-bucket-fake-provider-offline, setup-bucket-migrates-old-layout, setup-bucket-no-auth-fails | Configure the private bucket sync target. |
+| `setup bucket` | configure-bucket | gold | configure-bucket, live-hf-bucket-daemon-sync, live-hf-bucket-multi-trace, live-hf-bucket-roundtrip, live-hf-read-remote, migration-u-bucket-1-setup-no-adoption, prompt-install-auth-flow, setup-bucket-fake-provider-offline, setup-bucket-migrates-old-layout, setup-bucket-no-auth-fails | Configure the private bucket sync target. |
 | `setup capture-otlp` | configure-otel-capture | silver | context-tree-otel-settings-patcher | Patch ~/.claude/settings.json so Claude Code emits OTel, and (optionally) |
-| `setup claude-code` | connect-agent-runtime | bronze | connect-agent-runtime | Install the Claude Code session-capture hooks. |
-| `setup codex-cli` | configure-codex-runtime | bronze | maintenance-command-ownership | Install Codex CLI session-capture hooks. |
-| `setup git` | connect-agent-runtime | silver | connect-agent-runtime, migration-u-setup-4-setup-git-clean-install, migration-u-trail-3-backfill-honest | Install the post-commit hook that correlates commits to traces. |
+| `setup claude-code` | connect-agent-runtime | silver | connect-agent-runtime, prompt-install-auth-flow | Install the Claude Code session-capture hooks. |
+| `setup codex-cli` | configure-codex-runtime | silver | maintenance-command-ownership, prompt-install-auth-flow | Install Codex CLI session-capture hooks. |
+| `setup git` | connect-agent-runtime | silver | connect-agent-runtime, migration-u-setup-4-setup-git-clean-install, migration-u-trail-3-backfill-honest, prompt-install-auth-flow | Install the post-commit hook that correlates commits to traces. |
 | `setup llm-review` | configure-security-reviewer | bronze | enable-security-tools | Configure the optional LLM dataset-row reviewer for publication gates. |
-| `setup pi` | **missing** | silver | pi-setup-dry-run | Verify, install, repair, or remove the OpenTraces Pi package. |
+| `setup pi` | **missing** | silver | pi-setup-dry-run, prompt-install-auth-flow | Verify, install, repair, or remove the OpenTraces Pi package. |
 | `setup privacy-filter` | configure-security-detectors | bronze | enable-security-tools | Configure the ``openai/privacy-filter`` PII detector. |
-| `setup skill` | connect-agent-runtime | bronze | connect-agent-runtime | Install the opentraces skill globally and link it into each agent harness. |
+| `setup skill` | connect-agent-runtime | silver | connect-agent-runtime, prompt-install-auth-flow | Install the opentraces skill globally and link it into each agent harness. |
 | `setup trufflehog` | configure-security-detectors | bronze | enable-security-tools | Configure the optional deep secret detector via TruffleHog. |
 | `setup upgrade` | maintain-install | bronze | maintain-install | Upgrade opentraces CLI and refresh the project skill file. |
 | `setup watcher` | _group_ | — | **unowned** | Install and control the background attribution watcher. |
@@ -201,7 +201,7 @@ the single source of truth. Drift fails CI under `--strict`.
 
 ## Per-trajectory tier coverage
 
-- Trajectories covered: **48** (15 gold, 4 silver, 29 bronze)
+- Trajectories covered: **48** (15 gold, 9 silver, 24 bronze)
 
 | Trajectory | Max tier | Owning journeys |
 |---|---|---|
@@ -215,15 +215,15 @@ the single source of truth. Drift fails CI under `--strict`.
 | build-publishable-dataset | bronze | 5 |
 | capsule-dependency-unblock | gold | 1 |
 | compare-bucket-digests | bronze | 1 |
-| configure-bucket | bronze | 4 |
-| configure-codex-runtime | bronze | 1 |
+| configure-bucket | silver | 5 |
+| configure-codex-runtime | silver | 2 |
 | configure-otel-capture | bronze | 1 |
 | configure-security-detectors | bronze | 1 |
 | configure-security-reviewer | bronze | 1 |
 | configure-settings | bronze | 1 |
 | configure-tracking-mode | bronze | 1 |
-| connect-agent-runtime | bronze | 1 |
-| connect-hf-identity | bronze | 1 |
+| connect-agent-runtime | silver | 2 |
+| connect-hf-identity | silver | 2 |
 | context-tree-branching | gold | 1 |
 | context-tree-capture | silver | 1 |
 | context-tree-cli | silver | 5 |
@@ -252,4 +252,4 @@ the single source of truth. Drift fails CI under `--strict`.
 | survey-local-datasets | bronze | 1 |
 | survival-walk | gold | 2 |
 | trace-spine | gold | 3 |
-| verify-install | bronze | 1 |
+| verify-install | silver | 2 |

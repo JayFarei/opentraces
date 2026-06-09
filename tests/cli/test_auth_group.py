@@ -12,10 +12,12 @@ and dispatches to the same code paths as the flat verbs.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from click.testing import CliRunner
 
-from opentraces.cli import main
+from opentraces.cli import SENTINEL, main
 
 
 @pytest.fixture
@@ -55,9 +57,64 @@ class TestAuthSubcommands:
         grouped = runner.invoke(main, ["auth", "login", "--help"])
         assert grouped.exit_code == 0
         assert "--token" in grouped.output
+        assert "--device-timeout" in grouped.output
 
     def test_ot_auth_logout_help_works(self, runner) -> None:
         result = runner.invoke(main, ["auth", "logout", "--help"])
         assert result.exit_code == 0
         # Should describe what logout does
         assert "logout" in result.output.lower() or "log out" in result.output.lower()
+
+    def test_device_login_timeout_returns_out_of_band_steps(self, runner, monkeypatch) -> None:
+        """Bounded device auth should tell agents exactly what the user must do next."""
+        class Config:
+            hf_token = None
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        calls = []
+
+        def fake_post(url, data=None, timeout=None):
+            calls.append(url)
+            if url.endswith("/oauth/device"):
+                return FakeResponse(
+                    {
+                        "device_code": "device-123",
+                        "user_code": "ABCD-EFGH",
+                        "verification_uri": "https://huggingface.co/device",
+                        "interval": 5,
+                        "expires_in": 900,
+                    }
+                )
+            return FakeResponse({"error": "authorization_pending"})
+
+        clock = {"now": 0.0}
+
+        def fake_sleep(seconds):
+            clock["now"] += float(seconds)
+
+        monkeypatch.setattr("opentraces.cli.load_config", lambda: Config())
+        monkeypatch.setattr("requests.post", fake_post)
+        monkeypatch.setattr("webbrowser.open", lambda _url: False)
+        monkeypatch.setattr("time.time", lambda: clock["now"])
+        monkeypatch.setattr("time.sleep", fake_sleep)
+
+        result = runner.invoke(main, ["--json", "auth", "login", "--device-timeout", "1"])
+
+        assert result.exit_code == 3
+        assert "Complete HuggingFace auth outside this agent session" in result.output
+        assert SENTINEL in result.output
+        payload = json.loads(result.output.split(SENTINEL, 1)[1].strip())
+        assert payload["status"] == "needs_action"
+        assert payload["error"]["code"] == "AUTH_TIMEOUT"
+        assert payload["authenticated"] is False
+        assert any("opentraces auth login --token" in step for step in payload["next_steps"])
+        assert any(url.endswith("/oauth/token") for url in calls)
