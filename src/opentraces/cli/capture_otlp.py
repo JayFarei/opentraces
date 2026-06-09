@@ -756,13 +756,16 @@ def capture_otlp_status_cmd(as_json: bool) -> None:
         ("Output", ["as_json"]),
     ],
 )
-@click.option("--port", type=int, default=DEFAULT_PORT, show_default=True)
-@click.option("--bind", default=DEFAULT_BIND, show_default=True)
+@click.option("--port", type=int, default=DEFAULT_PORT, show_default=True,
+              help="TCP port the OTLP receiver listens on.")
+@click.option("--bind", default=DEFAULT_BIND, show_default=True,
+              help="Address the OTLP receiver binds to.")
 @click.option(
     "--raw-bodies-dir",
     "raw_bodies_dir",
     type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
     default=None,
+    help="Directory where raw request/response bodies are written.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @click.pass_context

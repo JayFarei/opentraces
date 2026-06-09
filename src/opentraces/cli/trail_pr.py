@@ -218,12 +218,15 @@ def attach(parent_group: click.Group) -> None:
             ("PR options", ["title", "draft", "update_if_exists"]),
         ],
     )
-    @click.option("--base", default="main", show_default=True)
-    @click.option("--head", default=None)
+    @click.option("--base", default="main", show_default=True,
+                  help="Base branch the PR merges into.")
+    @click.option("--head", default=None,
+                  help="Head ref for the PR (default: current HEAD).")
     @click.option(
         "--project", "project_dir",
         type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
         default=None,
+        help="Project directory (default: current directory).",
     )
     @click.option(
         "--title",
@@ -339,12 +342,15 @@ def attach(parent_group: click.Group) -> None:
             ("Target", ["number"]),
         ],
     )
-    @click.option("--base", default="main", show_default=True)
-    @click.option("--head", default=None)
+    @click.option("--base", default="main", show_default=True,
+                  help="Base branch the PR merges into.")
+    @click.option("--head", default=None,
+                  help="Head ref for the PR (default: current HEAD).")
     @click.option(
         "--project", "project_dir",
         type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
         default=None,
+        help="Project directory (default: current directory).",
     )
     @click.option(
         "--number", "-n",

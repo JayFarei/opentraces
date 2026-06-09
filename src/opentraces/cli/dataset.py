@@ -356,8 +356,10 @@ def dataset_remote_remove(
 @dataset_remote_group.command("visibility", cls=OpentracesCommand)
 @click.argument("name")
 @click.argument("remote", required=False, default=None)
-@click.option("--private", "make_private", flag_value=True, default=None)
-@click.option("--public", "make_private", flag_value=False)
+@click.option("--private", "make_private", flag_value=True, default=None,
+              help="Set the bound HuggingFace dataset remote to private.")
+@click.option("--public", "make_private", flag_value=False,
+              help="Set the bound HuggingFace dataset remote to public.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_remote_visibility(
     name: str,
@@ -397,6 +399,7 @@ def dataset_remote_visibility(
     type=click.Choice(["current-agent", "claude-code-headless"]),
     default="claude-code-headless",
     show_default=True,
+    help="Executor each scheduled run uses.",
 )
 @click.option(
     "--approve-new",

@@ -2206,7 +2206,8 @@ def setup_entity_parser(force: bool) -> None:
 
 
 @setup_group.command("privacy-filter")
-@click.option("--enable/--disable", "enable", default=True)
+@click.option("--enable/--disable", "enable", default=True,
+              help="Turn the privacy-filter PII detector on or off.")
 @click.option(
     "--install-deps", is_flag=True,
     help="Pip-install transformers + torch into the active environment.",
@@ -2394,7 +2395,8 @@ def setup_watcher_status(json_out: bool) -> None:
 
 
 @setup_watcher_group.command("start")
-@click.option("--interval", type=int, default=300, show_default=True)
+@click.option("--interval", type=int, default=300, show_default=True,
+              help="Polling interval in seconds.")
 @click.option("--no-install", is_flag=True,
               help="Assume unit is already installed; just load it.")
 def setup_watcher_start(interval: int, no_install: bool) -> None:
@@ -2431,7 +2433,7 @@ def setup_watcher_restart() -> None:
 @click.option("--project", "project_dir", type=click.Path(
                   exists=True, file_okay=False, dir_okay=True, path_type=Path),
               default=None, help="Project directory (default: all enlisted).")
-@click.option("--json", "json_out", is_flag=True)
+@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON.")
 def setup_watcher_tick(project_dir: Path | None, json_out: bool) -> None:
     """Run one tick now and print reports (diagnostic)."""
     from ..watcher import daemon as _daemon

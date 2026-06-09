@@ -2707,57 +2707,34 @@ tr:hover td { background: var(--surface-hover); }
     border-radius: var(--radius) var(--radius) 0 0;
     gap: 10px;
   }
-  .pipe-stations { flex-direction: column; align-items: stretch; gap: 0; }
-  .pipe-after { padding-top: 0; gap: 0; padding-left: var(--pipe-card-inset); }
-  .pipe-after-row { flex-direction: column; align-items: stretch; }
-  /* The "after" stations match the session stations' padding so their icon
-     column lines up with the session's (overriding the desktop `0 10px`). */
-  .pipe-after-row .pipe-station { padding: 6px 2px; }
+  .pipe-stations { flex-direction: column; align-items: center; gap: 0; }
+  .pipe-after { padding-top: 0; gap: 0; }
+  .pipe-after-row { flex-direction: column; align-items: center; }
 
-  /* One shared icon-column width so icons AND arrows sit on the same vertical
-     axis (column 1) and can never drift apart; text lives in column 2.
-     --pipe-card-inset mirrors the session card's left border+padding (1px +
-     14px, see .pipe-session) so the unboxed "after" block + cross arrow keep
-     the SAME spine when the flow exits the card — one continuous column of
-     icons + arrows top to bottom. */
-  .pipe-session-flow { --pipe-ico-col: 50px; --pipe-card-inset: 15px; }
+  /* Each station is a CENTRED column — icon on top, title + sub centred beneath
+     it — and the rows stack vertically with the down-arrows centred between.
+     The base .pipe-station is already a centred flex column (align-items:center,
+     text-align:center); on mobile we just give it natural height + spacing. */
+  .pipe-station { flex: 0 0 auto; gap: 5px; padding: 10px 2px; }
+  .pipe-after-row .pipe-station { padding: 10px 2px; }
+  .pipe-station-ico { height: auto; }
+  .pipe-station-agents { padding: 0; border: none; background: none; gap: 5px; }
+  /* keep the 3 agent marks a touch smaller so the trio reads as one balanced
+     unit (the generic `.pipe-station-ico svg { 22px }` would make 3×22 huge);
+     the extra class wins on specificity. */
+  .pipe-station-ico .pipe-station-glyph { width: 17px; height: 17px; }
 
-  /* compact rows: icon slot on the left, title over sub on the right */
-  .pipe-station {
-    flex: 0 0 auto;
-    display: grid;
-    grid-template-columns: var(--pipe-ico-col) 1fr;
-    column-gap: 10px;
-    align-items: center;
-    text-align: left;
-    padding: 6px 2px;
-  }
-  .pipe-station-ico { grid-row: 1 / 3; height: auto; }
-  .pipe-station-t { grid-column: 2; }
-  .pipe-station-s { grid-column: 2; }
-  .pipe-station-agents { padding: 0; border: none; background: none; gap: 2px; }
-  /* The 3 agent marks must fit INSIDE the icon column. The generic
-     `.pipe-station-ico svg { width: 22px }` (specificity 0,1,1) was beating the
-     plain `.pipe-station-glyph` class, so 3×22 + gaps = 72px overflowed the
-     50px column and bulged left. Add the extra class to win: 3×14 + 2×2 = 46px,
-     inside --pipe-ico-col so the "what it does" row lines up with the others. */
-  .pipe-station-ico .pipe-station-glyph { width: 14px; height: 14px; }
-
-  /* small down-arrows centred on the shared icon-column axis: width matches the
-     grid's first track and text-align:center lands the glyph on the icon centre
-     (rotate(90deg) spins about the glyph's own centre, so it stays centred). */
+  /* down-arrows centred between the stacked, centred stations */
   .pipe-station-arrow {
     display: block;
-    align-self: flex-start;
+    align-self: center;
     transform: rotate(90deg);
     height: auto;
     padding: 0;
-    margin: 1px 0;
-    width: var(--pipe-ico-col);
-    text-align: center;
+    margin: 2px 0;
     font-size: 11px;
   }
-  .pipe-session-flow > .pipe-station-arrow { padding-top: 0; margin-left: var(--pipe-card-inset); }
+  .pipe-session-flow > .pipe-station-arrow { padding-top: 0; }
 
   /* drop the desktop-only detail visuals: trace strip + legend, commit graph */
   .pipe-trace-block,
