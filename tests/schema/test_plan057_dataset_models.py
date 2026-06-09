@@ -271,3 +271,15 @@ def test_policy_override_must_target_required_tool():
             enabled_tools=["entropy"],
             overrides=[DatasetSecurityOverride(tool="entropy")],
         )
+
+
+def test_policy_rejects_override_when_required_disable_not_allowed():
+    # A hand-edited / migrated manifest cannot smuggle in an override unless the
+    # contract permits disabling required tools (the CLI already blocks this).
+    with pytest.raises(ValidationError):
+        DatasetSecurityPolicy(
+            required_tools=["regex"],
+            enabled_tools=[],
+            allow_disable_required=False,
+            overrides=[DatasetSecurityOverride(tool="regex")],
+        )

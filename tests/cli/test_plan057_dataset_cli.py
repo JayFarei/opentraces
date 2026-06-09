@@ -166,6 +166,34 @@ def test_dataset_new_seeds_manifest_security_from_workflow_contract(tmp_path):
     assert security["required_satisfied"] is True
 
 
+def test_dataset_new_named_installed_workflow_seeds_security():
+    """Plan 092 (Codex #1): a bare installed-workflow name (not a path) still
+    seeds the dataset security policy from that workflow's contract."""
+    from opentraces.core.workflows import create_workflow
+
+    pkg = create_workflow("secure-installed")
+    (pkg.path / "SKILL.md").write_text(
+        "---\n"
+        "name: secure-installed\n"
+        "security:\n"
+        "  required_tools: [regex, entropy]\n"
+        "  optional_tools: [business_logic]\n"
+        "  default_enabled_tools: [business_logic]\n"
+        "---\n\n# secure-installed\nEmit rows.\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    created = runner.invoke(
+        dataset_group, ["new", "named-ds", "--workflow", "secure-installed", "--json"]
+    )
+    assert created.exit_code == 0, created.output
+    sec = json.loads(created.output)["dataset"]["security"]
+    assert sec["source"] == "workflow"
+    assert sec["source_workflow_digest"].startswith("sha256:")
+    assert sec["required_tools"] == ["regex", "entropy"]
+    assert sec["enabled_tools"] == ["regex", "entropy", "business_logic"]
+
+
 def test_dataset_security_edits_only_that_dataset_manifest(tmp_path):
     """`dataset security <name>` edits one dataset's manifest policy, with
     per-dataset isolation; it never reads or writes global config."""

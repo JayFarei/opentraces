@@ -223,3 +223,18 @@ def test_frontmatter_invalid_security_contract_is_rejected(tmp_path):
     )
     with pytest.raises(ValidationError):
         resolve_workflow_reference(md)
+
+
+def test_frontmatter_non_dict_security_block_raises(tmp_path):
+    """A present-but-malformed `security:` (e.g. a scalar typo) fails loudly
+    rather than silently dropping the contract."""
+    import pytest
+
+    from opentraces.core.workflows import resolve_workflow_reference
+
+    md = _write_workflow_md(
+        tmp_path,
+        "---\nname: typo-curator\nsecurity: recommended\n---\n\n# typo-curator\n",
+    )
+    with pytest.raises(ValueError):
+        resolve_workflow_reference(md)

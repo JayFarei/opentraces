@@ -567,8 +567,20 @@ def append_rows(
     current_line = _line_count(dataset.path / "data" / "train.jsonl")
     row_security_by_id: dict[str, DatasetRowSecurity] = {}
 
+    # When the dataset carries a workflow-seeded security contract, its enabled
+    # tools are authoritative and actually run over every row. Datasets without
+    # a contract (manual / ad-hoc) fall back to the coarse privacy-tier mapping.
+    security_policy = dataset.manifest.security
+    policy_tools: list[str] | None = (
+        list(security_policy.enabled_tools)
+        if (security_policy.required_tools or security_policy.optional_tools)
+        else None
+    )
+
     for index, row in enumerate(rows, start=1):
-        sanitized = sanitize_dataset_row(row, privacy_tier=resolved_privacy_tier)
+        sanitized = sanitize_dataset_row(
+            row, privacy_tier=resolved_privacy_tier, tools=policy_tools
+        )
         row = sanitized.row
         errors = validate_row(row, schema)
         if errors:
@@ -737,6 +749,7 @@ def _build_row_provenance(
             "enabled_tools": list(dataset.manifest.security.enabled_tools),
             "required_tools": list(dataset.manifest.security.required_tools),
             "required_satisfied": dataset.manifest.security.required_tools_satisfied(),
+            "tools_applied": list(row_security.tools_applied),
         },
         "run": run_provenance or {},
     }

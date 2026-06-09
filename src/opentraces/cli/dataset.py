@@ -48,7 +48,7 @@ from ..core.workflow_runner import (
     ExecutorUnavailableError,
     run_dataset_workflow,
 )
-from ..core.workflows import resolve_workflow_reference
+from ..core.workflows import load_workflow, resolve_workflow_reference
 from ..core.schedules import (
     add_schedule,
     list_schedules,
@@ -777,7 +777,21 @@ def _resolve_workflow_for_dataset(
     if not workflow:
         return None, workflow_digest, None, None
     if not _looks_like_workflow_path(workflow):
-        return workflow, workflow_digest, None, None
+        # A bare name may reference an installed workflow package. If it
+        # resolves, seed the dataset's security policy from its contract and
+        # pin its digest; otherwise treat the name as an opaque skill string.
+        try:
+            installed = load_workflow(workflow)
+        except (FileNotFoundError, ValueError):
+            return workflow, workflow_digest, None, None
+        security = (
+            DatasetSecurityPolicy.from_contract(
+                installed.security, source_workflow_digest=installed.digest
+            )
+            if installed.security is not None
+            else None
+        )
+        return installed.name, installed.digest, None, security
 
     package = resolve_workflow_reference(workflow)
     config: dict[str, object] = {

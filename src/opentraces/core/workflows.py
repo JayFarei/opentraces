@@ -394,9 +394,16 @@ def _legacy_flat_frontmatter(raw: str) -> dict[str, str]:
 def _workflow_security_contract(metadata: dict[str, Any]) -> WorkflowSecurityContract | None:
     """Build the workflow security contract from front matter, if declared."""
 
+    if "security" not in metadata:
+        return None
     raw = metadata.get("security")
     if not isinstance(raw, dict):
-        return None
+        # A present-but-malformed `security:` block (e.g. a scalar typo) must
+        # fail loudly rather than silently disabling the contract.
+        raise ValueError(
+            "workflow front matter 'security' must be a mapping/block, got "
+            f"{type(raw).__name__}"
+        )
     return WorkflowSecurityContract.model_validate(raw)
 
 

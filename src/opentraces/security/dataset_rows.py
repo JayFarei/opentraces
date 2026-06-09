@@ -28,6 +28,7 @@ class DatasetRowSecurity:
     redactions_applied: int = 0
     findings_count: int = 0
     filtered: bool = True
+    tools_applied: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,29 +50,39 @@ def sanitize_dataset_row(
     row: dict[str, Any],
     *,
     privacy_tier: str | None = DEFAULT_PRIVACY_TIER,
+    tools: list[str] | tuple[str, ...] | None = None,
 ) -> SanitizedDatasetRow:
     """Return a sanitised copy of a dataset row.
 
-    ``tier="off"`` returns the row unchanged with ``filtered=False`` — used as
-    an explicit deferral mode when the dataset author wants to ship raw rows
-    out of the local store. Other tiers map onto a small fixed tool set;
-    callers needing finer control should call :func:`sanitize_dict` directly.
+    When ``tools`` is provided (the dataset's resolved security policy), it is
+    authoritative: exactly those registry tools run, regardless of the privacy
+    tier, so a workflow's required tools cannot be silently dropped. When
+    ``tools`` is ``None`` the coarse tier mapping is used: ``tier="off"`` ships
+    the row unchanged, other tiers map onto a small fixed tool set.
     """
     tier = normalize_privacy_tier(privacy_tier)
-    if tier == "off":
+    if tools is not None:
+        effective_tools = [t for t in dict.fromkeys(tools) if t]
+    elif tier == "off":
+        effective_tools = []
+    else:
+        effective_tools = list(_TIER_TOOLS.get(tier, ("regex", "entropy")))
+
+    if not effective_tools:
+        # No tools run: explicit deferral (tier off) or an empty policy.
         return SanitizedDatasetRow(
             row=dict(row),
             security=DatasetRowSecurity(
                 privacy_tier=tier,
                 security_version=None,
                 filtered=False,
+                tools_applied=(),
             ),
         )
 
-    tools = list(_TIER_TOOLS.get(tier, ("regex", "entropy")))
     # sanitize_dict + walk_dict_strings rebuild containers only where a leaf
     # changed and never mutate the input, so no upfront copy is needed.
-    sanitised, report = sanitize_dict(row, tools=tools)
+    sanitised, report = sanitize_dict(row, tools=effective_tools)
 
     username = os.environ.get("USER") or os.environ.get("USERNAME") or None
 
@@ -90,5 +101,6 @@ def sanitize_dataset_row(
             redactions_applied=report.redactions_applied,
             findings_count=len(report.findings),
             filtered=True,
+            tools_applied=tuple(effective_tools),
         ),
     )

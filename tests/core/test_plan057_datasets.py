@@ -163,6 +163,40 @@ def test_append_row_provenance_records_dataset_security_policy():
     assert policy["required_satisfied"] is True
 
 
+def test_append_actually_runs_dataset_policy_tools():
+    """Plan 092 R9 (Codex #3): a workflow-seeded policy's enabled tools actually
+    run over each row, recorded as tools_applied in provenance, not just stored."""
+    from opentraces.core.datasets import (
+        append_rows,
+        create_dataset,
+        read_row_provenance,
+    )
+    from opentraces_schema import DatasetSecurityPolicy
+
+    create_dataset(
+        "sec-run",
+        workflow_skill="sec-curator",
+        workflow_digest="sha256:wf",
+        row_schema=_row_schema(),
+        security=DatasetSecurityPolicy(
+            source="workflow",
+            required_tools=["regex"],
+            optional_tools=["entropy"],
+            enabled_tools=["regex", "entropy"],
+        ),
+    )
+    row = {
+        "source_trace_id": "trace-1",
+        "source_unit_id": "tu:trace-1:trace",
+        "summary": "A row whose policy tools must actually run.",
+    }
+    # privacy_tier "off" would normally skip sanitization; the contract is
+    # authoritative, so the policy tools still run.
+    append_rows("sec-run", [row], run_id="run_1", privacy_tier="off")
+    record = next(iter(read_row_provenance("sec-run").values()))
+    assert record["security_policy"]["tools_applied"] == ["regex", "entropy"]
+
+
 def test_publish_check_blocks_rows_when_required_security_tools_missing():
     """Plan 092 R10: a dataset whose required tools are disabled (via override)
     cannot publish; evaluate_publication_state blocks every row."""

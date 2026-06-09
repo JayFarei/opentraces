@@ -194,6 +194,11 @@ class DatasetSecurityPolicy(BaseModel):
             raise ValueError(
                 f"overrides may only target required tools: {sorted(stray_override)}"
             )
+        if overridden and not self.allow_disable_required:
+            raise ValueError(
+                "overrides are only allowed when allow_disable_required is true: "
+                f"{sorted(overridden)}"
+            )
         return self
 
     @classmethod
