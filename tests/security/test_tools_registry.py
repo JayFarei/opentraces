@@ -136,6 +136,22 @@ class TestEnableState:
         """iter_enabled(None) has no implicit always-on tools."""
         assert {t.name for t in iter_enabled(None)} == set()
 
+    def test_dataset_row_tools_match_registry_capability(self) -> None:
+        """Plan 092: the dataset-row-applicable tool set must equal the
+        detector-protocol tools that can run over a row dict (have `find`), plus
+        path_anonymizer (the always-on anonymize step). Guards against a tool
+        being added to DATASET_ROW_TOOLS that cannot actually run on a row."""
+        from opentraces.security.dataset_rows import DATASET_ROW_TOOLS
+        from opentraces.security.tools import Detector
+
+        runnable = {
+            t.name
+            for t in iter_tools()
+            if isinstance(t, Detector) and hasattr(t, "find")
+        }
+        runnable.add("path_anonymizer")
+        assert DATASET_ROW_TOOLS == runnable
+
     def test_schema_security_tool_vocab_matches_registry(self) -> None:
         """Plan 092: the schema's SecurityToolName vocab must not drift from the
         live registry order (the schema package stays standalone, so this is the

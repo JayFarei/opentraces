@@ -18,6 +18,26 @@ from .privacy import DEFAULT_PRIVACY_TIER, PrivacyTier, normalize_privacy_tier
 from .version import SECURITY_VERSION
 from .walker import walk_dict_strings
 
+# Security tools that can actually sanitize a projected dataset-row dict: the
+# detector-protocol tools `sanitize_dict` executes over string leaves, plus
+# `path_anonymizer` which the unconditional anonymize_paths step below applies.
+# The remaining registry tools operate on TraceRecord structure and cannot run
+# over a row: trufflehog / llm_pii are apply-only detectors (no `find`),
+# capsule_scope is a record field-exclusion transformer, classifier is a
+# whole-record judge. A dataset security contract may only reference this set.
+DATASET_ROW_TOOLS: frozenset[str] = frozenset(
+    {"regex", "entropy", "privacy_filter", "business_logic", "path_anonymizer"}
+)
+
+
+def unsupported_dataset_row_tools(names: "list[str] | tuple[str, ...]") -> list[str]:
+    """Return any tool names that cannot run over a dataset row (order-stable)."""
+    seen: list[str] = []
+    for name in names:
+        if name and name not in DATASET_ROW_TOOLS and name not in seen:
+            seen.append(name)
+    return seen
+
 
 @dataclass(frozen=True)
 class DatasetRowSecurity:
@@ -93,6 +113,14 @@ def sanitize_dataset_row(
     if not isinstance(sanitised, dict):  # defensive
         sanitised = dict(row)
 
+    # Record the tools that ACTUALLY executed: the detector-protocol tools
+    # sanitize_dict ran, plus path_anonymizer (the unconditional _anon step
+    # above). A workflow may list tools that cannot run over a row dict, so this
+    # is the truthful execution evidence the publish gate checks against.
+    applied = list(report.tools_applied)
+    if "path_anonymizer" not in applied:
+        applied.append("path_anonymizer")
+
     return SanitizedDatasetRow(
         row=sanitised,
         security=DatasetRowSecurity(
@@ -101,9 +129,6 @@ def sanitize_dataset_row(
             redactions_applied=report.redactions_applied,
             findings_count=len(report.findings),
             filtered=True,
-            # Record the tools that ACTUALLY executed (sanitize_dict runs only
-            # detector-protocol tools), not the full requested set — a workflow
-            # may list tools that cannot run over a row dict.
-            tools_applied=tuple(report.tools_applied),
+            tools_applied=tuple(applied),
         ),
     )

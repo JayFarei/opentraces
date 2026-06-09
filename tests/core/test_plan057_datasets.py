@@ -194,7 +194,31 @@ def test_append_actually_runs_dataset_policy_tools():
     # authoritative, so the policy tools still run.
     append_rows("sec-run", [row], run_id="run_1", privacy_tier="off")
     record = next(iter(read_row_provenance("sec-run").values()))
-    assert record["security_policy"]["tools_applied"] == ["regex", "entropy"]
+    # The policy tools actually ran (path_anonymizer is the always-on step).
+    assert {"regex", "entropy"} <= set(record["security_policy"]["tools_applied"])
+
+
+def test_create_dataset_rejects_non_row_runnable_required_tools():
+    """Code-review #1: a contract requiring tools that cannot run over a row
+    dict (trufflehog/llm_pii/capsule_scope/classifier) is rejected at seed time
+    rather than silently under-protecting."""
+    import pytest
+
+    from opentraces.core.datasets import create_dataset
+    from opentraces_schema import DatasetSecurityPolicy
+
+    with pytest.raises(ValueError, match="cannot run over"):
+        create_dataset(
+            "leaky-ds",
+            workflow_skill="leaky-curator",
+            workflow_digest="sha256:wf",
+            row_schema=_row_schema(),
+            security=DatasetSecurityPolicy(
+                source="workflow",
+                required_tools=["trufflehog"],
+                enabled_tools=["trufflehog"],
+            ),
+        )
 
 
 def test_empty_contract_policy_falls_back_to_tier_floor():
@@ -226,7 +250,7 @@ def test_empty_contract_policy_falls_back_to_tier_floor():
     append_rows("floor-ds", [row], run_id="run_1", privacy_tier="medium")
     record = next(iter(read_row_provenance("floor-ds").values()))
     # The medium tier floor (regex + entropy) ran even though enabled_tools=[].
-    assert set(record["security_policy"]["tools_applied"]) == {"regex", "entropy"}
+    assert {"regex", "entropy"} <= set(record["security_policy"]["tools_applied"])
 
 
 def test_publish_check_blocks_rows_when_required_security_tools_missing():
@@ -242,6 +266,8 @@ def test_publish_check_blocks_rows_when_required_security_tools_missing():
     )
     from opentraces_schema import DatasetSecurityPolicy
 
+    # business_logic is a required tool that is NOT in the privacy-tier floor,
+    # so disabling it means it genuinely never runs over the row.
     create_dataset(
         "sec-gate",
         workflow_skill="sec-curator",
@@ -250,8 +276,8 @@ def test_publish_check_blocks_rows_when_required_security_tools_missing():
         publication_policy={"review": "auto"},
         security=DatasetSecurityPolicy(
             source="workflow",
-            required_tools=["regex"],
-            enabled_tools=["regex"],
+            required_tools=["business_logic"],
+            enabled_tools=["business_logic"],
             allow_disable_required=True,
         ),
     )
@@ -260,27 +286,38 @@ def test_publish_check_blocks_rows_when_required_security_tools_missing():
         "source_unit_id": "tu:trace-1:trace",
         "summary": "A row guarded by a required tool.",
     }
-    append_rows("sec-gate", [row], run_id="run_1", privacy_tier="low")
 
-    # With required tools satisfied, the row is publishable.
-    ok_state = evaluate_publication_state("sec-gate", privacy_tier="low")
-    statuses = {e.status for e in ok_state.rows.values()}
-    assert statuses == {"publishable"}
-
-    # Disable the required tool via unsafe override, then re-evaluate.
+    # Disable the required tool FIRST, then append: business_logic never runs,
+    # so the row's execution evidence is missing it and publish is blocked.
     dataset = load_dataset("sec-gate")
     new_policy, _ = apply_dataset_security_edit(
         dataset.manifest.security,
-        disable=["regex"],
+        disable=["business_logic"],
         unsafe_override=True,
         reason="testing the gate",
     )
     save_manifest(dataset.path, dataset.manifest.model_copy(update={"security": new_policy}))
 
+    append_rows("sec-gate", [row], run_id="run_1", privacy_tier="low")
     blocked_state = evaluate_publication_state("sec-gate", privacy_tier="low")
     entry = next(iter(blocked_state.rows.values()))
     assert entry.status == "blocked"
     assert "required_security_tools_missing" in entry.block_reasons
+
+    # Re-enabling and re-appending produces a row whose evidence covers the
+    # required tool, so that fresh row is publishable.
+    dataset = load_dataset("sec-gate")
+    reenabled, _ = apply_dataset_security_edit(
+        dataset.manifest.security, enable=["business_logic"]
+    )
+    save_manifest(dataset.path, dataset.manifest.model_copy(update={"security": reenabled}))
+    row2 = {**row, "source_trace_id": "trace-2", "source_unit_id": "tu:trace-2:trace"}
+    append_rows("sec-gate", [row2], run_id="run_2", privacy_tier="low")
+    state2 = evaluate_publication_state("sec-gate", privacy_tier="low")
+    fresh = state2.rows[
+        next(rid for rid, e in state2.rows.items() if "required_security_tools_missing" not in e.block_reasons)
+    ]
+    assert fresh.status == "publishable"
 
 
 def test_dry_run_preview_never_appends_or_updates_row_index():

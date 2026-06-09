@@ -427,7 +427,13 @@ def _warn_bad_security_contract(detail: str) -> None:
 
 
 def _optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
+    if isinstance(value, str):
+        return value or None
+    # YAML coerces unquoted scalars (e.g. `description: yes` -> True,
+    # `description: 1.0` -> 1.0); preserve them as text rather than dropping.
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    return None
 
 
 def _default_skill_text(name: str, description: str) -> str:

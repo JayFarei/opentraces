@@ -41,7 +41,11 @@ from opentraces_schema import (
 from opentraces_schema.dataset import SECURITY_TOOL_ORDER
 
 from ..security import SECURITY_VERSION
-from ..security.dataset_rows import DatasetRowSecurity, sanitize_dataset_row
+from ..security.dataset_rows import (
+    DatasetRowSecurity,
+    sanitize_dataset_row,
+    unsupported_dataset_row_tools,
+)
 from ..security.privacy import DEFAULT_PRIVACY_TIER, normalize_privacy_tier
 from ..security.scanner import scan_serialized
 
@@ -198,6 +202,18 @@ def create_dataset(
         if isinstance(security, DatasetSecurityPolicy)
         else DatasetSecurityPolicy.model_validate(security or {})
     )
+    # A dataset security contract may only require/offer tools that can actually
+    # run over a projected row dict; reject a contract that lists tools which
+    # silently would not run (trufflehog/llm_pii/capsule_scope/classifier).
+    unsupported = unsupported_dataset_row_tools(
+        [*security_model.required_tools, *security_model.optional_tools, *security_model.enabled_tools]
+    )
+    if unsupported:
+        raise ValueError(
+            "workflow security contract references tools that cannot run over "
+            f"dataset rows: {', '.join(unsupported)}. Dataset-applicable tools "
+            "are: regex, entropy, privacy_filter, business_logic, path_anonymizer."
+        )
     workflow = WorkflowRef(
         skill=workflow_skill or f"{name}-workflow",
         digest=workflow_digest,
@@ -841,9 +857,13 @@ def evaluate_publication_state(
     """
 
     dataset = load_dataset(name)
-    # Plan 092 R10: a dataset whose required security tools are not satisfied
-    # (a required tool was disabled via unsafe override) cannot publish rows.
-    missing_required_tools = dataset.manifest.security.missing_required_tools()
+    # Plan 092 R10: the required-tools gate is keyed on EXECUTION EVIDENCE, not
+    # manifest membership — a row publishes only if the tools that actually ran
+    # over it (recorded per-row in provenance) cover the contract's required
+    # tools. This blocks rows where a required tool could not run, was disabled
+    # via override, or was re-enabled only after the row was appended raw.
+    required_tools = set(dataset.manifest.security.required_tools)
+    provenance = read_row_provenance(name) if required_tools else {}
     selected = set(row_ids or [])
     state = read_publication_state(name)
     rows_by_id = read_rows_by_id(name)
@@ -876,19 +896,31 @@ def evaluate_publication_state(
             if existing
             else 0
         )
+        # Tools that actually ran over this row: fresh from row_security, else
+        # the per-row provenance recorded at append time.
+        if security is not None:
+            row_tools = set(security.tools_applied)
+        else:
+            row_tools = set(
+                (provenance.get(entry.row_id, {}).get("security_policy", {}) or {}).get(
+                    "tools_applied", []
+                )
+            )
         scan = scan_serialized(
             (_canonical_json(row) + "\n").encode("utf-8"),
             include_entropy=entry_privacy_tier != "low",
         )
         block_reasons = sorted({match.pattern_name for match in scan.matches})
-        if entry_privacy_tier == "off":
+        # privacy_tier_off only blocks a genuinely raw row — if a contract's
+        # tools actually ran, the row is not raw even at tier "off".
+        if entry_privacy_tier == "off" and not row_tools:
             block_reasons.append("privacy_tier_off")
         security_stale = bool(
             entry_privacy_tier != "off" and entry_security_version != SECURITY_VERSION
         )
         if security_stale:
             block_reasons.append("security_version_stale")
-        if missing_required_tools:
+        if required_tools - row_tools:
             block_reasons.append("required_security_tools_missing")
         block_reasons = sorted(set(block_reasons))
         if block_reasons:
