@@ -185,7 +185,7 @@ Invoke the bundled artifact with the Workflow tool. Scope it per deploy with
 Workflow({
   scriptPath: ".claude/skills/deploy-site/verify-site-deploy.workflow.js",
   args: {
-    baseUrl: "https://opentraces.ai",   // or a preview URL to keep email off prod
+    baseUrl: "https://www.opentraces.ai",  // canonical host; or a preview URL to keep email off prod
     changed: ["/hub", "/"],             // routes this deploy touched -> deep-checked; rest are smoked
     pagesOnly: false                    // true = skip the email write (read-only validation runs)
   }
@@ -198,16 +198,21 @@ passed; otherwise `failures` lists exactly what to fix in Phase 3.
 How the harness applies the JIT primitives (see
 `kb/docs/concept-jit-harnesses-generic.md`):
 
-- **Classify-and-route**: if you pass `changed`, those routes get a deep check
-  (layout, console, network, nav) and the rest get a cheap smoke check. Plain JS
-  control flow the runtime owns, no model in the seam.
-- **Fan-out + barrier**: one worker per route x viewport (desktop `1440x900`,
-  mobile `390x844`), on a cheap model (`haiku`) because it's high-volume grunt
-  work.
-- **Independent adversarial confirm**: any worker that reports a failure is
+- **Classify-and-route**: if you pass `changed`, those routes get a full browser
+  check (console, overflow, screenshot); every other route is a cheap `curl`
+  status only. Plain JS control flow the runtime owns, no model in the seam, so a
+  scoped deploy stays cheap.
+- **One deterministic sweep worker per viewport** (2 workers, not ~18): each runs
+  a single fixed bash batch (`curl` + a bounded set of agent-browser calls per
+  route) on a cheap model (`haiku`) and returns the parsed JSON. No open-ended
+  "verify everything" prompt, so the model can't loop; each batch opens one
+  browser session and `close --all`s it, so Chrome processes don't pile up.
+  (Validated 2026-06-09: ~16s for a full-deep viewport sweep, 1 leftover proc,
+  vs. the original per-cell design's 54 procs / 15+ min.)
+- **Independent adversarial confirm**: any route a sweep flags as failed is
   re-checked by a *separate* worker with a clean session (default model) that
-  tries to reproduce it, so an agent-browser fumble doesn't masquerade as a site
-  bug.
+  tries to reproduce it; a failure survives only if the confirm also fails, so an
+  agent-browser fumble doesn't masquerade as a site bug.
 - **Typed contracts**: every worker returns against `PAGE_VERDICT` /
   `EMAIL_VERDICT`, so results merge mechanically.
 - **Email capture** gets its own worker that proves the write via an independent
