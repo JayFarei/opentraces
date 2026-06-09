@@ -4210,6 +4210,22 @@ p {
   color: var(--border-strong);
   margin-bottom: 28px;
 }
+/* "new" badge on a section title — mirrors the nav's .nav-new-pill. The
+   section-rule flex gap (14px) handles spacing, so no left margin here. */
+.section-rule-pill {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 999px;
+  padding: 3px 6px;
+}
 .section-rule .label {
   font-family: var(--font-mono);
   font-size: 10px;

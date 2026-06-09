@@ -6,7 +6,7 @@ import EarlyAccessForm from "./EarlyAccessForm";
 export default function HubTeaser() {
   return (
     <section>
-      <SectionRule label="hub preview" />
+      <SectionRule label="hub preview" pill="new" />
       <div className="section-title">Learn from your team data.</div>
       <p className="section-sub" style={{ maxWidth: 640, marginBottom: 24 }}>
         Every run your team makes is data you can learn from. The Hub is the web companion to the
