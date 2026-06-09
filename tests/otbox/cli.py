@@ -708,6 +708,32 @@ def cmd_journey(args: argparse.Namespace) -> int:
     return 0 if result.verdict in ("PASS", "SKIP") else 1
 
 
+def cmd_fetch_captures(args: argparse.Namespace) -> int:
+    """Fetch manifested real-agent capture artifacts from the GitHub release."""
+    from .captures_manifest import MANIFEST_PATH, fetch_all, fetch_scenario, load_manifest
+
+    captures_root = Path(__file__).parent / "captures"
+    doc = load_manifest()
+    if not doc:
+        raise OtboxError(f"no captures manifest at {MANIFEST_PATH}")
+    if args.scenario:
+        fetched = [args.scenario]
+        fetch_scenario(args.scenario, captures_root)
+    else:
+        fetched = fetch_all(captures_root)
+    _emit(
+        {
+            "action": "fetch-captures",
+            "release_tag": doc.get("release_tag"),
+            "fetched": fetched,
+            "captures_root": str(captures_root),
+        },
+        json_mode=args.json,
+        human=f"fetched {len(fetched)} scenario(s) from {doc.get('release_tag')}",
+    )
+    return 0
+
+
 def cmd_artifacts(args: argparse.Namespace) -> int:
     box = resolve_box(args.box)
     results = _load_journey_results(box)
@@ -1367,6 +1393,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_art.add_argument("--box", metavar="BOX_ID")
     p_art.add_argument("--label", metavar="LABEL", help="bundle label")
     p_art.set_defaults(func=cmd_artifacts)
+
+    p_fetch = add("fetch-captures", help="download manifested real-agent capture artifacts")
+    p_fetch.add_argument("--scenario", help="fetch one scenario (default: all manifested)")
+    p_fetch.set_defaults(func=cmd_fetch_captures)
 
     p_status = add("status", help="inspect a box")
     p_status.add_argument("--box", metavar="BOX_ID")
