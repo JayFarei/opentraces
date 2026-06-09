@@ -550,16 +550,16 @@ html { color-scheme: light; }
 
 .cta-agents {
   position: relative;
-  width: 60px; /* reserves the fanned-out width (0,22,44 + 16px) so the label never shifts */
-  height: 18px;
+  width: 63px; /* reserves the fanned-out width (0,22,44 + 19px) so the label never shifts */
+  height: 19px;
   flex: 0 0 auto;
   display: block;
 }
 .cta-agent {
   position: absolute;
-  top: 1px;
-  width: 16px;
-  height: 16px;
+  top: 0;
+  width: 19px;
+  height: 19px;
   display: block;
   transform-origin: 50% 50%;
   transition: left 0.34s cubic-bezier(.2, .75, .2, 1), transform 0.34s cubic-bezier(.2, .75, .2, 1);
