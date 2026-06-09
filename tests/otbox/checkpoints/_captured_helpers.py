@@ -127,7 +127,9 @@ def _read_origin_box_id(box_root: Path) -> str | None:
     return box_id if isinstance(box_id, str) and box_id else None
 
 
-def restore_from_capture(driver, box: Box, capture_name: str) -> dict | None:
+def restore_from_capture(
+    driver, box: Box, capture_name: str, *, reconcile: bool = True
+) -> dict | None:
     """Restore a captured snapshot artifact into ``box`` in-place.
 
     Plan 072 R1 contract:
@@ -209,7 +211,7 @@ def restore_from_capture(driver, box: Box, capture_name: str) -> dict | None:
     # world PREPARATION — the journeys' "no staleness after capture" claims
     # stay intact rather than being weakened to tolerate restore artifacts.
     project_dir = box.root / "project"
-    if driver is not None and project_dir.exists():
+    if reconcile and driver is not None and project_dir.exists():
         tick = driver.exec(
             box,
             [*driver.cli_argv(box), "setup", "watcher", "tick",

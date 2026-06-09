@@ -22,7 +22,13 @@ from pathlib import Path
 from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-JTBD_PATH = REPO_ROOT / "kb" / "plans" / "063-jtbd-command-map.md"
+# Vendored in-repo (otbox 2.0 phase 2): the JTBD map gates CI, and a gate
+# whose SSoT lives in the gitignored kb/ cannot run in any clean checkout
+# (worktrees, CI runners). The kb/plans/063 document remains the narrative
+# history; THIS file is what the strict gate reads. The legacy kb path is
+# a fallback so stale primary-checkout tooling keeps working.
+JTBD_PATH = Path(__file__).resolve().parent / "jtbd-command-map.md"
+_LEGACY_JTBD_PATH = REPO_ROOT / "kb" / "plans" / "063-jtbd-command-map.md"
 
 # Plan 069 R5: trajectory slugs that MUST be covered by at least one
 # ``tier_label = "gold"`` journey. Starts empty so the slice ships

@@ -81,3 +81,11 @@ reason = "tier-0 journeys that FAIL on a fresh environment (verified pre-existin
 issue = "https://github.com/JayFarei/opentraces/issues/25"
 added = 2026-06-10
 expires = 2026-09-08
+
+[[entries]]
+journeys = ["mixed-agent-bucket-parity", "mixed-agent-bucket-parity-pi"]
+rules = ["baseline-red"]
+reason = "artifact-path defect surfaced by the supply chain: on a non-origin machine the restored archive's manifest is empty until a watcher tick re-ingests, and any manifest REBUILD (bucket repair / bucket_manifest(write=True) in the inject step) then DROPS the tick-reconciled trace, leaving the composed world claude-only. Candidate product bug for PR-B: bucket repair loses tick-reconciled traces after cross-machine restore."
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
