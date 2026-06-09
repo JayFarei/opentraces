@@ -84,6 +84,35 @@ for (const args of toolCalls) {
   if (!/\bexecute\s*\(/.test(obj.body)) throw new Error(`registerTool ${label} is missing an execute handler`);
 }
 
+function requireSource(label, snippet) {
+  if (!index.includes(snippet)) {
+    throw new Error(`missing ${label}`);
+  }
+}
+
+requireSource(
+  'ot_search read-only trace query argv',
+  '["trace", "query", "--lex", String(params.query), "--limit", String(params.limit ?? 5), "--json"]',
+);
+requireSource(
+  'ot_standup read-only trace query argv',
+  '["trace", "query", "--lex", "recent work", "--limit", "10", "--json"]',
+);
+requireSource(
+  '/ot-search read-only trace query argv',
+  '["trace", "query", "--lex", args || "recent work", "--json"]',
+);
+
+const searchAndStandupRegion = index.slice(
+  index.indexOf('name: "ot_search"'),
+  index.indexOf('pi.registerTool({\n    name: "ot_capsule"'),
+);
+for (const forbidden of ['--force-rebuild', 'trace index', 'refresh']) {
+  if (searchAndStandupRegion.includes(forbidden)) {
+    throw new Error(`Pi search/standup must not invoke query-time maintenance: ${forbidden}`);
+  }
+}
+
 if (!pkg.pi?.extensions?.includes('./src/index.ts')) throw new Error('pi extension manifest missing');
 if (!pkg.pi?.skills?.includes('./skills')) throw new Error('pi skills manifest missing');
 if (!pkg.pi?.prompts?.includes('./prompts')) throw new Error('pi prompts manifest missing');

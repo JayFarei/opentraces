@@ -325,6 +325,9 @@ def _prepare_box_for_agent(
         hook_error = prep._install_opentraces_hooks_in_box(box, agent)
         if hook_error is not None:
             return None, hook_error, env_extra
+        index_error = prep._rebuild_trace_search_snapshot_in_box(box)
+        if index_error is not None:
+            return None, index_error, env_extra
         env_extra = {
             **(env_extra or {}),
             "PATH": f"{Path(box.project) / '.testvenv' / 'bin'}:{os.environ.get('PATH', '')}",

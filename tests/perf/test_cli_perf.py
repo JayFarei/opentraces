@@ -30,8 +30,10 @@ def test_cli_perf(
 
     def factory(run_idx: int):
         base_dir = tmp_path / scenario.name / f"run-{run_idx:02d}"
+        home_dir = perf_home / scenario.name / f"home-{run_idx:02d}"
         base_dir.mkdir(parents=True, exist_ok=True)
-        return build_command_plan(base_dir, perf_home, scenario)
+        home_dir.mkdir(parents=True, exist_ok=True)
+        return build_command_plan(base_dir, home_dir, scenario)
 
     result = measure_command_factory(scenario, factory)
     budgets = load_budgets()

@@ -12,9 +12,10 @@ This journey closes that gap. It runs from `c-captured-real-session`
 the harness, ingested via `_ingest-session`, fired the post-commit
 hook, and matured a Git Anchor. From there:
 
-  1. `trace query` resolves the captured trace via the BM25 + semantic
-     Trace Index. `trace discover` groups the same retained evidence into
-     cards for exploratory orientation. (Real consumer-API entry points.)
+  1. `trace index` explicitly rebuilds the read-only search snapshot.
+     `trace query` resolves the captured trace through that snapshot.
+     `trace discover` groups the same retained evidence into cards for
+     exploratory orientation. (Real consumer-API entry points.)
   2. `dataset new --rows-file` seeds a row referencing the captured
      `source_trace_id` so the dataset's published shard carries the
      real captured trace's lineage.
@@ -38,8 +39,23 @@ from_checkpoints = ["c-captured-real-session"]
 # --- 1. `trace query` resolves the captured trace by free-text -----------
 [[steps]]
 type = "cli"
+id = "trace-index"
+argv = ["trace", "index", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-index"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-index"
+path = "search_snapshot.trace_count"
+
+[[steps]]
+type = "cli"
 id = "trace-query"
-argv = ["trace", "query", "farewell"]
+argv = ["trace", "query", "farewell", "--limit", "5", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -52,6 +68,36 @@ equals = 0
 kind = "stdout_contains"
 step = "trace-query"
 value = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query"
+path = "search_diagnostics.used_search_snapshot"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query"
+path = "search_diagnostics.raw_trace_scan"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query"
+path = "search_diagnostics.wrote_to_index"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query"
+path = "search_diagnostics.rebuilt_index"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query"
+path = "search_diagnostics.python_full_corpus_sort"
+equals = false
 
 # `trace discover` should surface the same captured trace in bounded
 # card/group form without loading the full transcript.

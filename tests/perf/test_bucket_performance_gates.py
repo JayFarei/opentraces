@@ -15,7 +15,7 @@ The 14 gates (per plan 080 §10):
   3. ``test_bench_ctx_show_local``                <50ms (4 blobs + gunzip)
   4. ``test_bench_ctx_show_remote_miss``          <3s lazy fetch (fake remote)
   5. ``test_bench_ctx_list_10k_traces``           <500ms, zero blob opens
-  6. ``test_bench_trace_query_10k_traces``        <500ms warm
+  6. ``test_bench_trace_query_snapshot_smoke``    <80ms p95 warm, bounded heap
   7. ``test_bench_capture_hot_path``              <20ms per layer event
   8. ``test_bench_ingest_tick_100_events``        <200ms
   9. ``test_bench_bucket_status_10k_blobs``       <300ms (no enumeration)
@@ -29,7 +29,7 @@ Fixture strategy:
 
 * Tests with small synthesizable fixtures (1k events, 100 events, 50
   blobs) build their fixture inline in ``tmp_path``.
-* Tests that demand a 10k-trace bucket (#5, #6, #9, #11) skip by default;
+* Tests that demand a 10k-trace bucket (#5, #9, #11) skip by default;
   they document the gate and the assertion shape but are only run nightly
   against a real fixture. The HARD assertion for #5 (zero blob opens) is
   still meaningful on the small fixture shape; we keep that one runnable
@@ -48,6 +48,7 @@ import json
 import os
 import subprocess
 import time
+import tracemalloc
 from pathlib import Path
 from typing import Any
 
@@ -189,6 +190,76 @@ def _build_trace_record(trace_id: str) -> Any:
         agent=Agent(name="perf-agent", version="0.0.1"),
         steps=[Step(step_index=1, role="user", content="perf seed step")],
     )
+
+
+def _write_search_bench_trace(
+    project_slug: str,
+    *,
+    trace_id: str,
+    idx: int,
+    matches_site: bool,
+) -> None:
+    from opentraces.core import paths
+
+    trace_dir = paths.PROJECTS_DIR / project_slug / "traces"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    description = (
+        f"site search benchmark trace {idx:04d}"
+        if matches_site
+        else f"background import benchmark trace {idx:04d}"
+    )
+    tool_name = "Edit" if matches_site else "Read"
+    file_path = (
+        f"web/site/app_{idx % 13}.tsx"
+        if matches_site
+        else f"src/importer/module_{idx % 17}.py"
+    )
+    row = {
+        "schema_version": "0.5.0",
+        "trace_id": trace_id,
+        "session_id": f"session-{trace_id}",
+        "timestamp_start": f"2026-06-09T09:{idx % 60:02d}:00Z",
+        "timestamp_end": f"2026-06-09T09:{idx % 60:02d}:05Z",
+        "agent": {"name": "perf-agent", "model": "anthropic/claude-opus-4-6"},
+        "task": {"description": description},
+        "steps": [
+            {
+                "step_index": 1,
+                "role": "user",
+                "content": description,
+            },
+            {
+                "step_index": 2,
+                "role": "agent",
+                "content": f"handled {description}",
+                "tool_calls": [
+                    {
+                        "tool_call_id": f"{trace_id}-call",
+                        "tool_name": tool_name,
+                        "input": {"file_path": file_path, "path": file_path},
+                    }
+                ],
+                "observations": [
+                    {
+                        "source_call_id": f"{trace_id}-call",
+                        "content": "bounded observation",
+                        "output_summary": "ok",
+                    }
+                ],
+            },
+        ],
+        "outcome": {"success": True, "committed": matches_site},
+        "dependencies": ["pytest"] if matches_site else ["requests"],
+    }
+    (trace_dir / f"{trace_id}.jsonl").write_text(json.dumps(row) + "\n")
+
+
+def _p95_ms(values: list[float]) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    index = max(0, int(len(ordered) * 0.95 + 0.999999) - 1)
+    return ordered[index]
 
 
 @pytest.fixture
@@ -530,28 +601,102 @@ def test_bench_ctx_list_10k_traces_full() -> None:  # pragma: no cover
 
 
 # --------------------------------------------------------------------------- #
-# 6. ``trace query`` over 10k traces — warm <500ms.
+# 6. ``trace query`` over the read-only trace search snapshot.
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.skip(reason="requires 10k-trace index fixture; run nightly")
-def test_bench_trace_query_10k_traces() -> None:  # pragma: no cover
-    """``trace query`` over 10k traces, warm: <500ms.
+@pytest.mark.perf
+def test_bench_trace_query_snapshot_smoke() -> None:
+    """Snapshot search stays bounded after the explicit maintenance build.
 
-    Plan 080 §10: search projection warm-path budget. Build a 10k-trace
-    index, drop the cache, run one warm query (after one warmup call).
-    Skipped by default — the index build itself takes minutes and is a
-    nightly fixture cost. The test exists to document the gate.
+    Issue #22: query commands must not rebuild, mutate WAL sidecars, scan
+    raw traces, or score/sort the corpus in Python. The measured section is
+    repeated read-only lookup against ``search.sqlite``; snapshot construction
+    is the explicit maintenance phase and intentionally outside the timing.
+    """
 
-    Reference shape (when fixture is wired)::
+    from opentraces.core.trace_search_snapshot import (
+        SearchFilters,
+        build_trace_search_snapshot,
+        search_traces,
+    )
 
-        from opentraces.core.trace_index import query_index
-        # warmup
-        query_index(lex="hello", limit=20)
-        start = time.perf_counter()
-        candidates = query_index(lex="hello", limit=20)
-        elapsed = time.perf_counter() - start
-        assert elapsed * 1000 < 500
+    project_slug = "perf-search"
+    trace_count = 750
+    limit = 20
+    for idx in range(trace_count):
+        _write_search_bench_trace(
+            project_slug,
+            trace_id=f"perf-trace-{idx:04d}",
+            idx=idx,
+            matches_site=idx % 5 == 0,
+        )
+
+    summary = build_trace_search_snapshot()
+    snapshot_size = summary.path.stat().st_size
+    assert summary.trace_count == trace_count
+
+    filters = SearchFilters(
+        project=project_slug,
+        tool="Edit",
+        file_kind="tsx",
+        sort_order="relevance",
+    )
+    warmup = search_traces("site", filters, limit=limit)
+    assert len(warmup.hits) == limit
+    assert warmup.diagnostics.used_search_snapshot is True
+    assert warmup.diagnostics.raw_trace_scan is False
+    assert warmup.diagnostics.wrote_to_index is False
+    assert warmup.diagnostics.rebuilt_index is False
+    assert warmup.diagnostics.python_full_corpus_sort is False
+
+    durations_ms: list[float] = []
+    tracemalloc.start()
+    try:
+        for _ in range(12):
+            start = time.perf_counter()
+            page = search_traces("site", filters, limit=limit)
+            durations_ms.append((time.perf_counter() - start) * 1000)
+            assert len(page.hits) == limit
+            assert page.diagnostics.hydrated_count == 0
+            assert page.diagnostics.hits_returned == limit
+            assert page.diagnostics.rows_examined >= limit
+            assert page.diagnostics.raw_trace_scan is False
+            assert page.diagnostics.wrote_to_index is False
+            assert page.diagnostics.rebuilt_index is False
+            assert page.diagnostics.python_full_corpus_sort is False
+    finally:
+        _current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+    p95_ms = _p95_ms(durations_ms)
+    heap_peak_mb = peak / (1024 * 1024)
+    P95_BUDGET_MS = 80.0
+    HEAP_BUDGET_MB = 8.0
+    assert p95_ms < P95_BUDGET_MS, (
+        f"trace_query_snapshot_smoke p95: {p95_ms:.1f}ms > {P95_BUDGET_MS}ms"
+    )
+    assert heap_peak_mb < HEAP_BUDGET_MB, (
+        f"trace_query_snapshot_smoke heap: {heap_peak_mb:.2f}MB > {HEAP_BUDGET_MB}MB"
+    )
+    assert summary.path.stat().st_size == snapshot_size
+    assert not summary.path.with_name(summary.path.name + "-wal").exists()
+    assert not summary.path.with_name(summary.path.name + "-shm").exists()
+
+
+@pytest.mark.skip(reason="requires 10k-trace search snapshot fixture; run nightly")
+def test_bench_trace_query_snapshot_10k_traces() -> None:  # pragma: no cover
+    """Nightly variant: 10k traces, warm snapshot query p95 <500ms.
+
+    Reference shape when the large fixture is wired:
+
+    * build raw trace fixture
+    * run ``build_trace_search_snapshot()`` once
+    * warm up ``search_traces("site", filters, limit=20)``
+    * measure repeated ``search_traces`` calls only
+    * assert diagnostics keep raw scans, writes, rebuilds, and Python
+      full-corpus sorting false
+    * assert no ``search.sqlite-wal`` or ``search.sqlite-shm`` sidecars
     """
 
 

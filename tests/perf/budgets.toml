@@ -32,6 +32,12 @@ max_p50_ms = 250.0
 max_p95_ms = 250.0
 max_peak_rss_mb = 65.0
 
+[trace-query-smoke]
+max_cold_ms = 600.0
+max_p50_ms = 650.0
+max_p95_ms = 750.0
+max_peak_rss_mb = 80.0
+
 [tui-navigation-smoke]
 max_cold_ms = 1205.82
 max_p50_ms = 1205.82

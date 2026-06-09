@@ -68,6 +68,11 @@ def build_command_plan(base_dir: Path, home_dir: Path, scenario: PerfScenario) -
             metadata=metadata,
         )
     if scenario.target == "cli.trace_query":
+        from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
+
+        summary = build_trace_search_snapshot()
+        metadata["search_snapshot_trace_count"] = summary.trace_count
+        metadata["search_snapshot_size_bytes"] = summary.path.stat().st_size
         return CommandPlan(
             cmd=[
                 str(OTD),
@@ -77,7 +82,6 @@ def build_command_plan(base_dir: Path, home_dir: Path, scenario: PerfScenario) -
                 str(scenario.params.get("lex", "trace")),
                 "--limit",
                 str(scenario.params.get("limit", 20)),
-                "--force-rebuild",
                 "--json",
             ],
             cwd=fixture.project_dir,

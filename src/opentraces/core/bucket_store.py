@@ -307,6 +307,12 @@ def write_trace_record(
             "updated_at": envelope["written_at"],
         },
     )
+    try:
+        from .trace_search_state import mark_search_snapshot_dirty
+
+        mark_search_snapshot_dirty("trace_record_write", trace_id=normalized.trace_id)
+    except Exception:
+        pass
     return BucketTraceRecord(
         path=object_path,
         project_slug=project_slug,
@@ -2034,6 +2040,13 @@ def sync_trace_records_from_local_stores(
                     removed += 1
                 except FileNotFoundError:
                     pass
+    if removed:
+        try:
+            from .trace_search_state import mark_search_snapshot_dirty
+
+            mark_search_snapshot_dirty("trace_record_remove")
+        except Exception:
+            pass
     return BucketSyncSummary(
         root=root,
         written=written,

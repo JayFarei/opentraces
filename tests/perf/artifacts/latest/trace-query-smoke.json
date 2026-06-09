@@ -1,58 +1,100 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 350.901958,
+    "cold_ms": 315.423834,
     "extra": {},
     "max_rss_delta_mb": null,
-    "mean_ms": 423.73169433333334,
-    "p50_ms": 421.761708,
-    "p95_ms": 498.531417,
-    "peak_rss_mb": 57.203125,
+    "mean_ms": 322.0016252,
+    "p50_ms": 323.523792,
+    "p95_ms": 331.133333,
+    "peak_rss_mb": 59.296875,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 350.901958,
+        "duration_ms": 315.423834,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/claude-501/pytest-of-jayfarei/pytest-31/test_cli_perf_trace_query_smok0/trace-query-smoke/run-01/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-860/test_cli_perf_trace_query_smok0/trace-query-smoke/run-01/proj",
           "returncode": 0,
           "scenario": "trace-query-smoke",
-          "stdout_tail": "  \"limit\": 20,\n  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
+          "search_snapshot_size_bytes": 258048,
+          "search_snapshot_trace_count": 24,
+          "stdout_tail": "  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"sort\": \"relevance\",\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 55.53125,
+        "peak_rss_mb": 58.421875,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 421.761708,
+        "duration_ms": 314.228208,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/claude-501/pytest-of-jayfarei/pytest-31/test_cli_perf_trace_query_smok0/trace-query-smoke/run-02/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-860/test_cli_perf_trace_query_smok0/trace-query-smoke/run-02/proj",
           "returncode": 0,
           "scenario": "trace-query-smoke",
-          "stdout_tail": "  \"limit\": 20,\n  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
+          "search_snapshot_size_bytes": 258048,
+          "search_snapshot_trace_count": 24,
+          "stdout_tail": "  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"sort\": \"relevance\",\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 55.203125,
+        "peak_rss_mb": 58.5625,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 498.531417,
+        "duration_ms": 323.523792,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/claude-501/pytest-of-jayfarei/pytest-31/test_cli_perf_trace_query_smok0/trace-query-smoke/run-03/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-860/test_cli_perf_trace_query_smok0/trace-query-smoke/run-03/proj",
           "returncode": 0,
           "scenario": "trace-query-smoke",
-          "stdout_tail": "  \"limit\": 20,\n  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
+          "search_snapshot_size_bytes": 258048,
+          "search_snapshot_trace_count": 24,
+          "stdout_tail": "  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"sort\": \"relevance\",\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 57.203125,
+        "peak_rss_mb": 59.296875,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 325.698959,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-860/test_cli_perf_trace_query_smok0/trace-query-smoke/run-04/proj",
+          "returncode": 0,
+          "scenario": "trace-query-smoke",
+          "search_snapshot_size_bytes": 258048,
+          "search_snapshot_trace_count": 24,
+          "stdout_tail": "  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"sort\": \"relevance\",\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 58.90625,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 331.133333,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-860/test_cli_perf_trace_query_smok0/trace-query-smoke/run-05/proj",
+          "returncode": 0,
+          "scenario": "trace-query-smoke",
+          "search_snapshot_size_bytes": 258048,
+          "search_snapshot_trace_count": 24,
+          "stdout_tail": "  \"next_page_token\": \"offset:20\",\n  \"semantic_query\": null,\n  \"sort\": \"relevance\",\n  \"source\": \"index\",\n  \"status\": \"ok\",\n  \"total\": 24,\n  \"total_returned\": 20\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 58.21875,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
@@ -62,7 +104,12 @@
   },
   "scenario": {
     "adapter": "subprocess",
-    "budget": {},
+    "budget": {
+      "max_cold_ms": 600.0,
+      "max_p50_ms": 650.0,
+      "max_p95_ms": 750.0,
+      "max_peak_rss_mb": 80.0
+    },
     "domain": "cli",
     "fixture": "stack",
     "lane": "smoke",
@@ -71,7 +118,7 @@
       "lex": "trace",
       "limit": 20
     },
-    "repetitions": 3,
+    "repetitions": 5,
     "target": "cli.trace_query",
     "tier": "small",
     "warmups": 1

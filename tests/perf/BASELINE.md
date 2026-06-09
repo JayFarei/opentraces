@@ -23,7 +23,7 @@ Generated from `tests/perf/artifacts/latest/summary.json`.
 | inverse-blame-smoke | provenance-graph-blame | core | graph_api.load_inverse_blame | 25.00 | 25.62 | 25.10 | 94.09 | 0.82 | 0.34 | 250.00 |
 | scan-project-smoke | capture-refresh | watcher | ingest.scan_project | 248.27 | 254.90 | 254.90 | 190.22 | 0.58 | 0.05 | 500.00 |
 | status-smoke | cli-review-batch, onboarding-terminal | cli | cli.status | 184.32 | 187.80 | 184.24 | 50.47 | - | - | 250.00 |
-| trace-query-smoke | cli-review-batch | cli | cli.trace_query | 585.84 | 714.30 | 456.01 | 58.83 | - | - | - |
+| trace-query-smoke | cli-review-batch | cli | cli.trace_query | 404.65 | 410.28 | 404.65 | 58.97 | - | - | 600.00 |
 | tui-navigation-smoke | tui-review | tui | tui.navigation | 782.63 | 782.63 | 782.63 | 141.94 | 22.92 | 17.00 | 1205.82 |
 | tui-review-actions-smoke | tui-review | tui | tui.review_actions | 1505.88 | 1505.88 | 1505.88 | 183.58 | 36.73 | 21.25 | 2024.40 |
 | tui-startup-smoke | tui-review | tui | tui.startup | 153.64 | 153.64 | 153.64 | 190.05 | 13.34 | 4.98 | 250.00 |

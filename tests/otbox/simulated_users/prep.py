@@ -521,6 +521,32 @@ def _install_opentraces_hooks_in_box(box: Box, agent: str | None = "claude") -> 
     return None
 
 
+def _rebuild_trace_search_snapshot_in_box(box: Box) -> str | None:
+    """Run the explicit trace search maintenance command inside a box."""
+    from ..env import isolated_env
+
+    testvenv_cli = Path(box.project) / ".testvenv" / "bin" / "opentraces"
+    if not testvenv_cli.is_file():
+        return (
+            f"box CLI not found at {testvenv_cli} — checkpoint "
+            f"`c-installed-source` did not run?"
+        )
+    result = subprocess.run(
+        [str(testvenv_cli), "trace", "index"],
+        cwd=str(box.project),
+        env=isolated_env(box),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return (
+            f"opentraces trace index failed (rc={result.returncode}): "
+            f"{(result.stderr or result.stdout).strip()[:200]}"
+        )
+    return None
+
+
 __all__ = [
     "_agent_name",
     "_detect_binary_version",
@@ -530,6 +556,7 @@ __all__ = [
     "_prep_codex_project_trust",
     "_prep_claude_project_trust",
     "_install_opentraces_hooks_in_box",
+    "_rebuild_trace_search_snapshot_in_box",
     "_build_env_prefix",
     "_strip_codex_project_tables",
     "_toml_quote",
