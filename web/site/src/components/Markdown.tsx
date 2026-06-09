@@ -53,6 +53,15 @@ export default function Markdown({ content }: { content: string }) {
           pre({ children }) {
             return <>{children}</>;
           },
+          // Wrap tables so wide ones scroll within their column instead of
+          // forcing horizontal page overflow on mobile.
+          table({ children }) {
+            return (
+              <div className="docs-table-wrap">
+                <table>{children}</table>
+              </div>
+            );
+          },
         }}
       >
         {content}

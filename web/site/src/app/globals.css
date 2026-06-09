@@ -3759,6 +3759,13 @@ a:hover .openmake-mark {
   padding: 0;
   font-size: 12px;
 }
+/* Wide markdown tables scroll within their column instead of widening the
+   page on mobile (the wrapper is added by Markdown.tsx). */
+.docs-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: 20px;
+}
 .docs-content table {
   width: 100%;
   border-collapse: collapse;
@@ -3767,6 +3774,7 @@ a:hover .openmake-mark {
   margin-bottom: 20px;
   border: 1px solid var(--border);
 }
+.docs-table-wrap table { margin-bottom: 0; }
 .docs-content th {
   font-size: 10px;
   letter-spacing: 0.08em;
