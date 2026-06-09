@@ -1,0 +1,68 @@
+# otbox 2.0 PR lane (Phase 0 baseline).
+#
+# Phase 0 contract (kb: otbox-2.0-design.md §8): pytest + the otbox vertical slice run on
+# every PR and push to main. The `otbox-slice` job carries continue-on-error until
+# 2026-06-23 at the latest (14-day grace, tracked in the run log); the `unit` job is a
+# required check from day one. Later phases split this into gate-catalogue / unit /
+# otbox-sentinel with a 15-minute target.
+name: ci-pr
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            packages/opentraces-schema/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install -q -e packages/opentraces-schema -e ".[dev]"
+      - name: Git identity for test repos
+        run: |
+          git config --global user.email "otbox-ci@opentraces.local"
+          git config --global user.name "otbox-ci"
+          git config --global init.defaultBranch main
+      - name: Unit + integration tests (otbox excluded; heavy marks deselected)
+        run: |
+          python -m pytest tests/ --ignore=tests/otbox -q \
+            -m "not perf and not real_repl and not trail_real_repl and not user_smoke"
+
+  otbox-slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Phase 0 grace: must become a hard-required check by 2026-06-23 (run log tracks this).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            packages/opentraces-schema/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install -q -e packages/opentraces-schema -e ".[dev]"
+      - name: Git identity for test repos
+        run: |
+          git config --global user.email "otbox-ci@opentraces.local"
+          git config --global user.name "otbox-ci"
+          git config --global init.defaultBranch main
+      - name: otbox vertical slice
+        run: make otbox-slice
