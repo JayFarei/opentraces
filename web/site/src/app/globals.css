@@ -487,17 +487,24 @@ html { color-scheme: light; }
 /* Left column action stack: the CTA row defines the width, and the installs
    card matches it (same length, shared left edge). */
 .hero-cta-stack {
-  width: fit-content;
+  width: 100%;
   max-width: 480px;
 }
+/* Desktop experiment: the CTA row fills the full column (3:2 proportional),
+   matching the installs card width below it for vertical symmetry — the same
+   behavior the ≤680px breakpoint already applies on mobile. */
 .hero-cta {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-wrap: nowrap;
+  align-items: stretch;
   justify-content: flex-start;
+  width: 100%;
   gap: 12px;
   margin-bottom: 14px;
 }
+.hero-cta .cta-copy-prompt { flex: 3 1 auto; font-weight: 700; } /* match View Docs — a later .btn rule otherwise drops this to 500 */
+.hero-cta .cta-secondary { flex: 2 1 auto; justify-content: center; white-space: nowrap; }
+.hero-cta .cta-label { white-space: nowrap; }
 
 /* Copy Prompt — composes .btn .btn-primary (themes automatically), then
    reshapes to a pill with a fanning deck of agent glyphs + success flip. */
