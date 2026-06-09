@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { HubBootPulse } from "./HubBootPulse";
 
 // The Hub prototype is a fixed-desktop layout (260px sidebar, no narrow
 // breakpoints). Render it at a constant logical canvas and CSS-scale the whole
@@ -57,7 +58,20 @@ export default function HubWindow({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [scale, setScale] = useState(0);
   const [mounted, setMounted] = useState(!lazy);
+  // `loaded` = the iframe finished booting; `revealed` = the boot pulse has
+  // fully faded, so we hand off from poster → live iframe. Sequencing the two
+  // (instead of revealing on load) keeps the dots/blur from dissolving on top
+  // of the app appearing at the same time.
   const [loaded, setLoaded] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+
+  // Backstop: if the pulse never runs (e.g. it loaded before it could start),
+  // still reveal shortly after load so the iframe can never get stuck hidden.
+  useEffect(() => {
+    if (!loaded) return;
+    const t = setTimeout(() => setRevealed(true), 900);
+    return () => clearTimeout(t);
+  }, [loaded]);
   // Start from a constant that matches SSR (the site's light :root default) so
   // the poster src is identical on server + first client render — no hydration
   // mismatch. The theme-sync effect below swaps to the real theme after mount.
@@ -144,10 +158,10 @@ export default function HubWindow({
       >
         {/* Poster sits underneath: it is the loading state, and the mobile fallback. */}
         <img
-          className={`hub-window-poster${loaded && !tooNarrow ? " hidden" : ""}`}
+          className={`hub-window-poster${revealed && !tooNarrow ? " hidden" : ""}`}
           src={posterSrc}
           alt="OpenTraces Hub — workspace overview"
-          aria-hidden={loaded ? "true" : undefined}
+          aria-hidden={revealed ? "true" : undefined}
         />
 
         {tooNarrow && (
@@ -157,7 +171,7 @@ export default function HubWindow({
         {!tooNarrow && mounted && scale > 0 && (
           <iframe
             ref={iframeRef}
-            className={`hub-window-frame${loaded ? " loaded" : ""}`}
+            className={`hub-window-frame${revealed ? " loaded" : ""}`}
             src={src}
             title="OpenTraces Hub interactive preview"
             loading={lazy ? "lazy" : "eager"}
@@ -170,6 +184,14 @@ export default function HubWindow({
             }}
           />
         )}
+
+        {/* Dot-grid "materialize" pulse over the poster while the live iframe
+            boots on first load; eases out once it's loaded. */}
+        <HubBootPulse
+          active={mounted && scale > 0 && !tooNarrow && !loaded}
+          theme={theme}
+          onExited={() => setRevealed(true)}
+        />
 
         {clipHeight ? <div className="hub-window-fade" /> : null}
       </div>
