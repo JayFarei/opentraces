@@ -1,0 +1,83 @@
+# otbox catalogue quarantine — tracked, expiring debt (otbox 2.0 phase 2).
+#
+# Each entry is ONE decision: a family of journeys sharing one reason, one
+# issue, one expiry. Max 15 entries (lint-enforced). Expired entries hard-fail
+# the lint on every PR; entries naming unknown journeys hard-fail; widening
+# requires a reviewed diff to this file. NEVER quarantine to make a gate
+# green — quarantine records debt, it does not erase it.
+
+[[entries]]
+journeys = [
+  "bucket-compression-integrity-roundtrip",
+  "bucket-cross-machine-content-identity",
+  "bucket-events-mirror-replay-equals-git",
+  "bucket-manifest-v2-shape",
+  "bucket-prune-orphan-only",
+  "bucket-rebuild-context-tree-substrate",
+  "bucket-remote-sync-scope-per-trace",
+  "bucket-self-sufficient-context-tree-outcome-roundtrip",
+  "bucket-self-sufficient-everything",
+  "bucket-symmetric-local-remote",
+  "bucket-verify-detects-dangling",
+  "bucket-write-order-discipline-local",
+  "setup-bucket-migrates-old-layout",
+]
+rules = ["unregistered-checkpoint", "unknown-precondition"]
+reason = "bucket-spine-v2 checkpoint family (plan 080 phases B/C/D) never built; precondition keys await PRECONDITION_VOCAB widening + runtime probes (otbox 2.0 phase 4)"
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
+
+[[entries]]
+journeys = [
+  "context-tree-branching-fidelity",
+  "context-tree-capture-fidelity",
+  "context-tree-compaction-fidelity",
+  "context-tree-ctx-output-parity",
+  "context-tree-ctx-prune-no-clobber",
+  "context-tree-ctx-resolve-empty-state",
+  "context-tree-ctx-show-bounded-default",
+  "context-tree-demo-acceptance",
+  "context-tree-determinism",
+  "context-tree-fork-fidelity",
+  "context-tree-temporal-anchor-precision",
+]
+rules = ["unregistered-checkpoint", "unknown-precondition"]
+reason = "c-context-tree-substrate / c-rewound-session / c-compacted-session checkpoints deferred from plan 077 phase 4; build or delete by expiry"
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
+
+[[entries]]
+journeys = [
+  "ctx-info-head-shape",
+  "ctx-list-no-blob-loads",
+  "ctx-show-layer-blob-dedup-per-project",
+  "ctx-show-offline-fails",
+  "ctx-show-with-lazy-blob-fetch",
+]
+rules = ["unregistered-checkpoint", "unknown-precondition"]
+reason = "ctx blob journeys depend on the same unbuilt bucket-spine-v2 checkpoints"
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
+
+[[entries]]
+journeys = ["trail-mature-updates-patch-anchor"]
+rules = ["unknown-precondition"]
+reason = "declares precondition keys outside PRECONDITION_VOCAB; widen vocab with probe in phase 4 or re-spec the journey"
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
+
+[[entries]]
+journeys = [
+  "pi-skill-detection-parity",
+  "pi-tool-bash-detection-parity",
+  "web-viewer-smoke",
+]
+rules = ["baseline-red"]
+reason = "tier-0 journeys that FAIL on a fresh environment (verified pre-existing via stash A/B on the unmodified runner, 2026-06-09); fix the journeys or their worlds — green wall must not be machine-dependent"
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08

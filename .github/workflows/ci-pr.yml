@@ -64,5 +64,9 @@ jobs:
           git config --global user.email "otbox-ci@opentraces.local"
           git config --global user.name "otbox-ci"
           git config --global init.defaultBranch main
+      - name: Catalogue lint + assertion-registry contract
+        run: |
+          python -m pytest tests/otbox/test_catalogue_lint.py \
+            tests/otbox/test_journey_assertions.py -q
       - name: otbox vertical slice
         run: make otbox-slice
