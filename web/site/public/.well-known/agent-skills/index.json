@@ -6,7 +6,7 @@
       "type": "skill",
       "description": "Share agent traces to open datasets on HuggingFace Hub. Use this skill when the user mentions OpenTraces, trace capture, Trace Trails, workflow-built datasets, dataset review, or publishing reviewed dataset rows.",
       "url": "https://opentraces.ai/.well-known/agent-skills/opentraces/SKILL.md",
-      "sha256": "d0fd143273975d55890c9a8156ed399dabb3bbfaac33f164d6b30a5683eacedf"
+      "sha256": "d9ee25f058d6b33853327e8f4c5dc04855cdb646f0fe3a66461efec7cdb6c9e8"
     }
   ]
 }

@@ -52,29 +52,32 @@ function Topbar({ workspace, project, traceShortId, onBack, theme, onToggleTheme
   );
 }
 
-// Easter egg: hovering Jay's avatar opens a little iMessage-style chat where he
-// "types" a note inviting you to reach out. Self-contained — no props, no global
-// state. Dismisses a beat after the pointer leaves, and instantly on any scroll.
+// Easter egg: hovering or clicking Jay's avatar opens a little iMessage-style
+// chat where he "types" a note inviting you to reach out. Self-contained — no
+// props, no global state. Once open it stays out (it no longer dismisses on
+// mouse-leave); clicking away closes it instantly, scrolling away closes it
+// after a short timeout.
 function AvatarChat() {
   const [open, setOpen] = React.useState(false);
   // How many of the three messages have landed (0–3), and whether the typing
   // indicator is currently showing while Jay "composes" the next one.
   const [revealed, setRevealed] = React.useState(0);
   const [typing, setTyping] = React.useState(true);
-  const leaveTimer = React.useRef(null);
+  const scrollTimer = React.useRef(null);
   const seqTimers = React.useRef([]);
+  const wrapRef = React.useRef(null);
 
   const clearSeq = () => {
     seqTimers.current.forEach(clearTimeout);
     seqTimers.current = [];
   };
   const clearTimers = () => {
-    if (leaveTimer.current) { clearTimeout(leaveTimer.current); leaveTimer.current = null; }
+    if (scrollTimer.current) { clearTimeout(scrollTimer.current); scrollTimer.current = null; }
     clearSeq();
   };
 
   const show = () => {
-    if (leaveTimer.current) { clearTimeout(leaveTimer.current); leaveTimer.current = null; }
+    if (scrollTimer.current) { clearTimeout(scrollTimer.current); scrollTimer.current = null; }
     if (open) return;
     setRevealed(0);
     setTyping(true);
@@ -87,21 +90,28 @@ function AvatarChat() {
     at(2240, () => { setRevealed(3); setTyping(false); });
   };
 
-  const hide = (immediate) => {
+  const hide = () => {
     clearTimers();
-    if (immediate) { setOpen(false); return; }
-    // small grace so a quick wobble between avatar and bubble doesn't dismiss it
-    leaveTimer.current = setTimeout(() => setOpen(false), 380);
+    setOpen(false);
   };
 
-  // Dismiss the instant the user scrolls anywhere (capture catches the scroll
+  // While open: click anywhere outside the popup closes it instantly; scrolling
+  // away closes it after a short grace timeout (capture catches the scroll
   // container too, since scroll events don't bubble).
   React.useEffect(() => {
     if (!open) return;
-    const onScroll = () => hide(true);
+    const onPointerDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) hide();
+    };
+    const onScroll = () => {
+      if (scrollTimer.current) return;
+      scrollTimer.current = setTimeout(() => { scrollTimer.current = null; hide(); }, 600);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("scroll", onScroll, true);
     window.addEventListener("scroll", onScroll, true);
     return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("scroll", onScroll, true);
     };
@@ -115,12 +125,11 @@ function AvatarChat() {
   return (
     <div
       className="tb-avatar-wrap"
+      ref={wrapRef}
       onMouseEnter={show}
-      onMouseLeave={() => hide(false)}
       onFocus={show}
-      onBlur={() => hide(false)}
     >
-      <button className="tb-avatar" aria-label="Account · Jay Farei" title="Jay Farei">
+      <button className="tb-avatar" aria-label="Account · Jay Farei" title="Jay Farei" onClick={show}>
         <img src="assets/avatar-jf.png" alt="Jay Farei" width="32" height="32" draggable="false" />
       </button>
 
