@@ -1959,7 +1959,10 @@ tr:hover td { background: var(--surface-hover); }
 }
 .pipe-after-row { display: flex; align-items: flex-start; justify-content: center; }
 .pipe-after-row .pipe-station { flex: 0 0 auto; padding: 0 10px; }
-.pipe-session-flow > .pipe-station-arrow { padding-top: 17px; }
+/* margin (not padding): the arrow has a fixed 28px border-box, so padding
+   would compress the glyph inside the box instead of offsetting the box down
+   to the icon row — leaving the cross arrow 17px high vs the other arrows. */
+.pipe-session-flow > .pipe-station-arrow { margin-top: 17px; }
 /* commit tree under the anchor: the session's commits don't stop there */
 .pipe-commit-block { display: flex; flex-direction: column; gap: 7px; }
 .pipe-commit-row { display: flex; align-items: center; gap: 10px; }
@@ -2741,7 +2744,7 @@ tr:hover td { background: var(--surface-hover); }
     margin: 2px 0;
     font-size: 11px;
   }
-  .pipe-session-flow > .pipe-station-arrow { padding-top: 0; }
+  .pipe-session-flow > .pipe-station-arrow { margin-top: 2px; }
 
   /* drop the desktop-only detail visuals: trace strip + legend, commit graph */
   .pipe-trace-block,
