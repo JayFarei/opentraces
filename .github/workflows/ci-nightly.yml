@@ -1,0 +1,56 @@
+# otbox 2.0 nightly lane (phase 3, honest v1).
+#
+# Runs the FULL tier-0 journey matrix with real-agent artifacts fetched from
+# the otbox-captures release (hash mismatch = hard fail, never fallback).
+# Cron only fires from the default branch — this workflow proves itself
+# post-merge; until then workflow_dispatch is the manual trigger.
+#
+# v1 scope (deltas tracked in the run log): junit XML is the run evidence
+# artifact; the run-ledger compactor and the in-run SKIP-fails rule land in
+# the next phase-3 increments.
+name: ci-nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            packages/opentraces-schema/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install -q -e packages/opentraces-schema -e ".[dev]"
+      - name: Git identity for test repos
+        run: |
+          git config --global user.email "otbox-ci@opentraces.local"
+          git config --global user.name "otbox-ci"
+          git config --global init.defaultBranch main
+      - name: Fetch real-agent capture artifacts (hash-pinned)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./otbox fetch-captures
+      - name: Full tier-0 journey matrix (artifact-preferred)
+        env:
+          OT_OTBOX_FETCH_CAPTURES: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m pytest tests/otbox -q \
+            --junitxml=otbox-nightly-junit.xml
+      - name: Upload run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: otbox-nightly-evidence
+          path: otbox-nightly-junit.xml
+          retention-days: 30
