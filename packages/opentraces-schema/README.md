@@ -60,7 +60,7 @@ Every version of the schema ships with a rationale document explaining why each
 model and field exists, grounded in public standards (ATIF, Agent Trace, ADP, OTel)
 and empirical observations from real agent traces.
 
-The current rationale is [RATIONALE-0.6.0.md](RATIONALE-0.6.0.md). Each version
+The current rationale is [RATIONALE-0.7.0.md](RATIONALE-0.7.0.md). Each version
 has its own rationale file linked from the [CHANGELOG](CHANGELOG.md).
 
 ## Contributing
@@ -82,7 +82,8 @@ for details.
 - [CHANGELOG.md](CHANGELOG.md) - What changed in each version
 - [VERSION-POLICY.md](VERSION-POLICY.md) - What version numbers mean for a schema package
 - [FIELD-MAPPINGS.md](FIELD-MAPPINGS.md) - Field maps to ATIF, ADP, and OTel GenAI
-- [RATIONALE-0.6.0.md](RATIONALE-0.6.0.md) - Current rationale for v0.6.0
+- [RATIONALE-0.7.0.md](RATIONALE-0.7.0.md) - Current rationale for v0.7.0 (dataset security policy)
+- [RATIONALE-0.6.0.md](RATIONALE-0.6.0.md) - Trace patch spine rationale
 - [RATIONALE-0.5.0.md](RATIONALE-0.5.0.md) - Context Tree cross-reference rationale
 - [RATIONALE-0.4.0.md](RATIONALE-0.4.0.md) - Dataset/workflow and trace-index rationale
 - [RATIONALE-0.3.0.md](RATIONALE-0.3.0.md) - Rationale for v0.3.0

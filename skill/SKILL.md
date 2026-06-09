@@ -399,14 +399,20 @@ machine-wide bucket egress over global tool flags, applied before private bucket
 sync. **Dataset security** is per-dataset: each dataset's manifest carries a
 resolved policy seeded from its workflow's front-matter `security:` contract
 (`required_tools`, `optional_tools`, `default_enabled_tools`, `disallowed_tools`,
-`allow_disable_required`) and pinned to the workflow digest. Manage it with
+`allow_disable_required`) and pinned to the workflow digest. A dataset contract
+may only reference row-applicable tools (`regex`, `entropy`, `privacy_filter`,
+`business_logic`, `path_anonymizer`); `trufflehog`, `llm_pii`, `capsule_scope`,
+and `classifier` run on full records, not row dicts, so a contract listing them
+is rejected at `dataset new`. Manage it with
 `opentraces dataset security <name>`: inspect the policy, toggle an optional tool
 on that dataset only (`--tool <t> --enable|--disable`, repeatable), and disable a
 required tool only when the contract sets `allow_disable_required: true` AND you
 pass `--unsafe-override` (else the command exits 2). It edits only that dataset's
 manifest; it is not a global config toggle and there is no `--policy` form on the
-dataset command. Required tools must run for rows to publish: `dataset publish
---check-only` blocks rows missing them (`required_security_tools_missing`).
+dataset command. The publish gate is keyed on execution evidence: `dataset
+publish --check-only` blocks a row whose recorded `tools_applied` is missing a
+required tool (`required_security_tools_missing`), so a row appended while a
+required tool was off stays blocked even after the tool is re-enabled.
 `security sanitize --tools ...` / `--use-config` stays available for inline
 sanitization inside workflows and scripts.
 

@@ -1384,6 +1384,14 @@ Policy bundles:
 | `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
 | `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
 
+Bucket security flags are machine-global (the same `cfg.security.<tool>.enabled`
+flags capture-time sanitization reads), so applying a policy can turn OFF a tool
+you enabled for another purpose; the CLI prints a warning naming any tool it
+disables. When `setup bucket` runs non-interactively (for example with `--json`,
+in CI, or any non-TTY), it applies the `recommended` policy by default so a
+remote-syncing private bucket is never left with zero redaction; pass explicit
+`--enable-security-tool` / `--disable-security-tool` flags to override.
+
 ## Cleanup
 
 ```bash
@@ -1819,7 +1827,7 @@ A workflow declares the security posture of the rows it projects in its
 ```yaml
 security:
   required_tools: [regex, entropy]
-  optional_tools: [business_logic, path_anonymizer, classifier]
+  optional_tools: [business_logic, path_anonymizer]
   default_enabled_tools: [business_logic]
   disallowed_tools: []
   allow_disable_required: false
@@ -1833,9 +1841,12 @@ security:
 | `disallowed_tools` | Never run |
 | `allow_disable_required` | Whether a downstream dataset may disable a required tool at all |
 
-Tool names come from the security tool registry (`regex`, `entropy`,
-`trufflehog`, `privacy_filter`, `llm_pii`, `business_logic`, `path_anonymizer`,
-`capsule_scope`, `classifier`). Unknown tools are rejected.
+A dataset security contract may only reference the tools that can actually run
+over a projected row: `regex`, `entropy`, `privacy_filter`, `business_logic`,
+and `path_anonymizer`. The remaining registry tools (`trufflehog`, `llm_pii`,
+`capsule_scope`, `classifier`) operate on full `TraceRecord` structure and
+cannot sanitize a row dict, so a contract that lists them is rejected at
+`opentraces dataset new`. Unknown tool names are also rejected.
 
 When you bind a workflow to a dataset with `opentraces dataset new --workflow
 <path>`, this contract seeds the dataset's resolved manifest policy and is
@@ -2095,9 +2106,13 @@ opentraces dataset publish my-dataset --check-only
 `dataset publish --check-only` also blocks any row that does not satisfy the
 dataset's required security tools (block reason
 `required_security_tools_missing`), alongside the existing review,
-security-version, and privacy gates. The dataset's required tools come from its
-manifest policy; inspect or adjust them with `opentraces dataset security
-<name>`.
+security-version, and privacy gates. This check is keyed on per-row execution
+evidence: each row records the tools that actually ran over it
+(`tools_applied`, in row provenance), and the gate blocks the row if that set
+does not cover the required tools. So a row appended while a required tool was
+disabled stays blocked even if the tool is re-enabled afterward. The dataset's
+required tools come from its manifest policy; inspect or adjust them with
+`opentraces dataset security <name>`.
 
 Rows without an approval state are filtered out. Gate failures surface in the
 CLI output and, in JSON mode, in the publication payload.

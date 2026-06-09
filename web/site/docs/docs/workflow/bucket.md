@@ -128,6 +128,14 @@ Policy bundles:
 | `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
 | `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
 
+Bucket security flags are machine-global (the same `cfg.security.<tool>.enabled`
+flags capture-time sanitization reads), so applying a policy can turn OFF a tool
+you enabled for another purpose; the CLI prints a warning naming any tool it
+disables. When `setup bucket` runs non-interactively (for example with `--json`,
+in CI, or any non-TTY), it applies the `recommended` policy by default so a
+remote-syncing private bucket is never left with zero redaction; pass explicit
+`--enable-security-tool` / `--disable-security-tool` flags to override.
+
 ## Cleanup
 
 ```bash

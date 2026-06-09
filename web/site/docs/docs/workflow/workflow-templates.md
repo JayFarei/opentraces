@@ -104,7 +104,7 @@ A workflow declares the security posture of the rows it projects in its
 ```yaml
 security:
   required_tools: [regex, entropy]
-  optional_tools: [business_logic, path_anonymizer, classifier]
+  optional_tools: [business_logic, path_anonymizer]
   default_enabled_tools: [business_logic]
   disallowed_tools: []
   allow_disable_required: false
@@ -118,9 +118,12 @@ security:
 | `disallowed_tools` | Never run |
 | `allow_disable_required` | Whether a downstream dataset may disable a required tool at all |
 
-Tool names come from the security tool registry (`regex`, `entropy`,
-`trufflehog`, `privacy_filter`, `llm_pii`, `business_logic`, `path_anonymizer`,
-`capsule_scope`, `classifier`). Unknown tools are rejected.
+A dataset security contract may only reference the tools that can actually run
+over a projected row: `regex`, `entropy`, `privacy_filter`, `business_logic`,
+and `path_anonymizer`. The remaining registry tools (`trufflehog`, `llm_pii`,
+`capsule_scope`, `classifier`) operate on full `TraceRecord` structure and
+cannot sanitize a row dict, so a contract that lists them is rejected at
+`opentraces dataset new`. Unknown tool names are also rejected.
 
 When you bind a workflow to a dataset with `opentraces dataset new --workflow
 <path>`, this contract seeds the dataset's resolved manifest policy and is
