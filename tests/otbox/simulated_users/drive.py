@@ -220,6 +220,31 @@ def _dismiss_claude_startup_dialogs(session: str, *, timeout_s: float = 10.0) ->
     return dismissed
 
 
+def _dismiss_pi_startup_dialogs(session: str, *, timeout_s: float = 10.0) -> bool:
+    """Clear pi's blocking startup dialogs before turn 0.
+
+    pi >= 0.79 shows a "Trust project folder?" selector on a fresh HOME
+    (highlighted default: Trust); anything typed into it vanishes, so the
+    turn-0 prompt was swallowed and the capture timed out (the
+    pi-linear-edit regeneration FAIL that surfaced this). Select the
+    highlighted default, as a real user does. Sibling of
+    ``_dismiss_claude_startup_dialogs`` / ``_dismiss_codex_hooks``.
+    """
+    dismissed = False
+    deadline = time.monotonic() + max(0.1, timeout_s)
+    while time.monotonic() < deadline:
+        lower = _tc_show(session).lower()
+        if "trust project folder?" in lower:
+            _tc_key(session, "enter")
+            dismissed = True
+            time.sleep(1.5)
+            continue
+        if dismissed:
+            return True
+        time.sleep(0.3)
+    return dismissed
+
+
 def _tc_mark(session: str, marker: str, markers: list[str]) -> None:
     """Add a navigable marker, recording its name for the result."""
     try:
@@ -600,9 +625,28 @@ def drive_session(
                 if _dismiss_claude_startup_dialogs(session):
                     _tc_mark(session, "claude-dialogs-dismissed", markers)
 
+            # pi >= 0.79 shows a "Trust project folder?" selector on a fresh
+            # HOME; select the default or turn 0 is swallowed. After the
+            # dismissal pi keeps initializing (tool downloads, changelog
+            # paint), so re-settle before turn 0 or the submit keypress is
+            # lost in the repaint.
+            if normalized == "pi":
+                if _dismiss_pi_startup_dialogs(session):
+                    _tc_mark(session, "pi-dialogs-dismissed", markers)
+                    _await_ready(session, budget_s=6.0)
+
             for turn_idx, turn in enumerate(turns):
                 _tc_mark(session, f"turn-{turn_idx}-prompt", markers)
                 _tc_send_prompt(session, turn.prompt)
+                if normalized == "pi":
+                    # pi 0.79 reworked its keyboard-protocol enter handling
+                    # (response-driven Kitty fallback); the submit enter can
+                    # be dropped while the editor initializes, leaving the
+                    # prompt sitting unsent in the input box. Nudge once —
+                    # if the first enter DID submit, this is an empty-input
+                    # no-op.
+                    time.sleep(2.0)
+                    _tc_key(session, "enter")
 
                 pattern = re.compile(turn.expect_regex, re.IGNORECASE)
                 turn_started = time.monotonic()

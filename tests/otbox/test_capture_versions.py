@@ -141,6 +141,27 @@ def test_format_report_names_the_remedy(tmp_path):
     assert "make capture-refresh SCENARIO=codex-linear-edit" in text
 
 
+def test_detect_binary_version_reads_stderr(tmp_path):
+    """pi writes its version line to STDERR with exit 0; the probe must
+    fall back to stderr or an installed pi reports as binary_absent (and
+    capture-time provenance stamps an empty binary_version)."""
+    import os
+
+    from tests.otbox.simulated_users.prep import _detect_binary_version
+
+    stderr_bin = tmp_path / "fake-pi"
+    stderr_bin.write_text("#!/bin/sh\necho '0.79.0' 1>&2\n", encoding="utf-8")
+    os.chmod(stderr_bin, 0o755)
+    assert _detect_binary_version(str(stderr_bin)) == "0.79.0"
+
+    stdout_bin = tmp_path / "fake-claude"
+    stdout_bin.write_text(
+        "#!/bin/sh\necho '2.1.170 (Claude Code)'\n", encoding="utf-8"
+    )
+    os.chmod(stdout_bin, 0o755)
+    assert _detect_binary_version(str(stdout_bin)) == "2.1.170 (Claude Code)"
+
+
 def test_real_manifest_check_runs_clean():
     """Against the committed manifest with the probe stubbed out: every row
     must land in a known status and the envelope shape must hold (the CLI

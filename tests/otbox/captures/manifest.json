@@ -212,23 +212,23 @@
     {
       "agent": "pi",
       "base_checkpoint": "c-installed-source",
-      "binary_version": "",
-      "captured_at": "2026-06-05T12:49:06.111214+00:00",
-      "metadata_sha256": "a15f2fb71e27a20e87d834cdf61904792a2f91d998aa766c243e75b79870f19a",
+      "binary_version": "0.79.0",
+      "captured_at": "2026-06-10T14:48:59.725255+00:00",
+      "metadata_sha256": "ed892618de5af24267189b50ad209d5d22f3e346a91c88f1f80b4258680fd2c9",
       "scenario": "pi-linear-edit",
-      "snapshot_sha256": "06365a15c5a38fa42eaf6d09baa347315c1c4c6135b7c96616b141adeb98d614",
-      "snapshot_size_bytes": 6170248,
+      "snapshot_sha256": "4bd322ff93ad141194b0df6eb2cae8586fd2d3dc5c0d3f90dd59ed2a0eb33bee",
+      "snapshot_size_bytes": 5936860,
       "source": "real-agent"
     },
     {
       "agent": "pi",
       "base_checkpoint": "c-installed-source",
-      "binary_version": "",
-      "captured_at": "2026-06-04T13:44:52.625318+00:00",
-      "metadata_sha256": "69278021e028c2539fc3376c28f94f543b67124c2e7676ccd7c9b9a53da89c0b",
+      "binary_version": "0.79.0",
+      "captured_at": "2026-06-10T14:51:32.530730+00:00",
+      "metadata_sha256": "ca4c1f2b420bae91e438402a90eed2840065601a7d938dbe9cb6b06907ee2e8d",
       "scenario": "pi-readonly-search",
-      "snapshot_sha256": "8560ff0e9bd5592707be7201f53833dbcc7f1d36b11083354b0a1e38835d3056",
-      "snapshot_size_bytes": 4111854,
+      "snapshot_sha256": "7f14623574b110ebfa0e5e90e3c5320ad825766dc427ad0fb9a56940768013e1",
+      "snapshot_size_bytes": 5880102,
       "source": "real-agent"
     },
     {
@@ -243,7 +243,7 @@
       "source": "real-agent"
     }
   ],
-  "generated_at": "2026-06-10T12:39:28.131607+00:00",
+  "generated_at": "2026-06-10T14:52:34.202706+00:00",
   "release_tag": "otbox-captures-v1",
   "schema_version": "otbox.captures_manifest.v1"
 }
