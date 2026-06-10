@@ -50,7 +50,7 @@ from .capture_limitations import (
     CONCURRENT_WRITER_OVERLAP,
     UNBOUNDED_MUTATION_WINDOW,
 )
-from .event_log import append_event_batch, read_events
+from .event_log import append_event_batch, read_events, read_events_scoped
 from .ids import (
     SNAPSHOT_CANONICALIZATION,
     TRACE_PATCH_CANONICALIZATION,
@@ -59,6 +59,23 @@ from .ids import (
     trace_snapshot_ref,
 )
 from .models import TrailEvent, TrailEventDraft, sha256_text
+
+# The reconciler only ever consumes these five event types (see
+# ``_index_events``). Reading the scoped slice instead of the whole log keeps
+# the watcher daemon's per-tick RSS bounded to a tiny fraction of the event log
+# (#45) — the daemon never exits, so a full-log materialisation per tick
+# compounds. No ``commit_filter``: none of these types is commit-keyed, so all
+# five are kept in full and ordering matches a full ``read_events`` (the scoped
+# reader sorts by ``event_sequence``).
+_RECONCILER_EVENT_TYPES = frozenset(
+    {
+        "filesystem_mutation_observed",
+        "trace_step_window_opened",
+        "trace_step_window_closed",
+        "trace_patch_created",
+        "watcher_observation_attributed",
+    }
+)
 
 RECONCILER_CAPTURE_METHOD = ["watcher_backstop"]
 RECONCILER_WRITER = "watcher-reconciler"
@@ -595,7 +612,7 @@ def reconcile_watcher_observations(
     """
     repo = repo.resolve()
     with _reconciler_lock(repo):
-        events = read_events(repo)
+        events = read_events_scoped(repo, event_types=set(_RECONCILER_EVENT_TYPES))
         index = _index_events(events)
 
         drafts: list[TrailEventDraft] = []

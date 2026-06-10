@@ -231,3 +231,175 @@ def test_gate_treats_anchored_pair_without_search_record_as_satisfied(tmp_path):
     # The (patch, HEAD) pair is anchored, so the gate must NOT report it as
     # unsearched even though no search record exists.
     assert has_unsearched_recent_patches(p) is False
+
+
+# --------------------------------------------------------------------------- #
+# #45 — per-tick cache invalidation + RSS backstop.
+# --------------------------------------------------------------------------- #
+
+
+def test_run_once_drops_read_events_cache_for_repo(tmp_path):
+    """After a tick the daemon must hold NO parsed-event memo for that repo, so
+    the long-lived daemon's RSS floor is not the largest repo's full parsed log
+    held alive across ticks (#45 part 2c)."""
+    import opentraces.core.trails.event_log as event_log
+
+    p = _init_project(tmp_path / "proj")
+    # Warm-up tick populates and (per the finally) clears the cache.
+    _wd.run_once(p)
+
+    repo_key = str(Path(p).resolve())
+    leftover = [k for k in event_log._READ_EVENTS_CACHE if k[0] == repo_key]
+    assert leftover == [], (
+        "run_once must invalidate the read_events cache for the ticked repo "
+        f"(found {leftover})"
+    )
+
+
+def test_run_forever_rss_backstop_reexecs_after_sweep(tmp_path, monkeypatch):
+    """When CURRENT RSS breaches OT_WATCHER_MAX_RSS_MB the service loop must
+    re-exec ONCE, only AFTER the sweep (never mid-tick), preserving argv +
+    interval (#45 part 3)."""
+    p = _init_project(tmp_path / "proj")
+
+    monkeypatch.setenv("OT_WATCHER_MAX_RSS_MB", "1")
+    # Report a huge current RSS so the backstop trips on the first check.
+    monkeypatch.setattr(_wd, "_current_rss_mb", lambda: 999_999.0)
+
+    events: list[str] = []
+
+    real_run_once = _wd.run_once
+
+    def _tracking_run_once(project_cwd, **kwargs):
+        events.append(f"tick:{Path(project_cwd).name}")
+        return real_run_once(project_cwd, **kwargs)
+
+    monkeypatch.setattr(_wd, "run_once", _tracking_run_once)
+
+    class _ReExec(Exception):
+        pass
+
+    recorded = {}
+
+    def _fake_execv(path, argv):
+        recorded["path"] = path
+        recorded["argv"] = list(argv)
+        events.append("reexec")
+        raise _ReExec()  # break the otherwise-infinite service loop
+
+    monkeypatch.setattr(_wd.os, "execv", _fake_execv)
+    # Make a stray sleep loud rather than silently hanging the test.
+    monkeypatch.setattr(_wd.time, "sleep", lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("re-exec must happen before sleep")))
+
+    import pytest
+
+    with pytest.raises(_ReExec):
+        _wd.run_forever(interval=300, projects=[p])
+
+    # The tick ran, THEN the re-exec — never the reverse, never mid-tick.
+    assert events == [f"tick:{p.name}", "reexec"], events
+    # argv preserves the run-forever entrypoint + the interval.
+    assert recorded["path"] == _wd.sys.executable
+    assert recorded["argv"][:4] == [
+        _wd.sys.executable, "-m", "opentraces.watcher.daemon", "run-forever",
+    ]
+    assert "--interval" in recorded["argv"]
+    i = recorded["argv"].index("--interval")
+    assert recorded["argv"][i + 1] == "300"
+
+
+def test_run_forever_no_reexec_below_ceiling(tmp_path, monkeypatch):
+    """Below the ceiling the loop must NOT re-exec — it sleeps and continues."""
+    p = _init_project(tmp_path / "proj")
+    monkeypatch.setenv("OT_WATCHER_MAX_RSS_MB", "4096")
+    monkeypatch.setattr(_wd, "_current_rss_mb", lambda: 10.0)
+    monkeypatch.setattr(_wd, "run_once", lambda *a, **k: None)
+
+    def _no_execv(*a, **k):
+        raise AssertionError("must not re-exec below the RSS ceiling")
+
+    monkeypatch.setattr(_wd.os, "execv", _no_execv)
+
+    class _Stop(Exception):
+        pass
+
+    def _stop_sleep(*_a, **_k):
+        raise _Stop()  # break the loop after one clean sweep
+
+    monkeypatch.setattr(_wd.time, "sleep", _stop_sleep)
+
+    import pytest
+
+    with pytest.raises(_Stop):
+        _wd.run_forever(interval=300, projects=[p])
+
+
+# --------------------------------------------------------------------------- #
+# #45 — memory-bound proof (env-gated, NOT default CI; like the perf suites).
+#
+# Run ``run_once`` against a /tmp copy of a large real event-log repo in a fresh
+# subprocess and assert ru_maxrss stays bounded. Before #45 the daemon path
+# materialised the full parsed log (two graphs on a cache-flag alternation) —
+# ~318MB+ on the kb corpus, extrapolating to ~8.5GB on the main repo. With
+# scoped reads + per-tick invalidation the floor is a fraction of that.
+#
+# Gated behind OT_WATCHER_MEM_PROOF=1 AND OT_WATCHER_MEM_PROOF_REPO=<path to a
+# real git repo carrying refs/opentraces/local/events/v1>. Skips otherwise.
+# --------------------------------------------------------------------------- #
+
+
+def test_run_once_memory_bound_on_large_corpus(tmp_path):
+    import os as _os
+
+    if _os.environ.get("OT_WATCHER_MEM_PROOF") != "1":
+        import pytest
+        pytest.skip("set OT_WATCHER_MEM_PROOF=1 to run the memory-bound proof")
+
+    src_repo = _os.environ.get("OT_WATCHER_MEM_PROOF_REPO")
+    if not src_repo or not Path(src_repo).is_dir():
+        import pytest
+        pytest.skip("set OT_WATCHER_MEM_PROOF_REPO to a large event-log repo")
+
+    max_mb = float(_os.environ.get("OT_WATCHER_MEM_PROOF_MAX_MB", "500"))
+
+    # Copy the source .git to /tmp so we never reconcile against a live repo.
+    work = tmp_path / "corpus"
+    work.mkdir()
+    subprocess.check_call(
+        ["git", "clone", "--mirror", str(src_repo), str(work / ".git")],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    # Convert the bare mirror into a normal worktree skeleton enough for a tick.
+    subprocess.check_call(
+        ["git", "-C", str(work), "config", "core.bare", "false"]
+    )
+    subprocess.check_call(
+        ["git", "-C", str(work), "checkout", "-f"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    (work / ".opentraces.json").write_text(json.dumps(
+        {"project_id": uuid.uuid4().hex, "policy": {}}
+    ))
+
+    # Run run_once in a fresh subprocess and read its peak RSS (ru_maxrss).
+    driver = (
+        "import resource, sys, json\n"
+        "from pathlib import Path\n"
+        "from opentraces.watcher import daemon as d\n"
+        f"d.run_once(Path({str(work)!r}))\n"
+        "peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+        "import platform\n"
+        # macOS reports bytes, Linux KiB.
+        "mb = peak / (1024*1024) if platform.system()=='Darwin' else peak/1024\n"
+        "print(json.dumps({'peak_mb': mb}))\n"
+    )
+    env = dict(_os.environ)
+    out = subprocess.check_output(
+        [_wd.sys.executable, "-c", driver], env=env, text=True
+    )
+    peak_mb = json.loads(out.strip().splitlines()[-1])["peak_mb"]
+    assert peak_mb < max_mb, (
+        f"run_once peak RSS {peak_mb:.0f}MB exceeded the {max_mb:.0f}MB ceiling "
+        "— the daemon path is materialising the full parsed log again (#45)"
+    )

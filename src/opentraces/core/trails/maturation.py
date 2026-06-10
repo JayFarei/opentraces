@@ -152,8 +152,27 @@ def has_unsearched_recent_patches(
         if state is not None:
             _save_maturation_watermark(repo, state)
         return False
+    # #45: scope the gate's whole-log read to exactly the slice mature_trails
+    # reads (:72-84). The gate never inspects any other event type, and the
+    # watcher daemon calls it on every quiet tick that misses the watermark, so
+    # a full-log materialisation here is the same unbounded per-tick RSS cost
+    # Bug B closed on the hook path. ``trace_patch_created`` carries no
+    # commit_filter (kept in full for the patch_ids set); the two anchor/search
+    # types are commit-keyed to the candidate commits, mirroring mature_trails.
     try:
-        events = read_events(repo, verify=False)
+        events = read_events_scoped(
+            repo,
+            event_types={
+                "trace_patch_created",
+                "git_anchor_created",
+                "git_anchor_search_completed",
+            },
+            commit_filter={
+                "git_anchor_created": "commit_id",
+                "git_anchor_search_completed": "search_head",
+            },
+            commit_shas=set(commits),
+        )
     except Exception:
         return False
     patch_ids = {

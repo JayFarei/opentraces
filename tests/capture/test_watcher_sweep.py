@@ -416,3 +416,181 @@ class TestWatcherSweep:
         assert report.sessions_new_generations == 0
         assert report.sessions_noops == 3
         assert report.sessions_errored == 0
+
+
+class TestGateScopedRead:
+    """#45: ``has_unsearched_recent_patches`` reads the scoped anchor/search/patch
+    slice (mature_trails' slice), never the whole event log. The gate runs on
+    every quiet tick that misses the maturation watermark, so a full-log read
+    here is the same unbounded per-tick RSS cost Bug B closed on the hook path.
+    """
+
+    def _commit(self, repo: Path, name: str, body: str) -> str:
+        (repo / name).write_text(body)
+        _git("add", "-A", cwd=repo)
+        _git("commit", "-q", "-m", f"c-{name}", cwd=repo)
+        return subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+
+    def _emit_patch(self, repo: Path, patch_id: str) -> None:
+        append_event_batch(
+            repo,
+            [TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-gate", step_index=1,
+                capture_method=["watcher_backstop"],
+                payload={
+                    "trace_patch_id": patch_id,
+                    "file_path": "g.py",
+                    "affected_range": {"start_line": 1, "end_line": 1},
+                    "authored_text": "x\n",
+                    "raw_authored_hash": sha256_text("x\n"),
+                    "git_clean_hash": sha256_text("x"),
+                    "limitations": [],
+                },
+            )],
+            writer="test-fixture",
+        )
+
+    def _emit_search_summary(
+        self, repo: Path, commit_sha: str, results: list[dict]
+    ) -> None:
+        from opentraces.core.trails.search_records import (
+            build_anchor_search_summary_payload,
+        )
+        payload = build_anchor_search_summary_payload(
+            schema_version="opentraces.trail.anchor_search.v2",
+            search_head={"hex": commit_sha},
+            algorithms_attempted=["exact"],
+            results=results,
+        )
+        append_event_batch(
+            repo,
+            [TrailEventDraft(
+                event_type="git_anchor_search_completed",
+                trace_id=None, step_index=None,
+                capture_method=["trail_maturation"],
+                payload=payload,
+            )],
+            writer="trail-maturation",
+        )
+
+    @staticmethod
+    def _previous_gate_impl(repo: Path) -> bool:
+        """Faithful copy of the pre-#45 gate body (full ``read_events`` +
+        identical patch_ids/searched/anchored set logic) as the parity oracle."""
+        from opentraces.core.trails.event_log import read_events as _full_read
+        from opentraces.core.trails.ids import id_from_payload
+        from opentraces.core.trails.maturation import _candidate_commits
+        from opentraces.core.trails.models import ATTRIBUTION_VERSION
+        from opentraces.core.trails.search_records import iter_search_records
+
+        commits = _candidate_commits(repo, commit_refs=None, max_commits=50)
+        if not commits:
+            return False
+        events = _full_read(repo, verify=False)
+        patch_ids = {
+            tp for event in events
+            if event.event_type == "trace_patch_created"
+            for tp in [id_from_payload(event.payload, "trace_patch")] if tp
+        }
+        if not patch_ids:
+            return False
+        searched = {
+            (r["trace_patch_id"], r["search_head_sha"], r["attribution_version"])
+            for event in events
+            if event.event_type == "git_anchor_search_completed"
+            for r in iter_search_records(event)
+        }
+        anchored = {
+            (id_from_payload(event.payload, "trace_patch"),
+             (event.payload.get("commit_id") or {}).get("hex"))
+            for event in events
+            if event.event_type == "git_anchor_created"
+        }
+        return any(
+            (tp, c, ATTRIBUTION_VERSION) not in searched
+            and (tp, c) not in anchored
+            for tp in patch_ids for c in commits
+        )
+
+    def test_gate_uses_scoped_read_not_full_read(self, tmp_path, monkeypatch):
+        """Sentinel: with the full ``read_events`` made to explode, the gate must
+        still compute the right answer off the scoped slice."""
+        from opentraces.core.trails import maturation as _mat
+
+        p = _init_project(tmp_path / "proj")
+        c1 = self._commit(p, "a.py", "a\n")
+        self._emit_patch(p, "gate-patch-unsearched")
+
+        def _boom(*a, **k):
+            raise AssertionError("gate must not call full read_events (#45)")
+
+        monkeypatch.setattr(_mat, "read_events", _boom)
+        # Patch exists, no search recorded -> unsearched -> True.
+        assert _mat.has_unsearched_recent_patches(p) is True
+
+    def test_gate_matches_previous_impl_across_fixtures(self, tmp_path):
+        """Parity across searched / anchored / unsearched combinations, INCLUDING
+        a commit carrying TWO search summaries (pkg-44 partial-summary handoff)."""
+        from opentraces.core.trails import maturation as _mat
+        from opentraces.core.trails.event_log import invalidate_read_events_cache
+
+        # Fixture 1: a patch with no search -> unsearched.
+        p1 = _init_project(tmp_path / "p1")
+        self._commit(p1, "a.py", "a\n")
+        self._emit_patch(p1, "p1-unsearched")
+        invalidate_read_events_cache(p1)
+        assert self._previous_gate_impl(p1) is True
+        invalidate_read_events_cache(p1)
+        assert _mat.has_unsearched_recent_patches(p1) is True
+
+        # Fixture 2: EVERY (patch, candidate-commit) searched -> satisfied
+        # (False). One commit carries TWO search summaries (pkg-44's partial-
+        # summary handoff shape): the set-union over both must still cover its
+        # (patch, commit) pairs. We search the patch against every candidate
+        # commit returned by the maturation candidate walk (including the init
+        # commit) so the gate has nothing left unsearched.
+        from opentraces.core.trails.maturation import _candidate_commits
+
+        p2 = _init_project(tmp_path / "p2")
+        self._commit(p2, "a.py", "a\n")
+        self._commit(p2, "b.py", "b\n")
+        self._emit_patch(p2, "p2-patch")
+        all_commits = _candidate_commits(p2, commit_refs=None, max_commits=50)
+        assert len(all_commits) >= 3, "init + a.py + b.py are all candidates"
+        for c in all_commits:
+            self._emit_search_summary(
+                p2, c,
+                [{"trace_patch_id": "p2-patch", "trace_id": "tr-gate",
+                  "step_index": 1, "generation_index": 0, "result": "unknown"}],
+            )
+        # SECOND summary for the FIRST candidate commit (a re-run): two
+        # git_anchor_search_completed events for one commit is a normal state.
+        self._emit_search_summary(
+            p2, all_commits[0],
+            [{"trace_patch_id": "p2-patch", "trace_id": "tr-gate",
+              "step_index": 1, "generation_index": 0, "result": "unknown"}],
+        )
+        invalidate_read_events_cache(p2)
+        # All candidate commits searched for the one patch -> nothing unsearched.
+        assert self._previous_gate_impl(p2) is False
+        invalidate_read_events_cache(p2)
+        assert _mat.has_unsearched_recent_patches(p2) is False
+
+        # Fixture 3: searched for one commit but a NEWER commit is unsearched.
+        p3 = _init_project(tmp_path / "p3")
+        c_old = self._commit(p3, "a.py", "a\n")
+        self._emit_patch(p3, "p3-patch")
+        self._emit_search_summary(
+            p3, c_old,
+            [{"trace_patch_id": "p3-patch", "trace_id": "tr-gate",
+              "step_index": 1, "generation_index": 0, "result": "unknown"}],
+        )
+        # New commit lands AFTER the search -> (patch, new_commit) is unsearched.
+        self._commit(p3, "c.py", "c\n")
+        invalidate_read_events_cache(p3)
+        assert self._previous_gate_impl(p3) is True
+        invalidate_read_events_cache(p3)
+        assert _mat.has_unsearched_recent_patches(p3) is True
