@@ -117,7 +117,7 @@ Installs the opentraces skill via [skills.sh](https://skills.sh) so your coding 
 
 ## Copy to your agent
 
-Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
+Paste this into your coding agent (Claude Code, Codex CLI, or Pi):
 
 ```
 {{AGENT_PROMPT}}
@@ -209,6 +209,17 @@ opentraces auth login
 By default, `opentraces auth login` starts Hugging Face's OAuth device flow in your browser. This is the simplest path on a developer machine and supports the normal dataset workflow.
 
 The CLI requests the scopes it needs to read, create, push, delete, and change visibility on datasets in namespaces you belong to.
+
+When a coding agent is driving setup for you, use a bounded wait so the session
+does not hang if you cannot complete the browser step:
+
+```bash
+opentraces auth login --device-timeout 180
+```
+
+If that times out, complete auth outside the agent session with
+`opentraces auth login`, `opentraces auth login --token`, or `HF_TOKEN`, then
+verify with `opentraces --json auth whoami`.
 
 ## Token Login
 
@@ -612,7 +623,11 @@ opentraces trace teleport export <trace-id> --output <dir>
 
 Common `trace query` filters include `--lex`, `--semantic`, `--skill`,
 `--tool`, `--files`, `--signal`, `--survival`, `--since`, `--candidate-kind`,
-`--project`, `--cwd`, `--remote-bucket`, and `--source index|projection`.
+`--project`, and `--cwd`. `trace query` is read-only against the local search
+snapshot: it neither rebuilds the index nor pulls remote data. To search remote
+traces, first `opentraces bucket remote pull` and then rebuild the snapshot with
+`opentraces trace index rebuild`. (`trace get --remote-bucket` / `--remote
+owner/repo` remain the per-trace remote-read path.)
 
 ## Trace Intelligence
 
@@ -1425,8 +1440,9 @@ lexical, semantic, file, tool, skill, dependency, and survival facets.
 opentraces trace query --lex "bug fix failing test" --cwd --json
 opentraces trace query --skill opentraces --since 7d
 opentraces trace query --files "src/**/*.py" --signal failing-test
-opentraces trace query --survival alive_on_path --candidate-kind patch
-opentraces trace query --remote-bucket --force-remote-bucket
+opentraces trace query --survival alive_on_path --candidate-kind trace
+opentraces bucket remote pull --force --json  # sync remote traces before querying
+opentraces trace query --cwd --json
 ```
 
 `trace query` returns `CandidatePacket` rows. Use `--include-slice intent` or
@@ -2224,7 +2240,8 @@ debugging scripts, and workflow builders that need raw context.
 ## Read From A Remote Bucket
 
 ```bash
-opentraces trace query --remote-bucket --cwd --json
+opentraces bucket remote pull --json  # sync remote traces before querying
+opentraces trace query --cwd --json
 opentraces trace get <trace-id> --remote owner/private-bucket --json
 opentraces trail blame commit <sha> --json
 opentraces ctx tree <trace-id> --json

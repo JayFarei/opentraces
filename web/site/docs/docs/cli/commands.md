@@ -165,7 +165,11 @@ opentraces trace teleport export <trace-id> --output <dir>
 
 Common `trace query` filters include `--lex`, `--semantic`, `--skill`,
 `--tool`, `--files`, `--signal`, `--survival`, `--since`, `--candidate-kind`,
-`--project`, `--cwd`, `--remote-bucket`, and `--source index|projection`.
+`--project`, and `--cwd`. `trace query` is read-only against the local search
+snapshot: it neither rebuilds the index nor pulls remote data. To search remote
+traces, first `opentraces bucket remote pull` and then rebuild the snapshot with
+`opentraces trace index rebuild`. (`trace get --remote-bucket` / `--remote
+owner/repo` remain the per-trace remote-read path.)
 
 ## Trace Intelligence
 

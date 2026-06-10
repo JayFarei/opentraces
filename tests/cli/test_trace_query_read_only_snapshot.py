@@ -197,7 +197,10 @@ def test_trace_index_command_rebuilds_search_snapshot() -> None:
     result = runner.invoke(main, ["trace", "index", "--json"])
 
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    # Parse result.stdout (the stream the --json contract governs), not
+    # result.output: under Click 8.2+ result.output is the user-terminal view
+    # that mixes the stderr bootstrap signpost in. stdout stays pure JSON.
+    payload = json.loads(result.stdout)
     assert payload["search_snapshot"]["trace_count"] == 1
     assert Path(payload["search_snapshot"]["path"]).exists()
 
@@ -295,3 +298,167 @@ def test_trace_query_rejects_unit_level_candidate_kind() -> None:
 
     assert result.exit_code == 2
     assert "trace-level" in result.output
+
+
+def test_trace_query_envelope_never_emits_dead_trail_freshness() -> None:
+    # Issue #27 item I: SearchPage.warnings has zero writers in the read-only
+    # snapshot kernel, so the query envelope must never carry the dead
+    # ``trail_freshness`` / ``warnings`` keys (PR #34 moved freshness onto
+    # SearchDiagnostics.rebuilt_index). Guards against the dead emission
+    # silently coming back.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "trail_freshness" not in payload
+    assert "warnings" not in payload
+
+
+def test_trace_index_status_reports_per_table_db_sizes() -> None:
+    # Issue #27 item A: status --json must expose a per-table byte breakdown for
+    # both on-disk SQLite DBs so the multi-GB bloat (issue #22) is measurable.
+    from opentraces.core.trace_index import default_index_path, refresh_index
+    from opentraces.core.trace_search_snapshot import default_snapshot_path
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+    refresh_index()  # materialize the legacy index.db
+
+    snapshot_before = (
+        default_snapshot_path().stat().st_size,
+        default_snapshot_path().stat().st_mtime_ns,
+    )
+    index_before = (
+        default_index_path().stat().st_size,
+        default_index_path().stat().st_mtime_ns,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["trace", "index", "status", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    db_sizes = payload["db_sizes"]
+
+    for label in ("legacy_index", "search_snapshot"):
+        entry = db_sizes[label]
+        assert entry["exists"] is True
+        assert entry["size_bytes"] > 0
+        # dbstat is compiled into CPython's bundled sqlite3; tables must resolve
+        # to a non-empty per-table byte map.
+        assert entry["tables"] is not None, entry.get("tables_error")
+        assert sum(stat["bytes"] for stat in entry["tables"].values()) > 0
+
+    # Read-only contract: neither DB was mutated by reporting sizes.
+    assert (
+        default_snapshot_path().stat().st_size,
+        default_snapshot_path().stat().st_mtime_ns,
+    ) == snapshot_before
+    assert (
+        default_index_path().stat().st_size,
+        default_index_path().stat().st_mtime_ns,
+    ) == index_before
+
+
+def test_trace_index_status_db_sizes_degrade_when_dbstat_unavailable(monkeypatch) -> None:
+    # Issue #27 item A: when dbstat is missing (no SQLITE_ENABLE_DBSTAT_VTAB) or
+    # the DB is unreadable, the block degrades to tables=None + tables_error
+    # rather than failing the command.
+    import sqlite3 as _sqlite3
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+
+    real_connect = _sqlite3.connect
+
+    class _NoDbstatConn:
+        def __init__(self, inner):
+            object.__setattr__(self, "_inner", inner)
+
+        def execute(self, sql, *a, **k):
+            if "dbstat" in sql:
+                raise _sqlite3.OperationalError("no such table: dbstat")
+            return self._inner.execute(sql, *a, **k)
+
+        def __enter__(self):
+            self._inner.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def __setattr__(self, name, value):
+            # Forward attribute sets (e.g. row_factory) to the real connection
+            # so callers that expect sqlite3.Row rows keep working.
+            setattr(self._inner, name, value)
+
+    def _no_dbstat(*args, **kwargs):
+        return _NoDbstatConn(real_connect(*args, **kwargs))
+
+    # The helper does ``import sqlite3`` locally, so it resolves to the same
+    # module object — patching the module's ``connect`` covers it.
+    monkeypatch.setattr(_sqlite3, "connect", _no_dbstat)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["trace", "index", "status", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    entry = payload["db_sizes"]["search_snapshot"]
+    assert entry["exists"] is True
+    assert entry["tables"] is None
+    assert "dbstat" in entry["tables_error"]
+
+
+def test_trace_index_bootstrap_signposts_progress_on_stderr() -> None:
+    # Issue #27 item M: the legacy-index bootstrap (missing index.db) can run
+    # many silent minutes. The human (non --json) path must signpost it on
+    # stderr with a trace count so the operator knows a long op is underway.
+    from opentraces.core.trace_index import default_index_path
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_index_path().exists()
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["trace", "index"])
+
+    assert result.exit_code == 0, result.output
+    # Bootstrap notice + completion line land on stderr only.
+    assert "Bootstrapping legacy Trace Index" in result.stderr
+    assert "bootstrap done" in result.stderr
+    # The legacy index now exists (bootstrap ran).
+    assert default_index_path().exists()
+
+
+def test_trace_index_bootstrap_keeps_json_stdout_clean() -> None:
+    # Issue #27 item M: the stderr signpost must NOT leak into the --json
+    # stdout contract — stdout stays a single parseable JSON document.
+    from opentraces.core.trace_index import default_index_path
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_index_path().exists()
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["trace", "index", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)  # parseable: no stderr leak
+    assert payload["status"] == "ok"
+    assert payload["legacy_index"]["healed"] is True
+    # No bootstrap notice on stdout when --json.
+    assert "Bootstrapping" not in result.stdout
+    # But the operator still sees the long-op signpost on stderr even under
+    # --json — a human watching a CI log should never face a multi-minute
+    # silent hang just because a script is consuming stdout.
+    assert "Bootstrapping legacy Trace Index" in result.stderr
+    assert "bootstrap done" in result.stderr

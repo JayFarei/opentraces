@@ -44,8 +44,9 @@ Slash commands are TUI actions for humans:
 Model-facing tools expose the same surfaces: `ot_capture_status`, `ot_search`,
 `ot_trace`, `ot_standup`, `ot_capsule`, and `ot_dataset`. A typical private
 bucket workflow is `/ot-search farewell helper`, then `/ot-trace <trace-id>` for
-the selected candidate. `ot_search` accepts a `limit` and optional
-`remote_bucket`; `ot_trace` can include a compact trace map.
+the selected candidate. `ot_search` accepts a `limit` and is read-only against
+the local snapshot; sync remote traces first with `opentraces bucket remote
+pull`. `ot_trace` can include a compact trace map.
 
 The extension is fail-open. Direct slash commands are not recorded as model tool
 calls; model-invoked `ot_*` tools are captured as read-only
