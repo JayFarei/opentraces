@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +80,14 @@ def _find_exact_anchor(
         if not path_matches(file_path, hunk_path):
             continue
         for hunk in file_hunks:
-            haystack = _norm(hunk.get("added_text") or "")
+            # #44: reuse the per-hunk normalized added text precomputed once per
+            # reconcile (``_norm_added``) instead of re-normalizing the same hunk
+            # for every (patch, hunk) pair. Falls back to live normalization when
+            # the precomputed key is absent (legacy callers / hand-built hunks).
+            if "_norm_added" in hunk:
+                haystack = hunk["_norm_added"]
+            else:
+                haystack = _norm(hunk.get("added_text") or "")
             if needle and needle in haystack:
                 return {
                     "path": hunk_path,
@@ -115,6 +123,7 @@ def _find_structural_anchor(
     authored = patch.get("authored_text") or ""
     if not file_path or not authored.strip():
         return None
+    authored_len = len(authored)
     best: dict[str, Any] | None = None
     best_score = 0.0
     for hunk_path, file_hunks in hunks.items():
@@ -124,7 +133,28 @@ def _find_structural_anchor(
             added = hunk.get("added_text") or ""
             if not added.strip():
                 continue
-            score = difflib.SequenceMatcher(None, authored, added, autojunk=False).ratio()
+            # #44 compute gate 1 — length bound (pure arithmetic). difflib's
+            # documented invariant is ratio() <= real_quick_ratio(), and for two
+            # sequences real_quick_ratio() is bounded above by
+            # 2*min(len)/(len(a)+len(b)) (the best case where the shorter is a
+            # subsequence of the longer). If that bound is already below the
+            # threshold the pair CANNOT score >= threshold, so skip it WITHOUT
+            # constructing a SequenceMatcher. This rejected 100% of the 1,077
+            # length-mismatched pairs in the 30-minute-hang incident.
+            added_len = len(added)
+            denom = authored_len + added_len
+            if denom == 0:
+                continue
+            length_bound = 2 * min(authored_len, added_len) / denom
+            if length_bound < STRUCTURAL_MATCH_THRESHOLD:
+                continue
+            # #44 compute gate 2 — quick_ratio() is the cheap O(n) upper bound on
+            # ratio(). Build the matcher ONCE; probe quick_ratio() first and only
+            # pay for the full O(n*m) ratio() when the bound still admits a match.
+            sm = difflib.SequenceMatcher(None, authored, added, autojunk=False)
+            if sm.quick_ratio() < STRUCTURAL_MATCH_THRESHOLD:
+                continue
+            score = sm.ratio()
             if score >= STRUCTURAL_MATCH_THRESHOLD and score > best_score:
                 best = {
                     "path": hunk_path,
@@ -148,6 +178,7 @@ def reconcile_commit_anchors(
     attribution_version: str | None = None,
     events: list[TrailEvent] | None = None,
     summary_out: dict[str, Any] | None = None,
+    deadline: float | None = None,
 ) -> list[dict[str, Any]]:
     """Search existing Trace Patches against a commit and append anchor events.
 
@@ -167,6 +198,12 @@ def reconcile_commit_anchors(
     commit_id = {"algo": "sha1", "hex": commit}
     diff = _git(repo, "show", "--format=", "--no-color", "-U3", commit)
     hunks = _parse_diff_hunks_with_content(diff)
+    # #44 (d): normalize each hunk's added_text ONCE per reconcile and stash it on
+    # the hunk dict (``_norm_added``). _find_exact_anchor reuses it per (patch,
+    # hunk) pair instead of re-normalizing the same hunk N times.
+    for file_hunks in hunks.values():
+        for hunk in file_hunks:
+            hunk["_norm_added"] = _norm(hunk.get("added_text") or "")
     # Bug B: this reconciler needs only 3 event types, and the anchor/search
     # dedup only consults events referencing THIS commit. Read that scoped slice
     # (streamed per-commit, no whole-log materialisation, no verify) instead of
@@ -243,7 +280,35 @@ def reconcile_commit_anchors(
     anchor_drafts: list[TrailEventDraft] = []
     created: list[dict[str, Any]] = []
     search_results: list[dict[str, Any]] = []
+    # #44 (b): _stable_patch_id(repo, commit) is loop-invariant — compute it
+    # lazily on the first anchor and reuse. (427 subprocess pairs -> 1.)
+    _patch_id_cache: dict[str, str | None] = {}
+
+    def _patch_id() -> str | None:
+        if commit not in _patch_id_cache:
+            _patch_id_cache[commit] = _stable_patch_id(repo, commit)
+        return _patch_id_cache[commit]
+
+    # #44 (c): _oid(repo, f"{commit}:{path}") is per-(commit, path) — cache it so
+    # multiple patches landing in the same file share one rev-parse subprocess.
+    _oid_cache: dict[str, dict[str, str] | None] = {}
+
+    def _oid_for(path: str) -> dict[str, str] | None:
+        if path not in _oid_cache:
+            _oid_cache[path] = _oid(repo, f"{commit}:{path}")
+        return _oid_cache[path]
+
+    # #44 Phase 2: wall-clock budget. ``deadline`` (time.monotonic absolute) is
+    # checked at the TOP of the per-patch loop. On expiry we break out and STILL
+    # append the summary covering the searched subset + created anchors below.
+    budget_exhausted = False
+    patches_searched = 0
+    patches_total = len(patch_events)
     for patch_event in patch_events:
+        if deadline is not None and time.monotonic() >= deadline:
+            budget_exhausted = True
+            break
+        patches_searched += 1
         patch = patch_event.payload
         trace_patch_id = id_from_payload(patch, "trace_patch")
         if not trace_patch_id:
@@ -273,7 +338,7 @@ def reconcile_commit_anchors(
         anchor_payload = None
         created_anchor_ids: list[str] = []
         if match:
-            blob_id = _oid(repo, f"{commit}:{match['path']}")
+            blob_id = _oid_for(match["path"])
             # #32 before-blob guard: a commit whose target-file content equals
             # the patch's pre-edit blob is the state BEFORE the patch landed, so
             # it cannot be this patch's landing commit. Reject the match (a plain
@@ -311,7 +376,7 @@ def reconcile_commit_anchors(
                 "path": match["path"],
                 "range": match["range"],
                 "blob_id": blob_id,
-                "patch_id": _stable_patch_id(repo, commit),
+                "patch_id": _patch_id(),
                 "observed_ref": commit_ref,
                 "relation": "anchored_in_git",
                 "evidence_tier": evidence_tier,
@@ -382,6 +447,14 @@ def reconcile_commit_anchors(
         # sum these instead of re-reading the whole log twice (before/after) just
         # to diff search-record counts. One per-patch search outcome was recorded
         # per visited patch (search_results), matching the prior _event_counts
-        # delta semantics.
+        # delta semantics. On a partial (budgeted) run this reports ONLY the
+        # searches actually recorded this run — maturation sums it.
         summary_out["searches_recorded"] = len(search_results)
+        # #44 Phase 2: budget surface. patches_searched counts the patches that
+        # passed the budget gate this run; patches_remaining is the unvisited
+        # tail. On a non-budgeted (or non-tripped) run budget_exhausted is False
+        # and patches_remaining is 0.
+        summary_out["budget_exhausted"] = budget_exhausted
+        summary_out["patches_searched"] = patches_searched
+        summary_out["patches_remaining"] = patches_total - patches_searched
     return created

@@ -874,10 +874,17 @@ def _backfill_patches_from_trail_events(
     Patch ordering: by ``step_index`` ascending, then by event_sequence so
     multiple patches at the same step preserve their emission order.
     """
-    from .trails.event_log import read_events
+    from .trails.event_log import read_events_scoped
 
+    # #45: scope to the single event type this backfill projects. The watcher
+    # session sweep calls this per ingested generation, so a full-log read here
+    # is the same per-tick RSS cost Bug B closed on the hook path. No
+    # commit_filter — ``trace_patch_created`` is not commit-keyed, so it is kept
+    # in full and the trace_id/generation_index post-filter is unchanged.
     try:
-        events = read_events(project_dir, verify=False)
+        events = read_events_scoped(
+            project_dir, event_types={"trace_patch_created"}
+        )
     except Exception:  # noqa: BLE001 — backfill is non-fatal at ingest time.
         logger.warning(
             "read_events failed during patches backfill for %s", trace_id,

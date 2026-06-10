@@ -1470,3 +1470,116 @@ def test_mutation_overlapping_two_writers_records_concurrent_writer_overlap(
 
     patch_events = [e for e in events if e.event_type == "trace_patch_created"]
     assert patch_events == []
+
+
+# --------------------------------------------------------------------------- #
+# #45 — reconcile reads the scoped slice, not the whole log.
+# --------------------------------------------------------------------------- #
+
+
+def _seed_attributable_observation(repo: Path) -> None:
+    """Build a log with a firm step window, a hook patch, and a corroborating
+    filesystem observation — the canonical 'attributed' scenario."""
+    repo.mkdir(parents=True, exist_ok=True)
+    _init_repo(repo)
+    target = repo / "auth.py"
+    before_text = "def authorize():\n    return False\n"
+    target.write_text(before_text)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed auth"], cwd=repo, check=True)
+    before_blob = GitObjectID(hex=_hash_object(repo, before_text))
+
+    open_result = open_step_window(
+        repo, trace_id="tr1", step_index=1, agent_step_id="step_1",
+        tool_call_id="tc1", capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    after_text = "def authorize():\n    return True\n"
+    target.write_text(after_text)
+    after_blob = GitObjectID(hex=_hash_object(repo, after_text))
+    close_result = close_step_window_with_snapshot(
+        repo, trace_id="tr1", step_index=1, agent_step_id="step_1",
+        tool_call_id="tc1", capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+    _emit_hook_patch(
+        repo, trace_id="tr1", step_index=1, file_path="auth.py",
+        trace_patch_id="tracepatch-sha256:fixture-tr1-step1",
+        before_blob=before_blob, after_blob=after_blob,
+        snapshot_before_id=f"snapshot-pre-{open_result.tree_id['hex']}",
+        snapshot_after_id=close_result.snapshot_id,
+        authored_text="    return True\n",
+    )
+    append_filesystem_mutation_observed(
+        repo, path="auth.py",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:07Z",
+        before_blob_id=before_blob, after_blob_id=after_blob,
+    )
+
+
+def _appended_after(repo: Path, pre_ids: set[str]) -> list[tuple]:
+    """Stable projection of events appended since ``pre_ids`` was captured."""
+    out = []
+    for e in read_events(repo):
+        if e.event_id in pre_ids:
+            continue
+        out.append((e.event_type, e.trace_id, e.step_index, e.capture_method,
+                    e.payload.get("result"), e.payload.get("trace_patch_id"),
+                    e.payload.get("upgraded_trace_patch_id")))
+    return out
+
+
+def test_reconcile_scoped_read_matches_full_read(tmp_path: Path, monkeypatch) -> None:
+    """The scoped-read reconcile (#45) must produce a byte-identical summary and
+    identical appended drafts vs. one fed by the old full ``read_events``."""
+    import opentraces.core.trails.event_log as event_log
+
+    # Repo A: the shipped scoped path.
+    repo_a = tmp_path / "a"
+    _seed_attributable_observation(repo_a)
+    event_log.invalidate_read_events_cache(repo_a)
+    pre_a = {e.event_id for e in read_events(repo_a)}
+    summary_a = reconcile_watcher_observations(repo_a)
+    appended_a = _appended_after(repo_a, pre_a)
+
+    # Repo B: force reconcile through the OLD full read (filtered to the same
+    # types post-hoc) by shadowing read_events_scoped with a full-read shim.
+    repo_b = tmp_path / "b"
+    _seed_attributable_observation(repo_b)
+    event_log.invalidate_read_events_cache(repo_b)
+
+    def _full_read_shim(cwd, *, event_types, commit_filter=None,
+                        commit_sha=None, commit_shas=None):
+        return [e for e in event_log.read_events(cwd, verify=False)
+                if e.event_type in event_types]
+
+    monkeypatch.setattr(reconciler_mod, "read_events_scoped", _full_read_shim)
+    pre_b = {e.event_id for e in read_events(repo_b)}
+    summary_b = reconcile_watcher_observations(repo_b)
+    appended_b = _appended_after(repo_b, pre_b)
+
+    assert summary_a == summary_b, "summary must be identical scoped vs full read"
+    assert appended_a == appended_b, "appended drafts must be identical"
+    # And the scenario actually did something (guards against vacuous parity).
+    assert summary_a["attributed"] == 1
+    assert summary_a["patches_upgraded"] == 1
+
+
+def test_reconcile_never_calls_full_read_events(tmp_path: Path, monkeypatch) -> None:
+    """Sentinel: ``reconcile_watcher_observations`` must read ONLY the scoped
+    slice. If the full ``read_events`` is touched it materialises the whole log
+    (the #45 daemon-RSS regression) — so make it explode and assert reconcile
+    still completes correctly."""
+    repo = tmp_path / "r"
+    _seed_attributable_observation(repo)
+
+    def _boom(*a, **k):
+        raise AssertionError(
+            "reconcile must not call the full read_events (#45 scoped-read guard)"
+        )
+
+    monkeypatch.setattr(reconciler_mod, "read_events", _boom)
+    summary = reconcile_watcher_observations(repo)
+    assert summary["attributed"] == 1
+    assert summary["patches_upgraded"] == 1
