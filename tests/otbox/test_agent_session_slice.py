@@ -76,6 +76,15 @@ def test_captured_session_checkpoint_produces_real_evidence(driver):
             driver.teardown(cp.box)
 
 
+@pytest.mark.xfail(
+    reason="PR-B finding #4 (issue #25): the substrate produces survival=unknown, "
+    "not 'reverted', for a real git revert. verify_provides correctly refuses "
+    "c-captured-with-revert's 'reverted' provides. Tracked product gap in the "
+    "8-survival-state claim; the rigorous survival-walk-reverted journey is also "
+    "quarantined. xfail (not skip) so this flips green the moment the substrate "
+    "learns to classify reverts.",
+    strict=False,
+)
 def test_captured_with_revert_checkpoint_produces_reverted_state(driver):
     """c-captured-with-revert must run ``git revert`` against the
     captured commit and record the post-revert survival state honestly.

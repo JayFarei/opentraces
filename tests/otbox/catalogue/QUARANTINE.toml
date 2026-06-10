@@ -91,6 +91,14 @@ added = 2026-06-10
 expires = 2026-09-08
 
 [[entries]]
+journeys = ["pi-readonly-recursion-guard"]
+rules = ["baseline-red"]
+reason = "PR #12 (Pi extension) journey, merged onto main DURING otbox-2 work, never run on CI before. Two bugs FIXED in place (trace index --json -> trace index status; .venv/bin/python -> {py_bin}); the third is structural: the snapshot-repeat-readonly step imports opentraces.core.trace_search_snapshot.default_snapshot_path, which does NOT exist in the codebase (ModuleNotFoundError) — the read-only-snapshot invariant is tested via a non-existent API and can never pass until the PR-#12 author points it at the real snapshot surface. Do NOT delete the step (it guards a real invariant); fix the import."
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
+
+[[entries]]
 journeys = ["tui-review-smoke"]
 rules = ["lane-unreachable"]
 reason = "requires 'decommissioned_ui' — a deliberately-never-satisfiable capability tombstone for the decommissioned TUI; delete the journey in PR-A review or re-home it"
