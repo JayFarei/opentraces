@@ -206,9 +206,9 @@ export default function Hero({
           <div style={{ height: 16 }} />
           <h1>Traces are the new source code.</h1>
           <p className="hero-sub">
-            The unit of work is no longer the diff. It is the session you run to produce it. Every prompt, tool call, and edit is behind the outcome.
+            The unit of work is no longer the diff. It is the session you ran to produce it. Every prompt, tool call, and edit is behind the outcome.
             <br /><br />
-            opentraces, the open infrastructure for what your agents do, links every session to the commit that shipped it so your usage data compounds.
+            opentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, evals, and datasets.
           </p>
           <div className="hero-cta-stack">
           <div className="hero-cta">
