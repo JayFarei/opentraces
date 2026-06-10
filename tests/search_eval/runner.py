@@ -39,6 +39,10 @@ from opentraces.core import search_diag  # noqa: E402
 from opentraces.core.boilerplate import looks_injected_boilerplate  # noqa: E402
 from opentraces.core.search_projection import query_search_projection_page  # noqa: E402
 from opentraces.core.trace_index import query_index_page  # noqa: E402
+from opentraces.core.trace_search_snapshot import (  # noqa: E402
+    SearchFilters,
+    search_traces,
+)
 from tests.perf.harness.measure import CommandPlan, measure_command_factory  # noqa: E402
 from tests.perf.harness.models import PerfBudget, PerfScenario  # noqa: E402
 from tests.search_eval import score_outcome  # noqa: E402
@@ -51,6 +55,16 @@ from tests.search_eval.generator import (  # noqa: E402
 )
 
 OTD = str(REPO_ROOT / "otd")
+# Search backend lanes the boundedness probe can exercise in-process.
+#  * ``snapshot`` - the compact read-only v3 snapshot kernel
+#    (``trace_search_snapshot.search_traces``) that the CLI has served since
+#    PR #24. This is the kernel users actually hit, so it is the PRIMARY lane.
+#  * ``legacy``   - the pre-#24 ``search_projection`` / ``trace_index`` backends.
+#    The CLI no longer routes to these, but they remain a useful baseline for
+#    boundedness regressions, so the lane is kept (issue #27 item L).
+LANE_SNAPSHOT = "snapshot"
+LANE_LEGACY = "legacy"
+DEFAULT_BOUNDEDNESS_LANE = LANE_SNAPSHOT
 OUTCOME_LIMIT = 100        # generous fetch so >=k distinct traces surface
 PERF_LIMIT = 20           # the natural agent-facing page size
 # qmd boundedness (R3): a query may scan up to BOUND_FACTOR x its matches
@@ -82,7 +96,8 @@ class RowResult:
     total: int
     perf: dict[str, Any]
     outcome: dict[str, Any]
-    boundedness: dict[str, Any]
+    boundedness: dict[str, Any]            # legacy lane (calibrated baseline)
+    boundedness_snapshot: dict[str, Any]   # primary snapshot kernel (PR #24+)
     bounded_expected: bool
     bounded_ok: bool
     summary_non_boilerplate_rate: float
@@ -164,9 +179,77 @@ def _summary_quality(payload: dict[str, Any]) -> dict[str, Any]:
     return {"rate": rate, "checked": checked, "bad": bad}
 
 
-def _capture_boundedness(row: QueryRow) -> dict[str, Any]:
-    """Run the query in-process with OT_SEARCH_DIAG to read the rows-scanned
-    counter (R3, the qmd invariant). Deterministic - the corpus is fixed."""
+def _snapshot_sort_order(row: QueryRow) -> str:
+    """Mirror the CLI's row-flag -> --sort mapping (see ``_query_args``).
+
+    ``sort: time`` -> ``time``; ``recency_weight`` (with no explicit sort)
+    -> ``recency``; otherwise relevance. ``min_score`` has no snapshot
+    equivalent and is dropped, exactly as the read-only CLI drops it.
+    """
+
+    sort = row.extra_flags.get("sort")
+    if sort in ("time", "recency", "relevance"):
+        return sort
+    if row.extra_flags.get("recency_weight"):
+        return "recency"
+    return "relevance"
+
+
+def _snapshot_filters(row: QueryRow) -> SearchFilters:
+    return SearchFilters(
+        files=row.query if row.mode == "files" else None,
+        latest_generation=not row.extra_flags.get("include_superseded", False),
+        sort_order=_snapshot_sort_order(row),
+    )
+
+
+def _snapshot_boundedness(row: QueryRow) -> dict[str, Any]:
+    """Boundedness reading for the PRIMARY snapshot kernel.
+
+    The compact v3 snapshot is index-backed: term queries hit the
+    ``trace_fts`` FTS5 index and ``--files`` hits the ``trace_files`` GLOB
+    sub-query, so it never does the legacy Python full-corpus scan. The
+    snapshot reports the matched-group count via ``diagnostics.rows_examined``
+    (== matches, not corpus), so by construction ``rows_scanned`` tracks
+    matches; this lane therefore CERTIFIES the kernel users actually hit rather
+    than the decommissioned legacy one.
+    """
+
+    from opentraces.core.trace_search_snapshot import snapshot_status
+
+    text = None if row.mode in ("semantic", "files") else row.query
+    semantic = row.query if row.mode == "semantic" else None
+    page = search_traces(
+        text,
+        _snapshot_filters(row),
+        limit=OUTCOME_LIMIT,
+        semantic=semantic,
+    )
+    matched = int(page.total)
+    rows_scanned = int(page.diagnostics.rows_examined)
+    try:
+        corpus = int(snapshot_status().get("trace_count", 0))
+    except Exception:
+        corpus = 0
+    bound_limit = max(BOUND_FLOOR, BOUND_FACTOR * matched)
+    bounded = rows_scanned <= bound_limit
+    return {
+        "lane": LANE_SNAPSHOT,
+        "path": "snapshot.fts" if page.diagnostics.used_fts else "snapshot.filter",
+        "rows_scanned": rows_scanned,
+        "corpus_docs": corpus,
+        "matched": matched,
+        "page_size": len(page.hits),
+        "page_le_limit": len(page.hits) <= OUTCOME_LIMIT,
+        "bound_limit": bound_limit,
+        "bounded": bounded,
+    }
+
+
+def _legacy_boundedness(row: QueryRow) -> dict[str, Any]:
+    """Boundedness reading for the legacy ``search_projection`` / ``trace_index``
+    backends (the pre-#24 kernel). Kept as a baseline lane; uses OT_SEARCH_DIAG
+    to read the rows-scanned counter (R3, the qmd invariant)."""
 
     kwargs: dict[str, Any] = {
         "limit": OUTCOME_LIMIT,
@@ -196,6 +279,7 @@ def _capture_boundedness(row: QueryRow) -> dict[str, Any]:
     bound_limit = max(BOUND_FLOOR, BOUND_FACTOR * matched)
     bounded = rows_scanned <= bound_limit
     return {
+        "lane": LANE_LEGACY,
         "path": diag.get("path"),
         "rows_scanned": rows_scanned,
         "corpus_docs": corpus,
@@ -205,6 +289,26 @@ def _capture_boundedness(row: QueryRow) -> dict[str, Any]:
         "bound_limit": bound_limit,
         "bounded": bounded,
     }
+
+
+def _capture_boundedness(row: QueryRow, lane: str = LANE_LEGACY) -> dict[str, Any]:
+    """Run the query in-process and read the rows-scanned counter (R3, the qmd
+    invariant). Deterministic - the corpus is fixed.
+
+    Two lanes:
+      * ``snapshot`` - the compact v3 kernel the CLI serves since PR #24
+        (PRIMARY; what users hit).
+      * ``legacy``   - the decommissioned ``search_projection`` / ``trace_index``
+        backends, kept as a boundedness baseline.
+
+    Defaults to ``legacy`` so the historical ``boundedness`` field (and its
+    calibrated invariant assertions) are byte-stable; the runner records the
+    ``snapshot`` lane additively in ``boundedness_snapshot``.
+    """
+
+    if lane == LANE_SNAPSHOT:
+        return _snapshot_boundedness(row)
+    return _legacy_boundedness(row)
 
 
 # --------------------------------------------------------------------------- #
@@ -317,7 +421,11 @@ def run_eval(
             "within_cliff": within_cliff,
         }
 
-        boundedness = _capture_boundedness(row)
+        boundedness = _capture_boundedness(row, lane=LANE_LEGACY)
+        # PRIMARY lane: certify the snapshot kernel the CLI actually serves
+        # (PR #24). Recorded additively; the legacy lane keeps the calibrated
+        # bounded_expected invariant byte-stable.
+        boundedness_snapshot = _capture_boundedness(row, lane=DEFAULT_BOUNDEDNESS_LANE)
         bounded_ok = (boundedness["bounded"] == row.bounded_expected) and boundedness["page_le_limit"]
         summary_rate = float(summary_quality["rate"])
         summary_ok = summary_rate >= 0.95
@@ -331,7 +439,8 @@ def run_eval(
             id=row.id, archetype=row.archetype, seed_case=row.seed_case,
             mode=row.mode, query=row.query, expected_phase_a=row.expected_phase_a,
             total=total, perf=perf_summary, outcome=outcome,
-            boundedness=boundedness, bounded_expected=row.bounded_expected,
+            boundedness=boundedness, boundedness_snapshot=boundedness_snapshot,
+            bounded_expected=row.bounded_expected,
             bounded_ok=bounded_ok,
             summary_non_boilerplate_rate=summary_rate,
             summary_ok=summary_ok,
@@ -529,6 +638,8 @@ def _outcome_digest(rows: list[RowResult]) -> str:
             "kendall_tau": oc.get("kendall_tau"), "recency_hit": oc.get("recency_hit"),
             "passes": oc.get("passes"),
             "bounded": r.boundedness.get("bounded"), "bounded_ok": r.bounded_ok,
+            "snapshot_bounded": r.boundedness_snapshot.get("bounded"),
+            "snapshot_matched": r.boundedness_snapshot.get("matched"),
             "summary_non_boilerplate_rate": r.summary_non_boilerplate_rate,
             "summary_ok": r.summary_ok,
             "path": r.boundedness.get("path"),
