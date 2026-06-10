@@ -197,16 +197,20 @@ def test_tier0_catalogue_journey(driver, journey_name):
         if result.verdict not in ("PASS", "SKIP"):
             # Surface the failing step + assertion detail so CI logs show the
             # ROOT cause (rc/stderr), not just "step failure; N assertions".
-            print(f"\n[otbox] {journey_name} verdict={result.verdict} reason={result.reason}")
+            # flush=True + a journey-scoped tag so lines can't be misattributed
+            # to a neighbouring test by output buffering.
+            tag = f"[otbox:{journey_name}]"
+            print(f"\n{tag} verdict={result.verdict} reason={result.reason}", flush=True)
             for s in result.steps:
                 if not s.ok:
                     res = s.result
-                    tail = ((res.stderr or res.stdout) if res else "")[-400:]
-                    print(f"[otbox]   STEP FAIL {s.step_id}: rc="
-                          f"{res.returncode if res else '?'} {s.message} :: {tail}")
+                    tail = ((res.stderr or res.stdout) if res else "")[-500:]
+                    print(f"{tag} STEP FAIL {s.step_id}: rc="
+                          f"{res.returncode if res else '?'} {s.message} :: {tail}",
+                          flush=True)
             for a in getattr(result, "assertions", []) or []:
                 if not a.ok:
-                    print(f"[otbox]   ASSERT FAIL [{a.kind}] {a.message[:200]}")
+                    print(f"{tag} ASSERT FAIL [{a.kind}] {a.message[:240]}", flush=True)
         assert result.verdict in ("PASS", "SKIP"), f"{journey_name}: {result.reason}"
     finally:
         if box.root.exists():
