@@ -110,7 +110,12 @@ def mature_trails(
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{commit}: {type(exc).__name__}: {exc}")
 
-    _stamp_maturation_watermark(repo, effective_version)
+    # Only a full recent-commits sweep may stamp the watermark: an explicit
+    # commit_refs subset has not matured the rest of the recent window, and
+    # stamping would make the quiet-tick gate skip those commits until the
+    # event-log head or repo HEAD next changes.
+    if commit_refs is None:
+        _stamp_maturation_watermark(repo, effective_version)
     return MaturationSummary(
         commits_considered=len(commits),
         searches_completed=searches_completed,
