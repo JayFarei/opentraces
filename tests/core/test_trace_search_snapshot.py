@@ -757,3 +757,251 @@ def test_notify_rebuilding_writes_to_stderr_not_stdout(capsys, monkeypatch) -> N
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+# --------------------------------------------------------------------------- #
+# issue #41: external-content FTS5 delete bookkeeping in the per-row refresh
+#
+# The keep-warm refresh deletes content rows but the FTS5 index is
+# external-content (``content='traces'``), so it is NOT auto-maintained on
+# delete. Without an explicit FTS ``'delete'`` carrying the OLD column values,
+# the index accumulates orphaned postings and silently desyncs / corrupts over
+# repeated refreshes. These tests prove the bookkeeping keeps the index in
+# lockstep with the content table across a long interleaved refresh sequence,
+# matches a from-scratch rebuild exactly, and that skipping the bookkeeping is
+# detectable by the FTS5 ``'integrity-check'`` command (the real guard).
+# --------------------------------------------------------------------------- #
+import sqlite3 as _sqlite3
+
+
+def _fts_integrity_ok(snapshot_path: Path) -> bool:
+    """Run the FTS5 ``integrity-check`` against a snapshot DB.
+
+    ``integrity-check`` (SQLite >= 3.42) re-derives the index from the content
+    table and raises ``SQLITE_CORRUPT`` if the stored FTS index disagrees — the
+    canonical detector for external-content desync. Returns ``True`` when the
+    index is consistent, ``False`` when the check raises a corruption error.
+    """
+
+    with _sqlite3.connect(snapshot_path) as conn:
+        try:
+            conn.execute("insert into trace_fts(trace_fts, rank) values('integrity-check', 1)")
+        except _sqlite3.DatabaseError:
+            return False
+    return True
+
+
+def _probe_rows(snapshot_path: Path, term: str) -> list[tuple[str, float]]:
+    """Deterministic (trace_id, bm25) probe straight against trace_fts.
+
+    Bypasses the dedup / partition layer so the result is a pure read of the
+    FTS index contents — exactly what desync would corrupt. Ordered by
+    (bm25, trace_id) so the comparison is stable.
+    """
+
+    with _sqlite3.connect(snapshot_path) as conn:
+        rows = conn.execute(
+            "select traces.trace_id, bm25(trace_fts) "
+            "from trace_fts join traces on traces.rowid = trace_fts.rowid "
+            "where trace_fts match ? "
+            "order by bm25(trace_fts), traces.trace_id",
+            (term,),
+        ).fetchall()
+    return [(str(tid), round(float(score), 6)) for tid, score in rows]
+
+
+def test_refresh_fts_bookkeeping_keeps_index_consistent_under_interleaving(tmp_path) -> None:
+    """N~80 corpus, ~60 interleaved per-row refreshes; FTS stays consistent.
+
+    Mixes text-changing updates, deletes, and re-adds (3 updates + 1 delete per
+    refresh) and then asserts: (a) the FTS ``integrity-check`` passes, (b) the
+    raw FTS probe rows + bm25 scores are IDENTICAL to a from-scratch
+    ``build_trace_search_snapshot`` of the same alive set, and (c) the snapshot
+    source_hash converges with the full rebuild.
+    """
+    from opentraces.core.trace_search_snapshot import (
+        default_snapshot_path,
+        refresh_trace_search_snapshot,
+    )
+
+    # Distinctive shared term so the probe always has matchable content.
+    corpus = {f"trace-{idx:03d}": f"importer pass {idx}" for idx in range(80)}
+    for tid, desc in corpus.items():
+        _write_trace("demo-project", _trace(tid, description=desc))
+
+    build_trace_search_snapshot()
+    snapshot_path = default_snapshot_path()
+    assert _fts_integrity_ok(snapshot_path)
+
+    alive = dict(corpus)
+    # 15 rounds × (3 text-updates + 1 delete) + occasional re-add = ~60 refreshes.
+    for round_idx in range(15):
+        ids = sorted(alive)
+        # 3 text-changing updates (re-rendered with new description text).
+        changed: list[str] = []
+        for offset in range(3):
+            tid = ids[(round_idx * 7 + offset) % len(ids)]
+            new_desc = f"importer pass {tid} rev {round_idx} {'fix' if offset else 'review'}"
+            alive[tid] = new_desc
+            _write_trace("demo-project", _trace(tid, description=new_desc))
+            refresh_trace_search_snapshot([tid], [])
+            changed.append(tid)
+        # 1 delete (remove from disk + drop from the snapshot).
+        del_id = ids[(round_idx * 11) % len(ids)]
+        if del_id in alive and del_id not in changed:
+            (paths.PROJECTS_DIR / "demo-project" / "traces" / f"{del_id}.jsonl").unlink()
+            del alive[del_id]
+            refresh_trace_search_snapshot([], [del_id])
+        # Every 4th round, re-add a previously deleted id (re-add path).
+        if round_idx % 4 == 3:
+            re_id = f"trace-9{round_idx:02d}"
+            re_desc = f"importer pass {re_id} re-added"
+            alive[re_id] = re_desc
+            _write_trace("demo-project", _trace(re_id, description=re_desc))
+            refresh_trace_search_snapshot([re_id], [])
+
+    # (a) FTS index is internally consistent with the content table.
+    assert _fts_integrity_ok(snapshot_path)
+
+    # (b) Raw FTS probe rows + bm25 scores match a from-scratch build of the
+    # SAME alive set exactly. Build the reference snapshot at a separate path so
+    # the live serving snapshot is untouched by the comparison build.
+    reference_path = tmp_path / "reference.sqlite"
+    build_trace_search_snapshot(path=reference_path)
+    for term in ("importer", "fix", "review", "added"):
+        assert _probe_rows(snapshot_path, term) == _probe_rows(reference_path, term), (
+            f"FTS desync on term {term!r}: refreshed index disagrees with rebuild"
+        )
+
+    # (c) Order-independent corpus hash converges between refresh + rebuild.
+    rebuilt = build_trace_search_snapshot()
+    refreshed_status = snapshot_status()
+    assert refreshed_status["source_hash"] == rebuilt.source_hash
+
+
+def test_refresh_without_fts_bookkeeping_corrupts_index_negative_control(monkeypatch) -> None:
+    """Negative control: skipping the FTS ``'delete'`` makes integrity-check fail.
+
+    Patches ``_fts_delete_doc`` to a no-op (and removes the whole-table rebuild,
+    which is already gone) so a text-changing refresh deletes+reinserts the
+    content row but leaves the OLD FTS postings orphaned. ``integrity-check``
+    must then raise — proving the bookkeeping is the load-bearing fix and the
+    test genuinely fails without it.
+    """
+    from opentraces.core import trace_search_snapshot as tss
+    from opentraces.core.trace_search_snapshot import (
+        default_snapshot_path,
+        refresh_trace_search_snapshot,
+    )
+
+    for idx in range(10):
+        _write_trace(
+            "demo-project",
+            _trace(f"trace-neg-{idx:02d}", description=f"importer pass {idx}"),
+        )
+    build_trace_search_snapshot()
+    snapshot_path = default_snapshot_path()
+    assert _fts_integrity_ok(snapshot_path)
+
+    # Disable the bookkeeping: a text change now orphans the OLD postings.
+    monkeypatch.setattr(tss, "_fts_delete_doc", lambda conn, trace_id: None)
+
+    for idx in range(5):
+        tid = f"trace-neg-{idx:02d}"
+        new_desc = f"importer pass {idx} mutated body {idx}"
+        _write_trace("demo-project", _trace(tid, description=new_desc))
+        refresh_trace_search_snapshot([tid], [])
+
+    # The external-content FTS index is now out of sync with the content table.
+    assert not _fts_integrity_ok(snapshot_path), (
+        "negative control failed: skipping FTS bookkeeping should corrupt the index"
+    )
+
+
+def test_refresh_of_one_issues_no_whole_table_rebuild() -> None:
+    """Perf guard: a refresh-of-1 must NOT issue ``values('rebuild')`` (issue #41).
+
+    Counts the FTS ``'rebuild'`` command via a SQL trace hook (not wall-clock):
+    the old per-refresh whole-table rebuild was O(corpus); the per-row delete
+    bookkeeping replaces it, so refreshing one changed trace must touch only the
+    changed rows. Also asserts the corresponding per-row ``'delete'`` IS issued.
+    """
+    from opentraces.core.trace_search_snapshot import (
+        _refresh_snapshot_locked,
+        default_snapshot_path,
+    )
+
+    for idx in range(20):
+        _write_trace(
+            "demo-project",
+            _trace(f"trace-perf-{idx:02d}", description=f"importer pass {idx}"),
+        )
+    build_trace_search_snapshot()
+    snapshot_path = default_snapshot_path()
+
+    target = "trace-perf-05"
+    _write_trace("demo-project", _trace(target, description="importer pass 5 mutated"))
+
+    statements: list[str] = []
+
+    def _trace_hook(statement: str) -> None:
+        statements.append(statement)
+
+    # Patch sqlite3.connect inside the module to install a trace hook on the
+    # refresh connection only.
+    import sqlite3 as _sqlite_mod
+    from opentraces.core import trace_search_snapshot as tss
+
+    real_connect = _sqlite_mod.connect
+
+    def _connect_with_trace(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(_trace_hook)
+        return conn
+
+    orig = tss.sqlite3.connect
+    tss.sqlite3.connect = _connect_with_trace  # type: ignore[assignment]
+    try:
+        _refresh_snapshot_locked(snapshot_path, [target], [target])
+    finally:
+        tss.sqlite3.connect = orig  # type: ignore[assignment]
+
+    joined = " ".join(statements).lower()
+    assert "values('rebuild')" not in joined.replace(" ", ""), (
+        "refresh-of-1 must not issue a whole-table FTS rebuild"
+    )
+    # The paired per-row FTS delete IS present (delete+reinsert for the change).
+    assert "'delete'" in joined, "refresh must issue the per-row FTS delete bookkeeping"
+
+
+def test_refresh_clears_unchanged_dirty_marker_after_bookkeeping_edit() -> None:
+    """PR #38 ``clear_dirty_marker_if_unchanged`` survives the issue #41 edit.
+
+    A refresh whose dirty token is unchanged across the commit-then-replace must
+    still clear the marker (the keep-warm convergence contract). This guards the
+    token capture/clear ordering after the per-row bookkeeping was inserted.
+    """
+    from opentraces.core.trace_search_snapshot import (
+        refresh_trace_search_snapshot,
+    )
+    from opentraces.core.trace_search_state import (
+        current_dirty_token,
+        mark_search_snapshot_dirty,
+    )
+
+    _write_trace("demo-project", _trace("trace-warm", description="initial importer pass"))
+    build_trace_search_snapshot()
+    assert current_dirty_token() is None
+
+    # A new capture marks the snapshot dirty (the keep-warm precondition).
+    _write_trace("demo-project", _trace("trace-warm-2", description="freshly captured pass"))
+    mark_search_snapshot_dirty("capture", trace_id="trace-warm-2")
+    assert current_dirty_token() is not None
+
+    refreshed = refresh_trace_search_snapshot(["trace-warm-2"], [])
+    assert refreshed is not None
+    # The unchanged token was cleared after the atomic replace (PR #38 behavior).
+    assert current_dirty_token() is None
+
+    page = search_traces("freshly captured", SearchFilters(), limit=5)
+    assert [hit.trace_id for hit in page.hits] == ["trace-warm-2"]
