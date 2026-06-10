@@ -7,6 +7,7 @@ from click.testing import CliRunner
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import (
     DatasetPublishSummary,
+    DatasetRemoteSchemaAheadError,
     add_dataset_remote,
     append_rows,
     load_dataset,
@@ -210,3 +211,29 @@ def test_dataset_publish_passes_saved_hf_token(monkeypatch):
     assert observed["name"] == "private-ds"
     assert observed["token"] == "hf_saved_token"
     assert observed["check_only"] is True
+
+
+def test_dataset_publish_remote_schema_ahead_exits_3(monkeypatch):
+    """When the remote schema is ahead, `dataset publish` exits 3 with a hint.
+
+    This is the CLI-level contract: a real remote stamping a newer schema (now
+    detectable thanks to the real-remote `_remote_card_text` path) surfaces as
+    exit code 3 with the version message in stderr.
+    """
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        "opentraces.cli.dataset._hf_auth",
+        lambda: ("tok", "user"),
+    )
+
+    def fake_publish_dataset(name: str, **kwargs):
+        raise DatasetRemoteSchemaAheadError("9.0.0", "1.0.0")
+
+    monkeypatch.setattr("opentraces.cli.dataset.publish_dataset", fake_publish_dataset)
+
+    result = runner.invoke(dataset_group, ["publish", "schema-ahead-cli"])
+
+    assert result.exit_code == 3, result.output
+    assert "9.0.0" in result.output
+    assert "1.0.0" in result.output

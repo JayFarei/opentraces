@@ -6,6 +6,7 @@ import contextlib
 import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -50,6 +51,8 @@ from ..security.privacy import DEFAULT_PRIVACY_TIER, normalize_privacy_tier
 from ..security.scanner import scan_serialized
 
 from . import paths
+
+logger = logging.getLogger(__name__)
 
 _DATASET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 SOURCE_PROVENANCE_SCHEMA = "opentraces.dataset.source_provenance.v1"
@@ -1119,7 +1122,7 @@ def publish_dataset(
     while True:
         attempts += 1
         remote_head_before = _remote_head(repo_id, token)
-        _check_remote_schema_not_ahead(dataset, repo_id)
+        _check_remote_schema_not_ahead(dataset, repo_id, token)
         state = evaluate_publication_state(name)
         remote_row_ids = _remote_row_ids(repo_id, dataset.manifest.identity, token)
         rows_by_id = read_rows_by_id(name)
@@ -1476,14 +1479,63 @@ def _changed_staged_files(repo_id: str, staging: Path, token: str | None) -> lis
     return sorted(changed)
 
 
-def _check_remote_schema_not_ahead(dataset: LocalDataset, repo_id: str) -> None:
+def _remote_card_text(repo_id: str, token: str | None = None) -> str | None:
+    """Return the remote dataset card (README.md) text, or ``None`` if absent.
+
+    ``None`` is the "treat remote as fresh" signal: no card on the remote yet
+    (first publish) or an unreadable / unreachable remote. Matching the
+    HFUploader's lenient stance, a missing card or a network blip never blocks a
+    publish — we would rather stamp our own fresh schema than fail on a hiccup.
+
+    The fake-remote path (Plan 058 tests) is preserved byte-for-byte: read the
+    on-disk README.md if it exists, else return ``None``.
+    """
     remote_root = _fake_remote_dir(repo_id)
-    if remote_root is None:
+    if remote_root is not None:
+        card = remote_root / "README.md"
+        if card.exists():
+            return card.read_text(encoding="utf-8")
+        return None
+
+    try:
+        from huggingface_hub.errors import (  # type: ignore
+            EntryNotFoundError,
+            RepositoryNotFoundError,
+        )
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import (  # type: ignore
+            EntryNotFoundError,
+            RepositoryNotFoundError,
+        )
+
+    from huggingface_hub import HfApi
+
+    try:
+        local_path = HfApi(token=token).hf_hub_download(
+            repo_id=repo_id,
+            filename="README.md",
+            repo_type="dataset",
+        )
+    except (EntryNotFoundError, RepositoryNotFoundError):
+        return None
+    except Exception as e:  # network blip / unexpected 404 variant
+        logger.debug("Could not fetch README.md for %s: %s", repo_id, e)
+        return None
+
+    try:
+        return Path(local_path).read_text(encoding="utf-8")
+    except OSError as e:
+        logger.debug("README.md at %s is not readable: %s", repo_id, e)
+        return None
+
+
+def _check_remote_schema_not_ahead(
+    dataset: LocalDataset, repo_id: str, token: str | None = None
+) -> None:
+    card_text = _remote_card_text(repo_id, token)
+    if card_text is None:
         return
-    card = remote_root / "README.md"
-    if not card.exists():
-        return
-    contract = _read_card_contract(card.read_text(encoding="utf-8"))
+    contract = _read_card_contract(card_text)
     remote_schema = contract.get("schema") if isinstance(contract, dict) else None
     remote_version = remote_schema.get("version") if isinstance(remote_schema, dict) else None
     local_version = dataset.manifest.schema_ref.version
