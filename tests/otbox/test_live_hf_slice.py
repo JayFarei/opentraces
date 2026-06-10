@@ -271,6 +271,79 @@ def _post_verify(repos: live_hf.LiveRepos, journey: str) -> None:
         )
 
 
+def test_live_hf_schema_ahead_blocks_publish(driver):
+    """Phase B4: a REAL `dataset publish` against a remote whose dataset
+    card advertises a NEWER schema must refuse with the schema-ahead block
+    (exit 3) instead of overwriting. End-to-end proof that the negotiation
+    is reachable from the live path (previously fake-remote-only)."""
+    _require_live()
+    cp = resolve_checkpoint(driver, _DEFAULT_CHECKPOINT)
+    box = cp.box
+    repos = live_hf.provision_live_repos(box.box_id)
+    passed = False
+    try:
+        base = driver.cli_argv(box)
+        proj = box.project
+
+        (proj / "live_rows.jsonl").write_text(
+            '{"source_trace_id": "t-1", "source_unit_id": "tu:t-1:trace", '
+            '"summary": "schema-ahead live row"}\n',
+            encoding="utf-8",
+        )
+        (proj / "live_schema.json").write_text(
+            '{"type": "object", "properties": {"source_trace_id": '
+            '{"type": "string"}, "source_unit_id": {"type": "string"}, '
+            '"summary": {"type": "string"}}, '
+            '"required": ["source_trace_id", "summary"]}\n',
+            encoding="utf-8",
+        )
+        for argv in (
+            ["dataset", "new", "live-schema-ahead", "--rows-file",
+             "live_rows.jsonl", "--schema", "live_schema.json"],
+            ["dataset", "remote", "create", "live-schema-ahead",
+             repos.dataset_repo, "--private"],
+            ["dataset", "review", "approve", "live-schema-ahead", "--all"],
+        ):
+            res = driver.exec(box, base + argv, live_hf=True)
+            assert res.returncode == 0, (
+                f"setup step {argv} failed rc={res.returncode}: "
+                f"{(res.stderr or res.stdout)[-400:]}"
+            )
+
+        # Doctor the REAL remote's card to advertise a newer schema.
+        api = live_hf._api(repos.token)
+        api.upload_file(
+            path_or_fileobj=(
+                b"---\nopentraces:\n  schema:\n    version: 9.0.0\n---\n# newer\n"
+            ),
+            path_in_repo="README.md",
+            repo_id=repos.dataset_repo,
+            repo_type="dataset",
+        )
+
+        res = driver.exec(
+            box, base + ["dataset", "publish", "live-schema-ahead"], live_hf=True
+        )
+        assert res.returncode == 3, (
+            f"live publish against a remote-newer schema must exit 3, got "
+            f"rc={res.returncode}: {(res.stderr or res.stdout)[-400:]}"
+        )
+        combined = (res.stderr or "") + (res.stdout or "")
+        assert "schema" in combined.lower(), combined[-400:]
+        # The block must be a real refusal: no data shards may have landed.
+        files = set(
+            api.list_repo_files(repo_id=repos.dataset_repo, repo_type="dataset")
+        )
+        assert not any(f.startswith("data/") for f in files), (
+            f"schema-ahead publish must not upload shards: {sorted(files)[:10]}"
+        )
+        passed = True
+    finally:
+        live_hf.cleanup_live_repos(repos, passed=passed)
+        if box.root.exists():
+            driver.teardown(box)
+
+
 @pytest.mark.parametrize("journey", LIVE_JOURNEYS)
 def test_live_hf_journey(driver, journey):
     _require_live()
@@ -280,12 +353,19 @@ def test_live_hf_journey(driver, journey):
     # {live_bucket_repo}/{live_dataset_repo} from the registry.
     repos = live_hf.provision_live_repos(box.box_id)
     passed = False
+    result = None
     try:
         result = run_journey(driver, box, journey)
         assert result.verdict == "PASS", _fmt_failures(result)
         _post_verify(repos, journey)
         passed = True
     finally:
+        if result is not None:
+            # Same executed-evidence ledger records the nightly slice drops
+            # (enabled by OTBOX_LEDGER_DIR; ci-release compacts them).
+            from tests.otbox.test_otbox_slice import _record_ledger_verdict
+
+            _record_ledger_verdict(journey, result)
         live_hf.cleanup_live_repos(repos, passed=passed)
         if box.root.exists():
             driver.teardown(box)
