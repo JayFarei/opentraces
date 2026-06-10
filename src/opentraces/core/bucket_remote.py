@@ -125,16 +125,41 @@ def remote_pull(
     """
 
     if fake_root is not None:
-        return _fake_payload(_substrate_aware_fake_pull(fake_root=fake_root, force=force))
+        return _mark_pull_dirty(
+            _fake_payload(_substrate_aware_fake_pull(fake_root=fake_root, force=force))
+        )
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
         if fake_remote_root() is not None:
-            return _fake_payload(_substrate_aware_fake_pull(force=force))
+            return _mark_pull_dirty(
+                _fake_payload(_substrate_aware_fake_pull(force=force))
+            )
         raise BucketRemoteError("private bucket remote is not configured")
     if remote.provider == "fake":
-        return _fake_payload(_substrate_aware_fake_pull(force=force))
-    return _hf_pull(remote.url, cfg.hf_token, force=force, eager=eager)
+        return _mark_pull_dirty(_fake_payload(_substrate_aware_fake_pull(force=force)))
+    return _mark_pull_dirty(_hf_pull(remote.url, cfg.hf_token, force=force, eager=eager))
+
+
+def _mark_pull_dirty(result: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort search-snapshot dirty mark after a pull changed the bucket.
+
+    A completed pull rewrites/deletes trace envelopes under the bucket traces
+    tree, so the read-only trace search snapshot must be rebuilt. Only marks
+    when the pull actually transferred files (``files_downloaded`` for the HF
+    adapter, ``files_copied`` for the fake adapter); a selective pull that
+    copied nothing left the local bucket untouched.
+    """
+
+    changed = bool(result.get("files_downloaded") or result.get("files_copied"))
+    if result.get("state") == "pulled" and changed:
+        try:
+            from .trace_search_state import mark_search_snapshot_dirty
+
+            mark_search_snapshot_dirty("bucket_remote_pull")
+        except Exception:
+            pass
+    return result
 
 
 def reconcile_once(*, reason: str = "manual") -> dict[str, Any]:

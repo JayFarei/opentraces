@@ -103,7 +103,7 @@ transcripts.
 
 ```bash
 opentraces trace query --lex "bug fix failing test" --json
-opentraces trace query --cwd --remote-bucket --json
+opentraces trace query --cwd --json  # remote traces: opentraces bucket remote pull first
 opentraces trace query --skill grill-me --json
 opentraces trace index rebuild --json
 opentraces trace map <trace_id> --candidate <unit_id> --json

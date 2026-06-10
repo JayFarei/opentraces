@@ -8,8 +8,10 @@ raw traces, then search opens it read-only and immutable.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -30,7 +32,7 @@ from .trace_map import build_trace_map, slice_trace_map_for_candidate
 from .trace_search_state import clear_dirty_marker_if_unchanged, current_dirty_token
 
 
-SNAPSHOT_SCHEMA_VERSION = "opentraces.trace_search_snapshot.v2"
+SNAPSHOT_SCHEMA_VERSION = "opentraces.trace_search_snapshot.v3"
 SNAPSHOT_DB_NAME = "search.sqlite"
 DEFAULT_LIMIT = 20
 VISIBLE_FILE_LIMIT = 8
@@ -185,18 +187,47 @@ def default_snapshot_path() -> Path:
     return paths.OPENTRACES_DIR / "index" / SNAPSHOT_DB_NAME
 
 
+@contextlib.contextmanager
+def _build_lock(snapshot_path: Path):
+    """Serialize snapshot builds so one build can never publish another's tmp."""
+
+    lock_path = snapshot_path.with_name(f"{snapshot_path.name}.build.lock")
+    try:
+        import fcntl
+    except ImportError:  # non-POSIX fallback: best-effort, unserialized
+        yield
+        return
+    with open(lock_path, "w", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def build_trace_search_snapshot(path: Path | None = None) -> SnapshotSummary:
     """Build a fresh compact snapshot and atomically replace the serving DB."""
 
     snapshot_path = path or default_snapshot_path()
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = snapshot_path.with_name(f"{snapshot_path.name}.tmp")
+    with _build_lock(snapshot_path):
+        return _build_trace_search_snapshot_locked(snapshot_path)
+
+
+def _build_trace_search_snapshot_locked(snapshot_path: Path) -> SnapshotSummary:
+    # Per-process tmp name: a crashed or concurrent build's leftover tmp can
+    # never be adopted or published by another build.
+    tmp_path = snapshot_path.with_name(f"{snapshot_path.name}.{os.getpid()}.tmp")
+    for stale in snapshot_path.parent.glob(f"{snapshot_path.name}.*.tmp*"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     if tmp_path.exists():
         tmp_path.unlink()
     _unlink_sidecars(tmp_path)
 
     dirty_token_before_build = current_dirty_token()
-    source_hasher = hashlib.sha256()
     trace_count = 0
     seen_trace_ids: set[str] = set()
     try:
@@ -208,9 +239,11 @@ def build_trace_search_snapshot(path: Path | None = None) -> SnapshotSummary:
                     continue
                 seen_trace_ids.add(doc.trace_id)
                 _insert_doc(conn, doc)
-                _update_source_hash(source_hasher, doc)
                 trace_count += 1
-            source_hash = source_hasher.hexdigest()
+            # Order-independent corpus hash over the per-trace content hashes
+            # already stored on each row, so an incremental refresh and a full
+            # rebuild of identical content converge to the same value.
+            source_hash = _meta_hash_from_db(conn)
             _write_meta(conn, source_hash, trace_count)
             try:
                 conn.execute("insert into trace_fts(trace_fts) values('optimize')")
@@ -228,6 +261,163 @@ def build_trace_search_snapshot(path: Path | None = None) -> SnapshotSummary:
         if tmp_path.exists():
             tmp_path.unlink()
         _unlink_sidecars(tmp_path)
+        raise
+
+    return SnapshotSummary(
+        path=snapshot_path,
+        trace_count=trace_count,
+        schema_version=SNAPSHOT_SCHEMA_VERSION,
+        source_hash=source_hash,
+    )
+
+
+def _meta_hash_from_db(conn: sqlite3.Connection) -> str:
+    """Corpus hash derived from the per-trace content hashes in the DB.
+
+    Order-independent (sorted by trace_id), so a bounded incremental refresh
+    and a full rebuild of identical content produce the same value.
+    """
+
+    hasher = hashlib.sha256()
+    for row in conn.execute("select trace_id, source_hash from traces order by trace_id"):
+        hasher.update(f"{row[0]}:{row[1]}\n".encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def _delete_trace_rows(conn: sqlite3.Connection, trace_id: str) -> None:
+    for table in (
+        "traces",
+        "trace_facets",
+        "trace_files",
+        "trace_tools",
+        "trace_skills",
+        "trace_signals",
+        "trace_concepts",
+    ):
+        conn.execute(f"delete from {table} where trace_id = ?", (trace_id,))
+
+
+def _load_doc_for_trace_id(trace_id: str) -> _SearchDocument | None:
+    """Bounded single-trace doc load: bucket pointer first, then legacy stores."""
+
+    from .bucket_store import read_trace_record_object, trace_records_root
+
+    root = trace_records_root()
+    if root.exists():
+        for pointer_path in sorted(root.glob(f"*/{trace_id}/current.json")):
+            obj = read_trace_record_object(pointer_path)
+            if obj is None:
+                continue
+            return _doc_from_record(
+                obj.record,
+                project_slug=obj.project_slug,
+                source_layer=obj.source_layer,
+                trace_path=obj.path,
+            )
+    from . import trace_index as ti
+
+    projects_root = paths.PROJECTS_DIR
+    if projects_root.exists():
+        for trace_path in sorted(projects_root.glob(f"*/traces/{trace_id}.jsonl")):
+            for record in ti._iter_trace_file_records(trace_path):
+                if record.trace_id == trace_id:
+                    return _doc_from_record(
+                        record,
+                        project_slug=trace_path.parent.parent.name,
+                        source_layer="canonical",
+                        trace_path=trace_path,
+                    )
+    staging_root = getattr(paths, "STAGING_DIR", None)
+    if staging_root and staging_root.exists():
+        for trace_path in sorted(staging_root.glob(f"{trace_id}.jsonl")):
+            for record in ti._iter_trace_file_records(trace_path):
+                if record.trace_id == trace_id:
+                    return _doc_from_record(
+                        record,
+                        project_slug="_staging",
+                        source_layer="staging",
+                        trace_path=trace_path,
+                    )
+    return None
+
+
+def refresh_trace_search_snapshot(
+    changed_trace_ids: list[str] | tuple[str, ...] = (),
+    deleted_trace_ids: list[str] | tuple[str, ...] = (),
+    *,
+    path: Path | None = None,
+) -> SnapshotSummary | None:
+    """Bounded incremental refresh of the read-only snapshot (keep-warm path).
+
+    Copies the serving file, applies the per-trace delta, rebuilds the FTS
+    index from content, and atomically swaps — the serving snapshot stays
+    immutable for readers throughout. Returns ``None`` (leaving any dirty
+    marker in place as the backstop for an explicit ``trace index`` rebuild)
+    when there is no snapshot, the schema is from another version, or there
+    is nothing to apply.
+    """
+
+    snapshot_path = path or default_snapshot_path()
+    if not snapshot_path.exists():
+        return None
+    ids = list(dict.fromkeys([*changed_trace_ids, *deleted_trace_ids]))
+    if not ids:
+        return None
+    with _build_lock(snapshot_path):
+        return _refresh_snapshot_locked(snapshot_path, changed_trace_ids, ids)
+
+
+def _refresh_snapshot_locked(
+    snapshot_path: Path,
+    changed_trace_ids: list[str] | tuple[str, ...],
+    all_ids: list[str],
+) -> SnapshotSummary | None:
+    import shutil
+
+    dirty_token_before = current_dirty_token()
+    tmp_path = snapshot_path.with_name(f"{snapshot_path.name}.{os.getpid()}.refresh.tmp")
+    try:
+        shutil.copyfile(snapshot_path, tmp_path)
+        with sqlite3.connect(tmp_path) as conn:
+            conn.execute("pragma journal_mode=DELETE")
+            row = conn.execute(
+                "select value from snapshot_meta where key = 'schema_version'"
+            ).fetchone()
+            if row is None or str(row[0]) != SNAPSHOT_SCHEMA_VERSION:
+                tmp_path.unlink()
+                return None
+            for trace_id in all_ids:
+                _delete_trace_rows(conn, trace_id)
+            for trace_id in dict.fromkeys(changed_trace_ids):
+                doc = _load_doc_for_trace_id(trace_id)
+                if doc is not None:
+                    _insert_doc(conn, doc)
+            # External-content FTS: regenerate wholesale from the content
+            # table instead of per-row delete bookkeeping (sub-second at the
+            # corpus sizes the snapshot is built for).
+            conn.execute("insert into trace_fts(trace_fts) values('rebuild')")
+            trace_count = conn.execute("select count(*) from traces").fetchone()[0]
+            source_hash = _meta_hash_from_db(conn)
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            conn.executemany(
+                "insert into snapshot_meta(key, value) values (?, ?) "
+                "on conflict(key) do update set value = excluded.value",
+                [
+                    ("built_at", now),
+                    ("source_hash", source_hash),
+                    ("trace_count", str(trace_count)),
+                ],
+            )
+            conn.commit()
+        tmp_path.replace(snapshot_path)
+        _unlink_sidecars(snapshot_path)
+        clear_dirty_marker_if_unchanged(dirty_token_before)
+    except Exception:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
         raise
 
     return SnapshotSummary(
@@ -257,7 +447,11 @@ def search_traces(
     semantic_expansion = expand_semantic_query(semantic) if semantic else None
     semantic_ids = set((semantic_expansion or {}).get("concept_ids") or [])
     if semantic and not semantic_ids:
-        raise SearchSnapshotNeedsRebuild("semantic_index_missing", path=snapshot_path)
+        # Base parity: a semantic phrase outside the deterministic concept
+        # lexicon falls back to lexical matching over the phrase itself
+        # (never a maintenance_needed dead-end — no rebuild can make an
+        # unknown concept match).
+        terms = terms or _terms(semantic)
 
     offset = _page_offset(cursor)
     page_size = max(1, int(limit or DEFAULT_LIMIT))
@@ -416,18 +610,25 @@ def get_trace_source_path(trace_id: str, path: Path | None = None) -> Path | Non
 
 
 def _iter_documents():
-    yielded_bucket = False
+    # Union of the bucket layer and the legacy project/staging stores, deduped
+    # by trace_id with the bucket winning. A bucket-only early-return would
+    # make legacy-store traces invisible until a keep-warm sync mirrors them,
+    # so an explicit rebuild must read both layers itself.
+    seen: set[str] = set()
     for record, project_slug, source_layer, trace_path in _iter_bucket_trace_records():
-        yielded_bucket = True
+        if record.trace_id in seen:
+            continue
+        seen.add(record.trace_id)
         yield _doc_from_record(
             record,
             project_slug=project_slug,
             source_layer=source_layer,
             trace_path=trace_path,
         )
-    if yielded_bucket:
-        return
     for record, project_slug, source_layer, trace_path in _iter_legacy_trace_records():
+        if record.trace_id in seen:
+            continue
+        seen.add(record.trace_id)
         yield _doc_from_record(
             record,
             project_slug=project_slug,
@@ -794,29 +995,31 @@ def _query_rows(
         )
         params.append(filters.file_kind.lstrip(".").lower())
     if filters.file_op:
-        where.append(_facet_exists("file.operation"))
-        params.append(_norm(filters.file_op))
+        where.append(_facet_exists())
+        params.extend(["file.operation", _norm(filters.file_op)])
     if filters.signal:
         where.append(
             "exists (select 1 from trace_signals ts where ts.trace_id = traces.trace_id and ts.signal_name = ?)"
         )
         params.append(filters.signal)
     for name, value in _parse_key_value_filters(filters.facet_filters):
-        where.append(_facet_exists(name))
-        params.append(_norm(value))
+        where.append(_facet_exists())
+        params.extend([name, _norm(value)])
     for name, value in _named_filter_pairs(filters):
-        where.append(_facet_exists(name))
-        params.append(_norm(value))
+        where.append(_facet_exists())
+        params.extend([name, _norm(value)])
     if filters.success is not None:
-        where.append(_facet_exists("outcome.success"))
-        params.append(_norm(str(filters.success)))
+        where.append(_facet_exists())
+        params.extend(["outcome.success", _norm(str(filters.success))])
     elif filters.success_unknown:
-        where.append("not " + _facet_exists("outcome.success"))
+        where.append(_bool_facet_unknown())
+        params.append("outcome.success")
     if filters.committed is not None:
-        where.append(_facet_exists("outcome.committed"))
-        params.append(_norm(str(filters.committed)))
+        where.append(_facet_exists())
+        params.extend(["outcome.committed", _norm(str(filters.committed))])
     elif filters.committed_unknown:
-        where.append("not " + _facet_exists("outcome.committed"))
+        where.append(_bool_facet_unknown())
+        params.append("outcome.committed")
     if filters.candidate_kind:
         if filters.candidate_kind == "trace":
             where.append("traces.candidate_kind = 'trace'")
@@ -967,11 +1170,25 @@ def _exists(table: str, column: str) -> str:
     )
 
 
-def _facet_exists(name: str) -> str:
+def _facet_exists() -> str:
+    # The facet name is bound as a parameter (never interpolated): SQLite
+    # treats double-quoted strings as identifiers when they collide with a
+    # column name, which silently captured names like ``project_slug``.
     return (
         "exists (select 1 from trace_facets tf "
-        "where tf.trace_id = traces.trace_id and tf.name = "
-        f"{json.dumps(name)} and tf.value_norm = ?)"
+        "where tf.trace_id = traces.trace_id and tf.name = ? "
+        "and tf.value_norm = ?)"
+    )
+
+
+def _bool_facet_unknown() -> str:
+    # Base-parity ``--unknown-*`` semantics: the facet is absent OR carries a
+    # non-boolean value (e.g. ``outcome.committed`` is always emitted, with a
+    # ``none`` value when unknown).
+    return (
+        "not exists (select 1 from trace_facets tf "
+        "where tf.trace_id = traces.trace_id and tf.name = ? "
+        "and tf.value_norm in ('true', 'false'))"
     )
 
 
@@ -1137,12 +1354,6 @@ def _source_hash(docs: list[_SearchDocument]) -> str:
         for doc in sorted(docs, key=lambda item: item.trace_id)
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def _update_source_hash(hasher: Any, doc: _SearchDocument) -> None:
-    hasher.update(
-        f"{doc.trace_id}\t{doc.source_hash}\t{doc.latest_generation}\n".encode("utf-8")
-    )
 
 
 def _record_hash(record: Any, trace_path: Path) -> str:

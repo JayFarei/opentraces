@@ -106,42 +106,61 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
     _enroll_project(project, "1234567890abcdef1234567890abcdef")
     _write_project_trace(project, _trace())
 
+    # `trace map`/`trace get`/`trace slice` still read the legacy Trace Index,
+    # which capture-time keep-warm owns now (the snapshot rebuild below must
+    # not touch it). Build it the way maintenance does.
+    from opentraces.core.trace_index import rebuild_index
+
+    rebuild_index()
+
     runner = CliRunner()
     rebuilt = runner.invoke(main, ["trace", "index", "rebuild", "--json"])
     assert rebuilt.exit_code == 0, rebuilt.output
     payload = json.loads(rebuilt.output)
     assert payload["status"] == "ok"
-    assert payload["index"]["trace_count"] == 1
-    assert payload["index"]["unit_count"] > 1
-    assert payload["search_projection"]["doc_count"] == payload["index"]["unit_count"]
-    assert "/bucket/projections/search/v1/builds/" in payload["search_projection"]["build_path"]
+    assert payload["search_snapshot"]["trace_count"] == 1
+    assert payload["search_snapshot"]["schema_version"]
+    assert payload["search_snapshot"]["source_hash"]
+    assert Path(payload["search_snapshot"]["path"]).exists()
+    # The legacy index is no longer rebuilt (or reported) by this command.
+    assert "index" not in payload
 
     status = runner.invoke(main, ["trace", "index", "status", "--json"])
     assert status.exit_code == 0, status.output
     status_payload = json.loads(status.output)
-    assert status_payload["index"]["exists"] is True
-    assert status_payload["index"]["trace_count"] == 1
-    assert status_payload["search_projection"]["state"] == "ok"
-    assert status_payload["search_projection"]["build_id"] == payload["search_projection"]["build_id"]
+    assert status_payload["status"] == "ok"
+    snapshot = status_payload["search_snapshot"]
+    assert snapshot["state"] == "ok"
+    assert snapshot["trace_count"] == 1
+    assert snapshot["dirty"] is False
+    assert snapshot["wal_exists"] is False
+    assert snapshot["shm_exists"] is False
+    # Status reports the exact build the rebuild produced.
+    assert snapshot["source_hash"] == payload["search_snapshot"]["source_hash"]
 
     query = runner.invoke(
         main,
-        [
-            "trace",
-            "query",
-            "--source",
-            "projection",
-            "--lex",
-            "clack",
-            "--json",
-        ],
+        ["trace", "query", "--lex", "clack", "--json"],
     )
     assert query.exit_code == 0, query.output
     query_payload = json.loads(query.output)
-    assert query_payload["source"] == "projection"
+    assert query_payload["source"] == "snapshot"
     assert query_payload["total"] >= 1
     assert query_payload["candidates"][0]["trace_id"] == "trace-local-index-cli"
-    assert query_payload["candidates"][0]["score_parts"]["projection_lexical"] > 0
+    # Lexical queries ride the snapshot's FTS table; the legacy
+    # projection_lexical score part is gone (BM25 can round to 0.0 on a
+    # one-doc corpus, so assert the shape + path, not a positive score).
+    assert query_payload["search_diagnostics"]["used_search_snapshot"] is True
+    assert query_payload["search_diagnostics"]["used_fts"] is True
+    assert set(query_payload["candidates"][0]["score_parts"]) <= {"snapshot_fts"}
+
+    # --source projection is no longer a query-time lifecycle selector.
+    legacy_source = runner.invoke(
+        main,
+        ["trace", "query", "--source", "projection", "--lex", "clack", "--json"],
+    )
+    assert legacy_source.exit_code == 2
+    assert "no longer a query-time lifecycle selector" in legacy_source.output
 
     get_result = runner.invoke(
         main,
@@ -212,16 +231,28 @@ def test_trace_query_semantic_uses_projection_aliases(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _mongo_trace())
+    # A second, non-mongo trace proves the alias expansion actually filters.
+    _write_project_trace(project, _trace())
 
     runner = CliRunner()
+    rebuilt = runner.invoke(main, ["trace", "index", "--json"])
+    assert rebuilt.exit_code == 0, rebuilt.output
+
     result = runner.invoke(
         main,
-        ["trace", "query", "--semantic", "mongodb", "--force-rebuild", "--json"],
+        ["trace", "query", "--semantic", "mongodb", "--json"],
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["source"] == "projection"
+    assert payload["source"] == "snapshot"
     assert payload["semantic_query"]["concept_ids"] == ["service:mongodb"]
-    assert payload["candidates"][0]["trace_id"] == "trace-local-semantic-mongo"
-    assert payload["candidates"][0]["score_parts"]["projection_semantic"] > 0
-    assert payload["candidates"][0]["matched_fields"]["semantic"] == ["mongodb"]
+    # The "mongodb" alias resolves through the indexed concept table: only the
+    # pymongo trace matches, even though the query text never appears in it.
+    assert [packet["trace_id"] for packet in payload["candidates"]] == [
+        "trace-local-semantic-mongo"
+    ]
+    # Semantic hits are concept-table joins, not FTS scores, in the snapshot.
+    assert payload["candidates"][0]["score_parts"] == {}
+    assert payload["search_diagnostics"]["used_search_snapshot"] is True
+    assert payload["search_diagnostics"]["used_fts"] is False
+    assert payload["search_diagnostics"]["raw_trace_scan"] is False

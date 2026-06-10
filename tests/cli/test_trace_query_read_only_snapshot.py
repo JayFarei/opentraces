@@ -150,12 +150,23 @@ def test_trace_index_command_rebuilds_search_snapshot() -> None:
     assert Path(payload["search_snapshot"]["path"]).exists()
 
 
-def test_trace_index_command_does_not_rebuild_legacy_trace_index(monkeypatch) -> None:
+def test_trace_index_command_does_not_rebuild_existing_legacy_trace_index(monkeypatch) -> None:
+    """With a legacy index present, ``trace index`` must never full-rebuild it.
+
+    The one exception is bootstrap: when the legacy DB is missing entirely
+    (the issue-#22 operator recovery deletes it), the verb heals it once so
+    ``trace map/get/slice`` keep working — hence the explicit seed below
+    before full rebuilds are forbidden.
+    """
     _write_trace("demo-project", _trace("trace-site", "Fix site search"))
     from opentraces.core import trace_index as ti
 
+    ti.refresh_index()  # seed the legacy index (missing-db bootstrap path)
+
     def forbidden(*_args, **_kwargs):
-        raise AssertionError("trace index should rebuild only the search snapshot")
+        raise AssertionError(
+            "trace index must not full-rebuild an existing legacy Trace Index"
+        )
 
     monkeypatch.setattr(ti, "rebuild_index", forbidden)
     runner = CliRunner()
@@ -166,6 +177,7 @@ def test_trace_index_command_does_not_rebuild_legacy_trace_index(monkeypatch) ->
     payload = json.loads(result.output)
     assert payload["search_snapshot"]["trace_count"] == 1
     assert "index" not in payload
+    assert payload["legacy_index"]["healed"] is False
 
 
 def test_trace_index_status_is_snapshot_first_without_legacy_inspection(monkeypatch) -> None:

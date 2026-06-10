@@ -45,6 +45,14 @@ def _trace_index_status() -> dict[str, Any]:
         search_freshness = {"state": "error", "error": str(exc)}
     source_files = sorted(paths.PROJECTS_DIR.glob("*/traces/*.jsonl")) if paths.PROJECTS_DIR.exists() else []
     source_latest_mtime = max((p.stat().st_mtime for p in source_files), default=None)
+    # The read-only search snapshot is the surface ``trace query`` actually
+    # serves from; report it alongside the legacy index it replaced.
+    try:
+        from .trace_search_snapshot import snapshot_status
+
+        search_snapshot = snapshot_status()
+    except Exception as exc:  # noqa: BLE001 — doctor must never crash.
+        search_snapshot = {"state": "error", "error": str(exc)}
     base = {
         "index_path": str(index_path),
         "expected_version": INDEX_VERSION,
@@ -54,6 +62,7 @@ def _trace_index_status() -> dict[str, Any]:
         "legacy_artifacts": legacy_artifacts,
         "legacy_warning": bool(legacy_artifacts),
         "search_projection_freshness": search_freshness,
+        "search_snapshot": search_snapshot,
     }
     if not index_path.exists():
         return {

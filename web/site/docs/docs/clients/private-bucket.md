@@ -7,7 +7,8 @@ debugging scripts, and workflow builders that need raw context.
 ## Read From A Remote Bucket
 
 ```bash
-opentraces trace query --remote-bucket --cwd --json
+opentraces bucket remote pull --json  # sync remote traces before querying
+opentraces trace query --cwd --json
 opentraces trace get <trace-id> --remote owner/private-bucket --json
 opentraces trail blame commit <sha> --json
 opentraces ctx tree <trace-id> --json

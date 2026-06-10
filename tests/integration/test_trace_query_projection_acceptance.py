@@ -118,19 +118,16 @@ def test_semantic_query_finds_service_from_dependency_evidence(
     ).lower()
     assert "mongodb" not in prompt_material
 
+    from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
+
+    build_trace_search_snapshot()
     runner = CliRunner()
     result = runner.invoke(main, ["trace", "query", "--semantic", "mongodb", "--json"])
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["source"] == "projection"
+    assert payload["source"] == "snapshot"
     assert payload["semantic_query"]["concept_ids"] == ["service:mongodb"]
-    status = search_projection_status()
-    assert status["state"] == "ok"
-    assert status["manifest"]["capabilities"]["semantic_ready"] is True
 
     candidates = {candidate["trace_id"]: candidate for candidate in payload["candidates"]}
     assert "p59-c-022-mongo" in candidates
-    candidate = candidates["p59-c-022-mongo"]
-    assert candidate["score_parts"]["projection_semantic"] > 0
-    assert candidate["matched_fields"]["semantic"] == ["mongodb"]

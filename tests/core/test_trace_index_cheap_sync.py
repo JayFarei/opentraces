@@ -16,6 +16,14 @@ The contract pinned here:
   zero ``refresh_index`` calls, zero ``refresh_search_projection`` calls, and
   the wall-clock stays well under the 2s budget.
 
+NOTE (read-only snapshot architecture): ``trace query`` no longer routes
+through cheap sync at all — queries serve an immutable SQLite FTS snapshot
+and never build/sync/mutate. ``cheap_sync_query_state`` remains the bounded
+incremental maintenance primitive for the capture-time keep-warm path
+(``keep_index_warm`` / ``trace index refresh``), which is what these core
+contracts pin. The CLI-facing test at the bottom pins the new read-only
+query contract.
+
 The autouse ``_isolate_opentraces_global_state`` fixture (tests/conftest.py)
 redirects ``~/.opentraces`` into a tmp HOME, so these are hermetic.
 """
@@ -427,19 +435,29 @@ def test_cheap_sync_detects_deleted_trace(tmp_path):
     assert all(c.trace_id != "trace-beta" for c in page.candidates)
 
 
-def test_trace_query_cli_reflects_new_trace_without_rebuild(tmp_path, monkeypatch):
-    """End-to-end: ``trace query`` surfaces a trace written after warm-up,
-    routed through the cheap-sync path (no full rebuild)."""
+def test_trace_query_is_read_only_and_reflects_new_trace_after_explicit_rebuild(
+    tmp_path, monkeypatch
+):
+    """End-to-end: ``trace query`` never syncs/rebuilds at query time anymore.
+
+    The plan-087 cheap-sync-then-serve hot path was replaced by the explicit
+    read-only search snapshot: a trace written after the snapshot build (a
+    direct file write, which does NOT mark the snapshot dirty) is served STALE
+    (absent, status ok) without triggering any index rebuild. Only an explicit
+    ``opentraces trace index`` makes it queryable.
+    """
     from click.testing import CliRunner
 
     from opentraces.cli import main
+    from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
 
     project = tmp_path / "demo"
     _enroll_project(project, "1234567890abcdef1234567890abcdef")
     _write_project_trace(project, _trace_with("trace-alpha", "alpha"))
     _warm(project)
+    build_trace_search_snapshot()
 
-    # Brand-new trace after the warm index was built.
+    # Brand-new trace after the snapshot was built.
     _write_project_trace(project, _trace_with("trace-gamma", "gamma"))
 
     rebuild_calls = {"n": 0}
@@ -452,9 +470,31 @@ def test_trace_query_cli_reflects_new_trace_without_rebuild(tmp_path, monkeypatc
     monkeypatch.setattr(ti, "rebuild_index", spy_rebuild)
 
     runner = CliRunner()
+    stale = runner.invoke(main, ["trace", "query", "--lex", "gamma", "--json"])
+    assert stale.exit_code == 0, stale.output
+    stale_payload = json.loads(stale.output)
+    assert all(c["trace_id"] != "trace-gamma" for c in stale_payload["candidates"]), (
+        "query must serve the immutable snapshot, not sync in the new trace"
+    )
+    assert stale_payload["search_diagnostics"]["wrote_to_index"] is False
+    assert stale_payload["search_diagnostics"]["rebuilt_index"] is False
+    assert rebuild_calls["n"] == 0, "CLI query must never rebuild the index"
+
+    # Maintenance path (capture-time keep-warm in real flows): the bounded
+    # cheap sync mirrors the new trace into the bucket store — still no full
+    # rebuild — and the explicit snapshot rebuild then picks it up.
+    sync = ti.cheap_sync_query_state(query_source="index")
+    assert sync.synced is True
+    assert "trace-gamma" in set(sync.changed_trace_ids)
+
+    rebuilt = runner.invoke(main, ["trace", "index", "--json"])
+    assert rebuilt.exit_code == 0, rebuilt.output
+
     result = runner.invoke(main, ["trace", "query", "--lex", "gamma", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     trace_ids = {c["trace_id"] for c in payload["candidates"]}
     assert "trace-gamma" in trace_ids
-    assert rebuild_calls["n"] == 0, "CLI query must reach the trace via cheap sync, not rebuild"
+    assert rebuild_calls["n"] == 0, (
+        "the snapshot rebuild must not full-rebuild the legacy Trace Index"
+    )

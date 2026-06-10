@@ -625,13 +625,41 @@ def trace_index_rebuild_cmd(as_json: bool) -> None:
 
 
 def _trace_index_rebuild_impl(as_json: bool) -> None:
-    """Rebuild the explicit read-only snapshot used by trace search."""
+    """Rebuild the read-only search snapshot and converge the warm surfaces.
+
+    Order matters: the bounded keep-warm sync first runs the staging→bucket
+    bridge and incrementally heals the legacy Trace Index + projection that
+    ``trace map/get/slice`` hydrate from (never a full legacy rebuild — that
+    is the multi-GB writer issue #22 is about), so the snapshot built
+    afterwards ingests every layer the dirty marker can be set for and a
+    rebuild always converges to clean.
+    """
+    from ..core.trace_index import default_index_path, keep_index_warm, refresh_index
     from ..core.trace_search_snapshot import build_trace_search_snapshot
 
+    healed_legacy_index = False
+    if not default_index_path().exists():
+        # One-time bootstrap: ``trace map/get/slice`` hydrate from the legacy
+        # Trace Index, and nothing else recreates it after the operator
+        # deletes a runaway DB (the issue-#22 recovery move). This is the only
+        # path where the explicit verb pays a full legacy rebuild.
+        refresh_index()
+        healed_legacy_index = True
+    warm_result = keep_index_warm(query_sources=("index", "projection"))
     search_summary = build_trace_search_snapshot()
     payload = {
         "status": "ok",
         "search_snapshot": search_summary.as_dict(),
+        "keep_warm": {
+            "ok": warm_result.ok,
+            "synced": warm_result.synced,
+            "changed": len(warm_result.changed_trace_ids),
+            "deleted": len(warm_result.deleted_trace_ids),
+        },
+        "legacy_index": {
+            "path": str(default_index_path()),
+            "healed": healed_legacy_index,
+        },
     }
     if as_json:
         click.echo(_dump_json(payload))
@@ -639,6 +667,12 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
 
     click.echo(f"Search snapshot rebuilt: {search_summary.path}")
     click.echo(f"  traces:    {search_summary.trace_count}")
+    if warm_result.synced:
+        click.echo(
+            "Warm caches synced: "
+            f"{len(warm_result.changed_trace_ids)} changed, "
+            f"{len(warm_result.deleted_trace_ids)} deleted"
+        )
 
 
 @trace_index_group.command("refresh", cls=OpentracesCommand)

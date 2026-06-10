@@ -125,10 +125,12 @@ def _query_args(row: QueryRow, limit: int) -> list[str]:
         args.append("--include-superseded")
     if row.extra_flags.get("sort"):
         args += ["--sort", row.extra_flags["sort"]]
-    if row.extra_flags.get("min_score") is not None:
-        args += ["--min-score", str(row.extra_flags["min_score"])]
-    if row.extra_flags.get("recency_weight"):
-        args += ["--recency-weight", str(row.extra_flags["recency_weight"])]
+    # Snapshot architecture (issue #22): --min-score / --recency-weight were
+    # removed from the read-only query CLI. recency_weight maps to the
+    # snapshot-native recency ranking; min_score has no CLI equivalent and is
+    # only honoured by the in-process adapters.
+    if row.extra_flags.get("recency_weight") and not row.extra_flags.get("sort"):
+        args += ["--sort", "recency"]
     return args
 
 
@@ -257,6 +259,16 @@ def run_eval(
     # On a cache hit the projection is already built + WAL-checkpointed, so the
     # warm step is skipped and the run is a pure restore-and-measure.
     if not cache_hit:
+        # Queries are read-only against the explicit snapshot now: build it
+        # (and the warm caches) once, exactly like an operator would.
+        build = subprocess.run(
+            [OTD, "trace", "index", "--json"], cwd=str(project_dir), env=env,
+            capture_output=True, text=True, timeout=600,
+        )
+        if build.returncode != 0:
+            raise RuntimeError(
+                f"trace index failed ({build.returncode}): {build.stderr[-400:]}"
+            )
         for warm in (["trace", "query", "--json", "--limit", "5", "--lex", "init"],
                      ["trace", "query", "--json", "--limit", "5", "--semantic", "init"],
                      ["trace", "query", "--json", "--limit", "5", "--files", "*.py"]):

@@ -177,19 +177,25 @@ def test_rebuild_does_not_clear_dirty_marker_created_during_build(monkeypatch) -
         raise AssertionError("concurrent dirty marker should keep snapshot stale")
 
 
-def test_semantic_query_requires_indexed_concept() -> None:
+def test_semantic_query_without_lexicon_concept_returns_empty_not_maintenance() -> None:
+    """An unmatched semantic term is an empty result, never a rebuild loop.
+
+    The concept lexicon is deterministic and in-code: no rebuild can make an
+    unknown term match, so advising ``trace index`` would be an unresolvable
+    maintenance_needed dead-end.
+    """
     _write_trace(
         "demo-project",
         _trace("trace-site", description="Fix the marketing site search hang"),
     )
     build_trace_search_snapshot()
 
-    try:
-        search_traces("unindexed idea", SearchFilters(project="demo-project"), semantic="unindexed idea")
-    except SearchSnapshotNeedsRebuild as exc:
-        assert exc.reason == "semantic_index_missing"
-    else:  # pragma: no cover - assertion clarity
-        raise AssertionError("semantic search should require indexed concepts")
+    page = search_traces(
+        "unindexed idea", SearchFilters(project="demo-project"), semantic="unindexed idea"
+    )
+    assert page.hits == []
+    assert page.total == 0
+    assert page.next_page_token is None
 
 
 def test_semantic_query_uses_indexed_concept_table() -> None:
@@ -373,3 +379,123 @@ def test_search_collapses_duplicate_titles_in_sql() -> None:
     assert [hit.trace_id for hit in page.hits] == ["trace-dup-new", "trace-distinct"]
     assert page.total == 2
     assert page.diagnostics.python_full_corpus_sort is False
+
+
+# --------------------------------------------------------------------------- #
+# review fixes: facet binding, layer union, incremental keep-warm refresh
+# --------------------------------------------------------------------------- #
+def test_facet_filter_name_binds_as_parameter_not_identifier() -> None:
+    """A facet whose name collides with a column (``project_slug``) must match.
+
+    Interpolating the name with double quotes made SQLite resolve it as the
+    ``traces.project_slug`` COLUMN, silently returning zero rows.
+    """
+    _write_trace("demo-project", _trace("trace-facet", description="Facet binding probe"))
+    build_trace_search_snapshot()
+
+    page = search_traces(
+        None,
+        SearchFilters(facet_filters=("project_slug=demo-project",)),
+        limit=5,
+    )
+    assert [hit.trace_id for hit in page.hits] == ["trace-facet"]
+
+    quoted = search_traces(
+        None,
+        SearchFilters(facet_filters=('we"ird=value',)),
+        limit=5,
+    )
+    assert quoted.hits == []
+
+
+def test_unknown_success_filter_binds_without_placeholder_drift() -> None:
+    """``--unknown-success`` previously emitted a ``?`` with no bound value."""
+    record = _trace("trace-unknown-outcome", description="Outcome unknown probe")
+    record.outcome.success = None
+    _write_trace("demo-project", record)
+    _write_trace("demo-project", _trace("trace-known", description="Outcome known probe"))
+    build_trace_search_snapshot()
+
+    page = search_traces(None, SearchFilters(success_unknown=True), limit=5)
+    assert [hit.trace_id for hit in page.hits] == ["trace-unknown-outcome"]
+
+    # Outcome.committed is non-nullable in the schema, so unknown-committed
+    # matches nothing — base parity (the projection matcher behaved the same).
+    committed_page = search_traces(None, SearchFilters(committed_unknown=True), limit=5)
+    assert committed_page.hits == []
+
+
+def test_rebuild_unions_bucket_and_legacy_layers() -> None:
+    """A legacy-store trace stays searchable even when bucket records exist."""
+    from opentraces.core.bucket_store import write_trace_record
+
+    write_trace_record(
+        _trace("trace-bucket", description="Bucket layer probe"),
+        project_slug="demo-project",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    _write_trace("demo-project", _trace("trace-legacy-only", description="Legacy layer probe"))
+    build_trace_search_snapshot()
+
+    page = search_traces(None, SearchFilters(), limit=10)
+    assert {hit.trace_id for hit in page.hits} == {"trace-bucket", "trace-legacy-only"}
+
+
+def test_keep_warm_refreshes_snapshot_incrementally() -> None:
+    """A captured trace converges the snapshot via keep-warm — no explicit rebuild."""
+    from opentraces.core.trace_index import keep_index_warm, refresh_index
+
+    _write_trace("demo-project", _trace("trace-first", description="Initial corpus entry"))
+    # A capturing machine has a live legacy index + sync markers; cheap-sync
+    # deliberately no-ops when the legacy DB is missing.
+    refresh_index()
+    keep_index_warm(query_sources=("index",))
+    build_trace_search_snapshot()
+    assert current_dirty_token() is None
+
+    # Capture shape: the record lands in the canonical project store; the
+    # post-ingest hook then passes the single trace it just wrote (plan 087
+    # F3) and the sync mirrors it into the bucket (marking the snapshot
+    # dirty) before the snapshot refresh converges it back to clean.
+    _write_trace("demo-project", _trace("trace-fresh", description="Freshly captured bucket trace"))
+
+    result = keep_index_warm(trace_id="trace-fresh", query_sources=("index",))
+    assert result.ok
+    assert result.snapshot_refreshed is True
+    assert current_dirty_token() is None
+
+    page = search_traces("freshly captured", SearchFilters(), limit=5)
+    assert [hit.trace_id for hit in page.hits] == ["trace-fresh"]
+
+    snapshot_path = default_snapshot_path()
+    assert not snapshot_path.with_name(f"{snapshot_path.name}-wal").exists()
+    assert not snapshot_path.with_name(f"{snapshot_path.name}-shm").exists()
+
+
+def test_incremental_refresh_removes_deleted_traces_and_converges_hash() -> None:
+    """Refresh drops removed traces; hash matches a from-scratch rebuild."""
+    from opentraces.core.trace_search_snapshot import refresh_trace_search_snapshot
+
+    keep = _write_trace("demo-project", _trace("trace-keep", description="Keeper entry"))
+    gone_path = _write_trace("demo-project", _trace("trace-gone", description="Removed entry"))
+    del keep
+    summary = build_trace_search_snapshot()
+    assert summary.trace_count == 2
+
+    gone_path.unlink()
+    refreshed = refresh_trace_search_snapshot([], ["trace-gone"])
+    assert refreshed is not None
+    assert refreshed.trace_count == 1
+
+    page = search_traces(None, SearchFilters(), limit=5)
+    assert [hit.trace_id for hit in page.hits] == ["trace-keep"]
+
+    rebuilt = build_trace_search_snapshot()
+    assert rebuilt.source_hash == refreshed.source_hash
+
+
+def test_refresh_returns_none_without_snapshot() -> None:
+    from opentraces.core.trace_search_snapshot import refresh_trace_search_snapshot
+
+    assert refresh_trace_search_snapshot(["trace-x"], []) is None

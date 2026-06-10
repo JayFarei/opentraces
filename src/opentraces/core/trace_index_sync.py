@@ -16,6 +16,7 @@ from pathlib import Path
 from . import search_diag
 from .trace_index_sqlite import (
     _cheap_sync_lock,
+    _checkpoint_wal_truncate,
     _connect,
     _meta_get,
     _meta_set,
@@ -229,7 +230,7 @@ def _cheap_sync_query_state_guarded(
             return CheapSyncResult(
                 synced=False, query_source=query_source, bucket_digest=prev_digest
             )
-        return _cheap_sync_query_state_locked(
+        result = _cheap_sync_query_state_locked(
             db_path=db_path,
             query_source=query_source,
             current_cheap_signal=current_cheap_signal,
@@ -238,6 +239,16 @@ def _cheap_sync_query_state_guarded(
             prev_per_trace_raw=prev_per_trace_raw,
             trace_id=trace_id,
         )
+        # Issue #22 — every keep-warm / refresh sync write path funnels
+        # through here exactly once per sync. The index runs in WAL mode
+        # and nothing else ever checkpoints it, so without this the
+        # ``index.db-wal`` sidecar grows without bound on capture-heavy
+        # machines. Only pay the checkpoint when the sync actually wrote
+        # (``synced=True``); steady-state no-ops stay free. Best-effort:
+        # the helper swallows every SQLite error.
+        if result.synced:
+            _checkpoint_wal_truncate(db_path)
+        return result
 
 
 def _sync_marker_snapshot(
@@ -433,6 +444,7 @@ class KeepWarmResult:
     synced: bool = False
     changed_trace_ids: list[str] = dataclass_field(default_factory=list)
     deleted_trace_ids: list[str] = dataclass_field(default_factory=list)
+    snapshot_refreshed: bool = False
     error: str | None = None
 
 
@@ -488,11 +500,29 @@ def keep_index_warm(
                 for tid in result.deleted_trace_ids:
                     if tid not in deleted:
                         deleted.append(tid)
+        snapshot_refreshed = False
+        if changed or deleted:
+            # Keep the read-only search snapshot fresh with the same bounded
+            # per-trace delta. Best-effort: a missing/older-schema snapshot
+            # returns None and the dirty marker stays as the backstop for an
+            # explicit ``trace index`` rebuild.
+            try:
+                from .trace_search_snapshot import refresh_trace_search_snapshot
+
+                snapshot_refreshed = (
+                    refresh_trace_search_snapshot(changed, deleted) is not None
+                )
+            except Exception:
+                logger.warning(
+                    "snapshot keep-warm refresh failed (best-effort, ignored)",
+                    exc_info=True,
+                )
         return KeepWarmResult(
             ok=True,
             synced=synced,
             changed_trace_ids=changed,
             deleted_trace_ids=deleted,
+            snapshot_refreshed=snapshot_refreshed,
         )
     except Exception as exc:  # noqa: BLE001 — keep-warm must never raise.
         logger.warning("keep_index_warm failed (best-effort, ignored)", exc_info=True)

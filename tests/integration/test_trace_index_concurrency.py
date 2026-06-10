@@ -103,9 +103,13 @@ def test_concurrent_trace_query_no_traceback(tmp_path):
     _seed_trail(project, commit_sha=commit_sha, trace_id="trace-concurrent")
 
     # Build the index once so query subprocesses do not race the initial
-    # rebuild.
+    # rebuild. Queries are read-only now, so the search snapshot must also
+    # exist before any subprocess runs.
     rebuild_index()
     assert default_index_path().exists()
+    from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
+
+    build_trace_search_snapshot()
 
     home = os.environ["HOME"]
     env = os.environ.copy()
@@ -118,7 +122,7 @@ def test_concurrent_trace_query_no_traceback(tmp_path):
         "--since",
         "12h",
         "--candidate-kind",
-        "git_anchor",
+        "trace",
         "--limit",
         "5",
         "--json",
@@ -130,7 +134,7 @@ def test_concurrent_trace_query_no_traceback(tmp_path):
         "--since",
         "12h",
         "--candidate-kind",
-        "patch",
+        "bug_fix",
         "--limit",
         "5",
         "--json",
@@ -160,6 +164,16 @@ def test_concurrent_trace_query_no_traceback(tmp_path):
     # Both subprocesses produced parseable JSON (the --json flag is honoured).
     json.loads(out_a)
     json.loads(out_b)
+
+    # Unit-level candidate kinds are rejected by the trace-level snapshot —
+    # cleanly (exit 2 with advice), never with a traceback.
+    proc_c = subprocess.run(
+        [str(OTD_SHIM), "trace", "query", "--candidate-kind", "patch", "--json"],
+        cwd=project, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert proc_c.returncode == 2, (proc_c.returncode, proc_c.stderr)
+    assert "trace-level" in proc_c.stderr
+    assert "Traceback" not in proc_c.stderr, proc_c.stderr
 
 
 def test_index_uses_wal_journal_mode(tmp_path):
