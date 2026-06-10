@@ -897,6 +897,29 @@ def _trace_ids_for_project(repo: Path) -> list[str]:
     return sorted(seen)
 
 
+def _has_in_place_legacy_source(project_slug: str, trace_id: str) -> bool:
+    """True when ``trace_id``'s canonical JSONL still lives in an in-place
+    legacy store (``~/.opentraces/projects/<slug>/traces/`` or staging).
+
+    Plan 085 S5 (read-in-place): legacy ``traces/*.jsonl`` records are
+    mirrored into the TraceRecord object store as a query substrate
+    (:func:`sync_trace_records_from_local_stores`, run by ``trace index
+    rebuild``), but they must never be auto-adopted into per-trace v2
+    envelopes / ``manifest.traces[]``. Adoption is reserved for capture-time
+    ingest; the auto-materialization passes (#28 / #31) exist for restored
+    buckets whose in-place source is gone, so "the JSONL is still here"
+    is exactly the discriminator. Both the 0.3.3 and 0.4 writers name the
+    file ``<trace_id>.jsonl``.
+    """
+
+    if project_slug == TRACE_RECORD_PROJECT_STAGING:
+        staging_root = getattr(paths, "STAGING_DIR", None)
+        if not staging_root:
+            return False
+        return (Path(staging_root) / f"{trace_id}.jsonl").exists()
+    return (paths.PROJECTS_DIR / project_slug / "traces" / f"{trace_id}.jsonl").exists()
+
+
 def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
     """Full rebuild from canonical (event log + blob store).
 
@@ -983,9 +1006,13 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
     # OWN events mirror (``project_per_trace_exports(None, ...)`` falls back to
     # ``read_events_mirror_batches``) so the trace survives. Idempotent: a
     # second repair re-projects the same bytes (atomic same-bytes writers).
+    # Plan 085 S5 — legacy-store mirrors whose in-place JSONL still exists
+    # are read in place, never adopted.
     for obj in iter_trace_record_objects():
         pair = (obj.project_slug, obj.trace_id)
         if pair in handled_pairs:
+            continue
+        if _has_in_place_legacy_source(*pair):
             continue
         handled_pairs.add(pair)
         traces_projected += 1
@@ -1616,12 +1643,15 @@ def rebuild_bucket_traces() -> dict[str, Any]:
     # TraceRecord object NOT reached by a live opted-in project (cross-machine
     # restore shape) is projected from the bucket's own events mirror so it is
     # never dropped. ``project_per_trace_exports(None, ...)`` falls back to
-    # ``read_events_mirror_batches``.
+    # ``read_events_mirror_batches``. Plan 085 S5 — legacy-store mirrors whose
+    # in-place JSONL still exists are read in place, never adopted.
     bucket_sourced_errors: list[dict[str, Any]] = []
     bucket_sourced_written = 0
     for obj in iter_trace_record_objects():
         pair = (obj.project_slug, obj.trace_id)
         if pair in handled_pairs:
+            continue
+        if _has_in_place_legacy_source(*pair):
             continue
         handled_pairs.add(pair)
         try:
@@ -1878,6 +1908,10 @@ def bucket_manifest(
     for obj in record_objects:
         pair = (obj.project_slug, obj.trace_id)
         if pair in _existing_pairs:
+            continue
+        # Plan 085 S5 — read-in-place. Legacy-store mirrors are a query
+        # substrate, not bucket content; never auto-adopt them.
+        if _has_in_place_legacy_source(*pair):
             continue
         try:
             if _project_paths is None:

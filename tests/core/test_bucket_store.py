@@ -417,3 +417,57 @@ def test_manifest_traces_include_trace_record_store_entries():
     # Manifest consistency check (bucket verify check 3) is green.
     result = bucket_verify(full=True)
     assert result["ok"] is True, result["errors"]
+
+
+def test_legacy_in_place_mirrors_never_auto_adopted(tmp_path):
+    """Plan 085 S5 — read-in-place. A legacy ``traces/*.jsonl`` trace mirrored
+    into the TraceRecord object store by ``sync_trace_records_from_local_stores``
+    (what ``trace index rebuild`` runs) must NOT be auto-adopted into a per-trace
+    v2 envelope / ``manifest.traces[]`` by the #31 manifest self-heal or the #28
+    bucket-sourced repair pass while its in-place JSONL still exists. The legacy
+    trace stays readable via the index; the bucket holds only 0.4+ captures.
+    """
+
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_repair,
+        bucket_status,
+        iter_trace_record_objects,
+        sync_trace_records_from_local_stores,
+        trace_v1_json_path,
+    )
+    from opentraces.core.config import get_project_dir
+
+    project = tmp_path / "legacy"
+    _enroll_project(project, "feedfacefeedfacefeedfacefeedface")
+    record = _scanned_trace("trace-legacy-in-place")
+    _write_project_trace(project, record)
+    slug = get_project_dir(project).name
+
+    # What `trace index rebuild` does: mirror the legacy store into the
+    # bucket's TraceRecord object store (query substrate).
+    summary = sync_trace_records_from_local_stores()
+    assert summary.written == 1
+    assert [obj.trace_id for obj in iter_trace_record_objects()] == [
+        "trace-legacy-in-place"
+    ]
+
+    # Manifest self-heal must skip the in-place mirror: no envelope, no row.
+    manifest = bucket_manifest(write=True, include_objects=False)
+    assert manifest["traces"] == []
+    assert not trace_v1_json_path(slug, "trace-legacy-in-place").exists()
+
+    # `bucket status` (the S5 journey surface) agrees.
+    status = bucket_status()
+    assert status["bucket"]["traces"] == []
+
+    # The #28 bucket-sourced repair pass must skip it too.
+    result = bucket_repair(dry_run=False)
+    assert result["bucket_sourced_traces"] == 0
+    manifest = bucket_manifest(write=False, include_objects=False)
+    assert manifest["traces"] == []
+    assert not trace_v1_json_path(slug, "trace-legacy-in-place").exists()
+
+    # The legacy JSONL is untouched in place.
+    traces_dir = get_project_dir(project) / "traces"
+    assert (traces_dir / "trace-legacy-in-place.jsonl").exists()
