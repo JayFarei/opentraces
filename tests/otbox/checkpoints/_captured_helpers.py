@@ -205,6 +205,23 @@ def restore_from_capture(
     # — every downstream paths() call must resolve against this box.
     box.save()
 
+    # Drop the derived SEARCH INDEX on restore (otbox 2.0 nightly hardening):
+    # the index is a fully rebuildable SQLite projection that bakes absolute
+    # paths from the CAPTURE machine. On a cross-machine restore those paths
+    # don't exist, and `trace query` CRASHES (rc=3) reading the stale index
+    # rather than rebuilding it — the real root cause of the on-main nightly's
+    # codex/pi restored-world cluster (revealed once the step-level error was
+    # surfaced). Deleting it forces a clean lazy rebuild from the bucket
+    # (whose paths the text rewrite already corrected). Pure derived-artifact
+    # cleanup; the bucket spine is untouched.
+    if driver is not None:
+        driver.exec(
+            box,
+            ["bash", "-lc",
+             'rm -rf "$HOME/.opentraces/index" '
+             '"$HOME/.opentraces/bucket/projections/search" 2>/dev/null || true'],
+        )
+
     # Cross-machine reconcile (otbox 2.0 phase 0): restoring a captured world
     # onto a different machine leaves path-keyed trail projections stale
     # (stale_count=1 until a watcher tick re-anchors them). Reconciling is
