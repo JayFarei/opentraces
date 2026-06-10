@@ -37,9 +37,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..capture import discover_project_sessions
-from ..core.config import PROJECTS_DIR, get_project_state_path
+from ..core import config as _config
+from ..core import paths as _paths
+from ..core.config import get_project_state_path
 from ..core.ingest import scan_project
-from ..core.paths import OPENTRACES_DIR
 from ..core.state import StateManager
 
 logger = logging.getLogger("opentraces.watcher")
@@ -215,7 +216,7 @@ def _jsonl_activity_since(project_cwd: Path, threshold_iso: str | None) -> bool:
 
 
 def _logs_dir() -> Path:
-    return OPENTRACES_DIR / "logs"
+    return _paths.OPENTRACES_DIR / "logs"
 
 
 _LOG_CONFIGURED = False
@@ -470,9 +471,9 @@ def discover_enlisted_projects() -> list[Path]:
     longer exists are filtered out.
     """
     out: list[Path] = []
-    if not PROJECTS_DIR.is_dir():
+    if not _config.PROJECTS_DIR.is_dir():
         return out
-    for slug_dir in sorted(PROJECTS_DIR.iterdir()):
+    for slug_dir in sorted(_config.PROJECTS_DIR.iterdir()):
         manifest = slug_dir / "project.json"
         if not manifest.is_file():
             continue

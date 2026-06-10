@@ -175,6 +175,206 @@ class TestWatcherSweep:
         assert len(searches) == 1
         assert searches[0].payload["results"][0]["result"] == "unknown"
 
+    def test_steady_state_quiet_tick_skips_maturation_scan(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """#23 step 3 (watermark): once a tick has matured, a subsequent quiet
+        tick at the same head must short-circuit ``has_unsearched_recent_patches``
+        WITHOUT enumerating git objects.
+
+        The runaway-CPU symptom in #23 is the gate reading the whole event log
+        every quiet tick. With the watermark in place, the steady-state quiet
+        tick issues ZERO ``rev-list --objects`` calls and reports
+        ``trail_maturation_searches == 0`` (maturation is never invoked).
+        """
+        p = _init_project(tmp_path / "proj")
+        # Seed an unsearched patch, then run a tick that matures it. This stamps
+        # the maturation watermark.
+        authored = "watermark steady-state authored line\n"
+        append_event_batch(
+            p,
+            [
+                TrailEventDraft(
+                    event_type="trace_patch_created",
+                    trace_id="tr-wm",
+                    step_index=1,
+                    capture_method=["watcher_backstop"],
+                    payload={
+                        "trace_patch_id": "wm-patch",
+                        "file_path": "ghost.py",
+                        "affected_range": {"start_line": 1, "end_line": 1},
+                        "authored_text": authored,
+                        "raw_authored_hash": sha256_text(authored),
+                        "git_clean_hash": sha256_text(" ".join(authored.split())),
+                        "limitations": [],
+                    },
+                )
+            ],
+            writer="test-fixture",
+        )
+        first = _wd.run_once(p)
+        assert first.error is None
+        assert first.trail_maturation_searches == 1
+
+        # Count rev-list --objects calls on the NEXT quiet tick.
+        import subprocess as _sp
+
+        rev_list_objects = {"count": 0}
+        real_run = _sp.run
+
+        def _counting_run(args, *a, **k):
+            try:
+                if (
+                    isinstance(args, (list, tuple))
+                    and "rev-list" in args
+                    and "--objects" in args
+                ):
+                    rev_list_objects["count"] += 1
+            except Exception:  # noqa: BLE001
+                pass
+            return real_run(args, *a, **k)
+
+        # Patch subprocess.run in both modules that issue rev-list --objects.
+        import subprocess as _subprocess_mod
+
+        monkeypatch.setattr(_subprocess_mod, "run", _counting_run)
+
+        second = _wd.run_once(p)
+        assert second.error is None
+        assert second.backfill_invoked is False, "second tick must be quiet"
+        # Watermark hit: maturation is not invoked, so no searches and no
+        # whole-log object enumeration from the maturation gate.
+        assert second.trail_maturation_searches == 0
+        assert rev_list_objects["count"] == 0, (
+            "steady-state quiet tick must not enumerate git objects "
+            f"(saw {rev_list_objects['count']} rev-list --objects calls)"
+        )
+
+    def test_batched_maturation_one_rev_list_and_identical_dedup_keys(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """#23 step 1: ``mature_trails`` over N commits issues exactly ONE
+        ``rev-list --objects`` (the single batched anchor/search slice read) and
+        produces search summaries whose dedup keys are identical to the
+        per-commit path.
+        """
+        from opentraces.core.trails.maturation import mature_trails
+
+        p = _init_project(tmp_path / "proj")
+
+        # Build 3 commits, each touching a distinct file with a distinct line.
+        commit_shas: list[str] = []
+        for i in range(3):
+            (p / f"f{i}.py").write_text(f"VALUE_{i} = 'line {i}'\n")
+            _git("add", "-A", cwd=p)
+            _git("commit", "-q", "-m", f"commit {i}", cwd=p)
+            commit_shas.append(
+                subprocess.check_output(
+                    ["git", "-C", str(p), "rev-parse", "HEAD"], text=True
+                ).strip()
+            )
+
+        # Seed 2 trace patches whose authored text matches two of the commits.
+        for i in (0, 2):
+            authored = f"VALUE_{i} = 'line {i}'\n"
+            append_event_batch(
+                p,
+                [
+                    TrailEventDraft(
+                        event_type="trace_patch_created",
+                        trace_id=f"tr-{i}",
+                        step_index=1,
+                        capture_method=["watcher_backstop"],
+                        payload={
+                            "trace_patch_id": f"batch-patch-{i}",
+                            "file_path": f"f{i}.py",
+                            "affected_range": {"start_line": 1, "end_line": 1},
+                            "authored_text": authored,
+                            "raw_authored_hash": sha256_text(authored),
+                            "git_clean_hash": sha256_text(" ".join(authored.split())),
+                            "limitations": [],
+                        },
+                    )
+                ],
+                writer="test-fixture",
+            )
+
+        # Count rev-list --objects during the batched mature_trails.
+        import subprocess as _sp
+
+        rev_list_objects = {"count": 0}
+        real_run = _sp.run
+
+        def _counting_run(args, *a, **k):
+            try:
+                if (
+                    isinstance(args, (list, tuple))
+                    and "rev-list" in args
+                    and "--objects" in args
+                ):
+                    rev_list_objects["count"] += 1
+            except Exception:  # noqa: BLE001
+                pass
+            return real_run(args, *a, **k)
+
+        import subprocess as _subprocess_mod
+
+        monkeypatch.setattr(_subprocess_mod, "run", _counting_run)
+
+        summary = mature_trails(p, commit_refs=commit_shas)
+        assert summary.errors == []
+        # Exactly ONE batched anchor/search slice read for the whole run.
+        assert rev_list_objects["count"] == 1, (
+            "batched maturation must issue exactly one rev-list --objects "
+            f"(saw {rev_list_objects['count']})"
+        )
+
+        # Collect the dedup keys (patch, commit-head, attribution_version)
+        # recorded by the batched path.
+        from opentraces.core.trails.search_records import iter_search_records
+
+        batched_records = [
+            record
+            for event in read_events(p)
+            if event.event_type == "git_anchor_search_completed"
+            for record in iter_search_records(event)
+        ]
+        batched_keys = {
+            (
+                record["trace_patch_id"],
+                record["search_head_sha"],
+                record["attribution_version"],
+            )
+            for record in batched_records
+        }
+        # Each of the 2 seeded patches is searched against all 3 commits
+        # (recording 'unknown' on the non-matching ones): 2 x 3 = 6 dedup keys.
+        assert len(batched_keys) == 6
+        searched_patches = {k[0] for k in batched_keys}
+        assert searched_patches == {"batch-patch-0", "batch-patch-2"}
+        # Exactly two records anchored (each patch's matching commit).
+        anchored = [r for r in batched_records if r["result"] == "anchored"]
+        assert len(anchored) == 2
+        assert {r["trace_patch_id"] for r in anchored} == {
+            "batch-patch-0",
+            "batch-patch-2",
+        }
+
+        # Idempotent: a second mature_trails over the same commits records no
+        # new search keys (dedup holds across the batched path).
+        mature_trails(p, commit_refs=commit_shas)
+        again_keys = {
+            (
+                record["trace_patch_id"],
+                record["search_head_sha"],
+                record["attribution_version"],
+            )
+            for event in read_events(p)
+            if event.event_type == "git_anchor_search_completed"
+            for record in iter_search_records(event)
+        }
+        assert again_keys == batched_keys, "batched dedup must be stable"
+
     def test_sweep_failure_does_not_break_the_tick(
         self, tmp_path, monkeypatch
     ) -> None:
