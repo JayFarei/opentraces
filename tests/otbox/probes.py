@@ -64,26 +64,31 @@ def _probe_survival_states(driver, box, value) -> ProbeResult:
 
 
 def _count_bucket_trace_dirs(driver, box) -> int:
-    """Ground-truth captured-trace count: distinct trace directories two
-    levels under any ``traces/v1`` root in the bucket.
+    """Ground-truth captured-trace count: the number of traces registered in
+    the project ``state.json`` file(s) — the SAME source the checkpoint audit
+    reads, and the registry of captured traces regardless of bucket LAYOUT.
 
-    NOT the Trace Index (a lazily-built SQLite projection that is empty at
-    cold-checkpoint-build time and populates inconsistently across machines —
-    the first on-main nightly failed every verify_provides here because the
-    index held 0 while the bucket held the traces) and NOT the bucket
-    manifest (the manifest-projection gap, issue #25). The bucket trace dirs
-    ARE the captured evidence — filesystem ground truth, identical on every
-    platform, available the instant the checkpoint delta finishes.
+    Why not the obvious surfaces:
+    - Trace Index: a lazily-built SQLite projection, EMPTY at cold-build time,
+      inconsistent across machines (the first on-main nightly failed every
+      verify_provides on it).
+    - Bucket trace dirs (traces/v1): correct for v2 worlds but ZERO for the
+      legacy 0.3.3 world (c-legacy-v033), whose traces live in the old
+      projects/<slug>/traces/*.jsonl layout — surfaced by the next nightly.
+    - Bucket manifest: the manifest-projection gap (issue #25).
+    state.json covers BOTH layouts and is written the instant capture lands;
+    json is stdlib so any box python reads it.
     """
     cmd = (
-        'c=0; for root in $(find "$HOME/.opentraces/bucket" -type d -name v1 '
-        '-path "*traces/v1" 2>/dev/null); do '
-        'c=$((c + $(find "$root" -mindepth 2 -maxdepth 2 -type d | wc -l))); '
-        'done; echo $c'
+        'total=0; for f in $(find "$HOME/.opentraces/projects" -name state.json '
+        '2>/dev/null); do '
+        'n=$(python3 -c "import json,sys; '
+        'print(len(json.load(open(sys.argv[1])).get(\'traces\',{})))" "$f" '
+        '2>/dev/null || echo 0); total=$((total+n)); done; echo $total'
     )
     res = driver.exec(box, ["bash", "-lc", cmd])
     try:
-        return int(res.stdout.strip() or 0)
+        return int((res.stdout or "").strip() or 0)
     except (ValueError, AttributeError):
         return 0
 
