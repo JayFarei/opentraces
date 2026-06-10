@@ -107,6 +107,33 @@ def load_guarantees(path: Path = GUARANTEES_PATH) -> list[Kill]:
     return out
 
 
+def is_faultpoint(name: str) -> str | None:
+    """Return the product faultpoint site for ``faultpoint:<site>`` names.
+
+    Faultpoint faults arm a deterministic seam INSIDE the product
+    (opentraces.core.faultpoints) via env vars, so they must be armed
+    BEFORE the checkpoint world is built (the kill test handles env
+    lifecycle + the checkpoint layer refuses cache I/O while armed).
+    """
+    if not name.startswith("faultpoint:"):
+        return None
+    site = name.split(":", 1)[1]
+    from opentraces.core.faultpoints import SITES
+
+    if site not in SITES:
+        raise KeyError(f"unknown faultpoint site {site!r}; known: {sorted(SITES)}")
+    return site
+
+
+def known_fault(name: str) -> bool:
+    if name in FAULTS:
+        return True
+    try:
+        return is_faultpoint(name) is not None
+    except KeyError:
+        return False
+
+
 def apply_fault(name: str, driver, box) -> str:
     fault = FAULTS.get(name)
     if fault is None:

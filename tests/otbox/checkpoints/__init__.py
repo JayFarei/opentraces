@@ -205,8 +205,17 @@ def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
 
     snap_name = snapshot_name(cp)
 
+    # Faultpoint hygiene (otbox 2.0 phase 6): while a product faultpoint is
+    # armed, never read from NOR write to the snapshot cache — a faulted
+    # world cached once would poison every future run silently.
+    try:
+        from opentraces.core.faultpoints import armed_site
+        _fault_armed = armed_site() is not None
+    except ImportError:  # pragma: no cover - older product checkouts
+        _fault_armed = False
+
     # cache hit → fork from the snapshot
-    if cp.cache and snapshot_exists(snap_name):
+    if not _fault_armed and cp.cache and snapshot_exists(snap_name):
         box, _meta = driver.restore(snap_name)
         return CheckpointResult(
             name=cp.name, box=box, cache_hit=True,
@@ -238,7 +247,7 @@ def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
     box.notes["checkpoint"] = cp.name
     box.save()
 
-    if cp.cache:
+    if cp.cache and not _fault_armed:
         driver.snapshot(box, snap_name, overwrite=True)
 
     return CheckpointResult(

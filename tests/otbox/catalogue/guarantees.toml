@@ -25,3 +25,13 @@ guarantee = "Captured traces parse and serve every read surface"
 fault = "corrupt-trace-jsonl"
 checkpoint = "c-captured-real-session"
 guards = ["agent-session-to-published-dataset"]
+
+# DEFERRED (otbox 2.0 phase 6, issue #25): a faultpoint kill for the
+# redaction-before-egress guarantee. faultpoints.py ships the seam, but the
+# existing security guard verifies redaction baked at INGEST time into stored
+# index previews — arming redact_index_text at query-rebuild does not
+# retroactively unredact stored text, so the kill must arm during the
+# synthetic ingest subprocess. Wiring + verifying that is a focused product
+# investigation; until it FIRES, no entry here (a kill that cannot fail is
+# exactly what this layer exists to forbid). The 4 world-fault kills above
+# already prove the machinery end-to-end (one earned gold).
