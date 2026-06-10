@@ -46,23 +46,6 @@ emit_json = _cli.emit_json
 error_response = _cli.error_response
 
 
-def _format_trace_query_warning(entry: dict) -> str:
-    project = entry.get("project_slug") or "unknown-project"
-    state = entry.get("state") or "unknown"
-    last_synced_at = entry.get("last_synced_at") or "unknown"
-    indexed = str(entry.get("indexed_ref_sha") or "")[:12] or "none"
-    current = str(entry.get("current_ref_sha") or "")[:12] or "none"
-    message = (
-        f"warning: Trace Trail projection for {project} is {state}; "
-        f"last synced {last_synced_at} "
-        f"(indexed ref {indexed}, current ref {current})"
-    )
-    advice = entry.get("advice")
-    if advice:
-        message = f"{message}. Run '{advice}'."
-    return message
-
-
 def _trace_query_diag_payload(sync_result, query_source: str) -> dict | None:
     try:
         from ..core import search_diag
@@ -589,15 +572,11 @@ def trace_query(
     }
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
-    if page.warnings:
-        payload["trail_freshness"] = page.warnings
-        warning_entries = [
-            warning
-            for warning in page.warnings
-            if warning.get("severity") == "warning"
-        ]
-        if warning_entries:
-            payload["warnings"] = warning_entries
+    # NOTE: SearchPage.warnings has zero writers in the read-only snapshot kernel
+    # (PR #34 routed Trace Trail freshness through SearchDiagnostics.rebuilt_index
+    # instead). The dead ``trail_freshness``/``warnings`` emission that used to live
+    # here was dropped (issue #27 item I) — re-add a real freshness surface only when
+    # the kernel actually populates page.warnings again.
     if semantic:
         from ..core.semantic import expand_semantic_query
 
@@ -605,9 +584,6 @@ def trace_query(
     if as_json:
         click.echo(_dump_json(payload))
         return
-    for warning in page.warnings:
-        if warning.get("severity") == "warning":
-            click.echo(_format_trace_query_warning(warning), err=True)
     for packet in candidates:
         click.echo(f"{packet.trace_id}  {packet.title}")
 

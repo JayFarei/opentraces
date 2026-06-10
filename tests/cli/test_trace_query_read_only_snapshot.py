@@ -295,3 +295,24 @@ def test_trace_query_rejects_unit_level_candidate_kind() -> None:
 
     assert result.exit_code == 2
     assert "trace-level" in result.output
+
+
+def test_trace_query_envelope_never_emits_dead_trail_freshness() -> None:
+    # Issue #27 item I: SearchPage.warnings has zero writers in the read-only
+    # snapshot kernel, so the query envelope must never carry the dead
+    # ``trail_freshness`` / ``warnings`` keys (PR #34 moved freshness onto
+    # SearchDiagnostics.rebuilt_index). Guards against the dead emission
+    # silently coming back.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "trail_freshness" not in payload
+    assert "warnings" not in payload
