@@ -493,6 +493,10 @@ class TestDetectInstallMethod:
         """pipx home in path = pipx install."""
         import opentraces.cli as cli_mod
         import shutil
+        # CI runners preinstall pipx with PIPX_HOME=/opt/pipx; the detector
+        # compares against that root, so the fake ~/.local/pipx path never
+        # matches unless the env var is cleared.
+        monkeypatch.delenv("PIPX_HOME", raising=False)
         original_file = cli_mod.__file__
         home = str(Path.home())
         fake_path = f"{home}/.local/pipx/venvs/opentraces/lib/python3.12/site-packages/opentraces/cli.py"

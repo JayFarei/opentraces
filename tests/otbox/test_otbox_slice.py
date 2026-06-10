@@ -165,7 +165,22 @@ def test_snapshot_restore_rewrites_trace_index_sqlite_paths(driver):
 )
 def test_tier0_catalogue_journey(driver, journey_name):
     """Every Tier 0 catalogue journey must PASS (or SKIP on a missing dep)."""
+    import datetime as _dt
+
+    from tests.otbox.catalogue_lint import load_quarantine
     from tests.otbox.checkpoints import resolve_checkpoint
+
+    # Quarantined baseline-red journeys xfail with their tracking issue —
+    # visible debt, not a machine-dependent green wall. Expiry is enforced
+    # by the catalogue lint, so a stale entry fails the suite there.
+    today = _dt.date.today()
+    for entry in load_quarantine():
+        if (
+            journey_name in entry.journeys
+            and "baseline-red" in entry.rules
+            and entry.expires >= today
+        ):
+            pytest.xfail(f"quarantined baseline-red: {entry.issue}")
 
     meta = {j["name"]: j for j in available_journeys()}[journey_name]
     from_checkpoints = meta.get("from_checkpoints") or []
@@ -178,10 +193,33 @@ def test_tier0_catalogue_journey(driver, journey_name):
         run_seed(driver, box, meta["seed"] or "smoke")
     try:
         result = run_journey(driver, box, journey_name)
+        _record_ledger_verdict(journey_name, result)
         assert result.verdict in ("PASS", "SKIP"), f"{journey_name}: {result.reason}"
     finally:
         if box.root.exists():
             driver.teardown(box)
+
+
+def _record_ledger_verdict(journey_name: str, result) -> None:
+    """Drop a per-journey verdict record for the executed-evidence ledger
+    (otbox 2.0 phase 3). Enabled by OTBOX_LEDGER_DIR; the nightly lane sets
+    it and compacts the records via `./otbox ledger --from-results`."""
+    import json as _json
+    import os
+    from pathlib import Path
+
+    out_dir = os.environ.get("OTBOX_LEDGER_DIR")
+    if not out_dir:
+        return
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    record = {
+        "journey": journey_name,
+        "verdict": result.verdict,
+        "reason": getattr(result, "reason", "") or "",
+        "duration_s": float(getattr(result, "duration_s", 0.0) or 0.0),
+        "base_checkpoint": "",
+    }
+    (Path(out_dir) / f"{journey_name}.json").write_text(_json.dumps(record) + "\n")
 
 
 def test_zero_host_residue(driver):

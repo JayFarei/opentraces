@@ -127,7 +127,9 @@ def _read_origin_box_id(box_root: Path) -> str | None:
     return box_id if isinstance(box_id, str) and box_id else None
 
 
-def restore_from_capture(driver, box: Box, capture_name: str) -> dict | None:
+def restore_from_capture(
+    driver, box: Box, capture_name: str, *, reconcile: bool = True
+) -> dict | None:
     """Restore a captured snapshot artifact into ``box`` in-place.
 
     Plan 072 R1 contract:
@@ -148,10 +150,21 @@ def restore_from_capture(driver, box: Box, capture_name: str) -> dict | None:
     surface (so the helper can grow driver-mediated extraction on
     Tier 1 later); on Tier 0 it is currently unused.
     """
-    _ = driver  # currently unused; reserved for Tier 1 parity.
     archive, metadata_path = _artifact_paths(capture_name)
     if not archive.exists() or not metadata_path.exists():
-        return None
+        # Supply-chain fallback (otbox 2.0 phase 0): when opted in, fetch the
+        # manifested artifact from the GitHub release instead of silently
+        # degrading to the synthetic harness. Hash mismatch raises — a
+        # corrupt artifact must never masquerade as restored.
+        import os as _os
+
+        if _os.environ.get("OT_OTBOX_FETCH_CAPTURES") == "1":
+            from ..captures_manifest import fetch_scenario, manifest_entry
+
+            if manifest_entry(capture_name) is not None:
+                fetch_scenario(capture_name, _captures_root())
+        if not archive.exists() or not metadata_path.exists():
+            return None
 
     try:
         metadata = json.loads(metadata_path.read_text())
@@ -191,6 +204,21 @@ def restore_from_capture(driver, box: Box, capture_name: str) -> dict | None:
     # Overwrite the extracted meta.json with the CURRENT box identity
     # — every downstream paths() call must resolve against this box.
     box.save()
+
+    # Cross-machine reconcile (otbox 2.0 phase 0): restoring a captured world
+    # onto a different machine leaves path-keyed trail projections stale
+    # (stale_count=1 until a watcher tick re-anchors them). Reconciling is
+    # world PREPARATION — the journeys' "no staleness after capture" claims
+    # stay intact rather than being weakened to tolerate restore artifacts.
+    project_dir = box.root / "project"
+    if reconcile and driver is not None and project_dir.exists():
+        tick = driver.exec(
+            box,
+            [*driver.cli_argv(box), "setup", "watcher", "tick",
+             "--project", str(project_dir), "--json"],
+        )
+        metadata = dict(metadata)
+        metadata["post_restore_tick_ok"] = bool(tick.ok)
 
     return metadata
 

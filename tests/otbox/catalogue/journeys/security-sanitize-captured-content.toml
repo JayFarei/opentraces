@@ -106,11 +106,16 @@ value = "src/config.py"
 
 # ---------------------------------------------------------------------
 # 3. Negative assertion: the secret literal canary does NOT appear in
-#    the user-facing query projection. Expressed as a shell pipeline
-#    because the runner has no `stdout_not_contains` kind yet;
-#    `!` inverts the grep return code so step rc=0 means "no match"
-#    (the safe state).
+#    the user-facing query projection. Asserted first-class via
+#    stdout_not_contains (otbox 2.0 phase 1 kind) AND via the original
+#    shell pipeline (belt and suspenders — the shell check also proves
+#    the projection from a fresh process).
 # ---------------------------------------------------------------------
+[[assertions]]
+kind = "stdout_not_contains"
+step = "trace-query-edits"
+value = "sk-test-abc123def456"
+
 [[steps]]
 type = "shell"
 id = "no-secret-in-query"

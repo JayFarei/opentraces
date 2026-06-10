@@ -708,6 +708,77 @@ def cmd_journey(args: argparse.Namespace) -> int:
     return 0 if result.verdict in ("PASS", "SKIP") else 1
 
 
+def cmd_ledger(args: argparse.Namespace) -> int:
+    """Compact a matrix report into the executed-evidence run ledger."""
+    import json as _json
+
+    from .ledger import build_ledger, ledger_summary
+
+    src = Path(args.from_matrix)
+    kills: dict[str, str] = {}
+    if src.is_dir():
+        # per-journey verdict records written by the pytest lane
+        # (OTBOX_LEDGER_DIR) — the matrix runner still skips legacy
+        # seed-based journeys, so pytest is the complete evidence source.
+        rows = []
+        for p in sorted(src.glob("*.json")):
+            if p.name.endswith(".kill.json"):
+                rec = _json.loads(p.read_text())
+                kills[rec["journey"]] = rec["content_hash"]
+            else:
+                rows.append(_json.loads(p.read_text()))
+        report = {"rows": rows}
+    else:
+        report = _json.loads(src.read_text())
+    ledger = build_ledger(report, source=args.source, kills=kills)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(ledger.to_dict(), indent=2, sort_keys=True) + "\n")
+    summary = ledger_summary(ledger)
+    reds = [r for r in ledger.rows if r.red]
+    human = [
+        f"ledger: {summary['rows']} rows, {summary['executed']} executed, "
+        f"{summary['red']} red — tiers {summary['effective_tiers']}",
+        f"  wrote {out}",
+    ]
+    for r in reds[:20]:
+        human.append(f"  [RED] {r.journey} ({r.ci_lane}): {r.red_reason}")
+    _emit(
+        {"action": "ledger", "path": str(out), **summary},
+        json_mode=args.json,
+        human="\n".join(human),
+    )
+    if args.fail_on_red and reds:
+        return 1
+    return 0
+
+
+def cmd_fetch_captures(args: argparse.Namespace) -> int:
+    """Fetch manifested real-agent capture artifacts from the GitHub release."""
+    from .captures_manifest import MANIFEST_PATH, fetch_all, fetch_scenario, load_manifest
+
+    captures_root = Path(__file__).parent / "captures"
+    doc = load_manifest()
+    if not doc:
+        raise OtboxError(f"no captures manifest at {MANIFEST_PATH}")
+    if args.scenario:
+        fetched = [args.scenario]
+        fetch_scenario(args.scenario, captures_root)
+    else:
+        fetched = fetch_all(captures_root)
+    _emit(
+        {
+            "action": "fetch-captures",
+            "release_tag": doc.get("release_tag"),
+            "fetched": fetched,
+            "captures_root": str(captures_root),
+        },
+        json_mode=args.json,
+        human=f"fetched {len(fetched)} scenario(s) from {doc.get('release_tag')}",
+    )
+    return 0
+
+
 def cmd_artifacts(args: argparse.Namespace) -> int:
     box = resolve_box(args.box)
     results = _load_journey_results(box)
@@ -1367,6 +1438,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_art.add_argument("--box", metavar="BOX_ID")
     p_art.add_argument("--label", metavar="LABEL", help="bundle label")
     p_art.set_defaults(func=cmd_artifacts)
+
+    p_fetch = add("fetch-captures", help="download manifested real-agent capture artifacts")
+    p_fetch.add_argument("--scenario", help="fetch one scenario (default: all manifested)")
+    p_fetch.set_defaults(func=cmd_fetch_captures)
+
+    p_ledger = add("ledger", help="compact a matrix report into the executed-evidence ledger")
+    p_ledger.add_argument("--from-matrix", required=True, metavar="REPORT_JSON")
+    p_ledger.add_argument("--out", default="run-ledger.json")
+    p_ledger.add_argument("--source", default="local-matrix")
+    p_ledger.add_argument("--fail-on-red", action="store_true")
+    p_ledger.set_defaults(func=cmd_ledger)
 
     p_status = add("status", help="inspect a box")
     p_status.add_argument("--box", metavar="BOX_ID")

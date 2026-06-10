@@ -1,0 +1,194 @@
+{
+  "schema_version": "otbox.captures_manifest.v1",
+  "release_tag": "otbox-captures-v1",
+  "generated_at": "2026-06-09T23:16:22.377094+00:00",
+  "entries": [
+    {
+      "scenario": "add-helper-function",
+      "snapshot_sha256": "f530f062cb23a23a388008f3223512494acb522c6699928f3e7a5af415e57bae",
+      "snapshot_size_bytes": 4111224,
+      "metadata_sha256": "3bff9660befa708ef7febc793e61adcc11595ca096fe0dc2e77b5e196cb9da00",
+      "agent": "claude",
+      "binary_version": "2.1.143 (Claude Code)",
+      "captured_at": "2026-05-17T18:14:00.113742+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-bash-debugging",
+      "snapshot_sha256": "d7007bffc5b764f2d9da9a631e6a1f48c8c1f353bc4482b12f545e1d0190aa8f",
+      "snapshot_size_bytes": 30936106,
+      "metadata_sha256": "b0205fc611081438fa9490e180968834ce82dcd52383df05c1e2d38b7115df7b",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T11:19:10.051451+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-context-compaction",
+      "snapshot_sha256": "67a6e3a093274d42f2e826faaf0aabffb6055414fb116c22caad6cd0733a6440",
+      "snapshot_size_bytes": 31355103,
+      "metadata_sha256": "5a8133ade6977ba3c5b33ad18d3e7b5275911fc79c35ab883cbee5121175f27a",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T13:39:22.418643+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-linear-edit",
+      "snapshot_sha256": "f6f9fd8543741cc0a1c4ddb45b60c16a720d4c70d995656fff8aa7502e06b4ce",
+      "snapshot_size_bytes": 31114447,
+      "metadata_sha256": "1039bf84bab9657ac340543629c68e2dabeeb0a9e43f08fb17f1607bdc30e1d9",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T10:53:14.246672+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-mcp-tool",
+      "snapshot_sha256": "540a94d796cb9aabfee4a6a30c3fe87b0bcb045a150ed677a57daf3c4202cd78",
+      "snapshot_size_bytes": 31091977,
+      "metadata_sha256": "cabc820c5fd3c10e18ac8060e3bea72fb4eaa7019cc14dd60a9e76c0276e7b8a",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T13:47:43.221768+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-multi-file-patch",
+      "snapshot_sha256": "987588c3aee5df254f222e1f5133c95313234fbf89ebffd221ebd652819812d5",
+      "snapshot_size_bytes": 31278699,
+      "metadata_sha256": "e6a8b0a75ade4840fff5d53fcf7cefd5af59431520b7e8af092bca163c9c7bad",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T11:29:40.170474+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-permission-request",
+      "snapshot_sha256": "490c5fb82bab5400ed0b82a5a12bb78494796d7274f7e5d6d7f992493b02b5dc",
+      "snapshot_size_bytes": 31170878,
+      "metadata_sha256": "e402adb84782b872f083dd22d71392e4c8a398862904044dbce1d4bfdbce8592",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T13:58:57.085484+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-readonly-search",
+      "snapshot_sha256": "a104409638bb28799a40e4d4a8f00ee67d2ef73b2654faf0f263730e3e66bb40",
+      "snapshot_size_bytes": 30590169,
+      "metadata_sha256": "5594418e70ce96c693c0e4321999d688ea77c072a36cde3648d896c1c382955a",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T14:06:26.254674+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-resume-continue",
+      "snapshot_sha256": "77a19ae9119407bb3a2ff29f19d9e52bdb753e4d0fcef1240dc264a12217650a",
+      "snapshot_size_bytes": 31534136,
+      "metadata_sha256": "bf70bccc92d631ce131364f6df572e132e890c8f2ec6378f21574636f0b525d2",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T13:46:04.619153+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-security-redaction",
+      "snapshot_sha256": "78b2c8878315049ed806cb010a093a55d4b1580764fb52f21c20dc14a6e6f126",
+      "snapshot_size_bytes": 30987881,
+      "metadata_sha256": "a2ac1fdebfa7e16a1d60c3dbb7c807657a5c2ada3b2d67932662fff0ac9ecc06",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T13:48:48.660855+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-skill-invocation",
+      "snapshot_sha256": "93c5898226e5d63c47b1a2edd4eaed26dac08e1e1ce5f2352a20cdac681ccb56",
+      "snapshot_size_bytes": 31125679,
+      "metadata_sha256": "4aded25b3ffc45a76d71320d18b3655e7151faea60658cd6bdf1d21f103fedd0",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T13:43:46.305585+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-subagent-compaction",
+      "snapshot_sha256": "92b3c0acaff9e8b31e5159d0cb04a1d603d48ccc8935a41b7499ce93d4d7c60f",
+      "snapshot_size_bytes": 32375335,
+      "metadata_sha256": "4fc443b30cdcfaa361dada16834748a3e1ecc8acfdc9f91f2888cb480dd54b7d",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T14:04:11.685083+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-subagent-edit",
+      "snapshot_sha256": "97af46e6d950d5302446c817aad67bf8dc4ec84d63d97dfd31d62db54e5d108c",
+      "snapshot_size_bytes": 31757238,
+      "metadata_sha256": "cdb243690b235d064ea6e4142757bc2e98c35ce246301c761d46b44525beba90",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T13:42:11.386705+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "codex-watcher-backstop",
+      "snapshot_sha256": "8b2d4b51b0e77947b738f05550ecfd3e97fdbf56d1ad3ca023909b914f41bcda",
+      "snapshot_size_bytes": 31057091,
+      "metadata_sha256": "965a93fb97cbce4be86bc5ff8f2e37a9b7c44180b29749e3e5bd471a44e0f809",
+      "agent": "codex",
+      "binary_version": "codex-cli 0.132.0",
+      "captured_at": "2026-05-21T14:00:41.813490+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "pi-linear-edit",
+      "snapshot_sha256": "06365a15c5a38fa42eaf6d09baa347315c1c4c6135b7c96616b141adeb98d614",
+      "snapshot_size_bytes": 6170248,
+      "metadata_sha256": "a15f2fb71e27a20e87d834cdf61904792a2f91d998aa766c243e75b79870f19a",
+      "agent": "pi",
+      "binary_version": "",
+      "captured_at": "2026-06-05T12:49:06.111214+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "pi-readonly-search",
+      "snapshot_sha256": "8560ff0e9bd5592707be7201f53833dbcc7f1d36b11083354b0a1e38835d3056",
+      "snapshot_size_bytes": 4111854,
+      "metadata_sha256": "69278021e028c2539fc3376c28f94f543b67124c2e7676ccd7c9b9a53da89c0b",
+      "agent": "pi",
+      "binary_version": "",
+      "captured_at": "2026-06-04T13:44:52.625318+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    },
+    {
+      "scenario": "prompt-install-auth-flow",
+      "snapshot_sha256": "85dda03652474394ca3c4e1deadffb07d8c75e10a26380a69aa280de6b94618a",
+      "snapshot_size_bytes": 3933643,
+      "metadata_sha256": "7018635513bc4f8a0e2896f49f524d53e0a80cafef4f0864af9f131837bd28b0",
+      "agent": "hermes",
+      "binary_version": "otbox-prompt-install-harness 1.0.0",
+      "captured_at": "2026-06-09T16:32:41.759782+00:00",
+      "base_checkpoint": "c-installed-source",
+      "source": "real-agent"
+    }
+  ]
+}

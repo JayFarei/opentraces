@@ -37,8 +37,10 @@ def test_jtbd_drift_check_passes_strict():
     import tempfile
     from pathlib import Path
 
-    if not JTBD_PATH.exists():
-        pytest.skip(f"kb checkout not present: {JTBD_PATH}")
+    # The map is vendored at tests/otbox/jtbd-command-map.md (otbox 2.0
+    # phase 2) — a gate that skips when kb/ is absent is not a gate, so the
+    # old silent skip is gone. A missing file is now a hard failure.
+    assert JTBD_PATH.exists(), f"vendored JTBD map missing: {JTBD_PATH}"
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as tf:
         out = Path(tf.name)

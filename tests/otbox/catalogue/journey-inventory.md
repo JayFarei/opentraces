@@ -31,15 +31,15 @@ the single source of truth. Drift fails CI under `--strict`.
 | `bucket status` | inspect-private-storage | gold | bucket-cross-machine-content-identity, bucket-events-mirror-replay-equals-git, bucket-inspect, bucket-prune-orphan-only, bucket-rebuild-context-tree-substrate, bucket-self-sufficient-everything, bucket-verify-detects-dangling, bucket-write-order-discipline-local, codex-full-parity-latest, codex-parity-bash-debugging, codex-parity-linear, ctx-list-no-blob-loads, ctx-show-layer-blob-dedup-per-project, migration-s5-read-in-place, migration-u-bucket-1-setup-no-adoption, mixed-agent-bucket-parity, pi-extension-capture-linear, setup-bucket-migrates-old-layout | Show local bucket health, sync eligibility, and trail freshness. |
 | `bucket verify` | inspect-private-storage | gold | bucket-compression-integrity-roundtrip, bucket-remote-sync-scope-per-trace, bucket-self-sufficient-context-tree-outcome-roundtrip, bucket-self-sufficient-everything, bucket-verify-detects-dangling, bucket-write-order-discipline-local, codex-parity-bash-debugging, codex-parity-linear, codex-parity-watcher-backstop, ctx-show-offline-fails, ctx-show-with-lazy-blob-fetch, migration-u-bucket-5-maintenance-preserves-legacy, mixed-agent-bucket-parity-pi, mixed-agent-bucket-parity, pi-extension-capture-linear, pi-incremental-recovery, pi-readonly-recursion-guard, pi-security-sanitize-captured-content | Blob content integrity + dangling-ref detection. |
 | `capsule` | _group_ | — | **unowned** | Capture, redact, and share a privacy-bounded agent usage episode — an |
-| `capsule export` | **missing** | bronze | capsule-command-smoke | Build a local, redacted, self-contained capsule for one agent usage episode. |
-| `capsule issue` | **missing** | bronze | capsule-command-smoke | Render the GitHub issue body for a capsule, or file it with --publish. |
-| `capsule open` | **missing** | bronze | capsule-command-smoke | Resolve a capsule (file / https / hf:// ref) and print its envelope. |
-| `capsule preview` | **missing** | bronze | capsule-command-smoke | Preview egress BEFORE anything leaves the machine — writes/publishes NOTHING. |
-| `capsule replay` | **missing** | bronze | capsule-command-smoke | Build a replay packet: what a maintainer agent needs to re-pose the intent. |
-| `capsule share` | **missing** | bronze | capsule-command-smoke | Mint a shareable capsule URL (add --publish to upload it). |
-| `capsule test` | **missing** | gold | capsule-dependency-unblock | Run the capsule AS A TEST: reproduce the failure or confirm the fix. |
-| `capsule verdict` | **missing** | bronze | capsule-command-smoke | Record a replay verdict back onto the issue (closing the loop). |
-| `capsule watch` | **missing** | bronze | capsule-command-smoke | Client-side subscription: is the capsule's issue resolved yet? (auto-unblock cue). |
+| `capsule export` | capsule-dependency-unblock | bronze | capsule-command-smoke | Build a local, redacted, self-contained capsule for one agent usage episode. |
+| `capsule issue` | capsule-dependency-unblock | bronze | capsule-command-smoke | Render the GitHub issue body for a capsule, or file it with --publish. |
+| `capsule open` | capsule-dependency-unblock | bronze | capsule-command-smoke | Resolve a capsule (file / https / hf:// ref) and print its envelope. |
+| `capsule preview` | capsule-dependency-unblock | bronze | capsule-command-smoke | Preview egress BEFORE anything leaves the machine — writes/publishes NOTHING. |
+| `capsule replay` | capsule-dependency-unblock | bronze | capsule-command-smoke | Build a replay packet: what a maintainer agent needs to re-pose the intent. |
+| `capsule share` | capsule-dependency-unblock | bronze | capsule-command-smoke | Mint a shareable capsule URL (add --publish to upload it). |
+| `capsule test` | capsule-dependency-unblock | gold | capsule-dependency-unblock | Run the capsule AS A TEST: reproduce the failure or confirm the fix. |
+| `capsule verdict` | capsule-dependency-unblock | bronze | capsule-command-smoke | Record a replay verdict back onto the issue (closing the loop). |
+| `capsule watch` | capsule-dependency-unblock | bronze | capsule-command-smoke | Client-side subscription: is the capsule's issue resolved yet? (auto-unblock cue). |
 | `capture-otlp` | _group_ | — | **unowned** | Run and control the OTLP receiver capture source. |
 | `capture-otlp flush` | configure-otel-capture | bronze | maintenance-command-ownership | Emit accumulated OTel session state as Context Tree events. |
 | `capture-otlp restart` | configure-otel-capture | silver | context-tree-otel-bypass-mode | Stop the receiver (if running), then start it again. |
@@ -107,7 +107,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `setup codex-cli` | configure-codex-runtime | silver | maintenance-command-ownership, prompt-install-auth-flow | Install Codex CLI session-capture hooks. |
 | `setup git` | connect-agent-runtime | silver | connect-agent-runtime, migration-u-setup-4-setup-git-clean-install, migration-u-trail-3-backfill-honest, prompt-install-auth-flow | Install the post-commit hook that correlates commits to traces. |
 | `setup llm-review` | configure-security-reviewer | bronze | enable-security-tools | Configure the optional LLM dataset-row reviewer for publication gates. |
-| `setup pi` | **missing** | silver | pi-setup-dry-run, prompt-install-auth-flow | Verify, install, repair, or remove the OpenTraces Pi package. |
+| `setup pi` | connect-agent-runtime | silver | pi-setup-dry-run, prompt-install-auth-flow | Verify, install, repair, or remove the OpenTraces Pi package. |
 | `setup privacy-filter` | configure-security-detectors | bronze | enable-security-tools | Configure the ``openai/privacy-filter`` PII detector. |
 | `setup skill` | connect-agent-runtime | silver | connect-agent-runtime, prompt-install-auth-flow | Install the opentraces skill globally and link it into each agent harness. |
 | `setup trufflehog` | configure-security-detectors | bronze | enable-security-tools | Configure the optional deep secret detector via TruffleHog. |
@@ -121,13 +121,13 @@ the single source of truth. Drift fails CI under `--strict`.
 | `setup watcher tick` | enable-live-attribution | silver | enable-live-attribution, live-hf-bucket-daemon-sync, migration-u-setup-5-watcher-tick-safe | Run one tick now and print reports (diagnostic). |
 | `setup watcher uninstall` | enable-live-attribution | bronze | enable-live-attribution | Unload and remove the watcher unit file. |
 | `skill-verifier` | _group_ | — | **unowned** | Author and calibrate a trace-grounded verifier (rubric) for a skill. |
-| `skill-verifier align` | **missing** | bronze | skill-verifier-command-smoke | Scaffold a manual alignment session (desired outcome + draft rubric + traces to label). |
-| `skill-verifier autoverify` | **missing** | bronze | skill-verifier-command-smoke | Self-align a rubric to the skill's goal and calibrate it (autoverify mode). |
-| `skill-verifier score` | **missing** | bronze | skill-verifier-command-smoke | Drive SkillOpt with the calibrated rubric (Phase 5 reward swap); emit a package. |
-| `skill-verifier status` | **missing** | bronze | skill-verifier-command-smoke | Quick autoverify status for a skill (feasibility triage). |
+| `skill-verifier align` | skill-verifier-calibration | bronze | skill-verifier-command-smoke | Scaffold a manual alignment session (desired outcome + draft rubric + traces to label). |
+| `skill-verifier autoverify` | skill-verifier-calibration | bronze | skill-verifier-command-smoke | Self-align a rubric to the skill's goal and calibrate it (autoverify mode). |
+| `skill-verifier score` | skill-verifier-calibration | bronze | skill-verifier-command-smoke | Drive SkillOpt with the calibrated rubric (Phase 5 reward swap); emit a package. |
+| `skill-verifier status` | skill-verifier-calibration | bronze | skill-verifier-command-smoke | Quick autoverify status for a skill (feasibility triage). |
 | `status` | onboard-repo | gold | cli-lifecycle, cli-publish-happy-path, migration-s1-read-compat, migration-s11-non-destructive, migration-s12-end-to-end-upgrade, migration-u-config-2-legacy-marker-loads, tier1-cold-publish, tier1-snapshot-restore, tier1-warm-reuse | Show status of the current opentraces project. |
 | `trace` | _group_ | — | **unowned** | Search, map, slice, and retrieve retained traces. |
-| `trace compare` | **missing** | bronze | trace-compare-smoke | Compare two traces: metrics, quality, burst/error signals, and security deltas. |
+| `trace compare` | trace-intelligence-compare | bronze | trace-compare-smoke | Compare two traces: metrics, quality, burst/error signals, and security deltas. |
 | `trace discover` | retrieve-relevant-traces | bronze | agent-session-to-published-dataset | Build a deterministic topic capsule from retained traces. |
 | `trace get` | resolve-trace-artifact | gold | bucket-cross-machine-content-identity, bucket-prune-orphan-only, bucket-self-sufficient-everything, bucket-symmetric-local-remote, bucket-write-order-discipline-local, cli-lifecycle, codex-parity-bash-debugging, codex-parity-linear, codex-parity-permission-request, codex-parity-readonly-search, codex-parity-resume, codex-parity-skill-invocation, live-hf-bucket-roundtrip, live-hf-read-remote, migration-s1-read-compat, migration-s12-end-to-end-upgrade, migration-u-trace-1-patch-survives-read, pi-compaction-branch-fidelity, pi-extension-capture-linear, pi-full-parity-latest, pi-security-sanitize-captured-content, trace-spine-cross-substrate-resolution, trace-spine-trace-get-shape, trail-mature-updates-patch-anchor | Resolve a trace, trace unit, map node, or ot:// Trail resource. |
 | `trace index` | _group_ | — | **unowned** | Rebuild and inspect local trace search projections. |
@@ -155,11 +155,11 @@ the single source of truth. Drift fails CI under `--strict`.
 | `workflow` | _group_ | — | **unowned** | Manage local dataset workflow skills. |
 | `workflow create` | productionize-trace-workflow | gold | dataset-sync-skill-history, migration-u-ds-1-scaffold-degrades, productionize-trace-workflow | Scaffold a new local dataset workflow skill. |
 | `workflow list` | productionize-trace-workflow | bronze | productionize-trace-workflow | List installed workflows with their path and bound datasets. |
-| `workflow optimize` | **missing** | bronze | skill-verifier-command-smoke | Optimize a skill from scored rollouts (SkillOpt, arXiv 2605.23904). |
+| `workflow optimize` | skill-intelligence-mining | bronze | skill-verifier-command-smoke | Optimize a skill from scored rollouts (SkillOpt, arXiv 2605.23904). |
 | `workflow remove` | productionize-trace-workflow | bronze | productionize-trace-workflow | Remove an installed workflow skill package. |
-| `workflow skill-intelligence` | **missing** | bronze | skill-verifier-command-smoke | Run the internal Skill Intelligence eval pipeline. |
+| `workflow skill-intelligence` | skill-intelligence-mining | bronze | skill-verifier-command-smoke | Run the internal Skill Intelligence eval pipeline. |
 | `workflow templates` | productionize-trace-workflow | bronze | productionize-trace-workflow | List built-in workflow templates available to `workflow create`. |
-| `workflow verifier-factory` | **missing** | bronze | skill-verifier-command-smoke | Mine skill_invocation evidence into trace-grounded verifier packages (dry-run). |
+| `workflow verifier-factory` | skill-intelligence-mining | bronze | skill-verifier-command-smoke | Mine skill_invocation evidence into trace-grounded verifier packages (dry-run). |
 
 ## Hidden commands
 

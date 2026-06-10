@@ -142,9 +142,20 @@ def available_journeys() -> list[dict]:
                 # today's behaviour.
                 "preconditions": dict(doc.get("preconditions") or {}),
                 "tier_label": str(doc.get("tier_label", "bronze")),
+                # otbox 2.0 phase 3: the CI lane (pr | nightly |
+                # local-agents). Explicit ci_lane in the TOML wins;
+                # otherwise derived (sentinels -> pr, tier 0 -> nightly,
+                # tier 1 -> local-agents).
+                "ci_lane": _derive_ci_lane(doc),
             }
         )
     return out
+
+
+def _derive_ci_lane(doc: dict) -> str:
+    from .lanes import derive_ci_lane
+
+    return derive_ci_lane(doc)
 
 
 # --------------------------------------------------------------------------
@@ -841,6 +852,265 @@ def _step_by_ref(steps: list[StepResult], ref: str | None) -> StepResult:
     raise JourneyError(f"assertion references unknown step id {ref!r}")
 
 
+# --------------------------------------------------------------------------
+# assertion kinds — single registry; the registry IS the dispatch (otbox 2.0
+# phase 1). Adding a kind means adding one entry here; the catalogue lint
+# reads this same dict, so lint-known and runtime-known cannot diverge.
+# --------------------------------------------------------------------------
+_NO_EXPECTED = object()
+
+
+def _brief(value: Any, limit: int = 120) -> str:
+    text = repr(value)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _resolve_expected(spec: dict, steps: list[StepResult], ctx: dict) -> Any:
+    """Resolve the expected value for an assertion.
+
+    Precedence: explicit ``equals`` wins; otherwise ``equals_var`` resolves
+    either cross-step (``"step-id:json.path"`` digs another step's stdout
+    JSON) or from the journey ctx (checkpoint audit / template variables,
+    JSON-decoded when possible). An unresolvable variable raises so the
+    assertion FAILS — it must never silently pass.
+    """
+    if "equals" in spec:
+        return spec["equals"]
+    if "equals_var" not in spec:
+        return _NO_EXPECTED
+    ref = str(spec["equals_var"])
+    step_ref, sep, json_path = ref.partition(":")
+    if sep and any(s.step_id == step_ref for s in steps):
+        step = _step_by_ref(steps, step_ref)
+        payload = _extract_json(step.result.stdout)
+        return _dig(payload, json_path)
+    if ref in ctx:
+        val = ctx[ref]
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except (ValueError, TypeError):
+                return val
+        return val
+    raise JourneyError(f"unresolved equals_var {ref!r} (no ctx variable, no step id)")
+
+
+def _require_expected(spec: dict, steps: list[StepResult], ctx: dict) -> Any:
+    expected = _resolve_expected(spec, steps, ctx)
+    if expected is _NO_EXPECTED:
+        raise JourneyError(f"{spec.get('kind')} requires equals or equals_var")
+    return expected
+
+
+def _k_returncode(spec, steps, ctx, driver, box):
+    step = _step_by_ref(steps, spec.get("step"))
+    actual = step.result.returncode if step.result else None
+    want = int(spec["equals"])
+    return actual == want, f"rc={actual} expected {want}"
+
+
+def _k_stream_contains(spec, steps, ctx, driver, box):
+    step = _step_by_ref(steps, spec.get("step"))
+    stream = step.result.stdout if spec["kind"].startswith("stdout") else step.result.stderr
+    needle = str(spec["value"])
+    return needle in stream, f"{'found' if needle in stream else 'missing'}: {needle!r}"
+
+
+def _k_stream_not_contains(spec, steps, ctx, driver, box):
+    step = _step_by_ref(steps, spec.get("step"))
+    stream = step.result.stdout if spec["kind"].startswith("stdout") else step.result.stderr
+    needle = str(spec["value"])
+    absent = needle not in stream
+    return absent, (
+        f"absent as expected: {needle!r}" if absent else f"unexpectedly present: {needle!r}"
+    )
+
+
+def _k_stdout_json(spec, steps, ctx, driver, box):
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    actual = _dig(payload, spec["path"]) if "path" in spec else payload
+    expected = _resolve_expected(spec, steps, ctx)
+    if expected is not _NO_EXPECTED:
+        return actual == expected, (
+            f"{spec.get('path', '<root>')}={_brief(actual)} expected {_brief(expected)}"
+        )
+    return actual is not None, f"{spec.get('path', '<root>')}={_brief(actual)}"
+
+
+def _k_stdout_json_equals_var(spec, steps, ctx, driver, box):
+    if "equals_var" not in spec:
+        raise JourneyError("stdout_json_equals_var requires equals_var")
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    actual = _dig(payload, spec["path"])
+    expected = _resolve_expected(spec, steps, ctx)
+    return actual == expected, (
+        f"{spec['path']}={_brief(actual)} expected {_brief(expected)}"
+        f" (from {spec['equals_var']!r})"
+    )
+
+
+def _k_stdout_json_array_equals(spec, steps, ctx, driver, box):
+    # Element-wise equality on a JSON array. Order-sensitive.
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    path = spec["path"]
+    try:
+        actual = _dig(payload, path)
+    except (KeyError, IndexError, ValueError):
+        return False, f"path not found: {path!r}"
+    expected = _require_expected(spec, steps, ctx)
+    if not isinstance(actual, list):
+        return False, f"{path!r} is {type(actual).__name__}, expected list"
+    if not isinstance(expected, list):
+        return False, f"expected value must be a list, got {type(expected).__name__}"
+    if len(actual) != len(expected):
+        return False, f"{path!r} length {len(actual)} != expected {len(expected)}"
+    for i, (a, e) in enumerate(zip(actual, expected)):
+        if a != e:
+            return False, f"{path}[{i}]={a!r} expected {e!r}"
+    return True, f"{path!r} array equals expected ({len(actual)} elements)"
+
+
+def _k_stdout_json_set_contains(spec, steps, ctx, driver, box):
+    # Subset check on a JSON array. Order-insensitive.
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    path = spec["path"]
+    try:
+        actual = _dig(payload, path)
+    except (KeyError, IndexError, ValueError):
+        return False, f"path not found: {path!r}"
+    expected = _require_expected(spec, steps, ctx)
+    if not isinstance(actual, list):
+        return False, f"{path!r} is {type(actual).__name__}, expected list"
+    if not isinstance(expected, list):
+        return False, f"expected value must be a list, got {type(expected).__name__}"
+    try:
+        actual_set = set(actual)
+        expected_set = set(expected)
+    except TypeError as exc:
+        return False, f"{path!r} contains unhashable elements: {exc}"
+    missing = expected_set - actual_set
+    if missing:
+        return False, f"{path!r} missing elements: {sorted(missing)!r}"
+    return True, f"{path!r} contains all {len(expected_set)} expected elements"
+
+
+def _k_stdout_json_length_equals(spec, steps, ctx, driver, box):
+    # Length check on a JSON list or dict.
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    path = spec["path"]
+    try:
+        actual = _dig(payload, path)
+    except (KeyError, IndexError, ValueError):
+        return False, f"path not found: {path!r}"
+    if not isinstance(actual, (list, dict)):
+        return False, f"{path!r} is {type(actual).__name__}, expected list or dict"
+    want = int(_require_expected(spec, steps, ctx))
+    have = len(actual)
+    return have == want, f"len({path!r})={have} expected {want}"
+
+
+def _k_stdout_json_path_absent(spec, steps, ctx, driver, box):
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    path = spec["path"]
+    try:
+        val = _dig(payload, path)
+    except (KeyError, IndexError, ValueError):
+        return True, f"path absent as expected: {path!r}"
+    return False, f"path unexpectedly present: {path!r}={_brief(val)}"
+
+
+def _k_stdout_json_greater_equal(spec, steps, ctx, driver, box):
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    actual = _dig(payload, spec["path"])
+    expected = _resolve_expected(spec, steps, ctx)
+    if expected is _NO_EXPECTED:
+        expected = spec["min"]
+    want = float(expected)
+    have = float(actual)
+    return have >= want, f"{spec['path']}={have} expected >= {want}"
+
+
+def _k_stdout_json_contains(spec, steps, ctx, driver, box):
+    # Substring check on the value at a JSON path.
+    step = _step_by_ref(steps, spec.get("step"))
+    payload = _extract_json(step.result.stdout)
+    actual = _dig(payload, spec["path"])
+    needle = str(spec["value"])
+    hay = actual if isinstance(actual, str) else json.dumps(actual)
+    return needle in hay, (
+        f"{'found' if needle in hay else 'missing'}: {needle!r} in {spec['path']}"
+    )
+
+
+def _k_duration_ms_max(spec, steps, ctx, driver, box):
+    # Per-step wall-clock budget (milliseconds). NF-lite: uses the runner's
+    # own duration_s measurement, outside the code under test.
+    step = _step_by_ref(steps, spec.get("step"))
+    have_ms = (step.result.duration_s if step.result else 0.0) * 1000.0
+    want_ms = float(spec["max"])
+    return have_ms <= want_ms, f"duration {have_ms:.0f}ms budget {want_ms:.0f}ms"
+
+
+def _k_path_exists(spec, steps, ctx, driver, box):
+    path = str(spec["path"])
+    if driver is not None and box is not None:
+        exists = driver.path_exists(box, path)
+    else:
+        exists = Path(path).exists()
+    return exists, f"{'exists' if exists else 'missing'}: {path}"
+
+
+def _k_path_not_exists(spec, steps, ctx, driver, box):
+    path = str(spec["path"])
+    if driver is not None and box is not None:
+        exists = driver.path_exists(box, path)
+    else:
+        exists = Path(path).exists()
+    return not exists, (
+        f"unexpectedly exists: {path}" if exists else f"absent as expected: {path}"
+    )
+
+
+def _k_file_count_min(spec, steps, ctx, driver, box):
+    root = str(spec["path"])
+    pattern = spec.get("glob", "**/*")
+    want = int(spec["min"])
+    if driver is not None and box is not None:
+        count = driver.count_files(box, root, pattern)
+    else:
+        p = Path(root)
+        count = sum(1 for f in p.glob(pattern) if f.is_file()) if p.exists() else 0
+    return count >= want, f"{count} file(s) under {root}, need >= {want}"
+
+
+ASSERTION_KINDS: dict[str, Any] = {
+    "returncode": _k_returncode,
+    "stdout_contains": _k_stream_contains,
+    "stderr_contains": _k_stream_contains,
+    "stdout_not_contains": _k_stream_not_contains,
+    "stderr_not_contains": _k_stream_not_contains,
+    "stdout_json": _k_stdout_json,
+    "stdout_json_equals_var": _k_stdout_json_equals_var,
+    "stdout_json_array_equals": _k_stdout_json_array_equals,
+    "stdout_json_set_contains": _k_stdout_json_set_contains,
+    "stdout_json_length_equals": _k_stdout_json_length_equals,
+    "stdout_json_path_absent": _k_stdout_json_path_absent,
+    "stdout_json_greater_equal": _k_stdout_json_greater_equal,
+    "stdout_json_contains": _k_stdout_json_contains,
+    "duration_ms_max": _k_duration_ms_max,
+    "path_exists": _k_path_exists,
+    "path_not_exists": _k_path_not_exists,
+    "file_count_min": _k_file_count_min,
+}
+
+
 def _eval_assertion(index: int, raw: dict, steps: list[StepResult], ctx: dict,
                     driver: Driver | None = None, box: Box | None = None) -> AssertionResult:
     spec = _expand(raw, ctx)
@@ -849,119 +1119,12 @@ def _eval_assertion(index: int, raw: dict, steps: list[StepResult], ctx: dict,
     def make(ok: bool, message: str) -> AssertionResult:
         return AssertionResult(index, kind, ok, message, spec)
 
-    try:
-        if kind == "returncode":
-            step = _step_by_ref(steps, spec.get("step"))
-            actual = step.result.returncode if step.result else None
-            want = int(spec["equals"])
-            return make(actual == want, f"rc={actual} expected {want}")
-
-        if kind in ("stdout_contains", "stderr_contains"):
-            step = _step_by_ref(steps, spec.get("step"))
-            stream = step.result.stdout if kind == "stdout_contains" else step.result.stderr
-            needle = str(spec["value"])
-            return make(needle in stream, f"{'found' if needle in stream else 'missing'}: {needle!r}")
-
-        if kind == "stdout_json":
-            step = _step_by_ref(steps, spec.get("step"))
-            payload = _extract_json(step.result.stdout)
-            actual = _dig(payload, spec["path"]) if "path" in spec else payload
-            if "equals" in spec:
-                return make(actual == spec["equals"], f"{spec.get('path','<root>')}={actual!r} expected {spec['equals']!r}")
-            return make(actual is not None, f"{spec.get('path','<root>')}={actual!r}")
-
-        if kind == "stdout_json_array_equals":
-            # Element-wise equality on a JSON array. Order-sensitive.
-            step = _step_by_ref(steps, spec.get("step"))
-            payload = _extract_json(step.result.stdout)
-            path = spec["path"]
-            try:
-                actual = _dig(payload, path)
-            except (KeyError, IndexError, ValueError):
-                return make(False, f"path not found: {path!r}")
-            expected = spec["equals"]
-            if not isinstance(actual, list):
-                return make(False, f"{path!r} is {type(actual).__name__}, expected list")
-            if not isinstance(expected, list):
-                return make(False, f"spec.equals must be a list, got {type(expected).__name__}")
-            if len(actual) != len(expected):
-                return make(
-                    False,
-                    f"{path!r} length {len(actual)} != expected {len(expected)}",
-                )
-            for i, (a, e) in enumerate(zip(actual, expected)):
-                if a != e:
-                    return make(False, f"{path}[{i}]={a!r} expected {e!r}")
-            return make(True, f"{path!r} array equals expected ({len(actual)} elements)")
-
-        if kind == "stdout_json_set_contains":
-            # Subset check on a JSON array. Order-insensitive.
-            step = _step_by_ref(steps, spec.get("step"))
-            payload = _extract_json(step.result.stdout)
-            path = spec["path"]
-            try:
-                actual = _dig(payload, path)
-            except (KeyError, IndexError, ValueError):
-                return make(False, f"path not found: {path!r}")
-            expected = spec["equals"]
-            if not isinstance(actual, list):
-                return make(False, f"{path!r} is {type(actual).__name__}, expected list")
-            if not isinstance(expected, list):
-                return make(False, f"spec.equals must be a list, got {type(expected).__name__}")
-            try:
-                actual_set = set(actual)
-                expected_set = set(expected)
-            except TypeError as exc:
-                return make(False, f"{path!r} contains unhashable elements: {exc}")
-            missing = expected_set - actual_set
-            if missing:
-                return make(False, f"{path!r} missing elements: {sorted(missing)!r}")
-            return make(
-                True,
-                f"{path!r} contains all {len(expected_set)} expected elements",
-            )
-
-        if kind == "stdout_json_length_equals":
-            # Length check on a JSON list or dict.
-            step = _step_by_ref(steps, spec.get("step"))
-            payload = _extract_json(step.result.stdout)
-            path = spec["path"]
-            try:
-                actual = _dig(payload, path)
-            except (KeyError, IndexError, ValueError):
-                return make(False, f"path not found: {path!r}")
-            if not isinstance(actual, (list, dict)):
-                return make(
-                    False,
-                    f"{path!r} is {type(actual).__name__}, expected list or dict",
-                )
-            want = int(spec["equals"])
-            have = len(actual)
-            return make(
-                have == want,
-                f"len({path!r})={have} expected {want}",
-            )
-
-        if kind == "path_exists":
-            path = str(spec["path"])
-            if driver is not None and box is not None:
-                exists = driver.path_exists(box, path)
-            else:
-                exists = Path(path).exists()
-            return make(exists, f"{'exists' if exists else 'missing'}: {path}")
-
-        if kind == "file_count_min":
-            root = str(spec["path"])
-            pattern = spec.get("glob", "**/*")
-            want = int(spec["min"])
-            if driver is not None and box is not None:
-                count = driver.count_files(box, root, pattern)
-            else:
-                p = Path(root)
-                count = sum(1 for f in p.glob(pattern) if f.is_file()) if p.exists() else 0
-            return make(count >= want, f"{count} file(s) under {root}, need >= {want}")
-
+    evaluator = ASSERTION_KINDS.get(kind)
+    if evaluator is None:
         return make(False, f"unknown assertion kind {kind!r}")
+    try:
+        ok, message = evaluator(spec, steps, ctx, driver, box)
+        return make(ok, message)
     except Exception as exc:  # noqa: BLE001 - surface assertion eval failures as FAIL
         return make(False, f"assertion error: {exc}")
 
@@ -1172,6 +1335,19 @@ def run_journey(driver: Driver, box: Box, name: str) -> JourneyResult:
         result.verdict = "SKIP"
         result.reason = f"missing capabilities: {sorted(missing)}"
         return result
+
+    # Runtime precondition probes (otbox 2.0 phase 4): re-verify declared
+    # preconditions against the LIVE box, not the checkpoint's static
+    # provides list. A failed probe is an ERROR — never SKIP (hides),
+    # never PASS (lies). This is what killed the survival-walk tautology.
+    if preconditions:
+        from .probes import run_probes
+
+        for key, ok, message in run_probes(driver, box, preconditions):
+            if not ok:
+                result.verdict = "ERROR"
+                result.reason = f"precondition_unmet: {key}: {message}"
+                return result
 
     # Plan 069 R8: when preconditions AND from_checkpoints are both
     # declared, the explicit pin wins but must satisfy the declared
