@@ -91,6 +91,22 @@ added = 2026-06-10
 expires = 2026-09-08
 
 [[entries]]
+journeys = [
+  "codex-parity-bash-debugging",
+  "codex-parity-multi-file-patch",
+  "codex-parity-permission-request",
+  "codex-parity-readonly-search",
+  "codex-parity-skill-invocation",
+  "pi-incremental-recovery",
+  "pi-full-parity-latest",
+]
+rules = ["baseline-red"]
+reason = "real-artifact cross-machine failures surfaced by the supply chain (2026-06-10): these journeys SKIPped silently before artifacts were fetchable; against the real restored worlds on a non-origin machine they fail (e.g. bash-debugging: persistent stale_count=1 that watcher tick does NOT reconcile, unlike the linear case). Per-artifact diagnosis owed; do NOT weaken the assertions"
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
+
+[[entries]]
 journeys = ["mixed-agent-bucket-parity", "mixed-agent-bucket-parity-pi"]
 rules = ["baseline-red"]
 reason = "artifact-path defect surfaced by the supply chain: on a non-origin machine the restored archive's manifest is empty until a watcher tick re-ingests, and any manifest REBUILD (bucket repair / bucket_manifest(write=True) in the inject step) then DROPS the tick-reconciled trace, leaving the composed world claude-only. Candidate product bug for PR-B: bucket repair loses tick-reconciled traces after cross-machine restore."

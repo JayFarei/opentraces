@@ -83,6 +83,8 @@ class LedgerRow:
     effective_tier: str = "pending"
     red: bool = False
     red_reason: str = ""
+    quarantined: bool = False
+    quarantine_issue: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -126,8 +128,16 @@ def build_ledger(
     Every catalogue journey gets a row — journeys the matrix never touched
     are PENDING (red when their lane should have run them).
     """
+    from .catalogue_lint import load_quarantine
+
     cat = catalogue_dir or CATALOGUE_DIR
     stamp = (now or _dt.datetime.now(_dt.timezone.utc)).isoformat()
+    today = (now or _dt.datetime.now(_dt.timezone.utc)).date()
+    quarantine: dict[str, str] = {}
+    for entry in load_quarantine():
+        if entry.expires >= today:
+            for j in entry.journeys:
+                quarantine[j] = entry.issue
     by_journey: dict[str, dict] = {}
     for row in matrix_report.get("rows", []):
         # Keep the strongest verdict per journey (PASS beats SKIP across
@@ -156,8 +166,15 @@ def build_ledger(
             assertions=assertions,
             effective_tier=effective_tier(verdict, assertions),
         )
+        # Quarantined journeys are visible debt, not red: they carry their
+        # issue URL and stay pending-tier until the quarantine resolves.
+        # Expiry is enforced by the catalogue lint, so a stale entry fails
+        # the suite there rather than silently extending here.
+        if name in quarantine:
+            row.quarantined = True
+            row.quarantine_issue = quarantine[name]
         # SKIP-fails rule: pr/nightly journeys must execute in their lane.
-        if meta["ci_lane"] in ("pr", "nightly") and verdict in ("SKIP", "PENDING"):
+        elif meta["ci_lane"] in ("pr", "nightly") and verdict in ("SKIP", "PENDING"):
             row.red = True
             row.red_reason = (
                 f"{meta['ci_lane']}-lane journey did not execute "
@@ -177,6 +194,7 @@ def ledger_summary(ledger: Ledger) -> dict:
     return {
         "rows": len(ledger.rows),
         "red": sum(1 for r in ledger.rows if r.red),
+        "quarantined": sum(1 for r in ledger.rows if r.quarantined),
         "effective_tiers": tiers,
         "executed": sum(1 for r in ledger.rows if r.verdict not in ("PENDING",)),
     }
