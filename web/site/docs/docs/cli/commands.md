@@ -171,6 +171,12 @@ traces, first `opentraces bucket remote pull` and then rebuild the snapshot with
 `opentraces trace index rebuild`. (`trace get --remote-bucket` / `--remote
 owner/repo` remain the per-trace remote-read path.)
 
+`--semantic` expands a small static dictionary of service/library concepts
+observed in trace evidence (for example Hugging Face or MongoDB); it is not an
+embedding search. A query that matches no concept falls back to lexical
+matching where every token must match, so natural-language paraphrases can
+miss traces that concrete keywords would find.
+
 ## Trace Intelligence
 
 Deterministic, derive-on-demand signals about how a run went, layered on top of the Trace surface. No LLM, no schema change, nothing persisted; each is a frozen JSON envelope. Three capabilities: context waste, run signals, run compare.

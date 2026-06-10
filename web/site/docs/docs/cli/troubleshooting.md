@@ -75,7 +75,7 @@ opentraces backfill
 opentraces git-backfill
 ```
 
-`git-backfill` is particularly useful after a first-time install of the post-commit hook or after a period where the hook failed silently.
+`git-backfill` is particularly useful after a first-time install of the post-commit hook or after a period where the hook failed silently. `backfill` (the attribution-cache refresh) is a hidden maintenance verb: it runs when typed but does not appear in `--help`.
 
 ### Blocked Rows in a Dataset
 

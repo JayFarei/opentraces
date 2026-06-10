@@ -17,7 +17,8 @@ When suggesting a schema change, include:
 | New optional field | Minor |
 | New optional model | Minor |
 | Field rename | Major |
-| Field removal | Major |
+| Field removal before 1.0 | Minor with rationale and a registered migration |
+| Field removal after 1.0 | Major with a registered migration |
 | Type change | Major |
 
 See [Versioning](/docs/schema/versioning) for full policy.
