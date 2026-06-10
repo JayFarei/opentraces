@@ -37,6 +37,12 @@ def _detect_binary_version(binary: str) -> str:
     Returns ``""`` if the call fails or produces no parseable output.
     Bounded with a 5-second timeout so a broken binary cannot wedge
     the runner before the real session even starts.
+
+    Checks stdout first, then stderr: ``pi`` (and a long tail of CLIs)
+    write their version line to STDERR with exit 0 — reading stdout only
+    stamped EMPTY ``binary_version`` provenance into the pi capture
+    artifacts and made the staleness report misclassify an installed pi
+    as ``binary_absent``.
     """
     try:
         result = subprocess.run(
@@ -49,10 +55,11 @@ def _detect_binary_version(binary: str) -> str:
         return ""
     if result.returncode != 0:
         return ""
-    for line in (result.stdout or "").splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
+    for stream in (result.stdout, result.stderr):
+        for line in (stream or "").splitlines():
+            stripped = line.strip()
+            if stripped:
+                return stripped
     return ""
 
 
