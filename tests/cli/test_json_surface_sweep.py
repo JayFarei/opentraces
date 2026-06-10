@@ -376,8 +376,15 @@ def test_envelope_shapes_match_snapshot():
     )
     committed = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
     current = _current_shapes()
+    # A committed command absent from `current` is NOT drift: some envelopes
+    # only materialize when an external binary is installed (e.g. `setup
+    # trufflehog` exits non-zero on substrates without the binary). Drift is
+    # a command whose shape CHANGED, or a new exit-0 envelope with no
+    # committed shape.
     drift = {}
     for path in sorted(set(committed) | set(current)):
+        if path not in current:
+            continue
         if committed.get(path) != current.get(path):
             drift[path] = {
                 "committed": committed.get(path),
