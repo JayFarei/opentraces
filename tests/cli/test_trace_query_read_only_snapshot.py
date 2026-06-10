@@ -415,3 +415,42 @@ def test_trace_index_status_db_sizes_degrade_when_dbstat_unavailable(monkeypatch
     assert entry["exists"] is True
     assert entry["tables"] is None
     assert "dbstat" in entry["tables_error"]
+
+
+def test_trace_index_bootstrap_signposts_progress_on_stderr() -> None:
+    # Issue #27 item M: the legacy-index bootstrap (missing index.db) can run
+    # many silent minutes. The human (non --json) path must signpost it on
+    # stderr with a trace count so the operator knows a long op is underway.
+    from opentraces.core.trace_index import default_index_path
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_index_path().exists()
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["trace", "index"])
+
+    assert result.exit_code == 0, result.output
+    # Bootstrap notice + completion line land on stderr only.
+    assert "Bootstrapping legacy Trace Index" in result.stderr
+    assert "bootstrap done" in result.stderr
+    # The legacy index now exists (bootstrap ran).
+    assert default_index_path().exists()
+
+
+def test_trace_index_bootstrap_keeps_json_stdout_clean() -> None:
+    # Issue #27 item M: the stderr signpost must NOT leak into the --json
+    # stdout contract — stdout stays a single parseable JSON document.
+    from opentraces.core.trace_index import default_index_path
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_index_path().exists()
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["trace", "index", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)  # parseable: no stderr leak
+    assert payload["status"] == "ok"
+    assert payload["legacy_index"]["healed"] is True
+    # No bootstrap notice on stdout when --json.
+    assert "Bootstrapping" not in result.stdout

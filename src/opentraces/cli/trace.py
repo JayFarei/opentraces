@@ -121,6 +121,34 @@ def _db_table_sizes(db_path: Path) -> dict:
     return entry
 
 
+def _approx_bootstrap_trace_count() -> int:
+    """Cheap pre-flight count of trace sources for the bootstrap signpost.
+
+    Globs the on-disk trace stores (bucket envelopes, per-project ``traces``
+    dirs, and the staging layer) WITHOUT running the expensive
+    ``sync_trace_records_from_local_stores`` pass that the real ingest does.
+    This is only used to put an order-of-magnitude number in the stderr
+    "this may take a while" notice (issue #27 item M); it never gates behavior.
+    Returns ``0`` if nothing is countable rather than raising.
+    """
+    from ..core import paths
+
+    count = 0
+    try:
+        bucket_traces = paths.OPENTRACES_DIR / "bucket" / "traces" / "v1"
+        if bucket_traces.exists():
+            count += sum(1 for _ in bucket_traces.glob("*/*/trace.json"))
+        projects_dir = getattr(paths, "PROJECTS_DIR", None)
+        if projects_dir is not None and projects_dir.exists():
+            count += sum(1 for _ in projects_dir.glob("*/traces/*.jsonl"))
+        staging_dir = getattr(paths, "STAGING_DIR", None)
+        if staging_dir is not None and staging_dir.exists():
+            count += sum(1 for _ in staging_dir.glob("*.jsonl"))
+    except OSError:
+        return count
+    return count
+
+
 # ---------------------------------------------------------------------------
 # Standalone trace commands (registered at root in cli/__init__).
 # ---------------------------------------------------------------------------
@@ -666,6 +694,8 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
     afterwards ingests every layer the dirty marker can be set for and a
     rebuild always converges to clean.
     """
+    import time
+
     from ..core.trace_index import default_index_path, keep_index_warm, refresh_index
     from ..core.trace_search_snapshot import build_trace_search_snapshot
 
@@ -674,8 +704,30 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
         # One-time bootstrap: ``trace map/get/slice`` hydrate from the legacy
         # Trace Index, and nothing else recreates it after the operator
         # deletes a runaway DB (the issue-#22 recovery move). This is the only
-        # path where the explicit verb pays a full legacy rebuild.
+        # path where the explicit verb pays a full legacy rebuild — which can
+        # run ~tens of minutes on a long-bloated machine (issue #27 item M).
+        # The per-trace ingest loop lives inside core.trace_index (not this
+        # file), so we cannot thread a per-trace progressbar without crossing
+        # module ownership. Instead we signpost the long silent operation:
+        # cheap up-front trace count + elapsed-time line, both on stderr only
+        # (the --json stdout contract is unchanged).
+        total_traces = _approx_bootstrap_trace_count()
+        if not as_json:
+            click.echo(
+                "Bootstrapping legacy Trace Index from scratch "
+                f"(~{total_traces} traces). This can take several minutes on a "
+                "large bucket; no output until it completes.",
+                err=True,
+            )
+        _bootstrap_started = time.monotonic()
         refresh_index()
+        if not as_json:
+            click.echo(
+                f"Legacy Trace Index bootstrap done in "
+                f"{time.monotonic() - _bootstrap_started:.1f}s "
+                f"(~{total_traces} traces).",
+                err=True,
+            )
         healed_legacy_index = True
     warm_result = keep_index_warm(query_sources=("index", "projection"))
     search_summary = build_trace_search_snapshot()
