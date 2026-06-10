@@ -6,6 +6,7 @@ import contextlib
 import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -50,6 +51,8 @@ from ..security.privacy import DEFAULT_PRIVACY_TIER, normalize_privacy_tier
 from ..security.scanner import scan_serialized
 
 from . import paths
+
+logger = logging.getLogger(__name__)
 
 _DATASET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 SOURCE_PROVENANCE_SCHEMA = "opentraces.dataset.source_provenance.v1"

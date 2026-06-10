@@ -529,29 +529,13 @@ def raw_source_snapshot(*, include_objects: bool = False) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def project_per_trace_exports(
-    repo: Path,
-    *,
-    project_slug: str,
-    trace_id: str,
-    record: TraceRecord | None = None,
-) -> dict[str, Any]:
-    """Write the per-trace envelope under ``bucket/traces/v1/<proj>/<trace>/``.
+def _events_for_trace_from_iter(
+    events_iter: Any, trace_id: str
+) -> tuple[list[Any], list[Any]]:
+    """Split an event iterable into (trail_events, context_events) for one trace.
 
-    Plan 080 §9 Writer 2 contract — order is load-bearing for partial-failure
-    recovery:
-
-    1. Filter events for this trace from the canonical Git event log.
-    2. Write ``trail.jsonl.gz``  (atomic).
-    3. Write ``context.jsonl.gz`` (atomic).
-    4. Write ``sources.jsonl.gz`` (atomic).
-    5. Write ``trace.json``       LAST (the spine; manifest consumer signal).
-
-    The manifest at ``bucket/manifest.json`` is updated separately by
-    :func:`bucket_manifest`. Callers that need a consistent snapshot should
-    invoke this function for every trace BEFORE calling ``bucket_manifest``.
-
-    All gzipped files use ``mtime=0`` (Resolution H — deterministic).
+    Shared by :func:`project_per_trace_exports` (Git event log) and the
+    events-mirror fallback path (issue #28) so both sources filter identically.
     """
 
     from .context_tree.contract import (
@@ -560,7 +544,6 @@ def project_per_trace_exports(
         CONTEXT_NODE_OBSERVED,
         CONTEXT_TREE_RECONCILED,
     )
-    from .trails import read_events
 
     _CONTEXT_EVENT_TYPES = {
         CONTEXT_LAYER_CAPTURED,
@@ -571,20 +554,11 @@ def project_per_trace_exports(
 
     # plan 090: a v2 anchor-search summary event has top-level trace_id=None (it
     # spans the traces it searched). The shared helper fans it into this trace's
-    # companion when one of its per-patch results belongs here, so per-trace
-    # consumers (which read via iter_search_records) still see their searches.
-    # The whole summary event is kept verbatim (not split) so the companion
-    # stays faithful to the canonical log. Legacy per-patch events keep a real
-    # trace_id and route via the normal trace_id match below.
+    # companion when one of its per-patch results belongs here.
     from .trails.search_records import summary_search_touches_trace
 
-    # 1. Filter events by trace_id (sequence order preserved).
     trail_events: list[Any] = []
     context_events: list[Any] = []
-    try:
-        events_iter = read_events(repo, verify=False)
-    except Exception:
-        events_iter = []
     for event in sorted(events_iter, key=lambda e: e.event_sequence):
         ev_trace_id = event.trace_id
         if not ev_trace_id and isinstance(event.payload, dict):
@@ -595,6 +569,23 @@ def project_per_trace_exports(
             context_events.append(event)
         else:
             trail_events.append(event)
+    return trail_events, context_events
+
+
+def _write_per_trace_envelope(
+    project_slug: str,
+    trace_id: str,
+    record: TraceRecord | None,
+    trail_events: list[Any],
+    context_events: list[Any],
+) -> dict[str, Any]:
+    """File-writing tail of :func:`project_per_trace_exports` (issue #31 step B).
+
+    Writes the four companion files + ``trace.json`` in the load-bearing order
+    (companions first, ``trace.json`` LAST as the manifest consumer signal).
+    All gzipped files use ``mtime=0`` (Resolution H — deterministic). Atomic
+    same-bytes writers keep this idempotent.
+    """
 
     trace_dir = traces_v1_dir(project_slug, trace_id)
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -638,6 +629,69 @@ def project_per_trace_exports(
         "has_trace_record": record is not None,
         "projected_at": utc_now_str(),
     }
+
+
+def project_per_trace_exports(
+    repo: Path | None = None,
+    *,
+    project_slug: str,
+    trace_id: str,
+    record: TraceRecord | None = None,
+) -> dict[str, Any]:
+    """Write the per-trace envelope under ``bucket/traces/v1/<proj>/<trace>/``.
+
+    Plan 080 §9 Writer 2 contract — order is load-bearing for partial-failure
+    recovery:
+
+    1. Filter events for this trace from the canonical Git event log.
+    2. Write ``trail.jsonl.gz``  (atomic).
+    3. Write ``context.jsonl.gz`` (atomic).
+    4. Write ``sources.jsonl.gz`` (atomic).
+    5. Write ``trace.json``       LAST (the spine; manifest consumer signal).
+
+    The manifest at ``bucket/manifest.json`` is updated separately by
+    :func:`bucket_manifest`. Callers that need a consistent snapshot should
+    invoke this function for every trace BEFORE calling ``bucket_manifest``.
+
+    Issue #28 — ``repo`` is optional. When ``repo`` is ``None`` (no live
+    project on this machine — the cross-machine restore shape) OR the live
+    Git event log yields no events for this trace, the bucket's OWN events
+    mirror (``bucket/events/v1/``) is used as the event source so the
+    envelope is still written from canonical data. This makes the bucket
+    self-sufficient: ``bucket repair`` / manifest rebuild no longer drop a
+    trace that exists in the bucket but has no live opted-in project.
+
+    All gzipped files use ``mtime=0`` (Resolution H — deterministic).
+    """
+
+    from .trails import read_events
+
+    # 1. Filter events by trace_id (sequence order preserved). Prefer the live
+    # Git event log; fall back to the bucket's own events mirror when there is
+    # no repo, or the live log yields nothing for this trace.
+    events_iter: list[Any] = []
+    if repo is not None:
+        try:
+            events_iter = list(read_events(repo, verify=False))
+        except Exception:
+            events_iter = []
+    trail_events, context_events = _events_for_trace_from_iter(events_iter, trace_id)
+
+    if not trail_events and not context_events:
+        try:
+            mirror_events = list(read_events_mirror_batches())
+        except (FileNotFoundError, ValueError, BucketLayoutError):
+            mirror_events = []
+        except Exception:
+            mirror_events = []
+        if mirror_events:
+            trail_events, context_events = _events_for_trace_from_iter(
+                mirror_events, trace_id
+            )
+
+    return _write_per_trace_envelope(
+        project_slug, trace_id, record, trail_events, context_events
+    )
 
 
 def _per_trace_v2_summary(
@@ -861,10 +915,12 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
 
     errors: list[dict[str, Any]] = []
     traces_projected = 0
+    bucket_sourced_traces = 0
     events_mirrored = 0
     manifest_regenerated = False
 
     projects = _iter_opted_in_projects()
+    handled_pairs: set[tuple[str, str]] = set()
 
     for project_path, project_slug in projects:
         # 1. Events mirror rebuild — required before per-trace projection.
@@ -884,6 +940,7 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
         trace_ids = _trace_ids_for_project(project_path)
         for trace_id in trace_ids:
             traces_projected += 1
+            handled_pairs.add((project_slug, trace_id))
             if dry_run:
                 continue
             try:
@@ -916,6 +973,41 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
                         "detail": str(exc),
                     }
                 )
+
+    # 3b. Issue #28 — bucket-sourced pass. The live-projects walk above only
+    # sees traces whose opted-in project still exists on THIS machine. After a
+    # cross-machine restore (``bucket remote pull`` onto a second machine) the
+    # bucket holds canonical TraceRecord envelopes with no live project — those
+    # must NOT be dropped by repair. For every TraceRecord object NOT already
+    # handled by the live walk, project the per-trace envelope from the bucket's
+    # OWN events mirror (``project_per_trace_exports(None, ...)`` falls back to
+    # ``read_events_mirror_batches``) so the trace survives. Idempotent: a
+    # second repair re-projects the same bytes (atomic same-bytes writers).
+    for obj in iter_trace_record_objects():
+        pair = (obj.project_slug, obj.trace_id)
+        if pair in handled_pairs:
+            continue
+        handled_pairs.add(pair)
+        traces_projected += 1
+        bucket_sourced_traces += 1
+        if dry_run:
+            continue
+        try:
+            project_per_trace_exports(
+                None,
+                project_slug=obj.project_slug,
+                trace_id=obj.trace_id,
+                record=obj.record,
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "kind": "bucket_sourced_export",
+                    "project_slug": obj.project_slug,
+                    "trace_id": obj.trace_id,
+                    "detail": str(exc),
+                }
+            )
 
     # 4. events_mirrored count from the events mirror index (set by the
     # last sync_events_mirror call across all projects). When there's only
@@ -968,6 +1060,7 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
         "status": status,
         "dry_run": dry_run,
         "traces_projected": traces_projected,
+        "bucket_sourced_traces": bucket_sourced_traces,
         "events_mirrored": events_mirrored,
         "manifest_regenerated": manifest_regenerated,
         "projects_walked": len(projects),
@@ -1492,11 +1585,13 @@ def rebuild_bucket_traces() -> dict[str, Any]:
     projects = _iter_opted_in_projects()
     per_project: list[dict[str, Any]] = []
     envelopes_written = 0
+    handled_pairs: set[tuple[str, str]] = set()
     for project_path, project_slug in projects:
         trace_ids = _trace_ids_for_project(project_path)
         project_envelopes = 0
         errors: list[dict[str, Any]] = []
         for tid in trace_ids:
+            handled_pairs.add((project_slug, tid))
             try:
                 project_per_trace_exports(
                     project_path,
@@ -1517,11 +1612,52 @@ def rebuild_bucket_traces() -> dict[str, Any]:
             }
         )
 
+    # Issue #28 — bucket-sourced pass (shared with :func:`bucket_repair`). Every
+    # TraceRecord object NOT reached by a live opted-in project (cross-machine
+    # restore shape) is projected from the bucket's own events mirror so it is
+    # never dropped. ``project_per_trace_exports(None, ...)`` falls back to
+    # ``read_events_mirror_batches``.
+    bucket_sourced_errors: list[dict[str, Any]] = []
+    bucket_sourced_written = 0
+    for obj in iter_trace_record_objects():
+        pair = (obj.project_slug, obj.trace_id)
+        if pair in handled_pairs:
+            continue
+        handled_pairs.add(pair)
+        try:
+            project_per_trace_exports(
+                None,
+                project_slug=obj.project_slug,
+                trace_id=obj.trace_id,
+                record=obj.record,
+            )
+            envelopes_written += 1
+            bucket_sourced_written += 1
+        except Exception as exc:
+            bucket_sourced_errors.append(
+                {
+                    "project_slug": obj.project_slug,
+                    "trace_id": obj.trace_id,
+                    "detail": str(exc),
+                }
+            )
+    if bucket_sourced_written or bucket_sourced_errors:
+        per_project.append(
+            {
+                "project_slug": None,
+                "project": "<bucket-sourced>",
+                "trace_count": bucket_sourced_written + len(bucket_sourced_errors),
+                "envelopes_written": bucket_sourced_written,
+                "errors": bucket_sourced_errors,
+            }
+        )
+
     return {
         "schema_version": BUCKET_PER_TRACE_SCHEMA,
         "substrate": "traces",
         "projects_walked": len(projects),
         "envelopes_written": envelopes_written,
+        "bucket_sourced_traces": bucket_sourced_written,
         "per_project": per_project,
         "idempotent_noop": envelopes_written == 0,
     }
@@ -1674,6 +1810,10 @@ def bucket_manifest(
 
     trace_snapshot = trace_record_snapshot(include_objects=include_objects)
     objects = trace_snapshot.get("objects") or []
+    # Issue #31 — iterate the TraceRecord object store ONCE; reuse the parsed
+    # ``BucketTraceRecord`` objects for both the (compat) objects block and the
+    # read-side self-heal of the v2 ``traces[]`` rows below.
+    record_objects = iter_trace_record_objects()
     if not include_objects:
         objects = [
             {
@@ -1683,7 +1823,7 @@ def bucket_manifest(
                 "security_stale": obj.envelope.get("security", {}).get("stale"),
                 "written_at": obj.envelope.get("written_at"),
             }
-            for obj in iter_trace_record_objects()
+            for obj in record_objects
         ]
     syncable_count = sum(1 for obj in objects if obj.get("syncable") is True)
     stale_security_count = sum(1 for obj in objects if obj.get("security_stale") is True)
@@ -1719,6 +1859,56 @@ def bucket_manifest(
     # Plan 080 §4 — new ``traces[]`` block + ``events_v1`` index. Sorted by
     # (project_slug, trace_id) for deterministic digests.
     traces_v2_rows = iter_traces_v2()
+
+    # Issue #31 — read-side reconcile. On a restored / cross-machine world the
+    # TraceRecord object store can hold traces that have no per-trace v2
+    # envelope yet (ingest used to write the envelope only on the live-project
+    # hot path, and ``bucket repair`` only walked live opted-in projects). The
+    # manifest-only readers (``bucket manifest`` / ``ctx list``) then reported 0
+    # traces while ``bucket status`` / the index / ``ctx tree`` saw them. Heal:
+    # for every (project_slug, trace_id) present in the object store but missing
+    # from ``traces[]``, materialize the per-trace envelope from canonical data
+    # (live event log if the project resolves, else the bucket events mirror,
+    # else a degraded envelope from the TraceRecord alone) and add its summary
+    # row. Materializing on disk in both write modes keeps ``bucket verify``
+    # check 3 green and keeps ``bucket repair``'s write=False candidate-digest
+    # comparison consistent. Atomic same-bytes writers preserve idempotency.
+    _existing_pairs = {(row["project_slug"], row["trace_id"]) for row in traces_v2_rows}
+    _project_paths: dict[str, Path] | None = None
+    for obj in record_objects:
+        pair = (obj.project_slug, obj.trace_id)
+        if pair in _existing_pairs:
+            continue
+        try:
+            if _project_paths is None:
+                _project_paths = {
+                    slug: path for path, slug in _iter_opted_in_projects()
+                }
+            repo = _project_paths.get(obj.project_slug)
+            project_per_trace_exports(
+                repo,
+                project_slug=obj.project_slug,
+                trace_id=obj.trace_id,
+                record=obj.record,
+            )
+            traces_v2_rows.append(
+                _per_trace_v2_summary(obj.project_slug, obj.trace_id, obj.record)
+            )
+            _existing_pairs.add(pair)
+        except Exception:
+            # Degraded fallback: write an envelope with empty event companions
+            # straight from the TraceRecord so the trace is never dropped.
+            try:
+                _write_per_trace_envelope(
+                    obj.project_slug, obj.trace_id, obj.record, [], []
+                )
+                traces_v2_rows.append(
+                    _per_trace_v2_summary(obj.project_slug, obj.trace_id, obj.record)
+                )
+                _existing_pairs.add(pair)
+            except Exception:
+                pass
+    traces_v2_rows.sort(key=lambda item: (item["project_slug"], item["trace_id"]))
 
     # ``events_v1`` mirror summary (single-repo today; multi-repo when ingest
     # writes multiple mirror trees).

@@ -64,6 +64,26 @@ def sync_events_mirror(
 
     status = event_log_status(repo)
     if status.get("state") == "missing":
+        # Issue #28 — do NOT clobber a restored mirror. On a fresh clone /
+        # cross-machine restore the live project's Git event-log ref is missing,
+        # but the bucket's own events mirror (``bucket/events/v1/``) may already
+        # hold the canonical batches (left by ``bucket remote pull``). Resetting
+        # the index to ``state=missing``/``batch_count=0`` here would orphan
+        # those batches and drop every trace they carry. So: if a prior
+        # non-empty mirror exists on disk, return it UNCHANGED (on-disk bytes
+        # untouched). Only write the missing-state index when no prior mirror
+        # exists — the normal first-tick behavior is unchanged.
+        index_path = events_v1_index_path()
+        if index_path.exists():
+            try:
+                prior = json.loads(index_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                prior = None
+            if (
+                isinstance(prior, dict)
+                and int(prior.get("batch_count") or 0) > 0
+            ):
+                return prior
         index = {
             "schema_version": BUCKET_EVENTS_INDEX_SCHEMA,
             "repo_id": repo_id,

@@ -580,6 +580,80 @@ def test_cross_machine_bucket_digest_byte_identical(repo, tmp_path):
     )
 
 
+def test_cross_machine_bucket_digest_different_root(repo, tmp_path, monkeypatch):
+    """Issue #29 — ``bucket_digest`` is machine-INDEPENDENT.
+
+    The same bucket content restored at a DIFFERENT ``OPENTRACES_DIR`` root
+    must produce a byte-identical ``bucket_digest`` (and identical per-trace
+    ``traces[].digest``), even though ``manifest['root']`` correctly differs
+    (machine-local display path). On unfixed code the digest material fed each
+    sub-block WHOLE — and every sub-block embeds a machine-local ``root``
+    absolute path — so the roll-up differed across roots. This test MUST fail
+    on unfixed code.
+    """
+
+    from opentraces.core import config as _config
+    from opentraces.core import paths
+    from opentraces.core.bucket_store import bucket_manifest
+
+    # Machine A: seed an envelope under the conftest-isolated root.
+    _project_envelope(repo, trace_id="trace-XMR1", seed="xmr1", project_slug="proj")
+    manifest_a = bucket_manifest(write=True)
+    digest_a = manifest_a.get("bucket_digest") or manifest_a.get("digest")
+    root_a = manifest_a["root"]
+    traces_digest_a = sorted(
+        (row["trace_id"], row["digest"]) for row in manifest_a["traces"]
+    )
+    assert digest_a is not None
+    assert traces_digest_a, "expected at least one trace row"
+
+    # Tar the bucket with mtime=0 (Resolution H).
+    bucket_a = paths.bucket_dir()
+    tar_bytes = io.BytesIO()
+    with tarfile.open(fileobj=tar_bytes, mode="w:gz", format=tarfile.PAX_FORMAT) as tf:
+        for src in sorted(bucket_a.rglob("*")):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(bucket_a)
+            tinfo = tarfile.TarInfo(name=str(rel))
+            data = src.read_bytes()
+            tinfo.size = len(data)
+            tinfo.mtime = 0
+            tf.addfile(tinfo, io.BytesIO(data))
+    tar_bytes.seek(0)
+
+    # Machine B: a DIFFERENT OPENTRACES_DIR root. Mirror tests/conftest.py:48-54.
+    root_b_home = tmp_path / "machine-b-home"
+    opentraces_b = root_b_home / ".opentraces"
+    opentraces_b.mkdir(parents=True)
+    (opentraces_b / "projects").mkdir()
+    for mod in (paths, _config):
+        monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_b)
+        monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_b / "config.json")
+        monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_b / "credentials")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", opentraces_b / "projects")
+
+    bucket_b = paths.bucket_dir()
+    bucket_b.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=tar_bytes, mode="r:gz") as tf:
+        tf.extractall(path=bucket_b)
+
+    manifest_b = bucket_manifest(write=True)
+    digest_b = manifest_b.get("bucket_digest") or manifest_b.get("digest")
+    root_b = manifest_b["root"]
+    traces_digest_b = sorted(
+        (row["trace_id"], row["digest"]) for row in manifest_b["traces"]
+    )
+
+    # The display root differs (machine-local, correct)...
+    assert root_a != root_b
+    # ...but content digests are byte-identical across roots.
+    assert digest_a == digest_b, (
+        f"bucket_digest is root-dependent: A={digest_a} vs B={digest_b}"
+    )
+    assert traces_digest_a == traces_digest_b
+
+
 def test_bucket_digest_invariant_under_relocation(repo, monkeypatch):
     """bucket_digest must not change when the bucket lives at another path.
 

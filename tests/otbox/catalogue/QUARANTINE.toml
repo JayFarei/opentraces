@@ -83,14 +83,6 @@ added = 2026-06-10
 expires = 2026-09-08
 
 [[entries]]
-journeys = ["survival-walk-reverted"]
-rules = ["baseline-red"]
-reason = "the phase-4 runtime probe now ERRORs this journey honestly (precondition_unmet: zero reverted trails in the live substrate) instead of letting it pass with result_count=0 as in 1.0. PRODUCT QUESTION per the spec contingency: the synthetic revert fixture cannot reach survival=reverted — either the substrate's revert detection needs a fix (PR-B) or the real claude-with-revert capture becomes the base; if neither, the 8-survival-state marketing claim needs honest re-scoping. Do NOT weaken the probe"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
 journeys = ["pi-readonly-recursion-guard"]
 rules = ["baseline-red"]
 reason = "PR #12 (Pi extension) journey, merged onto main DURING otbox-2 work, never run on CI before. Two bugs FIXED in place (trace index --json -> trace index status; .venv/bin/python -> {py_bin}); the third is structural: the snapshot-repeat-readonly step imports opentraces.core.trace_search_snapshot.default_snapshot_path, which does NOT exist in the codebase (ModuleNotFoundError) — the read-only-snapshot invariant is tested via a non-existent API and can never pass until the PR-#12 author points it at the real snapshot surface. Do NOT delete the step (it guards a real invariant); fix the import."
@@ -122,10 +114,3 @@ issue = "https://github.com/JayFarei/opentraces/issues/25"
 added = 2026-06-10
 expires = 2026-09-08
 
-[[entries]]
-journeys = ["mixed-agent-bucket-parity", "mixed-agent-bucket-parity-pi"]
-rules = ["baseline-red"]
-reason = "artifact-path defect surfaced by the supply chain: on a non-origin machine the restored archive's manifest is empty until a watcher tick re-ingests, and any manifest REBUILD (bucket repair / bucket_manifest(write=True) in the inject step) then DROPS the tick-reconciled trace, leaving the composed world claude-only. Candidate product bug for PR-B: bucket repair loses tick-reconciled traces after cross-machine restore."
-issue = "https://github.com/JayFarei/opentraces/issues/25"
-added = 2026-06-10
-expires = 2026-09-08

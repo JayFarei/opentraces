@@ -4,6 +4,18 @@ The legacy Trace Index is still useful for rich TraceMap/unit lookup, but it
 is the wrong serving primitive for search. This module owns the compact
 trace-level projection used by query-like commands: maintenance builds it from
 raw traces, then search opens it read-only and immutable.
+
+Contract (issue #30): query verbs stay read-only in steady state but self-heal
+exactly once per invocation when no servable snapshot exists. ``search_traces``
+takes ``auto_rebuild=True`` by default: a missing snapshot, or a verification
+failure (``stale`` / ``unreadable`` / ``missing_schema`` / ``wrong_schema``),
+triggers a single compact ``build_trace_search_snapshot`` build + retry and
+then serves rc=0 results with ``rebuilt_index=True``. This is an auto-rebuild
+of the compact v3 snapshot, NOT a raw trace scan and NOT the heavy legacy index
+rebuild (the #22 perf trap is not reintroduced). ``maintenance_needed`` / exit 3
+remains only when the self-heal build itself fails (or the snapshot is still
+missing after building). Pass ``auto_rebuild=False`` to keep the strict
+raise-on-missing behavior.
 """
 
 from __future__ import annotations
@@ -436,12 +448,33 @@ def search_traces(
     cursor: str | None = None,
     semantic: str | None = None,
     path: Path | None = None,
+    auto_rebuild: bool = True,
 ) -> SearchPage:
-    """Search the immutable snapshot and return compact trace hits."""
+    """Search the immutable snapshot and return compact trace hits.
+
+    Read-only-in-steady-state with a single self-heal (issue #30). When the
+    snapshot is missing — or verification trips a needs-rebuild condition
+    (``stale`` / ``unreadable`` / ``missing_schema`` / ``wrong_schema``) — and
+    ``auto_rebuild`` is set (the default), this builds the compact v3 snapshot
+    exactly once via ``build_trace_search_snapshot`` (already ``_build_lock``
+    serialized + atomic-swap + dirty-marker clearing) and serves the result. It
+    is NOT a raw scan and it never calls the heavy legacy index rebuild, so the
+    #22 perf trap is not reintroduced; the steady-state read path stays
+    untouched once a servable snapshot exists. If the snapshot is still missing
+    after the build, or the build itself fails, the ``SearchSnapshotNeedsRebuild``
+    propagates and the CLI surfaces ``maintenance_needed`` / exit 3. Pass
+    ``auto_rebuild=False`` to keep the strict raise-on-missing behavior.
+    """
 
     snapshot_path = path or default_snapshot_path()
+    rebuilt = False
     if not snapshot_path.exists():
-        raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        if not auto_rebuild:
+            raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        build_trace_search_snapshot(path=snapshot_path)
+        rebuilt = True
+        if not snapshot_path.exists():
+            raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
     filters = filters or SearchFilters()
     terms = _terms(text or "")
     semantic_expansion = expand_semantic_query(semantic) if semantic else None
@@ -455,16 +488,30 @@ def search_traces(
 
     offset = _page_offset(cursor)
     page_size = max(1, int(limit or DEFAULT_LIMIT))
-    with _connect_readonly(snapshot_path) as conn:
-        _verify_snapshot(conn, snapshot_path)
-        rows, total = _query_rows(
-            conn,
-            terms=terms,
-            semantic_ids=semantic_ids,
-            filters=filters,
-            limit=page_size + 1,
-            offset=offset,
-        )
+
+    def _read() -> tuple[list[sqlite3.Row], int]:
+        with _connect_readonly(snapshot_path) as conn:
+            _verify_snapshot(conn, snapshot_path)
+            return _query_rows(
+                conn,
+                terms=terms,
+                semantic_ids=semantic_ids,
+                filters=filters,
+                limit=page_size + 1,
+                offset=offset,
+            )
+
+    try:
+        rows, total = _read()
+    except SearchSnapshotNeedsRebuild:
+        # A stale dirty marker (or an otherwise unservable snapshot) converges
+        # with exactly one build + one retry. If the rebuild already ran above,
+        # or auto_rebuild is off, re-raise so the CLI reports maintenance_needed.
+        if not auto_rebuild or rebuilt:
+            raise
+        build_trace_search_snapshot(path=snapshot_path)
+        rebuilt = True
+        rows, total = _read()
 
     has_more = len(rows) > page_size
     selected = rows[:page_size]
@@ -473,6 +520,8 @@ def search_traces(
         used_fts=bool(terms),
         rows_examined=total,
         hits_returned=len(hits),
+        rebuilt_index=rebuilt,
+        wrote_to_index=rebuilt,
     )
     next_page_token = f"offset:{offset + page_size}" if has_more else None
     return SearchPage(

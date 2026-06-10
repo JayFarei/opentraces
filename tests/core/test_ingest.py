@@ -579,6 +579,35 @@ class TestIngestOneSession:
         assert len(upgraded) == 1
         assert upgraded[0].payload["file_path"] == "x.py"
 
+    def test_ingest_writes_per_trace_envelope_and_manifest_row(
+        self, project_dir
+    ) -> None:
+        """Issue #31 — write-side capture parity.
+
+        Ingest must project the per-trace v2 envelope at capture time, so the
+        manifest-only readers (``bucket manifest`` / ``ctx list``) agree with
+        ``bucket status`` / the index immediately — without waiting for a
+        later ``bucket repair``. Assert ``trace.json`` exists on disk and the
+        trace appears in ``bucket_manifest(write=False)['traces']``.
+        """
+        from opentraces.core.bucket_store import (
+            bucket_manifest,
+            trace_v1_json_path,
+        )
+        from opentraces.core.config import get_project_dir
+        from opentraces.core.ingest import ingest_one_session
+
+        path = _write_jsonl(project_dir, "sess-envelope", turns=3)
+        result = ingest_one_session(path, project_dir)
+        assert result.error is None
+
+        project_slug = get_project_dir(project_dir).name
+        assert trace_v1_json_path(project_slug, result.trace_id).exists()
+
+        manifest = bucket_manifest(write=False, include_objects=False)
+        trace_ids = [row["trace_id"] for row in manifest["traces"]]
+        assert result.trace_id in trace_ids
+
     def test_unchanged_file_is_noop(self, project_dir) -> None:
         from opentraces.core.ingest import ingest_one_session
 

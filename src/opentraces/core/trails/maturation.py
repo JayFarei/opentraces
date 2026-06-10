@@ -1,13 +1,16 @@
 """Runtime maturation for Trace Patches into Git Anchors."""
 from __future__ import annotations
 
+import json
+import os
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
 from .anchors import reconcile_commit_anchors
-from .event_log import read_events
+from .event_log import read_events, read_events_scoped
 from .ids import id_from_payload
 from .models import ATTRIBUTION_VERSION
 from .search_records import iter_search_records
@@ -60,10 +63,36 @@ def mature_trails(
     if not commits:
         return MaturationSummary(errors=errors)
 
-    before = _event_counts(repo)
+    # #23 step 1: read the anchor/search/patch slice for ALL candidate commits in
+    # ONE whole-log pass (`commit_shas`), then hand each reconcile call the shared
+    # slice. This replaces N per-commit scoped reads (each a `rev-list --objects`
+    # over the whole log) with a single read — the quadratic git work that pinned
+    # a CPU core on mature repos.
+    try:
+        shared_events = read_events_scoped(
+            repo,
+            event_types={
+                "trace_patch_created",
+                "git_anchor_created",
+                "git_anchor_search_completed",
+            },
+            commit_filter={
+                "git_anchor_created": "commit_id",
+                "git_anchor_search_completed": "search_head",
+            },
+            commit_shas=set(commits),
+        )
+    except Exception:  # noqa: BLE001 — fall back to per-commit reads on error
+        shared_events = None
+
+    # #23 step 2: sum each reconcile's reported search count via ``summary_out``
+    # instead of reading the whole log twice (before/after) just to diff the
+    # search-record delta.
     anchors_created = 0
+    searches_completed = 0
     for commit in commits:
         try:
+            per_commit_summary: dict[str, object] = {}
             anchors_created += len(
                 reconcile_commit_anchors(
                     repo,
@@ -71,18 +100,25 @@ def mature_trails(
                     writer=writer,
                     capture_method=MATURATION_CAPTURE_METHOD,
                     attribution_version=effective_version,
+                    events=shared_events,
+                    summary_out=per_commit_summary,
                 )
+            )
+            searches_completed += int(
+                per_commit_summary.get("searches_recorded", 0) or 0
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{commit}: {type(exc).__name__}: {exc}")
 
-    after = _event_counts(repo)
+    # Only a full recent-commits sweep may stamp the watermark: an explicit
+    # commit_refs subset has not matured the rest of the recent window, and
+    # stamping would make the quiet-tick gate skip those commits until the
+    # event-log head or repo HEAD next changes.
+    if commit_refs is None:
+        _stamp_maturation_watermark(repo, effective_version)
     return MaturationSummary(
         commits_considered=len(commits),
-        searches_completed=max(
-            0,
-            after["git_anchor_search_completed"] - before["git_anchor_search_completed"],
-        ),
+        searches_completed=searches_completed,
         anchors_created=anchors_created,
         errors=errors,
     )
@@ -96,10 +132,26 @@ def has_unsearched_recent_patches(
 ) -> bool:
     """Return true if any recent commit lacks a search for any Trace Patch."""
     repo = Path(repo).resolve()
+    effective_version = attribution_version or ATTRIBUTION_VERSION
+
+    # #23 step 3: watermark short-circuit. If the event-log head, repo HEAD, and
+    # attribution version are all unchanged since the last time maturation ran to
+    # completion (or the gate previously found nothing to do), there is provably
+    # nothing new to search — return False WITHOUT reading the whole event log.
+    # This is the quiet-tick fast path: zero git object enumeration on idle
+    # ticks, which is the runaway-CPU symptom in #23.
+    state = _maturation_state(repo, effective_version)
+    watermark = _load_maturation_watermark(repo)
+    if state is not None and watermark == state:
+        return False
+
     commits = _candidate_commits(repo, commit_refs=None, max_commits=max_commits)
     if not commits:
+        # Nothing to mature at this head; record the watermark so subsequent
+        # quiet ticks short-circuit.
+        if state is not None:
+            _save_maturation_watermark(repo, state)
         return False
-    effective_version = attribution_version or ATTRIBUTION_VERSION
     try:
         events = read_events(repo, verify=False)
     except Exception:
@@ -112,6 +164,8 @@ def has_unsearched_recent_patches(
         if trace_patch_id
     }
     if not patch_ids:
+        if state is not None:
+            _save_maturation_watermark(repo, state)
         return False
     searched = {
         (
@@ -123,11 +177,126 @@ def has_unsearched_recent_patches(
         if event.event_type == "git_anchor_search_completed"
         for record in iter_search_records(event)
     }
-    return any(
+    # #23 step 4: close the gate/worker asymmetry. The worker
+    # (reconcile_commit_anchors) skips a (patch, commit) pair when EITHER a search
+    # record OR an anchor already exists for it. The gate must mirror that, else a
+    # pair with an anchor-but-no-search-record (possible across attribution
+    # versions / legacy logs) reads as "unsearched" forever -> the worker is
+    # invoked every tick, does nothing, never records a new search -> livelock.
+    anchored = {
+        (
+            id_from_payload(event.payload, "trace_patch"),
+            (event.payload.get("commit_id") or {}).get("hex"),
+        )
+        for event in events
+        if event.event_type == "git_anchor_created"
+    }
+    has_unsearched = any(
         (trace_patch_id, commit, effective_version) not in searched
+        and (trace_patch_id, commit) not in anchored
         for trace_patch_id in patch_ids
         for commit in commits
     )
+    if not has_unsearched and state is not None:
+        # Everything in range is satisfied — stamp so the next quiet tick is free.
+        _save_maturation_watermark(repo, state)
+    return has_unsearched
+
+
+# --- maturation watermark (quiet-tick short-circuit, #23) -------------------
+
+_MATURATION_WATERMARK_FORMAT = 1
+
+
+def _maturation_watermark_path(repo: Path) -> Path | None:
+    """Per-repo maturation watermark file inside the git dir.
+
+    Separate file from the verify watermark (event_log_verified.json) so the two
+    optimizations never collide.
+    """
+    proc = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    git_dir = Path(proc.stdout.strip())
+    if not git_dir.is_absolute():
+        git_dir = (repo / git_dir).resolve()
+    return git_dir / "opentraces" / "maturation_watermark.json"
+
+
+def _event_log_head(repo: Path) -> str | None:
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", "refs/opentraces/local/events/v1"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _maturation_state(repo: Path, attribution_version: str) -> dict[str, object] | None:
+    """The watermark identity for the current world: event-log head + repo HEAD
+    + attribution version. None when either head is unresolvable (then the gate
+    falls through to the full scan and never short-circuits)."""
+    event_head = _event_log_head(repo)
+    repo_head = _rev_parse(repo, "HEAD")
+    if event_head is None or repo_head is None:
+        return None
+    return {
+        "format": _MATURATION_WATERMARK_FORMAT,
+        "event_log_head": event_head,
+        "repo_head": repo_head,
+        "attribution_version": attribution_version,
+    }
+
+
+def _load_maturation_watermark(repo: Path) -> dict[str, object] | None:
+    path = _maturation_watermark_path(repo)
+    if path is None or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("format") != _MATURATION_WATERMARK_FORMAT:
+        return None
+    return data
+
+
+def _save_maturation_watermark(repo: Path, state: dict[str, object]) -> None:
+    path = _maturation_watermark_path(repo)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(state, fh)
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 — watermark is an optimization, never fatal
+        return
+
+
+def _stamp_maturation_watermark(
+    repo: Path, attribution_version: str | None = None
+) -> None:
+    """Stamp the watermark at the current world state (end of mature_trails).
+
+    Called even when maturation hit errors: this trades infinite-retry livelock
+    for at-most-one-retry-per-head-change. Once the event-log head or repo HEAD
+    advances, the watermark mismatches and maturation runs again.
+    """
+    state = _maturation_state(repo, attribution_version or ATTRIBUTION_VERSION)
+    if state is not None:
+        _save_maturation_watermark(repo, state)
 
 
 def _candidate_commits(
@@ -190,24 +359,3 @@ def _rev_parse(repo: Path, ref: str) -> str | None:
     if proc.returncode != 0:
         return None
     return proc.stdout.strip() or None
-
-
-def _event_counts(repo: Path) -> dict[str, int]:
-    # plan 090: count per-patch search RECORDS, not raw events. One v2 summary
-    # event covers N patch-searches, so counting events would collapse
-    # ``searches_completed`` to ~run-count. Expanding through iter_search_records
-    # keeps the metric meaning "number of patch-searches" across both the legacy
-    # per-patch shape and the new summary shape.
-    counts = {
-        "git_anchor_search_completed": 0,
-    }
-    try:
-        events = read_events(repo, verify=False)
-    except Exception:
-        return counts
-    for event in events:
-        if event.event_type == "git_anchor_search_completed":
-            counts["git_anchor_search_completed"] += sum(
-                1 for _ in iter_search_records(event)
-            )
-    return counts

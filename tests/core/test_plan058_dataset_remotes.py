@@ -452,3 +452,50 @@ def test_publish_refuses_remote_schema_ahead_on_live_hf_path(tmp_path, monkeypat
         raise AssertionError("live remote schema ahead must refuse publish")
     assert calls["repo_id"] == "me/schema-ahead-live"
     assert calls["filename"] == "README.md"
+
+
+def test_publish_proceeds_when_live_remote_has_no_card(tmp_path, monkeypatch):
+    """A live remote with no README (first publish) is treated as fresh.
+
+    ``hf_hub_download`` raising EntryNotFoundError must map to "nothing to
+    compare", letting the publish proceed (issue #33: the guard must block
+    remote-newer without breaking first publishes)."""
+    from opentraces.core.datasets import (
+        add_dataset_remote,
+        append_rows,
+        create_dataset,
+        publish_dataset,
+    )
+
+    monkeypatch.delenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", raising=False)
+
+    create_dataset(
+        "fresh-live",
+        workflow_skill="curator",
+        workflow_digest="sha256:w",
+        publication_policy={"review": "auto"},
+    )
+    add_dataset_remote("fresh-live", "me/fresh-live", visibility="private")
+    append_rows(
+        "fresh-live",
+        [_row("Local row.", trace_id="trace-local")],
+        run_id="run-1",
+    )
+
+    try:
+        from huggingface_hub.errors import EntryNotFoundError
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import EntryNotFoundError  # type: ignore
+
+    def _raise_not_found(*, repo_id, repo_type, filename, token=None):
+        raise EntryNotFoundError("no README")
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _raise_not_found)
+    monkeypatch.setattr(
+        "opentraces.core.datasets._remote_head", lambda repo_id, token: None
+    )
+
+    summary = publish_dataset("fresh-live", check_only=True, contributor="tester")
+    assert summary.message == "check passed"

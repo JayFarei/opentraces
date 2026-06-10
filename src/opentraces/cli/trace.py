@@ -164,6 +164,8 @@ def trace_discover(
             project=project,
         )
     except SearchSnapshotNeedsRebuild as exc:
+        # Query verbs auto-rebuild the compact snapshot once before this fires
+        # (issue #30); reaching here means the automatic rebuild itself failed.
         payload = {
             "status": "maintenance_needed",
             "reason": exc.reason,
@@ -173,7 +175,7 @@ def trace_discover(
             click.echo(_dump_json(payload))
             sys.exit(3)
         click.echo(
-            f"Trace search snapshot needs rebuild ({exc.reason}). "
+            f"Trace search snapshot automatic rebuild failed ({exc.reason}). "
             "Run 'opentraces trace index'.",
             err=True,
         )
@@ -528,6 +530,8 @@ def trace_query(
             semantic=semantic,
         )
     except SearchSnapshotNeedsRebuild as exc:
+        # search_traces auto-rebuilds the compact snapshot once before raising
+        # (issue #30); reaching here means the automatic rebuild itself failed.
         payload = {
             "status": "maintenance_needed",
             "reason": exc.reason,
@@ -550,7 +554,7 @@ def trace_query(
             click.echo(_dump_json(payload))
             sys.exit(3)
         click.echo(
-            f"Trace search snapshot needs rebuild ({exc.reason}). "
+            f"Trace search snapshot automatic rebuild failed ({exc.reason}). "
             "Run 'opentraces trace index'.",
             err=True,
         )

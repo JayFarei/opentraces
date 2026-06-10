@@ -214,6 +214,13 @@ def restore_from_capture(
     # surfaced). Deleting it forces a clean lazy rebuild from the bucket
     # (whose paths the text rewrite already corrected). Pure derived-artifact
     # cleanup; the bucket spine is untouched.
+    #
+    # Issue #30 note: `trace query` now lazily bootstraps a missing/stale
+    # snapshot itself (one compact build + retry, rc=0 with rebuilt_index=true),
+    # so the explicit rebuild below is no longer strictly required for the bare
+    # first-query journeys. It is kept as a harmless world-prep step: it makes
+    # the very first journey query deterministic across platforms and keeps the
+    # legacy trace-index map/get/slice surface warm too.
     if driver is not None:
         driver.exec(
             box,
@@ -221,11 +228,10 @@ def restore_from_capture(
              'rm -rf "$HOME/.opentraces/index" '
              '"$HOME/.opentraces/bucket/projections/search" 2>/dev/null || true'],
         )
-        # Then REBUILD it explicitly. `trace query` does NOT lazily rebuild a
-        # missing index on CI — it returns status=maintenance_needed (exit 3).
-        # An explicit rebuild from the path-corrected bucket is deterministic
-        # on every platform (the journeys' first step is often a bare query
-        # that assumes a ready index).
+        # Then REBUILD it explicitly. Harmless world-prep (see issue #30 note
+        # above): an explicit rebuild from the path-corrected bucket is
+        # deterministic on every platform and warms the legacy map/get/slice
+        # surface, even though a bare query would now self-heal on its own.
         driver.exec(box, [*driver.cli_argv(box), "trace", "index", "rebuild"])
 
     # Cross-machine reconcile (otbox 2.0 phase 0): restoring a captured world

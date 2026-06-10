@@ -176,6 +176,98 @@ def test_trail_sync_anchor_reverted(tmp_path: Path) -> None:
     ]
 
 
+def _append_patch_with_before_blob(
+    repo: Path, *, patch_id: str, authored: str, before_blob_hex: str
+) -> None:
+    """Like ``_append_patch`` but records ``before_blob_id`` — the pre-edit
+    blob the #32 guard consults to reject a revert commit as a landing commit."""
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id=f"tr-{patch_id}",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": f"tracepatch-sha256:{patch_id}",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": {"algo": "sha1", "hex": before_blob_hex},
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+
+def test_trail_sync_patch_reverted_not_realive_via_revert_anchor(
+    tmp_path: Path,
+) -> None:
+    """#32 end-to-end: a real ``git revert`` of an anchored patch resolves to
+    ``reverted`` on the ``sync --patch`` path — not ``alive_transformed``.
+
+    The trap: the revert commit re-introduces the patch's pre-edit content. The
+    structural matcher (line similarity >= 0.85) would mis-anchor the patch onto
+    the revert commit, creating a SECOND anchor. ``sync --patch`` aggregates all
+    of a patch's anchors under ``any_alive_anchor_wins`` — so the spurious
+    revert anchor (which on its own commit looks "alive") would beat the genuine
+    ``reverted`` signal from the landing anchor.
+
+    The #32 before-blob guard rejects the revert commit as a landing commit
+    (its target blob == the patch's before_blob_id), so no second anchor is
+    created and the patch correctly resolves to ``reverted``.
+
+    Red without the guard: ``alive_transformed`` (the revert anchor wins).
+    """
+    _init_repo(tmp_path)
+    # Capture the pre-edit blob of app.py (the seed state the revert restores).
+    before_blob_hex = _git(tmp_path, "rev-parse", "HEAD:app.py")
+
+    # Authored line is deliberately close to the seed line ("    return 'old'\n")
+    # so the structural matcher WOULD fire on the revert (which re-adds the seed
+    # line) if the guard were absent — this is what makes the guard load-bearing.
+    authored = "    return 'odl'\n"  # one transposition away from 'old'
+    _append_patch_with_before_blob(
+        tmp_path,
+        patch_id="revsync",
+        authored=authored,
+        before_blob_hex=before_blob_hex,
+    )
+    (tmp_path / "app.py").write_text("def value():\n" + authored)
+    landing_commit = _commit(tmp_path, "apply revsync")
+    landing_anchors = reconcile_commit_anchors(
+        tmp_path, landing_commit, writer="post-commit-correlator"
+    )
+    assert len(landing_anchors) == 1, "landing commit must anchor the patch"
+
+    # Real git revert restores the seed content (== before_blob_id).
+    subprocess.run(
+        ["git", "revert", "--no-edit", landing_commit], cwd=tmp_path, check=True
+    )
+    revert_commit = _git(tmp_path, "rev-parse", "HEAD")
+    assert _git(tmp_path, "rev-parse", f"{revert_commit}:app.py") == before_blob_hex
+
+    # Reconcile against the revert commit. WITHOUT the #32 guard this creates a
+    # spurious structural-match anchor on the revert commit.
+    revert_anchors = reconcile_commit_anchors(
+        tmp_path, revert_commit, writer="post-commit-correlator"
+    )
+    assert revert_anchors == [], (
+        "#32 guard must reject the revert commit as a landing commit "
+        "(no spurious anchor)"
+    )
+
+    # sync --patch aggregates ALL anchors for the patch; with the guard there is
+    # only the landing anchor, so the patch resolves to reverted.
+    payload = _sync(tmp_path, "--patch", "tracepatch-sha256:revsync")
+    assert payload["current_survival"]["survival_state"] == "reverted"
+
+
 def test_trail_sync_reintroduced_patch_is_alive_not_permanently_reverted(
     tmp_path: Path,
 ) -> None:
