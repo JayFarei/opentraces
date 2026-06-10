@@ -52,6 +52,7 @@ from ..drivers.base import Driver
 from ..env import Box, resolve_cli_argv
 from . import Checkpoint, CheckpointError, register
 from ._captured_helpers import (
+    harness_interpreter,
     harness_source_with_shebang,
     capture_metadata_from_artifact,
     check as _check_helper,
@@ -252,7 +253,7 @@ def _captured_multi_skill_delta(driver: Driver, box: Box) -> None:
         # 5. Fake-claude harness — produces transcript + applies the
         #    file mutation + fires the live hooks.
         _check(
-            driver.exec(box, [testvenv_python, harness_dst], env_extra={
+            driver.exec(box, [harness_interpreter(), harness_dst], env_extra={
                 "OTBOX_FAKE_SESSION": _SESSION_NAME,
                 "OTBOX_FAKE_SESSION_INDEX": str(index),
                 "OTBOX_FAKE_SESSIONS_DIR": sessions_dir,

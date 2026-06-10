@@ -30,6 +30,7 @@ from ..drivers.base import Driver
 from ..env import Box, resolve_cli_argv
 from . import Checkpoint, CheckpointError, register
 from ._captured_helpers import (
+    harness_interpreter,
     harness_source_with_shebang,
     check as _check_helper,
     encode_claude_path,
@@ -139,7 +140,7 @@ def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
         f"{home}/.claude/projects/{encoded_project}/{_SESSION_ID}.jsonl"
     )
     _check(
-        driver.exec(box, [testvenv_python, harness_dst], env_extra={
+        driver.exec(box, [harness_interpreter(), harness_dst], env_extra={
             "OTBOX_FAKE_SESSION": _SESSION_NAME,
             "OTBOX_FAKE_SESSIONS_DIR": sessions_dir,
             "OTBOX_PROJECT_DIR": project,
