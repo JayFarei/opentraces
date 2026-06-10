@@ -1119,7 +1119,7 @@ def publish_dataset(
     while True:
         attempts += 1
         remote_head_before = _remote_head(repo_id, token)
-        _check_remote_schema_not_ahead(dataset, repo_id)
+        _check_remote_schema_not_ahead(dataset, repo_id, token)
         state = evaluate_publication_state(name)
         remote_row_ids = _remote_row_ids(repo_id, dataset.manifest.identity, token)
         rows_by_id = read_rows_by_id(name)
@@ -1476,14 +1476,33 @@ def _changed_staged_files(repo_id: str, staging: Path, token: str | None) -> lis
     return sorted(changed)
 
 
-def _check_remote_schema_not_ahead(dataset: LocalDataset, repo_id: str) -> None:
+def _check_remote_schema_not_ahead(
+    dataset: LocalDataset, repo_id: str, token: str | None = None
+) -> None:
     remote_root = _fake_remote_dir(repo_id)
-    if remote_root is None:
-        return
-    card = remote_root / "README.md"
-    if not card.exists():
-        return
-    contract = _read_card_contract(card.read_text(encoding="utf-8"))
+    if remote_root is not None:
+        card = remote_root / "README.md"
+        if not card.exists():
+            return
+        card_text = card.read_text(encoding="utf-8")
+    else:
+        # Live HuggingFace: fetch the dataset card so the schema-ahead
+        # negotiation is reachable from a real `dataset publish` (Phase B4;
+        # previously this returned early and the gate existed only against
+        # the fake remote — issue #25 finding #6).
+        try:
+            from huggingface_hub import hf_hub_download
+
+            card_path = hf_hub_download(
+                repo_id=repo_id,
+                repo_type="dataset",
+                filename="README.md",
+                token=token,
+            )
+            card_text = Path(card_path).read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001 - no repo / no card / offline: nothing to compare
+            return
+    contract = _read_card_contract(card_text)
     remote_schema = contract.get("schema") if isinstance(contract, dict) else None
     remote_version = remote_schema.get("version") if isinstance(remote_schema, dict) else None
     local_version = dataset.manifest.schema_ref.version

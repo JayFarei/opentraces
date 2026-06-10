@@ -386,3 +386,69 @@ def test_plan058_publish_refuses_remote_schema_ahead(tmp_path, monkeypatch):
         assert exc.local_version == "1.0.0"
     else:
         raise AssertionError("remote schema ahead must refuse publish")
+
+
+def test_publish_refuses_remote_schema_ahead_on_live_hf_path(tmp_path, monkeypatch):
+    """Phase B4: the schema-ahead negotiation must be reachable from a LIVE
+    `dataset publish` (no fake remote configured). Previously
+    ``_check_remote_schema_not_ahead`` returned early whenever the fake
+    remote dir was absent, so real-HF publishes never negotiated at all
+    (issue #25 finding #6). The live path fetches the remote dataset card
+    via ``hf_hub_download``; a remote-newer contract must refuse publish."""
+    from opentraces.core.datasets import (
+        DatasetRemoteSchemaAheadError,
+        add_dataset_remote,
+        append_rows,
+        create_dataset,
+        publish_dataset,
+    )
+
+    # NO fake remote root: this drives the live-HF branch.
+    monkeypatch.delenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", raising=False)
+
+    create_dataset(
+        "schema-ahead-live",
+        workflow_skill="curator",
+        workflow_digest="sha256:w",
+        publication_policy={"review": "auto"},
+    )
+    add_dataset_remote("schema-ahead-live", "me/schema-ahead-live", visibility="private")
+    append_rows(
+        "schema-ahead-live",
+        [_row("Local row.", trace_id="trace-local")],
+        run_id="run-1",
+    )
+
+    card = tmp_path / "README.md"
+    card.write_text(
+        "---\nopentraces:\n  schema:\n    version: 9.0.0\n---\n# newer\n",
+        encoding="utf-8",
+    )
+
+    calls: dict = {}
+
+    def _fake_hf_hub_download(*, repo_id, repo_type, filename, token=None):
+        calls["repo_id"] = repo_id
+        calls["filename"] = filename
+        assert repo_type == "dataset"
+        return str(card)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _fake_hf_hub_download)
+    # publish_dataset reads the remote head before the schema check; keep the
+    # unit test offline (the schema check itself raises before anything else
+    # touches the remote).
+    monkeypatch.setattr(
+        "opentraces.core.datasets._remote_head", lambda repo_id, token: None
+    )
+
+    try:
+        publish_dataset("schema-ahead-live", contributor="tester")
+    except DatasetRemoteSchemaAheadError as exc:
+        assert exc.remote_version == "9.0.0"
+        assert exc.local_version == "1.0.0"
+    else:
+        raise AssertionError("live remote schema ahead must refuse publish")
+    assert calls["repo_id"] == "me/schema-ahead-live"
+    assert calls["filename"] == "README.md"

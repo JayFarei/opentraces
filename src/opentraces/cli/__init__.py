@@ -2120,6 +2120,29 @@ def status(limit: int) -> None:
         )
         click.echo()
 
+    # Agent-facing affordances (B3b): status is the documented entry point
+    # of the next_steps graph, so it must name where to go from here. Keep
+    # them state-aware and runnable as written.
+    next_steps: list[str] = []
+    if counts["inbox"] or counts["staged"] or counts["pushed"]:
+        next_steps.append(
+            "Search captured traces with 'opentraces trace query <terms>'"
+        )
+        next_steps.append(
+            "Inspect a trace with 'opentraces trace map <trace-id>'"
+        )
+        next_steps.append(
+            "Explain a commit's trace lineage with "
+            "'opentraces trail blame commit <sha>'"
+        )
+        next_steps.append(
+            "Project traces into a dataset with 'opentraces dataset new' "
+            "then 'opentraces dataset run' / 'opentraces dataset publish'"
+        )
+    else:
+        next_steps.append(
+            "Start a connected agent; traces will be captured automatically"
+        )
     emit_json({
         "status": "ok",
         "project": project_name,
@@ -2130,6 +2153,12 @@ def status(limit: int) -> None:
         "counts": counts,
         "total_staged": total_files,
         "sessions": session_summary,
+        "next_steps": next_steps,
+        "next_command": (
+            "opentraces trace query"
+            if (counts["inbox"] or counts["staged"] or counts["pushed"])
+            else "opentraces status"
+        ),
     })
 
 

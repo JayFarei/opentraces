@@ -58,7 +58,7 @@ real `git_anchor_id`, `event_log_ref = "refs/opentraces/local/events/v1"`.
 | `ssh [--box ID] [--root]` | drop into the box's project dir (Tier 0 or Tier 1) |
 | `journey <name> [--box ID] [--artifacts]` | run a catalogue journey, verdict PASS/FAIL/SKIP |
 | `matrix [filters] [--inventory [--strict]]` | run the (journey × base-checkpoint) matrix |
-| `capture-refresh --scenario <name> [--dry-run] [--base-checkpoint C]` | drive a simulated-user scenario and snapshot the result (plan 071) |
+|  `capture-refresh --scenario <name> [--all --agent <a>] [--check-versions] [--dry-run] [--base-checkpoint C]` | drive a simulated-user scenario and snapshot the result (plan 071) |
 | `artifacts [--box ID] [--label L]` | bundle journey-run evidence for a PR |
 | `status [--box ID]` / `list` | inspect boxes, snapshots, drivers, seeds, journeys |
 | `snapshot-rm <name>` | delete a snapshot |
@@ -458,6 +458,52 @@ tests/otbox/captures/<scenario>/
 These are committed verbatim under `tests/otbox/captures/`. If they
 grow past ~1MB each, the plan is to migrate to Git LFS in a follow-up
 (out of scope for plan 071).
+
+## Authoring a scenario — the front door (plan B0)
+
+Scenario authoring is how a new test world enters otbox. Most user
+journeys are agent-driven, so the only faithful way to emulate them is
+to GENERATE the world by driving the real agent — a scenario TOML plus
+one `make capture-refresh` run IS the procedure for adding a new world:
+
+1. **Write the scenario TOML** at
+   `tests/otbox/simulated_users/scenarios/<agent>-<shape>.toml` (schema
+   above — name, agent, binary_name, optional `[initial_state]`
+   template, `[[turns]]` with prompt/expect_regex/timeout, `[capture]`
+   with artifact_dir + expected_paths). Naming convention:
+   `<agent>-<journey-shape>` (e.g. `claude-with-revert`,
+   `codex-subagent-edit`). The journey-shape vocabulary the matrix
+   wants covered per agent: linear edit, revert, multi-file, subagent,
+   compaction, skill invocation, secrets, mcp, permission, readonly,
+   watcher-backstop, pr-branch.
+2. **Dry-run it**: `.venv/bin/python -m tests.otbox capture-refresh
+   --scenario <name> --dry-run --json` — validates the TOML, resolves
+   the binary, prints the plan without driving anything.
+3. **Generate**: `make capture-refresh SCENARIO=<name>` on a machine
+   with the real agent binary + subscription. One run produces BOTH
+   the box snapshot artifact (+ `metadata.json` provenance: binary
+   version, scenario digest, schema/CLI versions) AND the gallery
+   footage (same drive).
+4. **Commit / release** the artifact: committed artifacts flip the
+   `c-captured-with-*` checkpoints from synthetic to real
+   automatically (plan 072), and `./otbox fetch-captures` serves CI
+   from the `otbox-captures-v1` release.
+
+**Version awareness** (the staleness loop):
+
+```
+make capture-refresh-check          # which batches are stale vs installed harnesses?
+make capture-refresh-all AGENT=codex   # regenerate one harness's whole batch
+```
+
+`capture-refresh --check-versions` compares each manifest entry's
+`binary_version` against the installed binary (major/minor) and names
+the exact regenerate command per stale batch. The same check runs as
+an amber (warn-only) gate in the nightly via
+`tests/otbox/test_capture_freshness.py` — a newer installed harness
+never reds CI, it signals the operator to run the refresh ritual. On
+binaries-absent substrates (default CI) the report is all
+`binary_absent` and stays silent.
 
 ## Journey footage (terminal-control)
 
