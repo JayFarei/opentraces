@@ -210,21 +210,41 @@ def _topic_page(
     project: str | None,
     index_path: Path | None,
 ):
+    from dataclasses import replace
+
     from .trace_search_snapshot import SearchFilters, search_traces
 
-    return search_traces(
+    # Issue #27 item G: term queries default to BM25-only ordering in the kernel;
+    # discovery groups by day and wants newest-first parity with the base
+    # ``trace query`` recency surface (plan 088 U4). We do NOT ask the kernel for
+    # pure ``sort_order="recency"`` because that discards relevance entirely and
+    # tie-breaks equal timestamps on ``trace_id`` — which surfaces a lexically
+    # coincidental file-path-only match ahead of the genuine description matches
+    # when traces share a day (regression caught by
+    # tests/core/test_trace_search_snapshot.py::test_discover_hydrates_only_top_search_hits).
+    #
+    # Instead we keep the kernel's relevance ordering (best matches first, with
+    # its own ``timestamp desc, trace_id`` secondary key) and apply a STABLE
+    # recency re-sort in Python. A stable sort preserves the upstream relevance
+    # order as the tie-break for equal timestamps, so we get strict newest-first
+    # ordering across distinct days while the genuinely-best match still wins a
+    # same-timestamp tie. Day-grouping downstream is unaffected.
+    page = search_traces(
         topic,
         SearchFilters(
             project=project,
             latest_generation=latest_generation,
-            # Issue #27 item G: term queries default to BM25-only ordering in the
-            # kernel; discovery groups by day and wants newest-first parity with
-            # the base ``trace query`` recency surface (plan 088 U4). Day-grouping
-            # downstream is unaffected — this only orders within the candidate page.
-            sort_order="recency",
+            sort_order="relevance",
         ),
         limit=limit,
     )
+
+    def _recency_key(hit) -> str:
+        # Mirror the kernel's ``coalesce(timestamp_end, timestamp_start, '')``.
+        return getattr(hit, "timestamp_end", None) or getattr(hit, "timestamp_start", None) or ""
+
+    ordered_hits = sorted(page.hits, key=_recency_key, reverse=True)
+    return replace(page, hits=ordered_hits)
 
 
 def _group_cards_by_day(
