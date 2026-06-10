@@ -63,41 +63,54 @@ def _probe_survival_states(driver, box, value) -> ProbeResult:
     return True, f"live substrate confirms survival states {states}"
 
 
+def _count_bucket_trace_dirs(driver, box) -> int:
+    """Ground-truth captured-trace count: distinct trace directories two
+    levels under any ``traces/v1`` root in the bucket.
+
+    NOT the Trace Index (a lazily-built SQLite projection that is empty at
+    cold-checkpoint-build time and populates inconsistently across machines —
+    the first on-main nightly failed every verify_provides here because the
+    index held 0 while the bucket held the traces) and NOT the bucket
+    manifest (the manifest-projection gap, issue #25). The bucket trace dirs
+    ARE the captured evidence — filesystem ground truth, identical on every
+    platform, available the instant the checkpoint delta finishes.
+    """
+    cmd = (
+        'c=0; for root in $(find "$HOME/.opentraces/bucket" -type d -name v1 '
+        '-path "*traces/v1" 2>/dev/null); do '
+        'c=$((c + $(find "$root" -mindepth 2 -maxdepth 2 -type d | wc -l))); '
+        'done; echo $c'
+    )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    try:
+        return int(res.stdout.strip() or 0)
+    except (ValueError, AttributeError):
+        return 0
+
+
 def _probe_min_captured_traces(driver, box, value) -> ProbeResult:
-    # Measured via the Trace Index (what "captured" MEANS to consumers),
-    # not bucket manifest envelopes: restored worlds have a known
-    # manifest-projection gap (issue #25 — tick-reconciled traces are
-    # queryable but absent from manifest.traces), and the probe must not
-    # conflate that open product bug with "the world has no traces".
     need = int(value)
-    doc = _cli_json(driver, box, "trace", "query", "--since", "3650d")
-    cands = (doc or {}).get("candidates", []) if isinstance(doc, dict) else []
-    have = len(cands) if isinstance(cands, list) else 0
+    have = _count_bucket_trace_dirs(driver, box)
     if have >= need:
-        return True, f"trace index holds {have} candidate(s) >= {need}"
-    return False, f"trace index holds {have} candidate(s), precondition needs {need}"
+        return True, f"bucket holds {have} captured trace(s) >= {need}"
+    return False, f"bucket holds {have} captured trace(s), precondition needs {need}"
 
 
 def _probe_context_tree_built(driver, box, value) -> ProbeResult:
-    # Measured via `ctx tree` (event-log-backed), NOT `ctx list`
-    # (manifest-only): restored worlds have the open manifest-projection
-    # gap (issue #25) where ctx tree works while ctx list shows nothing.
+    # Ground truth: a context companion in the bucket, NOT the Trace Index
+    # (lazily built, empty at cold-build time) nor `ctx list` (manifest gap,
+    # issue #25). A captured world with context has context.jsonl.gz / a
+    # context blob under the bucket — filesystem-checkable on any platform.
     if not value:
         return True, "context_tree_built not requested"
-    q = _cli_json(driver, box, "trace", "query", "--since", "3650d")
-    cands = (q or {}).get("candidates", []) if isinstance(q, dict) else []
-    for cand in cands[:3]:
-        trace_id = cand.get("trace_id") if isinstance(cand, dict) else None
-        if not trace_id:
-            continue
-        tree = _cli_json(driver, box, "ctx", "tree", str(trace_id))
-        nodes = (tree or {}).get("nodes") or (tree or {}).get("tree") or []
-        if nodes:
-            return True, f"ctx tree for {str(trace_id)[:12]} has context nodes"
-    return False, (
-        f"no context nodes found via ctx tree across {min(len(cands), 3)} "
-        f"candidate trace(s)"
+    cmd = (
+        'find "$HOME/.opentraces/bucket" \\( -name "context.jsonl.gz" '
+        '-o -path "*context*" -name "*.json.gz" \\) 2>/dev/null | head -1'
     )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    if (res.stdout or "").strip():
+        return True, "bucket holds a context companion"
+    return False, "no context companion found in the bucket"
 
 
 def _probe_otlp_receiver_running(driver, box, value) -> ProbeResult:
