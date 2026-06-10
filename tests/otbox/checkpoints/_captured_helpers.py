@@ -305,6 +305,23 @@ def trace_for_session(state: dict, session_id: str) -> tuple[str | None, int]:
 # ---------------------------------------------------------------------------
 # Shared checkpoint-delta primitives (extracted from per-checkpoint copies)
 # ---------------------------------------------------------------------------
+def harness_interpreter() -> str:
+    """The interpreter the fake-agent harness runs under.
+
+    The fake-claude harness is otbox's OWN scaffolding: it imports
+    opentraces_schema (pydantic) to build TraceRecords, exactly like a real
+    agent's runtime would have its own deps. The box's project ``.testvenv``
+    is built ``--no-deps`` (it only needs the opentraces CLI, resolved via
+    the repo venv), so running the harness under it crashed on CI with
+    ModuleNotFoundError: pydantic (the .testvenv only "worked" locally
+    because the host base python leaked pydantic in). sys.executable is the
+    test interpreter, which by construction has the deps on every platform.
+    """
+    import sys
+
+    return sys.executable
+
+
 def harness_source_with_shebang(src_path: Path) -> str:
     """Read a fake-harness file and pin its shebang to an interpreter that
     has the test deps (pydantic / opentraces_schema).
