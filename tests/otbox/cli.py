@@ -715,15 +715,22 @@ def cmd_ledger(args: argparse.Namespace) -> int:
     from .ledger import build_ledger, ledger_summary
 
     src = Path(args.from_matrix)
+    kills: dict[str, str] = {}
     if src.is_dir():
         # per-journey verdict records written by the pytest lane
         # (OTBOX_LEDGER_DIR) — the matrix runner still skips legacy
         # seed-based journeys, so pytest is the complete evidence source.
-        rows = [_json.loads(p.read_text()) for p in sorted(src.glob("*.json"))]
+        rows = []
+        for p in sorted(src.glob("*.json")):
+            if p.name.endswith(".kill.json"):
+                rec = _json.loads(p.read_text())
+                kills[rec["journey"]] = rec["content_hash"]
+            else:
+                rows.append(_json.loads(p.read_text()))
         report = {"rows": rows}
     else:
         report = _json.loads(src.read_text())
-    ledger = build_ledger(report, source=args.source)
+    ledger = build_ledger(report, source=args.source, kills=kills)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(_json.dumps(ledger.to_dict(), indent=2, sort_keys=True) + "\n")

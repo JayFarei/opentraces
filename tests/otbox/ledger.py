@@ -122,6 +122,7 @@ def build_ledger(
     source: str,
     catalogue_dir: Path | None = None,
     now: _dt.datetime | None = None,
+    kills: dict[str, str] | None = None,
 ) -> Ledger:
     """Compact a MatrixReport dict into the run ledger.
 
@@ -156,15 +157,19 @@ def build_ledger(
         run = by_journey.get(name)
         verdict = run["verdict"] if run else "PENDING"
         assertions = classify_assertions(path)
+        content_hash = journey_content_hash(path)
+        # A kill is fresh ONLY if it was witnessed against this exact
+        # journey content — change the TOML, lose the kill.
+        kill_fresh = bool(kills and kills.get(name) == content_hash)
         row = LedgerRow(
             journey=name,
-            content_hash=journey_content_hash(path),
+            content_hash=content_hash,
             ci_lane=meta["ci_lane"],
             verdict=verdict,
             executed_at=stamp if run else "",
             duration_s=float(run.get("duration_s", 0.0)) if run else 0.0,
             assertions=assertions,
-            effective_tier=effective_tier(verdict, assertions),
+            effective_tier=effective_tier(verdict, assertions, kill_fresh=kill_fresh),
         )
         # Quarantined journeys are visible debt, not red: they carry their
         # issue URL and stay pending-tier until the quarantine resolves.

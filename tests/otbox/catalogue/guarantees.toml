@@ -1,0 +1,27 @@
+# Guarantee -> fault -> guard journeys (otbox 2.0 phase 5).
+#
+# Each entry binds one advertised guarantee to the world-fault that breaks it
+# and the journeys that MUST go red under that fault. The kill test derives
+# from this file — an entry whose guards stay green under its fault FAILS the
+# suite (vacuous guard). Removing an entry to dodge that is a reviewed diff.
+#
+# v1 covers the faults implementable without the phase-6 product faultpoint
+# seam; maturation/schema-comparison kills land with faultpoints.py.
+
+[[guarantees]]
+guarantee = "A planted secret never reaches query output after sanitize (redaction-before-egress)"
+fault = "disable-security-tools"
+checkpoint = "c-captured-with-secrets"
+guards = ["security-sanitize-captured-content"]
+
+[[guarantees]]
+guarantee = "The append-only Git event log is the canonical lineage substrate"
+fault = "delete-events-ref"
+checkpoint = "c-captured-real-session"
+guards = ["agent-session-trail-explain-happy"]
+
+[[guarantees]]
+guarantee = "Captured traces parse and serve every read surface"
+fault = "corrupt-trace-jsonl"
+checkpoint = "c-captured-real-session"
+guards = ["agent-session-to-published-dataset"]
