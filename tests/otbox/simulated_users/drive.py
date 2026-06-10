@@ -193,6 +193,33 @@ def _dismiss_codex_hooks(session: str, *, timeout_s: float = 12.0) -> bool:
     return False
 
 
+def _dismiss_claude_startup_dialogs(session: str, *, timeout_s: float = 10.0) -> bool:
+    """Clear Claude Code's blocking startup dialogs before turn 0.
+
+    Claude Code >= 2.1.17x interposes trust dialogs at REPL startup when the
+    project carries config it has not seen under this HOME — observed live
+    with "New MCP server found in this project" (the box project ships a
+    codex MCP entry). The dialog swallows anything typed into it, so the
+    first prompt vanishes and the turn times out (the claude-linear-edit
+    capture FAIL that surfaced this). Confirm the highlighted default —
+    what a real user pressing Enter does — until no confirm-dialog
+    signature remains. Sibling of ``_dismiss_codex_hooks``.
+    """
+    dismissed = False
+    deadline = time.monotonic() + max(0.1, timeout_s)
+    while time.monotonic() < deadline:
+        lower = _tc_show(session).lower()
+        if "enter to confirm" in lower or "new mcp server found" in lower:
+            _tc_key(session, "enter")
+            dismissed = True
+            time.sleep(1.5)
+            continue
+        if dismissed:
+            return True
+        time.sleep(0.3)
+    return dismissed
+
+
 def _tc_mark(session: str, marker: str, markers: list[str]) -> None:
     """Add a navigable marker, recording its name for the result."""
     try:
@@ -567,6 +594,12 @@ def drive_session(
                 if _dismiss_codex_hooks(session):
                     _tc_mark(session, "codex-hooks-trusted", markers)
 
+            # Claude shows blocking trust dialogs (MCP server discovery) at
+            # REPL startup on a fresh HOME; clear them or turn 0 is swallowed.
+            if normalized == "claude":
+                if _dismiss_claude_startup_dialogs(session):
+                    _tc_mark(session, "claude-dialogs-dismissed", markers)
+
             for turn_idx, turn in enumerate(turns):
                 _tc_mark(session, f"turn-{turn_idx}-prompt", markers)
                 _tc_send_prompt(session, turn.prompt)
@@ -584,12 +617,29 @@ def drive_session(
                 # Poll faster (0.3s) and retain every distinct frame so transient
                 # completion text is still detected.
                 seen_frames: list[str] = []
+                last_approval_frame = ""
                 while time.monotonic() < deadline:
                     time.sleep(0.3)
                     screen = _tc_show(session)
                     if screen and screen != last_frame:
                         seen_frames.append(screen)
                         last_frame = screen
+                    # Mid-turn permission prompts (claude >= 2.1.x asks per
+                    # edit/command on a fresh HOME: "Do you want to make this
+                    # edit ...?" / "Do you want to run ...?"). The simulated
+                    # user approves the highlighted default, as a real
+                    # approving user does. Only re-approve when the dialog
+                    # frame CHANGED, so a slow repaint doesn't double-Enter.
+                    lower = screen.lower()
+                    if (
+                        "do you want to" in lower
+                        and "1. yes" in lower
+                        and screen != last_approval_frame
+                    ):
+                        _tc_key(session, "enter")
+                        _tc_mark(session, f"turn-{turn_idx}-approval", markers)
+                        last_approval_frame = screen
+                        continue
                     haystack = "\n".join(seen_frames)
                     logs = _tc_logs(session)
                     if logs:
