@@ -221,6 +221,12 @@ def restore_from_capture(
              'rm -rf "$HOME/.opentraces/index" '
              '"$HOME/.opentraces/bucket/projections/search" 2>/dev/null || true'],
         )
+        # Then REBUILD it explicitly. `trace query` does NOT lazily rebuild a
+        # missing index on CI — it returns status=maintenance_needed (exit 3).
+        # An explicit rebuild from the path-corrected bucket is deterministic
+        # on every platform (the journeys' first step is often a bare query
+        # that assumes a ready index).
+        driver.exec(box, [*driver.cli_argv(box), "trace", "index", "rebuild"])
 
     # Cross-machine reconcile (otbox 2.0 phase 0): restoring a captured world
     # onto a different machine leaves path-keyed trail projections stale
