@@ -296,7 +296,12 @@ def rebuild_index(index_path: Path | None = None) -> RebuildSummary:
     """Rebuild the local cache from retained project trace stores."""
 
     db_path = index_path or default_index_path()
-    return _retry_on_lock(lambda: _rebuild_index_locked(db_path))
+    summary = _retry_on_lock(lambda: _rebuild_index_locked(db_path))
+    # Issue #40 (A1): trace-level fields are memoized per (trace_id, path) for
+    # the read-time rejoin; a rebuild may have changed any of them, so a
+    # long-lived process must not keep serving the old hydration.
+    _trace_level_fields.cache_clear()
+    return summary
 
 
 def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
@@ -389,13 +394,17 @@ def refresh_index(
     if not db_path.exists():
         return rebuild_index(db_path)
 
-    return _retry_on_lock(
+    summary = _retry_on_lock(
         lambda: _refresh_index_locked(
             db_path,
             refresh_trails=refresh_trails,
             trail_project_slugs=trail_project_slugs,
         )
     )
+    # Issue #40 (A1): see rebuild_index — refreshed traces invalidate the
+    # memoized trace-level hydration fields.
+    _trace_level_fields.cache_clear()
+    return summary
 
 
 @dataclass(frozen=True)
