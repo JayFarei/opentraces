@@ -260,6 +260,40 @@ def test_boundedness_invariant(dev_report):
     assert not facet["bounded"]
 
 
+def test_snapshot_lane_certifies_served_kernel(dev_report):
+    """Issue #27 item L: the eval must measure the snapshot kernel the CLI has
+    served since PR #24, not only the decommissioned legacy backends.
+
+    Every row carries a ``boundedness_snapshot`` reading sourced from
+    ``trace_search_snapshot.search_traces`` (the served kernel). This would be
+    absent / mislabelled if the eval still only probed the legacy lane.
+    """
+
+    rows = dev_report.rows
+    assert rows, "dev report produced no rows"
+
+    # Every row gets a snapshot-lane reading, explicitly tagged.
+    assert all(r.boundedness_snapshot for r in rows)
+    assert all(r.boundedness_snapshot.get("lane") == "snapshot" for r in rows)
+    # And the legacy lane stays the legacy lane (additive, not replaced).
+    assert all(r.boundedness.get("lane") == "legacy" for r in rows)
+
+    # The snapshot kernel actually returns scored results on the fixture
+    # corpus: the gold-bearing descriptive rows match >= 1 trace and page <= k.
+    by_id = {r.id: r for r in rows}
+    for rid in ("desc-00", "refbare-00"):
+        snap = by_id[rid].boundedness_snapshot
+        assert snap["matched"] >= 1, (rid, snap)
+        assert snap["page_le_limit"]
+        # term queries hit the FTS5 index, so the served kernel is bounded:
+        # rows examined track matches, never the whole corpus.
+        assert snap["bounded"], (rid, snap)
+        assert snap["corpus_docs"] >= snap["matched"]
+
+    # the default lane constant points at the served kernel
+    assert runner_mod.DEFAULT_BOUNDEDNESS_LANE == runner_mod.LANE_SNAPSHOT
+
+
 def test_slope_gate_logic():
     """The scaling-slope gate (U7): bounded queries must stay ~flat across a
     corpus-size step; O(corpus) rows are exempt. Synthetic, deterministic."""

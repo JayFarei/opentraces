@@ -292,6 +292,7 @@
  "trace index status": {
   "schema_version": null,
   "top_level_keys": [
+   "db_sizes",
    "search_snapshot",
    "status"
   ]

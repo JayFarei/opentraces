@@ -46,23 +46,6 @@ emit_json = _cli.emit_json
 error_response = _cli.error_response
 
 
-def _format_trace_query_warning(entry: dict) -> str:
-    project = entry.get("project_slug") or "unknown-project"
-    state = entry.get("state") or "unknown"
-    last_synced_at = entry.get("last_synced_at") or "unknown"
-    indexed = str(entry.get("indexed_ref_sha") or "")[:12] or "none"
-    current = str(entry.get("current_ref_sha") or "")[:12] or "none"
-    message = (
-        f"warning: Trace Trail projection for {project} is {state}; "
-        f"last synced {last_synced_at} "
-        f"(indexed ref {indexed}, current ref {current})"
-    )
-    advice = entry.get("advice")
-    if advice:
-        message = f"{message}. Run '{advice}'."
-    return message
-
-
 def _trace_query_diag_payload(sync_result, query_source: str) -> dict | None:
     try:
         from ..core import search_diag
@@ -84,6 +67,86 @@ def _trace_query_diag_payload(sync_result, query_source: str) -> dict | None:
         }
     except Exception:
         return None
+
+
+def _db_table_sizes(db_path: Path) -> dict:
+    """Read-only per-table byte breakdown for a SQLite DB (issue #27 item A).
+
+    Uses the ``dbstat`` virtual table to attribute on-disk bytes to each table
+    and index so the issue-#22 / item-A bloat becomes measurable. ``dbstat`` is
+    only available when SQLite was compiled with ``SQLITE_ENABLE_DBSTAT_VTAB``;
+    when it is not (or the DB is locked / unreadable) the block degrades to
+    ``{"tables": None, "tables_error": <reason>}`` rather than failing the
+    command. The connection is opened ``mode=ro&immutable=1`` so this never
+    mutates either DB (no WAL checkpoint, no journal, no page writes).
+    """
+    import sqlite3
+    from urllib.parse import quote
+
+    entry: dict = {
+        "path": str(db_path),
+        "exists": db_path.exists(),
+        "size_bytes": None,
+        "tables": None,
+    }
+    if not db_path.exists():
+        return entry
+    try:
+        entry["size_bytes"] = db_path.stat().st_size
+    except OSError:
+        pass
+    uri = f"file:{quote(str(db_path), safe='/')}?mode=ro&immutable=1"
+    conn = None
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        rows = conn.execute(
+            "select name, sum(pgsize) as bytes, sum(pgsize) / "
+            "(select page_size from pragma_page_size) as pages "
+            "from dbstat group by name order by bytes desc"
+        ).fetchall()
+        entry["tables"] = {
+            str(name): {"bytes": int(byt or 0), "pages": int(pages or 0)}
+            for (name, byt, pages) in rows
+        }
+    except sqlite3.OperationalError as exc:
+        # dbstat vtab not compiled in, or schema introspection unavailable.
+        entry["tables"] = None
+        entry["tables_error"] = str(exc)
+    except sqlite3.DatabaseError as exc:
+        entry["tables"] = None
+        entry["tables_error"] = str(exc)
+    finally:
+        if conn is not None:
+            conn.close()
+    return entry
+
+
+def _approx_bootstrap_trace_count() -> int:
+    """Cheap pre-flight count of trace sources for the bootstrap signpost.
+
+    Globs the on-disk trace stores (bucket envelopes, per-project ``traces``
+    dirs, and the staging layer) WITHOUT running the expensive
+    ``sync_trace_records_from_local_stores`` pass that the real ingest does.
+    This is only used to put an order-of-magnitude number in the stderr
+    "this may take a while" notice (issue #27 item M); it never gates behavior.
+    Returns ``0`` if nothing is countable rather than raising.
+    """
+    from ..core import paths
+
+    count = 0
+    try:
+        bucket_traces = paths.OPENTRACES_DIR / "bucket" / "traces" / "v1"
+        if bucket_traces.exists():
+            count += sum(1 for _ in bucket_traces.glob("*/*/trace.json"))
+        projects_dir = getattr(paths, "PROJECTS_DIR", None)
+        if projects_dir is not None and projects_dir.exists():
+            count += sum(1 for _ in projects_dir.glob("*/traces/*.jsonl"))
+        staging_dir = getattr(paths, "STAGING_DIR", None)
+        if staging_dir is not None and staging_dir.exists():
+            count += sum(1 for _ in staging_dir.glob("*.jsonl"))
+    except OSError:
+        return count
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -589,15 +652,11 @@ def trace_query(
     }
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
-    if page.warnings:
-        payload["trail_freshness"] = page.warnings
-        warning_entries = [
-            warning
-            for warning in page.warnings
-            if warning.get("severity") == "warning"
-        ]
-        if warning_entries:
-            payload["warnings"] = warning_entries
+    # NOTE: SearchPage.warnings has zero writers in the read-only snapshot kernel
+    # (PR #34 routed Trace Trail freshness through SearchDiagnostics.rebuilt_index
+    # instead). The dead ``trail_freshness``/``warnings`` emission that used to live
+    # here was dropped (issue #27 item I) — re-add a real freshness surface only when
+    # the kernel actually populates page.warnings again.
     if semantic:
         from ..core.semantic import expand_semantic_query
 
@@ -605,9 +664,6 @@ def trace_query(
     if as_json:
         click.echo(_dump_json(payload))
         return
-    for warning in page.warnings:
-        if warning.get("severity") == "warning":
-            click.echo(_format_trace_query_warning(warning), err=True)
     for packet in candidates:
         click.echo(f"{packet.trace_id}  {packet.title}")
 
@@ -638,6 +694,8 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
     afterwards ingests every layer the dirty marker can be set for and a
     rebuild always converges to clean.
     """
+    import time
+
     from ..core.trace_index import default_index_path, keep_index_warm, refresh_index
     from ..core.trace_search_snapshot import build_trace_search_snapshot
 
@@ -646,8 +704,31 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
         # One-time bootstrap: ``trace map/get/slice`` hydrate from the legacy
         # Trace Index, and nothing else recreates it after the operator
         # deletes a runaway DB (the issue-#22 recovery move). This is the only
-        # path where the explicit verb pays a full legacy rebuild.
+        # path where the explicit verb pays a full legacy rebuild — which can
+        # run ~tens of minutes on a long-bloated machine (issue #27 item M).
+        # The per-trace ingest loop lives inside core.trace_index (not this
+        # file), so we cannot thread a per-trace progressbar without crossing
+        # module ownership. Instead we signpost the long silent operation:
+        # cheap up-front trace count + elapsed-time line. Both lines go to
+        # stderr UNCONDITIONALLY (even under --json) — a human watching the
+        # terminal/CI log should never face a ~tens-of-minutes silent hang
+        # just because a script is consuming stdout. The --json *stdout*
+        # contract is unchanged because the signpost never touches stdout.
+        total_traces = _approx_bootstrap_trace_count()
+        click.echo(
+            "Bootstrapping legacy Trace Index from scratch "
+            f"(~{total_traces} traces). This can take several minutes on a "
+            "large bucket; no output until it completes.",
+            err=True,
+        )
+        _bootstrap_started = time.monotonic()
         refresh_index()
+        click.echo(
+            f"Legacy Trace Index bootstrap done in "
+            f"{time.monotonic() - _bootstrap_started:.1f}s "
+            f"(~{total_traces} traces).",
+            err=True,
+        )
         healed_legacy_index = True
     warm_result = keep_index_warm(query_sources=("index", "projection"))
     search_summary = build_trace_search_snapshot()
@@ -729,12 +810,20 @@ def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_index_status_cmd(as_json: bool) -> None:
     """Show local trace search snapshot status."""
-    from ..core.trace_search_snapshot import snapshot_status
+    from ..core.trace_index import default_index_path
+    from ..core.trace_search_snapshot import default_snapshot_path, snapshot_status
 
     search_snapshot = snapshot_status()
+    # Issue #27 item A: per-table byte breakdown for BOTH on-disk SQLite DBs so
+    # the multi-GB bloat (issue #22 hypothesis 3) is measurable. Read-only.
+    db_sizes = {
+        "legacy_index": _db_table_sizes(default_index_path()),
+        "search_snapshot": _db_table_sizes(default_snapshot_path()),
+    }
     payload = {
         "status": "ok",
         "search_snapshot": search_snapshot,
+        "db_sizes": db_sizes,
     }
     if as_json:
         click.echo(_dump_json(payload))
@@ -747,6 +836,19 @@ def trace_index_status_cmd(as_json: bool) -> None:
     click.echo(f"  dirty:  {search_snapshot.get('dirty')}")
     click.echo(f"  wal:    {search_snapshot.get('wal_exists')}")
     click.echo(f"  shm:    {search_snapshot.get('shm_exists')}")
+    for label, entry in db_sizes.items():
+        if not entry.get("exists"):
+            continue
+        size_bytes = entry.get("size_bytes")
+        click.echo(f"{label}: {entry.get('path')}")
+        if size_bytes is not None:
+            click.echo(f"  size:   {size_bytes} bytes")
+        tables = entry.get("tables")
+        if tables is None:
+            click.echo(f"  tables: unavailable ({entry.get('tables_error', 'n/a')})")
+        else:
+            for name, stat in tables.items():
+                click.echo(f"  table {name}: {stat['bytes']} bytes ({stat['pages']} pages)")
 
 
 @trace_group.command("map", cls=OpentracesCommand)
