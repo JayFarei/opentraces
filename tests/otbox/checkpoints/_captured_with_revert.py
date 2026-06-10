@@ -76,8 +76,7 @@ def _resolve_survival_state(
     # ``trace_patch_created`` event for the captured trace is the one
     # the revert targets.
     timeline = driver.exec(box, [
-        *cli, "trail", "timeline",
-        "--trace", trace_id,
+        *cli, "trail", "timeline", trace_id,
         "--project", project,
         "--json",
     ])

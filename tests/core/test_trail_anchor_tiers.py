@@ -257,3 +257,99 @@ def test_unrelated_lines_do_not_anchor_via_structural_match(tmp_path: Path) -> N
     assert len(search_events) == 1
     assert search_events[0].payload["results"][0]["result"] == "unknown"
     assert not any(e.event_type == "git_anchor_created" for e in events)
+
+
+def test_before_blob_guard_rejects_revert_commit_as_landing(tmp_path: Path) -> None:
+    """#32: a commit whose target-file blob equals the patch's pre-edit blob
+    cannot be the patch's landing commit.
+
+    A plain ``git revert`` lands a commit that restores the pre-edit content.
+    Its diff re-introduces the OLD lines, which the structural matcher (line
+    similarity >= 0.85) would otherwise mis-anchor — leaving the patch wrongly
+    "alive_transformed" on the revert commit instead of resolving to
+    ``reverted``. The before-blob guard rejects any match whose resolved blob
+    equals ``before_blob_id``: no anchor is created and the search records
+    ``result=unknown`` so the revert commit never claims the patch.
+
+    Without the guard this test fails (an anchor on the revert commit is
+    created via the structural fallback).
+    """
+    _init_repo(tmp_path)
+    target = tmp_path / "greet.py"
+    # The pre-edit content. Made deliberately close to the authored text so the
+    # structural matcher WOULD fire on the revert (which re-adds this content)
+    # if the guard were absent — this is what makes the guard load-bearing.
+    before_text = "GREETING = 'hello world AAA'\n"
+    target.write_text(before_text)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed greet"], cwd=tmp_path, check=True
+    )
+    before_blob = GitObjectID(hex=_hash_object(tmp_path, before_text))
+
+    # The agent's authored edit (one token differs from before_text -> the two
+    # are > 0.85 similar under SequenceMatcher).
+    hook_authored = "GREETING = 'hello world BBB'\n"
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, hook_authored))
+    _emit_hook_patch(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        file_path="greet.py",
+        trace_patch_id="tracepatch-sha256:fixture-revert-guard",
+        before_blob=before_blob,
+        after_blob=after_blob,
+        authored_text=hook_authored,
+        affected_range={"start_line": 1, "end_line": 1},
+    )
+
+    # The landing commit applies the authored edit. This anchors normally.
+    target.write_text(hook_authored)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "land greet"], cwd=tmp_path, check=True
+    )
+    landing = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    created_landing = reconcile_commit_anchors(tmp_path, landing)
+    assert len(created_landing) == 1, "landing commit must anchor the patch"
+
+    # Now git-revert the landing commit. The revert restores before_text, so
+    # the revert commit's `greet.py` blob == before_blob_id, and its diff
+    # re-adds the OLD (before) lines (> 0.85 similar to the authored text).
+    subprocess.run(
+        ["git", "revert", "--no-edit", landing], cwd=tmp_path, check=True
+    )
+    revert = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    # Sanity: the revert commit's target blob really is the pre-edit blob.
+    revert_blob = subprocess.check_output(
+        ["git", "rev-parse", f"{revert}:greet.py"], cwd=tmp_path, text=True
+    ).strip()
+    assert revert_blob == before_blob.hex
+
+    created_revert = reconcile_commit_anchors(tmp_path, revert)
+    # The guard rejects the revert commit as a landing commit: no anchor.
+    assert created_revert == [], (
+        "before-blob guard must reject the revert commit as the patch's "
+        "landing commit"
+    )
+
+    events = read_events(tmp_path)
+    revert_searches = [
+        e
+        for e in events
+        if e.event_type == "git_anchor_search_completed"
+        and (e.payload.get("search_head") or {}).get("hex") == revert
+    ]
+    assert len(revert_searches) == 1
+    results = revert_searches[0].payload["results"]
+    assert any(r["result"] == "unknown" for r in results)
+    # No anchor was created on the revert commit.
+    assert not any(
+        e.event_type == "git_anchor_created"
+        and (e.payload.get("commit_id") or {}).get("hex") == revert
+        for e in events
+    )

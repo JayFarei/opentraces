@@ -1,0 +1,143 @@
+# otbox 2.0 release lane (phase B4).
+#
+# The standing proof that the REAL HuggingFace boundary works: runs the
+# live-hf-* journeys against real huggingface.co ephemeral otbox-live-*
+# repos (real auth via the scoped token, real bucket push/pull/sync, real
+# dataset publish + read-remote), with teardown-on-pass, keep-on-failure,
+# and a stale-orphan sweep.
+#
+# Triggers: version tags (v*) and manual workflow_dispatch. The job binds to
+# the `live-hf` GitHub environment — add required reviewers there to make
+# dispatch approval-gated (no approval rule = runs immediately).
+#
+# Fail-closed preconditions:
+#   1. the latest ci-nightly on the default branch must be green and <48h old
+#   2. the OPENTRACES_LIVE_HF_TOKEN secret must be present
+# Either failing blocks the live segment from running at all.
+name: ci-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  preconditions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Latest ci-nightly on default branch is green and fresh (<48h)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/ci-nightly.yml/runs?branch=main&status=completed&per_page=1" \
+            --jq '.workflow_runs[0]')
+          if [ -z "$run" ] || [ "$run" = "null" ]; then
+            echo "::error::no completed ci-nightly run found on main — fail closed"
+            exit 1
+          fi
+          conclusion=$(echo "$run" | jq -r '.conclusion')
+          created_at=$(echo "$run" | jq -r '.created_at')
+          run_id=$(echo "$run" | jq -r '.id')
+          head_sha=$(echo "$run" | jq -r '.head_sha')
+          echo "latest nightly: run=$run_id sha=$head_sha conclusion=$conclusion created_at=$created_at"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::latest ci-nightly on main is $conclusion, not success — fix the nightly before releasing"
+            exit 1
+          fi
+          age_seconds=$(( $(date +%s) - $(date -d "$created_at" +%s) ))
+          if [ "$age_seconds" -gt 172800 ]; then
+            echo "::error::latest green ci-nightly is ${age_seconds}s old (>48h) — dispatch a fresh nightly first"
+            exit 1
+          fi
+      - name: Live HF token secret is present
+        env:
+          OPENTRACES_LIVE_HF_TOKEN: ${{ secrets.OPENTRACES_LIVE_HF_TOKEN }}
+        run: |
+          if [ -z "$OPENTRACES_LIVE_HF_TOKEN" ]; then
+            echo "::error::OPENTRACES_LIVE_HF_TOKEN secret is not configured — fail closed"
+            exit 1
+          fi
+
+  live-hf:
+    needs: preconditions
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: live-hf
+    concurrency:
+      group: otbox-live-hf
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            packages/opentraces-schema/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install -q -e packages/opentraces-schema -e ".[dev]"
+      - name: Git identity for test repos
+        run: |
+          git config --global user.email "otbox-ci@opentraces.local"
+          git config --global user.name "otbox-ci"
+          git config --global init.defaultBranch main
+      - name: Fetch real-agent capture artifacts (hash-pinned)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./otbox fetch-captures
+      - name: Live HF journeys (real huggingface.co, ephemeral otbox-live-* repos)
+        env:
+          OT_OTBOX_LIVE_HF: "1"
+          OPENTRACES_LIVE_HF_TOKEN: ${{ secrets.OPENTRACES_LIVE_HF_TOKEN }}
+          OT_OTBOX_FETCH_CAPTURES: "1"
+          OTBOX_LEDGER_DIR: ledger-records
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m pytest tests/otbox/test_live_hf_slice.py -v \
+            --junitxml=otbox-live-hf-junit.xml
+      - name: Executed-evidence ledger (live segment)
+        if: always()
+        # Scoped to the records this segment actually produced — running the
+        # full-catalogue compactor here would graveyard-red every journey the
+        # release lane deliberately does not execute.
+        run: |
+          python - <<'PY'
+          import glob, json, sys
+          rows = [json.load(open(p)) for p in sorted(glob.glob("ledger-records/*.json"))]
+          red = [r["journey"] for r in rows if r.get("verdict") != "PASS"]
+          summary = {
+              "source": "release:${{ github.run_id }}",
+              "executed": len(rows),
+              "red": red,
+              "rows": rows,
+          }
+          with open("live-hf-ledger.json", "w") as fh:
+              json.dump(summary, fh, indent=1, sort_keys=True)
+          print(f"live segment: {len(rows)} journey(s) executed, red={red}")
+          sys.exit(1 if red else 0)
+          PY
+      - name: Sweep leftover otbox-live-* repos older than 48h
+        if: always()
+        env:
+          OPENTRACES_LIVE_HF_TOKEN: ${{ secrets.OPENTRACES_LIVE_HF_TOKEN }}
+        run: |
+          python - <<'PY'
+          from tests.otbox import live_hf
+          deleted = live_hf.sweep_orphans(ttl_hours=48)
+          print(f"swept {len(deleted)} orphan repo(s): {deleted}")
+          PY
+      - name: Upload run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: otbox-release-live-hf-evidence
+          path: |
+            otbox-live-hf-junit.xml
+            live-hf-ledger.json
+          retention-days: 90

@@ -580,6 +580,169 @@ def test_cross_machine_bucket_digest_byte_identical(repo, tmp_path):
     )
 
 
+def test_cross_machine_bucket_digest_different_root(repo, tmp_path, monkeypatch):
+    """Issue #29 — ``bucket_digest`` is machine-INDEPENDENT.
+
+    The same bucket content restored at a DIFFERENT ``OPENTRACES_DIR`` root
+    must produce a byte-identical ``bucket_digest`` (and identical per-trace
+    ``traces[].digest``), even though ``manifest['root']`` correctly differs
+    (machine-local display path). On unfixed code the digest material fed each
+    sub-block WHOLE — and every sub-block embeds a machine-local ``root``
+    absolute path — so the roll-up differed across roots. This test MUST fail
+    on unfixed code.
+    """
+
+    from opentraces.core import config as _config
+    from opentraces.core import paths
+    from opentraces.core.bucket_store import bucket_manifest
+
+    # Machine A: seed an envelope under the conftest-isolated root.
+    _project_envelope(repo, trace_id="trace-XMR1", seed="xmr1", project_slug="proj")
+    manifest_a = bucket_manifest(write=True)
+    digest_a = manifest_a.get("bucket_digest") or manifest_a.get("digest")
+    root_a = manifest_a["root"]
+    traces_digest_a = sorted(
+        (row["trace_id"], row["digest"]) for row in manifest_a["traces"]
+    )
+    assert digest_a is not None
+    assert traces_digest_a, "expected at least one trace row"
+
+    # Tar the bucket with mtime=0 (Resolution H).
+    bucket_a = paths.bucket_dir()
+    tar_bytes = io.BytesIO()
+    with tarfile.open(fileobj=tar_bytes, mode="w:gz", format=tarfile.PAX_FORMAT) as tf:
+        for src in sorted(bucket_a.rglob("*")):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(bucket_a)
+            tinfo = tarfile.TarInfo(name=str(rel))
+            data = src.read_bytes()
+            tinfo.size = len(data)
+            tinfo.mtime = 0
+            tf.addfile(tinfo, io.BytesIO(data))
+    tar_bytes.seek(0)
+
+    # Machine B: a DIFFERENT OPENTRACES_DIR root. Mirror tests/conftest.py:48-54.
+    root_b_home = tmp_path / "machine-b-home"
+    opentraces_b = root_b_home / ".opentraces"
+    opentraces_b.mkdir(parents=True)
+    (opentraces_b / "projects").mkdir()
+    for mod in (paths, _config):
+        monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_b)
+        monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_b / "config.json")
+        monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_b / "credentials")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", opentraces_b / "projects")
+
+    bucket_b = paths.bucket_dir()
+    bucket_b.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=tar_bytes, mode="r:gz") as tf:
+        tf.extractall(path=bucket_b)
+
+    manifest_b = bucket_manifest(write=True)
+    digest_b = manifest_b.get("bucket_digest") or manifest_b.get("digest")
+    root_b = manifest_b["root"]
+    traces_digest_b = sorted(
+        (row["trace_id"], row["digest"]) for row in manifest_b["traces"]
+    )
+
+    # The display root differs (machine-local, correct)...
+    assert root_a != root_b
+    # ...but content digests are byte-identical across roots.
+    assert digest_a == digest_b, (
+        f"bucket_digest is root-dependent: A={digest_a} vs B={digest_b}"
+    )
+    assert traces_digest_a == traces_digest_b
+
+
+def test_bucket_digest_invariant_under_relocation(repo, monkeypatch):
+    """bucket_digest must not change when the bucket lives at another path.
+
+    The tar+restore test above restores into the SAME path, so it cannot
+    catch machine-local path material in the digest. The live-hf-* journeys
+    did: every sub-block snapshot embeds an absolute ``root`` (and trail
+    freshness a ``repo_path``), so a bucket pulled on machine B hashed
+    differently and ``bucket remote status`` was permanently
+    ``remote_ahead`` (issue #25 PR-B finding #2). Digest material now
+    excludes machine-local path keys; the manifest keeps them for display.
+    """
+
+    from opentraces.core import config as config_mod
+    from opentraces.core import paths
+    from opentraces.core.bucket_store import bucket_manifest
+
+    _project_envelope(repo, trace_id="trace-RELOC1", seed="reloc", project_slug="proj")
+    manifest_a = bucket_manifest(write=True)
+    digest_a = manifest_a.get("bucket_digest")
+    assert digest_a is not None
+    root_a = manifest_a["trace_records"]["snapshot"]["root"]
+
+    # "Machine B": the same home content under a different absolute path.
+    old_dir = paths.OPENTRACES_DIR
+    new_dir = old_dir.parent / "relocated-home" / ".opentraces"
+    new_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(old_dir, new_dir)
+    for mod in (paths, config_mod):
+        monkeypatch.setattr(mod, "OPENTRACES_DIR", new_dir)
+        monkeypatch.setattr(mod, "CONFIG_PATH", new_dir / "config.json")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", new_dir / "projects")
+        if hasattr(mod, "STAGING_DIR"):
+            monkeypatch.setattr(mod, "STAGING_DIR", new_dir / "staging")
+
+    manifest_b = bucket_manifest(write=True)
+    digest_b = manifest_b.get("bucket_digest")
+    root_b = manifest_b["trace_records"]["snapshot"]["root"]
+    assert root_a != root_b, "relocation should move the display root"
+    assert digest_a == digest_b, (
+        f"bucket_digest is path-polluted: {digest_a} != {digest_b}"
+    )
+
+
+def test_bucket_digest_invariant_to_unsynced_context_substrate(repo):
+    """bucket_digest must cover exactly what ``bucket remote push`` syncs.
+
+    Plan-079 R8 hardcodes ``remote_sync.eligible = False`` on every
+    context-tree head, so push deliberately skips the context substrate.
+    Counting it in the digest meant a pulled bucket (which lacks those
+    files) could never reproduce the pushed digest — the live
+    ``live-hf-bucket-roundtrip`` / ``-multi-trace`` journeys failed
+    ``status-after-pull`` with ``remote_ahead`` forever. The digest now
+    excludes ``context_trees``; the manifest block remains for display.
+    """
+
+    from opentraces.core import paths
+    from opentraces.core.bucket_store import bucket_manifest
+
+    _project_envelope(repo, trace_id="trace-CTXSKIP1", seed="ctxskip", project_slug="proj")
+    manifest_a = bucket_manifest(write=True)
+    digest_a = manifest_a.get("bucket_digest")
+    assert digest_a is not None
+
+    # Simulate the pulled bucket: the R8-blocked context substrate is absent.
+    bucket_root = paths.bucket_dir()
+    removed_any = False
+    for rel in ("contexts/v1",):
+        target = bucket_root / rel
+        if target.exists():
+            shutil.rmtree(target)
+            removed_any = True
+    for project_dir in sorted((bucket_root / "blobs" / "v1").glob("*")):
+        ctx = project_dir / "context"
+        if ctx.exists():
+            shutil.rmtree(ctx)
+            removed_any = True
+    assert removed_any, "fixture should have produced context-tree material"
+
+    manifest_b = bucket_manifest(write=True)
+    digest_b = manifest_b.get("bucket_digest")
+    assert manifest_a["context_trees"] != manifest_b["context_trees"], (
+        "context substrate removal should be visible in the display block"
+    )
+    assert digest_a == digest_b, (
+        "bucket_digest must not cover the R8-unsynced context substrate: "
+        f"{digest_a} != {digest_b}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Section 6 — gzip determinism (mtime=0 on both backends).
 # --------------------------------------------------------------------------- #

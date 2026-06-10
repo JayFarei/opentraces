@@ -128,6 +128,8 @@ def test_snapshot_db_does_not_store_full_trace_payload() -> None:
 
 
 def test_stale_snapshot_requires_explicit_rebuild() -> None:
+    # With auto_rebuild disabled, a stale snapshot still raises (issue #30
+    # leaves the strict raise-on-needs-rebuild path intact behind the flag).
     _write_trace(
         "demo-project",
         _trace("trace-site", description="Fix the marketing site search hang"),
@@ -137,7 +139,9 @@ def test_stale_snapshot_requires_explicit_rebuild() -> None:
     mark_search_snapshot_dirty("test", trace_id="trace-site")
 
     try:
-        search_traces("marketing", SearchFilters(project="demo-project"))
+        search_traces(
+            "marketing", SearchFilters(project="demo-project"), auto_rebuild=False
+        )
     except SearchSnapshotNeedsRebuild as exc:
         assert exc.reason == "stale"
     else:  # pragma: no cover - assertion clarity
@@ -146,8 +150,52 @@ def test_stale_snapshot_requires_explicit_rebuild() -> None:
 
     build_trace_search_snapshot()
     assert current_dirty_token() is None
-    page = search_traces("marketing", SearchFilters(project="demo-project"))
+    page = search_traces(
+        "marketing", SearchFilters(project="demo-project"), auto_rebuild=False
+    )
     assert [hit.trace_id for hit in page.hits] == ["trace-site"]
+
+
+def test_search_bootstraps_snapshot_when_missing() -> None:
+    # Issue #30: search_traces with no snapshot self-heals once (compact build)
+    # and serves the hit, reporting rebuilt_index=True.
+    _write_trace(
+        "demo-project",
+        _trace("trace-site", description="Fix the marketing site search hang"),
+    )
+    assert not default_snapshot_path().exists()
+
+    page = search_traces("marketing", SearchFilters(project="demo-project"), limit=3)
+
+    assert [hit.trace_id for hit in page.hits] == ["trace-site"]
+    assert page.diagnostics.rebuilt_index is True
+    assert page.diagnostics.wrote_to_index is True
+    assert page.diagnostics.raw_trace_scan is False
+    assert default_snapshot_path().exists()
+
+    # Steady state: a second query finds the snapshot and does not rebuild.
+    page2 = search_traces("marketing", SearchFilters(project="demo-project"), limit=3)
+    assert [hit.trace_id for hit in page2.hits] == ["trace-site"]
+    assert page2.diagnostics.rebuilt_index is False
+
+
+def test_search_missing_snapshot_raises_when_auto_rebuild_disabled() -> None:
+    # Issue #30 contract: auto_rebuild=False keeps the strict raise on a
+    # missing snapshot path.
+    _write_trace(
+        "demo-project",
+        _trace("trace-site", description="Fix the marketing site search hang"),
+    )
+    assert not default_snapshot_path().exists()
+
+    try:
+        search_traces(
+            "marketing", SearchFilters(project="demo-project"), auto_rebuild=False
+        )
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "missing"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("missing snapshot should raise with auto_rebuild=False")
 
 
 def test_rebuild_does_not_clear_dirty_marker_created_during_build(monkeypatch) -> None:

@@ -526,6 +526,7 @@ def read_events_scoped(
     event_types: set[str],
     commit_filter: dict[str, str] | None = None,
     commit_sha: str | None = None,
+    commit_shas: set[str] | None = None,
 ) -> list[TrailEvent]:
     """Read only events of ``event_types``, streaming per-commit so the whole
     history is never materialised at once (Bug B hot-path reader).
@@ -539,6 +540,13 @@ def read_events_scoped(
     must equal ``commit_sha`` (used to keep only anchor/search events that
     reference the commit being reconciled). Types absent from ``commit_filter``
     are kept in full.
+
+    ``commit_shas`` is the batched form of ``commit_sha``: when provided, a
+    filtered event is kept when its nested ``hex`` is ANY sha in the set. This
+    lets the maturation scan read the anchor/search slice for N recent commits
+    in a SINGLE whole-log pass instead of N per-commit reads (#23). Exactly one
+    of ``commit_sha`` / ``commit_shas`` should be supplied for filtered types;
+    when both are None, filtered types are dropped (no commit to match).
 
     NOTE: this never populates the shared ``_READ_EVENTS_CACHE`` (keyed
     ``(repo, head, verify)`` and shared with full-history callers) — a partial
@@ -582,14 +590,24 @@ def read_events_scoped(
     filtered_tokens = [
         f'"{t}"'.encode() for t in event_types if t in commit_filter
     ]
-    commit_token = commit_sha.encode() if commit_sha else None
+    # Unify single + batched commit-sha forms. ``wanted_shas`` is the set the
+    # post-parse filter membership-checks; ``commit_tokens`` is the raw-bytes
+    # prefilter (a blob is admitted if ANY wanted sha appears, since the
+    # post-parse check still enforces exact matching — the prefilter can only
+    # over-include, never miss).
+    wanted_shas: set[str] = set()
+    if commit_sha:
+        wanted_shas.add(commit_sha)
+    if commit_shas:
+        wanted_shas.update(commit_shas)
+    commit_tokens = [sha.encode() for sha in wanted_shas]
 
     def _wanted(raw: bytes) -> bool:
         if any(token in raw for token in plain_tokens):
             return True
         if not filtered_tokens:
             return False
-        if commit_token is not None and commit_token not in raw:
+        if commit_tokens and not any(token in raw for token in commit_tokens):
             return False
         return any(token in raw for token in filtered_tokens)
 
@@ -604,7 +622,7 @@ def read_events_scoped(
                 continue
             if event.event_type in commit_filter:
                 ref = (event.payload.get(commit_filter[event.event_type]) or {}).get("hex")
-                if ref != commit_sha:
+                if ref not in wanted_shas:
                     continue
             matched.append(event)
     matched.sort(key=lambda event: event.event_sequence)

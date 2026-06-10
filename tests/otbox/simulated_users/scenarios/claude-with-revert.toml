@@ -1,0 +1,23 @@
+# Plan B0 — claude credible-state batch. See claude-linear-edit.toml header.
+
+name = "claude-with-revert"
+description = "CL2: drive real Claude Code through an edit + commit, then a git revert of that commit — produces the reverted-survival world shape."
+agent = "claude"
+binary_name = "claude"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Add a shout(name: str) helper to src/app.py that returns the upper-cased greeting, run a quick syntax check, and commit the change with message 'add shout helper'."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[[turns]]
+prompt = "Actually I changed my mind about that helper. Revert the commit you just made with git revert (keep history, do not reset), and confirm the revert commit landed."
+expect_regex = "(?is)(revert(ed)?|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "claude-with-revert"
+expected_paths = ["src/app.py"]

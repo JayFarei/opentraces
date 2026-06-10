@@ -18,7 +18,7 @@ from .ids import (
     id_from_payload,
     trace_patch_ref,
 )
-from .models import ATTRIBUTION_VERSION, GitObjectID, TrailEventDraft
+from .models import ATTRIBUTION_VERSION, GitObjectID, TrailEvent, TrailEventDraft
 from .search_records import (
     build_anchor_search_summary_payload,
     iter_search_records,
@@ -146,6 +146,8 @@ def reconcile_commit_anchors(
     capture_method: list[str] | None = None,
     trace_id: str | None = None,
     attribution_version: str | None = None,
+    events: list[TrailEvent] | None = None,
+    summary_out: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Search existing Trace Patches against a commit and append anchor events.
 
@@ -169,19 +171,43 @@ def reconcile_commit_anchors(
     # dedup only consults events referencing THIS commit. Read that scoped slice
     # (streamed per-commit, no whole-log materialisation, no verify) instead of
     # the full ~N-event history that drove the post-commit hook to ~7.5GB RSS.
-    events = read_events_scoped(
-        repo,
-        event_types={
-            "trace_patch_created",
-            "git_anchor_created",
-            "git_anchor_search_completed",
-        },
-        commit_filter={
-            "git_anchor_created": "commit_id",
-            "git_anchor_search_completed": "search_head",
-        },
-        commit_sha=commit,
-    )
+    #
+    # #23: when ``events`` is pre-supplied (the batched maturation scan reads
+    # the anchor/search slice for ALL recent commits in one whole-log pass),
+    # filter that supplied list to this commit's sha here exactly as the scoped
+    # commit_filter would — preserving plan-090 R5 dedup. When ``events`` is
+    # None the per-commit scoped read is byte-identical (the post-commit hook
+    # path is unchanged).
+    if events is None:
+        events = read_events_scoped(
+            repo,
+            event_types={
+                "trace_patch_created",
+                "git_anchor_created",
+                "git_anchor_search_completed",
+            },
+            commit_filter={
+                "git_anchor_created": "commit_id",
+                "git_anchor_search_completed": "search_head",
+            },
+            commit_sha=commit,
+        )
+    else:
+        events = [
+            event
+            for event in events
+            if (
+                event.event_type == "trace_patch_created"
+                or (
+                    event.event_type == "git_anchor_created"
+                    and (event.payload.get("commit_id") or {}).get("hex") == commit
+                )
+                or (
+                    event.event_type == "git_anchor_search_completed"
+                    and (event.payload.get("search_head") or {}).get("hex") == commit
+                )
+            )
+        ]
     existing_anchor_keys = {
         (id_from_payload(event.payload, "trace_patch"), (event.payload.get("commit_id") or {}).get("hex"))
         for event in events
@@ -248,6 +274,20 @@ def reconcile_commit_anchors(
         created_anchor_ids: list[str] = []
         if match:
             blob_id = _oid(repo, f"{commit}:{match['path']}")
+            # #32 before-blob guard: a commit whose target-file content equals
+            # the patch's pre-edit blob is the state BEFORE the patch landed, so
+            # it cannot be this patch's landing commit. Reject the match (a plain
+            # `git revert` lands a commit that restores the pre-edit content; the
+            # structural matcher would otherwise mis-anchor the revert's
+            # re-introduced old lines, leaving survival stuck at `unknown` instead
+            # of resolving to `reverted`). Patches without a recorded
+            # before_blob_id (legacy / fs_watcher with no parent blob) skip the
+            # guard, preserving prior behavior. Temporal-free and backfill-safe.
+            before_hex = (patch.get("before_blob_id") or {}).get("hex")
+            blob_hex = (blob_id or {}).get("hex")
+            if before_hex and blob_hex and blob_hex == before_hex:
+                match = None
+        if match:
             git_anchor_object_ref = content_ref(
                 kind="git_anchor",
                 canonicalization=GIT_ANCHOR_CANONICALIZATION,
@@ -337,4 +377,11 @@ def reconcile_commit_anchors(
 
     if drafts:
         append_event_batch(repo, drafts, writer=writer)
+    if summary_out is not None:
+        # #23: surface the per-patch search count to the caller so maturation can
+        # sum these instead of re-reading the whole log twice (before/after) just
+        # to diff search-record counts. One per-patch search outcome was recorded
+        # per visited patch (search_results), matching the prior _event_counts
+        # delta semantics.
+        summary_out["searches_recorded"] = len(search_results)
     return created

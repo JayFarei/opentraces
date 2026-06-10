@@ -104,7 +104,77 @@ def test_repeated_trace_query_does_not_mutate_snapshot_or_create_wal() -> None:
     assert not snapshot.with_name(snapshot.name + "-shm").exists()
 
 
-def test_missing_snapshot_returns_maintenance_needed_json() -> None:
+def test_missing_snapshot_bootstraps_and_serves() -> None:
+    # Issue #30: a world with traces but no search snapshot must NOT dead-end at
+    # maintenance_needed/exit 3. query self-heals once (auto-rebuild of the
+    # compact snapshot) and serves rc=0 results, reporting rebuilt_index=True
+    # on the first call and False on the next (steady state).
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_snapshot_path().exists()
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert [item["trace_id"] for item in payload["candidates"]] == ["trace-site"]
+    assert payload["search_diagnostics"]["used_search_snapshot"] is True
+    assert payload["search_diagnostics"]["raw_trace_scan"] is False
+    assert payload["search_diagnostics"]["rebuilt_index"] is True
+    assert default_snapshot_path().exists()
+
+    # Second invocation finds a servable snapshot: read-only steady state.
+    result2 = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+    assert result2.exit_code == 0, result2.output
+    payload2 = json.loads(result2.output)
+    assert [item["trace_id"] for item in payload2["candidates"]] == ["trace-site"]
+    assert payload2["search_diagnostics"]["rebuilt_index"] is False
+
+
+def test_stale_snapshot_self_heals() -> None:
+    # Issue #30: a stale dirty marker self-heals with one build + retry and
+    # serves rc=0 results; the dirty marker is cleared by the rebuild.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+    mark_search_snapshot_dirty("test", trace_id="trace-site")
+    from opentraces.core.trace_search_state import current_dirty_token
+
+    assert current_dirty_token() is not None
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert [item["trace_id"] for item in payload["candidates"]] == ["trace-site"]
+    assert payload["search_diagnostics"]["rebuilt_index"] is True
+    assert payload["search_diagnostics"]["raw_trace_scan"] is False
+    # Rebuild cleared the dirty marker.
+    assert current_dirty_token() is None
+
+
+def test_query_exit_3_when_rebuild_fails(monkeypatch) -> None:
+    # Issue #30 contract: maintenance_needed/exit 3 remains ONLY when the
+    # self-heal build itself fails. Force the auto-rebuild to raise and assert
+    # the payload shape and exit code are preserved.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_snapshot_path().exists()
+
+    from opentraces.core import trace_search_snapshot as tss
+
+    def boom(*_args, **_kwargs):
+        raise tss.SearchSnapshotNeedsRebuild("missing", path=default_snapshot_path())
+
+    monkeypatch.setattr(tss, "build_trace_search_snapshot", boom)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -116,26 +186,8 @@ def test_missing_snapshot_returns_maintenance_needed_json() -> None:
     payload = json.loads(result.output)
     assert payload["status"] == "maintenance_needed"
     assert payload["advice"] == "opentraces trace index"
-
-
-def test_stale_snapshot_returns_maintenance_needed_json() -> None:
-    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
-    build_trace_search_snapshot()
-    mark_search_snapshot_dirty("test", trace_id="trace-site")
-    runner = CliRunner()
-
-    result = runner.invoke(
-        main,
-        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
-    )
-
-    assert result.exit_code == 3
-    payload = json.loads(result.output)
-    assert payload["status"] == "maintenance_needed"
-    assert payload["reason"] == "stale"
-    assert payload["search_diagnostics"]["raw_trace_scan"] is False
-    assert payload["search_diagnostics"]["wrote_to_index"] is False
     assert payload["search_diagnostics"]["rebuilt_index"] is False
+    assert payload["search_diagnostics"]["raw_trace_scan"] is False
 
 
 def test_trace_index_command_rebuilds_search_snapshot() -> None:
@@ -212,7 +264,11 @@ def test_trace_index_status_is_snapshot_first_without_legacy_inspection(monkeypa
     assert (snapshot.stat().st_size, snapshot.stat().st_mtime_ns) == before
 
 
-def test_trace_discover_missing_snapshot_returns_maintenance_needed_json() -> None:
+def test_trace_discover_missing_snapshot_bootstraps_and_serves() -> None:
+    # Issue #30: discover routes through search_traces, so it inherits the
+    # same self-heal — a missing snapshot now serves rc=0 discovery output.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_snapshot_path().exists()
     runner = CliRunner()
 
     result = runner.invoke(
@@ -220,10 +276,11 @@ def test_trace_discover_missing_snapshot_returns_maintenance_needed_json() -> No
         ["trace", "discover", "site", "--json"],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["status"] == "maintenance_needed"
-    assert payload["advice"] == "opentraces trace index"
+    assert payload["status"] == "ok"
+    assert "discovery" in payload
+    assert default_snapshot_path().exists()
 
 
 def test_trace_query_rejects_unit_level_candidate_kind() -> None:
