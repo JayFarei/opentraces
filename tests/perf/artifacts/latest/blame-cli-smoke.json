@@ -1,61 +1,61 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 247.66525,
+    "cold_ms": 370.28075,
     "extra": {},
     "max_rss_delta_mb": null,
-    "mean_ms": 242.30977766666666,
-    "p50_ms": 239.858625,
-    "p95_ms": 247.66525,
-    "peak_rss_mb": 46.625,
+    "mean_ms": 361.41022200000003,
+    "p50_ms": 357.301083,
+    "p95_ms": 370.28075,
+    "peak_rss_mb": 51.203125,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 247.66525,
+        "duration_ms": 370.28075,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/claude-501/pytest-of-jayfarei/pytest-31/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-01/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-865/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-01/proj",
           "returncode": 0,
           "scenario": "blame-cli-smoke",
-          "sha": "e9f7371789a6818ff726daf47fde14a3c39ba082",
+          "sha": "abe06943d861885b78059223d8d6901b8b94d72a",
           "stdout_tail": "\u2570\u2500\u2500 \u25c6 t:small-tr   small-trace  1 of 2 diff lines . 50%   claude-opus-4-6\n    + Added chunks lines 4-4\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nFiles:\n\n  pkg/module_2.py  4 line(s)  (2 attributed)",
           "trace_count": 24
         },
-        "peak_rss_mb": 46.34375,
+        "peak_rss_mb": 51.203125,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 239.858625,
+        "duration_ms": 356.648833,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/claude-501/pytest-of-jayfarei/pytest-31/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-02/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-865/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-02/proj",
           "returncode": 0,
           "scenario": "blame-cli-smoke",
-          "sha": "adefde46f0764853c7ab68f55206f814379c6804",
+          "sha": "b0d0bebcfc3ade6db22a8c6fe0ea0d135dcf8130",
           "stdout_tail": "\u2570\u2500\u2500 \u25c6 t:small-tr   small-trace  1 of 2 diff lines . 50%   claude-opus-4-6\n    + Added chunks lines 4-4\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nFiles:\n\n  pkg/module_2.py  4 line(s)  (2 attributed)",
           "trace_count": 24
         },
-        "peak_rss_mb": 46.625,
+        "peak_rss_mb": 49.0625,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 239.405458,
+        "duration_ms": 357.301083,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/claude-501/pytest-of-jayfarei/pytest-31/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-03/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-865/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-03/proj",
           "returncode": 0,
           "scenario": "blame-cli-smoke",
-          "sha": "26acf2b119e6f55e28bcbeabe737211d222e651d",
+          "sha": "c30c2be75f9cc6587ca280a921100e454cc4998c",
           "stdout_tail": "\u2570\u2500\u2500 \u25c6 t:small-tr   small-trace  1 of 2 diff lines . 50%   claude-opus-4-6\n    + Added chunks lines 4-4\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nFiles:\n\n  pkg/module_2.py  4 line(s)  (2 attributed)",
           "trace_count": 24
         },
-        "peak_rss_mb": 41.21875,
+        "peak_rss_mb": 48.109375,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
