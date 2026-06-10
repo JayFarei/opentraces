@@ -27,12 +27,18 @@ from __future__ import annotations
 
 CI_LANES = ("pr", "nightly", "local-agents")
 
-# Capability vocabulary comes from journey._capabilities().
+# Capability vocabulary comes from journey._capabilities(). These reflect what
+# each lane's runner ACTUALLY provides — the ubuntu nightly has tmux but NOT
+# terminal-control (termctrl, a cargo-installed real-terminal driver), so
+# termctrl-driving journeys belong in the manual local-agents ritual, not CI.
+# (Claiming termctrl for nightly made a real-terminal journey SKIP -> graveyard-
+# red in the first green-candidate nightly.)
 LANE_CAPABILITIES: dict[str, frozenset[str]] = {
     "pr": frozenset({"cli", "git"}),
-    "nightly": frozenset({"cli", "git", "tmux", "termctrl"}),
+    "nightly": frozenset({"cli", "git", "tmux", "fetched_artifacts"}),
     "local-agents": frozenset(
-        {"cli", "git", "tmux", "termctrl", "tier1", "real_repl", "live_hf"}
+        {"cli", "git", "tmux", "termctrl", "tier1", "real_repl", "live_hf",
+         "fetched_artifacts"}
     ),
 }
 
