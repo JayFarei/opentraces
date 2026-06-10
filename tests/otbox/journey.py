@@ -297,6 +297,64 @@ def _checkpoint_satisfies(
                 f"pre_migration_schema {have_schema!r} != {want_schema!r}"
             )
 
+    # Issue #42 — bucket-spine-v2 + context-tree boolean world flags. Each
+    # requires the hosting checkpoint to advertise the same flag True.
+    for flag in (
+        "bucket_spine_v2_layout",
+        "pushed_to_fake_remote",
+        "orphan_blob_injected",
+        "dangling_ref_injected",
+        "bucket_only_no_git_ref",
+        "local_blobs_dropped",
+        "lazy_projection_enabled",
+        "events_mirror_v1_populated",
+        "git_repo_present",
+        "post_commit_hook_installed",
+    ):
+        if preconditions.get(flag):
+            if not bool(p.get(flag)):
+                return False, f"{flag} is not True"
+
+    # Issue #42 — context-tree integer/list world requirements.
+    req_branch_types = preconditions.get("requires_branch_types") or []
+    if req_branch_types:
+        have_branch_types = set(p.get("branch_types") or [])
+        missing = [b for b in req_branch_types if b not in have_branch_types]
+        if missing:
+            return False, f"missing branch_types: {missing}"
+
+    min_compactions = preconditions.get("requires_compactions_min")
+    if min_compactions is not None:
+        try:
+            need = int(min_compactions)
+        except (TypeError, ValueError):
+            return False, f"requires_compactions_min is not an int: {min_compactions!r}"
+        have = int(p.get("compactions") or 0)
+        if have < need:
+            return False, f"compactions {have} < {need}"
+
+    min_msg_bytes = preconditions.get("requires_messages_layer_bytes_min")
+    if min_msg_bytes is not None:
+        try:
+            need = int(min_msg_bytes)
+        except (TypeError, ValueError):
+            return False, (
+                f"requires_messages_layer_bytes_min is not an int: {min_msg_bytes!r}"
+            )
+        have = int(p.get("messages_layer_bytes_max") or 0)
+        if have < need:
+            return False, f"messages_layer_bytes_max {have} < {need}"
+
+    min_edit_commits = preconditions.get("requires_edit_commits_min")
+    if min_edit_commits is not None:
+        try:
+            need = int(min_edit_commits)
+        except (TypeError, ValueError):
+            return False, f"requires_edit_commits_min is not an int: {min_edit_commits!r}"
+        have = int(p.get("edit_commits") or 0)
+        if have < need:
+            return False, f"edit_commits {have} < {need}"
+
     return True, ""
 
 

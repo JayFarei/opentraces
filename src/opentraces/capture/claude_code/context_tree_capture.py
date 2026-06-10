@@ -1013,6 +1013,13 @@ def emit_context_tree_events_from_record(
         # projection can find the active_path_leaf_id without re-walking.
         summary["node_count"] = len(nodes)
         summary["layer_count"] = len({layer.layer_id for layer in layers})
+        # Plan-086 fidelity join key: the set of capture_method values across
+        # the contributing layers, mirroring the pi/codex_cli/otlp sibling
+        # paths (which already emit `capture_methods`). Consumers prefer wire
+        # fidelity (`otel`) over `transcript_reconstruction` when present.
+        summary["capture_methods"] = sorted(
+            {layer.capture_method for layer in layers}
+        )
 
         # R10 cross-substrate join: surface the active-path step_index ->
         # node_id map so ingest can populate Step.context_node_id on the
