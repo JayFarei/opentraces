@@ -34,7 +34,7 @@ type = "shell"
 id = "wire-deps"
 argv = [
     "sh", "-c",
-    "echo {repo_root}/.venv/lib/python3.14/site-packages > .testvenv/lib/python3.14/site-packages/host-venv.pth",
+    "echo {host_site_packages} > .testvenv/lib/{py_tag}/site-packages/host-venv.pth",
 ]
 
 # --- Install hatchling + editables (the build backend opentraces uses) ----

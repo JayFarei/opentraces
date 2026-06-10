@@ -158,6 +158,12 @@ def _derive_ci_lane(doc: dict) -> str:
     return derive_ci_lane(doc)
 
 
+def _sysconfig_purelib() -> str:
+    import sysconfig
+
+    return sysconfig.get_paths()["purelib"]
+
+
 # --------------------------------------------------------------------------
 # precondition resolver (plan 069 R2)
 # --------------------------------------------------------------------------
@@ -539,6 +545,11 @@ def _context(driver: Driver, box: Box, port: int) -> dict[str, str]:
         "opentraces_dir": paths["opentraces_dir"],
         "repo_root": str(REPO_ROOT),
         "port": str(port),
+        # python version of the interpreter running the tests, for journeys
+        # that touch venv lib paths (e.g. host-venv.pth). Hardcoding
+        # python3.14 broke on CI's python3.12.
+        "py_tag": f"python{sys.version_info.major}.{sys.version_info.minor}",
+        "host_site_packages": _sysconfig_purelib(),
     }
     ctx.update(_captured_session(box))
     # live_hf lane: expose the ephemeral private repo ids provisioned for this
