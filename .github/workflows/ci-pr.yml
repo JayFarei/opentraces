@@ -22,6 +22,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the entry6 labeled-regression suite asserts against
+          # the repo's own commits (git show <sha>, burst commit lookups) and
+          # a shallow clone fails them all.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
