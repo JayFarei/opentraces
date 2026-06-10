@@ -122,6 +122,12 @@ def _quote_sqlite_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+# Any absolute path ending in /.otbox/boxes/otb_<id>, regardless of the
+# machine prefix that produced it (the non-greedy prefix stops at common
+# JSON/text delimiters). Used for cross-machine restore.
+_ANY_BOX_ROOT_RE = re.compile(r"/[^\s\"',;:()\[\]]*?/\.otbox/boxes/otb_[0-9a-fA-F]+")
+
+
 def _replace_box_roots(
     text: str,
     *,
@@ -132,7 +138,16 @@ def _replace_box_roots(
     text = text.replace(old_root, new_root)
     boxes_prefix = re.escape(str(boxes_root))
     box_root_re = re.compile(rf"{boxes_prefix}/otb_[0-9a-fA-F]+")
-    return box_root_re.sub(new_root, text)
+    text = box_root_re.sub(new_root, text)
+    # Cross-machine restore: a captured artifact may carry a DIFFERENT
+    # machine's path prefix (captured under /Users/... on a mac, restored on
+    # /home/runner/... on CI), which neither of the above — both keyed on the
+    # CURRENT machine's boxes_root — can match. Repoint ANY absolute path
+    # ending in /.otbox/boxes/otb_<id> at the new box root regardless of the
+    # capture-machine prefix. (The first on-main nightly's whole
+    # restored-world cluster traced to this: trace records kept /Users/...
+    # paths that don't exist on CI, so trace query found nothing.)
+    return _ANY_BOX_ROOT_RE.sub(new_root, text)
 
 
 def _rewrite_sqlite_absolute_paths(
@@ -178,13 +193,14 @@ def _rewrite_sqlite_absolute_paths(
                             f"select {quoted_col} from {quoted_table} where {quoted_col} is not null"
                         )
                     ]
+                    # Discover box roots regardless of the capture-machine
+                    # prefix (cross-machine restore): the index SQLite, built
+                    # on the capture machine, holds /Users/... paths that the
+                    # current-boxes_root pattern would miss on CI.
                     discovered_roots = {
                         match
                         for value in values
-                        for match in re.findall(
-                            rf"{re.escape(str(boxes_root))}/otb_[0-9a-fA-F]+",
-                            value,
-                        )
+                        for match in _ANY_BOX_ROOT_RE.findall(value)
                     }
                     roots = [old_root, *sorted(discovered_roots)]
                     for root in roots:
