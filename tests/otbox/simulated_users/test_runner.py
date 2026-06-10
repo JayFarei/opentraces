@@ -59,6 +59,11 @@ def _isolate_opentraces_global_state():
 def driver():
     if not shutil.which("tmux"):
         pytest.skip("tmux not installed on PATH")
+    # The drive core needs terminal-control (termctrl); absent on CI runners.
+    # Guard here so these real-terminal-driving tests SKIP cleanly rather than
+    # fail on a SKIP verdict (surfaced by the first on-main nightly).
+    if not shutil.which("termctrl"):
+        pytest.skip("termctrl (terminal-control) not installed on PATH")
     return get_driver("local")
 
 

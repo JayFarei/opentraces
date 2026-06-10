@@ -7,7 +7,7 @@ echo binary, and accept only on the re-rolled held-out reward.
 lane = "core"
 tier = 0
 tier_label = "gold"
-requires = ["cli", "tmux"]
+requires = ["cli", "tmux", "termctrl"]
 from_checkpoints = ["c-installed-source"]
 
 [preconditions]
