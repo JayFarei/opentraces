@@ -103,12 +103,25 @@ jobs:
             --junitxml=otbox-live-hf-junit.xml
       - name: Executed-evidence ledger (live segment)
         if: always()
+        # Scoped to the records this segment actually produced — running the
+        # full-catalogue compactor here would graveyard-red every journey the
+        # release lane deliberately does not execute.
         run: |
-          ./otbox ledger --from-matrix ledger-records \
-            --out live-hf-ledger.json \
-            --source "release:${{ github.run_id }}" \
-            --fail-on-red || true
-          test -f live-hf-ledger.json && cat live-hf-ledger.json | head -40 || true
+          python - <<'PY'
+          import glob, json, sys
+          rows = [json.load(open(p)) for p in sorted(glob.glob("ledger-records/*.json"))]
+          red = [r["journey"] for r in rows if r.get("verdict") != "PASS"]
+          summary = {
+              "source": "release:${{ github.run_id }}",
+              "executed": len(rows),
+              "red": red,
+              "rows": rows,
+          }
+          with open("live-hf-ledger.json", "w") as fh:
+              json.dump(summary, fh, indent=1, sort_keys=True)
+          print(f"live segment: {len(rows)} journey(s) executed, red={red}")
+          sys.exit(1 if red else 0)
+          PY
       - name: Sweep leftover otbox-live-* repos older than 48h
         if: always()
         env:
