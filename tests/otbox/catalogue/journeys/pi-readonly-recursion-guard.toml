@@ -15,7 +15,7 @@ context_tree_built = true
 [[steps]]
 type = "cli"
 id = "trace-index"
-argv = ["trace", "index", "--json"]
+argv = ["trace", "index", "status", "--json"]
 
 [[steps]]
 type = "cli"
@@ -25,7 +25,7 @@ argv = ["trace", "query", "--facet", "agent.name=pi", "--limit", "3", "--json"]
 [[steps]]
 type = "shell"
 id = "snapshot-repeat-readonly"
-argv = ["bash", "-lc", "cd {repo_root} && .venv/bin/python -c 'from opentraces.core.trace_search_snapshot import default_snapshot_path; import subprocess; p=default_snapshot_path(); before=p.stat().st_size; [subprocess.run([\"{repo_root}/otd\", \"trace\", \"query\", \"--facet\", \"agent.name=pi\", \"--limit\", \"3\", \"--json\"], check=True, stdout=subprocess.DEVNULL) for _ in range(3)]; assert p.stat().st_size == before; assert not p.with_name(p.name + \"-wal\").exists(); assert not p.with_name(p.name + \"-shm\").exists(); print(\"snapshot-immutable\")'"]
+argv = ["bash", "-lc", "cd {repo_root} && {py_bin} -c 'from opentraces.core.trace_search_snapshot import default_snapshot_path; import subprocess; p=default_snapshot_path(); before=p.stat().st_size; [subprocess.run([\"{repo_root}/otd\", \"trace\", \"query\", \"--facet\", \"agent.name=pi\", \"--limit\", \"3\", \"--json\"], check=True, stdout=subprocess.DEVNULL) for _ in range(3)]; assert p.stat().st_size == before; assert not p.with_name(p.name + \"-wal\").exists(); assert not p.with_name(p.name + \"-shm\").exists(); print(\"snapshot-immutable\")'"]
 
 [[steps]]
 type = "shell"
