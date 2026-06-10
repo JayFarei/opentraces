@@ -313,3 +313,7 @@ from . import _context_tree_otel_linear  # noqa: E402,F401  (registers c-context
 from . import _context_tree_otel_with_mcp  # noqa: E402,F401  (registers c-context-tree-otel-with-mcp)
 # Plan 085 legacy-world (otbox's first previous-version world).
 from . import _legacy_v033  # noqa: E402,F401  (registers c-legacy-v033 + c-legacy-v033-upgraded)
+# Issue #42 pilot — bucket-spine-v2 family (plan 080 phases B/C/D deferral).
+from . import _bucket_spine_v2  # noqa: E402,F401  (registers c-bucket-spine-v2-one-trace-provisional)
+# Issue #42 — context-tree substrate (plan 077 phase-4 deferral).
+from . import _context_tree_substrate  # noqa: E402,F401  (registers c-context-tree-substrate)

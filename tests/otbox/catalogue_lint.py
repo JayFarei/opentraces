@@ -51,6 +51,23 @@ PRECONDITION_VOCAB = frozenset(
         "no_data_loss",
         "migration_idempotent",
         "pre_migration_schema",
+        # Issue #42 — bucket-spine-v2 family (plan 080 phases B/C/D).
+        "bucket_spine_v2_layout",
+        "pushed_to_fake_remote",
+        "orphan_blob_injected",
+        "dangling_ref_injected",
+        "bucket_only_no_git_ref",
+        "local_blobs_dropped",
+        "lazy_projection_enabled",
+        "events_mirror_v1_populated",
+        # Issue #42 — context-tree family (plan 077 phase 4).
+        "requires_branch_types",
+        "requires_compactions_min",
+        "requires_messages_layer_bytes_min",
+        "requires_edit_commits_min",
+        # Issue #42 — trail-mature precondition (entry 4).
+        "git_repo_present",
+        "post_commit_hook_installed",
     }
 )
 

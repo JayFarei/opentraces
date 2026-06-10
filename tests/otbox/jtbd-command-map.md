@@ -743,7 +743,7 @@ the default test sweep.
 | dev-quality-maintenance | `dev-quality-maintenance` |
 | decommission-dataset | `decommission-dataset` |
 | session-ingest, commit-correlation | partial (auto-invoked; proven indirectly by `tier1-cold-publish` + `world` seed) |
-| review-rows-tui, review-rows-web | partial (rendered surface tested by `tui-review-smoke`; dedicated web/TUI review journeys are a tracked follow-up) |
+| review-rows-tui, review-rows-web | follow-up (the legacy TUI and Flask web review surfaces are decommissioned — `tui-review-smoke` (a `sys.exit(2)` stub tombstone) and `web-viewer-smoke` (only green by bypassing the missing `opentraces web` command) were deleted in #43/#42; new journeys will target the future dataset-scoped review UI) |
 | manual-inbox-recovery, schema-migration, shell-completion-protocol | follow-up (hidden surfaces not in the strict gate, but candidates for the next coverage wave) |
 
 ## Pre-delivery — Original trajectory ownership snapshot (2026-05-15)

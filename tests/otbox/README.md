@@ -264,8 +264,6 @@ Current catalogue highlights. Regenerate the exact pass/skip counts with
 | `security-sanitize-captured-content` | core | 0 | gold | sanitize pipeline on `c-captured-with-secrets` |
 | `dataset-sync-skill-history` | core | 0 | gold | `dataset schedule` lifecycle on `c-captured-multi-skill` |
 | `doctor-health` | extended | 0 | bronze | CLI: doctor JSON health |
-| `web-viewer-smoke` | extended | 0 | bronze | Web: Flask review backend, headless |
-| `tui-review-smoke` | extended | 0 | bronze | Legacy TUI smoke, gated by `decommissioned_ui` |
 | `install-smoke-tier1` | extended | 1 | bronze | cross-OS install smoke (opt-in) |
 
 ## Captured-session checkpoints — artifact-preferred, synthetic-fallback
@@ -700,6 +698,33 @@ otbox-agent-session` together are the verification commands.
 
 ## Troubleshooting
 
+- **Tier-0 local runner in a `.venv`-less worktree (e.g. a Conductor /
+  git worktree checkout).** The `otbox` shim and `env.py::resolve_cli_argv`
+  prefer a repo-root `.venv`; a worktree created without one falls back
+  **silently** to bare `python3 -c <bootstrap>`, which has no `click`
+  (or `opentraces`) installed — every journey CLI call then dies with
+  `ModuleNotFoundError: No module named 'click'`. Fix one of two ways:
+  (a) create a real `.venv` in the worktree
+  (`python3 -m venv .venv && .venv/bin/pip install -e packages/opentraces-schema -e .`),
+  or (b) export `OT_CLI_BIN` pointing at a tiny wrapper that pins
+  `PYTHONPATH` to the worktree `src` (+ `packages/opentraces-schema/src`)
+  and runs a real venv python, e.g.:
+
+  ```bash
+  cat > /tmp/ot-cli.sh <<'SH'
+  #!/usr/bin/env bash
+  exec env PYTHONPATH="$WORKTREE/src:$WORKTREE/packages/opentraces-schema/src" \
+    /path/to/real/.venv/bin/python \
+    -c 'from opentraces.cli import main; raise SystemExit(main(prog_name="otbox-cli"))' "$@"
+  SH
+  chmod +x /tmp/ot-cli.sh
+  export OT_CLI_BIN=/tmp/ot-cli.sh
+  ```
+
+  `OT_CLI_BIN` is the documented highest-priority override in
+  `resolve_cli_argv`; with it set, journeys run THIS worktree's source.
+  (Checkpoint *builds* are unaffected — they install their own editable
+  `.testvenv` from the synced worktree source.)
 - **A checkpoint won't resolve / stale audit.** Editing a checkpoint
   builder invalidates the cache; delete the offending snapshot at
   `.otbox/snapshots/_checkpoint-<name>-<hash>.tar.gz` and re-resolve.

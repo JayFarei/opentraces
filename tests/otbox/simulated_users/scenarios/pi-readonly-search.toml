@@ -1,5 +1,22 @@
 name = "pi-readonly-search"
-description = "OpenTraces readonly search/recursion guard smoke for Pi."
+description = """
+OpenTraces readonly skill + tool capture for Pi.
+
+The pi-skill-detection-parity journey asserts the captured trace exposes
+(a) a skill invocation with source `pi_skill_body_read` and skill name
+`opentraces` — pi must actually READ `.agents/skills/opentraces/SKILL.md`,
+(b) tool_kinds including both `read` (a real project-file read) and
+`opentraces_retrieval` with `opentraces_internal_readonly=True` (the
+`ot_capture_status` call). This scenario drives pi through all three in
+one turn so a single capture satisfies pi-skill-detection-parity and
+pi-readonly-recursion-guard without weakening their assertions.
+
+Refresh prerequisite: the box must carry `.agents/skills/opentraces/SKILL.md`
+so pi can read it (install it into `box.project` before driving the turn,
+e.g. via `opentraces setup pi` / the skill installer). `expected_paths`
+lists only `src/app.py` — the SKILL.md is a read INPUT, not a write output,
+so it is not asserted as a post-run product.
+"""
 agent = "pi"
 binary_name = "pi"
 
@@ -7,7 +24,7 @@ binary_name = "pi"
 template = "single-file-python-project"
 
 [[turns]]
-prompt = "Call the OpenTraces capture status tool ot_capture_status, report the local readiness result, make no code changes, and end your final response with the uppercase marker formed by OPENTRACES, READONLY, and DONE joined by hyphens."
+prompt = "First read the OpenTraces skill file at .agents/skills/opentraces/SKILL.md to learn the workflow, then read the project file src/app.py to see what it does, then call the OpenTraces capture status tool ot_capture_status and report the local readiness result. Make no code changes. End your final response with the uppercase marker formed by OPENTRACES, READONLY, and DONE joined by hyphens."
 expect_regex = "OPENTRACES-READONLY-DONE"
 timeout_s = 240
 
