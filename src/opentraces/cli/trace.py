@@ -69,6 +69,58 @@ def _trace_query_diag_payload(sync_result, query_source: str) -> dict | None:
         return None
 
 
+def _db_table_sizes(db_path: Path) -> dict:
+    """Read-only per-table byte breakdown for a SQLite DB (issue #27 item A).
+
+    Uses the ``dbstat`` virtual table to attribute on-disk bytes to each table
+    and index so the issue-#22 / item-A bloat becomes measurable. ``dbstat`` is
+    only available when SQLite was compiled with ``SQLITE_ENABLE_DBSTAT_VTAB``;
+    when it is not (or the DB is locked / unreadable) the block degrades to
+    ``{"tables": None, "tables_error": <reason>}`` rather than failing the
+    command. The connection is opened ``mode=ro&immutable=1`` so this never
+    mutates either DB (no WAL checkpoint, no journal, no page writes).
+    """
+    import sqlite3
+    from urllib.parse import quote
+
+    entry: dict = {
+        "path": str(db_path),
+        "exists": db_path.exists(),
+        "size_bytes": None,
+        "tables": None,
+    }
+    if not db_path.exists():
+        return entry
+    try:
+        entry["size_bytes"] = db_path.stat().st_size
+    except OSError:
+        pass
+    uri = f"file:{quote(str(db_path), safe='/')}?mode=ro&immutable=1"
+    conn = None
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        rows = conn.execute(
+            "select name, sum(pgsize) as bytes, sum(pgsize) / "
+            "(select page_size from pragma_page_size) as pages "
+            "from dbstat group by name order by bytes desc"
+        ).fetchall()
+        entry["tables"] = {
+            str(name): {"bytes": int(byt or 0), "pages": int(pages or 0)}
+            for (name, byt, pages) in rows
+        }
+    except sqlite3.OperationalError as exc:
+        # dbstat vtab not compiled in, or schema introspection unavailable.
+        entry["tables"] = None
+        entry["tables_error"] = str(exc)
+    except sqlite3.DatabaseError as exc:
+        entry["tables"] = None
+        entry["tables_error"] = str(exc)
+    finally:
+        if conn is not None:
+            conn.close()
+    return entry
+
+
 # ---------------------------------------------------------------------------
 # Standalone trace commands (registered at root in cli/__init__).
 # ---------------------------------------------------------------------------
@@ -705,12 +757,20 @@ def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_index_status_cmd(as_json: bool) -> None:
     """Show local trace search snapshot status."""
-    from ..core.trace_search_snapshot import snapshot_status
+    from ..core.trace_index import default_index_path
+    from ..core.trace_search_snapshot import default_snapshot_path, snapshot_status
 
     search_snapshot = snapshot_status()
+    # Issue #27 item A: per-table byte breakdown for BOTH on-disk SQLite DBs so
+    # the multi-GB bloat (issue #22 hypothesis 3) is measurable. Read-only.
+    db_sizes = {
+        "legacy_index": _db_table_sizes(default_index_path()),
+        "search_snapshot": _db_table_sizes(default_snapshot_path()),
+    }
     payload = {
         "status": "ok",
         "search_snapshot": search_snapshot,
+        "db_sizes": db_sizes,
     }
     if as_json:
         click.echo(_dump_json(payload))
@@ -723,6 +783,19 @@ def trace_index_status_cmd(as_json: bool) -> None:
     click.echo(f"  dirty:  {search_snapshot.get('dirty')}")
     click.echo(f"  wal:    {search_snapshot.get('wal_exists')}")
     click.echo(f"  shm:    {search_snapshot.get('shm_exists')}")
+    for label, entry in db_sizes.items():
+        if not entry.get("exists"):
+            continue
+        size_bytes = entry.get("size_bytes")
+        click.echo(f"{label}: {entry.get('path')}")
+        if size_bytes is not None:
+            click.echo(f"  size:   {size_bytes} bytes")
+        tables = entry.get("tables")
+        if tables is None:
+            click.echo(f"  tables: unavailable ({entry.get('tables_error', 'n/a')})")
+        else:
+            for name, stat in tables.items():
+                click.echo(f"  table {name}: {stat['bytes']} bytes ({stat['pages']} pages)")
 
 
 @trace_group.command("map", cls=OpentracesCommand)

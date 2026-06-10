@@ -316,3 +316,102 @@ def test_trace_query_envelope_never_emits_dead_trail_freshness() -> None:
     payload = json.loads(result.output)
     assert "trail_freshness" not in payload
     assert "warnings" not in payload
+
+
+def test_trace_index_status_reports_per_table_db_sizes() -> None:
+    # Issue #27 item A: status --json must expose a per-table byte breakdown for
+    # both on-disk SQLite DBs so the multi-GB bloat (issue #22) is measurable.
+    from opentraces.core.trace_index import default_index_path, refresh_index
+    from opentraces.core.trace_search_snapshot import default_snapshot_path
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+    refresh_index()  # materialize the legacy index.db
+
+    snapshot_before = (
+        default_snapshot_path().stat().st_size,
+        default_snapshot_path().stat().st_mtime_ns,
+    )
+    index_before = (
+        default_index_path().stat().st_size,
+        default_index_path().stat().st_mtime_ns,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["trace", "index", "status", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    db_sizes = payload["db_sizes"]
+
+    for label in ("legacy_index", "search_snapshot"):
+        entry = db_sizes[label]
+        assert entry["exists"] is True
+        assert entry["size_bytes"] > 0
+        # dbstat is compiled into CPython's bundled sqlite3; tables must resolve
+        # to a non-empty per-table byte map.
+        assert entry["tables"] is not None, entry.get("tables_error")
+        assert sum(stat["bytes"] for stat in entry["tables"].values()) > 0
+
+    # Read-only contract: neither DB was mutated by reporting sizes.
+    assert (
+        default_snapshot_path().stat().st_size,
+        default_snapshot_path().stat().st_mtime_ns,
+    ) == snapshot_before
+    assert (
+        default_index_path().stat().st_size,
+        default_index_path().stat().st_mtime_ns,
+    ) == index_before
+
+
+def test_trace_index_status_db_sizes_degrade_when_dbstat_unavailable(monkeypatch) -> None:
+    # Issue #27 item A: when dbstat is missing (no SQLITE_ENABLE_DBSTAT_VTAB) or
+    # the DB is unreadable, the block degrades to tables=None + tables_error
+    # rather than failing the command.
+    import sqlite3 as _sqlite3
+
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+
+    real_connect = _sqlite3.connect
+
+    class _NoDbstatConn:
+        def __init__(self, inner):
+            object.__setattr__(self, "_inner", inner)
+
+        def execute(self, sql, *a, **k):
+            if "dbstat" in sql:
+                raise _sqlite3.OperationalError("no such table: dbstat")
+            return self._inner.execute(sql, *a, **k)
+
+        def __enter__(self):
+            self._inner.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def __setattr__(self, name, value):
+            # Forward attribute sets (e.g. row_factory) to the real connection
+            # so callers that expect sqlite3.Row rows keep working.
+            setattr(self._inner, name, value)
+
+    def _no_dbstat(*args, **kwargs):
+        return _NoDbstatConn(real_connect(*args, **kwargs))
+
+    # The helper does ``import sqlite3`` locally, so it resolves to the same
+    # module object — patching the module's ``connect`` covers it.
+    monkeypatch.setattr(_sqlite3, "connect", _no_dbstat)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["trace", "index", "status", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    entry = payload["db_sizes"]["search_snapshot"]
+    assert entry["exists"] is True
+    assert entry["tables"] is None
+    assert "dbstat" in entry["tables_error"]
