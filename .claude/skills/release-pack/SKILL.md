@@ -1,14 +1,15 @@
 ---
 name: release-pack
 description: >
-  Full coordinated release of all opentraces packages — schema, CLI, and marketing site — in
-  a single orchestrated flow. Use when the user says "release everything", "full release",
-  "release pack", "release all", "cut a full release", "ship it all", "release-pack", or
-  when doing a versioned release that should touch all three packages at once. This is the
-  right skill any time you want to go from current code to a published, verified release
-  across PyPI (schema + CLI), GitHub Releases, Homebrew, and Vercel in one pass.
-  It handles version bumps, docs checks, ordered publishing, propagation waits, and
-  post-release verification of both pipx and brew installs automatically.
+  Full coordinated release of all opentraces packages — schema, CLI, the opentraces-pi
+  npm extension, and the marketing site — in a single orchestrated flow. Use when the user
+  says "release everything", "full release", "release pack", "release all", "cut a full
+  release", "ship it all", "release-pack", or when doing a versioned release that should
+  touch all packages at once. This is the right skill any time you want to go from current
+  code to a published, verified release across PyPI (schema + CLI), npm (opentraces-pi),
+  GitHub Releases, Homebrew, and Vercel in one pass. It handles version bumps, docs checks,
+  ordered publishing, propagation waits, and post-release verification of pipx, brew, and
+  npm installs automatically.
 ---
 
 # Release Pack
@@ -82,6 +83,9 @@ git tag -l 'schema-v*' --sort=-v:refname | head -3
 
 # Homebrew — what the tap currently pins
 brew info JayFarei/opentraces/opentraces 2>/dev/null | head -3
+
+# npm — published Pi extension version
+npm view opentraces-pi version
 
 # Live site — version displayed (relies on PyPI at deploy time, so PyPI is authoritative)
 curl -s https://opentraces.ai | grep -o '"version":"[^"]*"' | head -1
@@ -340,10 +344,19 @@ The `opentraces-pi` Pi extension publishes to **npm**, not PyPI — it is the pa
 
 ```bash
 # Did the Pi package change since the last pi-v* tag?
-git log --oneline $(git tag -l 'pi-v*' --sort=-v:refname | head -1)..HEAD -- packages/opentraces-pi/ src/opentraces/capture/pi/
+LAST_PI_TAG=$(git tag -l 'pi-v*' --sort=-v:refname | head -1)
+if [ -n "$LAST_PI_TAG" ]; then
+  git log --oneline ${LAST_PI_TAG}..HEAD -- packages/opentraces-pi/ src/opentraces/capture/pi/
+else
+  # No pi-v* tag yet (pre-tag releases were published ad hoc). Fall back to
+  # comparing against the npm publish date of the current published version.
+  PUBLISHED=$(npm view opentraces-pi version)
+  PUBLISH_DATE=$(npm view opentraces-pi time --json | python3 -c "import sys,json; print(json.load(sys.stdin)['$PUBLISHED'])" 2>/dev/null || npm view opentraces-pi time.modified)
+  git log --oneline --since="$PUBLISH_DATE" -- packages/opentraces-pi/ src/opentraces/capture/pi/
+fi
 ```
 
-If there are no changes and `opentraces-pi` already exists on npm at the current version, skip. Otherwise release.
+Also check the local version against npm: if `packages/opentraces-pi/package.json` version equals `npm view opentraces-pi version` but the package sources changed since that publish, a bump is REQUIRED (npm rejects re-publishing an existing version). If there are no changes and the published version matches, skip. Otherwise release.
 
 ### Bump, commit, tag, push
 
@@ -493,9 +506,12 @@ Release pack complete:
     pipx:     opentraces CLI vCLI_VERSION
     pip:      opentraces CLI vCLI_VERSION
 
+  opentraces-pi vPI_VERSION  (or "skipped — no Pi changes")
+    npm:    published (npm view opentraces-pi version == PI_VERSION)
+
   Site:   https://opentraces.ai (deployed)
 
-  Tags:   schema-vSCHEMA_VERSION  vCLI_VERSION
+  Tags:   schema-vSCHEMA_VERSION  vCLI_VERSION  pi-vPI_VERSION
   GH:     https://github.com/JayFarei/opentraces/releases/tag/vCLI_VERSION
 ```
 
