@@ -357,19 +357,58 @@ def _append_hook_log(repo: Path, entry: dict) -> None:
         pass
 
 
+DEFAULT_HOOK_RECONCILE_BUDGET_SECONDS = 10.0
+
+
+def _reconcile_budget_seconds() -> float | None:
+    """Resolve the post-commit reconcile wall-clock budget (seconds).
+
+    #44: a single mature repo can leave thousands of un-anchored trace patches,
+    and the per-patch anchor search ran the post-commit hook for ~30 minutes.
+    The hook caps reconcile wall-clock so a commit never blocks for minutes;
+    the un-searched tail is picked up by the watcher's full-window sweep.
+
+    ``OPENTRACES_HOOK_RECONCILE_BUDGET_SECONDS`` overrides the default; ``0``
+    disables the budget (deadline=None, the full pre-#44 reconcile runs).
+    """
+    raw = os.environ.get("OPENTRACES_HOOK_RECONCILE_BUDGET_SECONDS")
+    if raw is None:
+        return DEFAULT_HOOK_RECONCILE_BUDGET_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_HOOK_RECONCILE_BUDGET_SECONDS
+    if value <= 0:
+        return None
+    return value
+
+
 def _reconcile_trail_anchors(repo: Path, sha: str | None, entry: dict) -> None:
     """Best-effort Trace Trail anchor reconciliation for the current commit."""
     if sha is None or is_merge_commit(repo, sha):
         return
     try:
+        import time
+
         from ...core.trails import reconcile_commit_anchors
 
+        budget = _reconcile_budget_seconds()
+        deadline = time.monotonic() + budget if budget is not None else None
+        summary_out: dict = {}
         anchors = reconcile_commit_anchors(
             repo,
             sha,
             writer="post-commit-correlator",
+            summary_out=summary_out,
+            deadline=deadline,
         )
         entry["trail_anchors_created"] = len(anchors)
+        # #44: only surface the budget fields when the budget actually tripped, so
+        # the hook log stays quiet on the common (fast) path.
+        if summary_out.get("budget_exhausted"):
+            entry["trail_anchor_budget_exhausted"] = True
+            entry["patches_searched"] = summary_out.get("patches_searched", 0)
+            entry["patches_remaining"] = summary_out.get("patches_remaining", 0)
     except Exception as e:
         entry["trail_anchor_error"] = f"{type(e).__name__}: {e}"
 
