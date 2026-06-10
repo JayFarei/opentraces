@@ -544,7 +544,168 @@ def _captured_session(box: Box) -> dict[str, str]:
         result["first_hook_event"] = "PreToolUse"
         # Re-resolve OTel node id under the with-mcp trace.
         result.update(_resolve_otel_node_template_vars(box, result["trace_id"]))
+
+    # Issue #42 — context-tree substrate (c-context-tree-substrate).
+    ct_audit = box.notes.get("c_context_tree_substrate_audit") or {}
+    if ct_audit:
+        result["trace_id"] = str(ct_audit.get("trace_id") or result.get("trace_id", ""))
+        result["session_id"] = str(
+            ct_audit.get("session_id") or result.get("session_id", "")
+        )
+        result["step_index"] = str(
+            ct_audit.get("step_index") or result.get("step_index", "")
+        )
+        result["subagent_trace_id"] = str(ct_audit.get("subagent_trace_id") or "")
+        result["subagent_session_id"] = str(ct_audit.get("subagent_session_id") or "")
+        result["rewound_trace_id"] = str(ct_audit.get("rewound_trace_id") or "")
+        result["edit_commits"] = str(ct_audit.get("edit_commits") or "")
+        # Resolve the node-id template vars from the live event log at
+        # expansion time (snapshot/restore-safe — never bake content ids).
+        result.update(
+            _resolve_context_tree_node_template_vars(
+                box,
+                primary_trace_id=result["trace_id"],
+                subagent_trace_id=result["subagent_trace_id"],
+                rewound_trace_id=result["rewound_trace_id"],
+                edit_step_index=ct_audit.get("step_index"),
+            )
+        )
     return result
+
+
+def _resolve_context_tree_node_template_vars(
+    box: Box,
+    *,
+    primary_trace_id: str,
+    subagent_trace_id: str,
+    rewound_trace_id: str,
+    edit_step_index,
+) -> dict[str, str]:
+    """Derive the context-tree node-id template vars from the event log.
+
+    Issue #42 / plan 077. Resolved at template-expansion time (mirrors
+    ``_resolve_otel_node_template_vars``) so the substrate's content-
+    addressed node ids never go stale across a snapshot/restore cycle.
+    Empty strings on miss so a journey referencing an absent var fails
+    loudly (the desired TDD signal) rather than silently passing.
+
+    Vars served:
+      {first_node_id}            root node of the primary trace
+      {first_read_node_id}       node of the first Read tool_result
+      {target_node_id}           node at the primary edit step_index
+      {expected_node_count}      active-path node count (primary)
+      {active_path_length}       active-path length to {target_node_id}
+      {active_path_uuid_set}            JSON list of active-path transcript uuids
+      {active_path_uuid_set_sorted}     sorted variant (two-way set check)
+      {captured_cwd} / {captured_model} runtime_state probe for the prune
+      {subagent_session_id_node}        a subagent_fork node id
+      {orphan_root_node_id} / {orphan_leaf_node_id}  rewind orphan branch
+    """
+    import json as _json
+
+    extras: dict[str, str] = {
+        "first_node_id": "",
+        "first_read_node_id": "",
+        "target_node_id": "",
+        "expected_node_count": "",
+        "active_path_length": "",
+        "active_path_uuid_set": "[]",
+        "active_path_uuid_set_sorted": "[]",
+        "captured_cwd": "",
+        "captured_model": "",
+        "orphan_root_node_id": "",
+        "orphan_leaf_node_id": "",
+    }
+    project = box.project
+    if not (project / ".git").exists() or not primary_trace_id:
+        return extras
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:  # noqa: BLE001
+        return extras
+
+    try:
+        edit_step = int(edit_step_index) if edit_step_index is not None else None
+    except (TypeError, ValueError):
+        edit_step = None
+
+    # Primary-trace nodes by step_index. Active path = the linear/root
+    # chain (orphan branches excluded). The primary corpus is strictly
+    # linear so every primary node is on the active path.
+    primary_nodes: list[dict] = []
+    rewound_nodes: list[dict] = []
+    for e in events:
+        if e.event_type != "context_node_observed":
+            continue
+        p = e.payload or {}
+        if e.trace_id == primary_trace_id:
+            primary_nodes.append(p)
+        elif rewound_trace_id and e.trace_id == rewound_trace_id:
+            rewound_nodes.append(p)
+
+    def _by_step(nodes: list[dict]) -> list[dict]:
+        return sorted(
+            nodes,
+            key=lambda n: (
+                n.get("step_index") if isinstance(n.get("step_index"), int) else 1 << 30
+            ),
+        )
+
+    primary_sorted = _by_step(primary_nodes)
+    if primary_sorted:
+        root = next(
+            (n for n in primary_sorted if n.get("branch_type") == "root"),
+            primary_sorted[0],
+        )
+        extras["first_node_id"] = str(root.get("node_id") or "")
+        extras["expected_node_count"] = str(len(primary_sorted))
+        extras["captured_cwd"] = str(root.get("cwd") or root.get("transcript_cwd") or "")
+        # model lives on the runtime_state layer; fall back to a node hint.
+        extras["captured_model"] = str(root.get("model") or "")
+
+    # target node = the node at edit_step (the resume/anchor target).
+    if edit_step is not None:
+        target = next(
+            (n for n in primary_sorted if n.get("step_index") == edit_step), None
+        )
+        if target is not None:
+            extras["target_node_id"] = str(target.get("node_id") or "")
+            # active path root->target inclusive (linear chain).
+            path = [
+                n for n in primary_sorted
+                if isinstance(n.get("step_index"), int)
+                and n["step_index"] <= edit_step
+            ]
+            extras["active_path_length"] = str(len(path))
+            uuids = [
+                str(n.get("transcript_uuid"))
+                for n in path
+                if n.get("transcript_uuid")
+            ]
+            extras["active_path_uuid_set"] = _json.dumps(uuids)
+            extras["active_path_uuid_set_sorted"] = _json.dumps(sorted(uuids))
+
+    # first Read node — the first non-root node carrying a read; the
+    # primary corpus reads on step 2.
+    read_node = next(
+        (
+            n for n in primary_sorted
+            if isinstance(n.get("step_index"), int) and n["step_index"] >= 2
+        ),
+        None,
+    )
+    if read_node is not None:
+        extras["first_read_node_id"] = str(read_node.get("node_id") or "")
+
+    # rewind orphan branch nodes.
+    orphans = [n for n in rewound_nodes if n.get("branch_type") == "rewind_branch"]
+    orphans = _by_step(orphans)
+    if orphans:
+        extras["orphan_root_node_id"] = str(orphans[0].get("node_id") or "")
+        extras["orphan_leaf_node_id"] = str(orphans[-1].get("node_id") or "")
+
+    return extras
 
 
 def _resolve_otel_node_template_vars(box: Box, trace_id: str) -> dict[str, str]:
