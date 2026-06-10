@@ -172,5 +172,30 @@ def test_capture_artifact_is_fresh(
                 stacklevel=1,
             )
 
+
+def test_harness_version_staleness_amber_gate():
+    """B0 staleness gate: warn (never fail) when an installed agent harness
+    has moved past the captured ``binary_version`` on major/minor.
+
+    On substrates with no agent binaries (default CI) every row is
+    ``binary_absent`` and the gate is silent. On a developer/runner machine
+    with a newer harness installed, the warning names the exact regenerate
+    command — the operator signal to run the capture-refresh ritual.
+    """
+    from tests.otbox.capture_versions import check_capture_versions
+
+    report = check_capture_versions()
+    for row in report.get("rows", []):
+        if row["status"] == "stale":
+            warnings.warn(
+                f"capture {row['scenario']!r}: installed {row['agent']} "
+                f"harness {row['installed_version']!r} is ahead of captured "
+                f"{row['captured_version']!r}; regenerate with "
+                f"`make capture-refresh SCENARIO={row['scenario']}` (or "
+                f"`make capture-refresh-all AGENT={row['agent']}`)",
+                stacklevel=1,
+            )
+    assert True
+
     # The freshness gate is informational — warnings are the signal.
     assert True

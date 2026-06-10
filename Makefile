@@ -2,6 +2,7 @@
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
        otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh \
+       capture-refresh-check capture-refresh-all \
        otbox-footage otbox-footage-all \
        search-eval search-eval-real search-eval-xl search-eval-slope \
        search-eval-cache search-eval-live search-eval-profile search-eval-test
@@ -98,6 +99,19 @@ otbox-live-hf:
 SCENARIO ?= echo-meta
 capture-refresh:
 	$(OTBOX_PY) -m tests.otbox capture-refresh --scenario $(SCENARIO) --json
+
+# Plan B0 — harness-version staleness report: compares installed agent
+# binary versions against the capture manifest's binary_version rows.
+# Pure report (no boxes, no agents driven); CI-safe.
+capture-refresh-check:
+	$(OTBOX_PY) -m tests.otbox capture-refresh --check-versions
+
+# Plan B0 — regenerate the whole scenario batch for one harness after a
+# version bump (e.g. `make capture-refresh-all AGENT=claude`). Requires
+# the agent binary on PATH; scenarios SKIP cleanly when it is absent.
+AGENT ?= claude
+capture-refresh-all:
+	$(OTBOX_PY) -m tests.otbox capture-refresh --all --agent $(AGENT) --json
 
 # Journey footage (terminal-control). ADDITIVE visual-review aid: records an
 # MP4 of a simulated-user journey via `termctrl` and builds a gallery. Needs
