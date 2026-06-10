@@ -7,6 +7,10 @@ echo binary, and accept only on the re-rolled held-out reward.
 lane = "core"
 tier = 0
 tier_label = "gold"
+# Drives a real terminal (termctrl), so it belongs in the manual local-agents
+# ritual lane, not the ubuntu nightly (no terminal-control). Keeps it out of
+# the nightly SKIP-fails scope while staying reachable.
+ci_lane = "local-agents"
 requires = ["cli", "tmux", "termctrl"]
 from_checkpoints = ["c-installed-source"]
 
