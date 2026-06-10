@@ -37,7 +37,15 @@ def driver():
 
 def test_captured_session_checkpoint_produces_real_evidence(driver):
     """c-captured-real-session must mint a real trace_id + commit_sha,
-    and the resulting consumer-API journey must PASS happy-path."""
+    and the resulting consumer-API journey must PASS happy-path.
+
+    Source-dependent expectations (plan 072 / B0 flip): real-agent
+    artifacts mint UUID session ids and their audits omit the
+    intermediate tick/mature counters (command stdout is not captured
+    in the archive), so the anchor-count assertion only applies to the
+    synthetic chain. The journey below asserts the anchor evidence at
+    the consumer surface on BOTH sources.
+    """
     cp = resolve_checkpoint(driver, "c-captured-real-session")
     try:
         audit = cp.box.notes.get("c_captured_session_audit") or {}
@@ -46,18 +54,23 @@ def test_captured_session_checkpoint_produces_real_evidence(driver):
             "the harness or _ingest-session failed silently"
         )
         assert audit.get("commit_sha"), audit
-        assert audit.get("session_id") == "sess-otbox-simple-refactor"
         assert int(audit.get("edit_step_index") or 0) >= 1
-        # Either the watcher tick or trail mature must have created the
-        # anchor — assert at least one path produced a real anchor.
-        anchors = (
-            int(audit.get("tick_trail_maturation_anchors") or 0)
-            + int(audit.get("mature_anchors_created") or 0)
-        )
-        assert anchors >= 1, (
-            f"no Git Anchors were materialised by the checkpoint delta; "
-            f"audit={audit}"
-        )
+        source = (audit.get("capture_metadata") or {}).get("source")
+        assert source in {"artifact", "synthetic"}, audit
+        if source == "artifact":
+            assert audit.get("session_id"), audit
+        else:
+            assert audit.get("session_id") == "sess-otbox-simple-refactor"
+            # Either the watcher tick or trail mature must have created
+            # the anchor — assert at least one path produced a real one.
+            anchors = (
+                int(audit.get("tick_trail_maturation_anchors") or 0)
+                + int(audit.get("mature_anchors_created") or 0)
+            )
+            assert anchors >= 1, (
+                f"no Git Anchors were materialised by the checkpoint "
+                f"delta; audit={audit}"
+            )
 
         result = run_journey(
             driver, cp.box, "agent-session-trail-explain-happy",
@@ -78,16 +91,16 @@ def test_captured_session_checkpoint_produces_real_evidence(driver):
 
 def test_captured_with_revert_checkpoint_produces_reverted_state(driver):
     """c-captured-with-revert must run ``git revert`` against the
-    captured commit and record the post-revert survival state honestly.
+    captured commit and land the patch on ``reverted`` — exactly.
 
-    The substrate-acceptable outcomes are ``reverted`` / ``lost`` /
-    ``alive_transformed`` (the patch's content didn't survive the
-    revert) — and also ``unknown`` (the survival-detection surface
-    didn't return a structured signal for this patch). Plan 070's
-    ``survival-walk-reverted.toml`` is the rigorous test of survival-
-    state behavior at the consumer-API surface; the checkpoint
-    pytest just verifies the substrate runs without erroring and
-    records *some* post-revert state.
+    Post-#32 (the before-blob revert guard in
+    ``core/trails/anchors.py``, commit 5cb6ff9f9a0) the substrate can
+    no longer mis-anchor the patch onto the revert commit, so
+    ``reverted`` is deterministic on BOTH world sources (restored
+    real-agent artifact or synthetic fake-claude chain — the artifact
+    path applies the revert in the delta when the capture's revert
+    turn didn't land a commit). Any other state is a substrate or
+    checkpoint-harness regression, not an accepted outcome.
     """
     cp = resolve_checkpoint(driver, "c-captured-with-revert")
     try:
@@ -95,9 +108,11 @@ def test_captured_with_revert_checkpoint_produces_reverted_state(driver):
         assert audit.get("revert_commit_sha"), audit
         assert audit.get("original_commit_sha"), audit
         assert audit.get("reverted_trace_id"), audit
-        assert audit.get("survival_state_after_revert") in {
-            "reverted", "lost", "alive_transformed", "unknown",
+        assert audit.get("reverted_trace_patch_id"), audit
+        assert (audit.get("capture_metadata") or {}).get("source") in {
+            "artifact", "synthetic",
         }, audit
+        assert audit.get("survival_state_after_revert") == "reverted", audit
     finally:
         if cp.box.root.exists():
             driver.teardown(cp.box)

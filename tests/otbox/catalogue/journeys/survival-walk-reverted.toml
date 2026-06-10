@@ -21,20 +21,23 @@ longer survives on the current HEAD:
     `projection.git.head_sha` reflects the revert commit, not
     the original.
   * `trail search --survival reverted --json` exposes the survival
-    bucket query. The substrate's `c-captured-with-revert` audit
-    explicitly allows the post-revert state to land on `reverted`,
-    `lost`, `alive_transformed`, or `unknown` (per the checkpoint's
-    own docstring + `provides.survival_states`). The current
-    fake-harness corpus lands on `unknown` more often than
-    `reverted`, so this journey asserts the surface returns
-    cleanly with the documented envelope (schema_version + query
-    shape) rather than asserting a specific non-zero
-    `result_count` — that would over-constrain the substrate.
+    bucket query and MUST return the reverted trail
+    (`result_count >= 1`). Post-#32 (the before-blob revert guard
+    in `core/trails/anchors.py`, commit 5cb6ff9f9a0) the substrate
+    deterministically lands the captured patch on `reverted` — the
+    spurious alive-looking anchor on the revert commit that used to
+    outrank it under `any_alive_anchor_wins` can no longer form.
+    The checkpoint's `provides.survival_states` is exactly
+    `["reverted"]` and is re-verified live on every cold build
+    (`verify_provides`) plus before every run (the
+    `requires_survival_states` runtime probe), so a zero here is a
+    substrate or harness regression, never an accepted outcome.
   * `trail explain` still surfaces the trace's step evidence
-    post-revert; the chain matures off `exact_range_hash` onto
-    `structural_match` (firmness drops to `provisional`) but the
-    relation stays `anchored_in_git` and `event_log_ref` remains
-    the canonical `refs/opentraces/local/events/v1`.
+    post-revert; the anchor stays `exact_range_hash` on the
+    original landing commit (the before-blob guard refuses to
+    re-anchor the patch onto the revert commit), the relation stays
+    `anchored_in_git` and `event_log_ref` remains the canonical
+    `refs/opentraces/local/events/v1`.
 
 Pairs with the bronze `survival-walk.toml` (empty-state contract).
 """
@@ -53,12 +56,13 @@ requires = ["cli", "git"]
 from_checkpoints = ["c-captured-with-revert"]
 
 # Plan 069 R1: declarative world-state needs. The checkpoint's
-# `provides.survival_states` lists `reverted` as an accepted
-# post-revert outcome (alongside `lost`, `alive_transformed`,
-# `unknown` — see _captured_with_revert.py). Declaring `reverted`
-# here is satisfied because the precondition resolver checks for
-# membership in the provides list, not for the *runtime* state
-# the substrate actually landed on.
+# `provides.survival_states` is exactly `["reverted"]` (post-#32 the
+# delta lands it deterministically — see _captured_with_revert.py).
+# This is enforced twice at runtime: `verify_provides` probes the
+# freshly built world on every cold build, and the journey runner's
+# `requires_survival_states` probe re-checks the live box before any
+# step runs (`trail search --survival reverted` must return >= 1, or
+# the journey ERRORs with precondition_unmet).
 [preconditions]
 requires_survival_states = ["reverted"]
 
@@ -96,12 +100,14 @@ path = "trace_id"
 equals = "{trace_id}"
 
 # The captured session produced ≥1 TrailEvent in the canonical log;
-# `event_count` is the count of events in `timeline`. We only check
-# presence (>0 implicitly via the path existing as a non-None int).
+# `event_count` is the count of events in `timeline`. The world
+# guarantees the captured trace has events, so assert the floor
+# rather than mere field presence.
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "track-reverted-trace"
 path = "event_count"
+min = 1
 
 # ---------------------------------------------------------------------
 # Step 2 — patch trail for the reverted trace. The Trail Query
@@ -145,12 +151,11 @@ path = "result_count"
 equals = 1
 
 # ---------------------------------------------------------------------
-# Step 3 — survival-bucket query for `reverted`. The substrate may
-# land on `unknown` instead of `reverted` (per the checkpoint's
-# audit), so we don't assert a specific `result_count` — we assert
-# the documented envelope: the surface returns cleanly, identifies
-# itself by schema_version, and the `query` block confirms the
-# requested survival filter was applied.
+# Step 3 — survival-bucket query for `reverted`. Post-#32 (before-blob
+# revert guard) the world GUARANTEES the captured patch lands on
+# `reverted`, so this step asserts the bucket actually contains the
+# trail (`result_count >= 1`) on top of the documented envelope
+# (schema_version + query shape).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -186,18 +191,21 @@ step = "search-survival-reverted"
 path = "event_log_ref"
 equals = "refs/opentraces/local/events/v1"
 
-# Just confirms the field is present (it'll be 0 when the substrate
-# landed on `unknown`, ≥1 when it landed on `reverted`).
+# The checkpoint guarantees a reverted trail (provides.survival_states
+# == ["reverted"], verified live on every build): the bucket query
+# must return it. A zero here is a regression in the revert-detection
+# substrate or the checkpoint harness, never an accepted outcome.
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "search-survival-reverted"
 path = "result_count"
+min = 1
 
 # ---------------------------------------------------------------------
 # Step 4 — `trail explain` still resolves the captured Edit step
-# post-revert. Evidence tier matures off `exact_range_hash` (the
-# original commit is no longer HEAD) onto `structural_match` (the
-# blob still surfaces in history) but the relation stays
+# post-revert. The anchor stays `exact_range_hash` on the original
+# landing commit (post-#32 the before-blob guard refuses to re-anchor
+# the patch onto the revert commit); the relation stays
 # `anchored_in_git` and the canonical event log ref is unchanged.
 # ---------------------------------------------------------------------
 [[steps]]

@@ -60,6 +60,7 @@ from ..env import Box, resolve_cli_argv
 from . import Checkpoint, CheckpointError, register
 from ._captured_helpers import (
     harness_interpreter,
+    harness_source_with_shebang,
     capture_metadata_from_artifact,
     check as _check_helper,
     encode_claude_path,
@@ -68,9 +69,13 @@ from ._captured_helpers import (
     restore_from_capture,
     synthetic_capture_metadata,
     trace_for_session,
+    traces_by_created_at,
 )
 
-_CAPTURE_NAME = "c-captured-with-pr-branch"
+_CHECKPOINT_NAME = "c-captured-with-pr-branch"
+# Plan B0 flip: the real-agent artifact produced by
+# `make capture-refresh SCENARIO=claude-pr-branch` (scenario-named dir).
+_CAPTURE_NAME = "claude-pr-branch"
 
 # The corpus we reuse from c-captured-real-session.
 _SESSION_NAME = "simple-refactor"
@@ -86,9 +91,15 @@ _BRANCH_COMMITS = 2
 # between iterations so the Edit's ``old_string`` still matches.
 _SOURCE_BEFORE = 'def greet(name: str) -> str:\n    return f"hello, {name}"\n'
 
+# tests/otbox/fake_harnesses/claude + tests/otbox/fixtures/sessions/ —
+# staged by the synthetic chain when the parent world (possibly
+# artifact-restored) doesn't already carry them.
+_HARNESS_SRC = Path(__file__).resolve().parents[1] / "fake_harnesses" / "claude"
+_SESSIONS_SRC = Path(__file__).resolve().parents[1] / "fixtures" / "sessions"
+
 
 def _check(result, label: str) -> None:
-    _check_helper(result, checkpoint=_CAPTURE_NAME, label=label)
+    _check_helper(result, checkpoint=_CHECKPOINT_NAME, label=label)
 
 
 def _clear_trace_index(driver: Driver, box: Box) -> None:
@@ -112,7 +123,7 @@ def _clear_trace_index(driver: Driver, box: Box) -> None:
 
 
 def _git(driver: Driver, box: Box, *args: str):
-    return _git_helper(driver, box, *args, checkpoint=_CAPTURE_NAME)
+    return _git_helper(driver, box, *args, checkpoint=_CHECKPOINT_NAME)
 
 
 def _trace_id_for_session(state: dict, session_id: str) -> str | None:
@@ -125,57 +136,77 @@ def _derive_pr_branch_audit_from_restored_box(
 ) -> dict:
     """Re-derive the PR-branch audit after an artifact restore.
 
-    Plan 072 R2 — the artifact captures the post-branch state: main
-    branch has the base commit, ``feat/pr-branch-test`` is checked
-    out with HEAD on the last branch commit. We walk
-    ``git rev-list main..HEAD`` to recover the branch commit shas and
-    re-derive the per-commit trace_ids from state.json.
+    Plan 072 R2 — the artifact captures the post-branch state: a base
+    branch holds the merge base, HEAD sits on the feature branch tip.
+    Branch identity, base, and the per-commit shas are re-derived from
+    the live git topology (real-agent artifacts choose their own
+    branch names); trace ids are enumerated from state.json in capture
+    order rather than assumed from the synthetic session naming.
     """
     paths = driver.paths(box)
     project = paths["project"]
     home = paths["home"]
 
     state_dir, state = read_state_json(driver, box)
+    ordered = traces_by_created_at(state)
+    if not ordered:
+        raise CheckpointError(
+            f"{_CHECKPOINT_NAME} artifact restore produced no traces; "
+            f"state at {state_dir}"
+        )
 
-    # main is the base; HEAD is on the branch tip.
-    base = driver.exec(box, [
-        "git", "-C", project, "rev-parse", "main",
+    branch = driver.exec(box, [
+        "git", "-C", project, "rev-parse", "--abbrev-ref", "HEAD",
     ])
-    base_commit_sha = base.stdout.strip() if base.ok else ""
+    branch_name = branch.stdout.strip() if branch.ok else ""
+
+    base_branch = ""
+    for candidate in ("main", "master"):
+        probe = driver.exec(box, [
+            "git", "-C", project, "rev-parse", "--verify", "--quiet", candidate,
+        ])
+        if probe.ok:
+            base_branch = candidate
+            break
+    base_commit_sha = ""
+    if base_branch:
+        merge_base = driver.exec(box, [
+            "git", "-C", project, "merge-base", base_branch, "HEAD",
+        ])
+        base_commit_sha = merge_base.stdout.strip() if merge_base.ok else ""
+
     head_proc = driver.exec(box, [
         "git", "-C", project, "rev-parse", "HEAD",
     ])
     head_commit_sha = head_proc.stdout.strip() if head_proc.ok else ""
 
-    # main..HEAD listed oldest-first so commit i pairs with branch run i.
-    log = driver.exec(box, [
-        "git", "-C", project, "log", "--reverse", "--format=%H",
-        f"{base_commit_sha}..HEAD",
-    ])
+    # base..HEAD listed oldest-first so commit i pairs with branch run i.
     branch_commit_shas: list[str] = []
-    if log.ok and log.stdout.strip():
-        branch_commit_shas = log.stdout.strip().splitlines()
+    if base_commit_sha:
+        log = driver.exec(box, [
+            "git", "-C", project, "log", "--reverse", "--format=%H",
+            f"{base_commit_sha}..HEAD",
+        ])
+        if log.ok and log.stdout.strip():
+            branch_commit_shas = log.stdout.strip().splitlines()
 
-    branch_trace_ids: list[str] = []
-    for i in range(1, _BRANCH_COMMITS + 1):
-        session_id = f"sess-otbox-pr-branch-{i}"
-        trace_id = _trace_id_for_session(state, session_id)
-        if not trace_id:
-            raise CheckpointError(
-                f"pr-branch artifact restore missing trace for "
-                f"session_id={session_id!r}; state at {state_dir}"
-            )
-        branch_trace_ids.append(trace_id)
+    # Synthetic-shaped artifacts carry the parent corpus session; the
+    # remaining traces (capture order) are the branch sessions. Real
+    # artifacts have no parent session — every trace is branch work.
+    parent_trace_id = _trace_id_for_session(state, _FIXED_SESSION_ID)
+    parent_session_id = _FIXED_SESSION_ID if parent_trace_id else ""
+    branch_trace_ids = [
+        t.get("trace_id") for t in ordered
+        if t.get("trace_id") and t.get("trace_id") != parent_trace_id
+    ]
 
-    parent_session_id = _FIXED_SESSION_ID
-    parent_trace_id = _trace_id_for_session(state, parent_session_id)
-    encoded_project = encode_claude_path(project)
-    transcript_dir = f"{home}/.claude/projects/{encoded_project}"
+    transcript_dirs = driver.glob(box, f"{home}/.claude/projects/*")
+    transcript_dir = transcript_dirs[0] if len(transcript_dirs) == 1 else ""
 
     return {
         "base_commit_sha": base_commit_sha,
-        "base_branch": "main",
-        "branch_name": _BRANCH_NAME,
+        "base_branch": base_branch,
+        "branch_name": branch_name,
         "branch_commit_count": len(branch_commit_shas),
         "branch_commit_shas": branch_commit_shas,
         "branch_trace_ids": branch_trace_ids,
@@ -189,8 +220,15 @@ def _derive_pr_branch_audit_from_restored_box(
 
 
 def _captured_with_pr_branch_delta(driver: Driver, box: Box) -> None:
-    # Plan 072 R3 — artifact-preferred, synthetic-fallback.
-    cap_meta = restore_from_capture(driver, box, _CAPTURE_NAME)
+    # Plan 072 R3 — artifact-preferred, synthetic-fallback. Contract
+    # gate: this checkpoint advertises 3 captured traces (parent + 2
+    # branch sessions); an artifact below that floor (e.g. one real
+    # claude session spanning the whole branch) falls back to the
+    # synthetic chain instead of building a world verify_provides
+    # would refuse.
+    cap_meta = restore_from_capture(
+        driver, box, _CAPTURE_NAME, min_traces=_BRANCH_COMMITS + 1,
+    )
     if cap_meta is not None:
         box.notes["c_captured_with_pr_branch_audit"] = (
             _derive_pr_branch_audit_from_restored_box(driver, box, cap_meta)
@@ -224,15 +262,29 @@ def _captured_with_pr_branch_delta(driver: Driver, box: Box) -> None:
     home = paths["home"]
     cli = resolve_cli_argv()
 
-    # The parent put the fake harness on PATH at $HOME/bin/claude with
-    # the corpus mirrored under $HOME/share/otbox/sessions/. Reuse them.
+    # The parent's SYNTHETIC chain puts the fake harness on PATH at
+    # $HOME/bin/claude with the corpus mirrored under
+    # $HOME/share/otbox/sessions/. An ARTIFACT-restored parent (real
+    # claude session) carries neither, so stage them here when absent —
+    # same staging contract as c-captured-real-session.
     harness_dst = f"{home}/bin/claude"
     sessions_dir = f"{home}/share/otbox/sessions"
     if not driver.path_exists(box, harness_dst):
-        raise CheckpointError(
-            f"expected harness at {harness_dst} (from parent checkpoint); "
-            "was the parent's setup elided?"
+        driver.mkdir(box, f"{home}/bin")
+        driver.put_text(
+            box, harness_dst,
+            harness_source_with_shebang(_HARNESS_SRC),
         )
+        _check(
+            driver.exec(box, ["chmod", "+x", harness_dst]),
+            "chmod +x harness (staged for artifact-restored parent)",
+        )
+    session_dst = f"{sessions_dir}/{_SESSION_NAME}"
+    if not driver.path_exists(box, session_dst):
+        driver.mkdir(box, session_dst)
+        for child in (_SESSIONS_SRC / _SESSION_NAME).iterdir():
+            if child.is_file():
+                driver.put_text(box, f"{session_dst}/{child.name}", child.read_text())
 
     encoded_project = encode_claude_path(project)
     transcript_dir = f"{home}/.claude/projects/{encoded_project}"
@@ -406,7 +458,9 @@ register(
         name="c-captured-with-pr-branch",
         composed_from="c-captured-real-session",
         delta=_captured_with_pr_branch_delta,
-        cache=True,
+        # cache=False: artifact presence/freshness live outside the
+        # checkpoint source hash (same rationale as the codex/pi lanes).
+        cache=False,
         description=(
             "c-captured-real-session + a feature branch ("
             f"{_BRANCH_NAME}) with {_BRANCH_COMMITS} additional "

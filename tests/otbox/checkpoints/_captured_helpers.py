@@ -1,8 +1,9 @@
 """Captured-session checkpoint helpers — plan 072 R1.
 
 The captured-session checkpoint family (``c-captured-real-session``,
-``c-captured-with-revert``, ``c-captured-multi-skill``,
-``c-captured-with-pr-branch``) has two source-of-truth tiers:
+``c-captured-with-revert``, ``c-captured-with-secrets``,
+``c-captured-multi-skill``, ``c-captured-with-pr-branch``) has two
+source-of-truth tiers:
 
   1. *Artifact-preferred.* If a pre-captured snapshot artifact exists
      under ``tests/otbox/captures/<capture_name>/``, restore that into
@@ -28,6 +29,8 @@ caller doesn't have to swap box identities mid-checkpoint.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import tarfile
 from pathlib import Path
@@ -127,8 +130,124 @@ def _read_origin_box_id(box_root: Path) -> str | None:
     return box_id if isinstance(box_id, str) and box_id else None
 
 
+# Absolute symlink target rooted in ANY machine's otbox box dir
+# (same shape as snapshot._ANY_BOX_ROOT_RE, anchored for a whole target).
+_BOX_ROOT_LINK_RE = re.compile(
+    r"^(?P<root>/.*?/\.otbox/boxes/otb_[0-9a-fA-F]+)(?P<rest>/.*)?$"
+)
+
+
+def _retarget_box_symlinks(box: Box) -> int:
+    """Re-point symlinks whose target lives under an origin box root.
+
+    ``snapshot.rewrite_absolute_paths`` rewrites absolute box roots inside
+    text-file CONTENTS (+ SQLite values), but a tar extraction preserves
+    symlink TARGETS verbatim. A captured world carries e.g. the skill
+    harness link ``home/.claude/skills/opentraces`` →
+    ``<origin-box>/home/.agents/skills/opentraces``; after restore that
+    target dangles (or points at a foreign box), ``doctor`` correctly
+    reports it under ``hooks[].broken_harnesses`` and exits 3 — restored
+    worlds must be healthy, so restore hygiene re-roots every such link
+    onto the current box. Relative symlinks and links outside an
+    ``/.otbox/boxes/otb_<id>`` root are left untouched. Best-effort:
+    unreadable/unwritable entries are skipped, never fatal.
+    """
+    retargeted = 0
+    if not box.root.exists():
+        return retargeted
+    # NB: pathlib's ``**`` does not follow directory symlinks, so this
+    # cannot loop even after links are re-rooted into the same box.
+    for path in box.root.rglob("*"):
+        if not path.is_symlink():
+            continue
+        try:
+            target = os.readlink(path)
+        except OSError:
+            continue
+        match = _BOX_ROOT_LINK_RE.match(target)
+        if not match:
+            continue
+        new_target = str(box.root) + (match.group("rest") or "")
+        if new_target == target:
+            continue
+        try:
+            path.unlink()
+            path.symlink_to(new_target)
+        except OSError:
+            continue
+        retargeted += 1
+    return retargeted
+
+
+def peek_artifact_world(capture_name: str) -> dict | None:
+    """Stream an artifact archive and return cheap world-shape facts
+    WITHOUT restoring it: ``{"trace_count": int,
+    "security_fingerprinted": bool}``.
+
+    ``trace_count`` sums ``traces`` entries across every project
+    ``state.json`` in the archive; ``security_fingerprinted`` is True
+    when any captured TraceRecord carries a non-empty
+    ``metadata.security.tools_applied``. Returns ``None`` when the
+    archive is absent or carries no readable ``state.json`` (callers
+    treat that as "shape unknown" and reject).
+    """
+    archive, _metadata = _artifact_paths(capture_name)
+    if not archive.exists():
+        return None
+    trace_count = 0
+    security_fingerprinted = False
+    state_seen = False
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            for member in tar:
+                if not member.isfile():
+                    continue
+                name = member.name
+                if "/.opentraces/projects/" not in name:
+                    continue
+                if name.endswith("/state.json"):
+                    handle = tar.extractfile(member)
+                    if handle is None:
+                        continue
+                    try:
+                        state = json.loads(handle.read().decode("utf-8"))
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    if isinstance(state, dict):
+                        trace_count += len(state.get("traces") or {})
+                        state_seen = True
+                elif "/traces/" in name and name.endswith(".jsonl"):
+                    handle = tar.extractfile(member)
+                    if handle is None:
+                        continue
+                    for raw_line in handle:
+                        line = raw_line.decode("utf-8", "replace").strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except ValueError:
+                            break
+                        if isinstance(obj, dict):
+                            sec = (obj.get("metadata") or {}).get("security") or {}
+                            if sec.get("tools_applied"):
+                                security_fingerprinted = True
+                        break
+    except (OSError, tarfile.TarError):
+        return None
+    if not state_seen:
+        return None
+    return {
+        "trace_count": trace_count,
+        "security_fingerprinted": security_fingerprinted,
+    }
+
+
 def restore_from_capture(
-    driver, box: Box, capture_name: str, *, reconcile: bool = True
+    driver, box: Box, capture_name: str, *,
+    reconcile: bool = True,
+    min_traces: int = 1,
+    require_security_fingerprints: bool = False,
 ) -> dict | None:
     """Restore a captured snapshot artifact into ``box`` in-place.
 
@@ -137,6 +256,13 @@ def restore_from_capture(
       * Returns ``None`` when no artifact is present (caller falls
         through to the synthetic harness chain).
       * Returns the parsed ``metadata.json`` dict on success.
+      * Contract gate: when the caller declares world-shape floors
+        (``min_traces`` > 1 / ``require_security_fingerprints``), the
+        archive is peeked BEFORE the box is wiped and an artifact that
+        cannot satisfy the checkpoint's ``provides`` contract is
+        rejected (``None`` → synthetic fallback) instead of building a
+        world ``verify_provides`` would refuse anyway. Rejections are
+        recorded in ``box.notes["capture_artifact_rejections"]``.
       * Extracts the archive into ``box.root`` after clearing the
         post-provision skeleton, then rewrites the origin-box root
         in every text file under ``~/.opentraces`` + the project
@@ -173,6 +299,28 @@ def restore_from_capture(
     if not isinstance(metadata, dict):
         return None
 
+    if min_traces > 1 or require_security_fingerprints:
+        shape = peek_artifact_world(capture_name)
+        reasons: list[str] = []
+        if shape is None:
+            reasons.append("world shape unreadable (no state.json in archive)")
+        else:
+            have_traces = int(shape.get("trace_count") or 0)
+            if have_traces < min_traces:
+                reasons.append(
+                    f"trace_count {have_traces} < required {min_traces}"
+                )
+            if require_security_fingerprints and not shape.get(
+                "security_fingerprinted"
+            ):
+                reasons.append(
+                    "no security-pipeline fingerprints on any captured trace"
+                )
+        if reasons:
+            rejections = box.notes.setdefault("capture_artifact_rejections", {})
+            rejections[capture_name] = "; ".join(reasons)
+            return None
+
     box.root.mkdir(parents=True, exist_ok=True)
     _clear_box_contents(box)
 
@@ -185,6 +333,11 @@ def restore_from_capture(
     if origin_box_id:
         origin_root = str(BOXES_DIR / origin_box_id)
         _rewrite_paths_in_place(box, origin_root)
+
+    # Symlink TARGETS are preserved verbatim by tar and untouched by the
+    # text rewrite above — re-root any link still pointing into an origin
+    # box (any machine's prefix) so restored worlds pass `doctor` clean.
+    _retarget_box_symlinks(box)
 
     # Carry forward the archived box's notes (the capture pipeline
     # may have recorded its own audit) before we save the new identity.
@@ -329,6 +482,78 @@ def trace_for_session(state: dict, session_id: str) -> tuple[str | None, int]:
         if trace.get("session_id") == session_id:
             return trace.get("trace_id"), int(trace.get("step_count") or 0)
     return None, 0
+
+
+def traces_by_created_at(state: dict) -> list[dict]:
+    """Every trace entry in ``state.json``, oldest first.
+
+    Real-agent artifacts mint UUID session ids, so the audit derivers
+    cannot key off the synthetic-corpus session names; capture order
+    (``created_at``) is the stable enumeration both world shapes share.
+    """
+    traces = [t for t in (state.get("traces") or {}).values() if isinstance(t, dict)]
+    return sorted(traces, key=lambda t: float(t.get("created_at") or 0.0))
+
+
+def load_trace_record(driver, box: Box, trace: dict) -> dict:
+    """Parse the TraceRecord JSONL a state.json trace entry points at.
+
+    The restore path-rewrite already re-rooted ``file_path`` to the
+    current box. Returns ``{}`` on any read/parse failure — callers
+    fall back to state.json-level fields.
+    """
+    path = trace.get("file_path")
+    if not isinstance(path, str) or not path:
+        return {}
+    raw = driver.exec(box, ["cat", path])
+    if not raw.ok:
+        return {}
+    first = next((line for line in raw.stdout.splitlines() if line.strip()), "")
+    if not first:
+        return {}
+    try:
+        data = json.loads(first)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+# Tool names whose call mutates a file — the step a journey "explains".
+EDIT_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+
+def edit_step_index_from_record(record: dict) -> int | None:
+    """The 1-based ``step_index`` of the first file-mutating tool call.
+
+    Real sessions land their Edit on whatever step the agent chose, so
+    artifact-restored audits derive it from the TraceRecord instead of
+    assuming the synthetic corpus's pinned step.
+    """
+    for step in record.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        for call in step.get("tool_calls") or []:
+            if isinstance(call, dict) and call.get("tool_name") in EDIT_TOOL_NAMES:
+                idx = step.get("step_index")
+                if isinstance(idx, int):
+                    return idx
+    return None
+
+
+def transcript_path_for_session(driver, box: Box, session_id: str) -> str:
+    """Locate the on-disk Claude transcript for ``session_id``.
+
+    The artifact's transcript directory is named after the ORIGIN
+    box's encoded project path (directory names are not rewritten on
+    restore), so the path is globbed rather than re-encoded.
+    """
+    if not session_id:
+        return ""
+    paths = driver.paths(box)
+    matches = driver.glob(
+        box, f"{paths['home']}/.claude/projects/*/{session_id}.jsonl"
+    )
+    return matches[0] if matches else ""
 
 
 # ---------------------------------------------------------------------------
