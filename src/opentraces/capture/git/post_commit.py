@@ -308,6 +308,12 @@ def persist_trace_updates(staging: Path, traces: list) -> int:
             tmp.write_text(payload + "\n", encoding="utf-8")
             os.replace(tmp, path)
             written += 1
+            try:
+                from ...core.trace_search_state import mark_search_snapshot_dirty
+
+                mark_search_snapshot_dirty("trace_record_update", trace_id=trace.trace_id)
+            except Exception:
+                pass
         except OSError:
             if tmp.exists():
                 try:

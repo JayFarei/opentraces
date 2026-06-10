@@ -5,7 +5,7 @@ adapter = "subprocess"
 target = "cli.trace_query"
 fixture = "stack"
 tier = "small"
-repetitions = 3
+repetitions = 5
 warmups = 1
 
 [params]

@@ -68,6 +68,23 @@ def _connect(db_path: Path, *, wal: bool = True) -> sqlite3.Connection:
     return conn
 
 
+def _checkpoint_wal_truncate(db_path: Path) -> None:
+    """Best-effort ``PRAGMA wal_checkpoint(TRUNCATE)`` on the index DB.
+
+    The legacy Trace Index runs in WAL mode and is mutated by the
+    capture-time keep-warm sync; without an explicit checkpoint the
+    ``-wal`` sidecar grows without bound (issue #22 — multi-GB WAL files
+    observed on real machines). Called once after a sync write transaction
+    commits. Swallows every SQLite error: a busy/blocked checkpoint just
+    means a later sync will truncate instead.
+    """
+    try:
+        with _connect(db_path) as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        pass
+
+
 def _unlink_wal_sidecars(db_path: Path) -> None:
     """Remove any ``-wal``/``-shm`` sidecars belonging to ``db_path``.
 

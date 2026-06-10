@@ -458,6 +458,18 @@ def open_trace_workspace(workspace: Path, project: Path) -> dict[str, Any]:
             src = workspace / trace_record_rel
             if src.exists():
                 shutil.copyfile(src, traces_dir / Path(trace_record_rel).name)
+                # The copied JSONL is a new legacy-layer raw trace record
+                # that bypasses ``write_trace_record``; mark the read-only
+                # search snapshot dirty so it gets rebuilt (best-effort).
+                try:
+                    from ..trace_search_state import mark_search_snapshot_dirty
+
+                    mark_search_snapshot_dirty(
+                        "trace_teleport_open",
+                        trace_id=manifest.get("trace_id"),
+                    )
+                except Exception:
+                    pass
     except Exception:
         shutil.rmtree(temp_project, ignore_errors=True)
         raise

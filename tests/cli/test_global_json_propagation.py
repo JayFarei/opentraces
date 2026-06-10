@@ -68,6 +68,8 @@ def test_global_json_trace_query_emits_json(tmp_path, monkeypatch):
     monkeypatch.chdir(project)
 
     runner = CliRunner()
+    build = runner.invoke(main, ["trace", "index"])
+    assert build.exit_code == 0, build.output
     result = runner.invoke(main, ["--json", "trace", "query", "--cwd", "--limit", "1"])
     assert result.exit_code == 0, result.output
     payload = _parse_last_json(result.output)

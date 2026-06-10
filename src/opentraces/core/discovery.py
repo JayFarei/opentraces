@@ -1,7 +1,7 @@
 """Progressive-discovery read models.
 
 This module is intentionally read-only. It composes bounded discovery packets
-from the existing trace bucket, Trace Index, and Trace Map projections.
+from the read-only trace search snapshot plus top-N trace hydration.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ class DiscoveryPacket(BaseModel):
     by: str = "day"
     total_candidates: int
     total_cards: int
+    search_diagnostics: dict[str, Any] = Field(default_factory=dict)
     groups: list[DiscoveryGroup] = Field(default_factory=list)
     refs: dict[str, str] = Field(default_factory=dict)
     limitations: list[str] = Field(default_factory=list)
@@ -75,9 +76,9 @@ def discover(
 ) -> DiscoveryPacket:
     """Build a deterministic progressive-discovery packet for ``topic``.
 
-    The function deliberately avoids LLMs and embeddings. It asks the existing
-    lexical Trace Index for a bounded candidate page, dedupes by trace id, then
-    expands each selected trace into a bounded :class:`CandidateCard`.
+    The function deliberately avoids LLMs and embeddings. It asks the
+    read-only search snapshot for a bounded candidate page, dedupes by trace id,
+    then expands each selected trace into a bounded :class:`CandidateCard`.
     """
 
     if by != "day":
@@ -90,20 +91,23 @@ def discover(
     if per_group < 1:
         raise ValueError("per_group must be >= 1")
 
-    candidates = _topic_candidates(
+    page = _topic_page(
         topic,
         limit=limit,
         latest_generation=latest_generation,
         project=project,
         index_path=index_path,
     )
+    candidates = page.hits
     cards: list[CandidateCard] = []
     seen: set[str] = set()
+    hydrated_count = 0
     for candidate in candidates:
         trace_id = getattr(candidate, "trace_id", None)
         if not trace_id or trace_id in seen:
             continue
         seen.add(trace_id)
+        hydrated_count += 1
         try:
             cards.append(candidate_card(trace_id, index_path=index_path))
         except FileNotFoundError:
@@ -112,11 +116,14 @@ def discover(
             break
 
     groups = _group_cards_by_day(topic, cards, per_group=per_group)
+    diagnostics = page.diagnostics.as_dict()
+    diagnostics["hydrated_count"] = hydrated_count
     return DiscoveryPacket(
         topic=topic,
         by=by,
         total_candidates=len(candidates),
         total_cards=len(cards),
+        search_diagnostics=diagnostics,
         groups=groups,
         refs={
             "query": f"ot://trace-search/lex/{_ref_escape(topic)}",
@@ -195,44 +202,24 @@ def _trace_id_from_ref(ref: str, *, index_path: Path | None = None) -> str:
     return ref
 
 
-def _topic_candidates(
+def _topic_page(
     topic: str,
     *,
     limit: int,
     latest_generation: bool,
     project: str | None,
     index_path: Path | None,
-) -> list[Any]:
-    from .trace_index import query_index_page
+):
+    from .trace_search_snapshot import SearchFilters, search_traces
 
-    out: list[Any] = []
-    seen: set[str] = set()
-    page_token: str | None = None
-    page_limit = min(max(limit * 3, limit), 100)
-    # A small page loop lets us keep trace-level diversity when the top page
-    # contains multiple candidate units for the same trace.
-    for _ in range(5):
-        page = query_index_page(
-            lex=topic,
-            limit=page_limit,
-            page_token=page_token,
-            latest_generation=latest_generation,
+    return search_traces(
+        topic,
+        SearchFilters(
             project=project,
-            sort="recency",
-            index_path=index_path,
-        )
-        for candidate in page.candidates:
-            trace_id = candidate.trace_id
-            if trace_id in seen:
-                continue
-            seen.add(trace_id)
-            out.append(candidate)
-            if len(out) >= limit:
-                return out
-        page_token = page.next_page_token
-        if not page_token:
-            break
-    return out
+            latest_generation=latest_generation,
+        ),
+        limit=limit,
+    )
 
 
 def _group_cards_by_day(
@@ -290,8 +277,11 @@ def _ref_escape(value: str) -> str:
 
 def _load_trace_record(trace_id: str, *, index_path: Path | None = None) -> TraceRecord:
     from .trace_index import get_trace_path
+    from .trace_search_snapshot import get_trace_source_path
 
     trace_path = get_trace_path(trace_id, index_path=index_path)
+    if trace_path is None:
+        trace_path = get_trace_source_path(trace_id)
     if trace_path is None or not trace_path.exists():
         raise FileNotFoundError(trace_id)
     bucket_obj = read_trace_record_object(trace_path)

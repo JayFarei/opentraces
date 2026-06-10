@@ -27,10 +27,31 @@ def _enroll_project(project_dir: Path, project_id: str) -> None:
 
 def _write_project_trace(project_dir: Path, record: TraceRecord) -> None:
     from opentraces.core.config import get_project_traces_dir
+    from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
 
     traces_dir = get_project_traces_dir(project_dir)
     traces_dir.mkdir(parents=True, exist_ok=True)
     (traces_dir / f"{record.trace_id}.jsonl").write_text(record.model_dump_json() + "\n")
+    # Queries are read-only against an explicit snapshot now; tests rebuild it
+    # after every seed write (cheap on these tiny corpora).
+    build_trace_search_snapshot()
+
+
+def _rebuild_legacy_index() -> None:
+    """Build the legacy Trace Index that `trace map` / `trace get` unit and
+    map-node lookups still read.
+
+    The old trigger (`trace query --force-rebuild`) is rejected by design in
+    the read-only snapshot architecture; in real flows capture-time keep-warm
+    (`keep_index_warm`) maintains this index.
+    """
+    from opentraces.core.trace_index import rebuild_index
+    from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
+
+    rebuild_index()
+    # The legacy rebuild mirrors records into the bucket store, which marks
+    # the search snapshot dirty — rebuild the snapshot so queries serve again.
+    build_trace_search_snapshot()
 
 
 def _register_project_source(project_dir: Path) -> None:
@@ -130,6 +151,12 @@ def _ui_trace() -> TraceRecord:
     trace.trace_id = "trace-plan056-cli-ui"
     trace.session_id = "session-plan056-cli-ui"
     trace.outcome.committed = False
+    # Distinct intent text: the search snapshot collapses duplicate titles in
+    # SQL, and this was always a different piece of work than _trace().
+    trace.task.description = "Bug fix failing UI render test from CLI"
+    trace.steps[0].content = (
+        "Use grill-me to fix the UI render bug and prove the failing test passes."
+    )
     for step in trace.steps:
         for call in step.tool_calls:
             if call.tool_name == "Edit":
@@ -179,6 +206,7 @@ def test_trace_query_map_get_json_cli_round_trip(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _trace())
+    _rebuild_legacy_index()
 
     runner = CliRunner()
     query = runner.invoke(
@@ -192,7 +220,6 @@ def test_trace_query_map_get_json_cli_round_trip(tmp_path):
             "grill-me",
             "--signal",
             "tested_successful_fix_candidate",
-            "--force-rebuild",
             "--json",
         ],
     )
@@ -295,11 +322,14 @@ def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tm
         ],
         writer="test-fixture",
     )
+    # The legacy index rebuild (old `--force-rebuild` side effect, now owned
+    # by maintenance/keep-warm) is what folds the trail projection into the map.
+    _rebuild_legacy_index()
 
     runner = CliRunner()
     query = runner.invoke(
         main,
-        ["trace", "query", "--lex", "generate", "--force-rebuild", "--json"],
+        ["trace", "query", "--lex", "generate", "--json"],
     )
     assert query.exit_code == 0, query.output
     trace_map = runner.invoke(main, ["trace", "map", record.trace_id, "--json"])
@@ -315,7 +345,12 @@ def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tm
     assert bash_node["metadata"]["trace_patches"][0]["trace_patch_id"]
 
 
-def test_trace_query_json_includes_trail_freshness_for_patch_units(tmp_path):
+def test_trace_query_rejects_patch_candidate_kind_even_with_patch_trails(tmp_path):
+    """Patch units (and the per-patch ``trail_freshness`` payload only they
+    carried) are no longer ``trace query`` results: the read-only search
+    snapshot is trace-level by design. Even when patch trails exist, the new
+    explicit contract is a hard rejection pointing at the hydration path
+    (``trace get`` / ``trace map``)."""
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _register_project_source(project)
@@ -346,29 +381,24 @@ def test_trace_query_json_includes_trail_freshness_for_patch_units(tmp_path):
 
     result = CliRunner().invoke(
         main,
-        ["trace", "query", "--candidate-kind", "patch", "--force-rebuild", "--json"],
+        ["trace", "query", "--candidate-kind", "patch", "--json"],
     )
 
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
-    assert payload["candidates"][0]["unit_type"] == "patch"
-    assert "warnings" not in payload
-    freshness = payload["trail_freshness"][0]
-    assert freshness["kind"] == "trail_projection_freshness"
-    assert freshness["severity"] == "info"
-    assert freshness["state"] == "current"
-    assert freshness["last_synced_at"].endswith("Z")
+    assert result.exit_code == 2, result.output
+    assert "--candidate-kind is trace-level in the compact search snapshot" in result.output
+    assert "trace get/map" in result.output
 
 
 def test_trace_map_accepts_ot_map_uri_and_map_node_target(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _trace())
+    _rebuild_legacy_index()
 
     runner = CliRunner()
     query = runner.invoke(
         main,
-        ["trace", "query", "--skill", "grill-me", "--force-rebuild", "--json"],
+        ["trace", "query", "--skill", "grill-me", "--json"],
     )
     assert query.exit_code == 0, query.output
     trace_id = json.loads(query.output)["candidates"][0]["trace_id"]
@@ -403,7 +433,6 @@ def test_trace_query_can_embed_bounded_slice_preview(tmp_path):
             "evidence",
             "--max-slice-nodes",
             "4",
-            "--force-rebuild",
             "--json",
         ],
     )
@@ -425,11 +454,12 @@ def test_trace_map_walks_backward_and_forward_from_node(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _trace())
+    _rebuild_legacy_index()
 
     runner = CliRunner()
     query = runner.invoke(
         main,
-        ["trace", "query", "--signal", "tested_successful_fix_candidate", "--force-rebuild", "--json"],
+        ["trace", "query", "--signal", "tested_successful_fix_candidate", "--json"],
     )
     assert query.exit_code == 0, query.output
     trace_id = json.loads(query.output)["candidates"][0]["trace_id"]
@@ -516,6 +546,13 @@ def test_trace_query_include_superseded_returns_older_generations(tmp_path):
     old = _trace()
     old.trace_id = "trace-plan056-cli-old"
     old.generation_index = 1
+    # The snapshot also collapses duplicate titles in SQL, so the older
+    # generation keeps its own (earlier) intent text — supersession must be
+    # proven by the explicit metadata marker, not by title dedup.
+    old.task.description = "Bug fix failing parser test from CLI (first attempt)"
+    old.steps[0].content = (
+        "Use grill-me to take a first pass at the parser bug before the retry."
+    )
     old.metadata = {**old.metadata, "superseded_by": "trace-plan056-cli-new"}
     new = _trace()
     new.trace_id = "trace-plan056-cli-new"
@@ -526,7 +563,7 @@ def test_trace_query_include_superseded_returns_older_generations(tmp_path):
     runner = CliRunner()
     latest_only = runner.invoke(
         main,
-        ["trace", "query", "--skill", "grill-me", "--force-rebuild", "--json"],
+        ["trace", "query", "--skill", "grill-me", "--json"],
     )
     assert latest_only.exit_code == 0, latest_only.output
     assert [packet["trace_id"] for packet in json.loads(latest_only.output)["candidates"]] == [
@@ -555,11 +592,12 @@ def test_trace_query_and_get_resolve_units(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _trace())
+    _rebuild_legacy_index()
 
     runner = CliRunner()
     search = runner.invoke(
         main,
-        ["trace", "query", "--skill", "grill-me", "--force-rebuild", "--json"],
+        ["trace", "query", "--skill", "grill-me", "--json"],
     )
     assert search.exit_code == 0, search.output
     packet = json.loads(search.output)["candidates"][0]
@@ -606,7 +644,6 @@ def test_trace_query_cli_metadata_filters_and_page_tokens(tmp_path):
             "--committed",
             "--candidate-kind",
             "bug_fix",
-            "--force-rebuild",
             "--json",
         ],
     )
@@ -673,9 +710,6 @@ def test_trace_query_cli_generic_facet_and_metadata_filters(tmp_path):
             "file.path=src/parser.py",
             "--facet",
             "agent.name=claude-code",
-            "--metadata",
-            "session_id=session-plan056-cli",
-            "--force-rebuild",
             "--json",
         ],
     )
@@ -685,7 +719,26 @@ def test_trace_query_cli_generic_facet_and_metadata_filters(tmp_path):
     assert [packet["trace_id"] for packet in payload["candidates"]] == [
         "trace-plan056-cli"
     ]
-    assert payload["candidates"][0]["score_parts"]["metadata"] > 0
+    # Filter-only queries carry no FTS score in the read-only snapshot, so the
+    # legacy {"metadata": >0} score part is gone; selection is the contract.
+    assert payload["candidates"][0]["score_parts"] == {}
+
+    # --metadata unit filters were removed with typed units; the snapshot
+    # rejects them explicitly instead of silently ignoring them.
+    rejected = runner.invoke(
+        main,
+        [
+            "trace",
+            "query",
+            "--signal",
+            "tested_successful_fix_candidate",
+            "--metadata",
+            "session_id=session-plan056-cli",
+            "--json",
+        ],
+    )
+    assert rejected.exit_code == 2
+    assert "--metadata filters are not part of the compact trace search snapshot" in rejected.output
 
 
 def test_trace_query_cli_named_exact_and_derived_filters(tmp_path):
@@ -724,7 +777,6 @@ def test_trace_query_cli_named_exact_and_derived_filters(tmp_path):
             "2026-04-01",
             "--file-op",
             "edit",
-            "--force-rebuild",
             "--json",
         ],
     )
@@ -746,31 +798,43 @@ def test_trace_query_cli_named_exact_and_derived_filters(tmp_path):
     assert ("dependency.name", "pytest") in facets
 
 
-def test_trace_query_cli_can_return_explicit_typed_units(tmp_path):
+def test_trace_query_cli_typed_units_rejected_but_skill_still_discoverable(tmp_path):
+    """Typed units (``skill_invocation`` etc.) were removed from query results
+    by design: the snapshot is trace-level. The CLI now rejects unit-level
+    candidate kinds explicitly, and the skill information survives on the
+    trace-level packet so skill discovery still works."""
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _trace())
 
-    result = CliRunner().invoke(
+    runner = CliRunner()
+    rejected = runner.invoke(
         main,
         [
             "trace",
             "query",
             "--skill",
             "grill-me",
-            "--facet",
-            "unit.type=skill_invocation",
-            "--force-rebuild",
+            "--candidate-kind",
+            "skill_invocation",
             "--json",
         ],
     )
 
+    assert rejected.exit_code == 2, rejected.output
+    assert "--candidate-kind is trace-level in the compact search snapshot" in rejected.output
+
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--skill", "grill-me", "--json"],
+    )
+
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert [packet["unit_type"] for packet in payload["candidates"]] == [
-        "skill_invocation"
-    ]
-    assert payload["candidates"][0]["unit_id"] == "tu:trace-plan056-cli:skill:tc-skill"
+    assert [packet["unit_type"] for packet in payload["candidates"]] == ["trace"]
+    packet = payload["candidates"][0]
+    assert packet["unit_id"] == "tu:trace-plan056-cli:trace"
+    assert "grill-me" in packet["skills"]
 
 
 def test_trace_query_rejects_invalid_generic_filter_syntax(tmp_path):
@@ -787,7 +851,6 @@ def test_trace_query_rejects_invalid_generic_filter_syntax(tmp_path):
             "tested_successful_fix_candidate",
             "--facet",
             "missing-equals",
-            "--force-rebuild",
             "--json",
         ],
     )
@@ -802,19 +865,29 @@ def test_trace_query_cwd_scope_uses_current_project_slug(tmp_path, monkeypatch):
     _enroll_project(project_a, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     _enroll_project(project_b, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
+    # Distinct intent texts: the snapshot's SQL title-dedup is global across
+    # projects, and these are two different pieces of work.
     trace_a = _trace()
     trace_a.trace_id = "trace-plan056-alpha"
     trace_a.session_id = "session-plan056-alpha"
+    trace_a.task.description = "Bug fix failing parser test in alpha"
+    trace_a.steps[0].content = (
+        "Use grill-me to fix the alpha parser bug and prove the failing test passes."
+    )
     trace_b = _trace()
     trace_b.trace_id = "trace-plan056-beta"
     trace_b.session_id = "session-plan056-beta"
+    trace_b.task.description = "Bug fix failing parser test in beta"
+    trace_b.steps[0].content = (
+        "Use grill-me to fix the beta parser bug and prove the failing test passes."
+    )
     _write_project_trace(project_a, trace_a)
     _write_project_trace(project_b, trace_b)
 
     runner = CliRunner()
     global_result = runner.invoke(
         main,
-        ["trace", "query", "--signal", "tested_successful_fix_candidate", "--force-rebuild", "--json"],
+        ["trace", "query", "--signal", "tested_successful_fix_candidate", "--json"],
     )
     assert global_result.exit_code == 0, global_result.output
     assert {p["trace_id"] for p in json.loads(global_result.output)["candidates"]} == {
@@ -872,8 +945,10 @@ def test_doctor_reports_trace_index_status(tmp_path, monkeypatch):
     )
 
     runner = CliRunner()
-    rebuilt = runner.invoke(main, ["trace", "query", "--skill", "grill-me", "--force-rebuild", "--json"])
-    assert rebuilt.exit_code == 0, rebuilt.output
+    # `trace query --force-rebuild` used to build the legacy Trace Index as a
+    # side effect; search is read-only now, so build it the way maintenance/
+    # capture-time keep-warm does before asking doctor about it.
+    _rebuild_legacy_index()
     from opentraces.core import paths
 
     (paths.OPENTRACES_DIR / "trace_index.json").write_text("{}")

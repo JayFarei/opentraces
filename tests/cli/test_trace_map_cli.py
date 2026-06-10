@@ -124,7 +124,7 @@ def test_trace_map_bursts_flag_returns_burst_nodes(tmp_path):
     # Force the index to rebuild for the freshly-enrolled project.
     rebuild = runner.invoke(
         main,
-        ["trace", "query", "--project", project.name, "--force-rebuild", "--json"],
+        ["trace", "index", "--json"],
     )
     assert rebuild.exit_code == 0, rebuild.output
 
@@ -157,7 +157,7 @@ def test_trace_get_bursts_matches_trace_map_bursts(tmp_path):
     runner = CliRunner()
     rebuild = runner.invoke(
         main,
-        ["trace", "query", "--project", project.name, "--force-rebuild", "--json"],
+        ["trace", "index", "--json"],
     )
     assert rebuild.exit_code == 0, rebuild.output
 
@@ -190,7 +190,7 @@ def test_trace_map_actions_filter_compactness_via_cli(tmp_path):
     runner = CliRunner()
     rebuild = runner.invoke(
         main,
-        ["trace", "query", "--project", project.name, "--force-rebuild", "--json"],
+        ["trace", "index", "--json"],
     )
     assert rebuild.exit_code == 0, rebuild.output
 
@@ -227,7 +227,7 @@ def test_trace_slice_template_bursts_returns_bounded_slices(tmp_path):
     runner = CliRunner()
     rebuild = runner.invoke(
         main,
-        ["trace", "query", "--project", project.name, "--force-rebuild", "--json"],
+        ["trace", "index", "--json"],
     )
     assert rebuild.exit_code == 0, rebuild.output
 
@@ -265,7 +265,7 @@ def test_trace_slice_manual_and_around_step_modes(tmp_path):
     runner = CliRunner()
     rebuild = runner.invoke(
         main,
-        ["trace", "query", "--project", project.name, "--force-rebuild", "--json"],
+        ["trace", "index", "--json"],
     )
     assert rebuild.exit_code == 0, rebuild.output
 

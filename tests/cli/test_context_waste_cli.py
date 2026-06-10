@@ -51,7 +51,7 @@ def _waste_trace() -> TraceRecord:
 
 
 def _rebuild(runner, project):
-    res = runner.invoke(main, ["trace", "query", "--project", project.name, "--force-rebuild", "--json"])
+    res = runner.invoke(main, ["trace", "index", "--json"])
     assert res.exit_code == 0, res.output
 
 

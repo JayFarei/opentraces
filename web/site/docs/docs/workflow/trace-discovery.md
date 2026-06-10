@@ -19,8 +19,9 @@ lexical, semantic, file, tool, skill, dependency, and survival facets.
 opentraces trace query --lex "bug fix failing test" --cwd --json
 opentraces trace query --skill opentraces --since 7d
 opentraces trace query --files "src/**/*.py" --signal failing-test
-opentraces trace query --survival alive_on_path --candidate-kind patch
-opentraces trace query --remote-bucket --force-remote-bucket
+opentraces trace query --survival alive_on_path --candidate-kind trace
+opentraces bucket remote pull --force --json  # sync remote traces before querying
+opentraces trace query --cwd --json
 ```
 
 `trace query` returns `CandidatePacket` rows. Use `--include-slice intent` or

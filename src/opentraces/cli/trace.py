@@ -117,7 +117,7 @@ def trace_group() -> None:
 @click.option("--project", default=None, help="Project slug to search.")
 @click.option("--cwd", "current_cwd", is_flag=True, help="Search only the current opted-in project.")
 @click.option("--latest-generation/--include-superseded", default=True, help="Suppress older generations by default.")
-@click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before discovering.")
+@click.option("--force-rebuild", is_flag=True, help="Rejected: search commands are read-only.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_discover(
     topic_terms: tuple[str, ...],
@@ -132,7 +132,7 @@ def trace_discover(
 ) -> None:
     """Build a deterministic topic capsule from retained traces."""
     from ..core.discovery import discover
-    from ..core.trace_index import cheap_sync_query_state, rebuild_index
+    from ..core.trace_search_snapshot import SearchSnapshotNeedsRebuild
 
     topic = " ".join(topic_terms)
     if current_cwd and project:
@@ -147,11 +147,12 @@ def trace_discover(
             sys.exit(3)
         project = get_project_dir(cwd).name
 
-    sync_result = None
     if force_rebuild:
-        rebuild_index()
-    else:
-        sync_result = cheap_sync_query_state(query_source="index")
+        click.echo(
+            "Search commands are read-only. Run 'opentraces trace index' to rebuild the search snapshot.",
+            err=True,
+        )
+        sys.exit(2)
 
     try:
         packet = discover(
@@ -162,14 +163,30 @@ def trace_discover(
             latest_generation=latest_generation,
             project=project,
         )
+    except SearchSnapshotNeedsRebuild as exc:
+        payload = {
+            "status": "maintenance_needed",
+            "reason": exc.reason,
+            "advice": "opentraces trace index",
+        }
+        if as_json:
+            click.echo(_dump_json(payload))
+            sys.exit(3)
+        click.echo(
+            f"Trace search snapshot needs rebuild ({exc.reason}). "
+            "Run 'opentraces trace index'.",
+            err=True,
+        )
+        sys.exit(3)
     except ValueError as exc:
         click.echo(str(exc), err=True)
         sys.exit(2)
 
-    payload = {"status": "ok", "discovery": packet.model_dump(mode="json")}
-    diag = _trace_query_diag_payload(sync_result, "index")
-    if diag:
-        payload.update(diag)
+    payload = {
+        "status": "ok",
+        "discovery": packet.model_dump(mode="json"),
+        "search_diagnostics": packet.search_diagnostics,
+    }
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -279,7 +296,7 @@ def trace_discover(
     default=0.0,
     help="Blend a recency term into the relevance score (newest-first tiebreak); 0 disables.",
 )
-@click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before querying.")
+@click.option("--force-rebuild", is_flag=True, help="Rejected: search commands are read-only.")
 @click.option(
     "--remote-bucket",
     is_flag=True,
@@ -347,10 +364,11 @@ def trace_query(
     as_json: bool,
 ) -> None:
     """Search local retained traces and return bounded candidate packets."""
-    from ..core.trace_index import (
-        cheap_sync_query_state,
-        query_index_page,
-        rebuild_index,
+    from ..core.trace_search_snapshot import (
+        SearchFilters,
+        SearchSnapshotNeedsRebuild,
+        candidate_packet_for_hit,
+        search_traces,
     )
 
     if lex_terms:
@@ -364,8 +382,6 @@ def trace_query(
     if lex and semantic:
         click.echo("Use either --lex or --semantic, not both.", err=True)
         sys.exit(2)
-    if semantic and query_source == "index":
-        query_source = "projection"
     if vec or hyde:
         click.echo(
             "Vector and HyDE trace query modes are reserved in M1. "
@@ -433,92 +449,140 @@ def trace_query(
         )
         sys.exit(3)
     remote_bucket_payload = None
-    sync_result = None
     if remote_bucket:
-        try:
-            from ._remote_bucket import pull_remote_bucket_for_trace
-
-            remote_bucket_payload = pull_remote_bucket_for_trace(
-                force=force_remote_bucket,
-                build_projection=query_source == "projection",
-            )
-        except Exception as exc:
-            click.echo(f"Unable to read remote bucket: {exc}", err=True)
-            sys.exit(3)
-    elif force_rebuild:
-        summary = rebuild_index()
-        if query_source == "projection":
-            from ..core.search_projection import build_search_projection
-
-            build_search_projection(index_path=summary.index_path)
-    else:
-        # Plan 087 U4 — cheap-sync-then-serve. Closes the Phase-1 stale-query
-        # window for the local bucket: a digest probe short-circuits in steady
-        # state, and a changed bucket triggers a BOUNDED incremental refresh
-        # (never the ~105s full rebuild) so the query below reflects freshly
-        # captured/altered traces. Best-effort by contract; never raises.
-        sync_result = cheap_sync_query_state(query_source=query_source)
+        click.echo(
+            "Remote bucket search must be synced explicitly before querying. "
+            "Run 'opentraces bucket remote pull' and then 'opentraces trace index'.",
+            err=True,
+        )
+        sys.exit(2)
+    if force_remote_bucket:
+        click.echo("--force-remote-bucket requires --remote-bucket.", err=True)
+        sys.exit(2)
+    if force_rebuild:
+        click.echo(
+            "Search commands are read-only. Run 'opentraces trace index' to rebuild the search snapshot.",
+            err=True,
+        )
+        sys.exit(2)
+    if query_source != "index":
+        click.echo(
+            "--source is no longer a query-time lifecycle selector. "
+            "Run 'opentraces trace index' to rebuild the search snapshot.",
+            err=True,
+        )
+        sys.exit(2)
+    if metadata_filters:
+        click.echo(
+            "--metadata filters are not part of the compact trace search snapshot yet.",
+            err=True,
+        )
+        sys.exit(2)
+    if candidate_kind not in (None, "trace", "bug_fix"):
+        click.echo(
+            "--candidate-kind is trace-level in the compact search snapshot. "
+            "Use trace, bug_fix, or hydrate a specific trace with trace get/map.",
+            err=True,
+        )
+        sys.exit(2)
+    if min_score is not None or recency_weight:
+        click.echo(
+            "--min-score and --recency-weight are not supported by the compact "
+            "read-only trace search snapshot.",
+            err=True,
+        )
+        sys.exit(2)
 
     try:
-        query_page = query_index_page
-        if query_source == "projection":
-            from ..core.search_projection import query_search_projection_page
-
-            query_page = query_search_projection_page
-        page = query_page(
-            lex=lex,
-            semantic=semantic if query_source == "projection" else None,
-            skill=skill,
-            tool=tool,
-            files=files,
-            file_kind=file_kind,
-            file_op=file_op,
-            signal=signal,
-            facet_filters=facet_filters,
-            metadata_filters=metadata_filters,
-            provider=provider,
-            cmd_family=cmd_family,
-            bash_action=bash_action,
-            test_framework=test_framework,
-            service=service,
-            service_channel=service_channel,
-            dependency=dependency,
-            git_tier=git_tier,
-            survival=survival,
-            since=since,
-            success=success,
-            success_unknown=unknown_success,
-            committed=committed,
-            committed_unknown=unknown_committed,
-            candidate_kind=candidate_kind,
-            latest_generation=latest_generation,
-            project=project,
+        page = search_traces(
+            lex,
+            SearchFilters(
+                skill=skill,
+                tool=tool,
+                files=files,
+                file_kind=file_kind,
+                file_op=file_op,
+                signal=signal,
+                facet_filters=facet_filters,
+                provider=provider,
+                cmd_family=cmd_family,
+                bash_action=bash_action,
+                test_framework=test_framework,
+                service=service,
+                service_channel=service_channel,
+                dependency=dependency,
+                git_tier=git_tier,
+                survival=survival,
+                since=since,
+                success=success,
+                success_unknown=unknown_success,
+                committed=committed,
+                committed_unknown=unknown_committed,
+                candidate_kind=candidate_kind,
+                latest_generation=latest_generation,
+                project=project,
+                sort_order=sort_order,
+            ),
             limit=limit,
-            page_token=page_token,
-            include_slice=include_slice,
-            max_slice_nodes=max_slice_nodes,
-            sort=sort_order,
-            min_score=min_score,
-            recency_weight=recency_weight,
+            cursor=page_token,
+            semantic=semantic,
         )
+    except SearchSnapshotNeedsRebuild as exc:
+        payload = {
+            "status": "maintenance_needed",
+            "reason": exc.reason,
+            "advice": "opentraces trace index",
+            "search_diagnostics": {
+                "used_search_snapshot": False,
+                "used_fts": False,
+                "rows_examined": 0,
+                "hits_returned": 0,
+                "hydrated_count": 0,
+                "raw_trace_scan": False,
+                "wrote_to_index": False,
+                "rebuilt_index": False,
+                "python_full_corpus_sort": False,
+            },
+        }
+        if exc.path is not None:
+            payload["path"] = str(exc.path)
+        if as_json:
+            click.echo(_dump_json(payload))
+            sys.exit(3)
+        click.echo(
+            f"Trace search snapshot needs rebuild ({exc.reason}). "
+            "Run 'opentraces trace index'.",
+            err=True,
+        )
+        sys.exit(3)
     except ValueError as exc:
         click.echo(str(exc), err=True)
         sys.exit(2)
+    candidates = []
+    hydrated_count = 0
+    for hit in page.hits:
+        packet, hydrated = candidate_packet_for_hit(
+            hit,
+            include_slice=include_slice,
+            max_slice_nodes=max_slice_nodes,
+        )
+        candidates.append(packet)
+        hydrated_count += hydrated
+    diagnostics = page.diagnostics.as_dict()
+    diagnostics["hydrated_count"] = hydrated_count
     payload = {
         "status": "ok",
-        "source": query_source,
+        "source": "snapshot",
         "sort": sort_order,
         "semantic_query": None,
         "total": page.total,
-        "total_returned": len(page.candidates),
+        "total_returned": len(candidates),
         "limit": limit,
         "next_page_token": page.next_page_token,
         "has_more": page.next_page_token is not None,
-        "candidates": [packet.model_dump(mode="json") for packet in page.candidates],
+        "candidates": [packet.model_dump(mode="json") for packet in candidates],
+        "search_diagnostics": diagnostics,
     }
-    diag = _trace_query_diag_payload(sync_result, query_source)
-    if diag:
-        payload.update(diag)
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
     if page.warnings:
@@ -540,45 +604,75 @@ def trace_query(
     for warning in page.warnings:
         if warning.get("severity") == "warning":
             click.echo(_format_trace_query_warning(warning), err=True)
-    for packet in page.candidates:
+    for packet in candidates:
         click.echo(f"{packet.trace_id}  {packet.title}")
 
 
-@trace_group.group("index", cls=OpentracesGroup)
-def trace_index_group() -> None:
-    """Rebuild and inspect local trace search projections."""
+@trace_group.group("index", cls=OpentracesGroup, invoke_without_command=True)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.pass_context
+def trace_index_group(ctx: click.Context, as_json: bool) -> None:
+    """Rebuild and inspect the local trace search snapshot."""
+    if ctx.invoked_subcommand is None:
+        _trace_index_rebuild_impl(as_json)
 
 
 @trace_index_group.command("rebuild", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_index_rebuild_cmd(as_json: bool) -> None:
-    """Rebuild the local Trace Index and bucket-shaped search projection."""
-    from ..core.search_projection import build_search_projection
-    from ..core.trace_index import rebuild_index
+    """Rebuild the local read-only trace search snapshot."""
+    _trace_index_rebuild_impl(as_json)
 
-    index_summary = rebuild_index()
-    search_summary = build_search_projection(index_path=index_summary.index_path)
+
+def _trace_index_rebuild_impl(as_json: bool) -> None:
+    """Rebuild the read-only search snapshot and converge the warm surfaces.
+
+    Order matters: the bounded keep-warm sync first runs the staging→bucket
+    bridge and incrementally heals the legacy Trace Index + projection that
+    ``trace map/get/slice`` hydrate from (never a full legacy rebuild — that
+    is the multi-GB writer issue #22 is about), so the snapshot built
+    afterwards ingests every layer the dirty marker can be set for and a
+    rebuild always converges to clean.
+    """
+    from ..core.trace_index import default_index_path, keep_index_warm, refresh_index
+    from ..core.trace_search_snapshot import build_trace_search_snapshot
+
+    healed_legacy_index = False
+    if not default_index_path().exists():
+        # One-time bootstrap: ``trace map/get/slice`` hydrate from the legacy
+        # Trace Index, and nothing else recreates it after the operator
+        # deletes a runaway DB (the issue-#22 recovery move). This is the only
+        # path where the explicit verb pays a full legacy rebuild.
+        refresh_index()
+        healed_legacy_index = True
+    warm_result = keep_index_warm(query_sources=("index", "projection"))
+    search_summary = build_trace_search_snapshot()
     payload = {
         "status": "ok",
-        "index": {
-            "path": str(index_summary.index_path),
-            "trace_count": index_summary.trace_count,
-            "unit_count": index_summary.unit_count,
-            "map_node_count": index_summary.map_node_count,
+        "search_snapshot": search_summary.as_dict(),
+        "keep_warm": {
+            "ok": warm_result.ok,
+            "synced": warm_result.synced,
+            "changed": len(warm_result.changed_trace_ids),
+            "deleted": len(warm_result.deleted_trace_ids),
         },
-        "search_projection": search_summary.as_dict(),
+        "legacy_index": {
+            "path": str(default_index_path()),
+            "healed": healed_legacy_index,
+        },
     }
     if as_json:
         click.echo(_dump_json(payload))
         return
 
-    click.echo(f"Trace Index rebuilt: {index_summary.index_path}")
-    click.echo(f"  traces:    {index_summary.trace_count}")
-    click.echo(f"  units:     {index_summary.unit_count}")
-    click.echo(f"  map nodes: {index_summary.map_node_count}")
-    click.echo(f"Search projection: {search_summary.build_id}")
-    click.echo(f"  docs:      {search_summary.doc_count}")
-    click.echo(f"  path:      {search_summary.build_path}")
+    click.echo(f"Search snapshot rebuilt: {search_summary.path}")
+    click.echo(f"  traces:    {search_summary.trace_count}")
+    if warm_result.synced:
+        click.echo(
+            "Warm caches synced: "
+            f"{len(warm_result.changed_trace_ids)} changed, "
+            f"{len(warm_result.deleted_trace_ids)} deleted"
+        )
 
 
 @trace_index_group.command("refresh", cls=OpentracesCommand)
@@ -630,53 +724,25 @@ def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
 @trace_index_group.command("status", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_index_status_cmd(as_json: bool) -> None:
-    """Show local Trace Index and search projection status."""
-    from ..core.search_projection import search_projection_status
-    from ..core.trace_index import (
-        default_index_path,
-        list_units,
-        trail_freshness_warnings,
-    )
+    """Show local trace search snapshot status."""
+    from ..core.trace_search_snapshot import snapshot_status
 
-    index_path = default_index_path()
-    units = list_units(index_path=index_path)
-    projection = search_projection_status()
-    trail_freshness = trail_freshness_warnings(
-        index_path=index_path,
-        include_current=True,
-    )
+    search_snapshot = snapshot_status()
     payload = {
         "status": "ok",
-        "index": {
-            "path": str(index_path),
-            "exists": index_path.exists(),
-            "unit_count": len(units),
-            "trace_count": len({unit.trace_id for unit in units}),
-        },
-        "search_projection": projection,
-        "trail_freshness": trail_freshness,
+        "search_snapshot": search_snapshot,
     }
     if as_json:
         click.echo(_dump_json(payload))
         return
 
-    index_state = "present" if index_path.exists() else "missing"
-    click.echo(f"Trace Index: {index_state}")
-    click.echo(f"  path:   {index_path}")
-    click.echo(f"  traces: {payload['index']['trace_count']}")
-    click.echo(f"  units:  {payload['index']['unit_count']}")
-    click.echo(f"Search projection: {projection.get('state')}")
-    if projection.get("state") == "ok":
-        click.echo(f"  build:  {projection.get('build_id')}")
-        click.echo(f"  docs:   {projection.get('doc_count')}")
-        click.echo(f"  path:   {projection.get('manifest_path')}")
-    if trail_freshness:
-        click.echo("Trace Trail projections:")
-        for entry in trail_freshness:
-            click.echo(
-                f"  {entry.get('project_slug')}: {entry.get('state')} "
-                f"(last synced {entry.get('last_synced_at') or 'unknown'})"
-            )
+    click.echo(f"Search snapshot: {search_snapshot.get('state')}")
+    click.echo(f"  path:   {search_snapshot.get('path')}")
+    if search_snapshot.get("trace_count") is not None:
+        click.echo(f"  traces: {search_snapshot.get('trace_count')}")
+    click.echo(f"  dirty:  {search_snapshot.get('dirty')}")
+    click.echo(f"  wal:    {search_snapshot.get('wal_exists')}")
+    click.echo(f"  shm:    {search_snapshot.get('shm_exists')}")
 
 
 @trace_group.command("map", cls=OpentracesCommand)

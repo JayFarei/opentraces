@@ -113,14 +113,14 @@
   },
   "trace-query-smoke": {
     "budget_updated": false,
-    "cold_ms": 350.901958,
+    "cold_ms": 315.423834,
     "domain": "cli",
     "extra": {},
     "lane": "smoke",
     "max_rss_delta_mb": null,
-    "p50_ms": 421.761708,
-    "p95_ms": 498.531417,
-    "peak_rss_mb": 57.203125,
+    "p50_ms": 323.523792,
+    "p95_ms": 331.133333,
+    "peak_rss_mb": 59.296875,
     "python_heap_peak_mb": null,
     "target": "cli.trace_query",
     "tier": "small"

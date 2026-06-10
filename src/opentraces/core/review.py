@@ -24,6 +24,21 @@ from .state import StateManager, TraceStatus
 logger = logging.getLogger(__name__)
 
 
+def _mark_search_snapshot_dirty(reason: str, trace_id: str | None = None) -> None:
+    """Best-effort dirty mark for the read-only trace search snapshot.
+
+    All redact / rescan / discard record rewrites flow through this module,
+    so marking here covers every client (CLI, TUI, web) without per-client
+    duplication. Never raises.
+    """
+    try:
+        from .trace_search_state import mark_search_snapshot_dirty
+
+        mark_search_snapshot_dirty(reason, trace_id=trace_id)
+    except Exception:
+        pass
+
+
 @dataclass
 class RedactResult:
     """Outcome of a redact_step_and_persist call."""
@@ -104,6 +119,7 @@ def rescan_trace_and_persist(
             logger.debug("Failed to clean up temp file: %s", fd.name)
         raise
 
+    _mark_search_snapshot_dirty("trace_redacted", trace_id=trace_id)
     return RescanResult(ok=True, processed=processed)
 
 
@@ -171,6 +187,7 @@ def redact_step_and_persist(
             logger.debug("Failed to clean up temp file: %s", fd.name)
         raise
 
+    _mark_search_snapshot_dirty("trace_redacted", trace_id=trace_id)
     return RedactResult(ok=True, step_index=step_index)
 
 
@@ -250,6 +267,7 @@ def redact_pattern_and_persist(
             logger.debug("Failed to clean up temp file: %s", fd.name)
         raise
 
+    _mark_search_snapshot_dirty("trace_redacted", trace_id=trace_id)
     return RedactResult(ok=True, step_index=step if step is not None else -1)
 
 
@@ -284,13 +302,18 @@ def discard_trace(
     Mirrors ``cli.py::session_discard`` exactly, including direct mutation of
     ``state._state['traces']`` followed by ``state.save()``.
     """
+    deleted = False
     if staging_file.exists():
         staging_file.unlink()
+        deleted = True
 
     entry = state.get_trace(trace_id)
     if entry is not None:
         state._state["traces"].pop(trace_id, None)
         state.save()
+        deleted = True
+    if deleted:
+        _mark_search_snapshot_dirty("trace_discarded", trace_id=trace_id)
 
 
 def discard_trace_state_only(
@@ -304,9 +327,11 @@ def discard_trace_state_only(
     Mirrors ``tui.py::action_discard`` exactly, including the try/except
     around ``staging_file.unlink()`` with logger.warning on OSError.
     """
+    deleted = False
     if staging_file.exists():
         try:
             staging_file.unlink()
+            deleted = True
         except OSError:
             logger.warning(
                 "Failed to delete staging file %s", staging_file, exc_info=True
@@ -315,6 +340,9 @@ def discard_trace_state_only(
     if trace_id in state._state.get("traces", {}):
         del state._state["traces"][trace_id]
         state.save()
+        deleted = True
+    if deleted:
+        _mark_search_snapshot_dirty("trace_discarded", trace_id=trace_id)
 
 
 def commit_single(

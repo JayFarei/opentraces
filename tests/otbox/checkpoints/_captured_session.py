@@ -286,11 +286,11 @@ def _captured_session_delta(driver: Driver, box: Box) -> None:
     except json.JSONDecodeError:
         tick_report = {"raw": tick.stdout}
 
-    # 10. Trace Index rebuild — populates the local BM25 + semantic
-    #    projection so `trace query` returns the captured trace.
+    # 10. Trace search snapshot rebuild — populates the explicit
+    #     read-only FTS snapshot so `trace query` returns the captured trace.
     _check(
-        driver.exec(box, [*cli, "trace", "index", "rebuild"]),
-        "trace index rebuild",
+        driver.exec(box, [*cli, "trace", "index"]),
+        "trace index",
     )
 
     # Resolve the trace_id minted by ingest. The state file under

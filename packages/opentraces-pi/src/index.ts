@@ -8,7 +8,6 @@ import { runOpenTraces, textResult, truncateText } from "./tools/opentraces";
 const SearchParams = Type.Object({
   query: Type.String({ description: "Natural-language or lexical query over local OpenTraces bucket traces" }),
   limit: Type.Optional(Type.Number({ description: "Maximum candidates to return" })),
-  remote_bucket: Type.Optional(Type.Boolean({ description: "Read from configured remote bucket as well as local" })),
 });
 
 const TraceParams = Type.Object({
@@ -30,8 +29,9 @@ function registerOpenTracesTools(pi: ExtensionAPI) {
     promptGuidelines: ["Use ot_search when the user asks about previous work, traces, captured sessions, or examples from the local OpenTraces bucket."],
     parameters: SearchParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
+      // Search is read-only against the local snapshot; remote buckets are
+      // synced explicitly (opentraces bucket remote pull) before querying.
       const args = ["trace", "query", "--lex", String(params.query), "--limit", String(params.limit ?? 5), "--json"];
-      if (params.remote_bucket) args.splice(args.length - 1, 0, "--remote-bucket");
       const result = await runOpenTraces(pi, args, ctx, { timeout: 20_000 });
       return textResult("OpenTraces search", result);
     },

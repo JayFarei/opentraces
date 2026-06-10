@@ -241,6 +241,13 @@ def run_local() -> dict[str, Any]:
             _write_project_trace(project)
             runner = CliRunner()
 
+            # Search is read-only: build the snapshot (and heal the legacy
+            # index) once, the way an operator would, before any query.
+            from opentraces.cli import main
+
+            index_result = runner.invoke(main, ["trace", "index"])
+            assert index_result.exit_code == 0, index_result.output
+
             command_transcripts: list[dict[str, Any]] = []
             skill_transcript, skill_payload = _invoke(
                 runner,
@@ -249,7 +256,6 @@ def run_local() -> dict[str, Any]:
                     "query",
                     "--skill",
                     "grill-me",
-                    "--force-rebuild",
                     "--json",
                 ],
             )
