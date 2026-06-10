@@ -217,6 +217,11 @@ def _topic_page(
         SearchFilters(
             project=project,
             latest_generation=latest_generation,
+            # Issue #27 item G: term queries default to BM25-only ordering in the
+            # kernel; discovery groups by day and wants newest-first parity with
+            # the base ``trace query`` recency surface (plan 088 U4). Day-grouping
+            # downstream is unaffected — this only orders within the candidate page.
+            sort_order="recency",
         ),
         limit=limit,
     )
