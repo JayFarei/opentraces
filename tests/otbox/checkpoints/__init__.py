@@ -185,6 +185,37 @@ def verify_provides(driver: Driver, box: Box, cp: "Checkpoint") -> None:
         )
 
 
+def _ensure_derived_search_snapshot(driver: Driver, box) -> None:
+    """Re-derive the read-only trace search snapshot on a cache-hit fork.
+
+    The snapshot cache key does not cover the PRODUCT code, so a cached
+    world built by an older checkout can be forked under newer code whose
+    derived-index expectations differ (surfaced live when PR #24's
+    read-only ``~/.opentraces/index/search.sqlite`` landed: every cached
+    world predating it forked with `trace query` rc=3 "missing", while CI
+    — always cold — stayed green). The search snapshot is a fully
+    rebuildable derived projection, so the honest cache-hit contract is:
+    re-derive it when the restored world's copy is missing or stale.
+    Best-effort by design — worlds without an initialized opentraces home
+    (c-empty, c-prereqs-present) skip out on the status probe failing.
+    """
+    import json as _json
+
+    try:
+        status = driver.exec(
+            box, [*driver.cli_argv(box), "--json", "trace", "index", "status"]
+        )
+        if status.returncode != 0:
+            return
+        state = (
+            _json.loads(status.stdout).get("search_snapshot", {}).get("state")
+        )
+        if state in ("missing", "stale"):
+            driver.exec(box, [*driver.cli_argv(box), "trace", "index", "rebuild"])
+    except Exception:  # noqa: BLE001 - cache hygiene must never sink a fork
+        return
+
+
 def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
     """Apply checkpoint ``name``, returning a ready-to-run box.
 
@@ -217,6 +248,7 @@ def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
     # cache hit → fork from the snapshot
     if not _fault_armed and cp.cache and snapshot_exists(snap_name):
         box, _meta = driver.restore(snap_name)
+        _ensure_derived_search_snapshot(driver, box)
         return CheckpointResult(
             name=cp.name, box=box, cache_hit=True,
             cold_build_seconds=0.0,
