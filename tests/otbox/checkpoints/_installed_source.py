@@ -20,16 +20,22 @@ this checkpoint is its cached *result*.
 from __future__ import annotations
 
 import sys
+import sysconfig
+from pathlib import Path
 
 from ..drivers.base import Driver
 from ..env import REPO_ROOT, Box
 from . import Checkpoint, CheckpointError, register
 
-# Best guess at the host python's library dir — same one
-# ``install-from-source-happy-path.toml`` writes into ``host-venv.pth``.
-_HOST_SITE_PACKAGES = (
-    REPO_ROOT / ".venv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-)
+# The host python's library dir, written into the box .testvenv's
+# host-venv.pth so the project venv (built --no-deps for speed) can see the
+# real opentraces deps (click, pydantic, ...). Derived from the RUNNING
+# interpreter's actual site-packages via sysconfig — NOT a hardcoded
+# REPO_ROOT/.venv path, which does not exist on CI (the workflow installs
+# into the setup-python directly, with no .venv). The first on-main nightly
+# crashed here: .testvenv saw no deps -> ModuleNotFoundError click/pydantic
+# -> checkpoints could not build their provides -> verify_provides fired.
+_HOST_SITE_PACKAGES = Path(sysconfig.get_paths()["purelib"])
 
 
 def _check(result, label: str) -> None:
