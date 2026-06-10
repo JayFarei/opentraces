@@ -1,0 +1,354 @@
+{
+ "auth whoami": {
+  "schema_version": null,
+  "top_level_keys": [
+   "authenticated",
+   "next_command",
+   "status"
+  ]
+ },
+ "bucket manifest": {
+  "schema_version": null,
+  "top_level_keys": [
+   "manifest",
+   "status"
+  ]
+ },
+ "bucket prune": {
+  "schema_version": null,
+  "top_level_keys": [
+   "deleted",
+   "prune",
+   "status",
+   "would_delete"
+  ]
+ },
+ "bucket rebuild": {
+  "schema_version": null,
+  "top_level_keys": [
+   "rebuild",
+   "status"
+  ]
+ },
+ "bucket remote diff": {
+  "schema_version": null,
+  "top_level_keys": [
+   "remote",
+   "status"
+  ]
+ },
+ "bucket remote status": {
+  "schema_version": null,
+  "top_level_keys": [
+   "remote",
+   "status"
+  ]
+ },
+ "bucket repair": {
+  "schema_version": null,
+  "top_level_keys": [
+   "repair",
+   "status"
+  ]
+ },
+ "bucket security": {
+  "schema_version": null,
+  "top_level_keys": [
+   "changes",
+   "security",
+   "status"
+  ]
+ },
+ "bucket status": {
+  "schema_version": null,
+  "top_level_keys": [
+   "bucket",
+   "config",
+   "status"
+  ]
+ },
+ "bucket verify": {
+  "schema_version": null,
+  "top_level_keys": [
+   "errors",
+   "ok",
+   "sampled",
+   "status",
+   "verify"
+  ]
+ },
+ "capture-otlp status": {
+  "schema_version": "opentraces.capture_otlp.v1",
+  "top_level_keys": [
+   "bind",
+   "captures_total",
+   "enabled",
+   "last_capture_at",
+   "next_command",
+   "next_steps",
+   "ok",
+   "pid",
+   "port",
+   "raw_body_dir",
+   "raw_body_dir_size_bytes",
+   "schema_version",
+   "stale",
+   "stale_pid",
+   "uptime_seconds",
+   "verb"
+  ]
+ },
+ "capture-otlp stop": {
+  "schema_version": "opentraces.capture_otlp.v1",
+  "top_level_keys": [
+   "enabled",
+   "next_command",
+   "next_steps",
+   "ok",
+   "pid",
+   "schema_version",
+   "verb"
+  ]
+ },
+ "config show": {
+  "schema_version": null,
+  "top_level_keys": [
+   "bucket",
+   "capture",
+   "classifier_sensitivity",
+   "config_version",
+   "custom_redact_strings",
+   "dataset_visibility",
+   "excluded_projects",
+   "hf_token",
+   "projects",
+   "projects_path",
+   "security"
+  ]
+ },
+ "config tracking-mode": {
+  "schema_version": null,
+  "top_level_keys": [
+   "status",
+   "tracking_mode"
+  ]
+ },
+ "ctx list": {
+  "schema_version": "opentraces.ctx.list.v2",
+  "top_level_keys": [
+   "schema_version",
+   "traces"
+  ]
+ },
+ "dataset list": {
+  "schema_version": null,
+  "top_level_keys": [
+   "datasets",
+   "status"
+  ]
+ },
+ "dataset schedule list": {
+  "schema_version": null,
+  "top_level_keys": [
+   "schedules",
+   "status"
+  ]
+ },
+ "doctor": {
+  "schema_version": null,
+  "top_level_keys": [
+   "doctor",
+   "status"
+  ]
+ },
+ "setup capture-otlp": {
+  "schema_version": "opentraces.capture_otlp_setup.v1",
+  "top_level_keys": [
+   "already_set",
+   "autostart",
+   "autostart_error",
+   "autostart_installed",
+   "backup_exists",
+   "backup_path",
+   "backup_written",
+   "env_keys",
+   "installed",
+   "next_command",
+   "next_steps",
+   "ok",
+   "patched",
+   "raw_body_dir",
+   "schema_version",
+   "settings_patch",
+   "settings_path",
+   "verb"
+  ]
+ },
+ "setup claude-code": {
+  "schema_version": null,
+  "top_level_keys": [
+   "hooks_added",
+   "installed",
+   "next_steps",
+   "settings_file",
+   "status"
+  ]
+ },
+ "setup codex-cli": {
+  "schema_version": null,
+  "top_level_keys": [
+   "hooks_added",
+   "hooks_file",
+   "installed",
+   "next_steps",
+   "status"
+  ]
+ },
+ "setup git": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "state",
+   "status"
+  ]
+ },
+ "setup pi": {
+  "schema_version": null,
+  "top_level_keys": [
+   "added",
+   "config_files",
+   "installed",
+   "next_steps",
+   "state",
+   "status"
+  ]
+ },
+ "setup skill": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "added",
+   "notes",
+   "state",
+   "status"
+  ]
+ },
+ "setup trufflehog": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "install_method",
+   "status",
+   "trufflehog_enabled",
+   "trufflehog_version"
+  ]
+ },
+ "setup watcher install": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "dry_run",
+   "interval_seconds",
+   "status",
+   "unit_path"
+  ]
+ },
+ "setup watcher status": {
+  "schema_version": null,
+  "top_level_keys": [
+   "installed",
+   "interval_seconds",
+   "platform",
+   "running",
+   "unit_path"
+  ]
+ },
+ "setup watcher uninstall": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "status"
+  ]
+ },
+ "trace index rebuild": {
+  "schema_version": null,
+  "top_level_keys": [
+   "keep_warm",
+   "legacy_index",
+   "search_snapshot",
+   "status"
+  ]
+ },
+ "trace index refresh": {
+  "schema_version": null,
+  "top_level_keys": [
+   "changed_trace_ids",
+   "deleted_trace_ids",
+   "sources",
+   "status",
+   "synced"
+  ]
+ },
+ "trace index status": {
+  "schema_version": null,
+  "top_level_keys": [
+   "search_snapshot",
+   "status"
+  ]
+ },
+ "trail graph": {
+  "schema_version": null,
+  "top_level_keys": [
+   "commits",
+   "mode",
+   "pivot_trace_id"
+  ]
+ },
+ "workflow list": {
+  "schema_version": null,
+  "top_level_keys": [
+   "status",
+   "workflows"
+  ]
+ },
+ "workflow skill-intelligence": {
+  "schema_version": null,
+  "top_level_keys": [
+   "accepted",
+   "approval_state",
+   "audit_path",
+   "case_study_dir",
+   "dry_run",
+   "dsel_after",
+   "dsel_before",
+   "dtest_score",
+   "episodes_path",
+   "eval_tasks_path",
+   "markdown_report_path",
+   "report_path",
+   "rollouts_path",
+   "selected_skill",
+   "split_counts",
+   "status"
+  ]
+ },
+ "workflow templates": {
+  "schema_version": null,
+  "top_level_keys": [
+   "status",
+   "templates"
+  ]
+ },
+ "workflow verifier-factory": {
+  "schema_version": null,
+  "top_level_keys": [
+   "automatic_promotion",
+   "candidates_path",
+   "dry_run",
+   "index_path",
+   "packages",
+   "promotion",
+   "status"
+  ]
+ }
+}
