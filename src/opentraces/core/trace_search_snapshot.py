@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,7 +45,7 @@ from .trace_map import build_trace_map, slice_trace_map_for_candidate
 from .trace_search_state import clear_dirty_marker_if_unchanged, current_dirty_token
 
 
-SNAPSHOT_SCHEMA_VERSION = "opentraces.trace_search_snapshot.v3"
+SNAPSHOT_SCHEMA_VERSION = "opentraces.trace_search_snapshot.v4"
 SNAPSHOT_DB_NAME = "search.sqlite"
 DEFAULT_LIMIT = 20
 VISIBLE_FILE_LIMIT = 8
@@ -64,6 +65,32 @@ class SearchSnapshotNeedsRebuild(RuntimeError):
         self.reason = reason
         self.path = path
         super().__init__(reason)
+
+
+def _notify_rebuilding() -> None:
+    """One-time stderr notice for the issue #30 self-heal build.
+
+    Auto-rebuild on a large corpus is a silent multi-second stall otherwise.
+    Emitted to stderr ONLY, and only when stderr is an interactive terminal —
+    stdout carries the JSON query contract and must never be polluted (issue #27
+    M). The TTY gate also keeps the notice out of piped / ``2>&1``-redirected
+    machine consumers and the Click ``CliRunner`` (whose captured stderr is not
+    a TTY), so the ``--json`` payload stays parseable end to end.
+    """
+
+    import sys
+
+    try:
+        interactive = sys.stderr.isatty()
+    except (AttributeError, ValueError):
+        interactive = False
+    if not interactive:
+        return
+    print(
+        "opentraces: rebuilding search snapshot (one-time)...",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -193,6 +220,10 @@ class _SearchDocument:
     signals: list[TraceSignal]
     provenance: dict[str, Any]
     candidate_kind: str
+    # Inverse supersession pointer (``metadata.superseded_trace_ids``). Not a
+    # stored column — consumed only by the build-time second pass that marks the
+    # traces it names as non-latest (issue #27 D).
+    superseded_trace_ids: tuple[str, ...] = ()
 
 
 def default_snapshot_path() -> Path:
@@ -242,6 +273,7 @@ def _build_trace_search_snapshot_locked(snapshot_path: Path) -> SnapshotSummary:
     dirty_token_before_build = current_dirty_token()
     trace_count = 0
     seen_trace_ids: set[str] = set()
+    superseded_by_inverse: set[str] = set()
     try:
         with sqlite3.connect(tmp_path) as conn:
             conn.execute("pragma journal_mode=DELETE")
@@ -251,7 +283,13 @@ def _build_trace_search_snapshot_locked(snapshot_path: Path) -> SnapshotSummary:
                     continue
                 seen_trace_ids.add(doc.trace_id)
                 _insert_doc(conn, doc)
+                superseded_by_inverse.update(doc.superseded_trace_ids)
                 trace_count += 1
+            # Second pass (issue #27 D): any trace named in another trace's
+            # ``superseded_trace_ids`` inverse pointer is a prior generation, so
+            # demote it from latest. Deferred until every doc is inserted because
+            # the pointer-holder may be processed before the trace it names.
+            _apply_inverse_supersession(conn, superseded_by_inverse)
             # Order-independent corpus hash over the per-trace content hashes
             # already stored on each row, so an incremental refresh and a full
             # rebuild of identical content converge to the same value.
@@ -400,10 +438,16 @@ def _refresh_snapshot_locked(
                 return None
             for trace_id in all_ids:
                 _delete_trace_rows(conn, trace_id)
+            inverse_superseded: set[str] = set()
             for trace_id in dict.fromkeys(changed_trace_ids):
                 doc = _load_doc_for_trace_id(trace_id)
                 if doc is not None:
                     _insert_doc(conn, doc)
+                    inverse_superseded.update(doc.superseded_trace_ids)
+            # Carry the inverse-supersession demotion through the keep-warm path
+            # too (issue #27 D): a freshly ingested trace that replaces an older
+            # one demotes that older row even when only the newer is in the delta.
+            _apply_inverse_supersession(conn, inverse_superseded)
             # External-content FTS: regenerate wholesale from the content
             # table instead of per-row delete bookkeeping (sub-second at the
             # corpus sizes the snapshot is built for).
@@ -471,6 +515,7 @@ def search_traces(
     if not snapshot_path.exists():
         if not auto_rebuild:
             raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        _notify_rebuilding()
         build_trace_search_snapshot(path=snapshot_path)
         rebuilt = True
         if not snapshot_path.exists():
@@ -509,6 +554,7 @@ def search_traces(
         # or auto_rebuild is off, re-raise so the CLI reports maintenance_needed.
         if not auto_rebuild or rebuilt:
             raise
+        _notify_rebuilding()
         build_trace_search_snapshot(path=snapshot_path)
         rebuilt = True
         rows, total = _read()
@@ -765,8 +811,8 @@ def _doc_from_record(
     return _SearchDocument(
         trace_id=record.trace_id,
         project_slug=project_slug,
-        timestamp_start=_str_or_none(record.timestamp_start),
-        timestamp_end=_str_or_none(record.timestamp_end),
+        timestamp_start=_normalize_ts(record.timestamp_start),
+        timestamp_end=_normalize_ts(record.timestamp_end),
         title=_limit_text(headline or record.task.description or ti._first_user_text(record) or record.trace_id, TITLE_LIMIT),
         summary=_limit_text(summary, SUMMARY_LIMIT),
         intent_text=_limit_text(intent_text_for_record(record) or summary, FIELD_LIMIT),
@@ -778,6 +824,7 @@ def _doc_from_record(
         source_hash=_record_hash(record, trace_path),
         search_group_key=_search_group_key(headline or summary or record.trace_id),
         latest_generation=not bool(record.metadata.get("superseded_by")),
+        superseded_trace_ids=_superseded_trace_ids(record),
         files=files,
         skills=skills,
         tools=tools,
@@ -884,6 +931,23 @@ def _write_meta(conn: sqlite3.Connection, source_hash: str, trace_count: int) ->
     conn.executemany(
         "insert into snapshot_meta(key, value) values (?, ?)",
         sorted(values.items()),
+    )
+
+
+def _apply_inverse_supersession(
+    conn: sqlite3.Connection, superseded_trace_ids: set[str]
+) -> None:
+    """Demote every trace named by an inverse ``superseded_trace_ids`` pointer.
+
+    A no-op when no inverse pointers were seen. Idempotent — re-running over an
+    already-marked corpus changes nothing.
+    """
+
+    if not superseded_trace_ids:
+        return
+    conn.executemany(
+        "update traces set latest_generation = 0 where trace_id = ?",
+        [(tid,) for tid in sorted(superseded_trace_ids)],
     )
 
 
@@ -1084,6 +1148,18 @@ def _query_rows(
         params.extend(sorted(semantic_ids))
 
     where_sql = " and ".join(where) if where else "1"
+    # Dedup partition (issue #27 D): default latest-only queries collapse equal
+    # titles to the single newest generation. When the caller asks to include
+    # superseded generations (``latest_generation=False``), fold generation into
+    # both the partition and the distinct-count grouping so an older generation
+    # that shares its title with the surviving one is not swallowed by the title
+    # dedup before it can surface.
+    if filters.latest_generation:
+        partition_sql = "search_group_key"
+        group_cols_sql = "search_group_key"
+    else:
+        partition_sql = "search_group_key, latest_generation"
+        group_cols_sql = "search_group_key, latest_generation"
     if terms:
         if filters.sort_order == "time":
             order_sql = "coalesce(timestamp_end, timestamp_start, '') asc, trace_id"
@@ -1099,12 +1175,13 @@ def _query_rows(
     count_sql = f"""
         with matched_raw as (
             select
-                traces.search_group_key
+                traces.search_group_key,
+                traces.latest_generation
             from {from_clause}
             where {where_sql}
         )
         select count(*) from (
-            select search_group_key from matched_raw group by search_group_key
+            select {group_cols_sql} from matched_raw group by {group_cols_sql}
         )
     """
     total = int(conn.execute(count_sql, params).fetchone()[0])
@@ -1120,7 +1197,7 @@ def _query_rows(
             select
                 *,
                 row_number() over (
-                    partition by search_group_key
+                    partition by {partition_sql}
                     order by {order_sql}
                 ) as search_group_rank
             from matched_raw
@@ -1440,10 +1517,60 @@ def _visible_signals(signals: list[TraceSignal]) -> list[TraceSignal]:
 
 
 def _search_group_key(value: object) -> str:
-    text = str(value or "").lower()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    text = " ".join(text.split())
-    return text[:240] or "__empty__"
+    raw = str(value or "")
+    ascii_key = " ".join(re.sub(r"[^a-z0-9]+", " ", raw.lower()).split())[:240]
+    if ascii_key:
+        return ascii_key
+    # Non-ASCII titles (CJK / Cyrillic / emoji-only) survive ASCII stripping as
+    # empty, which would otherwise collapse every distinct non-ASCII title into
+    # one dedup group ("__empty__") and let the row_number() partition return
+    # only one of them per query (issue #27 B). Fall back to a stable hash of the
+    # NFKC-casefolded title so distinct non-ASCII titles get distinct groups
+    # while true duplicates (identical normalized text) still collapse together.
+    normalized = unicodedata.normalize("NFKC", raw).casefold().strip()
+    if not normalized:
+        return "__empty__"
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:24]
+    return f"__h:{digest}"
+
+
+def _superseded_trace_ids(record) -> tuple[str, ...]:
+    """Inverse supersession pointer: trace ids this record replaces.
+
+    Mirrors the legacy index (``trace_index._latest_units``) which honours
+    ``metadata.superseded_trace_ids`` in addition to the forward
+    ``superseded_by`` marker. The snapshot's ``latest_generation`` column only
+    consulted the forward pointer, so writers that emit only the inverse pointer
+    left the older generation flagged latest (issue #27 D).
+    """
+
+    replaced = record.metadata.get("superseded_trace_ids") or []
+    if not isinstance(replaced, list):
+        return ()
+    return tuple(str(tid) for tid in replaced if tid)
+
+
+def _normalize_ts(value: object) -> str | None:
+    """Normalize a record timestamp to UTC Z-form for lexicographic compare.
+
+    Stored timestamps must share a canonical UTC representation with the
+    ``--since`` bound (which ``_since_iso`` emits as ``...+00:00`` -> ``...Z``),
+    otherwise an offset-bearing stamp like ``10:00:00+02:00`` (== ``08:00:00Z``)
+    sorts after ``09:00:00Z`` as a raw string and the ``coalesce(...) >= ?``
+    where-clause filters it on the wrong side of the boundary (issue #27 C).
+    A value we cannot parse is preserved verbatim (best-effort, never lossy).
+    """
+
+    if value in (None, ""):
+        return None
+    text = str(value)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _since_iso(value: str) -> str:

@@ -547,3 +547,213 @@ def test_refresh_returns_none_without_snapshot() -> None:
     from opentraces.core.trace_search_snapshot import refresh_trace_search_snapshot
 
     assert refresh_trace_search_snapshot(["trace-x"], []) is None
+
+
+# --------------------------------------------------------------------------- #
+# issue #27 B: non-ASCII titles must not collapse into one dedup group
+# --------------------------------------------------------------------------- #
+def test_distinct_non_ascii_titles_both_surface() -> None:
+    # Two traces with DISTINCT CJK / Cyrillic titles must both appear: before
+    # the fix, the ASCII-stripped group key was "__empty__" for both, so the
+    # SQL row_number() partition returned only one of them per query.
+    _write_trace(
+        "demo-project",
+        _trace("trace-cjk", description="検索のバグを修正する"),
+    )
+    _write_trace(
+        "demo-project",
+        _trace("trace-cyr", description="Исправить поиск"),
+    )
+    build_trace_search_snapshot()
+
+    page = search_traces(None, SearchFilters(project="demo-project"), limit=10)
+
+    assert {hit.trace_id for hit in page.hits} == {"trace-cjk", "trace-cyr"}
+    assert page.total == 2
+
+
+def test_identical_non_ascii_titles_still_dedup() -> None:
+    # True duplicates (same normalized non-ASCII title) must still collapse to
+    # one surviving generation, keeping the dedup contract intact.
+    _write_trace(
+        "demo-project",
+        _trace(
+            "trace-dup-old",
+            description="検索のバグを修正する",
+            timestamp="2026-06-08T09:00:00Z",
+        ),
+    )
+    _write_trace(
+        "demo-project",
+        _trace(
+            "trace-dup-new",
+            description="検索のバグを修正する",
+            timestamp="2026-06-09T09:00:00Z",
+        ),
+    )
+    build_trace_search_snapshot()
+
+    page = search_traces(None, SearchFilters(project="demo-project"), limit=10)
+
+    assert [hit.trace_id for hit in page.hits] == ["trace-dup-new"]
+    assert page.total == 1
+
+
+# --------------------------------------------------------------------------- #
+# issue #27 C: --since must compare on a UTC-normalized timestamp
+# --------------------------------------------------------------------------- #
+def test_since_normalizes_offset_timestamps_to_utc() -> None:
+    # 10:00:00+02:00 == 08:00:00Z. A raw-string compare against a Z-normalized
+    # bound puts it on the wrong side of the boundary; build-time UTC
+    # normalization fixes that.
+    _write_trace(
+        "demo-project",
+        _trace(
+            "trace-offset",
+            description="Fix the offset boundary case",
+            timestamp="2026-06-09T10:00:00+02:00",
+        ),
+    )
+    build_trace_search_snapshot()
+
+    excluded = search_traces(
+        None,
+        SearchFilters(project="demo-project", since="2026-06-09T09:00:00Z"),
+        limit=10,
+    )
+    assert [hit.trace_id for hit in excluded.hits] == []
+
+    included = search_traces(
+        None,
+        SearchFilters(project="demo-project", since="2026-06-09T07:00:00Z"),
+        limit=10,
+    )
+    assert [hit.trace_id for hit in included.hits] == ["trace-offset"]
+
+
+# --------------------------------------------------------------------------- #
+# issue #27 D: inverse superseded pointer + surfacing older generations
+# --------------------------------------------------------------------------- #
+def _trace_with_metadata(trace_id: str, *, description: str, metadata: dict, timestamp: str):
+    record = _trace(trace_id, description=description, timestamp=timestamp)
+    record.metadata.update(metadata)
+    return record
+
+
+def test_inverse_superseded_pointer_demotes_older_generation() -> None:
+    # The newer trace declares it replaces the older via the inverse
+    # ``superseded_trace_ids`` pointer (the forward ``superseded_by`` marker is
+    # absent on the older one). Default latest-only search must drop the older.
+    _write_trace(
+        "demo-project",
+        _trace(
+            "trace-gen-old",
+            description="Auth flow rewrite first pass",
+            timestamp="2026-06-08T09:00:00Z",
+        ),
+    )
+    _write_trace(
+        "demo-project",
+        _trace_with_metadata(
+            "trace-gen-new",
+            description="Auth flow rewrite second pass",
+            metadata={"superseded_trace_ids": ["trace-gen-old"]},
+            timestamp="2026-06-09T09:00:00Z",
+        ),
+    )
+    build_trace_search_snapshot()
+
+    latest = search_traces(None, SearchFilters(project="demo-project"), limit=10)
+    assert {hit.trace_id for hit in latest.hits} == {"trace-gen-new"}
+
+
+def test_include_superseded_surfaces_equal_title_older_generation() -> None:
+    # Older + newer generation share a title. With --include-superseded
+    # (latest_generation=False) BOTH must surface; before the fix the title
+    # dedup partition collapsed them before generation could distinguish them.
+    _write_trace(
+        "demo-project",
+        _trace(
+            "trace-eq-old",
+            description="Stabilize the importer",
+            timestamp="2026-06-08T09:00:00Z",
+        ),
+    )
+    _write_trace(
+        "demo-project",
+        _trace_with_metadata(
+            "trace-eq-new",
+            description="Stabilize the importer",
+            metadata={"superseded_trace_ids": ["trace-eq-old"]},
+            timestamp="2026-06-09T09:00:00Z",
+        ),
+    )
+    build_trace_search_snapshot()
+
+    latest = search_traces(None, SearchFilters(project="demo-project"), limit=10)
+    assert {hit.trace_id for hit in latest.hits} == {"trace-eq-new"}
+
+    both = search_traces(
+        None,
+        SearchFilters(project="demo-project", latest_generation=False),
+        limit=10,
+    )
+    assert {hit.trace_id for hit in both.hits} == {"trace-eq-old", "trace-eq-new"}
+    assert both.total == 2
+
+
+# --------------------------------------------------------------------------- #
+# issue #27: a schema version bump auto-rebuilds existing snapshots once
+# --------------------------------------------------------------------------- #
+def test_schema_version_is_v4_for_corrected_documents() -> None:
+    from opentraces.core.trace_search_snapshot import SNAPSHOT_SCHEMA_VERSION
+
+    _write_trace("demo-project", _trace("trace-v", description="Schema bump check"))
+    summary = build_trace_search_snapshot()
+    assert summary.schema_version == SNAPSHOT_SCHEMA_VERSION == "opentraces.trace_search_snapshot.v4"
+
+
+def test_old_schema_snapshot_auto_rebuilds_exactly_once() -> None:
+    # An existing snapshot stamped with a prior schema version is treated as
+    # needs-rebuild; auto_rebuild self-heals once and serves rc=0 results.
+    import sqlite3
+
+    _write_trace("demo-project", _trace("trace-old-schema", description="needs rebuild"))
+    build_trace_search_snapshot()
+    snap = default_snapshot_path()
+    with sqlite3.connect(snap) as conn:
+        conn.execute(
+            "update snapshot_meta set value = ? where key = 'schema_version'",
+            ("opentraces.trace_search_snapshot.v3",),
+        )
+        conn.commit()
+    # A prior schema version is a needs-rebuild condition (issue #30 self-heal).
+    assert snapshot_status()["state"] == "wrong_schema"
+
+    page = search_traces(None, SearchFilters(project="demo-project"), limit=10)
+    assert [hit.trace_id for hit in page.hits] == ["trace-old-schema"]
+    assert page.diagnostics.rebuilt_index is True
+
+    page2 = search_traces(None, SearchFilters(project="demo-project"), limit=10)
+    assert page2.diagnostics.rebuilt_index is False
+
+
+def test_notify_rebuilding_writes_to_stderr_not_stdout(capsys, monkeypatch) -> None:
+    # M-half: the one-time rebuild notice must never touch stdout (JSON
+    # contract) and only emits when stderr is interactive.
+    import sys
+
+    from opentraces.core import trace_search_snapshot as tss
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True, raising=False)
+    tss._notify_rebuilding()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "rebuilding search snapshot" in captured.err
+
+    # Non-interactive stderr stays silent so piped / CliRunner JSON is clean.
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False, raising=False)
+    tss._notify_rebuilding()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
