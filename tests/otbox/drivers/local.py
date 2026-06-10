@@ -79,6 +79,16 @@ class LocalDriver(Driver):
                 stdout = exc.stdout or "" if isinstance(exc.stdout, str) else ""
                 stderr = (exc.stderr or "" if isinstance(exc.stderr, str) else "") + \
                     f"\n[otbox] command timed out after {timeout}s"
+            except FileNotFoundError as exc:
+                # A missing binary is a non-zero RESULT, not a harness crash —
+                # callers that probe candidate binaries (e.g. _prereqs.py's
+                # python3.14 -> python3.12 fall-through) rely on exec returning
+                # ok=False so they can try the next candidate. Surfaced on the
+                # first CI nightly: python3.14 exists locally but not on the
+                # ubuntu runner, so the unguarded probe crashed the whole sweep.
+                returncode = 127
+                stdout = ""
+                stderr = f"[otbox] executable not found: {exc.filename or argv[0]}"
         return ExecResult(
             argv=argv,
             returncode=returncode,
