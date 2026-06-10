@@ -58,14 +58,6 @@ added = 2026-06-10
 expires = 2026-09-08
 
 [[entries]]
-journeys = ["trail-mature-updates-patch-anchor"]
-rules = ["unknown-precondition"]
-reason = "declares git_repo_present + post_commit_hook_installed preconditions; the vocab keys + probes are added by otbox-42-worlds-envelopes. The journey TOML itself is already fixed ({trace_id} + argv shell steps) and passes 7/7 steps on c-captured-real-session via a direct journey run; drop this entry in the final pass once the vocab lands so it passes the catalogue lint too."
-issue = "https://github.com/JayFarei/opentraces/issues/42"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
 journeys = ["pi-skill-detection-parity"]
 rules = ["baseline-red"]
 reason = "blocked-on-pi-skill-capture-content: the real pi-readonly-search artifact contains only an ot_capture_status call; assertions need a capture where pi reads .agents/skills/opentraces/SKILL.md and a project file — re-spec the scenario then OT_REAL_PI=1 make capture-refresh SCENARIO=pi-readonly-search and re-publish via the PR #35 supply chain; do NOT weaken assertions."
