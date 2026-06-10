@@ -72,6 +72,7 @@ from .trace_index_sqlite import (
     T,
     _configure_connection,
     _connect,
+    _checkpoint_wal_truncate,
     _unlink_wal_sidecars,
     _is_lock_error,
     _retry_on_lock,
@@ -295,7 +296,12 @@ def rebuild_index(index_path: Path | None = None) -> RebuildSummary:
     """Rebuild the local cache from retained project trace stores."""
 
     db_path = index_path or default_index_path()
-    return _retry_on_lock(lambda: _rebuild_index_locked(db_path))
+    summary = _retry_on_lock(lambda: _rebuild_index_locked(db_path))
+    # Issue #40 (A1): trace-level fields are memoized per (trace_id, path) for
+    # the read-time rejoin; a rebuild may have changed any of them, so a
+    # long-lived process must not keep serving the old hydration.
+    _trace_level_fields.cache_clear()
+    return summary
 
 
 def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
@@ -339,6 +345,10 @@ def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
                 source_repo = project_sources.get(project_slug)
                 if source_repo and source_repo.exists():
                     _rebuild_trail_projection(conn, project_slug, source_repo)
+            # Issue #40 (A2): a from-scratch rebuild also expands every
+            # generation; purge the superseded ones so a heal/rebuild does not
+            # re-grow the bloat the refresh path just reclaimed.
+            _purge_superseded_generation_units(conn)
             conn.execute(
                 "insert into meta(key, value) values (?, ?)",
                 ("index_version", INDEX_VERSION),
@@ -384,12 +394,197 @@ def refresh_index(
     if not db_path.exists():
         return rebuild_index(db_path)
 
-    return _retry_on_lock(
+    summary = _retry_on_lock(
         lambda: _refresh_index_locked(
             db_path,
             refresh_trails=refresh_trails,
             trail_project_slugs=trail_project_slugs,
         )
+    )
+    # Issue #40 (A1): see rebuild_index — refreshed traces invalidate the
+    # memoized trace-level hydration fields.
+    _trace_level_fields.cache_clear()
+    return summary
+
+
+@dataclass(frozen=True)
+class CompactSummary:
+    """Issue #40 (B): result of a ``trace index compact`` reclaim pass."""
+
+    index_path: Path
+    purged_units: int
+    size_bytes_before: int | None
+    size_bytes_after: int | None
+    freelist_before: int | None
+    freelist_after: int | None
+    vacuumed: bool
+    vacuum_skipped_reason: str | None
+    free_disk_bytes: int | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "index_path": str(self.index_path),
+            "purged_units": self.purged_units,
+            "size_bytes_before": self.size_bytes_before,
+            "size_bytes_after": self.size_bytes_after,
+            "freelist_before": self.freelist_before,
+            "freelist_after": self.freelist_after,
+            "vacuumed": self.vacuumed,
+            "vacuum_skipped_reason": self.vacuum_skipped_reason,
+            "free_disk_bytes": self.free_disk_bytes,
+        }
+
+
+def _db_file_size(db_path: Path) -> int | None:
+    try:
+        return db_path.stat().st_size
+    except OSError:
+        return None
+
+
+def _free_disk_bytes(db_path: Path) -> int | None:
+    import os as _os
+
+    try:
+        st = _os.statvfs(str(db_path.parent))
+    except (OSError, AttributeError):  # AttributeError: non-POSIX (Windows).
+        return None
+    return int(st.f_bavail) * int(st.f_frsize)
+
+
+def _freelist_count(db_path: Path) -> int | None:
+    try:
+        with _connect(db_path) as conn:
+            return int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+    except (sqlite3.Error, TypeError, ValueError):
+        return None
+
+
+def _compact_purge_superseded_batched(
+    db_path: Path, *, batch_size: int = 50
+) -> int:
+    """Incrementally purge superseded-generation units in short transactions.
+
+    Unlike the in-refresh purge (one big transaction), the compact verb deletes
+    in small per-trace-batch transactions so a concurrent reader is never
+    blocked for more than one short write. Each batch is wrapped in its own
+    ``_retry_on_lock`` so transient contention is absorbed. Returns the total
+    number of unit rows purged.
+    """
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        if not _schema_supports_refresh(conn):
+            # A version-mismatched / partially-built DB has nothing safe to
+            # incrementally purge; the operator should rebuild instead.
+            return 0
+        trace_ids = _superseded_generation_trace_ids(conn)
+    if not trace_ids:
+        return 0
+    purged = 0
+    for start in range(0, len(trace_ids), batch_size):
+        batch = trace_ids[start : start + batch_size]
+
+        def _purge_batch(batch: list[str] = batch) -> int:
+            with _connect(db_path) as conn:
+                placeholders = ",".join("?" for _ in batch)
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    before = conn.execute(
+                        f"select count(*) from units "
+                        f"where trace_id in ({placeholders}) and unit_type != 'trace'",
+                        batch,
+                    ).fetchone()[0]
+                    _delete_units_where(
+                        conn,
+                        f"trace_id in ({placeholders}) and unit_type != 'trace'",
+                        batch,
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            return int(before or 0)
+
+        purged += _retry_on_lock(_purge_batch)
+    return purged
+
+
+def compact_index(
+    index_path: Path | None = None,
+    *,
+    vacuum: bool = False,
+) -> CompactSummary:
+    """Issue #40 (B): reclaim legacy Trace Index space without a full rebuild.
+
+    Three phases, each safe to run while live capture mutates the DB:
+
+    1. **Incremental purge** — delete superseded-generation unit bodies in
+       short per-batch transactions (no long write lock).
+    2. **WAL checkpoint (TRUNCATE)** — fold the WAL back into the main file and
+       shrink the ``-wal`` sidecar.
+    3. **VACUUM (opt-in)** — only when ``vacuum=True`` AND free disk space is at
+       least the current DB file size (SQLite VACUUM writes a full temporary
+       copy of the database). When the guard fails, the pass still reports the
+       freelist reclaimable by a later VACUUM but does not run it.
+
+    Returns a :class:`CompactSummary` with before/after sizes and freelist
+    counts so the caller can render an honest reclaim report.
+    """
+    db_path = index_path or default_index_path()
+    # Existence MUST be checked before any ``_connect`` — sqlite3.connect would
+    # create an empty DB file as a side effect and turn a no-op into a VACUUM
+    # of an empty database.
+    if not db_path.exists():
+        return CompactSummary(
+            index_path=db_path,
+            purged_units=0,
+            size_bytes_before=None,
+            size_bytes_after=None,
+            freelist_before=None,
+            freelist_after=None,
+            vacuumed=False,
+            vacuum_skipped_reason="index does not exist" if vacuum else None,
+            free_disk_bytes=_free_disk_bytes(db_path),
+        )
+
+    size_before = _db_file_size(db_path)
+    freelist_before = _freelist_count(db_path)
+    purged = _compact_purge_superseded_batched(db_path)
+    _checkpoint_wal_truncate(db_path)
+
+    free_disk = _free_disk_bytes(db_path)
+    vacuumed = False
+    vacuum_skipped_reason: str | None = None
+    if vacuum:
+        # SQLite VACUUM rebuilds the DB into a temp file in the same directory,
+        # so it transiently needs roughly another full DB's worth of free space.
+        current_size = _db_file_size(db_path) or 0
+        if free_disk is not None and free_disk < current_size:
+            vacuum_skipped_reason = (
+                f"insufficient free disk: need ~{current_size} bytes, "
+                f"have {free_disk} bytes free"
+            )
+        else:
+            def _run_vacuum() -> None:
+                with _connect(db_path) as conn:
+                    conn.execute("VACUUM")
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+            _retry_on_lock(_run_vacuum)
+            vacuumed = True
+
+    size_after = _db_file_size(db_path)
+    freelist_after = _freelist_count(db_path)
+    return CompactSummary(
+        index_path=db_path,
+        purged_units=purged,
+        size_bytes_before=size_before,
+        size_bytes_after=size_after,
+        freelist_before=freelist_before,
+        freelist_after=freelist_after,
+        vacuumed=vacuumed,
+        vacuum_skipped_reason=vacuum_skipped_reason,
+        free_disk_bytes=free_disk,
     )
 
 
@@ -470,6 +665,12 @@ def _refresh_index_locked(
             ]
             _delete_trace_ids(conn, old_trace_ids)
             conn.execute("delete from sources where path = ?", (source_key,))
+
+        # Issue #40 (A2): purge superseded generations' heavy unit bodies.
+        # Older generations of a session keep their ``traces`` + map rows + the
+        # single trace-level unit, but their per-node/per-patch units are
+        # redundant index bloat that accumulates across re-ingest passes.
+        _purge_superseded_generation_units(conn)
 
         if refresh_trails:
             seen_trail_projects: set[str] = set()
@@ -1620,6 +1821,86 @@ def _delete_units_where(conn: sqlite3.Connection, clause: str, params: list[str]
         conn.execute("delete from units where unit_id = ?", (unit_id,))
 
 
+def _superseded_generation_trace_ids(conn: sqlite3.Connection) -> list[str]:
+    """Issue #40 (A2): trace_ids of every NON-latest generation per session.
+
+    A session (``session_id``) may accumulate many generations across resume /
+    re-ingest passes, each landing as its own ``trace_id`` with an increasing
+    ``generation_index``. Only the latest generation needs its full unit /
+    FTS / facet / signal expansion; older generations are kept reachable for
+    ``trace map``/``--include-superseded`` via their ``traces`` + map rows +
+    the single trace-level unit, but their heavy per-node/per-patch unit bodies
+    are redundant index bloat.
+
+    Returns the trace_ids that are NOT the max-generation row for their
+    ``(project_slug, session_id)`` group. Sessions with a single generation
+    contribute nothing.
+    """
+    rows = conn.execute(
+        "select trace_id, project_slug, session_id, generation_index from traces"
+    ).fetchall()
+    latest: dict[tuple[str, str], tuple[int, str]] = {}
+    members: dict[tuple[str, str], list[str]] = {}
+    for row in rows:
+        trace_id = str(row[0])
+        key = (str(row[1]), str(row[2]))
+        try:
+            gen = int(row[3])
+        except (TypeError, ValueError):
+            gen = 0
+        members.setdefault(key, []).append(trace_id)
+        current = latest.get(key)
+        # Tie-break on trace_id so a stable winner is chosen when two rows
+        # share the max generation_index (defensive; should not happen).
+        if (
+            current is None
+            or gen > current[0]
+            or (gen == current[0] and trace_id > current[1])
+        ):
+            latest[key] = (gen, trace_id)
+    superseded: list[str] = []
+    for key, trace_ids in members.items():
+        if len(trace_ids) < 2:
+            continue
+        winner = latest[key][1]
+        superseded.extend(trace_id for trace_id in trace_ids if trace_id != winner)
+    return sorted(set(superseded))
+
+
+def _purge_superseded_generation_units(conn: sqlite3.Connection) -> int:
+    """Issue #40 (A2): delete superseded generations' heavy units.
+
+    For every non-latest generation in a multi-generation session, delete its
+    units (and their FTS / facet / signal rows) EXCEPT the single trace-level
+    ``unit_type = 'trace'`` unit. The ``traces`` row and the
+    ``trace_map_nodes`` / ``trace_map_edges`` rows are retained untouched so
+    ``trace map <old-gen-id>`` keeps exiting 0 and ``--include-superseded``
+    still surfaces a trace-level row for the old generation. Returns the count
+    of purged unit rows (0 when nothing was superseded).
+    """
+    trace_ids = _superseded_generation_trace_ids(conn)
+    if not trace_ids:
+        return 0
+    purged = 0
+    # Bound the IN-list size to stay well under SQLite's parameter limit on
+    # buckets with many superseded generations.
+    for start in range(0, len(trace_ids), 400):
+        batch = trace_ids[start : start + 400]
+        placeholders = ",".join("?" for _ in batch)
+        before = conn.execute(
+            f"select count(*) from units "
+            f"where trace_id in ({placeholders}) and unit_type != 'trace'",
+            batch,
+        ).fetchone()[0]
+        _delete_units_where(
+            conn,
+            f"trace_id in ({placeholders}) and unit_type != 'trace'",
+            batch,
+        )
+        purged += int(before or 0)
+    return purged
+
+
 def _delete_trail_maps_for_trace_ids(conn: sqlite3.Connection, trace_ids: list[str]) -> None:
     ids = sorted({trace_id for trace_id in trace_ids if trace_id})
     if not ids:
@@ -1895,6 +2176,17 @@ def _build_units(
     ]
     units.extend(_skill_invocation_units(record, project_slug, title, facets))
     for node in trace_map.nodes:
+        # Issue #40 (A1): trace_map_node units must NOT de-normalize the
+        # trace-level intent/title/summary_metadata. Stamping the full
+        # trace-level text onto every node was the dominant ``units`` bloat
+        # (~1.7MB/trace of duplicated unit bodies across hundreds of nodes).
+        # Node units keep only their own node-level text (a bounded preview)
+        # plus the cross-trace join key (``trace_id``); the trace-level
+        # ``tu:<id>:trace`` unit retains intent/title/summary and the
+        # candidate-packet builder (:func:`_candidate_packet`) joins those
+        # trace-level fields back in at read time via
+        # :func:`_trace_level_fields`.
+        node_preview = _preview(node.text_preview or "")
         units.append(
             TraceUnit(
                 unit_id=node.unit_id,
@@ -1903,10 +2195,10 @@ def _build_units(
                 project_slug=project_slug,
                 files=[*node.files_read, *node.files_modified],
                 skills=skills if node.action_type == "skill_invocation" else [],
-                title_text=title,
-                intent_text=intent_text,
-                action_text=node.text_preview or "",
-                evidence_text=node.text_preview or "",
+                title_text="",
+                intent_text="",
+                action_text=node_preview,
+                evidence_text=node_preview,
                 artifact_text=" ".join([*node.files_read, *node.files_modified]),
                 facets=facets if node.action_type == "skill_invocation" else [],
                 signals=[],
@@ -1916,7 +2208,6 @@ def _build_units(
                     "generation_index": record.generation_index,
                     "timestamp_start": record.timestamp_start,
                     "timestamp_end": record.timestamp_end,
-                    **summary_metadata,
                 },
             )
         )
@@ -2673,6 +2964,86 @@ def _latest_units(units: list[TraceUnit]) -> list[TraceUnit]:
     ]
 
 
+_TRACE_LEVEL_SUMMARY_KEYS = (
+    "summary",
+    "headline",
+    "provenance_color",
+    "outcome_commit_sha",
+    "commit_subject",
+)
+
+
+@lru_cache(maxsize=4096)
+def _trace_level_fields(trace_id: str, index_path_str: str) -> tuple[str, str, str]:
+    """Issue #40 (A1): fetch the trace-level unit's de-normalized fields.
+
+    ``trace_map_node`` units no longer carry the trace-level
+    ``title_text`` / ``intent_text`` / ``summary_metadata`` (that duplication
+    was the dominant ``units`` bloat). The candidate-packet builder joins those
+    fields back in at read time from the single ``tu:<trace_id>:trace`` unit
+    that retains them. Returns ``(title_text, intent_text, summary_metadata_json)``
+    where the metadata JSON carries only the five summary keys. The lookup is a
+    single indexed point-SELECT per trace_id (bounded page size, memoized).
+    """
+    db_path = Path(index_path_str)
+    if not db_path.exists():
+        return ("", "", "{}")
+    try:
+        with _connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "select title_text, intent_text, metadata_json from units "
+                "where unit_id = ?",
+                (f"tu:{trace_id}:trace",),
+            ).fetchone()
+    except sqlite3.DatabaseError:
+        return ("", "", "{}")
+    if row is None:
+        return ("", "", "{}")
+    try:
+        meta = json.loads(row["metadata_json"])
+    except (ValueError, TypeError):
+        meta = {}
+    summary_meta = {
+        key: meta.get(key) for key in _TRACE_LEVEL_SUMMARY_KEYS if key in meta
+    }
+    return (
+        row["title_text"] or "",
+        row["intent_text"] or "",
+        json.dumps(summary_meta),
+    )
+
+
+def _hydrate_trace_level_fields(unit: TraceUnit, index_path: Path | None) -> TraceUnit:
+    """Backfill a node unit's missing trace-level fields from its trace unit.
+
+    Only ``trace_map_node`` units are affected (they ship with empty
+    ``title_text`` / ``intent_text`` and no summary metadata after issue #40).
+    All other unit types are returned unchanged. The hydration is non-mutating
+    on the shared cached row: it returns a shallow copy with the joined fields.
+    """
+    if unit.unit_type != "trace_map_node":
+        return unit
+    if unit.title_text or unit.intent_text:
+        return unit
+    db_path = index_path or default_index_path()
+    title, intent, summary_meta_json = _trace_level_fields(unit.trace_id, str(db_path))
+    if not (title or intent or summary_meta_json != "{}"):
+        return unit
+    try:
+        summary_meta = json.loads(summary_meta_json)
+    except (ValueError, TypeError):
+        summary_meta = {}
+    joined = unit.model_copy(deep=True)
+    joined.title_text = title
+    joined.intent_text = intent
+    merged_metadata = dict(joined.metadata)
+    for key, value in summary_meta.items():
+        merged_metadata.setdefault(key, value)
+    joined.metadata = merged_metadata
+    return joined
+
+
 def _candidate_packet(
     unit: TraceUnit,
     score: float,
@@ -2683,6 +3054,7 @@ def _candidate_packet(
     max_slice_nodes: int = 40,
     index_path: Path | None = None,
 ) -> CandidatePacket:
+    unit = _hydrate_trace_level_fields(unit, index_path)
     title = unit.title_text or unit.trace_id
     summary = _candidate_summary(unit, index_path=index_path)
     headline = headline_from_summary(summary or title)
