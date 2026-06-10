@@ -40,17 +40,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./otbox fetch-captures
-      - name: Full tier-0 journey matrix (artifact-preferred)
+      - name: Full journey sweep + harness tests (verdicts recorded)
         env:
           OT_OTBOX_FETCH_CAPTURES: "1"
+          OTBOX_LEDGER_DIR: ledger-records
           GH_TOKEN: ${{ github.token }}
         run: |
           python -m pytest tests/otbox -q \
             --junitxml=otbox-nightly-junit.xml
+      - name: Executed-evidence ledger (SKIP-fails rule enforced)
+        run: |
+          ./otbox ledger --from-matrix ledger-records \
+            --out run-ledger.json \
+            --source "nightly:${{ github.run_id }}" \
+            --fail-on-red
       - name: Upload run evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: otbox-nightly-evidence
-          path: otbox-nightly-junit.xml
+          path: |
+            otbox-nightly-junit.xml
+            matrix-report.json
+            run-ledger.json
           retention-days: 30

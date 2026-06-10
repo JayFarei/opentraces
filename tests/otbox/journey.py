@@ -142,9 +142,20 @@ def available_journeys() -> list[dict]:
                 # today's behaviour.
                 "preconditions": dict(doc.get("preconditions") or {}),
                 "tier_label": str(doc.get("tier_label", "bronze")),
+                # otbox 2.0 phase 3: the CI lane (pr | nightly |
+                # local-agents). Explicit ci_lane in the TOML wins;
+                # otherwise derived (sentinels -> pr, tier 0 -> nightly,
+                # tier 1 -> local-agents).
+                "ci_lane": _derive_ci_lane(doc),
             }
         )
     return out
+
+
+def _derive_ci_lane(doc: dict) -> str:
+    from .lanes import derive_ci_lane
+
+    return derive_ci_lane(doc)
 
 
 # --------------------------------------------------------------------------

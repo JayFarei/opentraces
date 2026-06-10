@@ -13,6 +13,8 @@ Rules (rule ids are stable; QUARANTINE.toml entries reference them):
   unknown-precondition     [preconditions] key outside PRECONDITION_VOCAB
   unknown-step-ref         assertion step= names no declared [[steps]].id
   self-comparing-var       equals_var resolves to the SAME step:path it asserts on
+  lane-unreachable         requires names a capability the journey's CI lane
+                           can never provide (the 1.0 graveyard pattern)
 
 Quarantine: tests/otbox/catalogue/QUARANTINE.toml downgrades matching
 violations to warnings until `expires`. Expired entries, entries naming
@@ -124,6 +126,19 @@ def _lint_one(path: Path) -> list[LintViolation]:
             violations.append(
                 LintViolation(name, "unregistered-checkpoint", f"{cp!r} is not registered")
             )
+
+    from .lanes import derive_ci_lane, lane_unreachable
+
+    ci_lane = derive_ci_lane(doc)
+    unreachable = lane_unreachable(ci_lane, [str(r) for r in doc.get("requires", [])])
+    if unreachable:
+        violations.append(
+            LintViolation(
+                name,
+                "lane-unreachable",
+                f"lane {ci_lane!r} can never provide {unreachable!r}",
+            )
+        )
 
     for key in (doc.get("preconditions") or {}):
         if key not in PRECONDITION_VOCAB:

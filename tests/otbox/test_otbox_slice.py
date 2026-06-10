@@ -193,10 +193,33 @@ def test_tier0_catalogue_journey(driver, journey_name):
         run_seed(driver, box, meta["seed"] or "smoke")
     try:
         result = run_journey(driver, box, journey_name)
+        _record_ledger_verdict(journey_name, result)
         assert result.verdict in ("PASS", "SKIP"), f"{journey_name}: {result.reason}"
     finally:
         if box.root.exists():
             driver.teardown(box)
+
+
+def _record_ledger_verdict(journey_name: str, result) -> None:
+    """Drop a per-journey verdict record for the executed-evidence ledger
+    (otbox 2.0 phase 3). Enabled by OTBOX_LEDGER_DIR; the nightly lane sets
+    it and compacts the records via `./otbox ledger --from-results`."""
+    import json as _json
+    import os
+    from pathlib import Path
+
+    out_dir = os.environ.get("OTBOX_LEDGER_DIR")
+    if not out_dir:
+        return
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    record = {
+        "journey": journey_name,
+        "verdict": result.verdict,
+        "reason": getattr(result, "reason", "") or "",
+        "duration_s": float(getattr(result, "duration_s", 0.0) or 0.0),
+        "base_checkpoint": "",
+    }
+    (Path(out_dir) / f"{journey_name}.json").write_text(_json.dumps(record) + "\n")
 
 
 def test_zero_host_residue(driver):
