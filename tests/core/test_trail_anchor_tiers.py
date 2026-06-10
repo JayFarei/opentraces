@@ -353,3 +353,236 @@ def test_before_blob_guard_rejects_revert_commit_as_landing(tmp_path: Path) -> N
         and (e.payload.get("commit_id") or {}).get("hex") == revert
         for e in events
     )
+
+
+# --------------------------------------------------------------------------- #
+# pkg-44 #44 — compute-gate equivalence in the structural matcher.
+#
+# These pin that the length-bound + quick_ratio gates are BEHAVIOR-PRESERVING:
+# a real near-equal-length divergence still anchors with the SAME similarity,
+# while a length-mismatched pair is rejected WITHOUT ever building a
+# SequenceMatcher (the gate that rejected 100% of the 1,077 pairs in the
+# 30-minute-hang incident).
+# --------------------------------------------------------------------------- #
+
+
+import difflib as _real_difflib
+
+_REAL_SEQUENCE_MATCHER = _real_difflib.SequenceMatcher
+
+
+class _CountingSequenceMatcher:
+    """Wraps difflib.SequenceMatcher, counting constructions and ratio() calls.
+
+    Used to prove the compute gates short-circuit BEFORE the expensive
+    O(n*m) ratio() (and even before constructing the matcher). Holds a
+    reference to the GENUINE class captured at import time so monkeypatching
+    ``difflib.SequenceMatcher`` with this wrapper does not recurse.
+    """
+
+    constructed = 0
+    ratio_calls = 0
+    quick_ratio_calls = 0
+
+    def __init__(self, *args, **kwargs):
+        type(self).constructed += 1
+        self._inner = _REAL_SEQUENCE_MATCHER(*args, **kwargs)
+
+    def ratio(self):
+        type(self).ratio_calls += 1
+        return self._inner.ratio()
+
+    def quick_ratio(self):
+        type(self).quick_ratio_calls += 1
+        return self._inner.quick_ratio()
+
+    def real_quick_ratio(self):
+        return self._inner.real_quick_ratio()
+
+    @classmethod
+    def reset(cls):
+        cls.constructed = 0
+        cls.ratio_calls = 0
+        cls.quick_ratio_calls = 0
+
+
+def _hunks_for(added_text: str, path: str = "config.py") -> dict:
+    from opentraces.enrichment.attribution import _norm
+
+    return {
+        path: [
+            {
+                "added_text": added_text,
+                "added_start": 1,
+                "added_end": added_text.count("\n") or 1,
+                "_norm_added": _norm(added_text),
+            }
+        ]
+    }
+
+
+def test_near_equal_length_pair_still_anchors_structural(monkeypatch):
+    """A near-equal-length divergence (quote rewrite) that scores >= 0.85 must
+    still anchor as structural_match with the SAME similarity value the
+    un-gated matcher would have produced. Gate is behavior-preserving on the
+    accept path."""
+    from opentraces.core.trails import anchors as A
+
+    authored = "GREETING = 'hello world AAAA'\n"
+    added = 'GREETING = "hello world AAAA"\n'  # two chars differ; ~0.93 ratio
+    patch = {"file_path": "config.py", "authored_text": authored}
+    hunks = _hunks_for(added)
+
+    # Baseline similarity from the raw matcher (no gates).
+    import difflib
+
+    raw_score = round(
+        difflib.SequenceMatcher(None, authored, added, autojunk=False).ratio(), 4
+    )
+    assert raw_score >= A.STRUCTURAL_MATCH_THRESHOLD
+
+    _CountingSequenceMatcher.reset()
+    monkeypatch.setattr(A.difflib, "SequenceMatcher", _CountingSequenceMatcher)
+    result = A._find_structural_anchor(patch, hunks)
+
+    assert result is not None
+    assert result["similarity"] == raw_score, (
+        "gated structural match must report the identical similarity value"
+    )
+    # The length gate passed, so the matcher was built and ratio() computed.
+    assert _CountingSequenceMatcher.constructed == 1
+    assert _CountingSequenceMatcher.ratio_calls == 1
+
+
+def test_tiny_patch_vs_huge_hunk_skipped_without_matcher(monkeypatch):
+    """A short authored line against a huge hunk has a length ratio far below
+    0.85, so it CANNOT score >= 0.85 (difflib bound:
+    ratio() <= real_quick_ratio() == length ratio). The gate must reject it
+    using pure arithmetic — NO SequenceMatcher is ever constructed."""
+    from opentraces.core.trails import anchors as A
+
+    authored = "x = 1\n"  # 6 chars
+    added = ("y = 2  # padding line that makes this hunk enormous\n" * 40)
+    patch = {"file_path": "config.py", "authored_text": authored}
+    hunks = _hunks_for(added)
+
+    _CountingSequenceMatcher.reset()
+    monkeypatch.setattr(A.difflib, "SequenceMatcher", _CountingSequenceMatcher)
+    result = A._find_structural_anchor(patch, hunks)
+
+    assert result is None
+    assert _CountingSequenceMatcher.constructed == 0, (
+        "length-bound gate must reject before constructing any SequenceMatcher"
+    )
+    assert _CountingSequenceMatcher.ratio_calls == 0
+
+
+def test_length_gate_pass_but_quick_ratio_fail_skips_full_ratio(monkeypatch):
+    """A pair whose lengths are close (passes the arithmetic gate) but whose
+    content has little real overlap fails quick_ratio() (the O(n) upper bound)
+    and must NOT pay for the full O(n*m) ratio()."""
+    from opentraces.core.trails import anchors as A
+
+    # Equal length, fully disjoint character multisets -> length ratio == 1.0
+    # (passes arithmetic gate) but quick_ratio() == 0.0 (< 0.85).
+    authored = "aaaaaaaaaaaaaaaaaaaaaaaa\n"
+    added = "bbbbbbbbbbbbbbbbbbbbbbbb\n"
+    assert len(authored) == len(added)
+    patch = {"file_path": "config.py", "authored_text": authored}
+    hunks = _hunks_for(added)
+
+    _CountingSequenceMatcher.reset()
+    monkeypatch.setattr(A.difflib, "SequenceMatcher", _CountingSequenceMatcher)
+    result = A._find_structural_anchor(patch, hunks)
+
+    assert result is None
+    # Matcher built once for the quick_ratio probe...
+    assert _CountingSequenceMatcher.constructed == 1
+    assert _CountingSequenceMatcher.quick_ratio_calls == 1
+    # ...but the full ratio() was never computed.
+    assert _CountingSequenceMatcher.ratio_calls == 0
+
+
+def test_reconcile_memoizes_patch_id_and_oid_subprocesses(tmp_path, monkeypatch):
+    """A reconcile creating multiple anchors on one commit must invoke
+    ``git patch-id`` exactly ONCE (loop-invariant per (repo, commit)) and
+    ``git rev-parse <commit>:<path>`` exactly once per DISTINCT path — not once
+    per anchor."""
+    import subprocess as _sp
+
+    from opentraces.core.trails import anchors as A
+
+    _init_repo(tmp_path)
+
+    # Three patches landing in the SAME file (one distinct path) plus one in a
+    # second file -> 4 anchors over 2 distinct paths.
+    files = {"a.py": "", "b.py": ""}
+    for fn in files:
+        (tmp_path / fn).write_text("seed\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed files"], cwd=tmp_path,
+                   check=True)
+
+    specs = [
+        ("a.py", "ALPHA = 1\n"),
+        ("a.py", "BETA = 2\n"),
+        ("a.py", "GAMMA = 3\n"),
+        ("b.py", "DELTA = 4\n"),
+    ]
+    new_content = {
+        "a.py": "ALPHA = 1\nBETA = 2\nGAMMA = 3\n",
+        "b.py": "DELTA = 4\n",
+    }
+    for i, (fp, authored) in enumerate(specs):
+        after_blob = GitObjectID(hex=_hash_object(tmp_path, authored))
+        _emit_hook_patch(
+            tmp_path,
+            trace_id=f"tr{i}",
+            step_index=i + 1,
+            file_path=fp,
+            trace_patch_id=f"tracepatch-sha256:fixture-mem-{i}",
+            before_blob=GitObjectID(hex=_hash_object(tmp_path, "seed\n")),
+            after_blob=after_blob,
+            authored_text=authored,
+            affected_range={"start_line": 1, "end_line": 1},
+        )
+    for fn, content in new_content.items():
+        (tmp_path / fn).write_text(content)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "land four"], cwd=tmp_path,
+                   check=True)
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+
+    counts = {"patch_id": 0, "rev_parse_blob": {}}
+    real_run = _sp.run
+
+    def _counting_run(args, *a, **k):
+        try:
+            if isinstance(args, (list, tuple)):
+                if "patch-id" in args:
+                    counts["patch_id"] += 1
+                if "rev-parse" in args:
+                    # rev-parse of a <commit>:<path> blob ref.
+                    for tok in args:
+                        if isinstance(tok, str) and tok.startswith(f"{head}:"):
+                            path = tok.split(":", 1)[1]
+                            counts["rev_parse_blob"][path] = (
+                                counts["rev_parse_blob"].get(path, 0) + 1
+                            )
+        except Exception:
+            pass
+        return real_run(args, *a, **k)
+
+    monkeypatch.setattr(A.subprocess, "run", _counting_run)
+    created = A.reconcile_commit_anchors(tmp_path, head)
+
+    assert len(created) == 4, "all four patches must anchor"
+    assert counts["patch_id"] == 1, (
+        "git patch-id must run exactly once per reconcile (loop-invariant)"
+    )
+    # One rev-parse blob lookup per DISTINCT path, not per anchor.
+    assert counts["rev_parse_blob"] == {"a.py": 1, "b.py": 1}, (
+        f"oid cache must collapse per-path: {counts['rev_parse_blob']}"
+    )
