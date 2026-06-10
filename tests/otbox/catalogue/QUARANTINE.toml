@@ -83,6 +83,14 @@ added = 2026-06-10
 expires = 2026-09-08
 
 [[entries]]
+journeys = ["survival-walk-reverted"]
+rules = ["baseline-red"]
+reason = "the phase-4 runtime probe now ERRORs this journey honestly (precondition_unmet: zero reverted trails in the live substrate) instead of letting it pass with result_count=0 as in 1.0. PRODUCT QUESTION per the spec contingency: the synthetic revert fixture cannot reach survival=reverted — either the substrate's revert detection needs a fix (PR-B) or the real claude-with-revert capture becomes the base; if neither, the 8-survival-state marketing claim needs honest re-scoping. Do NOT weaken the probe"
+issue = "https://github.com/JayFarei/opentraces/issues/25"
+added = 2026-06-10
+expires = 2026-09-08
+
+[[entries]]
 journeys = ["tui-review-smoke"]
 rules = ["lane-unreachable"]
 reason = "requires 'decommissioned_ui' — a deliberately-never-satisfiable capability tombstone for the decommissioned TUI; delete the journey in PR-A review or re-home it"

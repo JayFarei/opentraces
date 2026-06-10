@@ -1336,6 +1336,19 @@ def run_journey(driver: Driver, box: Box, name: str) -> JourneyResult:
         result.reason = f"missing capabilities: {sorted(missing)}"
         return result
 
+    # Runtime precondition probes (otbox 2.0 phase 4): re-verify declared
+    # preconditions against the LIVE box, not the checkpoint's static
+    # provides list. A failed probe is an ERROR — never SKIP (hides),
+    # never PASS (lies). This is what killed the survival-walk tautology.
+    if preconditions:
+        from .probes import run_probes
+
+        for key, ok, message in run_probes(driver, box, preconditions):
+            if not ok:
+                result.verdict = "ERROR"
+                result.reason = f"precondition_unmet: {key}: {message}"
+                return result
+
     # Plan 069 R8: when preconditions AND from_checkpoints are both
     # declared, the explicit pin wins but must satisfy the declared
     # preconditions; otherwise SKIP with a clear conflict reason.
