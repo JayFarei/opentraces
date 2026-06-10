@@ -334,6 +334,55 @@ def _meta_hash_from_db(conn: sqlite3.Connection) -> str:
     return hasher.hexdigest()
 
 
+# The exact FTS5 external-content column list, in declaration order (must stay
+# in lockstep with the ``create virtual table trace_fts`` body in
+# ``_create_schema`` and the insert in ``_insert_doc``). ``trace_fts`` is an
+# external-content table (``content='traces'`` / ``content_rowid='rowid'``), so
+# its index is NOT auto-maintained when a content row is deleted — the caller
+# must emit a paired FTS ``'delete'`` command carrying the OLD column values
+# BEFORE the content row goes away, or the FTS index silently desyncs (issue
+# #41): orphaned postings keep matching deleted/changed traces, and the per-row
+# refresh path corrupts the index over time.
+_FTS_COLUMNS = (
+    "title",
+    "summary",
+    "intent_text",
+    "action_text",
+    "file_text",
+    "skill_text",
+    "facet_text",
+)
+
+
+def _fts_delete_doc(conn: sqlite3.Connection, trace_id: str) -> None:
+    """Emit the external-content FTS5 ``'delete'`` bookkeeping for one trace.
+
+    Reads the OLD values of the seven indexed FTS columns straight from the
+    ``traces`` content table (joined by ``rowid``, which is also the FTS
+    ``content_rowid``) and issues the special ``insert into trace_fts(trace_fts,
+    rowid, <cols...>) values('delete', ...)`` command that removes that row's
+    postings from the FTS index. This MUST run while the content row still
+    exists — once ``_delete_trace_rows`` removes it the old column values are
+    gone and the FTS index cannot be reconciled by delete bookkeeping anymore.
+
+    No-op when the trace_id is absent from the content table (a delete of a
+    never-indexed id, or a second delete in the same refresh).
+    """
+
+    row = conn.execute(
+        f"select rowid, {', '.join(_FTS_COLUMNS)} from traces where trace_id = ?",
+        (trace_id,),
+    ).fetchone()
+    if row is None:
+        return
+    placeholders = ", ".join("?" for _ in _FTS_COLUMNS)
+    conn.execute(
+        f"insert into trace_fts(trace_fts, rowid, {', '.join(_FTS_COLUMNS)}) "
+        f"values ('delete', ?, {placeholders})",
+        (row[0], *row[1:]),
+    )
+
+
 def _delete_trace_rows(conn: sqlite3.Connection, trace_id: str) -> None:
     for table in (
         "traces",
@@ -436,7 +485,16 @@ def _refresh_snapshot_locked(
             if row is None or str(row[0]) != SNAPSHOT_SCHEMA_VERSION:
                 tmp_path.unlink()
                 return None
+            # Per-row external-content FTS bookkeeping (issue #41): emit the FTS
+            # ``'delete'`` for EVERY id in the delta (changed ∪ deleted) while
+            # its content row still exists, THEN drop the content rows. A changed
+            # trace is delete+reinsert: the delete here clears its OLD postings,
+            # and ``_insert_doc`` below adds the NEW ones. This replaces the old
+            # whole-table ``'rebuild'`` — which was O(corpus) per refresh and is
+            # the perf trap this package closes (refresh-of-1 must touch only the
+            # changed rows, never re-scan the whole content table).
             for trace_id in all_ids:
+                _fts_delete_doc(conn, trace_id)
                 _delete_trace_rows(conn, trace_id)
             inverse_superseded: set[str] = set()
             for trace_id in dict.fromkeys(changed_trace_ids):
@@ -447,11 +505,14 @@ def _refresh_snapshot_locked(
             # Carry the inverse-supersession demotion through the keep-warm path
             # too (issue #27 D): a freshly ingested trace that replaces an older
             # one demotes that older row even when only the newer is in the delta.
+            # SAFE without FTS bookkeeping: ``_apply_inverse_supersession`` updates
+            # only ``traces.latest_generation`` (a content-table column NOT in
+            # ``_FTS_COLUMNS``), so the external-content FTS index is unaffected.
+            # INVARIANT: any future UPDATE of an FTS-indexed column on the
+            # ``traces`` table MUST go through ``_fts_delete_doc`` + reinsert (or a
+            # paired ``'delete'`` / ``'insert'`` pair) — a bare UPDATE of an
+            # indexed column silently desyncs the external-content index.
             _apply_inverse_supersession(conn, inverse_superseded)
-            # External-content FTS: regenerate wholesale from the content
-            # table instead of per-row delete bookkeeping (sub-second at the
-            # corpus sizes the snapshot is built for).
-            conn.execute("insert into trace_fts(trace_fts) values('rebuild')")
             trace_count = conn.execute("select count(*) from traces").fetchone()[0]
             source_hash = _meta_hash_from_db(conn)
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
