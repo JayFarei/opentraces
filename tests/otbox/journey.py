@@ -550,6 +550,10 @@ def _context(driver: Driver, box: Box, port: int) -> dict[str, str]:
         # python3.14 broke on CI's python3.12.
         "py_tag": f"python{sys.version_info.major}.{sys.version_info.minor}",
         "host_site_packages": _sysconfig_purelib(),
+        # absolute path to the interpreter running the tests; journeys that
+        # need to run a python script must use this, NOT {repo_root}/.venv
+        # (no .venv exists on CI — deps live in the setup-python).
+        "py_bin": sys.executable,
     }
     ctx.update(_captured_session(box))
     # live_hf lane: expose the ephemeral private repo ids provisioned for this
