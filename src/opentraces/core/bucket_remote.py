@@ -254,6 +254,16 @@ def _hf_push(
 ) -> dict[str, Any]:
     repo_id = _hf_repo_id(url)
     api = _hf_api(token)
+    # Records captured before security tools were enabled carry a stale
+    # security envelope. The daemon path refreshes them implicitly via the
+    # index-sync bridge; the discrete push verb must do the same so both
+    # paths judge eligibility against current-config security state.
+    try:
+        from .bucket_store import sync_trace_records_from_local_stores
+
+        sync_trace_records_from_local_stores(prune=False)
+    except Exception:  # noqa: BLE001 - refresh is best-effort; the gate below stays authoritative
+        pass
     manifest = bucket_manifest(write=True, include_objects=False)
     sync = manifest.get("sync") or {}
     if sync.get("eligible") is not True:
@@ -261,6 +271,13 @@ def _hf_push(
         raise BucketRemoteError(
             "bucket is not eligible for remote sync"
             + (f": {reasons}" if reasons else "")
+            + (
+                "; run 'opentraces setup bucket' to enable the recommended "
+                "security tools — unscanned records are re-scanned on the "
+                "next push"
+                if "unfiltered_records" in (sync.get("blocked_reasons") or [])
+                else ""
+            )
         )
     status = _hf_status(url, token)
     if status.get("state") in {"remote_ahead", "diverged"} and not force:

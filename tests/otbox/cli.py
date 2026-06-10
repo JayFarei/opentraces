@@ -958,14 +958,58 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
     """Drive a simulated-user scenario against a real (or echo) agent and
     snapshot the resulting box state into ``tests/otbox/captures/<name>/``.
 
-    Plan 071 R4 + R5. The CLI is the operator-facing surface; the heavy
-    lifting lives in ``tests.otbox.simulated_users.runner`` (Agent A) and
+    Plan 071 R4 + R5; plan B0 adds the version-aware batch surface:
+
+    * ``--check-versions`` — compare installed agent binary versions
+      against the manifest's ``binary_version`` per scenario and report
+      which batches are stale. Pure report: no boxes, no agents driven.
+    * ``--all --agent <a>`` — regenerate the whole scenario batch for one
+      harness (the one-command refresh after a harness version bump).
+
+    The CLI is the operator-facing surface; the heavy lifting lives in
+    ``tests.otbox.simulated_users.runner`` (Agent A) and
     ``tests.otbox.simulated_users.scenario`` (Agent B). When the named
     binary is not on PATH, the command SKIPs cleanly (exit 0) so the
     default-CI surface never depends on a real ``claude`` install.
     """
     import datetime as _dt
     import shutil
+
+    if getattr(args, "check_versions", False):
+        from .capture_versions import check_capture_versions, format_check_report
+
+        report = check_capture_versions()
+        _emit(report, json_mode=args.json, human=format_check_report(report))
+        return 0
+
+    if getattr(args, "all_scenarios", False):
+        from .simulated_users.scenario import available_scenarios
+
+        if not args.agent:
+            raise OtboxError("capture-refresh --all requires --agent <a>")
+        names = [
+            s["name"]
+            for s in available_scenarios()
+            if not s.get("error") and s.get("agent") == args.agent
+        ]
+        if not names:
+            raise OtboxError(
+                f"capture-refresh --all: no scenarios for agent {args.agent!r}"
+            )
+        worst = 0
+        for name in names:
+            sub = argparse.Namespace(**vars(args))
+            sub.scenario = name
+            sub.all_scenarios = False
+            rc = cmd_capture_refresh(sub)
+            worst = max(worst, rc)
+        return worst
+
+    if not args.scenario:
+        raise OtboxError(
+            "capture-refresh requires --scenario <name> "
+            "(or --all --agent <a>, or --check-versions)"
+        )
 
     # Lazy imports — these modules ship in parallel siblings (plan 071
     # Agents A + B). Importing at the top of cli.py would couple the
@@ -1481,8 +1525,15 @@ def build_parser() -> argparse.ArgumentParser:
         "capture-refresh",
         help="drive a simulated-user scenario and snapshot the result (plan 071)",
     )
-    p_capref.add_argument("--scenario", required=True,
+    p_capref.add_argument("--scenario",
                           help="scenario name under tests/otbox/simulated_users/scenarios/")
+    p_capref.add_argument("--all", action="store_true", dest="all_scenarios",
+                          help="run every scenario for one agent (requires --agent)")
+    p_capref.add_argument("--agent", default=None,
+                          help="agent filter for --all (claude/codex/pi/echo)")
+    p_capref.add_argument("--check-versions", action="store_true",
+                          help="report capture staleness vs installed agent "
+                               "binary versions (no boxes, no agents driven)")
     p_capref.add_argument("--dry-run", action="store_true",
                           help="report what would happen without running anything")
     p_capref.add_argument("--base-checkpoint", default="c-installed-source",

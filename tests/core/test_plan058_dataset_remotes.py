@@ -388,14 +388,13 @@ def test_plan058_publish_refuses_remote_schema_ahead(tmp_path, monkeypatch):
         raise AssertionError("remote schema ahead must refuse publish")
 
 
-def test_publish_refuses_remote_schema_ahead_real_remote(tmp_path, monkeypatch):
-    """The schema-ahead guard fires against a REAL HF remote, not just the fake.
-
-    Without the fix, `_check_remote_schema_not_ahead` short-circuits to a no-op
-    when `OPENTRACES_PLAN058_FAKE_REMOTE_ROOT` is unset, so a real remote whose
-    README stamps a newer schema would never block a publish.
-    """
-    import opentraces.core.datasets as datasets
+def test_publish_refuses_remote_schema_ahead_on_live_hf_path(tmp_path, monkeypatch):
+    """Phase B4: the schema-ahead negotiation must be reachable from a LIVE
+    `dataset publish` (no fake remote configured). Previously
+    ``_check_remote_schema_not_ahead`` returned early whenever the fake
+    remote dir was absent, so real-HF publishes never negotiated at all
+    (issue #25 finding #6). The live path fetches the remote dataset card
+    via ``hf_hub_download``; a remote-newer contract must refuse publish."""
     from opentraces.core.datasets import (
         DatasetRemoteSchemaAheadError,
         add_dataset_remote,
@@ -404,60 +403,63 @@ def test_publish_refuses_remote_schema_ahead_real_remote(tmp_path, monkeypatch):
         publish_dataset,
     )
 
-    # No fake remote: exercise the real-HF code path.
+    # NO fake remote root: this drives the live-HF branch.
     monkeypatch.delenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", raising=False)
 
     create_dataset(
-        "schema-ahead-real",
+        "schema-ahead-live",
         workflow_skill="curator",
         workflow_digest="sha256:w",
         publication_policy={"review": "auto"},
     )
-    add_dataset_remote("schema-ahead-real", "me/schema-ahead-real", visibility="private")
+    add_dataset_remote("schema-ahead-live", "me/schema-ahead-live", visibility="private")
     append_rows(
-        "schema-ahead-real",
+        "schema-ahead-live",
         [_row("Local row.", trace_id="trace-local")],
         run_id="run-1",
     )
 
-    # `_remote_head` is called before the schema check and would otherwise hit
-    # the network; stub it.
-    monkeypatch.setattr(datasets, "_remote_head", lambda repo_id, token: "head-0")
-
-    # Stub `HfApi.hf_hub_download` to materialize a remote README whose
-    # frontmatter pins a newer schema.
-    card_path = tmp_path / "downloaded_README.md"
-    card_path.write_text(
+    card = tmp_path / "README.md"
+    card.write_text(
         "---\nopentraces:\n  schema:\n    version: 9.0.0\n---\n# newer\n",
         encoding="utf-8",
     )
 
-    from huggingface_hub import HfApi
+    calls: dict = {}
 
-    def _fake_download(self, *, repo_id, filename, repo_type):
-        assert filename == "README.md"
+    def _fake_hf_hub_download(*, repo_id, repo_type, filename, token=None):
+        calls["repo_id"] = repo_id
+        calls["filename"] = filename
         assert repo_type == "dataset"
-        return str(card_path)
+        return str(card)
 
-    monkeypatch.setattr(HfApi, "hf_hub_download", _fake_download, raising=False)
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _fake_hf_hub_download)
+    # publish_dataset reads the remote head before the schema check; keep the
+    # unit test offline (the schema check itself raises before anything else
+    # touches the remote).
+    monkeypatch.setattr(
+        "opentraces.core.datasets._remote_head", lambda repo_id, token: None
+    )
 
     try:
-        publish_dataset("schema-ahead-real", contributor="tester")
+        publish_dataset("schema-ahead-live", contributor="tester")
     except DatasetRemoteSchemaAheadError as exc:
         assert exc.remote_version == "9.0.0"
         assert exc.local_version == "1.0.0"
     else:
-        raise AssertionError("real remote schema ahead must refuse publish")
+        raise AssertionError("live remote schema ahead must refuse publish")
+    assert calls["repo_id"] == "me/schema-ahead-live"
+    assert calls["filename"] == "README.md"
 
 
-def test_publish_proceeds_when_real_remote_has_no_card(tmp_path, monkeypatch):
-    """A real remote with no README (first publish) is treated as fresh.
+def test_publish_proceeds_when_live_remote_has_no_card(tmp_path, monkeypatch):
+    """A live remote with no README (first publish) is treated as fresh.
 
-    `hf_hub_download` raising EntryNotFoundError must map to "treat remote as
-    fresh" (return None), letting the publish proceed — matching the lenient
-    HFUploader stance.
-    """
-    import opentraces.core.datasets as datasets
+    ``hf_hub_download`` raising EntryNotFoundError must map to "nothing to
+    compare", letting the publish proceed (issue #33: the guard must block
+    remote-newer without breaking first publishes)."""
     from opentraces.core.datasets import (
         add_dataset_remote,
         append_rows,
@@ -468,31 +470,32 @@ def test_publish_proceeds_when_real_remote_has_no_card(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", raising=False)
 
     create_dataset(
-        "fresh-real",
+        "fresh-live",
         workflow_skill="curator",
         workflow_digest="sha256:w",
         publication_policy={"review": "auto"},
     )
-    add_dataset_remote("fresh-real", "me/fresh-real", visibility="private")
+    add_dataset_remote("fresh-live", "me/fresh-live", visibility="private")
     append_rows(
-        "fresh-real",
+        "fresh-live",
         [_row("Local row.", trace_id="trace-local")],
         run_id="run-1",
     )
-
-    monkeypatch.setattr(datasets, "_remote_head", lambda repo_id, token: "head-0")
 
     try:
         from huggingface_hub.errors import EntryNotFoundError
     except ImportError:  # older huggingface_hub
         from huggingface_hub.utils import EntryNotFoundError  # type: ignore
 
-    from huggingface_hub import HfApi
-
-    def _raise_not_found(self, *, repo_id, filename, repo_type):
+    def _raise_not_found(*, repo_id, repo_type, filename, token=None):
         raise EntryNotFoundError("no README")
 
-    monkeypatch.setattr(HfApi, "hf_hub_download", _raise_not_found, raising=False)
+    import huggingface_hub
 
-    summary = publish_dataset("fresh-real", check_only=True, contributor="tester")
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _raise_not_found)
+    monkeypatch.setattr(
+        "opentraces.core.datasets._remote_head", lambda repo_id, token: None
+    )
+
+    summary = publish_dataset("fresh-live", check_only=True, contributor="tester")
     assert summary.message == "check passed"

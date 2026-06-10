@@ -1,0 +1,42 @@
+{
+  "status": {
+    "argv": ["--json", "status"],
+    "max_tokens": 700,
+    "measured_at_seed": 317
+  },
+  "bucket-status": {
+    "argv": ["--json", "bucket", "status"],
+    "max_tokens": 1900,
+    "measured_at_seed": 920
+  },
+  "trace-index-status": {
+    "argv": ["--json", "trace", "index", "status"],
+    "max_tokens": 300,
+    "measured_at_seed": 127
+  },
+  "trace-query": {
+    "argv": ["trace", "query", "farewell"],
+    "max_tokens": 1500,
+    "measured_at_seed": 32
+  },
+  "trace-map": {
+    "argv": ["trace", "map", "{trace_id}", "--json"],
+    "max_tokens": 9000,
+    "measured_at_seed": 4311
+  },
+  "trace-get": {
+    "argv": ["trace", "get", "{trace_id}", "--json"],
+    "max_tokens": 7500,
+    "measured_at_seed": 3565
+  },
+  "ctx-list": {
+    "argv": ["ctx", "list", "--json"],
+    "max_tokens": 400,
+    "measured_at_seed": 16
+  },
+  "doctor": {
+    "argv": ["--json", "doctor"],
+    "max_tokens": 7500,
+    "measured_at_seed": 3716
+  }
+}

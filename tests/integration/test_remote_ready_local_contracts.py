@@ -155,6 +155,54 @@ def test_remote_ready_bucket_round_trip_and_sync_blockers(monkeypatch, tmp_path)
     assert "not eligible for remote sync" in blocked.output
 
 
+def test_remote_push_refreshes_unscanned_records_when_tools_enabled(monkeypatch, tmp_path):
+    """Push self-heals records captured before security tools were enabled.
+
+    A capture made with zero enabled security tools lands unscanned
+    (``security.scanned = False``) and blocks ``bucket remote push`` with
+    ``unfiltered_records``. Once tools are enabled (what ``setup bucket``
+    does), push must re-scan those records itself — parity with the daemon
+    path, whose index-sync refresh does this implicitly. Surfaced by the
+    first real-HF run of the live-hf-* otbox journeys (Phase B4).
+    """
+    from opentraces.core import paths
+    from opentraces.core.config import load_config, save_config
+
+    runner = CliRunner()
+    remote_root = tmp_path / "remote-bucket"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+
+    record = _trace("trace-unscanned-refresh")
+    assert record.security.scanned is False
+    traces_dir = paths.PROJECTS_DIR / "community-traces-hf" / "traces"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    (traces_dir / "trace-unscanned-refresh.jsonl").write_text(
+        record.model_dump_json() + "\n", encoding="utf-8"
+    )
+
+    # Zero tools enabled: the gate blocks and the error names the remedy.
+    blocked = runner.invoke(main, ["bucket", "remote", "push", "--json"])
+    assert blocked.exit_code == 3
+    assert "unfiltered_records" in blocked.output
+    assert "setup bucket" in blocked.output
+
+    cfg = load_config()
+    cfg.security.regex.enabled = True
+    cfg.security.entropy.enabled = True
+    save_config(cfg)
+
+    pushed = runner.invoke(main, ["bucket", "remote", "push", "--json"])
+    assert pushed.exit_code == 0, pushed.output
+    assert json.loads(pushed.output)["remote"]["state"] == "pushed"
+    refreshed = [
+        obj
+        for obj in iter_trace_record_objects()
+        if obj.trace_id == "trace-unscanned-refresh"
+    ]
+    assert refreshed, "record should be mirrored into the bucket"
+    assert refreshed[0].envelope["security"]["syncable"] is True
+
+
 def test_remote_ready_dataset_run_review_and_row_provenance(monkeypatch, tmp_path):
     runner = CliRunner()
     schema_path = _write_dataset_schema(tmp_path / "hf-sync-row.schema.json")

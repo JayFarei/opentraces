@@ -1479,62 +1479,32 @@ def _changed_staged_files(repo_id: str, staging: Path, token: str | None) -> lis
     return sorted(changed)
 
 
-def _remote_card_text(repo_id: str, token: str | None = None) -> str | None:
-    """Return the remote dataset card (README.md) text, or ``None`` if absent.
-
-    ``None`` is the "treat remote as fresh" signal: no card on the remote yet
-    (first publish) or an unreadable / unreachable remote. Matching the
-    HFUploader's lenient stance, a missing card or a network blip never blocks a
-    publish — we would rather stamp our own fresh schema than fail on a hiccup.
-
-    The fake-remote path (Plan 058 tests) is preserved byte-for-byte: read the
-    on-disk README.md if it exists, else return ``None``.
-    """
-    remote_root = _fake_remote_dir(repo_id)
-    if remote_root is not None:
-        card = remote_root / "README.md"
-        if card.exists():
-            return card.read_text(encoding="utf-8")
-        return None
-
-    try:
-        from huggingface_hub.errors import (  # type: ignore
-            EntryNotFoundError,
-            RepositoryNotFoundError,
-        )
-    except ImportError:  # older huggingface_hub
-        from huggingface_hub.utils import (  # type: ignore
-            EntryNotFoundError,
-            RepositoryNotFoundError,
-        )
-
-    from huggingface_hub import HfApi
-
-    try:
-        local_path = HfApi(token=token).hf_hub_download(
-            repo_id=repo_id,
-            filename="README.md",
-            repo_type="dataset",
-        )
-    except (EntryNotFoundError, RepositoryNotFoundError):
-        return None
-    except Exception as e:  # network blip / unexpected 404 variant
-        logger.debug("Could not fetch README.md for %s: %s", repo_id, e)
-        return None
-
-    try:
-        return Path(local_path).read_text(encoding="utf-8")
-    except OSError as e:
-        logger.debug("README.md at %s is not readable: %s", repo_id, e)
-        return None
-
-
 def _check_remote_schema_not_ahead(
     dataset: LocalDataset, repo_id: str, token: str | None = None
 ) -> None:
-    card_text = _remote_card_text(repo_id, token)
-    if card_text is None:
-        return
+    remote_root = _fake_remote_dir(repo_id)
+    if remote_root is not None:
+        card = remote_root / "README.md"
+        if not card.exists():
+            return
+        card_text = card.read_text(encoding="utf-8")
+    else:
+        # Live HuggingFace: fetch the dataset card so the schema-ahead
+        # negotiation is reachable from a real `dataset publish` (Phase B4;
+        # previously this returned early and the gate existed only against
+        # the fake remote — issue #25 finding #6).
+        try:
+            from huggingface_hub import hf_hub_download
+
+            card_path = hf_hub_download(
+                repo_id=repo_id,
+                repo_type="dataset",
+                filename="README.md",
+                token=token,
+            )
+            card_text = Path(card_path).read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001 - no repo / no card / offline: nothing to compare
+            return
     contract = _read_card_contract(card_text)
     remote_schema = contract.get("schema") if isinstance(contract, dict) else None
     remote_version = remote_schema.get("version") if isinstance(remote_schema, dict) else None

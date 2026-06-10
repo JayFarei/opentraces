@@ -1982,43 +1982,34 @@ def bucket_manifest(
     # Plan 080 Resolution H — ``bucket_digest`` is deterministic across
     # machines: excludes ``generated_at``/``updated_at``; sorts traces[] by
     # (project_slug, trace_id).
-    #
-    # Issue #29 — the sub-blocks (``trace_records`` / ``raw_sources`` /
-    # ``trail_events`` / ``context_trees``) each embed a machine-local ``root``
-    # absolute path, so feeding them in WHOLE made ``bucket_digest`` differ
-    # across two restores of identical content (a real cross-machine-identity
-    # break). ``_digest_view`` recursively strips ``root`` (machine-local
-    # absolute paths) and the volatile ``objects`` listing from any sub-block
-    # before it enters the digest material, leaving only content-addressed
-    # fields. The ``trail`` block is excluded entirely: it carries trace-index
-    # freshness (absolute repo_path, timestamps, local-index presence) — pure
-    # machine-local state, never bucket content. The manifest SHAPE is
-    # unchanged: ``root`` stays in ``manifest.json`` for display.
-    def _digest_view(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                k: _digest_view(v)
-                for k, v in value.items()
-                if k not in ("root", "objects")
-            }
-        if isinstance(value, list):
-            return [_digest_view(v) for v in value]
-        return value
-
-    bucket_digest_material = {
-        "schema_version": manifest["schema_version"],
-        "bucket_root": manifest["bucket_root"],
-        "security_version": manifest["security_version"],
-        "traces": sorted(
-            traces_v2_rows, key=lambda r: (r["project_slug"], r["trace_id"])
-        ),
-        "events_v1": manifest["events_v1"],
-        "trace_records": _digest_view(manifest["trace_records"]),
-        "raw_sources": _digest_view(manifest["raw_sources"]),
-        "trail_events": _digest_view(manifest["trail_events"]),
-        "context_trees": _digest_view(manifest["context_trees"]),
-        "sync": manifest["sync"],
-    }
+    # Digest material covers exactly the SYNCED bucket unit (plan 080
+    # Resolution H: deterministic across machines):
+    # * machine-local absolute paths ("root", "repo_path") are excluded —
+    #   the same bucket restored at a different path must hash identically
+    #   (issue #25 PR-B finding #2, confirmed live by the live-hf-* journeys:
+    #   pull on another machine was permanently "remote_ahead").
+    # * ``context_trees`` is excluded entirely: plan-079 R8 hardcodes
+    #   ``remote_sync.eligible = False`` for every context-tree head, so push
+    #   deliberately skips that substrate — counting it in the digest made a
+    #   pulled bucket unable to ever reproduce the pushed digest. If R8 is
+    #   ever lifted (or ``--unsafe-push`` grows a synced-context contract),
+    #   the eligible subset must re-enter this material.
+    bucket_digest_material = _machine_neutral_digest_view(
+        {
+            "schema_version": manifest["schema_version"],
+            "bucket_root": manifest["bucket_root"],
+            "security_version": manifest["security_version"],
+            "traces": sorted(
+                traces_v2_rows, key=lambda r: (r["project_slug"], r["trace_id"])
+            ),
+            "events_v1": manifest["events_v1"],
+            "trace_records": manifest["trace_records"],
+            "trail": manifest["trail"],
+            "raw_sources": manifest["raw_sources"],
+            "trail_events": manifest["trail_events"],
+            "sync": manifest["sync"],
+        }
+    )
     bucket_digest = _digest_payload(bucket_digest_material)
     manifest["bucket_digest"] = bucket_digest
     # Retain ``digest`` as a compat alias for callers that still consume the
@@ -2027,6 +2018,27 @@ def bucket_manifest(
     if write:
         _atomic_write_json(bucket_manifest_path(), manifest)
     return manifest
+
+
+_MACHINE_LOCAL_DIGEST_KEYS = frozenset({"root", "repo_path"})
+
+
+def _machine_neutral_digest_view(value: Any) -> Any:
+    """Strip machine-local path keys from digest material, recursively.
+
+    The manifest keeps the absolute paths for display; only the digest
+    roll-up must be invariant under bucket relocation.
+    """
+
+    if isinstance(value, dict):
+        return {
+            k: _machine_neutral_digest_view(v)
+            for k, v in value.items()
+            if k not in _MACHINE_LOCAL_DIGEST_KEYS
+        }
+    if isinstance(value, list):
+        return [_machine_neutral_digest_view(v) for v in value]
+    return value
 
 
 def bucket_status(*, write_manifest: bool = True) -> dict[str, Any]:
@@ -2118,6 +2130,14 @@ def fake_remote_push(remote_root: Path | None = None, *, force: bool = False) ->
         raise ValueError("set OPENTRACES_FAKE_BUCKET_REMOTE_ROOT")
     local_bucket = paths.bucket_dir()
     root.mkdir(parents=True, exist_ok=True)
+    # Same refresh the HF push path runs: re-scan records whose security
+    # envelope predates the currently-enabled tools, so push eligibility is
+    # judged against current-config security state (parity with the daemon
+    # path's implicit index-sync refresh).
+    try:
+        sync_trace_records_from_local_stores(prune=False)
+    except Exception:  # noqa: BLE001 - refresh is best-effort; the gate below stays authoritative
+        pass
     manifest = bucket_manifest(write=True, include_objects=False)
     sync = manifest.get("sync") or {}
     if sync.get("eligible") is not True:
@@ -2125,6 +2145,13 @@ def fake_remote_push(remote_root: Path | None = None, *, force: bool = False) ->
         raise ValueError(
             "bucket is not eligible for remote sync"
             + (f": {reasons}" if reasons else "")
+            + (
+                "; run 'opentraces setup bucket' to enable the recommended "
+                "security tools — unscanned records are re-scanned on the "
+                "next push"
+                if "unfiltered_records" in (sync.get("blocked_reasons") or [])
+                else ""
+            )
         )
     status = fake_remote_status(root)
     if status.get("state") in {"remote_ahead", "diverged"} and not force:

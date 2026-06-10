@@ -217,7 +217,7 @@ def test_dataset_publish_remote_schema_ahead_exits_3(monkeypatch):
     """When the remote schema is ahead, `dataset publish` exits 3 with a hint.
 
     This is the CLI-level contract: a real remote stamping a newer schema (now
-    detectable thanks to the real-remote `_remote_card_text` path) surfaces as
+    detectable thanks to the live-HF dataset-card fetch) surfaces as
     exit code 3 with the version message in stderr.
     """
     runner = CliRunner()
