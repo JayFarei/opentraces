@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover - non-POSIX fallback.
 # Cluster A — A2/A5 schema bump: ``trail_sources.limitations_json`` carries
 # structured limitations and ``indexed_at`` records when the trail projection
 # was last synced into the query index.
-INDEX_VERSION = "plan056-m1-v8"
+INDEX_VERSION = "plan056-m1-v9"
 INDEX_BUSY_TIMEOUT_MS = 5000
 INDEX_WRITE_RETRY_LIMIT = 5
 INDEX_WRITE_RETRY_BASE_SECONDS = 0.05
