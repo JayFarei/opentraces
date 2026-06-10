@@ -197,7 +197,10 @@ def test_trace_index_command_rebuilds_search_snapshot() -> None:
     result = runner.invoke(main, ["trace", "index", "--json"])
 
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    # Parse result.stdout (the stream the --json contract governs), not
+    # result.output: under Click 8.2+ result.output is the user-terminal view
+    # that mixes the stderr bootstrap signpost in. stdout stays pure JSON.
+    payload = json.loads(result.stdout)
     assert payload["search_snapshot"]["trace_count"] == 1
     assert Path(payload["search_snapshot"]["path"]).exists()
 
@@ -454,3 +457,8 @@ def test_trace_index_bootstrap_keeps_json_stdout_clean() -> None:
     assert payload["legacy_index"]["healed"] is True
     # No bootstrap notice on stdout when --json.
     assert "Bootstrapping" not in result.stdout
+    # But the operator still sees the long-op signpost on stderr even under
+    # --json — a human watching a CI log should never face a multi-minute
+    # silent hang just because a script is consuming stdout.
+    assert "Bootstrapping legacy Trace Index" in result.stderr
+    assert "bootstrap done" in result.stderr

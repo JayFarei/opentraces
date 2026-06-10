@@ -709,25 +709,26 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
         # The per-trace ingest loop lives inside core.trace_index (not this
         # file), so we cannot thread a per-trace progressbar without crossing
         # module ownership. Instead we signpost the long silent operation:
-        # cheap up-front trace count + elapsed-time line, both on stderr only
-        # (the --json stdout contract is unchanged).
+        # cheap up-front trace count + elapsed-time line. Both lines go to
+        # stderr UNCONDITIONALLY (even under --json) — a human watching the
+        # terminal/CI log should never face a ~tens-of-minutes silent hang
+        # just because a script is consuming stdout. The --json *stdout*
+        # contract is unchanged because the signpost never touches stdout.
         total_traces = _approx_bootstrap_trace_count()
-        if not as_json:
-            click.echo(
-                "Bootstrapping legacy Trace Index from scratch "
-                f"(~{total_traces} traces). This can take several minutes on a "
-                "large bucket; no output until it completes.",
-                err=True,
-            )
+        click.echo(
+            "Bootstrapping legacy Trace Index from scratch "
+            f"(~{total_traces} traces). This can take several minutes on a "
+            "large bucket; no output until it completes.",
+            err=True,
+        )
         _bootstrap_started = time.monotonic()
         refresh_index()
-        if not as_json:
-            click.echo(
-                f"Legacy Trace Index bootstrap done in "
-                f"{time.monotonic() - _bootstrap_started:.1f}s "
-                f"(~{total_traces} traces).",
-                err=True,
-            )
+        click.echo(
+            f"Legacy Trace Index bootstrap done in "
+            f"{time.monotonic() - _bootstrap_started:.1f}s "
+            f"(~{total_traces} traces).",
+            err=True,
+        )
         healed_legacy_index = True
     warm_result = keep_index_warm(query_sources=("index", "projection"))
     search_summary = build_trace_search_snapshot()
