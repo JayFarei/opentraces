@@ -52,6 +52,7 @@ from ..drivers.base import Driver
 from ..env import Box, resolve_cli_argv
 from . import Checkpoint, CheckpointError, register
 from ._captured_helpers import (
+    harness_source_with_shebang,
     capture_metadata_from_artifact,
     check as _check_helper,
     encode_claude_path,
@@ -204,7 +205,7 @@ def _captured_multi_skill_delta(driver: Driver, box: Box) -> None:
     driver.mkdir(box, bin_dir)
     driver.mkdir(box, sessions_dir)
     harness_dst = f"{bin_dir}/claude"
-    driver.put_text(box, harness_dst, _HARNESS_SRC.read_text())
+    driver.put_text(box, harness_dst, harness_source_with_shebang(_HARNESS_SRC))
     _check(
         driver.exec(box, ["chmod", "+x", harness_dst]),
         "chmod +x harness",

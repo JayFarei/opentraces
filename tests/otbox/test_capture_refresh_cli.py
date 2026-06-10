@@ -121,7 +121,14 @@ def test_dry_run_emits_summary():
 # Test 2 — full run against the echo scenario produces the artifact pair
 # ---------------------------------------------------------------------------
 def test_real_run_against_echo_produces_artifact():
+    import shutil as _shutil
+
     _require_echo_scenario()
+    # capture-refresh drives a real terminal via tmux + terminal-control; both
+    # absent on CI runners -> skip cleanly rather than fail on rc=3 (surfaced
+    # by the first on-main nightly).
+    if not _shutil.which("tmux") or not _shutil.which("termctrl"):
+        pytest.skip("tmux/termctrl not installed on PATH")
 
     # If the echo binary isn't on disk yet (Agent A), skip.
     echo_binary = (

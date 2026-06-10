@@ -305,6 +305,27 @@ def trace_for_session(state: dict, session_id: str) -> tuple[str | None, int]:
 # ---------------------------------------------------------------------------
 # Shared checkpoint-delta primitives (extracted from per-checkpoint copies)
 # ---------------------------------------------------------------------------
+def harness_source_with_shebang(src_path: Path) -> str:
+    """Read a fake-harness file and pin its shebang to an interpreter that
+    has the test deps (pydantic / opentraces_schema).
+
+    The committed harness ships ``#!/usr/bin/env python3`` for local dev,
+    where ``python3`` is usually the active venv. On CI the bare ``python3``
+    is the runner's system interpreter WITHOUT the editable install, so the
+    fake-claude session module crashed with ModuleNotFoundError: pydantic
+    (surfaced by the first on-main nightly). We rewrite line 1 to the
+    interpreter currently running the tests (``sys.executable``), which by
+    construction has the deps, on every platform.
+    """
+    import sys
+
+    text = src_path.read_text()
+    lines = text.splitlines(keepends=True)
+    if lines and lines[0].startswith("#!"):
+        lines[0] = f"#!{sys.executable}\n"
+    return "".join(lines)
+
+
 def check(result, *, checkpoint: str, label: str) -> None:
     """Raise CheckpointError with a uniform format on a non-ok exec result."""
     from . import CheckpointError
