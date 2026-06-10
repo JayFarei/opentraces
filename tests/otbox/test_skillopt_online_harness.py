@@ -32,6 +32,11 @@ def _isolate_opentraces_global_state():
 def driver():
     if not shutil.which("tmux"):
         pytest.skip("tmux not installed on PATH")
+    # run_simulated_session drives the binary through terminal-control;
+    # absent on CI -> the rollout verdict is never PASS, reward stays 0, and
+    # the test asserts 1.0. Skip cleanly when the tool is missing.
+    if not shutil.which("termctrl"):
+        pytest.skip("termctrl (terminal-control) not installed on PATH")
     return get_driver("local")
 
 

@@ -16,7 +16,7 @@ from_checkpoints = ["c-installed-source"]
 type = "shell"
 id = "skillopt-online-loop"
 argv = [
-  "{repo_root}/.venv/bin/python",
+  "{py_bin}",
   "-m",
   "pytest",
   "{repo_root}/tests/otbox/test_skillopt_online_harness.py::test_otbox_harness_drives_online_loop_with_echo",

@@ -19,7 +19,7 @@ type = "service"
 id = "web"
 kind = "shell"
 argv = [
-    "{repo_root}/.venv/bin/python",
+    "{py_bin}",
     "-c",
     "import sys; from opentraces.clients.web.server import create_app; create_app(staging_dir=sys.argv[1], state_path=sys.argv[2]).run(host='127.0.0.1', port=int(sys.argv[3]))",
     "{state_dir}/traces",

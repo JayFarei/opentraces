@@ -18,7 +18,7 @@ requires = ["cli"]
 type = "shell"
 id = "verifier-factory-loop"
 argv = [
-  "{repo_root}/.venv/bin/python",
+  "{py_bin}",
   "-m",
   "pytest",
   "{repo_root}/tests/otbox/test_verifier_factory_journey.py::test_verifier_package_feeds_skillopt_gate_default_ci",
