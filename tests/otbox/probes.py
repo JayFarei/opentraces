@@ -39,8 +39,19 @@ def _cli_json(driver, box, *args) -> dict | list | None:
         return None
 
 
+# Survival states with negative-evidence weight: a world claiming these MUST
+# show them in trail search — they are what the lineage marketing claims rest
+# on. alive_* / unknown legitimately show zero search rows pre-maturation, so
+# probing them via search would conflate the maturation lifecycle with lying.
+TRUST_CRITICAL_SURVIVAL = frozenset(
+    {"reverted", "lost", "partially_preserved", "repaired", "alive_transformed"}
+)
+
+
 def _probe_survival_states(driver, box, value) -> ProbeResult:
-    states = [str(s) for s in (value or [])]
+    states = [s for s in (str(x) for x in (value or [])) if s in TRUST_CRITICAL_SURVIVAL]
+    if not states:
+        return True, "no trust-critical survival states requested"
     for state in states:
         doc = _cli_json(driver, box, "trail", "search", "--survival", state)
         count = (doc or {}).get("result_count", 0) if isinstance(doc, dict) else 0
@@ -53,23 +64,40 @@ def _probe_survival_states(driver, box, value) -> ProbeResult:
 
 
 def _probe_min_captured_traces(driver, box, value) -> ProbeResult:
+    # Measured via the Trace Index (what "captured" MEANS to consumers),
+    # not bucket manifest envelopes: restored worlds have a known
+    # manifest-projection gap (issue #25 — tick-reconciled traces are
+    # queryable but absent from manifest.traces), and the probe must not
+    # conflate that open product bug with "the world has no traces".
     need = int(value)
-    doc = _cli_json(driver, box, "bucket", "manifest")
-    traces = (doc or {}).get("manifest", {}).get("traces", []) if isinstance(doc, dict) else []
-    have = len(traces) if isinstance(traces, list) else 0
+    doc = _cli_json(driver, box, "trace", "query", "--since", "3650d")
+    cands = (doc or {}).get("candidates", []) if isinstance(doc, dict) else []
+    have = len(cands) if isinstance(cands, list) else 0
     if have >= need:
-        return True, f"bucket manifest holds {have} trace(s) >= {need}"
-    return False, f"bucket manifest holds {have} trace(s), precondition needs {need}"
+        return True, f"trace index holds {have} candidate(s) >= {need}"
+    return False, f"trace index holds {have} candidate(s), precondition needs {need}"
 
 
 def _probe_context_tree_built(driver, box, value) -> ProbeResult:
+    # Measured via `ctx tree` (event-log-backed), NOT `ctx list`
+    # (manifest-only): restored worlds have the open manifest-projection
+    # gap (issue #25) where ctx tree works while ctx list shows nothing.
     if not value:
         return True, "context_tree_built not requested"
-    doc = _cli_json(driver, box, "ctx", "list")
-    rows = doc.get("traces") or doc.get("rows") or [] if isinstance(doc, dict) else []
-    if rows:
-        return True, f"ctx list shows {len(rows)} trace(s) with context"
-    return False, "ctx list shows zero traces with context nodes"
+    q = _cli_json(driver, box, "trace", "query", "--since", "3650d")
+    cands = (q or {}).get("candidates", []) if isinstance(q, dict) else []
+    for cand in cands[:3]:
+        trace_id = cand.get("trace_id") if isinstance(cand, dict) else None
+        if not trace_id:
+            continue
+        tree = _cli_json(driver, box, "ctx", "tree", str(trace_id))
+        nodes = (tree or {}).get("nodes") or (tree or {}).get("tree") or []
+        if nodes:
+            return True, f"ctx tree for {str(trace_id)[:12]} has context nodes"
+    return False, (
+        f"no context nodes found via ctx tree across {min(len(cands), 3)} "
+        f"candidate trace(s)"
+    )
 
 
 def _probe_otlp_receiver_running(driver, box, value) -> ProbeResult:
@@ -83,15 +111,17 @@ def _probe_otlp_receiver_running(driver, box, value) -> ProbeResult:
 
 
 def _probe_branch_commits_min(driver, box, value) -> ProbeResult:
+    # Counts world history (rev-list HEAD), matching the provides semantic
+    # ("the world carries >= N commits") — NOT main..HEAD, which counts a
+    # different thing (commits ahead of base) and mis-measured both the
+    # pr-branch and pi worlds when first tried.
     need = int(value)
     project = str(box.root / "project")
-    res = driver.exec(
-        box, ["git", "-C", project, "rev-list", "--count", "main..HEAD"]
-    )
+    res = driver.exec(box, ["git", "-C", project, "rev-list", "--count", "HEAD"])
     have = int(res.stdout.strip() or 0) if res.returncode == 0 else 0
     if have >= need:
-        return True, f"branch carries {have} commit(s) >= {need}"
-    return False, f"branch carries {have} commit(s), precondition needs {need}"
+        return True, f"world history carries {have} commit(s) >= {need}"
+    return False, f"world history carries {have} commit(s), precondition needs {need}"
 
 
 PROBES: dict[str, Callable] = {

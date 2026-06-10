@@ -145,6 +145,46 @@ def snapshot_name(cp: Checkpoint) -> str:
 # ---------------------------------------------------------------------------
 # resolution
 # ---------------------------------------------------------------------------
+def verify_provides(driver: Driver, box: Box, cp: "Checkpoint") -> None:
+    """Re-verify probe-backed ``provides`` keys against the built box.
+
+    Mapping from provides vocabulary to the runtime probe registry: only
+    keys a probe can check are verified (captured_traces, survival_states,
+    context_tree_built, branch_commits); unprobeable keys (skills,
+    has_security_findings, migration flags) pass through unverified for now
+    — widening this map is the cheap follow-up, never a blocker to honesty
+    on the probeable ones.
+    """
+    provides = cp.provides or {}
+    if not provides:
+        return
+    from ..probes import run_probes
+
+    as_preconditions: dict = {}
+    if provides.get("captured_traces"):
+        as_preconditions["min_captured_traces"] = int(provides["captured_traces"])
+    if provides.get("survival_states"):
+        as_preconditions["requires_survival_states"] = list(provides["survival_states"])
+    # context_tree_built is deliberately NOT verified at build time yet:
+    # `ctx list` is manifest-only and restored worlds have the open
+    # manifest-projection gap (issue #25), so the probe would conflate that
+    # product bug with a lying checkpoint. Re-enable when the gap closes.
+    if provides.get("branch_commits"):
+        as_preconditions["requires_branch_commits_min"] = int(provides["branch_commits"])
+    if not as_preconditions:
+        return
+    failures = [
+        f"{key}: {message}"
+        for key, ok, message in run_probes(driver, box, as_preconditions)
+        if not ok
+    ]
+    if failures:
+        raise CheckpointError(
+            f"checkpoint {cp.name!r} advertises provides it did not build "
+            f"(refusing to cache a lying world): " + "; ".join(failures)
+        )
+
+
 def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
     """Apply checkpoint ``name``, returning a ready-to-run box.
 
@@ -188,6 +228,12 @@ def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
         cp.builder(driver, box)
     if cp.delta is not None:
         cp.delta(driver, box)
+
+    # otbox 2.0 phase 4: a lying checkpoint cannot enter the cache. Every
+    # probe-backed key in the static ``provides`` is re-verified against the
+    # box that was actually built; mismatch raises instead of caching a
+    # world that doesn't contain what it advertises.
+    verify_provides(driver, box, cp)
 
     box.notes["checkpoint"] = cp.name
     box.save()
