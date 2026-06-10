@@ -37,9 +37,12 @@ jobs:
           git config --global user.email "otbox-ci@opentraces.local"
           git config --global user.name "otbox-ci"
           git config --global init.defaultBranch main
-      - name: Unit + integration tests (otbox excluded; heavy marks deselected)
+      - name: Unit + integration tests (otbox + perf excluded; heavy marks deselected)
+        # tests/perf is env-only (own manual workflow, perf.yml) and imports
+        # the decommissioned TUI's textual at module level, which breaks
+        # COLLECTION on a [dev]-only install — ignore, don't just deselect.
         run: |
-          python -m pytest tests/ --ignore=tests/otbox -q \
+          python -m pytest tests/ --ignore=tests/otbox --ignore=tests/perf -q \
             -m "not perf and not real_repl and not trail_real_repl and not user_smoke"
 
   otbox-slice:
