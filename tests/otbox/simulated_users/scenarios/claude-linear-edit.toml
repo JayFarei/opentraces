@@ -1,0 +1,22 @@
+# Plan B0 — claude credible-state batch (closes the Claude artifact gap).
+# Runs only when a logged-in `claude` binary is on PATH; default CI SKIPs.
+#   make capture-refresh SCENARIO=claude-linear-edit
+# On PASS the plan-072 artifact-preferred machinery flips the
+# c-captured-real-session-family checkpoints from synthetic to real.
+
+name = "claude-linear-edit"
+description = "CL1: drive real Claude Code through a small linear edit plus git commit (the minimum credible captured session)."
+agent = "claude"
+binary_name = "claude"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "In this repo, add a farewell(name: str) helper to src/app.py that returns 'goodbye, <name>', keep the existing greet helper working, run a quick syntax check, then commit the change with a concise message."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "claude-linear-edit"
+expected_paths = ["src/app.py"]
