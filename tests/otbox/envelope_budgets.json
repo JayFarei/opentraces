@@ -11,8 +11,9 @@
   },
   "trace-index-status": {
     "argv": ["--json", "trace", "index", "status"],
-    "max_tokens": 300,
-    "measured_at_seed": 127
+    "max_tokens": 650,
+    "measured_at_seed": 313,
+    "note": "Re-seeded (2x measured) after the issue-#40 db_sizes block was compacted to aggregate scalars; the per-table breakdown is --verbose-only."
   },
   "trace-query": {
     "argv": ["trace", "query", "farewell"],

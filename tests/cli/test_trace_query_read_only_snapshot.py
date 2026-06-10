@@ -322,8 +322,11 @@ def test_trace_query_envelope_never_emits_dead_trail_freshness() -> None:
 
 
 def test_trace_index_status_reports_per_table_db_sizes() -> None:
-    # Issue #27 item A: status --json must expose a per-table byte breakdown for
-    # both on-disk SQLite DBs so the multi-GB bloat (issue #22) is measurable.
+    # Issue #27 item A: status --json must expose a byte breakdown for both
+    # on-disk SQLite DBs so the multi-GB bloat (issue #22) is measurable.
+    # Envelope-budget contract: the DEFAULT --json render carries aggregate
+    # scalars only (the 20+ FTS shadow tables blew the agent-facing token
+    # budget); the full per-table map moves behind --verbose.
     from opentraces.core.trace_index import default_index_path, refresh_index
     from opentraces.core.trace_search_snapshot import default_snapshot_path
 
@@ -351,8 +354,20 @@ def test_trace_index_status_reports_per_table_db_sizes() -> None:
         entry = db_sizes[label]
         assert entry["exists"] is True
         assert entry["size_bytes"] > 0
-        # dbstat is compiled into CPython's bundled sqlite3; tables must resolve
-        # to a non-empty per-table byte map.
+        # dbstat is compiled into CPython's bundled sqlite3; the aggregate
+        # scalars must resolve from a non-empty per-table scan.
+        assert entry["table_count"] > 0
+        assert entry["tables_bytes_total"] > 0
+        assert entry["largest_table"]["bytes"] > 0
+        # The bounded default never inlines the per-table map.
+        assert "tables" not in entry
+
+    verbose = runner.invoke(main, ["trace", "index", "status", "--json", "--verbose"])
+
+    assert verbose.exit_code == 0, verbose.output
+    verbose_payload = json.loads(verbose.output)
+    for label in ("legacy_index", "search_snapshot"):
+        entry = verbose_payload["db_sizes"][label]
         assert entry["tables"] is not None, entry.get("tables_error")
         assert sum(stat["bytes"] for stat in entry["tables"].values()) > 0
 
@@ -416,8 +431,15 @@ def test_trace_index_status_db_sizes_degrade_when_dbstat_unavailable(monkeypatch
     payload = json.loads(result.output)
     entry = payload["db_sizes"]["search_snapshot"]
     assert entry["exists"] is True
-    assert entry["tables"] is None
+    assert entry["table_count"] is None
     assert "dbstat" in entry["tables_error"]
+
+    verbose = runner.invoke(main, ["trace", "index", "status", "--json", "--verbose"])
+
+    assert verbose.exit_code == 0, verbose.output
+    verbose_entry = json.loads(verbose.output)["db_sizes"]["search_snapshot"]
+    assert verbose_entry["tables"] is None
+    assert "dbstat" in verbose_entry["tables_error"]
 
 
 def test_trace_index_bootstrap_signposts_progress_on_stderr() -> None:
