@@ -555,6 +555,28 @@ def _ingest_locked(
             logger.warning(
                 "context tree bucket projection failed for %s", trace_id, exc_info=True
             )
+        # Issue #31 — write-side capture parity. Project the per-trace v2
+        # envelope (``bucket/traces/v1/<proj>/<trace>/``) at capture time so the
+        # manifest projection (``bucket manifest`` / ``ctx list``) agrees with
+        # ``bucket status`` / the trace index without waiting for a later
+        # ``bucket repair``. Best-effort; never make capture fragile. The
+        # Bug-A ``trace_record_only`` fast path skips this (guarded by the
+        # enclosing ``if not trace_record_only:``).
+        try:
+            from .bucket_store import project_per_trace_exports
+
+            project_per_trace_exports(
+                project_dir,
+                project_slug=project_slug,
+                trace_id=final_record.trace_id,
+                record=final_record,
+            )
+        except Exception:
+            logger.warning(
+                "per-trace bucket envelope projection failed for %s",
+                trace_id,
+                exc_info=True,
+            )
 
     # Plan 087 U5: best-effort keep-warm. Now that the trace is in the bucket,
     # bring the warm Trace Index + search projection up to date so the trace is

@@ -381,3 +381,39 @@ def test_incremental_event_mirror_equals_full_rebuild(tmp_path, monkeypatch):
     for key in ("batch_count", "last_batch_id", "latest_event_sequence"):
         assert inc_index[key] == full_index[key]
     assert inc_index["batch_count"] == 4
+
+
+def test_manifest_traces_include_trace_record_store_entries():
+    """Issue #31 — manifest-only readers agree with the object store.
+
+    A trace seeded into the bucket TraceRecord object store ONLY (no live
+    per-trace v2 envelope) must still appear in ``manifest.traces``: the
+    manifest projection self-heals by materializing the per-trace envelope
+    from canonical data. ``bucket verify --full`` then passes (the envelope is
+    on disk) and the manifest count equals the object count.
+    """
+
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_verify,
+        trace_v1_json_path,
+        write_trace_record,
+    )
+
+    write_trace_record(
+        _trace("trace-heal-1"),
+        project_slug="project-restored",
+        source_layer="canonical",
+    )
+
+    manifest = bucket_manifest(write=True, include_objects=False)
+    trace_ids = [row["trace_id"] for row in manifest["traces"]]
+    assert "trace-heal-1" in trace_ids
+    assert len(manifest["traces"]) == manifest["trace_records"]["object_count"]
+
+    # Self-heal materialized the envelope on disk.
+    assert trace_v1_json_path("project-restored", "trace-heal-1").exists()
+
+    # Manifest consistency check (bucket verify check 3) is green.
+    result = bucket_verify(full=True)
+    assert result["ok"] is True, result["errors"]

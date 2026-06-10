@@ -11,12 +11,15 @@ What "identical" means here, and why the obvious measures are WRONG:
 
 * Raw bytes differ across two boxes because restore rewrites machine-local
   absolute paths into envelopes (correct machine-locality, not a bug).
-* The top-level `bucket_digest` ALSO differs — and that is a real product
-  finding, not test flakiness: bucket_store builds the digest material from
-  each sub-block WHOLE, and every sub-block (raw_sources / trail_events /
-  context_trees / ...) embeds a machine-local ``"root"`` absolute path. So
-  the digest the "Plan 080 Resolution H — deterministic across machines"
-  comment promises is in fact path-polluted. Logged for PR-B (issue #25).
+* The top-level `bucket_digest` USED to differ — that was issue #29: the
+  digest material fed each sub-block (raw_sources / trail_events /
+  context_trees / ...) in WHOLE, and every sub-block embedded a machine-local
+  ``"root"`` absolute path, so the digest the "Plan 080 Resolution H —
+  deterministic across machines" comment promised was path-polluted. FIXED:
+  ``bucket_manifest`` now strips ``root`` (and the volatile ``objects``
+  listing) from each sub-block via a recursive ``_digest_view`` and drops the
+  machine-local ``trail`` (trace-index freshness) block entirely, so
+  ``bucket_digest`` is byte-identical across two restores of identical content.
 
 What DOES hold, and what we assert: every per-block CONTENT digest
 (``raw_sources.digest``, ``trail_events.digest``, ``context_trees.digest``,
