@@ -60,6 +60,15 @@ const nextConfig: NextConfig = {
   ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   transpilePackages: ["@opentraces/ui"],
   allowedDevOrigins: ["gabrieles-mac-mini-1.taila1b059.ts.net"],
+  async rewrites() {
+    return [
+      // Launch announcement is a self-contained static page in public/blog/.
+      {
+        source: "/blog/introducing-opentraces-0-4",
+        destination: "/blog/introducing-opentraces-0-4/index.html",
+      },
+    ];
+  },
   async headers() {
     const linkHeader = [
       '</docs>; rel="service-doc"; type="text/html"',

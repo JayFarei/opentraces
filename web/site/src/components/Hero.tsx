@@ -202,7 +202,12 @@ export default function Hero({
     <section className="hero">
       <div className="hero-grid">
         <div className="hero-left">
-          <div className="hero-pill">opentraces &nbsp; v{pkg.version}</div>
+          <div className="hero-pill-row">
+            <div className="hero-pill">opentraces &nbsp; v{pkg.version}</div>
+            <Link className="hero-announce" href="/blog/introducing-opentraces-0-4">
+              <span aria-hidden="true">←</span> Read the announcement
+            </Link>
+          </div>
           <div style={{ height: 16 }} />
           <h1>Traces are the new source code.</h1>
           <p className="hero-sub">
