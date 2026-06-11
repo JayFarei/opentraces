@@ -50,9 +50,9 @@ the single source of truth. Drift fails CI under `--strict`.
 | `completions install` | enable-shell-completions | bronze | enable-shell-completions | Install completions for SHELL (auto-detects if omitted). |
 | `completions uninstall` | enable-shell-completions | bronze | enable-shell-completions | Remove completions for SHELL (auto-detects if omitted). |
 | `config` | _group_ | — | **unowned** | Manage opentraces configuration. |
-| `config set` | configure-settings | gold | bucket-remote-sync-scope-per-trace, bucket-self-sufficient-context-tree-outcome-roundtrip, configure-settings | Set a configuration value. |
-| `config show` | configure-settings | silver | cli-lifecycle, configure-settings, migration-s8-config-forward-compat, migration-u-config-2-legacy-marker-loads | Display current configuration (secrets masked). |
-| `config tracking-mode` | configure-tracking-mode | silver | maintenance-command-ownership, prompt-install-auth-flow | Show or set the project tracking mode (plan 081). |
+| `config set` | configure-settings | gold | bucket-remote-sync-scope-per-trace, bucket-self-sufficient-context-tree-outcome-roundtrip, capture-safety-excluded-marker, configure-settings | Set a configuration value. |
+| `config show` | configure-settings | silver | capture-safety-excluded-marker, cli-lifecycle, configure-settings, migration-s8-config-forward-compat, migration-u-config-2-legacy-marker-loads | Display current configuration (secrets masked). |
+| `config tracking-mode` | configure-tracking-mode | silver | capture-safety-excluded-marker, capture-safety-tracking-mode, maintenance-command-ownership, prompt-install-auth-flow | Show or set the project tracking mode (plan 081). |
 | `ctx` | _group_ | gold | context-tree-demo-acceptance, context-tree-determinism, context-tree-outcome-3-teleport-resume-from-step-N, context-tree-outcome-4-checkpoint-for-experiments | Navigate the Context Tree: what the LLM saw at each step. |
 | `ctx anchor-for-step` | resume-from-context | silver | context-tree-temporal-anchor-precision | Print the trail_anchor_hint.commit_id for the ContextNode at STEP_INDEX. |
 | `ctx compactions` | inspect-context-tree | gold | codex-parity-compaction, codex-parity-subagent-compaction, context-tree-compaction-fidelity | List compaction boundaries for a trace. |
@@ -92,7 +92,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `dataset status` | build-publishable-dataset | bronze | build-publishable-dataset-shape | Show row count and publication-state breakdown for a dataset. |
 | `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, prompt-install-auth-flow, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
 | `git-backfill` | attribution-backfill | silver | attribution-backfill, migration-u-trail-3-backfill-honest | Retroactively correlate inbox traces to past commits. |
-| `init` | onboard-repo | silver | migration-u-setup-3-init-idempotent, onboard-repo | Initialize opentraces in the current project. |
+| `init` | onboard-repo | silver | capture-safety-excluded-marker, capture-safety-import-existing, migration-u-setup-3-init-idempotent, onboard-repo | Initialize opentraces in the current project. |
 | `remove` | offboard-repo | silver | cli-lifecycle, migration-u-config-5-remove-reports-deletion | Remove opentraces from the current project. |
 | `security` | _group_ | — | **unowned** | Optional privacy/security utilities. |
 | `security sanitize` | inspect-security-pipeline | bronze | inspect-security-pipeline | Sanitise JSON read from stdin. |
@@ -103,7 +103,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `setup auth` | connect-hf-identity | bronze | connect-hf-identity | Log in to HuggingFace Hub for dataset remotes. |
 | `setup bucket` | configure-bucket | gold | configure-bucket, live-hf-bucket-daemon-sync, live-hf-bucket-multi-trace, live-hf-bucket-roundtrip, live-hf-read-remote, migration-u-bucket-1-setup-no-adoption, prompt-install-auth-flow, setup-bucket-fake-provider-offline, setup-bucket-migrates-old-layout, setup-bucket-no-auth-fails | Configure the private bucket sync target. |
 | `setup capture-otlp` | configure-otel-capture | silver | context-tree-otel-settings-patcher | Patch ~/.claude/settings.json so Claude Code emits OTel, and (optionally) |
-| `setup claude-code` | connect-agent-runtime | silver | connect-agent-runtime, prompt-install-auth-flow | Install the Claude Code session-capture hooks. |
+| `setup claude-code` | connect-agent-runtime | silver | capture-safety-excluded-marker, capture-safety-tracking-mode, connect-agent-runtime, prompt-install-auth-flow | Install the Claude Code session-capture hooks. |
 | `setup codex-cli` | configure-codex-runtime | silver | maintenance-command-ownership, prompt-install-auth-flow | Install Codex CLI session-capture hooks. |
 | `setup git` | connect-agent-runtime | silver | connect-agent-runtime, migration-u-setup-4-setup-git-clean-install, migration-u-trail-3-backfill-honest, prompt-install-auth-flow | Install the post-commit hook that correlates commits to traces. |
 | `setup llm-review` | configure-security-reviewer | bronze | enable-security-tools | Configure the optional LLM dataset-row reviewer for publication gates. |
@@ -125,17 +125,17 @@ the single source of truth. Drift fails CI under `--strict`.
 | `skill-verifier autoverify` | skill-verifier-calibration | bronze | skill-verifier-command-smoke | Self-align a rubric to the skill's goal and calibrate it (autoverify mode). |
 | `skill-verifier score` | skill-verifier-calibration | bronze | skill-verifier-command-smoke | Drive SkillOpt with the calibrated rubric (Phase 5 reward swap); emit a package. |
 | `skill-verifier status` | skill-verifier-calibration | bronze | skill-verifier-command-smoke | Quick autoverify status for a skill (feasibility triage). |
-| `status` | onboard-repo | gold | cli-lifecycle, cli-publish-happy-path, migration-s1-read-compat, migration-s11-non-destructive, migration-s12-end-to-end-upgrade, migration-u-config-2-legacy-marker-loads, tier1-cold-publish, tier1-snapshot-restore, tier1-warm-reuse | Show status of the current opentraces project. |
+| `status` | onboard-repo | gold | capture-safety-import-existing, capture-safety-tracking-mode, cli-lifecycle, cli-publish-happy-path, migration-s1-read-compat, migration-s11-non-destructive, migration-s12-end-to-end-upgrade, migration-u-config-2-legacy-marker-loads, tier1-cold-publish, tier1-snapshot-restore, tier1-warm-reuse | Show status of the current opentraces project. |
 | `trace` | _group_ | — | **unowned** | Search, map, slice, and retrieve retained traces. |
 | `trace compare` | trace-intelligence-compare | bronze | trace-compare-smoke | Compare two traces: metrics, quality, burst/error signals, and security deltas. |
 | `trace discover` | retrieve-relevant-traces | bronze | agent-session-to-published-dataset | Build a deterministic topic capsule from retained traces. |
 | `trace get` | resolve-trace-artifact | gold | bucket-cross-machine-content-identity, bucket-prune-orphan-only, bucket-self-sufficient-everything, bucket-symmetric-local-remote, bucket-write-order-discipline-local, cli-lifecycle, codex-parity-bash-debugging, codex-parity-linear, codex-parity-permission-request, codex-parity-readonly-search, codex-parity-resume, codex-parity-skill-invocation, live-hf-bucket-roundtrip, live-hf-read-remote, migration-s1-read-compat, migration-s12-end-to-end-upgrade, migration-u-trace-1-patch-survives-read, pi-compaction-branch-fidelity, pi-extension-capture-linear, pi-full-parity-latest, pi-security-sanitize-captured-content, trace-spine-cross-substrate-resolution, trace-spine-trace-get-shape, trail-mature-updates-patch-anchor | Resolve a trace, trace unit, map node, or ot:// Trail resource. |
-| `trace index` | _group_ | gold | agent-session-to-published-dataset, pi-skill-detection-parity, pi-tool-bash-detection-parity | Rebuild and inspect the local trace search snapshot. |
+| `trace index` | _group_ | gold | agent-session-to-published-dataset, capture-safety-import-existing, pi-skill-detection-parity, pi-tool-bash-detection-parity | Rebuild and inspect the local trace search snapshot. |
 | `trace index rebuild` | maintain-index | gold | cli-publish-happy-path, migration-s1-read-compat, migration-s10-idempotency, migration-s11-non-destructive, migration-s12-end-to-end-upgrade, migration-s5-read-in-place, migration-u-ctx-1-honest-no-evidence, migration-u-ds-1-scaffold-degrades, migration-u-ds-4-live-hf-publish, migration-u-ds-4-spine-to-published-shard, migration-u-setup-7-outcome-real-agent, migration-u-trace-1-patch-survives-read, migration-u-trace-8-bursts-degrade, migration-u-trail-1-honest-unknown, security-sanitize-captured-content, tier1-cold-publish, trace-map-and-slice | Rebuild the local read-only trace search snapshot. |
 | `trace index refresh` | maintain-index | gold | migration-s12-end-to-end-upgrade | Keep the warm Trace Index + search projection up to date (cheap sync). |
 | `trace index status` | maintain-index | gold | pi-readonly-recursion-guard, trace-map-and-slice | Show local trace search snapshot status. |
 | `trace map` | inspect-trace-context | gold | codex-parity-bash-debugging, codex-parity-linear, codex-parity-multi-file-patch, codex-parity-readonly-search, codex-parity-skill-invocation, codex-parity-watcher-backstop, migration-s1-read-compat, migration-u-trace-8-bursts-degrade, pi-extension-capture-linear, trace-map-and-slice | Show a deterministic Trace Map or bounded candidate slice. |
-| `trace query` | retrieve-relevant-traces | gold | agent-session-to-published-dataset, bucket-self-sufficient-everything, cli-publish-happy-path, codex-parity-bash-debugging, codex-parity-linear, context-tree-demo-acceptance, dataset-sync-skill-history, migration-s1-read-compat, migration-s10-idempotency, migration-s5-read-in-place, migration-u-ds-4-live-hf-publish, migration-u-ds-4-spine-to-published-shard, migration-u-setup-7-outcome-real-agent, pi-extension-capture-linear, pi-readonly-recursion-guard, pi-skill-detection-parity, security-sanitize-captured-content, tier1-cold-publish, tier1-warm-reuse, trace-map-and-slice, trace-spine-trace-get-shape | Search local retained traces and return bounded candidate packets. |
+| `trace query` | retrieve-relevant-traces | gold | agent-session-to-published-dataset, bucket-self-sufficient-everything, capture-safety-import-existing, cli-publish-happy-path, codex-parity-bash-debugging, codex-parity-linear, context-tree-demo-acceptance, dataset-sync-skill-history, migration-s1-read-compat, migration-s10-idempotency, migration-s5-read-in-place, migration-u-ds-4-live-hf-publish, migration-u-ds-4-spine-to-published-shard, migration-u-setup-7-outcome-real-agent, pi-extension-capture-linear, pi-readonly-recursion-guard, pi-skill-detection-parity, security-sanitize-captured-content, tier1-cold-publish, tier1-warm-reuse, trace-map-and-slice, trace-spine-trace-get-shape | Search local retained traces and return bounded candidate packets. |
 | `trace slice` | extract-bounded-evidence | gold | codex-parity-linear, codex-parity-multi-file-patch, pi-extension-capture-linear, trace-map-and-slice | Extract deterministic Trace Slices for dataset workflows. |
 | `trace teleport` | _group_ | — | **unowned** | Move a trace and its retained Git evidence between workspaces. |
 | `trace teleport export` | recreate-trace-environment | bronze | recreate-trace-environment-empty-state-contract, recreate-trace-environment | Export a trace and retained Git evidence as a portable workspace. |
@@ -172,7 +172,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `__capture` | session-ingest | — | — | Capture a Claude Code session (hidden, for automation). |
 | `__ingest-session` | session-ingest | — | — | Ingest one native agent session invoked fire-and-forget by a Stop hook. |
 | `__migrate-trace-ids` | schema-migration | — | — | Rewrite legacy ``<agent>_<session>`` trace ids to canonical UUIDv4. |
-| `__pi-bridge` | — | — | — | Hidden argv-safe Pi extension bridge. |
+| `__pi-bridge` | — | silver | capture-safety-excluded-marker | Hidden argv-safe Pi extension bridge. |
 | `__run-post-commit-hook` | commit-correlation | — | — | Invoked by .git/hooks/opentraces-post-commit after each commit. |
 | `__scan` | manual-inbox-recovery | — | — | Manually re-sync the current project's inbox from its JSONL corpus. |
 | `_backfill` | attribution-backfill | bronze | attribution-backfill, trail-blame-and-graph | Backfill per-commit attribution into the local cache. |
@@ -201,7 +201,7 @@ the single source of truth. Drift fails CI under `--strict`.
 
 ## Per-trajectory tier coverage
 
-- Trajectories covered: **48** (15 gold, 9 silver, 24 bronze)
+- Trajectories covered: **48** (15 gold, 12 silver, 21 bronze)
 
 | Trajectory | Max tier | Owning journeys |
 |---|---|---|
@@ -220,8 +220,8 @@ the single source of truth. Drift fails CI under `--strict`.
 | configure-otel-capture | bronze | 1 |
 | configure-security-detectors | bronze | 1 |
 | configure-security-reviewer | bronze | 1 |
-| configure-settings | bronze | 1 |
-| configure-tracking-mode | bronze | 1 |
+| configure-settings | silver | 2 |
+| configure-tracking-mode | silver | 3 |
 | connect-agent-runtime | silver | 2 |
 | connect-hf-identity | silver | 2 |
 | context-tree-branching | gold | 1 |
@@ -243,7 +243,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | maintain-install | bronze | 1 |
 | manage-hf-visibility | bronze | 1 |
 | onboard-integrations | bronze | 1 |
-| onboard-repo | bronze | 1 |
+| onboard-repo | silver | 2 |
 | pr-lineage-publish | gold | 2 |
 | productionize-trace-workflow | bronze | 1 |
 | recreate-trace-environment | bronze | 2 |

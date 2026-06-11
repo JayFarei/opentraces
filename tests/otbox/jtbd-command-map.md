@@ -116,23 +116,23 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 
 | Command | JTBD one-liner | Action trajectory (n/N) | Owning journey | Persona |
 |---|---|---|---|---|
-| `init` | Developer enrolls a git repo so opentraces can capture traces from it | onboard-repo (1/5) | unowned | human |
+| `init` | Developer enrolls a git repo so opentraces can capture traces from it | onboard-repo (1/5) | `capture-safety-import-existing` | human |
 | `status` | Developer checks inbox counts + remote binding after init to confirm the project is live | onboard-repo (5/5) | `cli-lifecycle`, `cli-publish-happy-path` | human |
 | `remove` | Developer unenrolls a project + wipes local state after stopping capture | offboard-repo (1/1) | `cli-lifecycle` | human |
 | `doctor` | Developer or agent verifies pipeline health after setup to catch broken tools or missing hooks | verify-install (1/1) | `doctor-health`, `install-smoke-tier1` | both |
 | `auth login` | Developer authenticates with HuggingFace via browser OAuth or token so dataset remotes + bucket sync are unblocked | connect-hf-identity (1/3) | unowned | both |
 | `auth whoami` | Agent or developer confirms which HF identity is active before running publish commands | connect-hf-identity (2/3) | unowned | both |
 | `auth logout` | Developer removes stored HF credentials to rotate or decommission an identity | connect-hf-identity (3/3) | unowned | human |
-| `config set` | Developer or agent writes a config key to global or project scope so behaviour changes take effect without editing JSON | configure-settings (1/2) | unowned | both |
+| `config set` | Developer or agent writes a config key to global or project scope so behaviour changes take effect without editing JSON | configure-settings (1/2) | `capture-safety-excluded-marker` | both |
 | `config show` | Developer inspects current config with secrets masked to confirm active settings | configure-settings (2/2) | `cli-lifecycle` | human |
-| `config tracking-mode` | Developer switches between global and manual tracking behavior so auto-enrollment matches the repo's privacy posture | configure-tracking-mode (1/1) | unowned | human |
+| `config tracking-mode` | Developer switches between global and manual tracking behavior so auto-enrollment matches the repo's privacy posture | configure-tracking-mode (1/1) | `capture-safety-tracking-mode`, `capture-safety-excluded-marker` | human |
 | `completions` | Developer prints a shell completion script to evaluate before installing | enable-shell-completions (1/3) | unowned | human |
 | `completions install` | Developer installs shell completions for bash/zsh/fish so `ot <TAB>` works | enable-shell-completions (2/3) | unowned | human |
 | `completions uninstall` | Developer removes installed completions after uninstalling or switching shells | enable-shell-completions (3/3) | unowned | human |
 | `setup` (bare) | Developer walks an interactive wizard that covers every integration after init | onboard-integrations (1/1) | unowned | human |
 | `setup auth` | Alias for `auth login` reachable from the wizard | connect-hf-identity (1/3) — alias | unowned | human |
 | `setup bucket` | Developer configures whether captured traces sync to a private HF remote or stay local-only | configure-bucket (1/1) | unowned | both |
-| `setup claude-code` | Developer installs the four Claude Code hooks (PreToolUse / PostToolUse / Stop / PostCompact) so sessions are captured | connect-agent-runtime (1/2) | unowned | both |
+| `setup claude-code` | Developer installs the four Claude Code hooks (PreToolUse / PostToolUse / Stop / PostCompact) so sessions are captured | connect-agent-runtime (1/2) | `capture-safety-tracking-mode` | both |
 | `setup codex-cli` | Developer installs Codex CLI capture hooks so Codex sessions enter the same trace/bucket substrates as Claude Code | configure-codex-runtime (1/1) | `codex-full-parity-latest` | both |
 | `setup pi` | Developer installs the Pi extension package entry so Pi sessions auto-enroll into capture | connect-agent-runtime (2/2) | `pi-setup-dry-run` | both |
 | `setup git` | Developer installs the post-commit hook that correlates commits to traces, powering `trail blame` | connect-agent-runtime (2/2) | unowned | both |

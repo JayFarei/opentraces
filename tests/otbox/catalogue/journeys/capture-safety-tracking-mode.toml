@@ -1,0 +1,158 @@
+name = "capture-safety-tracking-mode"
+description = """
+CAP-4 (claims ledger): global tracking is opt-out, repos auto-enroll on
+first capture, and manual mode requires an explicit `opentraces init`.
+
+The journey drives the REAL enrollment boundary: it installs the Claude
+Code hooks with `setup claude-code`, then fires the installed
+PreToolUse hook entrypoint exactly the way Claude Code would (JSON
+payload on stdin, cwd pointing at the project). PreToolUse is the
+auto-enroll hot path (`auto_enroll_from_cwd` ->
+`auto_enroll_if_global`) and — unlike the Stop hook — spawns no
+detached ingest subprocess, so the journey's state assertions cannot
+race a background worker.
+
+Arc:
+  1. `config tracking-mode manual` + hook fire => the project is NOT
+     enrolled (no `.opentraces.json` marker; `--json status` returns
+     the PROJECT_NOT_OPTED_IN envelope with exit 3).
+  2. `config tracking-mode global` + the same hook fire => the project
+     IS enrolled on first capture, with the documented auto-enroll
+     policy (private review-required marker listing the built-in
+     claude-code / codex-cli / pi capture agents).
+
+State is asserted via the public CLI JSON surfaces (`config
+tracking-mode`, `status`) plus the committable `.opentraces.json`
+marker the docs tell users to look for.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["configure-tracking-mode"]
+persona = "human"
+requires = ["cli", "git"]
+from_checkpoints = ["c-installed-source"]
+status = "capture-safety"
+
+[[steps]]
+type = "shell"
+id = "init-git-repo"
+argv = ["git", "init", "--quiet", "--initial-branch=main"]
+
+[[steps]]
+type = "shell"
+id = "seed-commit"
+argv = ["bash", "-c", "echo seed > README.md && git add -A && git commit -q -m seed"]
+
+[[steps]]
+type = "cli"
+id = "set-manual"
+argv = ["config", "tracking-mode", "manual"]
+
+[[steps]]
+type = "cli"
+id = "show-manual"
+argv = ["--json", "config", "tracking-mode"]
+
+[[steps]]
+type = "cli"
+id = "setup-claude"
+argv = ["setup", "claude-code"]
+
+# Fire the installed PreToolUse hook the way Claude Code would. Under
+# manual tracking mode this must NOT enroll the project.
+[[steps]]
+type = "shell"
+id = "fire-hook-manual"
+argv = [
+  "bash",
+  "-c",
+  "printf '{{\"cwd\": \"{project}\", \"session_id\": \"otbox-cap4-manual\", \"transcript_path\": \"{home}/cap4-manual.jsonl\", \"tool_name\": \"Read\", \"tool_input\": {{\"file_path\": \"README.md\"}}}}' | {py_bin} '{home}/.claude/hooks/opentraces_on_pre_tool_use.py'",
+]
+
+[[steps]]
+type = "cli"
+id = "status-manual"
+argv = ["--json", "status"]
+expect_returncode = 3
+
+[[steps]]
+type = "cli"
+id = "set-global"
+argv = ["config", "tracking-mode", "global"]
+
+# The same capture event under global mode auto-enrolls on first fire.
+[[steps]]
+type = "shell"
+id = "fire-hook-global"
+argv = [
+  "bash",
+  "-c",
+  "printf '{{\"cwd\": \"{project}\", \"session_id\": \"otbox-cap4-global\", \"transcript_path\": \"{home}/cap4-global.jsonl\", \"tool_name\": \"Read\", \"tool_input\": {{\"file_path\": \"README.md\"}}}}' | {py_bin} '{home}/.claude/hooks/opentraces_on_pre_tool_use.py'",
+]
+
+[[steps]]
+type = "cli"
+id = "status-global"
+argv = ["--json", "status"]
+
+[[assertions]]
+kind = "returncode"
+step = "set-manual"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-manual"
+path = "tracking_mode"
+equals = "manual"
+
+[[assertions]]
+kind = "returncode"
+step = "setup-claude"
+equals = 0
+
+# The hook entrypoint must exit 0 in BOTH modes (fail-open contract).
+[[assertions]]
+kind = "returncode"
+step = "fire-hook-manual"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "fire-hook-global"
+equals = 0
+
+# Manual mode: capture event did not enroll.
+[[assertions]]
+kind = "returncode"
+step = "status-manual"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-manual"
+path = "error.code"
+equals = "PROJECT_NOT_OPTED_IN"
+
+# Global mode: first capture event enrolled with the documented policy.
+[[assertions]]
+kind = "returncode"
+step = "status-global"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-global"
+path = "review_policy"
+equals = "review"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "status-global"
+path = "agents"
+equals = ["claude-code", "codex-cli", "pi"]
+
+[[assertions]]
+kind = "path_exists"
+path = "{project}/.opentraces.json"
