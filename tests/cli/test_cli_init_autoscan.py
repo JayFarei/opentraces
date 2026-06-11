@@ -154,3 +154,43 @@ def test_init_start_fresh_leaves_inbox_empty(
     assert state.get_session("sess-X") is None, (
         "--start-fresh must not invoke scan_project"
     )
+
+
+def test_init_import_existing_resolves_underscore_path_session_dir(
+    tmp_path, runner, monkeypatch
+) -> None:
+    """Regression (release-gate CAP-5): repo paths with chars outside
+    ``[alnum, '-']`` (e.g. ``my_repo``) must import.
+
+    ``_current_project_session_dir`` used a ``'/' -> '-'`` slug while
+    corpus discovery used ``encode_claude_path`` (every non-alnum-non-dash
+    char becomes ``-``). For ``my_repo`` the two diverged, the session
+    count came back 0, and ``--import-existing`` silently imported
+    nothing. No ``_current_project_session_dir`` monkeypatch here — the
+    real resolution against the real (isolated-HOME) corpus dir is the
+    thing under test.
+    """
+    from opentraces.core.repo_identity import encode_claude_path
+
+    project = _init_git_repo(tmp_path / "my_repo")
+
+    # Seed the corpus exactly where Claude Code writes it.
+    corpus = Path.home() / ".claude" / "projects" / encode_claude_path(project)
+    _write_synthetic_session(corpus, "sess-underscore-A", turns=3)
+    _write_synthetic_session(corpus, "sess-underscore-B", turns=3)
+
+    monkeypatch.setattr(
+        "opentraces.cli._is_interactive_terminal", lambda: False
+    )
+    monkeypatch.chdir(project)
+
+    result = runner.invoke(main, ["init", "--import-existing"])
+    assert result.exit_code == 0, result.output
+
+    from opentraces.core.state import StateManager
+    from opentraces.core.config import get_project_state_path
+    state = StateManager(state_path=get_project_state_path(project))
+    assert state.get_session("sess-underscore-A") is not None, (
+        "underscore-path corpus must be discovered and imported"
+    )
+    assert state.get_session("sess-underscore-B") is not None

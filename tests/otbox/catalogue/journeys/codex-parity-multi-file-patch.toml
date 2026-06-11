@@ -47,7 +47,9 @@ equals = ["src/app.py", "src/helpers.py", "tests/test_app.py"]
 kind = "stdout_json_length_equals"
 step = "trace-map"
 path = "map.nodes.0.metadata.patches"
-equals = 3
+# World-derived: the record's patch count (codex hunk granularity varies per
+# binary version; the cross-surface identity record==map is the contract).
+equals_var = "codex_patch_count"
 
 [[assertions]]
 kind = "returncode"
@@ -64,4 +66,4 @@ equals = "{trace_id}"
 kind = "stdout_json_length_equals"
 step = "trace-slice"
 path = "slices.0.trace_patch_refs"
-equals = 4
+equals_var = "codex_patch_count"

@@ -1042,3 +1042,81 @@ class TestAutoReviewPromotion:
         entry = state.get_trace(result.trace_id)
         assert entry is not None
         assert entry.status == TraceStatus.STAGED.value
+
+
+# --------------------------------------------------------------------------- #
+# Per-project exclusion gate (release-gate CAP-4: `excluded` honored at the
+# shared ingest choke point, not just by the Pi bridge)
+# --------------------------------------------------------------------------- #
+
+class TestExcludedProjectGate:
+    def _exclude(self, project_dir: Path) -> bytes:
+        """Flip the project's marker to excluded; return its exact bytes."""
+        marker = project_dir / ".opentraces.json"
+        data = json.loads(marker.read_text())
+        data["excluded"] = True
+        marker.write_text(json.dumps(data))
+        return marker.read_bytes()
+
+    def test_ingest_skips_excluded_project_and_stages_nothing(
+        self, project_dir
+    ) -> None:
+        from opentraces.core.config import PROJECTS_DIR
+        from opentraces.core.ingest import ingest_one_session
+
+        marker_before = self._exclude(project_dir)
+        path = _write_jsonl(project_dir, "sess-excluded", turns=3)
+
+        result = ingest_one_session(path, project_dir)
+
+        assert result.action == "skipped"
+        assert "excluded" in (result.error or "")
+        assert result.trace_id is None
+        # Nothing staged anywhere under the global projects dir.
+        assert list(PROJECTS_DIR.glob("**/traces/*.jsonl")) == []
+        # The marker is byte-identical — no agent backfill, no rewrite.
+        assert (project_dir / ".opentraces.json").read_bytes() == marker_before
+
+    def test_ingest_skips_bare_excluded_marker_without_minting_state(
+        self, tmp_path
+    ) -> None:
+        """A bare committed ``{"excluded": true}`` marker (no project_id)
+        must skip cleanly — not error out, not mint a project_id, not
+        create per-project global state."""
+        from opentraces.core.config import PROJECTS_DIR
+        from opentraces.core.ingest import ingest_one_session
+
+        proj = tmp_path / "bare-excluded"
+        proj.mkdir()
+        marker = proj / ".opentraces.json"
+        marker.write_text('{"excluded": true}')
+        marker_before = marker.read_bytes()
+        path = _write_jsonl(proj, "sess-bare-excluded", turns=3)
+
+        result = ingest_one_session(path, proj)
+
+        assert result.action == "skipped"
+        assert "excluded" in (result.error or "")
+        assert marker.read_bytes() == marker_before
+        # No slug dir, no ingest-locks, nothing minted for this project.
+        assert list(PROJECTS_DIR.iterdir()) == []
+
+    def test_scan_project_excluded_returns_empty_report(
+        self, project_dir, monkeypatch
+    ) -> None:
+        from opentraces.core.ingest import scan_project
+
+        marker_before = self._exclude(project_dir)
+        path = _write_jsonl(project_dir, "sess-excluded-scan", turns=3)
+
+        # Discovery must not even be consulted for an excluded project.
+        def _boom(_repo):
+            raise AssertionError("corpus discovery ran for an excluded project")
+
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus", _boom
+        )
+        report = scan_project(project_dir)
+
+        assert report.results == []
+        assert (project_dir / ".opentraces.json").read_bytes() == marker_before

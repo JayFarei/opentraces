@@ -8,23 +8,6 @@
 
 [[entries]]
 journeys = [
-  "bucket-compression-integrity-roundtrip",
-  "bucket-events-mirror-replay-equals-git",
-  "bucket-manifest-v2-shape",
-  "bucket-prune-orphan-only",
-  "bucket-rebuild-context-tree-substrate",
-  "bucket-remote-sync-scope-per-trace",
-  "bucket-self-sufficient-everything",
-  "bucket-symmetric-local-remote",
-]
-rules = ["unregistered-checkpoint", "unknown-precondition", "lane-unreachable"]
-reason = "bucket-spine-v2 checkpoint family (plan 080 phases B/C/D) never built; precondition keys await PRECONDITION_VOCAB widening + runtime probes (otbox 2.0 phase 4). The otbox-42-worlds-envelopes package builds the c-bucket-spine-v2-* checkpoints + probes and lists per-journey un-quarantine in its handoff; remove each journey here as that package proves it green."
-issue = "https://github.com/JayFarei/opentraces/issues/42"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
-journeys = [
   "context-tree-branching-fidelity",
   "context-tree-capture-fidelity",
   "context-tree-compaction-fidelity",
@@ -39,20 +22,6 @@ journeys = [
 ]
 rules = ["unregistered-checkpoint", "unknown-precondition"]
 reason = "c-context-tree-substrate / c-rewound-session / c-compacted-session checkpoints deferred from plan 077 phase 4; build or delete by expiry"
-issue = "https://github.com/JayFarei/opentraces/issues/42"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
-journeys = [
-  "ctx-info-head-shape",
-  "ctx-list-no-blob-loads",
-  "ctx-show-layer-blob-dedup-per-project",
-  "ctx-show-offline-fails",
-  "ctx-show-with-lazy-blob-fetch",
-]
-rules = ["unregistered-checkpoint", "unknown-precondition"]
-reason = "ctx blob journeys depend on the same unbuilt bucket-spine-v2 checkpoints"
 issue = "https://github.com/JayFarei/opentraces/issues/42"
 added = 2026-06-10
 expires = 2026-09-08

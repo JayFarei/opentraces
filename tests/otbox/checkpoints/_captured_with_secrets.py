@@ -32,20 +32,30 @@ from . import Checkpoint, CheckpointError, register
 from ._captured_helpers import (
     harness_interpreter,
     harness_source_with_shebang,
+    capture_metadata_from_artifact,
     check as _check_helper,
     encode_claude_path,
     git as _git_helper,
+    read_state_json,
+    restore_from_capture,
+    synthetic_capture_metadata,
+    trace_for_session,
+    traces_by_created_at,
+    transcript_path_for_session,
 )
 
-_CAPTURE_NAME = "c-captured-with-secrets"
+_CHECKPOINT_NAME = "c-captured-with-secrets"
+# Plan B0 flip: the real-agent artifact produced by
+# `make capture-refresh SCENARIO=claude-with-secrets` (scenario-named dir).
+_CAPTURE_NAME = "claude-with-secrets"
 
 
 def _check(result, label: str) -> None:
-    _check_helper(result, checkpoint=_CAPTURE_NAME, label=label)
+    _check_helper(result, checkpoint=_CHECKPOINT_NAME, label=label)
 
 
 def _git(driver: Driver, box: Box, *args: str):
-    return _git_helper(driver, box, *args, checkpoint=_CAPTURE_NAME)
+    return _git_helper(driver, box, *args, checkpoint=_CHECKPOINT_NAME)
 
 _SESSION_NAME = "session-with-secrets"
 _SESSION_ID = "sess-otbox-session-with-secrets"
@@ -62,7 +72,127 @@ _HARNESS_SRC = Path(__file__).resolve().parents[1] / "fake_harnesses" / "claude"
 _SESSIONS_SRC = Path(__file__).resolve().parents[1] / "fixtures" / "sessions"
 
 
+def _security_audit_fields(driver: Driver, box: Box, trace_jsonl: str) -> dict:
+    """Scan the on-disk trace JSONL for security-pipeline fingerprints.
+
+    Shared by the synthetic and artifact-restored paths so both audits
+    carry the same shape: ``tools_applied``,
+    ``security_findings_count``, ``secret_present_in_disk``,
+    ``trace_jsonl_readable``.
+    """
+    trace_raw = driver.exec(box, ["cat", trace_jsonl])
+    tools_applied: list[str] = []
+    findings_count = 0
+    if not trace_raw.ok:
+        return {
+            "trace_jsonl_readable": False,
+            "tools_applied": tools_applied,
+            "security_findings_count": findings_count,
+            "secret_present_in_disk": False,
+        }
+    # The file is a single TraceRecord serialized as JSONL — usually
+    # one line, but defensively walk every line.
+    for line in trace_raw.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        sec = ((obj.get("metadata") or {}).get("security") or {})
+        applied = sec.get("tools_applied") or []
+        if isinstance(applied, list):
+            for name in applied:
+                if isinstance(name, str) and name not in tools_applied:
+                    tools_applied.append(name)
+        tools_map = sec.get("tools") or {}
+        if isinstance(tools_map, dict):
+            for entry in tools_map.values():
+                if isinstance(entry, dict):
+                    try:
+                        findings_count += int(entry.get("findings_count") or 0)
+                    except (TypeError, ValueError):
+                        pass
+    return {
+        "trace_jsonl_readable": True,
+        "tools_applied": tools_applied,
+        "security_findings_count": findings_count,
+        "secret_present_in_disk": _SECRET_CANARY in trace_raw.stdout,
+    }
+
+
+def _derive_secrets_audit_from_restored_box(
+    driver: Driver, box: Box, cap_meta: dict,
+) -> dict:
+    """Re-derive the secrets audit after an artifact restore.
+
+    Plan 072 R2 — same on-disk sources the synthetic path ends on:
+    state.json for the trace handle, the trace JSONL for the
+    security-pipeline fingerprints. Real-agent artifacts mint UUID
+    session ids, so the trace is resolved by capture order when the
+    synthetic id is absent.
+    """
+    state_dir, state = read_state_json(driver, box)
+    trace_id, _ = trace_for_session(state, _SESSION_ID)
+    session_id = _SESSION_ID
+    trace: dict = {}
+    if trace_id:
+        for entry in (state.get("traces") or {}).values():
+            if entry.get("trace_id") == trace_id:
+                trace = entry
+                break
+    else:
+        ordered = traces_by_created_at(state)
+        if ordered:
+            trace = ordered[-1]
+            trace_id = trace.get("trace_id")
+            session_id = str(trace.get("session_id") or "")
+    if not trace_id:
+        raise CheckpointError(
+            f"{_CHECKPOINT_NAME} artifact restore produced no traces; "
+            f"state at {state_dir}/state.json contained "
+            f"{len(state.get('traces') or {})} entries"
+        )
+
+    trace_jsonl = (
+        trace.get("file_path") or f"{state_dir}/traces/{trace_id}.jsonl"
+    )
+    paths = driver.paths(box)
+    project = paths["project"]
+    head = driver.exec(box, ["git", "-C", project, "rev-parse", "HEAD"])
+    commit_sha = head.stdout.strip() if head.ok else ""
+    transcript_path = transcript_path_for_session(driver, box, session_id)
+
+    return {
+        "session_id": session_id,
+        "session_corpus": str(cap_meta.get("scenario_name") or _SESSION_NAME),
+        "trace_id": trace_id,
+        "commit_sha": commit_sha,
+        "transcript_path": transcript_path,
+        "state_dir": state_dir,
+        "trace_jsonl_path": trace_jsonl,
+        **_security_audit_fields(driver, box, trace_jsonl),
+        "secret_canary": _SECRET_CANARY,
+        "capture_metadata": capture_metadata_from_artifact(cap_meta),
+    }
+
+
 def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
+    # Plan 072 R3 — artifact-preferred, synthetic-fallback. Contract
+    # gate: the artifact must already carry security-pipeline
+    # fingerprints (this checkpoint advertises has_security_findings);
+    # a capture taken with the security tools off falls back to the
+    # synthetic chain, which enables them explicitly before ingest.
+    cap_meta = restore_from_capture(
+        driver, box, _CAPTURE_NAME, require_security_fingerprints=True,
+    )
+    if cap_meta is not None:
+        box.notes["c_captured_with_secrets_audit"] = (
+            _derive_secrets_audit_from_restored_box(driver, box, cap_meta)
+        )
+        return
+
     paths = driver.paths(box)
     project = paths["project"]
     home = paths["home"]
@@ -214,39 +344,6 @@ def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
     # Audit the on-disk trace JSONL. Each trace lives at
     # <state_dir>/traces/<trace_id>.jsonl.
     trace_jsonl = f"{state_dir}/traces/{trace_id}.jsonl"
-    trace_raw = driver.exec(box, ["cat", trace_jsonl])
-    tools_applied: list[str] = []
-    findings_count = 0
-    if trace_raw.ok:
-        # The file is a single TraceRecord serialized as JSONL — usually
-        # one line, but defensively walk every line.
-        for line in trace_raw.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            sec = ((obj.get("metadata") or {}).get("security") or {})
-            applied = sec.get("tools_applied") or []
-            if isinstance(applied, list):
-                for name in applied:
-                    if isinstance(name, str) and name not in tools_applied:
-                        tools_applied.append(name)
-            tools_map = sec.get("tools") or {}
-            if isinstance(tools_map, dict):
-                for entry in tools_map.values():
-                    if isinstance(entry, dict):
-                        try:
-                            findings_count += int(entry.get("findings_count") or 0)
-                        except (TypeError, ValueError):
-                            pass
-        secret_present_in_disk = _SECRET_CANARY in trace_raw.stdout
-        trace_jsonl_readable = True
-    else:
-        secret_present_in_disk = False
-        trace_jsonl_readable = False
 
     box.notes["c_captured_with_secrets_audit"] = {
         "session_id": _SESSION_ID,
@@ -256,11 +353,11 @@ def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
         "transcript_path": transcript_path,
         "state_dir": state_dir,
         "trace_jsonl_path": trace_jsonl,
-        "trace_jsonl_readable": trace_jsonl_readable,
-        "tools_applied": tools_applied,
-        "security_findings_count": findings_count,
-        "secret_present_in_disk": secret_present_in_disk,
+        **_security_audit_fields(driver, box, trace_jsonl),
         "secret_canary": _SECRET_CANARY,
+        # Plan 072 R4 — provenance marker so consumers can branch on
+        # artifact-restored vs synthetic-derived audits.
+        "capture_metadata": synthetic_capture_metadata(),
     }
 
 
@@ -269,7 +366,9 @@ register(
         name="c-captured-with-secrets",
         composed_from="c-installed-source",
         delta=_captured_with_secrets_delta,
-        cache=True,
+        # cache=False: artifact presence/freshness live outside the
+        # checkpoint source hash (same rationale as the codex/pi lanes).
+        cache=False,
         description=(
             "c-installed-source + a real captured Claude Code session "
             "whose Edit creates src/config.py with synthetic OpenAI / "

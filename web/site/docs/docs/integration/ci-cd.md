@@ -14,23 +14,21 @@ You do not need to run `opentraces auth login` when `HF_TOKEN` is already set in
 
 ## Recommended Pattern
 
-For headless runs:
+For headless runs, seed from a JSONL file produced earlier in the pipeline:
 
 ```bash
 opentraces init --agent claude-code
-opentraces dataset new my-dataset --workflow my-workflow --schema schema.json
-opentraces dataset run my-dataset --executor claude-code-headless
-opentraces dataset review approve my-dataset --all
-opentraces dataset publish my-dataset --to my-org/dataset
-```
-
-If the runner is seeding from an existing JSONL file instead of running a workflow:
-
-```bash
 opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 opentraces dataset review approve my-import --all
 opentraces dataset publish my-import --to my-org/dataset
 ```
+
+Workflow-driven runs (`opentraces dataset new my-dataset --workflow my-workflow
+--schema schema.json`, then `opentraces dataset run my-dataset`) are designed to
+execute inside an agent session with `--executor current-agent`. The
+`--executor claude-code-headless` choice is a reserved seam: it currently exits
+with an executor-unavailable error instead of invoking Claude Code, so it is
+not yet a working CI pattern.
 
 ## Health Checks
 
@@ -62,12 +60,11 @@ Those commands assume the required binary or endpoint is already available.
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
   run: opentraces init --agent claude-code
 
-- name: Create dataset and run workflow
+- name: Create dataset from prepared rows
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
   run: |
-    opentraces dataset new ci-dataset --workflow ci-workflow --schema schema.json
-    opentraces dataset run ci-dataset --executor claude-code-headless
+    opentraces dataset new ci-dataset --rows-file rows.jsonl --schema schema.json
 
 - name: Approve and publish
   env:

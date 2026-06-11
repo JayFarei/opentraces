@@ -1,0 +1,211 @@
+name = "capture-safety-import-existing"
+description = """
+CAP-5 (claims ledger): `opentraces init --import-existing` backfills
+pre-existing Claude Code session JSONLs for the repo.
+
+World: a fresh git repo whose canonical Claude Code corpus dir
+(`~/.claude/projects/<encoded-path>/`) already holds two parseable
+three-turn sessions — exactly what a user who ran Claude Code before
+installing opentraces has on disk. `init --import-existing` (non-
+interactive, so the flag must be explicit) must stage both sessions,
+report them in the init JSON envelope, and leave them queryable via
+`status` counts and the `trace index` -> `trace query` arc.
+
+The corpus is seeded ONLY into the canonical `encode_claude_path` dir
+(the directory Claude Code actually writes). The box project path
+contains `.` and `_` (`.otbox/boxes/otb_<id>/project`), so this
+journey also pins the encoding fix: init's session count
+(`_current_project_session_dir`) now resolves via `encode_claude_path`
+— the same encoding the import scan uses — where it previously used a
+`/`->`-` slug that diverged for such paths, counted 0 sessions, and
+silently imported nothing (the former symlink-alias workaround here is
+gone).
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["onboard-repo"]
+persona = "human"
+requires = ["cli", "git"]
+from_checkpoints = ["c-installed-source"]
+status = "capture-safety"
+
+[[steps]]
+type = "shell"
+id = "init-git-repo"
+argv = ["git", "init", "--quiet", "--initial-branch=main"]
+
+[[steps]]
+type = "shell"
+id = "seed-commit"
+argv = ["bash", "-c", "echo seed > README.md && git add -A && git commit -q -m seed"]
+
+# The corpus writer is brace-free Python (dict() constructors only) so
+# the journey templating's str.format pass leaves it byte-identical.
+[[steps]]
+type = "write_file"
+id = "write-corpus-seeder"
+path = "seed_import_corpus.py"
+content = """
+import json
+from pathlib import Path
+
+from opentraces.core.repo_identity import encode_claude_path
+
+
+def turn(session_id, index, prompt):
+    ts = "2026-04-15T07:00:0" + str(index) + "Z"
+    tool_id = "tu_" + str(index)
+    user = dict(
+        type="user", sessionId=session_id, timestamp=ts,
+        cwd=str(Path.cwd().resolve()),
+        message=dict(role="user", content=prompt + " step " + str(index)),
+    )
+    tool_use = dict(
+        type="tool_use", id=tool_id, name="Read",
+        input=dict(file_path="README.md"),
+    )
+    assistant = dict(
+        type="assistant", sessionId=session_id, timestamp=ts,
+        message=dict(
+            role="assistant", content=[tool_use],
+            usage=dict(input_tokens=10, output_tokens=10),
+        ),
+    )
+    tool_result = dict(type="tool_result", tool_use_id=tool_id, content="ok")
+    result = dict(
+        type="user", sessionId=session_id, timestamp=ts,
+        message=dict(role="user", content=[tool_result]),
+    )
+    return [user, assistant, result]
+
+
+def main():
+    project = Path.cwd().resolve()
+    projects_root = Path.home() / ".claude" / "projects"
+    canonical = projects_root / encode_claude_path(project)
+    canonical.mkdir(parents=True, exist_ok=True)
+
+    sessions = dict()
+    sessions["sess-hist-greeting"] = "refactor the greeting helper"
+    sessions["sess-hist-farewell"] = "tighten the farewell banner"
+    for session_id, prompt in sessions.items():
+        lines = []
+        for index in (1, 2, 3):
+            lines.extend(turn(session_id, index, prompt))
+        path = canonical / (session_id + ".jsonl")
+        path.write_text("\\n".join(json.dumps(line) for line in lines) + "\\n")
+
+    print(json.dumps(dict(
+        sessions_written=len(sessions),
+        session_dir=str(canonical),
+    )))
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+[[steps]]
+type = "shell"
+id = "seed-corpus"
+argv = ["{py_bin}", "seed_import_corpus.py"]
+
+[[steps]]
+type = "cli"
+id = "init-import"
+argv = ["--json", "init", "--agent", "claude-code", "--import-existing"]
+
+[[steps]]
+type = "cli"
+id = "status-after-import"
+argv = ["--json", "status"]
+
+[[steps]]
+type = "cli"
+id = "trace-index"
+argv = ["trace", "index", "--json"]
+
+[[steps]]
+type = "cli"
+id = "trace-query"
+argv = ["trace", "query", "greeting", "--limit", "5", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "seed-corpus"
+path = "sessions_written"
+equals = 2
+
+[[assertions]]
+kind = "returncode"
+step = "init-import"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "init-import"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "init-import"
+path = "existing_session_count"
+equals = 2
+
+[[assertions]]
+kind = "stdout_json"
+step = "init-import"
+path = "import_existing"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "init-import"
+path = "imported_existing"
+equals = 2
+
+[[assertions]]
+kind = "stdout_json"
+step = "init-import"
+path = "import_errors"
+equals = 0
+
+# The backfilled sessions are visible project state, not just an init
+# side-channel: status counts them ...
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "status-after-import"
+path = "counts.inbox"
+min = 2
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "status-after-import"
+path = "total_staged"
+min = 2
+
+# ... the trace index ingests them ...
+[[assertions]]
+kind = "returncode"
+step = "trace-index"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "trace-index"
+path = "search_snapshot.trace_count"
+min = 2
+
+# ... and free-text query resolves the imported history.
+[[assertions]]
+kind = "returncode"
+step = "trace-query"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "trace-query"
+path = "total"
+min = 1

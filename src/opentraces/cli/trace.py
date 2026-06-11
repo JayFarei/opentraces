@@ -121,6 +121,38 @@ def _db_table_sizes(db_path: Path) -> dict:
     return entry
 
 
+def _compact_db_entry(entry: dict) -> dict:
+    """Aggregate-scalar projection of a ``_db_table_sizes`` entry.
+
+    The full per-table map (20+ FTS shadow tables per DB) blew the
+    agent-facing envelope token budget for ``trace index status --json``.
+    The default JSON render keeps only the bloat-actionable scalars (issue
+    #40 visibility: total size, table count, dominant table); the full
+    breakdown stays reachable via ``--verbose`` and the text render.
+    """
+    compact: dict = {
+        "path": entry.get("path"),
+        "exists": entry.get("exists"),
+        "size_bytes": entry.get("size_bytes"),
+        "table_count": None,
+    }
+    tables = entry.get("tables")
+    if tables is None:
+        if "tables_error" in entry:
+            compact["tables_error"] = entry["tables_error"]
+        return compact
+    compact["table_count"] = len(tables)
+    compact["tables_bytes_total"] = sum(
+        int(stat.get("bytes", 0)) for stat in tables.values()
+    )
+    if tables:
+        name, stat = max(
+            tables.items(), key=lambda item: int(item[1].get("bytes", 0))
+        )
+        compact["largest_table"] = {"name": name, "bytes": int(stat.get("bytes", 0))}
+    return compact
+
+
 def _approx_bootstrap_trace_count() -> int:
     """Cheap pre-flight count of trace sources for the bootstrap signpost.
 
@@ -808,7 +840,12 @@ def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
 
 @trace_index_group.command("status", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def trace_index_status_cmd(as_json: bool) -> None:
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Include the full per-table byte breakdown in --json output.",
+)
+def trace_index_status_cmd(as_json: bool, verbose: bool) -> None:
     """Show local trace search snapshot status."""
     from ..core.trace_index import default_index_path
     from ..core.trace_search_snapshot import default_snapshot_path, snapshot_status
@@ -823,7 +860,14 @@ def trace_index_status_cmd(as_json: bool) -> None:
     payload = {
         "status": "ok",
         "search_snapshot": search_snapshot,
-        "db_sizes": db_sizes,
+        # Agent-facing default is aggregate scalars only (envelope budget);
+        # --verbose restores the per-table map, and the text render below
+        # always shows it.
+        "db_sizes": (
+            db_sizes
+            if verbose
+            else {label: _compact_db_entry(entry) for label, entry in db_sizes.items()}
+        ),
     }
     if as_json:
         click.echo(_dump_json(payload))

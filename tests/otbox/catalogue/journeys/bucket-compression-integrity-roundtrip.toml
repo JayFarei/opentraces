@@ -4,44 +4,31 @@ Plan 080 Phase C mechanism journey (GOLD) — gzip compression on layer
 blobs + per-trace JSONL is content-preserving and deterministic.
 
 Per Plan 080 §5 (Selective gzip) + §20 Resolution H (deterministic
-projection contract: `gzip.compress(data, mtime=0, compresslevel=6)`
-for every blob + per-trace JSONL + event log mirror write).
-
-The load-bearing claim is that the content-addressed blob namespace
-under `bucket/blobs/v1/<project>/context/<hh>/<hash>.json.gz` carries
-its hash as its filename, so the gzip envelope's payload (when
-decompressed) MUST hash back to the embedded `layer_id`. If
-compression is non-deterministic (mtime drift, level drift) or the
-write path corrupts the payload, this round-trip fails.
+projection contract: `gzip.compress(data, mtime=0, compresslevel=6)`).
 
 Asserts:
-  (a) `ctx show <node> --json` exits 0 and returns each layer with
-      `layer_id` + `blob_path` populated.
-  (b) The decompressed payload from `blob_path` is a JSON object with
-      `layer_id` matching the returned `layer_id` (proves the blob's
-      filename hash IS the content hash of the decompressed payload).
-  (c) `bucket verify --json` reports `verify.ok: true` AND
-      `verify.compression_check.ok: true` (the verify verb runs the
-      same round-trip against every reachable blob).
-  (d) Re-reading the same `blob_path` returns byte-identical content
-      across calls (no `os.utime` drift, no streaming-write race).
+  (a) `ctx step <trace> 0 --json` resolves the trace's root ContextNode
+      with all four layer ids populated (the content-addressed refs the
+      blob namespace is keyed by).
+  (b) `bucket verify --full --json` decompresses EVERY context blob and
+      re-asserts the payload's layer_id echoes the path-encoded hash:
+      ok=true, blobs_checked >= 1, dangling_count == 0 (a corrupt gzip
+      envelope or hash drift would surface as blob_content errors).
+  (c) Re-reading the same node returns byte-identical layer ids across
+      calls (no rewrite churn; equals_var).
 
-Fails today because:
-  - `ctx show` resolving via the new `bucket/blobs/v1/<project>/context/`
-    layout is Phase B Track B3.
-  - `bucket verify` is a new verb (Phase B Track B3).
-  - Deterministic gzip helper (`_gzip_deterministic`) lives in Phase C
-    Track C1 (bucket_store gzip writes).
-
-Cross-track dependencies:
-  - C1: deterministic gzip helper applied to every blob write under
-    `bucket/blobs/v1/<project>/context/`.
-  - C1: `bucket verify` round-trip check that decompresses each blob
-    and reasserts `sha256(decompressed) == layer_id_hash`.
-  - B3: `ctx show --json` envelope shape with `layer_id` + `blob_path`.
+Re-specced for issue #42 (un-quarantine): the journey was authored
+against a `verify.compression_check.{ok,hash_mismatches,
+decompression_errors}` sub-envelope and per-layer `blob_path` keys that
+were never implemented — the shipped verify primitive reports the same
+round-trip through `{ok, blobs_checked, errors[], dangling_count}` (a
+decompression failure or hash mismatch lands in errors[] with kind
+"blob_content" and flips ok/rc). The `{first_context_node_id}` template
+var had no producer; the node is addressed via `ctx step <trace> 0`.
+Out-of-vocab `bucket_spine_v2_layout` precondition dropped.
 """
 lane = "core"
-tier = 1  # PHASE-C: opt-in pending checkpoint c-bucket-spine-v2-one-trace-anchored.
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
@@ -50,46 +37,44 @@ from_checkpoints = ["c-bucket-spine-v2-one-trace-anchored"]
 
 [preconditions]
 min_captured_traces = 1
-bucket_spine_v2_layout = true
 context_tree_built = true
 
 # ---------------------------------------------------------------------
-# Step 1 — ctx show resolves a node + returns its layers with
-# (layer_id, blob_path) pairs.
+# Step 1 — ctx step resolves the root node + its four layer refs.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
-id = "ctx-show-blob-roundtrip-baseline"
-argv = ["ctx", "show", "{first_context_node_id}", "--json"]
+id = "ctx-step-blob-roundtrip-baseline"
+argv = ["ctx", "step", "{trace_id}", "0", "--json"]
 
 [[assertions]]
 kind = "returncode"
-step = "ctx-show-blob-roundtrip-baseline"
+step = "ctx-step-blob-roundtrip-baseline"
 equals = 0
 
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-show-blob-roundtrip-baseline"
+step = "ctx-step-blob-roundtrip-baseline"
+path = "node_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-step-blob-roundtrip-baseline"
 path = "layers.system.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-show-blob-roundtrip-baseline"
-path = "layers.system.blob_path"
-
-[[assertions]]
-kind = "stdout_json"
-step = "ctx-show-blob-roundtrip-baseline"
+step = "ctx-step-blob-roundtrip-baseline"
 path = "layers.messages.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-show-blob-roundtrip-baseline"
+step = "ctx-step-blob-roundtrip-baseline"
 path = "layers.tool_registry.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-show-blob-roundtrip-baseline"
+step = "ctx-step-blob-roundtrip-baseline"
 path = "layers.runtime_state.layer_id"
 
 # ---------------------------------------------------------------------
@@ -112,53 +97,67 @@ step = "bucket-verify-compression-roundtrip"
 path = "verify.ok"
 equals = true
 
-# Verify path enumerates a non-zero blob count.
 [[assertions]]
 kind = "stdout_json"
 step = "bucket-verify-compression-roundtrip"
-path = "verify.compression_check.blobs_checked"
-
-# All blobs round-trip to the expected layer_id.
-[[assertions]]
-kind = "stdout_json"
-step = "bucket-verify-compression-roundtrip"
-path = "verify.compression_check.ok"
+path = "verify.full"
 equals = true
 
-# Zero blobs whose decompressed sha256 mismatches the filename hash.
+# Verify path enumerated a non-zero blob count (the round-trip ran).
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-verify-compression-roundtrip"
+path = "verify.blobs_checked"
+min = 1
+
+# Zero referenced-but-missing blobs.
 [[assertions]]
 kind = "stdout_json"
 step = "bucket-verify-compression-roundtrip"
-path = "verify.compression_check.hash_mismatches"
+path = "verify.dangling_count"
 equals = 0
 
-# Zero blobs that failed to decompress at all (corrupt gzip envelope).
+# Zero errors of any kind (blob_content / dangling / manifest).
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_length_equals"
 step = "bucket-verify-compression-roundtrip"
-path = "verify.compression_check.decompression_errors"
+path = "verify.errors"
 equals = 0
 
 # ---------------------------------------------------------------------
-# Step 3 — re-running ctx show returns the same (layer_id, blob_path)
-# pair (proves the read path is stable; no rewrite churn).
+# Step 3 — re-running ctx step returns the same layer ids
+# (proves the read path is stable; no rewrite churn).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
-id = "ctx-show-blob-roundtrip-stable"
-argv = ["ctx", "show", "{first_context_node_id}", "--json"]
+id = "ctx-step-blob-roundtrip-stable"
+argv = ["ctx", "step", "{trace_id}", "0", "--json"]
 
 [[assertions]]
 kind = "returncode"
-step = "ctx-show-blob-roundtrip-stable"
+step = "ctx-step-blob-roundtrip-stable"
 equals = 0
 
 [[assertions]]
-kind = "stdout_json"
-step = "ctx-show-blob-roundtrip-stable"
+kind = "stdout_json_equals_var"
+step = "ctx-step-blob-roundtrip-stable"
 path = "layers.system.layer_id"
+equals_var = "ctx-step-blob-roundtrip-baseline:layers.system.layer_id"
 
 [[assertions]]
-kind = "stdout_json"
-step = "ctx-show-blob-roundtrip-stable"
-path = "layers.system.blob_path"
+kind = "stdout_json_equals_var"
+step = "ctx-step-blob-roundtrip-stable"
+path = "layers.messages.layer_id"
+equals_var = "ctx-step-blob-roundtrip-baseline:layers.messages.layer_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-step-blob-roundtrip-stable"
+path = "layers.tool_registry.layer_id"
+equals_var = "ctx-step-blob-roundtrip-baseline:layers.tool_registry.layer_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-step-blob-roundtrip-stable"
+path = "layers.runtime_state.layer_id"
+equals_var = "ctx-step-blob-roundtrip-baseline:layers.runtime_state.layer_id"

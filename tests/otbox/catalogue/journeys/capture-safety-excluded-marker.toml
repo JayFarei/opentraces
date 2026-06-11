@@ -1,0 +1,328 @@
+name = "capture-safety-excluded-marker"
+description = """
+CAP-4 (claims ledger), excluded-marker half: a project carrying the
+documented `excluded` opt-out stays excluded under global tracking
+mode — enforced at the shared boundaries every agent funnels through
+(`auto_enroll_if_global` for marker/registry writes, the
+`core.ingest` choke point for staging), not just the Pi bridge.
+
+Two excluded shapes are exercised:
+
+  1. An ENROLLED project that opts out via
+     `config set excluded true --project` (the CLI-documented path).
+     The capture-decision surface behind the Pi extension's
+     `/ot-capture-status` (`_pi-bridge --status`, the same JSON the
+     extension renders for the user) must report
+     `capture_enabled=false` with `capture_source="excluded"`. A
+     real `_ingest-session` fire (the Stop-hook ingest path) against
+     a parseable 3-turn transcript must stage NOTHING and leave the
+     marker byte-identical (no codex-cli/pi agent backfill — that
+     backfill used to flip Pi's capture decision back on). `--json
+     status` reports the excluded state with exit 0.
+  2. An UN-enrolled sibling repo carrying a bare committed
+     `{"excluded": true}` marker. Firing the installed Claude Code
+     PreToolUse hook there (the auto-enroll hot path) must exit 0,
+     must NOT mint a project_id / agents list into the marker, and
+     must NOT register the repo (asserted via `config show`'s
+     registered-projects section). `status` run inside the repo must
+     exit 0 and report the excluded state — not crash with a raw
+     KeyError('project_id') (the former CAP-4/CAP-5-adjacent bug).
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["configure-tracking-mode", "configure-settings"]
+persona = "human"
+requires = ["cli", "git"]
+from_checkpoints = ["c-installed-source"]
+status = "capture-safety"
+
+[[steps]]
+type = "shell"
+id = "init-git-repo"
+argv = ["git", "init", "--quiet", "--initial-branch=main"]
+
+[[steps]]
+type = "shell"
+id = "seed-commit"
+argv = ["bash", "-c", "echo seed > README.md && git add -A && git commit -q -m seed"]
+
+[[steps]]
+type = "cli"
+id = "set-global"
+argv = ["config", "tracking-mode", "global"]
+
+# Shape 1 — enrolled project opts out via the CLI-documented path.
+[[steps]]
+type = "cli"
+id = "init-project"
+argv = ["--json", "init", "--start-fresh", "--agent", "claude-code"]
+
+[[steps]]
+type = "cli"
+id = "config-set-excluded"
+argv = ["--json", "config", "set", "excluded", "true", "--project"]
+
+[[steps]]
+type = "cli"
+id = "pi-status-enrolled-excluded"
+argv = ["_pi-bridge", "--status", "--cwd", "{project}"]
+
+# The transcript seeder is brace-free Python (dict() constructors only)
+# so the journey templating's str.format pass leaves it byte-identical.
+[[steps]]
+type = "write_file"
+id = "write-transcript-seeder"
+path = "seed_excluded_transcript.py"
+content = """
+import json
+from pathlib import Path
+
+
+def turn(session_id, index):
+    ts = "2026-04-15T07:00:0" + str(index) + "Z"
+    tool_id = "tu_" + str(index)
+    user = dict(
+        type="user", sessionId=session_id, timestamp=ts,
+        cwd=str(Path.cwd().resolve()),
+        message=dict(role="user", content="excluded probe step " + str(index)),
+    )
+    tool_use = dict(
+        type="tool_use", id=tool_id, name="Read",
+        input=dict(file_path="README.md"),
+    )
+    assistant = dict(
+        type="assistant", sessionId=session_id, timestamp=ts,
+        message=dict(
+            role="assistant", content=[tool_use],
+            usage=dict(input_tokens=10, output_tokens=10),
+        ),
+    )
+    tool_result = dict(type="tool_result", tool_use_id=tool_id, content="ok")
+    result = dict(
+        type="user", sessionId=session_id, timestamp=ts,
+        message=dict(role="user", content=[tool_result]),
+    )
+    return [user, assistant, result]
+
+
+def main():
+    session_id = "sess-cap4-excluded"
+    lines = []
+    for index in (1, 2, 3):
+        lines.extend(turn(session_id, index))
+    path = Path.home() / (session_id + ".jsonl")
+    path.write_text("\\n".join(json.dumps(line) for line in lines) + "\\n")
+    print(json.dumps(dict(transcript=str(path))))
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+[[steps]]
+type = "shell"
+id = "seed-transcript"
+argv = ["{py_bin}", "seed_excluded_transcript.py"]
+
+[[steps]]
+type = "shell"
+id = "snapshot-marker-before-ingest"
+argv = ["cp", "{project}/.opentraces.json", "{home}/cap4-marker-before.json"]
+
+# The Stop-hook ingest path, fired exactly the way on_stop.py spawns it
+# (but foreground, so the assertions below cannot race a worker).
+[[steps]]
+type = "cli"
+id = "ingest-session-excluded"
+argv = ["_ingest-session", "{home}/sess-cap4-excluded.jsonl", "--project", "{project}"]
+
+[[steps]]
+type = "shell"
+id = "assert-nothing-staged"
+argv = [
+  "bash",
+  "-c",
+  "test -z \"$(find {home}/.opentraces/projects -path '*/traces/*.jsonl' 2>/dev/null)\"",
+]
+
+[[steps]]
+type = "shell"
+id = "assert-marker-bytes-unchanged"
+argv = ["cmp", "{home}/cap4-marker-before.json", "{project}/.opentraces.json"]
+
+[[steps]]
+type = "cli"
+id = "status-enrolled-excluded"
+argv = ["--json", "status"]
+
+# Shape 2 — un-enrolled sibling repo with a bare committed excluded
+# marker; the installed PreToolUse hook fires there under global mode.
+[[steps]]
+type = "cli"
+id = "setup-claude"
+argv = ["setup", "claude-code"]
+
+[[steps]]
+type = "shell"
+id = "make-excluded-lib"
+argv = [
+  "bash",
+  "-c",
+  "mkdir -p excluded-lib && cd excluded-lib && git init -q --initial-branch=main && printf '{{\"excluded\": true}}\\n' > .opentraces.json",
+]
+
+[[steps]]
+type = "shell"
+id = "fire-hook-excluded-lib"
+argv = [
+  "bash",
+  "-c",
+  "printf '{{\"cwd\": \"{project}/excluded-lib\", \"session_id\": \"otbox-cap4-excluded\", \"transcript_path\": \"{home}/cap4-excluded.jsonl\", \"tool_name\": \"Read\", \"tool_input\": {{\"file_path\": \"README.md\"}}}}' | {py_bin} '{home}/.claude/hooks/opentraces_on_pre_tool_use.py'",
+]
+
+[[steps]]
+type = "shell"
+id = "show-excluded-lib-marker"
+argv = ["cat", "excluded-lib/.opentraces.json"]
+
+[[steps]]
+type = "cli"
+id = "pi-status-excluded-lib"
+argv = ["_pi-bridge", "--status", "--cwd", "{project}/excluded-lib"]
+
+# `status` from inside the bare-marker repo: must exit 0 and report the
+# excluded state (formerly a raw KeyError('project_id'), rc 1).
+[[steps]]
+type = "shell"
+id = "status-bare-marker"
+argv = [
+  "bash",
+  "-c",
+  "cd excluded-lib && {py_bin} -m opentraces --json status",
+]
+
+[[steps]]
+type = "cli"
+id = "config-show"
+argv = ["config", "show"]
+
+[[assertions]]
+kind = "returncode"
+step = "init-project"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "config-set-excluded"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "config-set-excluded"
+path = "scope"
+equals = "project"
+
+# Shape 1: the capture-decision surface honors the opt-out.
+[[assertions]]
+kind = "stdout_json"
+step = "pi-status-enrolled-excluded"
+path = "tracking_mode"
+equals = "global"
+
+[[assertions]]
+kind = "stdout_json"
+step = "pi-status-enrolled-excluded"
+path = "project.capture_enabled"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "pi-status-enrolled-excluded"
+path = "project.capture_source"
+equals = "excluded"
+
+# Shape 1: the ingest path stages NOTHING for the excluded project ...
+[[assertions]]
+kind = "returncode"
+step = "ingest-session-excluded"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "assert-nothing-staged"
+equals = 0
+
+# ... and the marker is byte-identical after the ingest fire (no agent
+# backfill, no normalization rewrite, no registry-driven mutation).
+[[assertions]]
+kind = "returncode"
+step = "assert-marker-bytes-unchanged"
+equals = 0
+
+# Shape 1: status reports the excluded state cleanly.
+[[assertions]]
+kind = "returncode"
+step = "status-enrolled-excluded"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-enrolled-excluded"
+path = "excluded"
+equals = true
+
+# Shape 2: the hook exits 0 (fail-open) ...
+[[assertions]]
+kind = "returncode"
+step = "fire-hook-excluded-lib"
+equals = 0
+
+# ... the bare excluded marker is not mutated by auto-enroll (no
+# project_id minted, no agents list backfilled) ...
+[[assertions]]
+kind = "stdout_contains"
+step = "show-excluded-lib-marker"
+value = "excluded"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "show-excluded-lib-marker"
+value = "project_id"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "show-excluded-lib-marker"
+value = "agents"
+
+# ... the decision surface reports it excluded ...
+[[assertions]]
+kind = "stdout_json"
+step = "pi-status-excluded-lib"
+path = "project.capture_enabled"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "pi-status-excluded-lib"
+path = "project.capture_source"
+equals = "excluded"
+
+# ... `status` on the bare marker exits 0 and reports excluded ...
+[[assertions]]
+kind = "returncode"
+step = "status-bare-marker"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-bare-marker"
+path = "excluded"
+equals = true
+
+# ... and the global registry never picked the sibling repo up.
+[[assertions]]
+kind = "stdout_not_contains"
+step = "config-show"
+value = "excluded-lib"

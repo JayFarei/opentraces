@@ -161,6 +161,14 @@
    "status"
   ]
  },
+ "security tools list": {
+  "schema_version": "opentraces.security_tools.v1",
+  "top_level_keys": [
+   "schema_version",
+   "status",
+   "tools"
+  ]
+ },
  "setup capture-otlp": {
   "schema_version": "opentraces.capture_otlp_setup.v1",
   "top_level_keys": [
@@ -223,6 +231,16 @@
    "status"
   ]
  },
+ "setup privacy-filter": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "enabled",
+   "model",
+   "score_threshold",
+   "status"
+  ]
+ },
  "setup skill": {
   "schema_version": null,
   "top_level_keys": [
@@ -261,6 +279,13 @@
    "platform",
    "running",
    "unit_path"
+  ]
+ },
+ "setup watcher stop": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "status"
   ]
  },
  "setup watcher uninstall": {

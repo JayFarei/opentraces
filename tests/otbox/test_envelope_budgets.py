@@ -31,6 +31,33 @@ def _approx_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def _render(part: str, subs: dict[str, str]) -> str:
+    for key, value in subs.items():
+        part = part.replace(key, value)
+    return part
+
+
+def _first_ctx_node_id(driver, box, trace_id: str) -> str:
+    """Probe the captured world for a real ContextNode id.
+
+    ``ctx show`` needs a node id that no checkpoint audit field carries;
+    resolve it the way an agent would — ``ctx tree <trace> --json`` and
+    take the first node on the active path. A failed probe returns ""
+    so the budget row runs with an empty argument and fails loudly in
+    ``test_budgeted_surfaces_run`` (never a silent skip).
+    """
+    res = driver.exec(box, [*driver.cli_argv(box), "ctx", "tree", trace_id, "--json"])
+    if res.returncode != 0:
+        return ""
+    try:
+        nodes = json.loads(res.stdout).get("nodes") or []
+    except ValueError:
+        return ""
+    if not nodes:
+        return ""
+    return str(nodes[0].get("node_id") or "")
+
+
 @pytest.fixture(scope="module")
 def measured():
     budgets = json.loads(BUDGETS_PATH.read_text(encoding="utf-8"))
@@ -39,12 +66,20 @@ def measured():
     box = cp.box
     try:
         audit = box.notes.get("c_captured_session_audit") or {}
-        trace_id = str(audit.get("trace_id") or "")
+        # Placeholder vocabulary available to envelope_budgets.json argv
+        # templates. Audit-derived values address the captured trace; the
+        # ctx node id is probe-resolved (see _first_ctx_node_id).
+        subs = {
+            "{trace_id}": str(audit.get("trace_id") or ""),
+            "{commit_sha}": str(audit.get("commit_sha") or ""),
+            "{edit_step_index}": str(audit.get("edit_step_index") or ""),
+        }
+        subs["{ctx_node_id}"] = _first_ctx_node_id(
+            driver, box, subs["{trace_id}"]
+        )
         out: dict[str, dict] = {}
         for label, spec in budgets.items():
-            argv = [
-                part.replace("{trace_id}", trace_id) for part in spec["argv"]
-            ]
+            argv = [_render(part, subs) for part in spec["argv"]]
             res = driver.exec(box, [*driver.cli_argv(box), *argv])
             out[label] = {
                 "rc": res.returncode,

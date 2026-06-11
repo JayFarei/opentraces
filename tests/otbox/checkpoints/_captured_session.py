@@ -21,10 +21,16 @@ full capture chain inside the box:
     6. Run the real Click ``_ingest-session`` command on that transcript
        — this is what creates Trace Patch events in
        ``refs/opentraces/local/events/v1``.
-    7. ``git add`` + ``git commit`` — the post-commit hook fires and
-       writes the commit↔trace link into ``refs/notes/opentraces``.
+    7. ``git add`` + ``git commit`` with the post-commit hook
+       suppressed for this one commit (the hook would otherwise mature
+       the anchor eagerly at commit time, leaving the audited
+       maturation backstops below with nothing to create — see the
+       step-7 comment in the delta).
     8. ``setup watcher tick`` reconciles + matures the patches into a
-       Git Anchor over the new commit.
+       Git Anchor over the new commit (the daemon path), then the
+       post-commit correlator is replayed explicitly so the
+       commit↔trace link lands under ``refs/notes/opentraces`` exactly
+       as a hook-fired world would have it.
     9. ``trace index rebuild`` populates the local BM25 + semantic
        Trace Index so consumer commands like ``trace query`` work.
 
@@ -50,12 +56,16 @@ from ._captured_helpers import (
     harness_source_with_shebang,
     capture_metadata_from_artifact,
     check as _check_helper,
+    edit_step_index_from_record,
     encode_claude_path,
     git as _git_helper,
+    load_trace_record,
     read_state_json,
     restore_from_capture,
     synthetic_capture_metadata,
     trace_for_session,
+    traces_by_created_at,
+    transcript_path_for_session,
 )
 
 _CHECKPOINT_NAME = "c-captured-real-session"
@@ -72,7 +82,9 @@ def _git(driver: Driver, box: Box, *args: str):
 # the corpus matching this name.
 _SESSION_NAME = "simple-refactor"
 _SESSION_ID = "sess-otbox-simple-refactor"
-_CAPTURE_NAME = "c-captured-real-session"
+# Plan B0 flip: the real-agent artifact produced by
+# `make capture-refresh SCENARIO=claude-linear-edit` (scenario-named dir).
+_CAPTURE_NAME = "claude-linear-edit"
 
 # The Edit lands on step 3 in the parsed trace (1=user-intro, 2=Read,
 # 3=Edit). Journeys forked from this checkpoint use {step_index} to
@@ -101,16 +113,31 @@ def _derive_audit_from_restored_box(
     artifact-restored audit omits the numeric ``tick_*`` /
     ``mature_*`` fields. Journeys that depend on those numbers must
     branch on ``capture_metadata.source``.
+
+    Real-agent artifacts mint UUID session ids and land their Edit on
+    whatever step the agent chose, so every session-keyed field is
+    re-derived from the restored world (state.json + TraceRecord)
+    instead of assumed from the synthetic corpus constants.
     """
     state_dir, state = read_state_json(driver, box)
     trace_id, step_count = trace_for_session(state, _SESSION_ID)
-    if not trace_id:
-        # Fallback for any captured-artifact whose session_id naming
-        # diverges from the synthetic id: take the first trace.
-        traces = list((state.get("traces") or {}).values())
-        if traces:
-            trace_id = traces[0].get("trace_id")
-            step_count = int(traces[0].get("step_count") or 0)
+    session_id = _SESSION_ID
+    trace: dict = {}
+    if trace_id:
+        # Synthetic-shaped artifact (fake-harness session id present).
+        for entry in (state.get("traces") or {}).values():
+            if entry.get("trace_id") == trace_id:
+                trace = entry
+                break
+    else:
+        # Real-agent artifact: the scenario's session is the most
+        # recent capture in the project state.
+        ordered = traces_by_created_at(state)
+        if ordered:
+            trace = ordered[-1]
+            trace_id = trace.get("trace_id")
+            session_id = str(trace.get("session_id") or "")
+            step_count = int(trace.get("step_count") or 0)
     if not trace_id:
         raise CheckpointError(
             "c-captured-real-session artifact restore produced no "
@@ -118,22 +145,23 @@ def _derive_audit_from_restored_box(
             f"{len(state.get('traces') or {})} entries"
         )
 
+    record = load_trace_record(driver, box, trace)
+    if not step_count:
+        step_count = len(record.get("steps") or [])
+    edit_step_index = edit_step_index_from_record(record) or EDIT_STEP_INDEX
+
     paths = driver.paths(box)
     project = paths["project"]
-    home = paths["home"]
     head = driver.exec(box, ["git", "-C", project, "rev-parse", "HEAD"])
     commit_sha = head.stdout.strip() if head.ok else ""
-    encoded_project = encode_claude_path(project)
-    transcript_path = (
-        f"{home}/.claude/projects/{encoded_project}/{_SESSION_ID}.jsonl"
-    )
+    transcript_path = transcript_path_for_session(driver, box, session_id)
 
     return {
-        "session_id": _SESSION_ID,
-        "session_corpus": _SESSION_NAME,
+        "session_id": session_id,
+        "session_corpus": str(cap_meta.get("scenario_name") or _SESSION_NAME),
         "trace_id": trace_id,
         "step_count": step_count,
-        "edit_step_index": EDIT_STEP_INDEX,
+        "edit_step_index": edit_step_index,
         "commit_sha": commit_sha,
         "transcript_path": transcript_path,
         "state_dir": state_dir,
@@ -251,24 +279,56 @@ def _captured_session_delta(driver: Driver, box: Box) -> None:
         "_ingest-session",
     )
 
-    # 7. Commit the harness's edit. The post-commit hook fires here.
-    #    With the patches already in the inbox the hook records the
-    #    commit↔trace note under refs/notes/opentraces and (in the
-    #    same pass) writes Git Anchor events linking the trace patches
-    #    to this commit.
+    # 7. Commit the harness's edit with the post-commit hook suppressed
+    #    for this one commit. The hook eagerly matures the Git Anchor at
+    #    commit time (capture/git/post_commit.py::_reconcile_trail_anchors),
+    #    which leaves the maturation backstops below — the counts this
+    #    checkpoint's audit records — with nothing to create. Pre-#32
+    #    that was masked: the tick "created" an anchor anyway by
+    #    structurally mis-anchoring the patch onto the SEED commit
+    #    (whose file content is the patch's before-state), exactly the
+    #    bug class the before-blob guard (5cb6ff9f9a0) closed.
+    #    Suppressing the hook keeps every event real and lets step 8
+    #    (the daemon path) be the genuine anchor creator; step 8b then
+    #    replays the correlator for the commit↔trace note.
+    no_hooks_dir = f"{home}/empty-hooks"
+    driver.mkdir(box, no_hooks_dir)
     _git(driver, box, "add", "-A")
-    _git(driver, box, "commit", "-q", "-m", "Add farewell() helper")
+    _git(
+        driver, box, "-c", f"core.hooksPath={no_hooks_dir}",
+        "commit", "-q", "-m", "Add farewell() helper",
+    )
     commit_sha = _git(driver, box, "rev-parse", "HEAD").stdout.strip()
 
-    # 8. Watcher tick — the maturation backstop. The post-commit hook
-    #    is the fast path, but the watcher tick is the consumer-API
-    #    shape and the path the daemon would have driven in
-    #    production. It reconciles any filesystem mutations the hook
-    #    boundary missed and matures anchors that the hook deferred.
+    # 8. Watcher tick — with the commit-time hook suppressed this is
+    #    the maturation path that turns the Trace Patch into the Git
+    #    Anchor: the consumer-API shape and the path the daemon would
+    #    have driven in production. It reconciles any filesystem
+    #    mutations the hook boundary missed and matures anchors over
+    #    the new commit.
     tick = driver.exec(box, [
         *cli, "setup", "watcher", "tick", "--project", project, "--json",
     ])
     _check(tick, "setup watcher tick")
+
+    # 8b. Replay the post-commit correlator for the suppressed commit so
+    #     the commit↔trace note lands under refs/notes/opentraces exactly
+    #     as a hook-fired world would have it. Its anchor reconciliation
+    #     is idempotent and dedup-skips the anchor the tick just created.
+    #     The correlator is fail-open by contract, so verify the note
+    #     actually landed instead of trusting the exit code.
+    _check(
+        driver.exec(box, [*cli, "_run-post-commit-hook", project]),
+        "_run-post-commit-hook (notes replay)",
+    )
+    notes = driver.exec(
+        box, ["git", "notes", "--ref", "opentraces", "show", commit_sha],
+    )
+    if not notes.ok:
+        raise CheckpointError(
+            "post-commit correlator replay left no commit↔trace note on "
+            f"{commit_sha}: {notes.stderr.strip() or '<no stderr>'}"
+        )
 
     # 9. Explicit ``trail mature`` against HEAD — a belt-and-suspenders
     #    backstop. The watcher tick only matures when its activity
@@ -340,10 +400,24 @@ def _captured_session_delta(driver: Driver, box: Box) -> None:
             f"{len(state.get('traces') or {})} entries"
         )
 
-    # Parse the explicit `trail mature` payload — its anchors_created /
-    # searches_completed counts are the load-bearing maturation numbers
-    # used by the journey assertions (the watcher tick's counts are
-    # informational only and can be 0 on quiet ticks).
+    # state.json does not persist per-trace step_count (it never has);
+    # derive it from the staged TraceRecord the trace entry points at so
+    # the audit reports the parsed step reality instead of a constant 0.
+    if trace_id and not step_count:
+        entry = next(
+            (
+                t for t in (state.get("traces") or {}).values()
+                if t.get("trace_id") == trace_id
+            ),
+            {},
+        )
+        step_count = len(load_trace_record(driver, box, entry).get("steps") or [])
+
+    # Parse the explicit `trail mature` payload. With the commit-time
+    # hook suppressed the watcher tick (step 8) is the anchor creator;
+    # this explicit run is the determinism backstop (idempotent, 0
+    # anchors on the happy path) and the documented user-facing
+    # recovery verb.
     try:
         mature_payload = json.loads(mature.stdout) if mature.stdout else {}
     except json.JSONDecodeError:
@@ -388,7 +462,9 @@ register(
         name="c-captured-real-session",
         composed_from="c-installed-source",
         delta=_captured_session_delta,
-        cache=True,
+        # cache=False: artifact presence/freshness live outside the
+        # checkpoint source hash (same rationale as the codex/pi lanes).
+        cache=False,
         description=(
             "c-installed-source + a real captured Claude Code session "
             "(fake harness + simple-refactor corpus): TrailEvents in "

@@ -54,6 +54,7 @@ from .config import (
     get_project_dir,
     get_project_state_path,
     get_project_traces_dir,
+    is_project_excluded,
     load_config,
     load_project_config,
 )
@@ -263,11 +264,26 @@ def ingest_one_session(
     resolved_parser_name = parser_name or "claude-code"
     session_id = _session_id_from(jsonl_path, resolved_parser_name)
 
+    # Per-project exclusion is enforced HERE, at the single ingest choke
+    # point every capture path funnels through (Stop-hook `_ingest-session`,
+    # the watcher sweep, `_scan`, and `init --import-existing` via
+    # `scan_project`). An excluded project never stages a trace and its
+    # marker is never touched — the check is read-only by construction
+    # (`is_project_excluded` reads the marker raw, no migration write),
+    # and it runs before `_lock_path_for`, which would otherwise mint
+    # global per-project state for the slug.
+    resolved_cfg = cfg or load_config()
+    if is_project_excluded(resolved_cfg, str(Path(project_dir).resolve())):
+        return IngestResult(
+            session_id=session_id, action="skipped",
+            error="project is excluded",
+        )
+
     try:
         with _FileLock(_lock_path_for(project_dir, session_id),
                        blocking=wait_for_lock):
             return _ingest_locked(jsonl_path, project_dir, session_id,
-                                  reparse=reparse, cfg=cfg,
+                                  reparse=reparse, cfg=resolved_cfg,
                                   parser_name=resolved_parser_name,
                                   reconcile_watcher=reconcile_watcher,
                                   trace_record_only=trace_record_only)
@@ -527,6 +543,14 @@ def _ingest_locked(
         source_layer="canonical",
         legacy_mirror=True,
     )
+    # NOTE: this raw-source link is load-bearing beyond re-parse capability —
+    # it is the per-trace capture-time provenance marker that
+    # ``bucket_store._is_legacy_read_in_place_mirror`` keys on (PR #63) to
+    # tell a 0.4+ staged record (projection deferred, manifest/repair MUST
+    # materialize it later) apart from a plan-085-S5 legacy read-in-place
+    # mirror (never auto-adopted). Keep it UNCONDITIONAL: the
+    # ``--trace-record-only`` fast path skips ``project_per_trace_exports``
+    # below, and without this link its deferred projection would never happen.
     try:
         write_raw_source_artifact(
             jsonl_path,
@@ -789,6 +813,14 @@ def scan_project(
     """
     project_dir = Path(project_dir).resolve()
 
+    # Excluded projects scan to nothing: skip discovery and the keep-warm
+    # pass entirely. The per-session gate in ``ingest_one_session`` is the
+    # authoritative check; this early return just keeps a sweep over an
+    # excluded project from doing corpus discovery work.
+    resolved_cfg = cfg or load_config()
+    if is_project_excluded(resolved_cfg, str(project_dir)):
+        return ScanReport(project_dir=project_dir)
+
     if paths is None:
         candidates = discover_project_ingest_candidates(project_dir)
     else:
@@ -799,7 +831,6 @@ def scan_project(
             for item in paths
         ]
 
-    resolved_cfg = cfg or load_config()
     report = ScanReport(project_dir=project_dir)
 
     total = len(candidates)

@@ -87,9 +87,12 @@ class TestToolsList:
         code, out = _run(["tools", "list", "--json"])
         assert code == 0, out
         payload = json.loads(out)
-        assert isinstance(payload, list)
-        assert len(payload) == 9  # +business_logic +capsule_scope (plan 090)
-        for entry in payload:
+        assert payload["status"] == "ok"
+        assert payload["schema_version"] == "opentraces.security_tools.v1"
+        tools = payload["tools"]
+        assert isinstance(tools, list)
+        assert len(tools) == 9  # +business_logic +capsule_scope (plan 090)
+        for entry in tools:
             assert set(entry.keys()) >= {"name", "display_name", "kind", "enabled", "state"}
 
 

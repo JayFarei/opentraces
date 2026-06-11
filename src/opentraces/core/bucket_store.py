@@ -897,6 +897,58 @@ def _trace_ids_for_project(repo: Path) -> list[str]:
     return sorted(seen)
 
 
+def _is_legacy_read_in_place_mirror(project_slug: str, trace_id: str) -> bool:
+    """True when ``trace_id``'s object-store entry is a plan-085-S5 legacy
+    read-in-place mirror, i.e. it must NOT be auto-adopted into a per-trace
+    v2 envelope / ``manifest.traces[]``.
+
+    Plan 085 S5 (read-in-place): legacy ``traces/*.jsonl`` records are
+    mirrored into the TraceRecord object store as a query substrate
+    (:func:`sync_trace_records_from_local_stores`, run by ``trace index
+    rebuild``), but they must never be auto-adopted into per-trace v2
+    envelopes / ``manifest.traces[]``. Two facts must hold for a pair to be
+    classified legacy:
+
+    1. **The in-place JSONL still exists** (``~/.opentraces/projects/<slug>/
+       traces/<trace_id>.jsonl`` or staging). Both the 0.3.3 and 0.4 writers
+       name the file ``<trace_id>.jsonl``. When it is gone the trace is a
+       restored bucket (cross-machine pull) and the auto-materialization
+       passes (#28 / #31) must heal it regardless of provenance.
+    2. **No capture-time raw-source link exists** for the pair
+       (``bucket/objects/raw/v1/sources/<slug>/<trace_id>.json``). The link
+       is written exclusively by capture-time ingest
+       (:func:`write_raw_source_artifact`'s sole caller is
+       ``core/ingest.py``, on BOTH the full and the ``--trace-record-only``
+       paths), never by the legacy mirror bridge — and 0.3.3 had no bucket
+       at all. It is therefore the per-trace provenance discriminator
+       (PR #63): a record-only staged trace deliberately defers
+       ``project_per_trace_exports`` at ingest ("projection deferred") and
+       MUST be materialized by manifest/repair later, while a true legacy
+       mirror is read in place forever. Adoption of a legacy trace remains
+       reserved for genuine re-capture through ingest, which writes the
+       link.
+    """
+
+    if project_slug == TRACE_RECORD_PROJECT_STAGING:
+        staging_root = getattr(paths, "STAGING_DIR", None)
+        if not staging_root:
+            return False
+        in_place = (Path(staging_root) / f"{trace_id}.jsonl").exists()
+    else:
+        in_place = (
+            paths.PROJECTS_DIR / project_slug / "traces" / f"{trace_id}.jsonl"
+        ).exists()
+    if not in_place:
+        return False
+    capture_link = (
+        raw_sources_root()
+        / "sources"
+        / _path_part(project_slug)
+        / f"{_path_part(trace_id)}.json"
+    )
+    return not capture_link.exists()
+
+
 def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
     """Full rebuild from canonical (event log + blob store).
 
@@ -983,9 +1035,15 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
     # OWN events mirror (``project_per_trace_exports(None, ...)`` falls back to
     # ``read_events_mirror_batches``) so the trace survives. Idempotent: a
     # second repair re-projects the same bytes (atomic same-bytes writers).
+    # Plan 085 S5 — legacy-store mirrors (in-place JSONL exists AND no
+    # capture-time raw-source link) are read in place, never adopted.
+    # Record-only staged traces (PR #63) carry the link and ARE projected
+    # here — that is their deferred projection.
     for obj in iter_trace_record_objects():
         pair = (obj.project_slug, obj.trace_id)
         if pair in handled_pairs:
+            continue
+        if _is_legacy_read_in_place_mirror(*pair):
             continue
         handled_pairs.add(pair)
         traces_projected += 1
@@ -1616,12 +1674,17 @@ def rebuild_bucket_traces() -> dict[str, Any]:
     # TraceRecord object NOT reached by a live opted-in project (cross-machine
     # restore shape) is projected from the bucket's own events mirror so it is
     # never dropped. ``project_per_trace_exports(None, ...)`` falls back to
-    # ``read_events_mirror_batches``.
+    # ``read_events_mirror_batches``. Plan 085 S5 — legacy-store mirrors
+    # (in-place JSONL exists AND no capture-time raw-source link) are read in
+    # place, never adopted; record-only staged traces (PR #63) carry the link
+    # and are projected here.
     bucket_sourced_errors: list[dict[str, Any]] = []
     bucket_sourced_written = 0
     for obj in iter_trace_record_objects():
         pair = (obj.project_slug, obj.trace_id)
         if pair in handled_pairs:
+            continue
+        if _is_legacy_read_in_place_mirror(*pair):
             continue
         handled_pairs.add(pair)
         try:
@@ -1878,6 +1941,12 @@ def bucket_manifest(
     for obj in record_objects:
         pair = (obj.project_slug, obj.trace_id)
         if pair in _existing_pairs:
+            continue
+        # Plan 085 S5 — read-in-place. Legacy-store mirrors (no capture-time
+        # raw-source link) are a query substrate, not bucket content; never
+        # auto-adopt them. Record-only staged traces (PR #63) carry the link
+        # and self-heal here — their deferred projection.
+        if _is_legacy_read_in_place_mirror(*pair):
             continue
         try:
             if _project_paths is None:

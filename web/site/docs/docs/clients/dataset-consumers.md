@@ -29,7 +29,8 @@ same bucket traces.
 
 ## File-Oriented Access
 
-For published Hugging Face datasets, `hf-mount` can expose shards as files:
+For published Hugging Face datasets, the third-party `hf-mount` tool can
+expose shards as files:
 
 ```bash
 hf-mount start repo datasets/your-org/agent-traces /mnt/traces
@@ -38,7 +39,9 @@ head -n 1 /mnt/traces/data/*.jsonl
 hf-mount stop /mnt/traces
 ```
 
-For private or gated datasets, authenticate with Hugging Face first.
+`hf-mount` is an external tool, not part of opentraces; install it separately
+and check its own documentation for platform support. For private or gated
+datasets, authenticate with Hugging Face first.
 
 ## Resolve Back To Evidence
 

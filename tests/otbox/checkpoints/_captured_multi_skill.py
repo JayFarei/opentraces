@@ -62,9 +62,13 @@ from ._captured_helpers import (
     restore_from_capture,
     synthetic_capture_metadata,
     trace_for_session as _trace_id_for_session,
+    traces_by_created_at,
 )
 
-_CAPTURE_NAME = "c-captured-multi-skill"
+_CHECKPOINT_NAME = "c-captured-multi-skill"
+# Plan B0 flip: the real-agent artifact produced by
+# `make capture-refresh SCENARIO=claude-multi-skill` (scenario-named dir).
+_CAPTURE_NAME = "claude-multi-skill"
 _SESSION_NAME = "multi-skill-session"
 # Must match _SKILLS in fixtures/sessions/multi-skill-session/session.py.
 _SKILLS = ("skill-alpha", "skill-beta")
@@ -77,11 +81,11 @@ _SESSIONS_SRC = Path(__file__).resolve().parents[1] / "fixtures" / "sessions"
 
 
 def _check(result, label: str) -> None:
-    _check_helper(result, checkpoint=_CAPTURE_NAME, label=label)
+    _check_helper(result, checkpoint=_CHECKPOINT_NAME, label=label)
 
 
 def _git(driver: Driver, box: Box, *args: str):
-    return _git_helper(driver, box, *args, checkpoint=_CAPTURE_NAME)
+    return _git_helper(driver, box, *args, checkpoint=_CHECKPOINT_NAME)
 
 
 def _session_id_for(index: int) -> str:
@@ -97,56 +101,70 @@ def _derive_multi_skill_audit_from_restored_box(
 ) -> dict:
     """Re-derive the multi-skill audit after an artifact restore.
 
-    Plan 072 R2 — the artifact captures 3 sessions × 3 commits. We
-    re-derive trace_ids from state.json (keyed off the session_ids
-    the multi-skill harness mints) and walk ``git log`` for the
-    matching commit shas. Skills are derived from the iteration
-    rotation since the harness alternates deterministically.
+    Plan 072 R2 — sessions are enumerated from state.json in capture
+    order (``created_at``) rather than assumed from the synthetic
+    ``sess-otbox-multi-skill-<i>`` naming, so real-agent artifacts
+    (UUID session ids) derive cleanly. When the world IS
+    synthetic-shaped, iterations are ordered by the minted index and
+    the deterministic skill rotation is preserved; real-agent worlds
+    record no skill rotation (skill identity is left to consumers).
     """
     paths = driver.paths(box)
     project = paths["project"]
 
     state_dir, state = read_state_json(driver, box)
+    ordered = traces_by_created_at(state)
+    if not ordered:
+        raise CheckpointError(
+            f"{_CHECKPOINT_NAME} artifact restore produced no traces; "
+            f"state at {state_dir}"
+        )
+
+    synthetic_ids = [_session_id_for(i) for i in range(_ITERATIONS)]
+    present_ids = {t.get("session_id") for t in ordered}
+    synthetic_shaped = set(synthetic_ids) <= present_ids
+    if synthetic_shaped:
+        by_session = {t.get("session_id"): t for t in ordered}
+        ordered = [by_session[sid] for sid in synthetic_ids]
 
     trace_ids: list[str] = []
     session_ids: list[str] = []
     skills_invoked: list[str] = []
     iteration_audits: list[dict] = []
-    for index in range(_ITERATIONS):
-        session_id = _session_id_for(index)
-        skill_name = _skill_for(index)
-        trace_id, step_count = _trace_id_for_session(state, session_id)
-        if not trace_id:
-            raise CheckpointError(
-                f"multi-skill artifact restore missing trace for "
-                f"session_id={session_id!r}; state at {state_dir}"
-            )
-        trace_ids.append(trace_id)
+    for index, trace in enumerate(ordered):
+        session_id = str(trace.get("session_id") or "")
+        skill_name = _skill_for(index) if synthetic_shaped else ""
+        trace_ids.append(trace.get("trace_id"))
         session_ids.append(session_id)
-        skills_invoked.append(skill_name)
+        if skill_name:
+            skills_invoked.append(skill_name)
         iteration_audits.append({
             "index": index,
             "session_id": session_id,
             "skill": skill_name,
-            "trace_id": trace_id,
-            "step_count": step_count,
+            "trace_id": trace.get("trace_id"),
+            "step_count": int(trace.get("step_count") or 0),
         })
 
-    # Commit shas — the 3 latest commits, oldest first (the order the
-    # synthetic loop produced them in).
+    # Commit shas — every commit after the seed, oldest first (the
+    # order the capture loop produced them in; on a seed+N history
+    # this equals the synthetic path's "latest N" enumeration).
     log = driver.exec(box, [
-        "git", "-C", project, "log",
-        f"-n{_ITERATIONS}", "--format=%H",
+        "git", "-C", project, "log", "--reverse", "--format=%H", "HEAD",
     ])
     commit_shas: list[str] = []
     if log.ok and log.stdout.strip():
-        commit_shas = list(reversed(log.stdout.strip().splitlines()))
+        all_shas = log.stdout.strip().splitlines()
+        commit_shas = all_shas[1:] if len(all_shas) > 1 else all_shas
     for index, sha in enumerate(commit_shas):
         if index < len(iteration_audits):
             iteration_audits[index]["commit_sha"] = sha
 
     return {
-        "session_corpus": _SESSION_NAME,
+        "session_corpus": (
+            _SESSION_NAME if synthetic_shaped
+            else str(cap_meta.get("scenario_name") or _SESSION_NAME)
+        ),
         "captured_session_count": len(trace_ids),
         "trace_ids": trace_ids,
         "session_ids": session_ids,
@@ -160,8 +178,14 @@ def _derive_multi_skill_audit_from_restored_box(
 
 
 def _captured_multi_skill_delta(driver: Driver, box: Box) -> None:
-    # Plan 072 R3 — artifact-preferred, synthetic-fallback.
-    cap_meta = restore_from_capture(driver, box, _CAPTURE_NAME)
+    # Plan 072 R3 — artifact-preferred, synthetic-fallback. Contract
+    # gate: this checkpoint advertises 3 captured traces; an artifact
+    # below that floor (e.g. one real claude session spanning all
+    # turns) falls back to the synthetic chain instead of building a
+    # world verify_provides would refuse.
+    cap_meta = restore_from_capture(
+        driver, box, _CAPTURE_NAME, min_traces=_ITERATIONS,
+    )
     if cap_meta is not None:
         box.notes["c_captured_multi_skill_audit"] = (
             _derive_multi_skill_audit_from_restored_box(driver, box, cap_meta)
@@ -388,7 +412,9 @@ register(
         name="c-captured-multi-skill",
         composed_from="c-installed-source",
         delta=_captured_multi_skill_delta,
-        cache=True,
+        # cache=False: artifact presence/freshness live outside the
+        # checkpoint source hash (same rationale as the codex/pi lanes).
+        cache=False,
         description=(
             "c-installed-source + 3 captured Claude Code sessions across "
             "3 commits via the multi-skill-session corpus. Alternates two "

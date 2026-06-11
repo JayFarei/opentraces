@@ -34,6 +34,11 @@ type = "cli"
 id = "index-status"
 argv = ["trace", "index", "status"]
 
+[[steps]]
+type = "cli"
+id = "index-compact"
+argv = ["trace", "index", "compact", "--json"]
+
 [[assertions]]
 kind = "stdout_contains"
 step = "query"
@@ -53,3 +58,8 @@ equals = 0
 kind = "stdout_contains"
 step = "index-status"
 value = "ok"
+
+[[assertions]]
+kind = "returncode"
+step = "index-compact"
+equals = 0

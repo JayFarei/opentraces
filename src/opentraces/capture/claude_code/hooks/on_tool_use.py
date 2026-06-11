@@ -27,6 +27,11 @@ Claude Code payload shape (PostToolUse):
 
 Non-file-editing tools are silently ignored. Any error path exits 0
 so the hook never blocks Claude Code.
+
+All ``opentraces``/``mmh3`` imports are lazy and individually fail-open
+(same contract as ``on_stop.py``): a broken or deleted pinned venv must
+degrade to a best-effort transcript append — never a non-zero exit with
+a traceback into the agent session.
 """
 
 from __future__ import annotations
@@ -35,17 +40,10 @@ import json
 import sys
 from datetime import datetime, timezone
 
-import mmh3
-
-from opentraces.capture.claude_code.hooks._trails import (
-    arm_hook_watchdog,
-    auto_enroll_from_cwd,
-    observe_tool_boundary_for_hook,
-    trail_state,
-)
-
 
 def _hash(text: str) -> str:
+    import mmh3
+
     return f"murmur3:{mmh3.hash128(text.encode('utf-8'), signed=False):032x}"
 
 
@@ -170,13 +168,24 @@ def _dual_emit_agent_trace(cwd: str | None, data: dict, session_id: str | None) 
 
 
 def main() -> None:
-    arm_hook_watchdog()
+    try:
+        from opentraces.capture.claude_code.hooks._trails import arm_hook_watchdog
+
+        arm_hook_watchdog()
+    except Exception:
+        pass
+
     try:
         payload = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
 
-    auto_enroll_from_cwd(payload.get("cwd"))
+    try:
+        from opentraces.capture.claude_code.hooks._trails import auto_enroll_from_cwd
+
+        auto_enroll_from_cwd(payload.get("cwd"))
+    except Exception:
+        pass
 
     transcript_path = payload.get("transcript_path")
     if not transcript_path:
@@ -187,18 +196,33 @@ def main() -> None:
     tool_use_id = payload.get("tool_use_id")
     session_id = payload.get("session_id")
     cwd = payload.get("cwd")
-    observer = observe_tool_boundary_for_hook(cwd, tool_name, transcript_path, tool_input)
+    observer = None
+    try:
+        from opentraces.capture.claude_code.hooks._trails import (
+            observe_tool_boundary_for_hook,
+        )
 
-    if tool_name == "Edit":
-        data = _handle_edit(tool_input)
-    elif tool_name == "Write":
-        data = _handle_write(tool_input)
-    else:
-        data = {
-            "tool": tool_name or "unknown",
-            "capture_status": "hook_only",
-            "limitations": ["hook_only"],
-        }
+        observer = observe_tool_boundary_for_hook(
+            cwd, tool_name, transcript_path, tool_input
+        )
+    except Exception:
+        observer = None
+
+    try:
+        if tool_name == "Edit":
+            data = _handle_edit(tool_input)
+        elif tool_name == "Write":
+            data = _handle_write(tool_input)
+        else:
+            data = {
+                "tool": tool_name or "unknown",
+                "capture_status": "hook_only",
+                "limitations": ["hook_only"],
+            }
+    except Exception:
+        # mmh3 (or anything else the handlers need) is unavailable —
+        # degrade to the no-range fallback below rather than crashing.
+        data = None
 
     if data is None:
         data = {
@@ -212,7 +236,13 @@ def main() -> None:
     data["session_id"] = session_id
     data["tool_input"] = tool_input
     data["tool_response"] = payload.get("tool_response") or {}
-    trail = trail_state(cwd, tool_name, tool_input)
+    trail: dict = {}
+    try:
+        from opentraces.capture.claude_code.hooks._trails import trail_state
+
+        trail = trail_state(cwd, tool_name, tool_input)
+    except Exception:
+        trail = {}
     if trail:
         data["trail"] = trail
     if observer is not None:

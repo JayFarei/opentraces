@@ -1,7 +1,8 @@
 .PHONY: version-check dirty-check clean build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
-       otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh \
+       otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf release-gate \
+       capture-refresh \
        capture-refresh-check capture-refresh-all \
        otbox-footage otbox-footage-all \
        search-eval search-eval-real search-eval-xl search-eval-slope \
@@ -75,6 +76,15 @@ otbox-matrix:
 
 otbox-inventory:
 	./otbox matrix --inventory --strict
+
+# Release gate (U0/U11): jtbd inventory strict, the claims-ledger gate,
+# envelope budgets, catalogue lint, then the rollup verdict. Pass
+# OTBOX_LEDGER=path/to/run-ledger.json to fold the latest local run
+# ledger's red rows + per-claim derived status into the verdict.
+release-gate: otbox-inventory
+	$(OTBOX_PY) -m pytest tests/otbox/test_claims_ledger.py \
+		tests/otbox/test_envelope_budgets.py tests/otbox/test_catalogue_lint.py -q
+	$(OTBOX_PY) -m tests.otbox.release_gate $(if $(OTBOX_LEDGER),--ledger $(OTBOX_LEDGER),)
 
 # Plan 064 vertical slice — prove the consumer-API surfaces return real
 # evidence on a REAL captured agent session (not the empty-state

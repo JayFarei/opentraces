@@ -147,23 +147,23 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "security-tools-list"
-path = "0.name"
+path = "tools.0.name"
 equals = "regex"
 
 [[assertions]]
 kind = "stdout_json"
 step = "security-tools-list"
-path = "0.enabled"
+path = "tools.0.enabled"
 equals = true
 
 [[assertions]]
 kind = "stdout_json"
 step = "security-tools-list"
-path = "1.name"
+path = "tools.1.name"
 equals = "entropy"
 
 [[assertions]]
 kind = "stdout_json"
 step = "security-tools-list"
-path = "1.enabled"
+path = "tools.1.enabled"
 equals = true

@@ -48,9 +48,13 @@ The agent only loads full trace content after the candidate is clearly useful.
 
 ```bash
 opentraces trace query --cwd --since 30d --lex "database migration" --json
-opentraces trace query --skill opentraces --semantic "schema drift after publish" --json
+opentraces trace query --skill opentraces --semantic "huggingface push failing" --json
 opentraces trace get <trace-id> --bursts --json
 ```
+
+`--semantic` matches a small concept dictionary (services and libraries seen in
+trace evidence); queries outside it fall back to all-tokens-must-match lexical
+search, so keep query terms concrete.
 
 This lets an agent ask, "Have we solved something like this before?" without
 turning the answer into a dataset row.

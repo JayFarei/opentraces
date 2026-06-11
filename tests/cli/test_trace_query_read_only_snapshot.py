@@ -190,6 +190,82 @@ def test_query_exit_3_when_rebuild_fails(monkeypatch) -> None:
     assert payload["search_diagnostics"]["raw_trace_scan"] is False
 
 
+def test_query_after_trace_index_rebuild_is_read_only_steady_state() -> None:
+    # PR #24 honesty contract: the documented maintenance verb (`trace
+    # index`) produces a servable snapshot, and the NEXT query serves from it
+    # read-only (rebuilt_index=False) — no hidden second rebuild. This is the
+    # explicit "rebuild then query succeeds" end-to-end pair; the self-heal
+    # tests above cover the no-rebuild-first ordering.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_snapshot_path().exists()
+    runner = CliRunner()
+
+    rebuild = runner.invoke(main, ["trace", "index", "--json"])
+    assert rebuild.exit_code == 0, rebuild.output
+    assert default_snapshot_path().exists()
+
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert [item["trace_id"] for item in payload["candidates"]] == ["trace-site"]
+    assert payload["search_diagnostics"]["used_search_snapshot"] is True
+    assert payload["search_diagnostics"]["rebuilt_index"] is False
+    assert payload["search_diagnostics"]["raw_trace_scan"] is False
+
+
+def test_query_self_heal_notice_is_stderr_only_and_tty_gated(monkeypatch) -> None:
+    # PR #38 item M residual gap: the one-time self-heal notice
+    # (_notify_rebuilding) is TTY-gated by design, and CliRunner's captured
+    # stderr is not a TTY — so the notice was invisible to every test above
+    # and only covered indirectly via rebuilt_index diagnostics. Simulate an
+    # interactive stderr by patching the runner's stream wrapper and assert
+    # BOTH halves of the honesty contract: the staleness signpost lands on
+    # stderr (never stdout), and the --json stdout document stays pure
+    # parseable JSON.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_snapshot_path().exists()
+    runner = CliRunner()
+
+    # Non-TTY consumers (pipes, scripts, CI) never see the notice, even when
+    # the self-heal actually runs.
+    quiet = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+    assert quiet.exit_code == 0, quiet.output
+    assert json.loads(quiet.stdout)["search_diagnostics"]["rebuilt_index"] is True
+    assert "rebuilding search snapshot" not in quiet.stderr
+
+    # Re-trigger the self-heal (stale dirty marker) with an interactive
+    # stderr: the operator-facing signpost must appear on stderr only.
+    mark_search_snapshot_dirty("test", trace_id="trace-site")
+    from click import testing as click_testing
+
+    original_isatty = click_testing._NamedTextIOWrapper.isatty
+
+    def stderr_is_a_tty(self):
+        if getattr(self, "name", "") == "<stderr>":
+            return True
+        return original_isatty(self)
+
+    monkeypatch.setattr(click_testing._NamedTextIOWrapper, "isatty", stderr_is_a_tty)
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    # stdout stays a single parseable JSON document even with the notice on.
+    payload = json.loads(result.stdout)
+    assert payload["search_diagnostics"]["rebuilt_index"] is True
+    assert "opentraces: rebuilding search snapshot (one-time)..." in result.stderr
+    assert "rebuilding search snapshot" not in result.stdout
+
+
 def test_trace_index_command_rebuilds_search_snapshot() -> None:
     _write_trace("demo-project", _trace("trace-site", "Fix site search"))
     runner = CliRunner()
@@ -322,8 +398,11 @@ def test_trace_query_envelope_never_emits_dead_trail_freshness() -> None:
 
 
 def test_trace_index_status_reports_per_table_db_sizes() -> None:
-    # Issue #27 item A: status --json must expose a per-table byte breakdown for
-    # both on-disk SQLite DBs so the multi-GB bloat (issue #22) is measurable.
+    # Issue #27 item A: status --json must expose a byte breakdown for both
+    # on-disk SQLite DBs so the multi-GB bloat (issue #22) is measurable.
+    # Envelope-budget contract: the DEFAULT --json render carries aggregate
+    # scalars only (the 20+ FTS shadow tables blew the agent-facing token
+    # budget); the full per-table map moves behind --verbose.
     from opentraces.core.trace_index import default_index_path, refresh_index
     from opentraces.core.trace_search_snapshot import default_snapshot_path
 
@@ -351,8 +430,20 @@ def test_trace_index_status_reports_per_table_db_sizes() -> None:
         entry = db_sizes[label]
         assert entry["exists"] is True
         assert entry["size_bytes"] > 0
-        # dbstat is compiled into CPython's bundled sqlite3; tables must resolve
-        # to a non-empty per-table byte map.
+        # dbstat is compiled into CPython's bundled sqlite3; the aggregate
+        # scalars must resolve from a non-empty per-table scan.
+        assert entry["table_count"] > 0
+        assert entry["tables_bytes_total"] > 0
+        assert entry["largest_table"]["bytes"] > 0
+        # The bounded default never inlines the per-table map.
+        assert "tables" not in entry
+
+    verbose = runner.invoke(main, ["trace", "index", "status", "--json", "--verbose"])
+
+    assert verbose.exit_code == 0, verbose.output
+    verbose_payload = json.loads(verbose.output)
+    for label in ("legacy_index", "search_snapshot"):
+        entry = verbose_payload["db_sizes"][label]
         assert entry["tables"] is not None, entry.get("tables_error")
         assert sum(stat["bytes"] for stat in entry["tables"].values()) > 0
 
@@ -416,8 +507,15 @@ def test_trace_index_status_db_sizes_degrade_when_dbstat_unavailable(monkeypatch
     payload = json.loads(result.output)
     entry = payload["db_sizes"]["search_snapshot"]
     assert entry["exists"] is True
-    assert entry["tables"] is None
+    assert entry["table_count"] is None
     assert "dbstat" in entry["tables_error"]
+
+    verbose = runner.invoke(main, ["trace", "index", "status", "--json", "--verbose"])
+
+    assert verbose.exit_code == 0, verbose.output
+    verbose_entry = json.loads(verbose.output)["db_sizes"]["search_snapshot"]
+    assert verbose_entry["tables"] is None
+    assert "dbstat" in verbose_entry["tables_error"]
 
 
 def test_trace_index_bootstrap_signposts_progress_on_stderr() -> None:

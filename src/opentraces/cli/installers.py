@@ -2296,7 +2296,14 @@ def setup_privacy_filter_cmd(
             click.echo(f"Model probe skipped: {exc}", err=True)
 
     state = "enabled" if enable else "disabled"
-    click.echo(f"privacy-filter: {state} ({model}, threshold={score_threshold:.2f})")
+    _cli.human_echo(f"privacy-filter: {state} ({model}, threshold={score_threshold:.2f})")
+    _cli.emit_json({
+        "status": "ok",
+        "action": "setup-privacy-filter",
+        "enabled": enable,
+        "model": model,
+        "score_threshold": score_threshold,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -2437,7 +2444,8 @@ def setup_watcher_stop() -> None:
     from ..watcher import installer as _winst
 
     _winst.stop()
-    click.echo("stopped.")
+    _cli.human_echo("stopped.")
+    _cli.emit_json({"status": "ok", "action": "stop-watcher"})
 
 
 @setup_watcher_group.command("restart")
@@ -2465,7 +2473,14 @@ def setup_watcher_tick(project_dir: Path | None, json_out: bool) -> None:
     else:
         targets = _daemon.discover_enlisted_projects()
         if not targets:
-            click.echo("(no enlisted projects)")
+            if json_out:
+                # Type-stable with the non-empty path below: consumers
+                # (otbox journeys, integration harnesses) index the report
+                # array as `0.<field>`, so the empty world is `[]`, not an
+                # object envelope.
+                click.echo(_setup_watcher_json.dumps([]))
+            else:
+                click.echo("(no enlisted projects)")
             return
     reports = [_daemon.run_once(p) for p in targets]
     if json_out:

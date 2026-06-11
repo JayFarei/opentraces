@@ -28,6 +28,13 @@ opentraces trace query --cwd --json
 `--include-slice evidence` when the consumer needs a bounded packet attached
 to the search hit.
 
+The `--semantic` facet is a lightweight concept layer, not embeddings: it
+expands a small static dictionary of service/library concepts (for example
+Hugging Face, MongoDB, OpenAI) and joins on concept ids when the query matches
+one. Anything else degrades to lexical full-text search where every token must
+match, so paraphrased queries can return zero hits even when related traces
+exist. Prefer query terms that actually appear in the trace.
+
 ## Map
 
 ```bash

@@ -522,14 +522,21 @@ from ._auth_impl import (
 
 
 def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
-    """Return the Claude Code session directory for the current repo, if present."""
+    """Return the Claude Code session directory for the current repo, if present.
+
+    Uses ``encode_claude_path`` — the same encoding corpus discovery uses —
+    so repo paths containing characters outside ``[alnum, '-']`` (``_``,
+    ``.``, …) resolve to the directory Claude Code actually writes. The
+    old ``'/' -> '-'`` slug diverged for such paths, which made ``init
+    --import-existing`` count 0 sessions and silently import nothing.
+    """
     from ..core.config import get_projects_path
+    from ..core.repo_identity import encode_claude_path
 
     if cfg is None:
         cfg = load_config()
     projects_path = get_projects_path(cfg)
-    slug = project_dir.resolve().as_posix().replace("/", "-")
-    session_dir = projects_path / slug
+    session_dir = projects_path / encode_claude_path(project_dir)
     return session_dir if session_dir.exists() else None
 
 
@@ -1850,6 +1857,33 @@ def status(limit: int) -> None:
         else:
             click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
+
+    # Per-project opt-out: report the excluded state cleanly and stop. A
+    # bare committed ``{"excluded": true}`` marker carries no project_id,
+    # so none of the per-project state below exists — and an enrolled
+    # project that opted out has capture disabled, which is the one fact
+    # status must surface.
+    from ..core.config import is_project_excluded
+    if is_project_excluded(load_config(), str(project_dir)):
+        if _json_mode:
+            emit_json({
+                "status": "ok",
+                "project": project_dir.name,
+                "excluded": True,
+                "next_steps": [
+                    "Re-enable capture with "
+                    "'opentraces config set excluded false --project'"
+                ],
+            })
+        else:
+            click.echo(f"{_bold(project_dir.name)}  {_dim('excluded — capture disabled')}")
+            click.echo(_dim(
+                "  This project opts out via \"excluded\": true in .opentraces.json."
+            ))
+            click.echo(_dim(
+                "  Re-enable with 'opentraces config set excluded false --project'."
+            ))
+        return
 
     proj_config = load_project_config(project_dir)
     remote = proj_config.get("remote", None)

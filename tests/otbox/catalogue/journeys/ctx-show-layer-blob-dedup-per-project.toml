@@ -1,50 +1,38 @@
 name = "ctx-show-layer-blob-dedup-per-project"
 description = """
 Plan 080 mechanism journey (GOLD) — layer blob dedup within a project,
-per-project namespace scoping (the default), under the new
+per-project namespace scoping (the default), under the
 `bucket/blobs/v1/<project>/context/<hh>/<hash>.json.gz` layout.
 
-Renamed in-place from Plan 079's
-`context-tree-bucket-layer-dedup-across-traces.toml` per Plan 080 §20
-Resolution A. The blob path is updated from
-`bucket/contexts/v1/<project>/layers/blobs/<hh>/<hex>.json`
-(Plan 079) to
-`bucket/blobs/v1/<project>/context/<hh>/<hash>.json.gz`
-(Plan 080 §4).
-
 The c-bucket-spine-v2-multi-trace-mixed checkpoint provides two
-captured sessions in the SAME project, both flushed through OTel
-emitter + JSONL pipeline against the same Claude Code version. The
-system / tool_registry layers should hash to the same content (same
-static_core_ref, same tools), so the blob namespace under
-`bucket/blobs/v1/<project>/context/` contains FEWER unique blobs
-than the sum of layer references across both heads. That's dedup
-proof.
+captured sessions in the SAME project (same box, same model, same
+claude_code_version), so the system layers content-hash identically and
+the blob namespace contains FEWER unique blobs than the sum of layer
+references across both traces. That's dedup proof.
 
 Asserts:
-  (a) Both traces appear in `ctx list --json` and each head has a
-      non-empty `layer_refs[]`.
-  (b) Layer blob count (from `bucket status --json`) is STRICTLY LESS
-      THAN the sum of `layer_count` across the two heads (proves at
-      least one dedup hit).
-  (c) Default `head.blob_scope == "project"` (proves the per-project
-      namespace is the default).
-  (d) No `_shared/` directory exists under `bucket/blobs/v1/`
-      (proves the global opt-in path is NOT taken by default).
-  (e) Blob paths are under `bucket/blobs/v1/<project>/context/`,
-      NOT under the legacy `bucket/contexts/v1/<project>/layers/blobs/`.
+  (a) Both traces appear in `ctx list --json` with node counts.
+  (b) `bucket status --json` reports the dedup tally over the context
+      substrate: trace_count == 2, sum_layer_refs_count == 8 (4 per
+      trace), dedup_hits >= 1 (at least one cross-trace content hit),
+      and global_shared_blob_count == 0.
+  (c) No `_shared/` namespace exists under `bucket/blobs/v1/` (the
+      per-project default; global scope is opt-in).
+  (d) `ctx step <trace> 0` resolves the first trace's layers through the
+      per-project namespace.
 
-Fails today because:
-  - `ctx list` is a new verb (Phase B Track B3).
-  - The blob writer under `bucket/blobs/v1/<project>/context/` is
-    Phase B Track B1 (bucket_store).
-
-Cross-track dependencies:
-  - B1: `context_layer_blob_path()` returning new layout path.
-  - B3: `ctx list --json` envelope + `bucket status --json` shape.
+Re-specced for issue #42 (un-quarantine): the dedup tally lives at
+`bucket.context_trees.{trace_count,sum_layer_refs_count,
+unique_layer_blob_count,dedup_hits,global_shared_blob_count}` (not the
+authored `bucket.blobs_v1.context.*` block, which was never
+implemented); `ctx list` rows live under `traces[]` and carry no
+blob_scope key (per-project is the only shipped default and is asserted
+via the path_not_exists on `_shared/`); `{first_context_node_id}` had no
+producer so the node is addressed via `ctx step <trace> 0`. Out-of-vocab
+`bucket_spine_v2_layout` precondition dropped.
 """
 lane = "core"
-tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v2-multi-trace-mixed
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
@@ -54,10 +42,9 @@ from_checkpoints = ["c-bucket-spine-v2-multi-trace-mixed"]
 [preconditions]
 min_captured_traces = 2
 context_tree_built = true
-bucket_spine_v2_layout = true
 
 # ---------------------------------------------------------------------
-# Step 1 — list all context_trees; confirm both checkpoint traces.
+# Step 1 — list all context-bearing traces; confirm both are present.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -72,39 +59,32 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "list-context-trees-dedup"
-path = "context_trees.0.trace_id"
+path = "schema_version"
+equals = "opentraces.ctx.list.v2"
 
 [[assertions]]
 kind = "stdout_json"
 step = "list-context-trees-dedup"
-path = "context_trees.1.trace_id"
+path = "traces.0.trace_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "list-context-trees-dedup"
-path = "context_trees.0.layer_count"
+path = "traces.1.trace_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "list-context-trees-dedup"
-path = "context_trees.1.layer_count"
-
-# Both heads carry blob_scope=project by default (per-project namespace).
-[[assertions]]
-kind = "stdout_json"
-step = "list-context-trees-dedup"
-path = "context_trees.0.blob_scope"
-equals = "project"
+path = "traces.0.summary.node_count"
 
 [[assertions]]
 kind = "stdout_json"
 step = "list-context-trees-dedup"
-path = "context_trees.1.blob_scope"
-equals = "project"
+path = "traces.1.summary.node_count"
 
 # ---------------------------------------------------------------------
-# Step 2 — bucket status surfaces the dedup tally over the new
-# `bucket/blobs/v1/<project>/context/` namespace.
+# Step 2 — bucket status surfaces the dedup tally over the context
+# substrate namespace.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -116,52 +96,64 @@ kind = "returncode"
 step = "status-dedup-tally"
 equals = 0
 
-# Distinct blobs across both traces.
 [[assertions]]
 kind = "stdout_json"
 step = "status-dedup-tally"
-path = "bucket.blobs_v1.context.unique_blob_count"
+path = "bucket.context_trees.trace_count"
+equals = 2
 
-# Sum of layer_refs across heads.
+# Sum of layer refs across both heads (4 per session-level trace).
 [[assertions]]
 kind = "stdout_json"
 step = "status-dedup-tally"
-path = "bucket.blobs_v1.context.sum_layer_refs_count"
+path = "bucket.context_trees.sum_layer_refs_count"
+equals = 8
+
+# Distinct content-addressed blobs across both traces.
+[[assertions]]
+kind = "stdout_json"
+step = "status-dedup-tally"
+path = "bucket.context_trees.unique_layer_blob_count"
 
 # Dedup hits >= 1 (sum_layer_refs - unique_blob_count).
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "status-dedup-tally"
-path = "bucket.blobs_v1.context.dedup_hits"
+path = "bucket.context_trees.dedup_hits"
+min = 1
 
 # Per-project default — _shared/ namespace is empty.
 [[assertions]]
 kind = "stdout_json"
 step = "status-dedup-tally"
-path = "bucket.blobs_v1.context.global_shared_blob_count"
+path = "bucket.context_trees.global_shared_blob_count"
 equals = 0
 
+# The global opt-in path is NOT taken by default.
+[[assertions]]
+kind = "path_not_exists"
+path = "{opentraces_dir}/bucket/blobs/v1/_shared"
+
 # ---------------------------------------------------------------------
-# Step 3 — `ctx show <node>` resolves the layer blob via the new
-# `bucket/blobs/v1/<project>/context/<hh>/<hash>.json.gz` path.
+# Step 3 — `ctx step <trace> 0` resolves the layers through the
+# per-project blob namespace.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
-id = "ctx-show-layer-blob-resolution"
-argv = ["ctx", "show", "{first_context_node_id}", "--json"]
+id = "ctx-step-layer-blob-resolution"
+argv = ["ctx", "step", "{trace_id}", "0", "--json"]
 
 [[assertions]]
 kind = "returncode"
-step = "ctx-show-layer-blob-resolution"
+step = "ctx-step-layer-blob-resolution"
 equals = 0
 
-# Layer content resolves via blob_path under bucket/blobs/v1/<project>/context/.
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-show-layer-blob-resolution"
+step = "ctx-step-layer-blob-resolution"
 path = "layers.system.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-show-layer-blob-resolution"
-path = "layers.system.blob_path"
+step = "ctx-step-layer-blob-resolution"
+path = "layers.messages.layer_id"

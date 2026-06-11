@@ -262,10 +262,14 @@ def _inject_trace_record_into_bucket(
     driver.put_text(box, str(payload_path), json.dumps(record_payload))
     script = """
 import json
+import time
+from datetime import datetime
 from pathlib import Path
 
 from opentraces_schema import TraceRecord
 from opentraces.core.bucket_store import bucket_manifest, project_per_trace_exports
+from opentraces.core.paths import PROJECTS_DIR
+from opentraces.core.state import StateManager, TraceStatus
 
 record = TraceRecord.model_validate_json(Path(__PAYLOAD__).read_text(encoding="utf-8"))
 summary = project_per_trace_exports(
@@ -274,13 +278,46 @@ summary = project_per_trace_exports(
     trace_id=record.trace_id,
     record=record,
 )
+
+# Register the injected trace in the project state.json the same way real
+# ingest does (core/ingest.py): write the staging JSONL under
+# <projects>/<slug>/traces/ and record the entry through the real
+# state-writer. The min_captured_traces probe deliberately counts
+# state.json entries, so the bucket write alone would leave the world
+# dishonest by the probe's definition.
+project_state_dir = PROJECTS_DIR / __PROJECT_SLUG__
+staging_dir = project_state_dir / "traces"
+staging_dir.mkdir(parents=True, exist_ok=True)
+staging_file = staging_dir / (record.trace_id + ".jsonl")
+staging_file.write_text(record.to_jsonl_line() + "\\n")
+created_at = time.time()
+if record.timestamp_start:
+    try:
+        created_at = datetime.fromisoformat(
+            record.timestamp_start.replace("Z", "+00:00")
+        ).timestamp()
+    except ValueError:
+        pass
+state = StateManager(state_path=project_state_dir / "state.json")
+state.set_trace_status(
+    record.trace_id,
+    TraceStatus.STAGED,
+    session_id=record.session_id,
+    file_path=str(staging_file),
+    created_at=created_at,
+)
+
 manifest = bucket_manifest(write=True, include_objects=False)
+state_traces = json.loads(
+    (project_state_dir / "state.json").read_text(encoding="utf-8")
+).get("traces") or {}
 print(json.dumps({
     "trace_id": record.trace_id,
     "agent_name": record.agent.name if record.agent else "",
     "project_slug": __PROJECT_SLUG__,
     "summary": summary,
     "trace_count": len(manifest.get("traces") or []),
+    "state_trace_count": len(state_traces),
 }, sort_keys=True))
 """.replace("__PAYLOAD__", repr(str(payload_path))).replace(
         "__PROJECT__", repr(str(box.project))

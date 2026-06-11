@@ -194,6 +194,7 @@ def workflow_optimize(
         make_llm_proposer,
     )
     from ..consumers.skill_opt.runner import DEFAULT_WORKFLOW, SkillOptRequest, run
+    from ..core.workflow_runner import ExecutorUnavailableError, WorkflowScriptError
 
     proposer = (
         make_llm_proposer(DeterministicOptimizerClient())
@@ -227,7 +228,25 @@ def workflow_optimize(
         slow_update=not no_slow_update,
         proposer=proposer,
     )
-    outcome = run(request)
+    try:
+        outcome = run(request)
+    except (WorkflowScriptError, ExecutorUnavailableError) as exc:
+        # World-not-ready (no rollout rows, missing workflow/script): a clean
+        # error envelope + exit 3, never a raw traceback.
+        if as_json:
+            click.echo(_dump_json({
+                "status": "error",
+                "error": {
+                    "code": "WORKFLOW_FAILED",
+                    "kind": type(exc).__name__,
+                    "message": str(exc),
+                    "hint": "capture traces first, then re-run "
+                            "`opentraces workflow optimize`",
+                    "retryable": True,
+                },
+            }))
+        click.echo(str(exc), err=True)
+        sys.exit(3)
 
     payload = {
         "status": "ok",
