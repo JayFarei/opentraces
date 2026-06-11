@@ -1,0 +1,114 @@
+name = "ctx-fresh-capture-visibility"
+description = """
+Issue #54 (BKT/CTX seam, GOLD) — a freshly captured trace is
+immediately visible to the manifest-only readers (`ctx list` /
+`ctx info`) WITHOUT a heal verb.
+
+Root cause (reproduced cold 2026-06-11): the per-trace v2 envelope IS
+written at capture time, but `bucket/manifest.json` was never written
+on the capture chain (ingest -> watcher tick -> post-commit). `ctx
+list` and `ctx info` are manifest-only readers (open `manifest.json`
+directly, no in-memory reconcile, the 10k-trace perf gate), so a
+fresh capture looked like an empty bucket: `ctx info` exited rc=3
+`trace_not_found_in_bucket`, `ctx list` returned `traces: []`. Running
+`bucket manifest` / `bucket repair` (a write=True heal verb) healed
+it. Fix: capture materializes the manifest row via a bounded
+single-trace upsert in `ingest_one_session`.
+
+This journey forks `c-captured-real-session` (the real capture chain
+end-to-end) and asserts — with NO `bucket manifest` / `bucket repair`
+/ heal verb run before the asserts — that:
+
+  (a) `ctx list --json` exits 0 and its rendered output references the
+      captured `{trace_id}` (the manifest carries the row at capture
+      time).
+  (b) `ctx info {trace_id} --json` exits 0 (not rc=3) with the
+      unchanged `opentraces.ctx.info.v2` stamp, `info.files.has_context
+      == true`, and `info.remote_sync_eligible == false` (privacy
+      default preserved through the new capture-time path).
+
+Paired with `ctx-info-head-shape` (on the heal-verb-run
+`c-bucket-spine-v2-one-trace-provisional` world): that journey pins the
+full envelope SHAPE; this one pins the fresh-capture VISIBILITY (no
+heal verb), which is the behavior issue #54 fixes.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli", "git"]
+# Issue #54: the fresh-capture world. `c-captured-real-session` runs the
+# real `_capture` + post-commit + watcher-tick chain (cache=False, rebuilt
+# every run) and mints exactly one captured trace + its context tree, so
+# the pin and the preconditions below agree.
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — ctx list sees the freshly captured trace (no heal verb run).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-list-fresh"
+argv = ["ctx", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-list-fresh"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-list-fresh"
+path = "schema_version"
+
+# The captured trace id is present in traces[] (rendered into stdout) —
+# a fresh capture is visible to the manifest-only reader.
+[[assertions]]
+kind = "stdout_contains"
+step = "ctx-list-fresh"
+value = "{trace_id}"
+
+# ---------------------------------------------------------------------
+# Step 2 — ctx info exits 0 (not rc=3 trace_not_found_in_bucket) with
+# the unchanged v2 stamp and the privacy default closed.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-info-fresh"
+argv = ["ctx", "info", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-info-fresh"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-fresh"
+path = "schema_version"
+equals = "opentraces.ctx.info.v2"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-fresh"
+path = "info.trace_id"
+equals = "{trace_id}"
+
+# Context companion present (the capture chain wrote it).
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-fresh"
+path = "info.files.has_context"
+equals = true
+
+# Privacy default is gate-closed through the new capture-time path.
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-fresh"
+path = "info.remote_sync_eligible"
+equals = false

@@ -37,8 +37,8 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-11, post-issue-55 + issue-62 merges): 25 verified,
-  18 partial, 7 open, 7 tracked, 0 waived — 57 rows.
+- Status counts (2026-06-11, post-issue-54 + issue-55 + issue-62 merges): 26 verified,
+  18 partial, 7 open, 7 tracked, 0 waived — 58 rows.
 
 ## A. Capture (per harness)
 
@@ -66,6 +66,7 @@ Derivation rules (enforced by the gate):
 | BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane, with default-CI symmetry coverage via the directory-backed fake dispatch (file:// scheme, issue #57) | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, bucket-symmetric-local-remote, ctx-show-with-lazy-blob-fetch, ctx-show-offline-fails, live-hf-bucket-roundtrip, tests/test_bucket_remote_symmetric.py, tests/otbox/test_live_hf_slice.py | — |
 | BKT-7 | Append-only hash-chained event log survives GC and rewrites | B | open | — | — |
 | BKT-8 | `bucket status`/`bucket manifest` are side-effect-free reads; self-heal is explicit via `bucket manifest --heal` / `bucket repair` (read-only digest == post-repair digest) | B | verified | bucket-read-verbs-side-effect-free, tests/core/test_bucket_store.py::test_bucket_read_verbs_are_side_effect_free, tests/core/test_bucket_store.py::test_readonly_node_count_matches_heal_when_live_log_is_trail_only, tests/core/test_bucket_store.py::test_manifest_write_repairs_stale_shape_with_unchanged_digest, migration-s5-read-in-place | #55 |
+| BKT-9 | A freshly captured trace is immediately visible to the manifest-only readers (`ctx list` / `ctx info`) without a heal verb (capture materializes the manifest row via a bounded single-trace upsert; the row is byte-identical to a full `bucket manifest` regeneration; `--trace-record-only` ingest still defers projection) | B | verified | ctx-fresh-capture-visibility, tests/core/test_ingest.py::TestIngestOneSession::test_ingest_writes_manifest_json_so_ctx_readers_see_the_trace, tests/core/test_ingest.py::TestIngestOneSession::test_ingest_manifest_upsert_is_bounded_to_one_trace, tests/core/test_ingest.py::TestIngestOneSession::test_record_only_ingest_writes_no_manifest_row, tests/core/test_bucket_store.py::test_concurrent_manifest_upserts_lose_no_rows, tests/cli/test_bucket_cli.py::test_ctx_info_falls_back_to_trace_json_when_manifest_row_missing | #54 |
 
 ## C. Discovery (query/map/slice/get + intelligence)
 

@@ -844,3 +844,65 @@ def test_manifest_write_repairs_stale_shape_with_unchanged_digest(tmp_path):
         "stale-shaped manifest.json survived a write=True re-projection "
         "(digest-only skip)"
     )
+
+
+def test_concurrent_manifest_upserts_lose_no_rows(tmp_path):
+    """Issue #54 adversary finding 1 — the capture-time upsert is serialized.
+
+    Ingest's flock is keyed per ``session_id``, so two concurrent ingests of
+    DIFFERENT sessions both reach ``upsert_manifest_trace_row``. Without the
+    bucket-level ``_manifest_upsert_lock`` both read the same manifest, each
+    appends its own row, and the later atomic replace drops the earlier row —
+    recreating the fresh-capture invisibility this fix exists to close. With
+    the lock every concurrently upserted row must survive.
+    """
+
+    import threading
+
+    from opentraces.core.bucket_store import (
+        bucket_manifest_path,
+        upsert_manifest_trace_row,
+        write_trace_record,
+    )
+
+    trace_ids = [f"trace-race-{i}" for i in range(8)]
+    records = {}
+    for trace_id in trace_ids:
+        record = _scanned_trace(trace_id)
+        write_trace_record(
+            record,
+            project_slug="raceproj",
+            source_layer="canonical",
+            legacy_mirror=False,
+        )
+        records[trace_id] = record
+
+    barrier = threading.Barrier(len(trace_ids))
+    errors: list[Exception] = []
+
+    def _upsert(trace_id: str) -> None:
+        try:
+            barrier.wait(timeout=10)
+            upsert_manifest_trace_row(
+                None,
+                project_slug="raceproj",
+                trace_id=trace_id,
+                record=records[trace_id],
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=_upsert, args=(trace_id,))
+        for trace_id in trace_ids
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert errors == []
+
+    doc = json.loads(bucket_manifest_path().read_text(encoding="utf-8"))
+    present = {row["trace_id"] for row in doc["traces"]}
+    missing = set(trace_ids) - present
+    assert not missing, f"concurrent upserts lost manifest rows: {sorted(missing)}"

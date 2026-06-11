@@ -19,11 +19,13 @@ module so all ~91 existing call sites remain importable from
 
 from __future__ import annotations
 
+import fcntl
 import gzip
 import json
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from opentraces.core._time import utc_now_str
@@ -913,6 +915,33 @@ def iter_traces_v2(
         rows.append(_per_trace_v2_summary(proj_slug, tid, record))
     rows.sort(key=lambda item: (item["project_slug"], item["trace_id"]))
     return rows
+
+
+def trace_v2_summary_by_id(trace_id: str) -> dict[str, Any] | None:
+    """Resolve ONE trace's v2 summary row by ``trace_id`` (no manifest read).
+
+    Issue #54 — backs ``ctx info``'s documented ``trace.json`` fallback. When
+    the manifest has no row for ``trace_id`` but the per-trace envelope exists
+    on disk, this globs ``traces/v1/*/<trace_id>/trace.json`` and derives the
+    summary via :func:`_per_trace_v2_summary`, so the fallback's info block is
+    byte-identical to the block ``ctx info`` reads from a manifest row.
+    Returns ``None`` when no envelope exists. Bounded to one trace — NOT the
+    ``ctx list`` 10k-trace perf gate (a single-id ``ctx info`` lookup).
+    """
+
+    root = traces_v1_root()
+    if not root.exists():
+        return None
+    for trace_json in sorted(root.glob(f"*/{_path_part(trace_id)}/trace.json")):
+        proj_slug = unquote(trace_json.parent.parent.name)
+        record: TraceRecord | None = None
+        try:
+            raw = json.loads(trace_json.read_text(encoding="utf-8"))
+            record = TraceRecord.model_validate(raw)
+        except (OSError, ValueError, json.JSONDecodeError, ValidationError):
+            record = None
+        return _per_trace_v2_summary(proj_slug, trace_id, record)
+    return None
 
 
 def _iter_opted_in_projects() -> list[tuple[Path, str]]:
@@ -2238,6 +2267,175 @@ def _manifest_change_view(doc: dict[str, Any]) -> dict[str, Any]:
     """
 
     return {k: v for k, v in doc.items() if k not in _MANIFEST_VOLATILE_KEYS}
+
+
+def _minimal_manifest_doc() -> dict[str, Any]:
+    """A schema-valid empty ``opentraces.bucket.manifest.v2`` document.
+
+    Issue #54 — the seed the bounded capture-time upsert writes when no
+    ``manifest.json`` exists yet. It carries only the canonical v2 skeleton
+    (``schema_version`` + an empty ``traces[]`` + an empty ``events_v1``
+    index) plus empty compat blocks every ``.get()``-guarded consumer
+    (``bucket_remote``, ``datasets``) already tolerates. A later full
+    :func:`bucket_manifest` regeneration (run by ``bucket status`` / ``bucket
+    remote push`` / ``bucket repair``) overwrites it with the populated
+    blocks; the upsert never sweeps the object store to fill them in (that is
+    the #44 latency class this seed exists to avoid).
+    """
+
+    return {
+        "schema_version": BUCKET_MANIFEST_SCHEMA,
+        "bucket_root": "",
+        "root": str(paths.bucket_dir()),
+        "generated_at": utc_now_str(),
+        "updated_at": utc_now_str(),
+        "security_version": SECURITY_VERSION,
+        "traces": [],
+        "events_v1": {
+            "schema_version": BUCKET_EVENTS_INDEX_SCHEMA,
+            "batch_count": 0,
+            "last_batch_id": None,
+            "latest_event_sequence": 0,
+        },
+        "trace_records": {},
+        "trail": {},
+        "sync": {},
+        "raw_sources": {},
+        "trail_events": {},
+        "context_trees": {},
+    }
+
+
+@contextmanager
+def _manifest_upsert_lock() -> Iterator[None]:
+    """Bucket-level exclusive flock serializing the manifest upsert.
+
+    Issue #54 adversary finding — ingest's flock is keyed per ``session_id``,
+    so two concurrent ingests of DIFFERENT sessions could both read the same
+    ``manifest.json``, each append its own row, and the later atomic replace
+    would drop the earlier trace's row (lost update; the exact invisibility
+    class the upsert exists to close). Blocking is correct here because the
+    hold time is one read + one write of a small JSON doc (mirrors
+    ``ingest._FileLock``'s rationale).
+    """
+
+    lock_path = bucket_manifest_path().with_name("manifest.json.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def upsert_manifest_trace_row(
+    repo: Path | None,
+    *,
+    project_slug: str,
+    trace_id: str,
+    record: TraceRecord | None = None,
+) -> dict[str, Any] | None:
+    """Insert/replace one trace's ``traces[]`` row in ``bucket/manifest.json``.
+
+    Issue #54 — capture materializes the manifest row so the manifest-only
+    readers (``ctx list`` / ``ctx info``) see a freshly captured trace
+    immediately, WITHOUT a ``bucket manifest`` / ``bucket repair`` heal verb.
+    Called from :func:`opentraces.core.ingest.ingest_one_session` right after
+    :func:`project_per_trace_exports`, inside the ``if not trace_record_only``
+    guard.
+
+    Bounded to O(one trace): the summary row is computed via
+    :func:`_per_trace_v2_summary` from the per-trace envelope this ingest just
+    wrote (byte-identical to the row a full ``bucket_manifest`` regeneration
+    produces). It NEVER calls :func:`iter_trace_record_objects` /
+    :func:`trace_record_snapshot` or regenerates the whole manifest (the #44
+    post-commit latency class). When ``manifest.json`` is absent a minimal
+    schema-valid v2 doc is seeded; the row is upserted (replace if the
+    ``(project_slug, trace_id)`` pair already exists, else append) and
+    ``traces[]`` re-sorted; ``bucket_root`` + ``bucket_digest`` are recomputed
+    over the in-memory rows; the doc is written atomically with the same
+    write-only-on-change discipline as :func:`bucket_manifest` (compare the
+    full content minus volatile timestamps so idempotent re-captures stay
+    byte-stable). Returns the upserted row (``None`` only if the row could not
+    be computed — best-effort, never fatal to capture).
+
+    A subsequent full ``bucket_manifest(write=True)`` regeneration overwrites
+    the minimal compat blocks with the swept-store content; the per-trace row
+    is unchanged because both paths derive it from the same envelope.
+    """
+
+    row = _per_trace_v2_summary(project_slug, trace_id, record)
+
+    manifest_path = bucket_manifest_path()
+    with _manifest_upsert_lock():
+        doc: dict[str, Any] | None = None
+        existing_view: Any = None
+        if manifest_path.exists():
+            try:
+                raw_text = manifest_path.read_text(encoding="utf-8")
+                loaded = json.loads(raw_text)
+                if isinstance(loaded, dict):
+                    # Independent parse: ``doc`` is mutated below, so the
+                    # change-view compare must hold its own object graph.
+                    existing_view = _manifest_change_view(json.loads(raw_text))
+                    if loaded.get("schema_version") == BUCKET_MANIFEST_SCHEMA:
+                        doc = loaded
+            except (OSError, ValueError, json.JSONDecodeError):
+                doc = None
+                existing_view = None
+        if doc is None:
+            doc = _minimal_manifest_doc()
+
+        traces = [r for r in (doc.get("traces") or []) if isinstance(r, dict)]
+        traces = [
+            r
+            for r in traces
+            if (r.get("project_slug"), r.get("trace_id"))
+            != (project_slug, trace_id)
+        ]
+        traces.append(row)
+        traces.sort(key=lambda item: (item["project_slug"], item["trace_id"]))
+        doc["traces"] = traces
+
+        project_slugs = sorted({r["project_slug"] for r in traces})
+        doc["bucket_root"] = project_slugs[0] if len(project_slugs) == 1 else ""
+        doc["updated_at"] = utc_now_str()
+
+        # The digest covers the doc AS WRITTEN (self-consistent), not the
+        # digest a full swept regeneration would produce — the compat blocks
+        # stay as-loaded until heal. That transient delta is consumer-safe:
+        # every top-level-digest consumer regenerates first
+        # (``bucket_remote`` calls ``bucket_manifest(write=True)`` before
+        # every ``.get("digest")``; ``datasets`` recomputes ``write=False``);
+        # ``ctx info``'s ``digest`` is the per-trace ROW digest, which is
+        # byte-identical across both paths.
+        bucket_digest_material = _machine_neutral_digest_view(
+            {
+                "schema_version": doc["schema_version"],
+                "bucket_root": doc["bucket_root"],
+                "security_version": doc.get("security_version", SECURITY_VERSION),
+                "traces": sorted(
+                    traces, key=lambda r: (r["project_slug"], r["trace_id"])
+                ),
+                "events_v1": doc.get("events_v1", {}),
+                "trace_records": doc.get("trace_records", {}),
+                "trail": doc.get("trail", {}),
+                "raw_sources": doc.get("raw_sources", {}),
+                "trail_events": doc.get("trail_events", {}),
+                "sync": doc.get("sync", {}),
+            }
+        )
+        bucket_digest = _digest_payload(bucket_digest_material)
+        doc["bucket_digest"] = bucket_digest
+        doc["digest"] = bucket_digest
+
+        if existing_view is None or existing_view != _manifest_change_view(doc):
+            _atomic_write_json(manifest_path, doc)
+    return row
 
 
 _MACHINE_LOCAL_DIGEST_KEYS = frozenset({"root", "repo_path"})

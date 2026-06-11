@@ -488,6 +488,13 @@ register(
             # entry 4) resolves without a bespoke checkpoint.
             "git_repo_present": True,
             "post_commit_hook_installed": True,
+            # Issue #54 — the capture chain reconstructs a Context Tree
+            # (the per-trace context companion + contexts/v1 nodes.jsonl
+            # are written; `ctx tree` returns a node, node_count == 1).
+            # Advertised so the `ctx-fresh-capture-visibility` journey
+            # (manifest-only-reader visibility of a fresh capture) resolves
+            # against this world.
+            "context_tree_built": True,
         },
     )
 )

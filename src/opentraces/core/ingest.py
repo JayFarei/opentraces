@@ -601,6 +601,30 @@ def _ingest_locked(
                 trace_id,
                 exc_info=True,
             )
+        # Issue #54 — materialize the manifest row at capture time. The
+        # per-trace envelope above makes ``bucket status`` / the index see the
+        # trace, but the manifest-only readers (``ctx list`` / ``ctx info``)
+        # open ``manifest.json`` directly with no in-memory reconcile, so
+        # without this they reported an empty bucket until a ``bucket manifest``
+        # / ``bucket repair`` heal verb ran. This upsert is bounded to one
+        # trace (reuses the envelope just written; never sweeps the object
+        # store — the #44 latency class). Best-effort; never make capture
+        # fragile. The ``--trace-record-only`` fast path skips it (guarded by
+        # the enclosing ``if not trace_record_only:``), keeping its deferred
+        # projection for ``bucket manifest --heal`` / ``bucket repair``.
+        try:
+            from .bucket_store import upsert_manifest_trace_row
+
+            upsert_manifest_trace_row(
+                project_dir,
+                project_slug=project_slug,
+                trace_id=final_record.trace_id,
+                record=final_record,
+            )
+        except Exception:
+            logger.warning(
+                "manifest row upsert failed for %s", trace_id, exc_info=True
+            )
 
     # Plan 087 U5: best-effort keep-warm. Now that the trace is in the bucket,
     # bring the warm Trace Index + search projection up to date so the trace is

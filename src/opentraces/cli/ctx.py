@@ -478,6 +478,17 @@ def ctx_info_cmd(trace_id: str, remote: str | None, as_json: bool) -> None:
             matched = entry
             break
 
+    # Issue #54 — documented ``trace.json`` fallback. On a LOCAL read, when the
+    # manifest carries no row for ``trace_id`` (a drifted / never-written
+    # manifest) but the per-trace envelope exists on disk, derive the row from
+    # that envelope via ``_per_trace_v2_summary`` so the info block is
+    # byte-identical to the manifest-row block. Remote reads have no on-disk
+    # envelope, so the fallback is local-only.
+    if matched is None and not remote:
+        from ..core.bucket_store import trace_v2_summary_by_id
+
+        matched = trace_v2_summary_by_id(trace_id)
+
     if matched is None:
         if as_json:
             _emit(

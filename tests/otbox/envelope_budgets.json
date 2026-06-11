@@ -102,6 +102,12 @@
     "max_tokens": 400,
     "measured_at_seed": 16
   },
+  "ctx-info": {
+    "argv": ["ctx", "info", "{trace_id}", "--json"],
+    "max_tokens": 450,
+    "measured_at_seed": 203,
+    "note": "Issue #54: restored to the budget sweep now that a freshly captured trace is visible to ctx info (capture-time manifest row upsert) — measures rc=0 on c-captured-real-session WITHOUT a heal verb. Seeded ~2x the synthetic-fallback world's measurement; re-seed after the #49 real-claude capture-batch regen if the envelope moves."
+  },
   "ctx-tree": {
     "argv": ["ctx", "tree", "{trace_id}", "--json"],
     "max_tokens": 2000,

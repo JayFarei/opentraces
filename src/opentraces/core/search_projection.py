@@ -1601,9 +1601,10 @@ def _persisted_bucket_digest() -> str | None:
     the bucket last persisted (the projection's ``built_from_digest`` lag is
     measured against this).
 
-    NOTE (F1): capture does not currently keep the on-disk manifest digest
-    authoritative (ingest writes traces but never rewrites the manifest), so
-    this persisted digest can lag a freshly-recomputed digest. It is reported
+    NOTE (F1, amended by issue #54): ingest now upserts the captured trace's
+    manifest row (and a digest over the doc as written) at capture time, so
+    the persisted digest tracks fresh captures; it can still lag a full swept
+    regeneration on the compat blocks until a heal verb runs. It is reported
     for visibility / lag, not used as the authoritative freshness gate — the
     cheap stat-only signal (``_current_bucket_cheap_signal``) remains the
     freshness source of truth. Returns ``None`` if the manifest is absent or
