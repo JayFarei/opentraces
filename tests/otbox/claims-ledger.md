@@ -52,13 +52,13 @@ Derivation rules (enforced by the gate):
 | CAP-6 | Hook failures never block the agent session (always exit 0) — 4 Claude scripts x 4 faults + missing-package sweep, Codex modules, git shim | A | verified | tests/otbox/test_faultpoints.py | — |
 | CAP-7 | OTel capture yields `completeness=full` layers; receiver-down never blocks agent traffic | A | partial | tests/test_otlp_capture.py, context-tree-otel-receiver-up, context-tree-otel-bypass-mode | — |
 | CAP-8 | Installers (`setup claude-code/codex-cli/pi/git`) are idempotent and preserve unrelated hooks (one refspec-duplication finding still open) | A | partial | tests/otbox/test_idempotency_sweep.py, pi-setup-dry-run, onboard-integrations | — |
-| CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds | A | tracked | — | TBD-B0 |
+| CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds | A | tracked | — | #61 |
 
 ## B. Bucket and privacy boundary
 
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
-| BKT-1 | Raw traces never leave the bucket without explicit opt-in (negative-space verifier: NOTHING egressed during a full capture+publish arc) | B | open | — | — |
+| BKT-1 | Raw traces never leave the bucket without explicit opt-in (negative-space verifier: NOTHING egressed during a full capture+publish arc) | B | open | — | #62 |
 | BKT-2 | `bucket replay --repo` reconstructs the canonical Git event ref byte-identically | B | verified | bucket-events-mirror-replay-equals-git, bucket-self-sufficient-everything | #25 |
 | BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/otbox/test_determinism.py | #25 |
 | BKT-4 | `bucket repair` is idempotent; `prune` never touches events or trace.json | B | verified | bucket-prune-orphan-only, bucket-write-order-discipline-local, bucket-rebuild-context-tree-substrate | #25 |
