@@ -23,12 +23,19 @@ class _FakeOption:
 
 
 def test_current_project_session_dir_found(tmp_path, monkeypatch):
-    project_dir = tmp_path / "repo"
+    """Resolution must use ``encode_claude_path`` — the directory Claude
+    Code actually writes — not a ``'/' -> '-'`` slug. The underscore in
+    the repo name makes the two encodings diverge (release-gate CAP-5:
+    the old slug counted 0 sessions for such paths and
+    ``init --import-existing`` silently imported nothing)."""
+    from opentraces.core.repo_identity import encode_claude_path
+
+    project_dir = tmp_path / "my_repo"
     project_dir.mkdir()
 
     projects_root = tmp_path / "projects"
     projects_root.mkdir()
-    expected = projects_root / project_dir.resolve().as_posix().replace("/", "-")
+    expected = projects_root / encode_claude_path(project_dir)
     expected.mkdir()
 
     monkeypatch.setattr(

@@ -916,8 +916,15 @@ def register_project(config: Config, project_dir: Path) -> bool:
         # Mint a fresh marker with default policy.
         project_id = uuid.uuid4().hex
         _write_marker(project_dir, project_id, {})
-    else:
+    elif marker.get("project_id"):
         project_id = marker["project_id"]
+    else:
+        # Marker exists but carries no project_id (legal for a bare
+        # ``{"excluded": true}`` opt-out). Registration is an explicit
+        # enrollment act, so mint an id here — but preserve the existing
+        # portable policy fields rather than resetting them.
+        project_id = uuid.uuid4().hex
+        _write_marker(project_dir, project_id, marker)
 
     slug = _make_slug(project_dir.name, project_id)
     new_reg = ProjectRegistration(project_id=project_id, slug=slug)
@@ -1005,6 +1012,13 @@ def auto_enroll_if_global(project_dir: Path) -> bool:
     """
     try:
         config = load_config()
+        # Per-project opt-out is absolute: an excluded project is never
+        # enrolled and its marker is never mutated from the capture hot
+        # path (no agent backfill, no project_id minting, no registry
+        # write). ``is_project_excluded`` reads the marker raw, so the
+        # check itself cannot trigger a migrating write.
+        if is_project_excluded(config, str(project_dir.resolve())):
+            return False
         if project_is_opted_in(project_dir):
             changed = False
             if config.capture.tracking_mode == "global":
@@ -1068,8 +1082,11 @@ def load_project_config(project_dir: Path) -> dict:
         data["visibility"] = marker["visibility"]
 
     changed = _normalize_project_data(data)
-    if changed:
-        # Persist normalized values back into the marker.
+    if changed and marker.get("project_id"):
+        # Persist normalized values back into the marker. A marker without
+        # a project_id (e.g. a bare committed ``{"excluded": true}``
+        # opt-out) is legal: normalize in memory only — persisting would
+        # mean minting an id, and reads must never mutate such a marker.
         _write_marker(project_dir, marker["project_id"], data)
 
     # Synthesize legacy ``remote``/``visibility`` keys for back-compat

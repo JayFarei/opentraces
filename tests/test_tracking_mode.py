@@ -137,6 +137,56 @@ def test_auto_enroll_global_repairs_legacy_agent_list(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Per-project `excluded` opt-out beats global mode (release-gate CAP-4)
+# --------------------------------------------------------------------------- #
+
+
+def test_auto_enroll_never_mutates_bare_excluded_marker(tmp_path):
+    """A bare committed ``{"excluded": true}`` marker is the documented
+    per-project opt-out. Under global mode a hook fire must not mint a
+    project_id, backfill agents, or register the project — the marker
+    stays byte-identical."""
+    _set_mode("global")
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    _git_init(proj)
+    marker = proj / ".opentraces.json"
+    marker.write_text('{"excluded": true}')
+    marker_before = marker.read_bytes()
+
+    assert auto_enroll_if_global(proj) is False
+    assert marker.read_bytes() == marker_before
+    assert str(proj.resolve()) not in opted_in_projects(load_config())
+
+
+def test_auto_enroll_never_mutates_enrolled_excluded_marker(tmp_path):
+    """An ENROLLED project that opted out (`config set excluded true
+    --project`) keeps its marker byte-identical on the auto-enroll hot
+    path: no codex-cli/pi agent backfill — backfilling `pi` would flip
+    the Pi bridge's capture decision back on."""
+    _set_mode("global")
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    marker = proj / ".opentraces.json"
+    marker.write_text(json.dumps({
+        "marker_version": "2",
+        "project_id": "enrolled-excluded-project",
+        "excluded": True,
+        "review_policy": "review",
+        "push_policy": "manual",
+        "remotes": {},
+        "active_remote": None,
+        "agents": ["claude-code"],
+    }))
+    marker_before = marker.read_bytes()
+
+    assert auto_enroll_if_global(proj) is False
+    assert marker.read_bytes() == marker_before
+    assert load_project_config(proj)["agents"] == ["claude-code"]
+    assert str(proj.resolve()) not in opted_in_projects(load_config())
+
+
+# --------------------------------------------------------------------------- #
 # R3 — manual mode is a strict no-op
 # --------------------------------------------------------------------------- #
 

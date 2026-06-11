@@ -110,3 +110,54 @@ class TestStatusGate:
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0, result.output
             assert "0 traces in inbox" in result.output
+
+    def test_status_reports_bare_excluded_marker_cleanly(
+        self, runner, isolated_home, tmp_path
+    ) -> None:
+        """A bare committed ``{"excluded": true}`` marker (no project_id)
+        is a legal opt-out shape. ``status`` must report the excluded
+        state, exit 0, and leave the marker byte-identical — no raw
+        KeyError('project_id'), no minted id (release-gate CAP-4)."""
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            marker = Path(td) / ".opentraces.json"
+            marker.write_text('{"excluded": true}')
+            marker_before = marker.read_bytes()
+
+            result = runner.invoke(main, ["status"])
+            assert result.exit_code == 0, result.output
+            assert "excluded" in result.output
+            assert marker.read_bytes() == marker_before
+
+    def test_status_json_reports_excluded_state(
+        self, runner, isolated_home, tmp_path
+    ) -> None:
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            (Path(td) / ".opentraces.json").write_text('{"excluded": true}')
+
+            result = runner.invoke(main, ["--json", "status"])
+            assert result.exit_code == 0, result.output
+            payload = json.loads(
+                result.output.split("---OPENTRACES_JSON---", 1)[1].strip()
+            )
+            assert payload["status"] == "ok"
+            assert payload["excluded"] is True
+
+
+class TestBareMarkerTolerance:
+    def test_load_project_config_tolerates_marker_without_project_id(
+        self, tmp_path
+    ) -> None:
+        """Normalization must stay in memory for a marker with no
+        project_id: persisting it would mean minting an id, and reads
+        never mutate an opt-out marker."""
+        from opentraces.core.config import load_project_config
+
+        marker = tmp_path / ".opentraces.json"
+        marker.write_text('{"excluded": true}')
+        marker_before = marker.read_bytes()
+
+        data = load_project_config(tmp_path)
+
+        assert data["excluded"] is True
+        assert data["review_policy"] == "review"
+        assert marker.read_bytes() == marker_before
