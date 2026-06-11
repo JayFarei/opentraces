@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tarfile
 from pathlib import Path
 
@@ -177,6 +178,36 @@ def _retarget_box_symlinks(box: Box) -> int:
             continue
         retargeted += 1
     return retargeted
+
+
+def _repair_dangling_venv_interpreters(box: Box) -> int:
+    """Repoint dangling venv ``bin/python*`` symlinks at the current
+    interpreter.
+
+    Venv interpreter links target the CAPTURE machine's python (e.g.
+    ``/opt/homebrew/.../python3.14``); ``_retarget_box_symlinks`` leaves
+    non-box targets alone, so on a cross-machine restore (Linux CI
+    restoring a Mac-captured artifact) the link dangles and any journey
+    step invoking ``.testvenv/bin/python`` dies with rc=127. Stdlib-only
+    steps survive under any interpreter, so a repaired link is strictly
+    better than a dangling one. Links that resolve on this machine are
+    never touched. Best-effort, never fatal.
+    """
+    repaired = 0
+    if not box.root.exists():
+        return repaired
+    for path in box.root.rglob("python*"):
+        if path.parent.name != "bin" or not path.is_symlink():
+            continue
+        if path.exists():
+            continue
+        try:
+            path.unlink()
+            path.symlink_to(sys.executable)
+        except OSError:
+            continue
+        repaired += 1
+    return repaired
 
 
 def peek_artifact_world(capture_name: str) -> dict | None:
@@ -338,6 +369,11 @@ def restore_from_capture(
     # text rewrite above — re-root any link still pointing into an origin
     # box (any machine's prefix) so restored worlds pass `doctor` clean.
     _retarget_box_symlinks(box)
+
+    # Venv interpreter links point OUTSIDE any box root (at the capture
+    # machine's python) and dangle on cross-machine restores; repair them
+    # so `.testvenv/bin/python` journey steps survive on CI.
+    _repair_dangling_venv_interpreters(box)
 
     # Carry forward the archived box's notes (the capture pipeline
     # may have recorded its own audit) before we save the new identity.

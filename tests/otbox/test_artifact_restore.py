@@ -26,6 +26,8 @@ checkpoint family:
 from __future__ import annotations
 
 import json
+import os
+import sys
 import tarfile
 
 import pytest
@@ -46,6 +48,16 @@ def _isolate_opentraces_global_state():
     autouse fixture would otherwise redirect HOME elsewhere and break
     box lifecycle. Same override as test_agent_session_slice.py."""
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_release_fetch(monkeypatch):
+    """The nightly exports ``OT_OTBOX_FETCH_CAPTURES=1``; these tests
+    stage their own captures roots, so the release-fetch fallback must
+    stay off — otherwise ``restore_from_capture`` downloads the real
+    manifested artifact into the staged root mid-test and the absent
+    case returns metadata instead of ``None``."""
+    monkeypatch.delenv("OT_OTBOX_FETCH_CAPTURES", raising=False)
 
 
 @pytest.fixture
@@ -79,6 +91,7 @@ def test_restore_from_capture_returns_none_when_absent(monkeypatch, tmp_path):
 def _build_fake_artifact(
     captures_root, capture_name: str, metadata: dict,
     *, traces: list[dict] | None = None,
+    venv_python_target: str | None = None,
 ) -> None:
     """Stage a minimum-shape artifact under ``captures_root/<capture_name>/``.
 
@@ -125,6 +138,16 @@ def _build_fake_artifact(
                 json.dumps(entry.get("record") or {"trace_id": trace_id}) + "\n"
             )
         (project_dir / "state.json").write_text(json.dumps(state))
+
+    if venv_python_target:
+        # Mirror a captured ``.testvenv``: ``python`` links at the capture
+        # machine's interpreter (the cross-machine dangling case), while
+        # ``python3`` links at a path that resolves locally — and is NOT
+        # sys.executable, so the test can tell "untouched" from "repaired".
+        venv_bin = body / "project" / ".testvenv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "python").symlink_to(venv_python_target)
+        (venv_bin / "python3").symlink_to("/bin/ls")
 
     archive = artifact_dir / "snapshot.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
@@ -186,6 +209,45 @@ def test_restore_from_capture_round_trips_synthetic_artifact(
     # And the meta.json must now reflect the CURRENT (not origin) box id.
     saved = json.loads((box.root / "meta.json").read_text())
     assert saved["box_id"] == box.box_id
+
+
+def test_restore_repairs_dangling_venv_interpreter(monkeypatch, tmp_path):
+    """A venv ``bin/python`` link targeting the capture machine's
+    interpreter dangles after a cross-machine restore; the helper must
+    repoint it at the current interpreter (journey steps invoking
+    ``.testvenv/bin/python`` die with rc=127 otherwise). A link that
+    already resolves must be left untouched."""
+    captures_root = tmp_path / "captures"
+    captures_root.mkdir()
+    monkeypatch.setenv("OTBOX_CAPTURES_ROOT", str(captures_root))
+    monkeypatch.setattr(
+        "tests.otbox.checkpoints._captured_helpers.BOXES_DIR",
+        tmp_path / "boxes",
+    )
+    monkeypatch.setattr(
+        "tests.otbox.env.BOXES_DIR",
+        tmp_path / "boxes",
+    )
+
+    foreign_python = str(tmp_path / "no-such-machine" / "bin" / "python3.14")
+    _build_fake_artifact(
+        captures_root,
+        "venv-repair-fixture",
+        {"scenario_name": "venv-repair-fixture", "agent": "echo"},
+        venv_python_target=foreign_python,
+    )
+
+    box = Box(box_id=new_box_id())
+    result = restore_from_capture(None, box, "venv-repair-fixture")
+    assert isinstance(result, dict)
+
+    venv_bin = box.root / "project" / ".testvenv" / "bin"
+    dangling = venv_bin / "python"
+    assert dangling.is_symlink()
+    assert os.readlink(dangling) == sys.executable
+    assert dangling.exists()
+    # The resolving link keeps its original (non-sys.executable) target.
+    assert os.readlink(venv_bin / "python3") == "/bin/ls"
 
 
 # ---------------------------------------------------------------------------
