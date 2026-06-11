@@ -26,8 +26,8 @@ Derivation rules (enforced by the gate):
   verifier covers only part of the claim. Same resolution rules as
   verified (verifiers must exist and be unquarantined).
 - **open** — no executing verifier yet. Honest debt; never blocks the
-  gate. BKT-1 is the acknowledged deprioritized tail (maintainer decision
-  2026-06-10): it stays open and never blocks the gate.
+  gate. (BKT-1, formerly the acknowledged deprioritized tail, gained its
+  negative-space verifier via #62 on 2026-06-11 and is now verified.)
 - **tracked** — ownership transferred to a named GitHub issue; the Issue
   cell is REQUIRED (`#NNN`, or a `TBD-<tag>` placeholder until the issue
   is filed).
@@ -37,8 +37,8 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-11, post-issue-49 code half + issue-55 merge): 24 verified,
-  18 partial, 8 open, 7 tracked, 0 waived — 57 rows.
+- Status counts (2026-06-11, post-issue-49 code half + issue-55 merge + issue-62
+  BKT-1 verifier): 25 verified, 18 partial, 7 open, 7 tracked, 0 waived — 57 rows.
 
 ## A. Capture (per harness)
 
@@ -58,7 +58,7 @@ Derivation rules (enforced by the gate):
 
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
-| BKT-1 | Raw traces never leave the bucket without explicit opt-in (negative-space verifier: NOTHING egressed during a full capture+publish arc) | B | open | — | #62 |
+| BKT-1 | Raw traces never leave the bucket without explicit opt-in (negative-space verifier: NOTHING egressed during a full capture+publish arc) | B | verified | tests/otbox/test_egress_verifier.py | #62 |
 | BKT-2 | `bucket replay --repo` reconstructs the canonical Git event ref byte-identically | B | verified | bucket-events-mirror-replay-equals-git, bucket-self-sufficient-everything | #25 |
 | BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/test_bucket_remote_symmetric.py, tests/otbox/test_determinism.py | #25 |
 | BKT-4 | `bucket repair` is idempotent; `prune` never touches events or trace.json | B | verified | bucket-prune-orphan-only, bucket-write-order-discipline-local, bucket-rebuild-context-tree-substrate | #25 |

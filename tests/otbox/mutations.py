@@ -76,6 +76,44 @@ def _fault_truncate_companions(driver, box) -> str:
     return f"truncated {hit} gzip companion(s)"
 
 
+def _first_bucket_trace_json(box) -> Path | None:
+    bucket = _home_opentraces(box) / "bucket" / "traces" / "v1"
+    for tj in bucket.rglob("trace.json"):
+        return tj
+    return None
+
+
+def inject_raw_egress(box, repo: str, bucket_remote: Path) -> str:
+    """Break: 'raw traces never leave the bucket without explicit opt-in'
+    (issue #62 BKT-1). Copy a raw bucket ``trace.json`` verbatim onto BOTH
+    egress surfaces — into the published dataset remote's subtree and into
+    the never-pushed fake bucket remote root. The negative-space verifier
+    MUST go red: the dataset-remote copy is an unattributable path and the
+    bucket-remote copy violates the zero-bytes claim.
+
+    Used directly by ``test_egress_verifier.py``'s in-module kill rather
+    than the guarantees.toml journey route — the verifier is a pytest slice
+    (ledger diff + gzip content scan exceed the journey assertion vocab),
+    so there is no journey guard to bind here."""
+    src = _first_bucket_trace_json(box)
+    if src is None:
+        raise RuntimeError("no bucket trace.json to inject as a raw egress")
+    raw = src.read_bytes()
+
+    dataset_target = box.fake_remote / repo / "raw" / "leaked-trace.json"
+    dataset_target.parent.mkdir(parents=True, exist_ok=True)
+    dataset_target.write_bytes(raw)
+
+    bucket_remote.mkdir(parents=True, exist_ok=True)
+    bucket_target = bucket_remote / "traces" / "v1" / "leaked-trace.json"
+    bucket_target.parent.mkdir(parents=True, exist_ok=True)
+    bucket_target.write_bytes(raw)
+
+    return (
+        f"injected raw {src.name} -> {dataset_target} + {bucket_target}"
+    )
+
+
 FAULTS: dict[str, Callable] = {
     "disable-security-tools": _fault_disable_security_tools,
     "delete-events-ref": _fault_delete_events_ref,
