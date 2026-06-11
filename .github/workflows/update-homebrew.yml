@@ -12,6 +12,10 @@ on:
 jobs:
   update-formula:
     name: Update Homebrew tap
+    # Only CLI releases (v0.x.y). Other release tags (otbox-captures-v1,
+    # schema-v*, pi-v*) must never rewrite the formula — otbox-captures-v1
+    # once pointed brew at a non-CLI tarball for two days.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     steps:
       - name: Get release tarball SHA256
@@ -48,8 +52,13 @@ jobs:
 
             def install
               venv = virtualenv_create(libexec, "python3.12")
-              venv.pip_install buildpath/"packages/opentraces-schema"
-              venv.pip_install_and_link buildpath
+              # venv.pip_install runs with --no-deps (expects vendored resources); this
+              # tap resolves dependencies from PyPI instead. The venv is created
+              # --without-pip, so go through python -m pip (system-site-packages).
+              system libexec/"bin/python", "-m", "pip", "install", "--no-input", buildpath/"packages/opentraces-schema"
+              system libexec/"bin/python", "-m", "pip", "install", "--no-input", buildpath.to_s
+              bin.install_symlink libexec/"bin/opentraces"
+              bin.install_symlink libexec/"bin/ot"
             end
 
             test do
