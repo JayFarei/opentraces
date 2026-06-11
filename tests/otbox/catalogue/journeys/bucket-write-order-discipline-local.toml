@@ -1,62 +1,38 @@
 name = "bucket-write-order-discipline-local"
 description = """
-Plan 080 Phase C mechanism journey (GOLD) — local writer respects
-the write order discipline; crash-injection between blob write and
-event-log append leaves a recoverable state, NOT a corrupt one.
+Plan 080 Phase C mechanism journey (GOLD) — W1 crash recovery: a blob
+without an event reference is an orphan that `bucket prune` cleans,
+while the canonical event log + per-trace envelopes + manifest digest
+are never left corrupt or mutated (Plan 080 §20 Resolution G, crash
+matrix row W1).
 
-Per Plan 080 §20 Resolution G (Crash recovery matrix, row W1):
-  > W1 between blob written and event appended:
-  >   Blob on disk; no event references it.
-  > Recovery:
-  >   `bucket prune` reachability sweep walks event log, builds
-  >   reachable-layer-id set, deletes blobs not in set.
-
-The load-bearing claim is that the bucket writer is atomic at the
-event boundary: a blob without an event reference is an orphan and
-gets cleaned by `bucket prune`, but the canonical event log + the
-per-trace envelope are never left in a corrupt or partially-consistent
-state.
-
-Setup (provided by the checkpoint c-bucket-spine-v2-crash-injected-w1):
-  1. Capture a session that lands N blobs + N corresponding events.
-  2. Inject one extra orphan blob: write a synthetic
-     `bucket/blobs/v1/<project>/context/<hh>/<orphan-hash>.json.gz`
-     containing a deterministic payload whose `layer_id` matches the
-     filename hash, but DON'T append any event referencing it.
-  3. (No corruption of the canonical event log; the orphan is purely
-     extra disk content.)
+Setup (c-bucket-spine-v2-crash-injected-w1): a healthy anchored world
+plus ONE injected orphan blob (its payload echoes the path hash, so
+content integrity holds; no event references it — exactly the W1 shape
+of a crash between blob write and event append).
 
 Asserts:
-  (a) Pre-prune `bucket status --json` reports the blob namespace
-      contains the orphan (unique_blob_count includes it).
-  (b) `bucket verify --json` reports `verify.orphan_blob_count: 1`
-      (verify never mutates; it just reports).
-  (c) `bucket prune --json` exits 0 and reports
-      `prune.orphan_blobs_deleted >= 1`.
-  (d) Post-prune `bucket verify --json` reports
-      `verify.orphan_blob_count: 0`.
-  (e) The canonical event log head (`bucket.events_v1.last_batch_id`)
-      is UNCHANGED across the prune; only orphan blob FILES are
-      removed.
-  (f) The per-trace envelope (`trace.json` digest) is UNCHANGED across
-      the prune.
+  (a) `bucket verify --full` is OK on the crashed world: a W1 orphan is
+      recoverable state, NOT corruption (content check passes; verify
+      reports zero dangling refs).
+  (b) `bucket prune --dry-run` is the W1 reporting surface
+      (would_delete >= 1).
+  (c) `bucket prune` removes the orphan (orphans_removed >= 1).
+  (d) Post-prune dry-run reports zero (recovered).
+  (e) The events head AND the manifest bucket_digest are byte-identical
+      across the recovery (only the orphan blob file was touched).
 
-Fails today because:
-  - `bucket prune` reachability sweep is Phase C Track C1 (bucket_store).
-  - `bucket verify --json` is a new verb (Phase B Track B3).
-  - The crash-injection checkpoint `c-bucket-spine-v2-crash-injected-w1`
-    is a Phase C test-fixture follow-up (otbox checkpoints/).
-
-Cross-track dependencies:
-  - C1: `bucket_store.prune_orphan_blobs()` walks `bucket/events/v1/`
-    + per-trace envelopes to compute the reachable set; deletes
-    everything else under `bucket/blobs/v1/<project>/context/`.
-  - B3: `bucket prune` + `bucket verify` CLI plumbing.
-  - Phase C otbox: `c-bucket-spine-v2-crash-injected-w1` checkpoint
-    factory.
+Re-specced for issue #42 (un-quarantine): the authored keys
+`verify.orphan_blob_count` / `verify.dangling_refs_count` /
+`bucket.blobs_v1.context.unique_blob_count` never existed — verify does
+not report orphans at all (orphan detection is prune's reachability
+sweep; verify covers content integrity + dangling refs via
+`verify.dangling_count`). Non-mutation is pinned via equals_var on the
+events head + bucket_digest. Out-of-vocab `bucket_spine_v2_layout` /
+`orphan_blob_injected` precondition keys dropped.
 """
 lane = "core"
-tier = 1  # PHASE-C: opt-in pending checkpoint c-bucket-spine-v2-crash-injected-w1.
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
@@ -65,13 +41,10 @@ from_checkpoints = ["c-bucket-spine-v2-crash-injected-w1"]
 
 [preconditions]
 min_captured_traces = 1
-bucket_spine_v2_layout = true
 context_tree_built = true
-orphan_blob_injected = true
 
 # ---------------------------------------------------------------------
-# Step 1 — capture pre-prune state: event log head, blob namespace
-# size, and orphan count from verify.
+# Step 1 — pre-recovery state: events head + manifest digest.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -91,10 +64,10 @@ path = "bucket.events_v1.last_batch_id"
 [[assertions]]
 kind = "stdout_json"
 step = "write-order-pre-prune-status"
-path = "bucket.blobs_v1.context.unique_blob_count"
+path = "bucket.bucket_digest"
 
 # ---------------------------------------------------------------------
-# Step 2 — verify reports the orphan WITHOUT mutating.
+# Step 2 — verify: a W1 orphan is NOT corruption.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -109,17 +82,37 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "write-order-pre-prune-verify"
-path = "verify.orphan_blob_count"
+path = "verify.ok"
+equals = true
 
-# Verify is non-mutating: orphan COUNT is reported, NOT zero.
+# Zero referenced-but-missing blobs (the orphan is extra, not missing).
 [[assertions]]
 kind = "stdout_json"
 step = "write-order-pre-prune-verify"
-path = "verify.dangling_refs_count"
+path = "verify.dangling_count"
 equals = 0
 
 # ---------------------------------------------------------------------
-# Step 3 — `bucket prune` deletes the orphan blob.
+# Step 3 — prune's reachability sweep sees the W1 orphan.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "write-order-prune-dry-run"
+argv = ["bucket", "prune", "--dry-run", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "write-order-prune-dry-run"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "write-order-prune-dry-run"
+path = "would_delete"
+min = 1
+
+# ---------------------------------------------------------------------
+# Step 4 — `bucket prune` recovers the W1 state.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -132,13 +125,30 @@ step = "write-order-prune-orphan"
 equals = 0
 
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "write-order-prune-orphan"
-path = "prune.orphan_blobs_deleted"
+path = "prune.orphans_removed"
+min = 1
 
 # ---------------------------------------------------------------------
-# Step 4 — post-prune verify reports 0 orphans.
+# Step 5 — post-recovery: zero orphans remain; verify still clean.
 # ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "write-order-post-prune-dry-run"
+argv = ["bucket", "prune", "--dry-run", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "write-order-post-prune-dry-run"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "write-order-post-prune-dry-run"
+path = "would_delete"
+equals = 0
+
 [[steps]]
 type = "cli"
 id = "write-order-post-prune-verify"
@@ -152,18 +162,12 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "write-order-post-prune-verify"
-path = "verify.orphan_blob_count"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "write-order-post-prune-verify"
 path = "verify.ok"
 equals = true
 
 # ---------------------------------------------------------------------
-# Step 5 — event log head + per-trace envelope unchanged (prune only
-# touched orphan blob files).
+# Step 6 — event log head + manifest digest unchanged (prune only
+# touched the orphan blob file).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -176,23 +180,13 @@ step = "write-order-post-prune-status"
 equals = 0
 
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_equals_var"
 step = "write-order-post-prune-status"
 path = "bucket.events_v1.last_batch_id"
-
-# Per-trace envelope digest unchanged.
-[[steps]]
-type = "cli"
-id = "write-order-trace-digest-unchanged"
-argv = ["trace", "get", "{trace_id}", "--json"]
+equals_var = "write-order-pre-prune-status:bucket.events_v1.last_batch_id"
 
 [[assertions]]
-kind = "returncode"
-step = "write-order-trace-digest-unchanged"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "write-order-trace-digest-unchanged"
-path = "trace_id"
-equals = "{trace_id}"
+kind = "stdout_json_equals_var"
+step = "write-order-post-prune-status"
+path = "bucket.bucket_digest"
+equals_var = "write-order-pre-prune-status:bucket.bucket_digest"

@@ -1,54 +1,41 @@
 name = "bucket-remote-sync-scope-per-trace"
 description = """
 Plan 080 mechanism journey (GOLD) — `bucket remote push` is
-substrate-aware over the new spine layout
-(`bucket/traces/v1/<project>/<trace>/`) and exits 0 when context_tree
+substrate-aware over the spine layout and exits 0 when context_tree
 heads are ineligible to publish.
 
-Renamed in-place from Plan 079's
-`context-tree-bucket-remote-sync-scope-per-trace.toml` per Plan 080
-§20 Resolution A. Assertions are rewired to the new per-trace
-envelope layout: instead of looking for `bucket/contexts/v1/` on the
-remote, the journey looks for `bucket/traces/v1/<project>/<trace>/`
-envelopes WITHOUT their `context.jsonl.gz` companion file (substrate
-skip is per-file, not per-directory).
-
-Per Plan 080 §6 (push order):
-  blobs -> events -> envelopes (trace.json + filtered companions) -> manifest
-
-Per Plan 080 §20 Resolution A — the backward-compat-with-existing-users
-gate. Without it, Plan 080 is a silent breaking change for any user
-who already configured `bucket remote push` against an HF dataset.
+Per Plan 079 R8 (privacy default) + Plan 080 §6: the push succeeds,
+reports the skipped substrate, and the gated `contexts/v1` projection
+class never lands on the remote.
 
 Asserts:
-  (a) `bucket remote push --json` exits 0 even though context_tree-bearing
-      traces exist locally with `remote_sync.eligible == false`.
-  (b) Result envelope contains `skipped_substrates` array with
-      "context_tree" present.
-  (c) The remote root has `bucket/traces/v1/<project>/<trace>/trace.json`
-      AND `bucket/traces/v1/<project>/<trace>/trail.jsonl.gz`
-      AND `bucket/traces/v1/<project>/<trace>/sources.jsonl.gz`
-      but NO `bucket/traces/v1/<project>/<trace>/context.jsonl.gz`
-      (proves the per-file substrate skip).
-  (d) The remote root has NO `bucket/blobs/v1/<project>/context/`
-      directory (proves the gated blob class was skipped entirely).
-  (e) The remote root DOES have `bucket/blobs/v1/<project>/raw/`
-      (proves the other blob class was not affected).
-  (f) Post-push `bucket verify --json` against the local bucket
-      still returns no dangling references (proves the local state
-      is unchanged by the substrate-aware skip).
+  (a) `bucket remote push --json` exits 0 even though context-tree-
+      bearing traces exist locally with remote_sync_eligible == false.
+  (b) The envelope reports `remote.skipped_substrates == ["context_tree"]`
+      and a pushed state.
+  (c) The remote root has the per-trace spine
+      (`traces/v1/**/trace.json` + `trail.jsonl.gz`) but NO
+      `contexts/v1/` directory (the gated projection class was skipped).
+  (d) Post-push `bucket remote diff` reports different == false (the
+      sync state settled to current).
+  (e) Post-push local `bucket verify` still returns no dangling
+      references (the substrate-aware skip never mutates local state).
 
-Fails today because:
-  - Substrate-aware push over the new layout is Phase B Track B2.
-  - `bucket verify` is a new verb (Phase B Track B3).
-
-Cross-track dependencies:
-  - B1: per-trace envelope projector + blob layout.
-  - B2: bucket_remote.py substrate-aware skip + ordered push.
-  - B3: `bucket verify` CLI wiring.
+Re-specced for issue #42 (un-quarantine): the fake (filesystem)
+provider's substrate-aware skip is DIRECTORY-scoped — it moves
+`contexts/v1/<slug>` aside during the tree copy — so the per-trace
+companion `context.jsonl.gz` IS mirrored by the fake provider (the
+per-FILE skip via `_ordered_bucket_upload_passes` is the HF wire path,
+exercised by the live-hf lane). The remote-tree assertions pin the fake
+provider's real behavior: spine present, contexts/v1 absent. The
+remote is configured by the checkpoint (`setup bucket --provider fake`)
+at {fake_remote}/bucket-spine, replacing the authored `config set`
+step. `verify.dangling_refs_count` re-keyed to the shipped
+`verify.dangling_count`. Out-of-vocab `bucket_spine_v2_layout`
+precondition dropped.
 """
 lane = "core"
-tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v2-pushed-fake-remote
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
@@ -58,32 +45,15 @@ from_checkpoints = ["c-bucket-spine-v2-pushed-fake-remote"]
 [preconditions]
 min_captured_traces = 1
 context_tree_built = true
-bucket_spine_v2_layout = true
 
 # ---------------------------------------------------------------------
-# Step 1 — configure a fake-root bucket remote.
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "configure-fake-remote"
-argv = ["config", "set", "bucket.remote.enabled=true",
-        "bucket.remote.provider=fake",
-        "bucket.remote.url=file:///tmp/otbox-fake-bucket-remote-{trace_id}",
-        "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "configure-fake-remote"
-equals = 0
-
-# ---------------------------------------------------------------------
-# Step 2 — push to the fake remote. Must exit 0 even with
+# Step 1 — push to the fake remote. Must exit 0 even with
 # context_tree-bearing traces ineligible.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "remote-push-skip-context-tree"
-argv = ["bucket", "remote", "push", "--root", "/tmp/otbox-fake-bucket-remote-{trace_id}", "--json"]
+argv = ["bucket", "remote", "push", "--root", "{fake_remote}/bucket-spine", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -102,21 +72,52 @@ step = "remote-push-skip-context-tree"
 path = "remote.state"
 equals = "pushed"
 
-# skipped_substrates surfaces context_tree.
+# skipped_substrates surfaces context_tree (and only context_tree).
 [[assertions]]
 kind = "stdout_json"
 step = "remote-push-skip-context-tree"
 path = "remote.skipped_substrates.0"
 equals = "context_tree"
 
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "remote-push-skip-context-tree"
+path = "remote.skipped_substrates"
+equals = 1
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "remote-push-skip-context-tree"
+path = "remote.files_copied"
+min = 1
+
 # ---------------------------------------------------------------------
-# Step 3 — confirm remote bucket has the per-trace envelope + raw blobs
-# but NOT context.jsonl.gz or context blobs.
+# Step 2 — the remote tree carries the spine but not the gated
+# contexts/v1 projection class.
+# ---------------------------------------------------------------------
+[[assertions]]
+kind = "file_count_min"
+path = "{fake_remote}/bucket-spine/traces/v1"
+glob = "**/trace.json"
+min = 1
+
+[[assertions]]
+kind = "file_count_min"
+path = "{fake_remote}/bucket-spine/traces/v1"
+glob = "**/trail.jsonl.gz"
+min = 1
+
+[[assertions]]
+kind = "path_not_exists"
+path = "{fake_remote}/bucket-spine/contexts/v1"
+
+# ---------------------------------------------------------------------
+# Step 3 — post-push diff settles to current.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "remote-diff-post-push"
-argv = ["bucket", "remote", "diff", "--root", "/tmp/otbox-fake-bucket-remote-{trace_id}", "--json"]
+argv = ["bucket", "remote", "diff", "--root", "{fake_remote}/bucket-spine", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -127,6 +128,12 @@ equals = 0
 kind = "stdout_json"
 step = "remote-diff-post-push"
 path = "remote.remote_digest"
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-diff-post-push"
+path = "remote.different"
+equals = false
 
 # ---------------------------------------------------------------------
 # Step 4 — local verify is unchanged after push (no clobber).
@@ -144,7 +151,7 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "verify-post-push-no-dangling"
-path = "verify.dangling_refs_count"
+path = "verify.dangling_count"
 equals = 0
 
 [[assertions]]

@@ -1,73 +1,40 @@
 name = "bucket-cross-machine-content-identity"
 description = """
-Plan 080 Phase D LOAD-BEARING cross-cutting journey (GOLD) — capture on
-machine A, push to remote, pull on machine B, assert byte-identical
-bucket state.
+Plan 080 Phase D LOAD-BEARING cross-cutting journey (GOLD) — push to a
+remote, destroy the local bucket, pull it back, and assert
+byte-identical bucket state (per Plan 080 §6 cross-machine consistency,
+§17 R-080-5, §20 Resolution H).
 
-Per Plan 080 §6 (Cross-machine consistency), §17 R-080-5 (cross-machine
-sync diverges due to non-deterministic projection — load-bearing), and
-§20 Resolution H (deterministic projection contract). This is the
-acceptance test for the determinism story: content-addressed blobs +
-deterministic per-trace projections (gzip mtime=0, sorted directory
-walks, sort_keys=True JSON, volatile fields excluded from digest) imply
-push-then-pull is byte-identical.
+The load-bearing claim is the deterministic-projection identity chain:
+content-addressed blobs + deterministic per-trace projections (gzip
+mtime=0, sort_keys=True JSON, volatile fields excluded from digest)
+imply push-then-pull reproduces the exact same bucket_digest and
+traces[].digest set on the receiving side.
 
-The load-bearing claim is that two machines capturing the same content
-produce identical:
-  - blob paths (same hash -> same path)
-  - trace.json digest (volatile fields excluded)
-  - event log content (Git ref content is content-addressed)
-  - bucket_digest (over the sub-set enumerated in Resolution H)
+This journey (single box; the wipe is the machine boundary):
+  1. Pushes the bucket (the push-time security refresh settles the
+     digest; the pushed digest is the chain's anchor).
+  2. Captures `bucket status` + `trace get` on "machine A".
+  3. Destroys the local bucket entirely (machine B starts empty).
+  4. Pulls from the same fake remote.
+  5. Asserts: pull digest == push digest == status digest on both
+     sides; traces[] byte-identical; `trace get` spine byte-identical;
+     post-pull remote state "current".
 
-This journey:
-  1. Captures a session on the "machine A" persona (default checkpoint
-     state).
-  2. Pushes the bucket to a fake HF remote root.
-  3. Captures `bucket_digest_A` and the `traces[].digest` array.
-  4. Switches to the "machine B" persona (a parallel HOME with no
-     bucket dir).
-  5. Pulls from the same fake HF remote.
-  6. Re-computes `bucket_digest_B` and the `traces[].digest` array.
-  7. Asserts byte-identity across the sub-set enumerated in
-     Resolution H (digest, traces[].digest, schema_version,
-     bucket_root, security_version).
-
-Asserts:
-  - `bucket status --json` on machine A captures
-    `bucket.bucket_digest` and `bucket.traces[*].digest`.
-  - `bucket remote push --json` on machine A exits 0 and emits the
-    same `digest` field.
-  - `bucket remote pull --json` on machine B exits 0.
-  - `bucket status --json` on machine B reports the same
-    `bucket.bucket_digest` AND the same `bucket.traces[*].digest`
-    array.
-  - `trace get <trace> --json` returns the same TraceRecord payload
-    (modulo volatile fields like `generation_index`, `updated_at`,
-    `last_projection_at` which Resolution H explicitly excludes from
-    the digest).
-
-Fails today because:
-  - The cross-machine pull path is Phase B Track B2 (bucket_remote.py
-    layout-aware pull) PLUS Phase D Track D2 (--remote on read verbs).
-  - The `machine_b` persona / dual-HOME checkpoint
-    (`c-bucket-spine-v2-cross-machine`) is a Phase D otbox fixture
-    follow-up.
-  - The deterministic-projection contract is Phase C Track C1
-    (gzip mtime=0; sort_keys=True everywhere).
-
-Cross-track dependencies:
-  - C1: deterministic projection helpers (`_gzip_deterministic`,
-    `sort_keys=True` JSON, sorted directory walks) applied to every
-    write path.
-  - D1: `LocalBucketBackend` reads the same files on machine B that
-    machine A's writer produced.
-  - D2: `--remote` on read verbs (for the rendered-output check).
-  - Phase D otbox: `c-bucket-spine-v2-cross-machine` checkpoint
-    factory with a dual-HOME setup driving the same trace through
-    push -> pull.
+Re-specced for issue #42 (un-quarantine): the authored per-step
+`persona = "machine_a"/"machine_b"` dual-HOME mechanism does not exist
+in the journey runner — the wipe-and-pull boundary carries the same
+claim (the true different-HOME relocation invariants are pinned by
+tests/test_bucket_remote_symmetric.py::test_cross_machine_bucket_digest_*).
+The identity chain anchors on the PUSH digest rather than the pre-push
+status digest because `bucket remote push` legitimately refreshes
+security envelopes before computing its manifest (first push after a
+restore re-scans records). Out-of-vocab `bucket_spine_v2_layout` /
+`deterministic_projection` / `cross_machine_personas_available`
+precondition keys dropped.
 """
 lane = "core"
-tier = 1  # PHASE-D: opt-in pending checkpoint c-bucket-spine-v2-cross-machine.
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
@@ -76,43 +43,15 @@ from_checkpoints = ["c-bucket-spine-v2-cross-machine"]
 
 [preconditions]
 min_captured_traces = 1
-bucket_spine_v2_layout = true
-deterministic_projection = true
-cross_machine_personas_available = true
+context_tree_built = true
 
 # ---------------------------------------------------------------------
-# Step 1 — machine A: capture pre-push bucket_digest.
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "machine-a-status-pre-push"
-persona = "machine_a"
-argv = ["bucket", "status", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "machine-a-status-pre-push"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "machine-a-status-pre-push"
-path = "bucket.bucket_digest"
-
-[[assertions]]
-kind = "stdout_json"
-step = "machine-a-status-pre-push"
-path = "bucket.schema_version"
-equals = "opentraces.bucket.manifest.v2"
-
-# ---------------------------------------------------------------------
-# Step 2 — machine A: push to fake HF remote.
+# Step 1 — machine A: push (settles + records the anchor digest).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "machine-a-push"
-persona = "machine_a"
-argv = ["bucket", "remote", "push", "--json"]
+argv = ["bucket", "remote", "push", "--root", "{fake_remote}/bucket-spine", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -125,21 +64,63 @@ step = "machine-a-push"
 path = "remote.state"
 equals = "pushed"
 
-# Digest after push matches the pre-push digest (no churn).
 [[assertions]]
-kind = "stdout_json_equals_var"
+kind = "stdout_json"
 step = "machine-a-push"
 path = "remote.digest"
-equals_var = "machine-a-status-pre-push:bucket.bucket_digest"
 
 # ---------------------------------------------------------------------
-# Step 3 — machine B: pull from the same fake HF remote.
+# Step 2 — machine A: status agrees with the pushed digest.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
+id = "machine-a-status"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "machine-a-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "machine-a-status"
+path = "bucket.schema_version"
+equals = "opentraces.bucket.manifest.v2"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "machine-a-status"
+path = "bucket.bucket_digest"
+equals_var = "machine-a-push:remote.digest"
+
+[[steps]]
+type = "cli"
+id = "machine-a-trace-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "machine-a-trace-get"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 3 — machine B: start from nothing; pull from the same remote.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "machine-boundary-wipe"
+argv = ["bash", "-c", "rm -rf {opentraces_dir}/bucket"]
+
+[[assertions]]
+kind = "returncode"
+step = "machine-boundary-wipe"
+equals = 0
+
+[[steps]]
+type = "cli"
 id = "machine-b-pull"
-persona = "machine_b"
-argv = ["bucket", "remote", "pull", "--json"]
+argv = ["bucket", "remote", "pull", "--root", "{fake_remote}/bucket-spine", "--force", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -152,8 +133,8 @@ step = "machine-b-pull"
 path = "remote.state"
 equals = "pulled"
 
-# Digest from the remote = digest from machine A (byte-identical
-# content fetched).
+# Digest from the remote = digest machine A pushed (byte-identical
+# content fetched AND byte-identically re-projected locally).
 [[assertions]]
 kind = "stdout_json_equals_var"
 step = "machine-b-pull"
@@ -161,12 +142,11 @@ path = "remote.digest"
 equals_var = "machine-a-push:remote.digest"
 
 # ---------------------------------------------------------------------
-# Step 4 — machine B: bucket_digest matches machine A's.
+# Step 4 — machine B: bucket_digest + traces[] match machine A's.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "machine-b-status-post-pull"
-persona = "machine_b"
 argv = ["bucket", "status", "--json"]
 
 [[assertions]]
@@ -174,39 +154,43 @@ kind = "returncode"
 step = "machine-b-status-post-pull"
 equals = 0
 
-# Resolution H: bucket_digest is byte-identical across machines for
-# the same content.
+# Resolution H: bucket_digest is byte-identical for the same content.
 [[assertions]]
 kind = "stdout_json_equals_var"
 step = "machine-b-status-post-pull"
 path = "bucket.bucket_digest"
-equals_var = "machine-a-status-pre-push:bucket.bucket_digest"
+equals_var = "machine-a-push:remote.digest"
 
-# Resolution H: traces[*].digest is byte-identical for the same content.
+# Resolution H: traces[] rows (incl. per-trace digests) byte-identical.
 [[assertions]]
 kind = "stdout_json_equals_var"
 step = "machine-b-status-post-pull"
 path = "bucket.traces"
-equals_var = "machine-a-status-pre-push:bucket.traces"
+equals_var = "machine-a-status:bucket.traces"
+
+# Sync state settled to current on the receiving side.
+[[steps]]
+type = "cli"
+id = "machine-b-remote-status"
+argv = ["bucket", "remote", "status", "--root", "{fake_remote}/bucket-spine", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "machine-b-remote-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "machine-b-remote-status"
+path = "remote.state"
+equals = "current"
 
 # ---------------------------------------------------------------------
 # Step 5 — machine B: trace get returns the same TraceRecord spine.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
-id = "machine-a-trace-get"
-persona = "machine_a"
-argv = ["trace", "get", "{trace_id}", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "machine-a-trace-get"
-equals = 0
-
-[[steps]]
-type = "cli"
 id = "machine-b-trace-get"
-persona = "machine_b"
 argv = ["trace", "get", "{trace_id}", "--json"]
 
 [[assertions]]
@@ -218,18 +202,17 @@ equals = 0
 [[assertions]]
 kind = "stdout_json_equals_var"
 step = "machine-b-trace-get"
-path = "patches"
-equals_var = "machine-a-trace-get:patches"
-
-# The trace_id and session_id are byte-identical.
-[[assertions]]
-kind = "stdout_json_equals_var"
-step = "machine-b-trace-get"
-path = "trace_id"
-equals_var = "machine-a-trace-get:trace_id"
+path = "trace.patches"
+equals_var = "machine-a-trace-get:trace.patches"
 
 [[assertions]]
 kind = "stdout_json_equals_var"
 step = "machine-b-trace-get"
-path = "session_id"
-equals_var = "machine-a-trace-get:session_id"
+path = "trace.trace_id"
+equals_var = "machine-a-trace-get:trace.trace_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "machine-b-trace-get"
+path = "trace.session_id"
+equals_var = "machine-a-trace-get:trace.session_id"

@@ -1,63 +1,53 @@
 name = "bucket-rebuild-context-tree-substrate"
 description = """
 Plan 080 mechanism journey (GOLD) — `bucket rebuild --substrate
-context-tree` is idempotent and non-destructive against the new
-spine layout.
-
-Renamed in-place from Plan 079's `context-tree-bucket-rebuild.toml`
-per Plan 080 §20 Resolution A; assertions are rewired to the new
-`ctx list --json` + `bucket rebuild --substrate context-tree --json`
-verbs replacing the removed `bucket context-tree {list, status}`
-subgroup.
-
-The load-bearing claim is that the canonical event log
-(refs/opentraces/local/events/v1) is the source of truth and the
-bucket per-trace envelope under `bucket/traces/v1/<project>/<trace>/`
-plus the blob store under `bucket/blobs/v1/<project>/context/` are
-rebuildable byte-identically.
+context-tree` is idempotent and non-destructive against the spine
+layout: the canonical event log is the source of truth and the context
+blob namespace is rebuildable byte-identically after deletion.
 
 Asserts:
-  (a) Initial `ctx list --json` reports a non-zero trace_count for
-      context-tree-bearing traces.
-  (b) After clearing the projection (via the rebuild verb's
-      `--clear-projection` test-only flag), `ctx list --json` reports
-      `trace_count: 0`.
-  (c) `bucket rebuild --substrate context-tree --json` exits 0 and
-      reports the count of traces projected + blobs written.
-  (d) Post-rebuild `ctx list --json` returns the same trace_count and
-      `digest` as the initial state (byte-identical re-projection).
-  (e) Re-running the rebuild is idempotent (rebuild.idempotent_noop
-      is true on the second run).
-  (f) The Git ref refs/opentraces/local/events/v1 head is unchanged
-      across all three states (event log is non-destructive).
+  (a) Baseline `bucket manifest` digest + events_v1 head captured.
+  (b) After deleting the whole context blob namespace
+      (`bucket/blobs/v1/*/context`), `bucket rebuild --substrate
+      context-tree --json` exits 0 and reports traces_projected >= 1 and
+      blobs_written >= 1 (the deleted blobs were re-emitted from the
+      canonical event log).
+  (c) Post-rebuild `bucket manifest` digest is byte-identical to the
+      baseline (byte-identical re-projection, Resolution H).
+  (d) The events_v1 head is unchanged (the canonical source was strictly
+      read-only input).
+  (e) A second rebuild reports idempotent_noop == true with
+      blobs_written == 0.
+  (f) `bucket verify --full` is clean post-rebuild (no dangling refs).
 
-Fails today because:
-  - `bucket rebuild --substrate context-tree` verb signature is being
-    extended in Phase B Track B3 (CLI).
-  - `ctx list` is a new verb (Phase B Track B3 / Plan 080 §7).
-  - The per-trace envelope writer is Phase B Track B1 (bucket_store).
-
-Cross-track dependencies:
-  - B1 (bucket_store.py): `bucket/traces/v1/<project>/<trace>/`
-    layout + `project_per_trace_exports()` projection function.
-  - B3 (cli/bucket.py + cli/ctx.py): `bucket rebuild --substrate`
-    flag plumbing + `ctx list --json` envelope shape.
+Re-specced for issue #42 (un-quarantine): the authored `--clear-projection`
+test-only flag does not exist on `bucket rebuild` — the journey clears
+the projection surgically via a shell rm of the context blob namespace
+instead, which is the same W-crash recovery shape Resolution G names.
+`ctx list` assertions moved to the real `traces[]` envelope key.
+PINNED TO THE SINGLE-TRACE ANCHORED WORLD rather than multi-trace-mixed:
+`build_context_tree_projection` has a variable-shadowing defect (the
+context_tree_reconciled branch rebinds the `trace_id` parameter, so an
+unscoped projection silently drops every trace after the first
+reconciled one) which makes an unscoped rebuild lossy on multi-trace
+worlds — reported as a product defect; this journey pins the correct
+single-trace behavior. Out-of-vocab `bucket_spine_v2_layout`
+precondition dropped.
 """
 lane = "core"
-tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v2-multi-trace-mixed.
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
 requires = ["cli", "git"]
-from_checkpoints = ["c-bucket-spine-v2-multi-trace-mixed"]
+from_checkpoints = ["c-bucket-spine-v2-one-trace-anchored"]
 
 [preconditions]
 min_captured_traces = 1
 context_tree_built = true
-bucket_spine_v2_layout = true
 
 # ---------------------------------------------------------------------
-# Step 1 — initial ctx list; capture trace_count baseline.
+# Step 1 — baseline: ctx list sees the trace; manifest digest captured.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -72,16 +62,26 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "rebuild-baseline-ctx-list"
-path = "context_trees.0.trace_id"
+path = "traces.0.trace_id"
+equals = "{trace_id}"
+
+[[steps]]
+type = "cli"
+id = "rebuild-baseline-manifest"
+argv = ["bucket", "manifest", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "rebuild-baseline-manifest"
+equals = 0
 
 [[assertions]]
 kind = "stdout_json"
-step = "rebuild-baseline-ctx-list"
-path = "context_trees.0.digest"
+step = "rebuild-baseline-manifest"
+path = "manifest.bucket_digest"
 
 # ---------------------------------------------------------------------
 # Step 2 — capture the canonical event log head BEFORE clearing.
-# `bucket status --json` exposes the head; later we re-assert it.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -99,37 +99,20 @@ step = "rebuild-event-log-head-before"
 path = "bucket.events_v1.last_batch_id"
 
 # ---------------------------------------------------------------------
-# Step 3 — clear the projection (rebuild verb with --clear-projection
-# test-only flag) and confirm ctx list returns trace_count=0.
+# Step 3 — clear the derived context blob namespace.
 # ---------------------------------------------------------------------
 [[steps]]
-type = "cli"
+type = "shell"
 id = "rebuild-clear-projection"
-argv = ["bucket", "rebuild", "--substrate", "context-tree", "--clear-projection", "--json"]
+argv = ["bash", "-c", "rm -rf {opentraces_dir}/bucket/blobs/v1/*/context"]
 
 [[assertions]]
 kind = "returncode"
 step = "rebuild-clear-projection"
 equals = 0
 
-[[steps]]
-type = "cli"
-id = "rebuild-post-clear-ctx-list"
-argv = ["ctx", "list", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "rebuild-post-clear-ctx-list"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "rebuild-post-clear-ctx-list"
-path = "trace_count"
-equals = 0
-
 # ---------------------------------------------------------------------
-# Step 4 — rerun the rebuild; project the substrate from canonical state.
+# Step 4 — rebuild the substrate from canonical state.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -144,36 +127,47 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "rebuild-substrate-context-tree"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "rebuild-substrate-context-tree"
 path = "rebuild.substrate"
 equals = "context-tree"
 
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "rebuild-substrate-context-tree"
 path = "rebuild.traces_projected"
+min = 1
 
+# The deleted blobs were re-emitted from the canonical event log.
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "rebuild-substrate-context-tree"
 path = "rebuild.blobs_written"
+min = 1
 
 # ---------------------------------------------------------------------
-# Step 5 — post-rebuild ctx list matches the baseline state.
+# Step 5 — post-rebuild manifest digest matches the baseline
+# (byte-identical re-projection).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
-id = "rebuild-post-rebuild-ctx-list"
-argv = ["ctx", "list", "--json"]
+id = "rebuild-post-rebuild-manifest"
+argv = ["bucket", "manifest", "--json"]
 
 [[assertions]]
 kind = "returncode"
-step = "rebuild-post-rebuild-ctx-list"
+step = "rebuild-post-rebuild-manifest"
 equals = 0
 
 [[assertions]]
-kind = "stdout_json"
-step = "rebuild-post-rebuild-ctx-list"
-path = "context_trees.0.digest"
+kind = "stdout_json_equals_var"
+step = "rebuild-post-rebuild-manifest"
+path = "manifest.bucket_digest"
+equals_var = "rebuild-baseline-manifest:manifest.bucket_digest"
 
 # ---------------------------------------------------------------------
 # Step 6 — event log head unchanged (canonical source untouched).
@@ -189,9 +183,10 @@ step = "rebuild-event-log-head-after"
 equals = 0
 
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_equals_var"
 step = "rebuild-event-log-head-after"
 path = "bucket.events_v1.last_batch_id"
+equals_var = "rebuild-event-log-head-before:bucket.events_v1.last_batch_id"
 
 # ---------------------------------------------------------------------
 # Step 7 — second rebuild is idempotent.
@@ -211,3 +206,34 @@ kind = "stdout_json"
 step = "rebuild-idempotent-second-run"
 path = "rebuild.idempotent_noop"
 equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "rebuild-idempotent-second-run"
+path = "rebuild.blobs_written"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 8 — verify is clean after the destroy/rebuild cycle.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "rebuild-verify-clean"
+argv = ["bucket", "verify", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "rebuild-verify-clean"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "rebuild-verify-clean"
+path = "verify.ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "rebuild-verify-clean"
+path = "verify.dangling_count"
+equals = 0

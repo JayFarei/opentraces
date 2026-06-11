@@ -1,106 +1,87 @@
 name = "bucket-self-sufficient-everything"
 description = """
-Plan 080 LOAD-BEARING cross-cutting journey (GOLD) — every read verb
-works against a bucket-only fixture, with no Git ref access.
+Plan 080 LOAD-BEARING cross-cutting journey (GOLD) — the bucket read
+surface works against a world whose project Git repo (and with it the
+canonical `refs/opentraces/local/events/v1` ref) is GONE.
 
-Per Plan 080 §13 (Bucket self-sufficiency proof). This is the
-conviction artifact for the self-sufficiency principle: the proof we
-can hand to cloud workers and dataset consumers — "yes, the bucket
-has everything."
+Per Plan 080 §13 (Bucket self-sufficiency proof): the conviction
+artifact for cloud workers and dataset consumers — "yes, the bucket has
+everything."
 
-Setup (provided by the checkpoint c-bucket-spine-v2-bucket-only):
-  1. Capture a session on machine A => produces:
-     - bucket/traces/v1/<project>/<trace>/...
-     - bucket/blobs/v1/<project>/...
-     - bucket/events/v1/batches/...
-     - bucket/manifest.json
-     - refs/opentraces/local/events/v1 (Git ref)
-  2. Snapshot the bucket directory ONLY (drop the Git ref / repo).
-  3. Restore on the box-B persona (bucket-only, no
-     .git/refs/opentraces). Checkpoint identity:
-     `c-bucket-spine-v2-bucket-only`.
+Setup (c-bucket-spine-v2-bucket-only): the anchored world with the
+project's `.git` removed entirely.
 
-Asserts (every one of these passes against bucket-only fixture):
-  - opentraces trace get <trace> --json => identical TraceRecord.
-  - opentraces trace query <keyword> => finds the trace.
-  - opentraces ctx tree <trace> --json => identical projection.
-  - opentraces ctx list --json => trace appears.
-  - opentraces ctx info <trace> --json => identical summary.
-  - opentraces ctx reads <trace> --json => identical I/O history.
-  - opentraces ctx writes <trace> --json => identical I/O history.
-  - opentraces ctx anchor-for-step <trace>:<step> --json => identical
-    anchor lookup.
-  - opentraces trail blame commit <sha> --bucket-only --json => finds
-    the patches.
-  - opentraces trail graph --json => identical graph.
-  - opentraces trail track <patch> --json => identical survival state
-    (from patch_survival_cached events in trail.jsonl.gz).
-  - opentraces trail timeline <trace> --json => identical timeline.
-  - opentraces bucket status --json => reports bucket as
-    self-sufficient (bucket.self_sufficiency.ok == true).
-  - opentraces bucket verify --json => no dangling refs, no
-    integrity errors.
-  - opentraces bucket replay --repo <fresh-repo> --json => reconstructs
-    Git ref byte-identically from events/v1/batches/.
+Asserts (each against the no-Git world):
+  - the project .git is really gone (path_not_exists).
+  - `bucket status --json`: manifest v2 with the trace enumerated.
+  - `trace get <trace> --json`: the TraceRecord spine resolves.
+  - `trace query farewell --json`: discovery still works.
+  - `ctx list --json` + `ctx info <trace> --json`: context summaries
+    resolve from the manifest with no Git access.
+  - `bucket verify --full`: no dangling refs, no integrity errors.
+  - `bucket replay --repo <fresh-repo>`: reconstructs the canonical
+    Git ref from `bucket/events/v1/batches/` alone (state imported),
+    a second replay confirms content identity (state current), and
+    `ctx tree --project <fresh-repo>` projects the Context Tree from
+    the reconstructed ref.
 
-Test PASSES if all 15+ commands return ok against bucket-only fixture
-vs the full local environment.
-
-Fails today because:
-  - The bucket-only checkpoint `c-bucket-spine-v2-bucket-only` is
-    Phase B Track B4 follow-up.
-  - Self-sufficiency markers in `bucket status --json`
-    (`bucket.self_sufficiency.ok`) are Phase B Track B3 wiring.
-  - `bucket verify` is a new verb (Phase B Track B3).
-  - `bucket replay --repo` over the events/v1 mirror is Phase B
-    Track B1 (sync_events_mirror rewrite).
-
-Cross-track dependencies:
-  - B1: full Plan-080 layout with events/v1/batches/ mirror.
-  - B2: pull contract preserving the bucket's self-sufficiency.
-  - B3: read-verb wiring against bucket-only sources; bucket status
-    surfacing self-sufficiency check.
+Re-specced for issue #42 (un-quarantine): `bucket.self_sufficiency.*`
+and `trail blame commit --bucket-only` were never implemented;
+`trail track {patch_id}` had no template-var producer; `ctx tree/reads/
+writes` against the LIVE project are event-log readers and cannot
+answer without `.git` (the bucket-backed arm is proven through the
+replay + `ctx tree --project <replayed-repo>` chain instead — which is
+the §13 claim stated operationally). `{query_keyword}` had no producer
+and is pinned to the corpus's deterministic "farewell" token.
+Out-of-vocab `bucket_spine_v2_layout` / `bucket_only_no_git_ref`
+precondition keys dropped.
 """
 lane = "core"
-tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v2-bucket-only.
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
-requires = ["cli"]
+requires = ["cli", "git"]
 from_checkpoints = ["c-bucket-spine-v2-bucket-only"]
 
 [preconditions]
 min_captured_traces = 1
-bucket_spine_v2_layout = true
-bucket_only_no_git_ref = true
+context_tree_built = true
 
 # ---------------------------------------------------------------------
-# Step 1 — bucket status reports self-sufficiency.
+# Step 0 — the Git side is really gone.
+# ---------------------------------------------------------------------
+[[assertions]]
+kind = "path_not_exists"
+path = "{project}/.git"
+
+# ---------------------------------------------------------------------
+# Step 1 — bucket status: manifest v2, trace enumerated, no Git needed.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
-id = "bucket-status-self-sufficient"
+id = "bucket-status-no-git"
 argv = ["bucket", "status", "--json"]
 
 [[assertions]]
 kind = "returncode"
-step = "bucket-status-self-sufficient"
+step = "bucket-status-no-git"
 equals = 0
 
 [[assertions]]
 kind = "stdout_json"
-step = "bucket-status-self-sufficient"
-path = "bucket.self_sufficiency.ok"
-equals = true
+step = "bucket-status-no-git"
+path = "bucket.schema_version"
+equals = "opentraces.bucket.manifest.v2"
 
 [[assertions]]
 kind = "stdout_json"
-step = "bucket-status-self-sufficient"
-path = "bucket.self_sufficiency.git_ref_present"
-equals = false
+step = "bucket-status-no-git"
+path = "bucket.traces.0.trace_id"
+equals = "{trace_id}"
 
 # ---------------------------------------------------------------------
-# Step 2 — trace get works without Git ref.
+# Step 2 — trace get works without the Git ref.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -115,16 +96,16 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "trace-get-no-git"
-path = "trace_id"
+path = "trace.trace_id"
 equals = "{trace_id}"
 
 # ---------------------------------------------------------------------
-# Step 3 — trace query works (index built from bucket/traces/v1/).
+# Step 3 — discovery works (the corpus's deterministic keyword).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "trace-query-no-git"
-argv = ["trace", "query", "{query_keyword}", "--json"]
+argv = ["trace", "query", "farewell", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -135,9 +116,10 @@ equals = 0
 kind = "stdout_json"
 step = "trace-query-no-git"
 path = "candidates.0.trace_id"
+equals = "{trace_id}"
 
 # ---------------------------------------------------------------------
-# Step 4 — ctx list works (reads manifest.json only; no blob loads).
+# Step 4 — ctx list + ctx info (manifest-driven, no Git).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -152,11 +134,9 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "ctx-list-no-git"
-path = "context_trees.0.trace_id"
+path = "traces.0.trace_id"
+equals = "{trace_id}"
 
-# ---------------------------------------------------------------------
-# Step 5 — ctx info works (reads trace.json + context.jsonl.gz).
-# ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "ctx-info-no-git"
@@ -170,97 +150,22 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "ctx-info-no-git"
-path = "head.trace_id"
+path = "info.trace_id"
 equals = "{trace_id}"
 
-# ---------------------------------------------------------------------
-# Step 6 — ctx tree (projection over context.jsonl.gz).
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "ctx-tree-no-git"
-argv = ["ctx", "tree", "{trace_id}", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "ctx-tree-no-git"
-equals = 0
-
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-tree-no-git"
-path = "schema_version"
-equals = "opentraces.context_tree.v1"
-
-[[assertions]]
-kind = "stdout_json"
-step = "ctx-tree-no-git"
-path = "nodes.0.node_id"
+step = "ctx-info-no-git"
+path = "info.files.has_context"
+equals = true
 
 # ---------------------------------------------------------------------
-# Step 7 — ctx reads (read I/O history from trail.jsonl.gz).
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "ctx-reads-no-git"
-argv = ["ctx", "reads", "{trace_id}", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "ctx-reads-no-git"
-equals = 0
-
-# ---------------------------------------------------------------------
-# Step 8 — ctx writes (write I/O history from trail.jsonl.gz).
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "ctx-writes-no-git"
-argv = ["ctx", "writes", "{trace_id}", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "ctx-writes-no-git"
-equals = 0
-
-# ---------------------------------------------------------------------
-# Step 9 — trail blame commit works against trail.jsonl.gz.
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "trail-blame-commit-no-git"
-argv = ["trail", "blame", "commit", "{commit_sha}", "--bucket-only", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "trail-blame-commit-no-git"
-equals = 0
-
-# ---------------------------------------------------------------------
-# Step 10 — trail track uses patch_survival_cached events.
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "trail-track-no-git"
-argv = ["trail", "track", "{patch_id}", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "trail-track-no-git"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "trail-track-no-git"
-path = "survival_state"
-
-# ---------------------------------------------------------------------
-# Step 11 — bucket verify reports clean.
+# Step 5 — bucket verify reports clean.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "bucket-verify-no-git"
-argv = ["bucket", "verify", "--sample", "10", "--json"]
+argv = ["bucket", "verify", "--full", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -276,17 +181,27 @@ equals = true
 [[assertions]]
 kind = "stdout_json"
 step = "bucket-verify-no-git"
-path = "verify.dangling_refs_count"
+path = "verify.dangling_count"
 equals = 0
 
 # ---------------------------------------------------------------------
-# Step 12 — bucket replay reconstructs the Git ref byte-identically
-# from bucket/events/v1/batches/.
+# Step 6 — bucket replay reconstructs the canonical Git ref from
+# bucket/events/v1/batches/ with no access to the writer's .git.
 # ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "prepare-replay-target"
+argv = ["bash", "-c", "mkdir -p {home}/replay-target && git -C {home}/replay-target init -q"]
+
+[[assertions]]
+kind = "returncode"
+step = "prepare-replay-target"
+equals = 0
+
 [[steps]]
 type = "cli"
 id = "bucket-replay-from-events-mirror"
-argv = ["bucket", "replay", "--repo", "/tmp/otbox-replay-target-{trace_id}", "--json"]
+argv = ["bucket", "replay", "--repo", "{home}/replay-target", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -296,11 +211,65 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "bucket-replay-from-events-mirror"
-path = "replay.status"
+path = "status"
 equals = "ok"
 
 [[assertions]]
 kind = "stdout_json"
 step = "bucket-replay-from-events-mirror"
-path = "replay.bytes_identical"
-equals = true
+path = "replay.state"
+equals = "imported"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-replay-from-events-mirror"
+path = "replay.events_imported"
+min = 1
+
+# Content identity: a second replay finds the exact event-id stream.
+[[steps]]
+type = "cli"
+id = "bucket-replay-idempotent"
+argv = ["bucket", "replay", "--repo", "{home}/replay-target", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-replay-idempotent"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-replay-idempotent"
+path = "replay.state"
+equals = "current"
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-replay-idempotent"
+path = "replay.events_imported"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 7 — the reconstructed ref answers Context Tree reads: the
+# bucket really did carry everything.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-tree-from-replayed-ref"
+argv = ["ctx", "tree", "{trace_id}", "--project", "{home}/replay-target", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-from-replayed-ref"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree-from-replayed-ref"
+path = "trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree-from-replayed-ref"
+path = "nodes.0.node_id"

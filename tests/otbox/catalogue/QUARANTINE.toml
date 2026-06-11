@@ -8,28 +8,6 @@
 
 [[entries]]
 journeys = [
-  "bucket-compression-integrity-roundtrip",
-  "bucket-cross-machine-content-identity",
-  "bucket-events-mirror-replay-equals-git",
-  "bucket-manifest-v2-shape",
-  "bucket-prune-orphan-only",
-  "bucket-rebuild-context-tree-substrate",
-  "bucket-remote-sync-scope-per-trace",
-  "bucket-self-sufficient-context-tree-outcome-roundtrip",
-  "bucket-self-sufficient-everything",
-  "bucket-symmetric-local-remote",
-  "bucket-verify-detects-dangling",
-  "bucket-write-order-discipline-local",
-  "setup-bucket-migrates-old-layout",
-]
-rules = ["unregistered-checkpoint", "unknown-precondition", "lane-unreachable"]
-reason = "bucket-spine-v2 checkpoint family (plan 080 phases B/C/D) never built; precondition keys await PRECONDITION_VOCAB widening + runtime probes (otbox 2.0 phase 4); one journey also requires 'real_claude', a capability the runner has NEVER provided"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
-journeys = [
   "context-tree-branching-fidelity",
   "context-tree-capture-fidelity",
   "context-tree-compaction-fidelity",
@@ -44,20 +22,6 @@ journeys = [
 ]
 rules = ["unregistered-checkpoint", "unknown-precondition"]
 reason = "c-context-tree-substrate / c-rewound-session / c-compacted-session checkpoints deferred from plan 077 phase 4; build or delete by expiry"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
-journeys = [
-  "ctx-info-head-shape",
-  "ctx-list-no-blob-loads",
-  "ctx-show-layer-blob-dedup-per-project",
-  "ctx-show-offline-fails",
-  "ctx-show-with-lazy-blob-fetch",
-]
-rules = ["unregistered-checkpoint", "unknown-precondition"]
-reason = "ctx blob journeys depend on the same unbuilt bucket-spine-v2 checkpoints"
 issue = "https://github.com/JayFarei/opentraces/issues/25"
 added = 2026-06-10
 expires = 2026-09-08

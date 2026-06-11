@@ -1,56 +1,44 @@
 name = "bucket-events-mirror-replay-equals-git"
 description = """
 Plan 080 LOAD-BEARING cross-cutting journey (GOLD) — replaying
-`bucket/events/v1/batches/*.jsonl.gz` into a fresh Git ref produces
-byte-identical content to the original Git ref
-(`refs/opentraces/local/events/v1`).
+`bucket/events/v1/batches/*.jsonl.gz` into a fresh Git repo
+reconstructs the canonical event ref content-identically.
 
-Per Plan 080 §11 (cross-cutting journeys, row 8) +
-§20 Resolution B (single event log mirror at
-`bucket/events/v1/batches/`, the `bucket/events/trail/v1/` path
-retired).
-
-Also folds in the contract previously asserted by Plan 079's
-`context-tree-bucket-dual-write-fidelity.toml`: context_* events MUST
-land in the unified event-log mirror (no separate trail-piggyback
-path under Plan 080).
+Per Plan 080 §11 (cross-cutting journeys, row 8) + §20 Resolution B
+(single event log mirror at `bucket/events/v1/batches/`).
 
 The load-bearing claim: the event log mirror in the bucket is
 exhaustive for downstream consumers — a cloud worker can reconstruct
-the canonical Git ref byte-identically without access to the writer
-machine's `.git/`.
+the canonical Git ref from `bucket/events/v1/` alone.
 
 Asserts:
-  (a) `bucket replay --repo <fresh-target> --json` exits 0 and
-      reports `replay.bytes_identical: true`.
-  (b) The reconstructed ref's tree-hash matches the original Git
-      ref's tree-hash.
-  (c) `bucket/events/v1/index.json` carries
-      `schema_version: "opentraces.bucket.events.v2"` (per
-      §20 Resolution B + Soft Q).
-  (d) The batch files under `bucket/events/v1/batches/` are
-      ordered by `<batch-seq>-<batch-id>.jsonl.gz` prefix.
-  (e) Replay restores ALL event types observed in the source ref:
-      trail events AND context_* events. Specifically, the replayed
-      ref MUST contain `context_layer_captured` events (proves the
-      Plan 080 unified mirror covers context_* — Plan 079's dual-write
-      contract is preserved by the single mirror).
-  (f) Replaying twice produces the same target tree-hash
-      (idempotent).
+  (a) `bucket status --json` reports the events_v1 index with
+      `schema_version: "opentraces.bucket.events.v2"`.
+  (b) `bucket replay --repo <fresh-target> --json` exits 0 with
+      `replay.state == "imported"` and a non-zero event count.
+  (c) `ctx tree <trace> --project <fresh-target> --json` projects the
+      trace's ContextNodes from the REPLAYED ref — context_* events
+      survived the mirror round-trip (Plan 079's dual-write contract is
+      preserved by the single mirror).
+  (d) Replaying again reports `replay.state == "current"` with
+      `events_imported == 0` — the reconstructed ref's event-id stream
+      is IDENTICAL to a re-import (the content-identity/idempotency
+      proof: import_event_log compares the full event_id sequences).
 
-Fails today because:
-  - `sync_events_mirror` (renamed from sync_trail_events_from_repo)
-    is Phase B Track B1.
-  - `bucket/events/v1/batches/` layout writer is Phase B Track B1.
-  - `bucket replay --repo` over the events/v1/ mirror is Phase B
-    Track B1.
-
-Cross-track dependencies:
-  - B1: sync_events_mirror, read_events_mirror_batches, replay verb
-    plumbing, bucket/events/v1/index.json writer.
+Re-specced for issue #42 (un-quarantine): the journey was authored
+against `replay.bytes_identical` / `replay.batches_replayed` /
+`replay.event_types_observed.*` / `replay.idempotent_noop` keys that
+the shipped envelope never had — the real envelope is `{state, ref,
+head, event_count, events_imported, repo, repo_id,
+export_event_log_head}` and the byte-identity claim is carried by the
+state=="current"/events_imported==0 second replay (import_event_log
+refuses differing streams without --force, so "current" IS the
+identity proof). The replay target must be a git repo, so the journey
+inits one under the box home. Out-of-vocab `bucket_spine_v2_layout` /
+`events_mirror_v1_populated` precondition keys dropped.
 """
 lane = "core"
-tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v2-one-trace-anchored
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
@@ -59,13 +47,10 @@ from_checkpoints = ["c-bucket-spine-v2-one-trace-anchored"]
 
 [preconditions]
 min_captured_traces = 1
-bucket_spine_v2_layout = true
 context_tree_built = true
-events_mirror_v1_populated = true
 
 # ---------------------------------------------------------------------
 # Step 1 — confirm the events/v1 mirror exists with v2 schema.
-# `bucket status --json` exposes the events_v1 block.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -77,7 +62,6 @@ kind = "returncode"
 step = "events-mirror-index-shape"
 equals = 0
 
-# events_v1 index schema_version is v2.
 [[assertions]]
 kind = "stdout_json"
 step = "events-mirror-index-shape"
@@ -100,13 +84,26 @@ step = "events-mirror-index-shape"
 path = "bucket.events_v1.latest_event_sequence"
 
 # ---------------------------------------------------------------------
-# Step 2 — `bucket replay --repo <fresh-target>` reconstructs the
+# Step 2 — prepare a fresh replay target repo.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "prepare-replay-target"
+argv = ["bash", "-c", "mkdir -p {home}/replay-target && git -C {home}/replay-target init -q"]
+
+[[assertions]]
+kind = "returncode"
+step = "prepare-replay-target"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 3 — `bucket replay --repo <fresh-target>` reconstructs the
 # canonical event ref from the bucket mirror.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "replay-from-events-mirror"
-argv = ["bucket", "replay", "--repo", "/tmp/otbox-replay-events-{trace_id}", "--json"]
+argv = ["bucket", "replay", "--repo", "{home}/replay-target", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -116,42 +113,71 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "replay-from-events-mirror"
-path = "replay.status"
+path = "status"
 equals = "ok"
 
-# Byte-identity proof: ref tree hash matches.
 [[assertions]]
 kind = "stdout_json"
 step = "replay-from-events-mirror"
-path = "replay.bytes_identical"
-equals = true
+path = "replay.state"
+equals = "imported"
 
-# The mirror enumerates batches in deterministic order.
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "replay-from-events-mirror"
-path = "replay.batches_replayed"
+path = "replay.event_count"
+min = 1
 
-# All event types restored — including context_* (Plan 080 single
-# mirror covers context_*, replacing Plan 079's trail-piggyback).
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_greater_equal"
 step = "replay-from-events-mirror"
-path = "replay.event_types_observed.context_layer_captured"
+path = "replay.events_imported"
+min = 1
 
 [[assertions]]
 kind = "stdout_json"
 step = "replay-from-events-mirror"
-path = "replay.event_types_observed.context_node_observed"
+path = "replay.ref"
+equals = "refs/opentraces/local/events/v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "replay-from-events-mirror"
+path = "replay.head"
 
 # ---------------------------------------------------------------------
-# Step 3 — idempotency: replaying again into the same target produces
-# the same tree hash.
+# Step 4 — the replayed ref projects the Context Tree (context_* events
+# made the round-trip through the mirror).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-tree-from-replayed-ref"
+argv = ["ctx", "tree", "{trace_id}", "--project", "{home}/replay-target", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-from-replayed-ref"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree-from-replayed-ref"
+path = "trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree-from-replayed-ref"
+path = "nodes.0.node_id"
+
+# ---------------------------------------------------------------------
+# Step 5 — idempotency / content identity: replaying again finds the
+# reconstructed ref already carries the exact event-id stream.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "replay-idempotent"
-argv = ["bucket", "replay", "--repo", "/tmp/otbox-replay-events-{trace_id}", "--json"]
+argv = ["bucket", "replay", "--repo", "{home}/replay-target", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -161,11 +187,18 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "replay-idempotent"
-path = "replay.bytes_identical"
-equals = true
+path = "replay.state"
+equals = "current"
 
 [[assertions]]
 kind = "stdout_json"
 step = "replay-idempotent"
-path = "replay.idempotent_noop"
-equals = true
+path = "replay.events_imported"
+equals = 0
+
+# Same total stream length on both runs.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "replay-idempotent"
+path = "replay.event_count"
+equals_var = "replay-from-events-mirror:replay.event_count"

@@ -1,94 +1,66 @@
 name = "setup-bucket-migrates-old-layout"
 description = """
 Plan 080 mechanism journey (GOLD) — `setup bucket --migrate --json`
-converts a Plan 079 layout
-(`bucket/contexts/v1/<project>/<trace>/{head,nodes,reconciliation}.json`
-+ `bucket/contexts/v1/<project>/layers/blobs/<hh>/<hash>.json`) into
-the Plan 080 layout
-(`bucket/traces/v1/<project>/<trace>/{trace.json,trail.jsonl.gz,context.jsonl.gz,sources.jsonl.gz}`
-+ `bucket/blobs/v1/<project>/{context,raw}/<hh>/<hash>.json.gz`
-+ `bucket/events/v1/batches/<seq>-<batch-id>.jsonl.gz`
-+ `bucket/manifest.json` (v2 shape)).
+converts a Plan 079 layout (`bucket/contexts/v1/...`) into the Plan 080
+layout (`bucket/traces/v1/` + `bucket/blobs/v1/` + `bucket/events/v1/`
++ manifest v2) via write-new-and-swap.
 
-Per Plan 080 §15 open question (a) — the migration uses the safe
-"write-new-and-swap" pattern: `setup bucket --migrate` writes to
-`bucket.v2/`, verifies, then atomically swaps. The old `bucket/`
-directory becomes `bucket.v1.backup/` post-swap.
-
-The migration is destructive in the sense that it RE-PROJECTS from
-the canonical event log (not a 1:1 file-format conversion) — so the
-v1 layout's privacy-gated artifacts are filtered through the Plan 080
-privacy default. Migration is idempotent: running it twice on an
-already-migrated bucket is a no-op.
+Setup (c-bucket-spine-v1-legacy-fixture): an anchored world whose
+bucket has been devolved to the plan-079 shape (contexts/v1 present;
+traces/v1 + events/v1 + blobs/v1 + manifest removed).
 
 Asserts:
-  (a) Fixture starts with `bucket/contexts/v1/` (Plan 079 layout)
-      present and `bucket/traces/v1/` ABSENT.
-  (b) `setup bucket --migrate --json` exits 0.
-  (c) Migration envelope reports:
-      - migration.from_schema == "opentraces.bucket.manifest.v1"
-      - migration.to_schema == "opentraces.bucket.manifest.v2"
-      - migration.traces_migrated >= 1
-      - migration.layout_swap == "atomic"
-  (d) Post-migration: `bucket/traces/v1/<project>/<trace>/trace.json`
-      exists.
-  (e) Post-migration: `bucket/blobs/v1/<project>/context/` exists.
-  (f) Post-migration: `bucket/events/v1/batches/` exists.
-  (g) Post-migration: `bucket/contexts/v1/` is GONE (moved to
-      `bucket.v1.backup/contexts/v1/`).
-  (h) Post-migration: `bucket manifest --json` returns v2 shape.
-  (i) Re-running `setup bucket --migrate --json` is a no-op
-      (migration.idempotent_noop: true).
+  (a) Fixture starts with `bucket/contexts/v1/` present and
+      `bucket/traces/v1/` ABSENT.
+  (b) `setup bucket --migrate --json` exits 0 reporting
+      from_layout == "v1_plan79", to_layout == "v2",
+      traces_migrated >= 1, status == "ok", and the legacy tree
+      renamed aside (legacy_aside populated).
+  (c) Post-migration the v2 spine exists on disk (traces/v1 trace.json,
+      events/v1 batches) and `bucket manifest --json` returns the v2
+      shape with the migrated trace.
+  (d) Re-running `setup bucket --migrate` is a no-op: it reports
+      from_layout == "v2" with status "ok" and migrates nothing.
 
-Fails today because:
-  - `setup bucket --migrate` is Phase B Track B3 (CLI).
-  - The layout migration writer is Phase B Track B1.
-
-Cross-track dependencies:
-  - B1: layout migration function in bucket_store.py (or new
-    bucket_migrate.py module).
-  - B3: `setup bucket --migrate` CLI flag wiring.
+Re-specced for issue #42 (un-quarantine): the authored keys
+`bucket.layout_state` / `bucket.migration_hint` /
+`migration.layout_swap == "atomic"` / `migration.backup_path` /
+`migration.idempotent_noop` never existed — the shipped envelope is
+`{status, migrate: {from_layout, to_layout, traces_migrated,
+blobs_migrated, status, legacy_aside, ...}}` and idempotency is
+signalled by the second run's `from_layout == "v2"` short-circuit.
+The v1-baseline probe is a filesystem assertion (path_exists/
+path_not_exists) instead of the unimplemented status keys.
+The journey declares only the in-vocab `min_captured_traces`
+precondition: `context_tree_built`'s runtime probe looks for a context
+companion in the bucket, which the v1-devolved bucket deliberately
+lacks until the migration runs.
 """
 lane = "core"
-tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v1-legacy-fixture
+tier = 0
 tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
-requires = ["cli"]
+requires = ["cli", "git"]
 from_checkpoints = ["c-bucket-spine-v1-legacy-fixture"]
 
 [preconditions]
 min_captured_traces = 1
-bucket_v1_layout_present = true
-bucket_spine_v2_layout = false
 
 # ---------------------------------------------------------------------
-# Step 1 — baseline: confirm v1 layout is present.
-# `bucket status --json` against a v1 layout reports the v1 schema.
-# (Plan 080 §20 Resolution E — manifest reader raises BucketLayoutError
-# on v1; but the status verb catches it and reports the legacy schema
-# with an upgrade hint.)
+# Step 1 — baseline: v1 layout present, v2 spine absent.
+#
+# NOTE: journey assertions evaluate AFTER every step, so the pre-state
+# cannot be pinned with path_not_exists here (the migration re-creates
+# traces/v1). The v1 baseline is proven by the migration envelope
+# itself: `migrate.from_layout == "v1_plan79"` is only returned when
+# the detector found contexts/v1 present AND the v2 spine absent.
+# The contexts/v1 tree survives migration (copied verbatim), so its
+# presence can still be asserted on the end state.
 # ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "migrate-baseline-status-v1"
-argv = ["bucket", "status", "--json"]
-
 [[assertions]]
-kind = "returncode"
-step = "migrate-baseline-status-v1"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "migrate-baseline-status-v1"
-path = "bucket.layout_state"
-equals = "v1_legacy"
-
-[[assertions]]
-kind = "stdout_json"
-step = "migrate-baseline-status-v1"
-path = "bucket.migration_hint"
+kind = "path_exists"
+path = "{opentraces_dir}/bucket/contexts/v1"
 
 # ---------------------------------------------------------------------
 # Step 2 — `setup bucket --migrate --json` runs the migration.
@@ -106,51 +78,55 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-execute"
-path = "migration.from_schema"
-equals = "opentraces.bucket.manifest.v1"
+path = "status"
+equals = "ok"
 
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-execute"
-path = "migration.to_schema"
-equals = "opentraces.bucket.manifest.v2"
+path = "migrate.from_layout"
+equals = "v1_plan79"
 
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-execute"
-path = "migration.traces_migrated"
+path = "migrate.to_layout"
+equals = "v2"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "migrate-execute"
+path = "migrate.traces_migrated"
+min = 1
 
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-execute"
-path = "migration.layout_swap"
-equals = "atomic"
+path = "migrate.status"
+equals = "ok"
 
+# Write-new-and-swap: the legacy tree is renamed aside, not destroyed.
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-execute"
-path = "migration.backup_path"
+path = "migrate.legacy_aside"
 
 # ---------------------------------------------------------------------
-# Step 3 — post-migration status reports v2 schema.
+# Step 3 — post-migration: the v2 spine exists on disk.
 # ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "migrate-post-status-v2"
-argv = ["bucket", "status", "--json"]
+[[assertions]]
+kind = "file_count_min"
+path = "{opentraces_dir}/bucket/traces/v1"
+glob = "**/trace.json"
+min = 1
 
 [[assertions]]
-kind = "returncode"
-step = "migrate-post-status-v2"
-equals = 0
+kind = "file_count_min"
+path = "{opentraces_dir}/bucket/events/v1/batches"
+glob = "*.jsonl.gz"
+min = 1
 
-[[assertions]]
-kind = "stdout_json"
-step = "migrate-post-status-v2"
-path = "bucket.layout_state"
-equals = "v2_current"
-
-# manifest is the v2 shape.
+# manifest is the v2 shape with the migrated trace.
 [[steps]]
 type = "cli"
 id = "migrate-post-manifest-v2"
@@ -167,7 +143,6 @@ step = "migrate-post-manifest-v2"
 path = "manifest.schema_version"
 equals = "opentraces.bucket.manifest.v2"
 
-# New layout paths exist (surface check is in test_bucket_self_sufficient.py).
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-post-manifest-v2"
@@ -176,10 +151,16 @@ path = "manifest.traces.0.trace_path"
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-post-manifest-v2"
+path = "manifest.traces.0.trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-post-manifest-v2"
 path = "manifest.events_v1.batch_count"
 
 # ---------------------------------------------------------------------
-# Step 4 — re-running migration is idempotent (no-op).
+# Step 4 — re-running migration is a no-op (already v2).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -194,5 +175,17 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "migrate-idempotent"
-path = "migration.idempotent_noop"
-equals = true
+path = "migrate.from_layout"
+equals = "v2"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-idempotent"
+path = "migrate.status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-idempotent"
+path = "migrate.traces_migrated"
+equals = 0
