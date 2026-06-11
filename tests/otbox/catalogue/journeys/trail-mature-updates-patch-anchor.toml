@@ -50,7 +50,7 @@ post_commit_hook_installed = true
 [[steps]]
 type = "cli"
 id = "baseline-trace-get"
-argv = ["trace", "get", "{first_trace_id}", "--json"]
+argv = ["trace", "get", "{trace_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -71,7 +71,7 @@ path = "trace.patches"
 [[steps]]
 type = "shell"
 id = "land-commit"
-cmd = "git add -A && git commit -m 'plan 080 phase A: anchor commit' --no-verify || true"
+argv = ["bash", "-lc", "git add -A && git commit -m 'plan 080 phase A: anchor commit' --no-verify || true"]
 
 [[assertions]]
 kind = "returncode"
@@ -98,7 +98,7 @@ equals = 0
 [[steps]]
 type = "cli"
 id = "post-anchor-trace-get"
-argv = ["trace", "get", "{first_trace_id}", "--json"]
+argv = ["trace", "get", "{trace_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -132,7 +132,7 @@ path = "trace.git_links"
 [[steps]]
 type = "shell"
 id = "amend-commit"
-cmd = "git commit --amend --no-edit --no-verify"
+argv = ["bash", "-lc", "git commit --amend --no-edit --no-verify"]
 
 [[assertions]]
 kind = "returncode"
@@ -152,7 +152,7 @@ equals = 0
 [[steps]]
 type = "cli"
 id = "post-amend-trace-get"
-argv = ["trace", "get", "{first_trace_id}", "--json"]
+argv = ["trace", "get", "{trace_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"

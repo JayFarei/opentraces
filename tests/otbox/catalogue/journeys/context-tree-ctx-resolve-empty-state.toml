@@ -69,12 +69,15 @@ step = "resolve-unknown"
 path = "limitations"
 equals = ["context_layer_unavailable"]
 
-# The resource_uri echoed back unchanged so consumers can correlate
-# the response with their request.
+# The resource echoed back unchanged so consumers can correlate the
+# response with their request. (Issue #42 envelope reconciliation: the
+# shipped opentraces.context_resolve.v1 envelope echoes the request URI
+# under `resource`, not the plan-077-draft `resource_uri`. Equal
+# strictness — still an exact-equals echo-back of the same URI.)
 [[assertions]]
 kind = "stdout_json"
 step = "resolve-unknown"
-path = "resource_uri"
+path = "resource"
 equals = "ot://context-node/sha256/0000000000000000000000000000000000000000000000000000000000000000"
 
 # Contract (e) — no traceback in stdout. A `Traceback (most recent

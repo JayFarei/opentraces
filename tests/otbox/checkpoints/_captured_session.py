@@ -480,6 +480,14 @@ register(
             "captured_traces": 1,
             "survival_states": ["alive_on_path"],
             "branch_commits": 1,
+            # Issue #42 — the captured world is a real git repo whose
+            # post-commit hook fired during the capture chain (synthetic
+            # path installs + invokes it; the artifact path restores a box
+            # that was captured the same way). Advertised so the
+            # `trail-mature-updates-patch-anchor` journey (quarantine
+            # entry 4) resolves without a bespoke checkpoint.
+            "git_repo_present": True,
+            "post_commit_hook_installed": True,
         },
     )
 )

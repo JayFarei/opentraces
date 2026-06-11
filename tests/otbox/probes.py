@@ -142,12 +142,75 @@ def _probe_branch_commits_min(driver, box, value) -> ProbeResult:
     return False, f"world history carries {have} commit(s), precondition needs {need}"
 
 
+def _probe_git_repo_present(driver, box, value) -> ProbeResult:
+    if not value:
+        return True, "git_repo_present not requested"
+    project = str(box.root / "project")
+    res = driver.exec(box, ["git", "-C", project, "rev-parse", "--git-dir"])
+    if res.returncode == 0 and (res.stdout or "").strip():
+        return True, "project is a git repo"
+    return False, "project directory is not a git repo"
+
+
+def _probe_post_commit_hook_installed(driver, box, value) -> ProbeResult:
+    if not value:
+        return True, "post_commit_hook_installed not requested"
+    # The opentraces post-commit hook lives at .git/hooks/post-commit and
+    # must reference opentraces (a bare sample hook would lie). Filesystem
+    # check works on any platform and at cold-build time (no CLI needed).
+    project = str(box.root / "project")
+    cmd = (
+        f'h="{project}/.git/hooks/post-commit"; '
+        '[ -x "$h" ] && grep -qi opentraces "$h" && echo ok'
+    )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    if (res.stdout or "").strip() == "ok":
+        return True, "opentraces post-commit hook is installed + executable"
+    return False, "no executable opentraces post-commit hook found"
+
+
+def _probe_bucket_spine_v2_layout(driver, box, value) -> ProbeResult:
+    if not value:
+        return True, "bucket_spine_v2_layout not requested"
+    # Ground truth: the v2 bucket layout has content-addressed blobs under
+    # blobs/v1 AND the per-trace envelope tree under traces/v1. Filesystem
+    # check (no CLI, no manifest dependency — the manifest is a lazy
+    # projection, issue #25).
+    cmd = (
+        'b="$HOME/.opentraces/bucket"; '
+        '[ -d "$b/blobs/v1" ] && [ -d "$b/traces/v1" ] && echo ok'
+    )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    if (res.stdout or "").strip() == "ok":
+        return True, "bucket carries the v2 blobs/v1 + traces/v1 layout"
+    return False, "bucket is missing the v2 blobs/v1 + traces/v1 layout"
+
+
+def _probe_events_mirror_v1_populated(driver, box, value) -> ProbeResult:
+    if not value:
+        return True, "events_mirror_v1_populated not requested"
+    # The events mirror is events/v1/batches/*.jsonl.gz + index.json.
+    cmd = (
+        'b="$HOME/.opentraces/bucket/events/v1"; '
+        '[ -f "$b/index.json" ] && '
+        'ls "$b/batches/"*.jsonl.gz >/dev/null 2>&1 && echo ok'
+    )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    if (res.stdout or "").strip() == "ok":
+        return True, "bucket events/v1 mirror is populated"
+    return False, "bucket events/v1 mirror is missing or empty"
+
+
 PROBES: dict[str, Callable] = {
     "requires_survival_states": _probe_survival_states,
     "min_captured_traces": _probe_min_captured_traces,
     "context_tree_built": _probe_context_tree_built,
     "otlp_receiver_running": _probe_otlp_receiver_running,
     "requires_branch_commits_min": _probe_branch_commits_min,
+    "git_repo_present": _probe_git_repo_present,
+    "post_commit_hook_installed": _probe_post_commit_hook_installed,
+    "bucket_spine_v2_layout": _probe_bucket_spine_v2_layout,
+    "events_mirror_v1_populated": _probe_events_mirror_v1_populated,
 }
 
 

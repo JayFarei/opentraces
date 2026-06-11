@@ -895,6 +895,69 @@ def trace_index_status_cmd(as_json: bool, verbose: bool) -> None:
                 click.echo(f"  table {name}: {stat['bytes']} bytes ({stat['pages']} pages)")
 
 
+@trace_index_group.command("compact", cls=OpentracesCommand)
+@click.option(
+    "--vacuum",
+    is_flag=True,
+    help=(
+        "Run a one-time SQLite VACUUM to reclaim freelist space to the OS. "
+        "VACUUM rewrites the whole DB into a temp copy, so it needs free disk "
+        ">= the current DB file size and can take minutes on a multi-GB file. "
+        "Refused (with a reason in the report) when free disk is insufficient."
+    ),
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_index_compact_cmd(vacuum: bool, as_json: bool) -> None:
+    """Reclaim legacy Trace Index space (issue #40).
+
+    Deletes superseded-generation unit bodies in short incremental
+    transactions (safe to run while live capture mutates the DB), folds the
+    WAL back into the main file, and — only with ``--vacuum`` and sufficient
+    free disk — runs a VACUUM to return freelist pages to the OS. Reports the
+    per-table ``db_sizes`` breakdown before and after.
+    """
+    from ..core.trace_index import compact_index, default_index_path
+
+    db_path = default_index_path()
+    sizes_before = _db_table_sizes(db_path)
+    try:
+        summary = compact_index(db_path, vacuum=vacuum)
+    except Exception as exc:  # IndexLockedError or sqlite error → typed exit.
+        click.echo(f"Trace index compact failed: {exc}", err=True)
+        sys.exit(3)
+    sizes_after = _db_table_sizes(db_path)
+    payload = {
+        "status": "ok",
+        "compact": summary.as_dict(),
+        "db_sizes_before": sizes_before,
+        "db_sizes_after": sizes_after,
+    }
+    if as_json:
+        click.echo(_dump_json(payload))
+        return
+
+    data = summary.as_dict()
+    click.echo(f"Trace index compact: {data['index_path']}")
+    click.echo(f"  purged units:   {data['purged_units']}")
+    before = data["size_bytes_before"]
+    after = data["size_bytes_after"]
+    if before is not None and after is not None:
+        reclaimed = before - after
+        click.echo(f"  size:           {before} -> {after} bytes ({reclaimed:+d})")
+    click.echo(
+        f"  freelist:       {data['freelist_before']} -> {data['freelist_after']}"
+    )
+    if data["vacuumed"]:
+        click.echo("  vacuum:         ran")
+    elif data["vacuum_skipped_reason"]:
+        click.echo(f"  vacuum:         skipped ({data['vacuum_skipped_reason']})")
+    elif not vacuum:
+        click.echo(
+            "  vacuum:         not requested "
+            "(pass --vacuum to return freelist pages to the OS)"
+        )
+
+
 @trace_group.command("map", cls=OpentracesCommand)
 @click.argument("target")
 @click.option("--candidate", default=None, help="Candidate unit or map node to expand around.")

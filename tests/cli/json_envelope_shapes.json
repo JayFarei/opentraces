@@ -295,6 +295,15 @@
    "status"
   ]
  },
+ "trace index compact": {
+  "schema_version": null,
+  "top_level_keys": [
+   "compact",
+   "db_sizes_after",
+   "db_sizes_before",
+   "status"
+  ]
+ },
  "trace index rebuild": {
   "schema_version": null,
   "top_level_keys": [

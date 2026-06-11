@@ -139,3 +139,141 @@ def test_every_run_writes_exactly_one_entry(tmp_path, monkeypatch):
     assert len(entries) == 3
     for e in entries:
         assert "ts" in e and "sha" in e and "verdicts" in e
+
+
+# --------------------------------------------------------------------------- #
+# pkg-44 #44 — reconcile wall-clock budget surfaced in the hook log.
+# --------------------------------------------------------------------------- #
+
+def _opt_in_staging(repo: Path, monkeypatch) -> Path:
+    """Point ``get_project_traces_dir`` at an existing (empty) staging dir so
+    ``run_for_repo`` reaches ``_reconcile_trail_anchors`` via the
+    ``no_traces_in_inbox_window`` path instead of bailing on NotOptedInError."""
+    staging = repo / ".opentraces" / "staging"
+    staging.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "opentraces.core.config.get_project_traces_dir",
+        lambda _repo: staging,
+        raising=False,
+    )
+    return staging
+
+
+def _seed_pending_patch(repo: Path) -> str:
+    """Seed one matching trace_patch + a landing commit, returning HEAD.
+
+    Used so the reconcile actually has a patch to search (the budget surface is
+    only meaningful when there are patches to visit)."""
+    from opentraces.core.trails import GitObjectID, TrailEventDraft, append_event_batch
+
+    authored = "BUDGET = 1\n"
+    after = GitObjectID(
+        hex=subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=repo, input=authored, text=True, capture_output=True, check=True,
+        ).stdout.strip()
+    )
+    append_event_batch(
+        repo,
+        [TrailEventDraft(
+            event_type="trace_patch_created",
+            trace_id="tr-budget",
+            generation_index=0,
+            step_index=1,
+            capture_method=["hook_posttooluse"],
+            payload={
+                "trace_patch_id": "tracepatch-sha256:fixture-budget",
+                "file_path": "budget.py",
+                "affected_range": {"start_line": 1, "end_line": 1},
+                "authored_text": authored,
+                "raw_authored_hash": "sha256:fixture",
+                "git_clean_hash": "sha256:fixture",
+                "after_blob_id": after.model_dump(mode="json"),
+                "limitations": [],
+            },
+        )],
+        writer="capture-claude-code",
+    )
+    (repo / "budget.py").write_text(authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "land budget"], cwd=repo, check=True)
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+
+
+def test_budget_fields_present_when_budget_trips(tmp_path, monkeypatch):
+    """When the reconcile budget trips, run_for_repo records
+    ``trail_anchor_budget_exhausted`` + ``patches_searched`` +
+    ``patches_remaining`` in the hook-log entry."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = _init_repo(tmp_path)
+    _seed_pending_patch(repo)
+    _opt_in_staging(repo, monkeypatch)
+
+    monkeypatch.setenv("OPENTRACES_HOOK_RECONCILE_BUDGET_SECONDS", "10")
+    # post_commit.time and anchors.time are the SAME module object. Drive a
+    # monotonic clock that returns a SMALL value for the deadline computation in
+    # post_commit (deadline = small + 10) then a LARGE value at the anchors
+    # loop-top check, so the budget trips on the first patch.
+    import time as _time_mod
+
+    clock = iter([100.0])  # first call: post_commit deadline base = 100 -> 110
+
+    def _stepped_monotonic():
+        try:
+            return next(clock)
+        except StopIteration:
+            return 1_000_000.0  # every later (anchors loop-top) call: past 110
+
+    monkeypatch.setattr(_time_mod, "monotonic", _stepped_monotonic)
+
+    run_for_repo(repo)
+
+    entry = _read_log(repo)[-1]
+    assert entry.get("trail_anchor_budget_exhausted") is True
+    assert "patches_searched" in entry
+    assert "patches_remaining" in entry
+    assert entry["patches_remaining"] >= 1
+    assert entry.get("trail_anchor_error") is None
+
+
+def test_budget_fields_absent_when_budget_not_tripped(tmp_path, monkeypatch):
+    """A normal (non-tripped) reconcile leaves the budget fields OUT of the
+    hook-log entry."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = _init_repo(tmp_path)
+    _seed_pending_patch(repo)
+    _opt_in_staging(repo, monkeypatch)
+    # Generous budget; the tiny reconcile finishes well within it.
+    monkeypatch.setenv("OPENTRACES_HOOK_RECONCILE_BUDGET_SECONDS", "600")
+
+    run_for_repo(repo)
+
+    entry = _read_log(repo)[-1]
+    assert "trail_anchor_budget_exhausted" not in entry
+    assert "patches_searched" not in entry
+    assert "patches_remaining" not in entry
+
+
+def test_budget_value_zero_disables_budget(tmp_path, monkeypatch):
+    """``OPENTRACES_HOOK_RECONCILE_BUDGET_SECONDS=0`` disables the budget: the
+    reconcile passes ``deadline=None`` so even a far-past monotonic clock never
+    trips, and no budget fields are written."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = _init_repo(tmp_path)
+    _seed_pending_patch(repo)
+    _opt_in_staging(repo, monkeypatch)
+
+    monkeypatch.setenv("OPENTRACES_HOOK_RECONCILE_BUDGET_SECONDS", "0")
+    # Even with a clock that would trip ANY real deadline, disabling means the
+    # deadline is None and the loop never short-circuits.
+    import opentraces.core.trails.anchors as anchors_mod
+    monkeypatch.setattr(anchors_mod.time, "monotonic", lambda: 9_999_999.0)
+
+    run_for_repo(repo)
+
+    entry = _read_log(repo)[-1]
+    assert "trail_anchor_budget_exhausted" not in entry
+    # The patch was actually anchored (budget disabled, full reconcile ran).
+    assert entry["trail_anchors_created"] == 1

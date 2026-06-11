@@ -67,7 +67,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **resume-from-context** | 1 → 4 | 3 | `ctx prune/resume/resolve/anchor-for-step` for replay and handoff packets |
 | **extract-bounded-evidence** ★ | 1 → 2 | 3 + 6 | `trace slice` for dataset workflows |
 | **resolve-trace-artifact** | 1/1 | 3 | `trace get` (incl. `--resume`) |
-| **maintain-index** | 1 → 2 | 3 | `trace index rebuild` + `status` |
+| **maintain-index** | 1 → 2 | 4 | `trace index rebuild` + `status` + `compact` |
 | **recreate-trace-environment** ★ | 1 → 2 | 3 + 6 | `trace teleport export` + `open` — reconstitutes the environment that produced a trace, for perturbation analysis, RL training, evaluation harnesses, or "rewind" features in OSS repos |
 | **commit-attribution-audit** | 1 → 3 | 4 (Trail) | `trail blame commit` + `trail graph` |
 | **pr-lineage-publish** | 1 → 3 | 4 | `trail blame pr render` → `create` → `update` |
@@ -183,9 +183,10 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `trace slice` | Agent extracts deterministic TraceSlice packets via template or manual step range so dataset workflows get bounded reproducible input | extract-bounded-evidence (1/2) ★ | `trace-map-and-slice` | agent |
 | `trace get` | Human or agent resolves a trace, trace unit, map node, or `ot://` resource by ref to inspect full content (or `--resume` to hand control back to an upstream agent) | resolve-trace-artifact (1/1) | `cli-lifecycle` | both |
 | `trace compare` | Human or agent A/B-compares two traces (metrics, quality personas, bursts, signals) via the frozen trace_compare.v1 envelope | trace-intelligence-compare (1/1) | `trace-compare-smoke` | both |
-| `trace index rebuild` | Human or agent explicitly rebuilds the local Trace Index + bucket-shaped search projection after new traces are captured | maintain-index (1/3) | `trace-map-and-slice`, `cli-publish-happy-path`, `tier1-cold-publish` | both |
-| `trace index refresh` | Human or agent incrementally refreshes the local Trace Index + search projection for newly-captured traces without a full rebuild (the cheap keep-warm maintenance path; plan 087) | maintain-index (2/3) | `migration-s12-end-to-end-upgrade` | both |
-| `trace index status` | Checks whether the local Trace Index + search projection are current before querying | maintain-index (3/3) | `trace-map-and-slice` | both |
+| `trace index rebuild` | Human or agent explicitly rebuilds the local Trace Index + bucket-shaped search projection after new traces are captured | maintain-index (1/4) | `trace-map-and-slice`, `cli-publish-happy-path`, `tier1-cold-publish` | both |
+| `trace index refresh` | Human or agent incrementally refreshes the local Trace Index + search projection for newly-captured traces without a full rebuild (the cheap keep-warm maintenance path; plan 087) | maintain-index (2/4) | `migration-s12-end-to-end-upgrade` | both |
+| `trace index status` | Checks whether the local Trace Index + search projection are current before querying | maintain-index (3/4) | `trace-map-and-slice` | both |
+| `trace index compact` | Reclaims index.db space after legacy body bloat accumulation (issue #40 remedy verb) | maintain-index (4/4) | `trace-map-and-slice` | both |
 | `trace teleport export` | Bundles a trace + its retained Git evidence into a portable workspace so a downstream consumer (RL trainer, perturbation harness, evaluation rig, OSS-repo rewind) can reproduce the environment that produced the trace | recreate-trace-environment (1/2) ★ | unowned | both |
 | `trace teleport open` | Reconstitutes the trace environment in a target project directory so the downstream consumer can run perturbations / RL rollouts / replay against it | recreate-trace-environment (2/2) ★ | unowned | both |
 | `ctx tree` | Agent or developer lists the Context Tree for a trace to inspect the active path of what the model saw | inspect-context-tree (1/9) | `context-tree-linear` | both |
@@ -743,7 +744,7 @@ the default test sweep.
 | dev-quality-maintenance | `dev-quality-maintenance` |
 | decommission-dataset | `decommission-dataset` |
 | session-ingest, commit-correlation | partial (auto-invoked; proven indirectly by `tier1-cold-publish` + `world` seed) |
-| review-rows-tui, review-rows-web | partial (rendered surface tested by `tui-review-smoke`; dedicated web/TUI review journeys are a tracked follow-up) |
+| review-rows-tui, review-rows-web | follow-up (the legacy TUI and Flask web review surfaces are decommissioned — `tui-review-smoke` (a `sys.exit(2)` stub tombstone) and `web-viewer-smoke` (only green by bypassing the missing `opentraces web` command) were deleted in #43/#42; new journeys will target the future dataset-scoped review UI) |
 | manual-inbox-recovery, schema-migration, shell-completion-protocol | follow-up (hidden surfaces not in the strict gate, but candidates for the next coverage wave) |
 
 ## Pre-delivery — Original trajectory ownership snapshot (2026-05-15)

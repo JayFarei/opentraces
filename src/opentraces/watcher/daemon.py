@@ -261,16 +261,24 @@ def _run_trace_trails_runtime(
 
         poll = poll_project_once(project_cwd)
         report.fs_observations = len(poll.observations)
-        reconcile_summary = reconcile_watcher_observations(project_cwd)
-        report.fs_reconciled = int(
-            reconcile_summary.get("observations_processed", 0) or 0
-        )
-        report.fs_patches_created = int(
-            reconcile_summary.get("patches_created", 0) or 0
-        )
-        report.fs_patches_upgraded = int(
-            reconcile_summary.get("patches_upgraded", 0) or 0
-        )
+        # #45 (optional gate): the reconciler's inputs only change between ticks
+        # when this poll yielded new filesystem observations OR an active tick
+        # appended new step windows via the session sweep (force_maturation is
+        # True on active ticks, False on quiet ones; quiet ticks never append
+        # windows — scan_project is active-only). On a truly idle quiet tick
+        # there is nothing new to attribute, so skip even the scoped read. This
+        # does NOT gate maturation, which has its own watermark short-circuit.
+        if force_maturation or poll.observations:
+            reconcile_summary = reconcile_watcher_observations(project_cwd)
+            report.fs_reconciled = int(
+                reconcile_summary.get("observations_processed", 0) or 0
+            )
+            report.fs_patches_created = int(
+                reconcile_summary.get("patches_created", 0) or 0
+            )
+            report.fs_patches_upgraded = int(
+                reconcile_summary.get("patches_upgraded", 0) or 0
+            )
         should_mature = force_maturation or bool(poll.observations) or bool(
             report.fs_patches_created or report.fs_patches_upgraded
         )
@@ -453,6 +461,18 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
         report.error = f"{type(e).__name__}: {e}"
         report.duration_ms = (time.monotonic() - t0) * 1000.0
         logger.exception("tick failed for %s", project_cwd)
+    finally:
+        # #45: drop this project's parsed-event memo at the end of every tick so
+        # the daemon's RSS floor is not the largest repo's full parsed log held
+        # alive across ticks. The cache exists to dedupe reads WITHIN one tick;
+        # the next tick re-reads (incrementally, from the on-disk snapshot) and
+        # rebuilds only what it needs. Best-effort: never let teardown raise.
+        try:
+            from ..core.trails.event_log import invalidate_read_events_cache
+
+            invalidate_read_events_cache(project_cwd)
+        except Exception:  # noqa: BLE001
+            pass
     return report
 
 
@@ -490,11 +510,80 @@ def discover_enlisted_projects() -> list[Path]:
     return out
 
 
+# --- RSS self-check backstop (#45) -----------------------------------------
+
+DEFAULT_MAX_RSS_MB = 2048
+
+
+def _current_rss_mb() -> float | None:
+    """Best-effort CURRENT (not peak) resident set size of this process, in MiB.
+
+    macOS ``ru_maxrss`` is peak-only and never shrinks, so it can't drive a
+    restart-on-current-bloat backstop. We read live RSS instead:
+
+    - Linux: ``/proc/self/statm`` field 2 (resident pages) × page size.
+    - macOS / other POSIX: ``ps -o rss= -p <pid>`` (KiB).
+
+    Returns None when neither source is readable (the caller then skips the
+    backstop rather than restarting on a bad read).
+    """
+    statm = Path("/proc/self/statm")
+    if statm.is_file():
+        try:
+            resident_pages = int(statm.read_text().split()[1])
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            return resident_pages * page_size / (1024 * 1024)
+        except Exception:  # noqa: BLE001 — fall through to ps
+            pass
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        kib = int(out.stdout.strip())
+        return kib / 1024.0
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _max_rss_mb() -> float:
+    """Configured RSS ceiling (MiB) from ``OT_WATCHER_MAX_RSS_MB``."""
+    raw = os.environ.get("OT_WATCHER_MAX_RSS_MB")
+    if not raw:
+        return float(DEFAULT_MAX_RSS_MB)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(DEFAULT_MAX_RSS_MB)
+    return value if value > 0 else float(DEFAULT_MAX_RSS_MB)
+
+
+def _reexec_self(interval: int) -> None:
+    """Replace this process with a fresh ``run-forever``, preserving interval.
+
+    Called ONLY between sweeps (never mid-tick) when RSS breaches the ceiling.
+    The installer's launchd plist uses StartInterval+RunAtLoad+ThrottleInterval
+    with no KeepAlive, so a self-replacement is supervisor-safe — the supervisor
+    sees one continuously-running PID, not a crash. ``os.execv`` keeps the same
+    PID and inherits stdio/log handles.
+    """
+    argv = [sys.executable, "-m", "opentraces.watcher.daemon",
+            "run-forever", "--interval", str(int(interval))]
+    logger.warning(
+        "RSS backstop re-exec: argv=%s",
+        " ".join(argv),
+    )
+    os.execv(sys.executable, argv)
+
+
 def run_forever(interval: int = DEFAULT_INTERVAL, *,
                 projects: list[Path] | None = None) -> None:
     """Service loop. Ticks every `interval` seconds across enlisted projects."""
     _configure_logging()
     logger.info("watcher service starting (interval=%ds)", interval)
+    max_rss_mb = _max_rss_mb()
     while True:
         targets = projects if projects is not None else discover_enlisted_projects()
         for p in targets:
@@ -503,6 +592,19 @@ def run_forever(interval: int = DEFAULT_INTERVAL, *,
             except Exception:  # noqa: BLE001
                 # run_once swallows its own errors; this is pure belt-and-braces.
                 logger.exception("run_once escaped for %s", p)
+        # #45 backstop: check CURRENT RSS only BETWEEN sweeps, never mid-tick.
+        # If we've crossed the ceiling, log loudly and re-exec a fresh daemon
+        # (same interval/argv) so accumulated allocator fragmentation / leaked
+        # references can't grow unbounded across a process designed to run
+        # forever. The scoped-read + per-tick cache invalidation above keep the
+        # steady-state floor low; this only fires on pathological growth.
+        rss_mb = _current_rss_mb()
+        if rss_mb is not None and rss_mb >= max_rss_mb:
+            logger.warning(
+                "watcher RSS %.0fMiB >= ceiling %.0fMiB — re-exec backstop",
+                rss_mb, max_rss_mb,
+            )
+            _reexec_self(interval)
         time.sleep(max(1, int(interval)))
 
 

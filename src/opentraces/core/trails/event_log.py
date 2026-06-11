@@ -549,7 +549,7 @@ def read_events_scoped(
     when both are None, filtered types are dropped (no commit to match).
 
     NOTE: this never populates the shared ``_READ_EVENTS_CACHE`` (keyed
-    ``(repo, head, verify)`` and shared with full-history callers) — a partial
+    ``(repo, head)`` and shared with full-history callers) — a partial
     list there would silently truncate them — and never runs verification.
 
     Performance: a single ``git rev-list --objects`` lists every event blob in
@@ -788,12 +788,16 @@ def _read_events_incremental(cwd: Path, head: str) -> list[TrailEvent]:
 # The CLI's batch path calls ``read_events`` more than once per process
 # (once to enumerate patch ids, once to thread into ``sync_patch``). On a
 # project with 100k+ events the read costs ~6 seconds — paying that twice
-# is half the warm-cache budget. We memo the result keyed by
-# ``(repo, event_log_ref_head, verify)`` so callers within one process
-# share one read. The cache invalidates automatically when the ref head
-# advances.
+# is half the warm-cache budget. We memo the PARSED list keyed by
+# ``(repo, event_log_ref_head)`` so callers within one process share one
+# read regardless of the ``verify`` flag (the parsed list is byte-identical
+# either way; verification is layered on top of a hit, never re-parsed). The
+# cache invalidates automatically when the ref head advances. Dropping
+# ``verify`` from the key (#45) means alternating ``verify=True`` /
+# ``verify=False`` callers no longer defeat the memo and never coexist as two
+# full parsed graphs in RSS.
 _READ_EVENTS_CACHE: dict[
-    tuple[str, str, bool], list[TrailEvent]
+    tuple[str, str], list[TrailEvent]
 ] = {}
 
 # Per-(repo, head) memo for the expensive whole-log verification. The event
@@ -807,24 +811,51 @@ def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
     head = _ref_head(cwd)
     if head is None:
         return []
-    cache_key = (str(Path(cwd).resolve()), head, verify)
+    cache_key = (str(Path(cwd).resolve()), head)
     cached = _READ_EVENTS_CACHE.get(cache_key)
     if cached is not None:
+        # Parsed list is already in hand. ``verify`` only layers verification
+        # on top — reuse the per-(repo, head) ``_VERIFY_STATUS_CACHE`` memo via
+        # ``verify_event_log(cwd)`` (events=None) so we never re-hash the whole
+        # history on a hit. The corrupt-log raising contract is preserved.
+        if verify:
+            _verify_or_raise(cwd)
         return cached
-    events = _read_events_incremental(cwd, head)
-    if verify:
-        errors = verify_event_log(cwd, events=events)["errors"]
-        if errors:
-            raise ValueError("; ".join(errors))
-    # Bound the cache: keep only the most recent entry per repo so we do
-    # not retain stale events across long-lived processes whose HEAD
-    # advances. Enough for the per-CLI-call use case.
+    # Evict this repo's stale entries BEFORE building the replacement graph so
+    # two full parsed graphs never coexist transiently in RSS (#45): a head
+    # advance would otherwise hold the old entry alive across the
+    # ``_read_events_incremental`` materialisation.
     repo_key = cache_key[0]
     for key in list(_READ_EVENTS_CACHE.keys()):
         if key[0] == repo_key and key != cache_key:
             _READ_EVENTS_CACHE.pop(key, None)
+    events = _read_events_incremental(cwd, head)
     _READ_EVENTS_CACHE[cache_key] = events
+    if verify:
+        # Verify the freshly-parsed list directly (the memo would otherwise
+        # re-read via read_events(verify=False), a redundant pass on a cold
+        # cache). Populate the verify memo so a later verify=True hit short-
+        # circuits, then raise on a corrupt log exactly as before.
+        result = verify_event_log(cwd, events=events)
+        verify_cache_key = (repo_key, head)
+        _VERIFY_STATUS_CACHE.setdefault(verify_cache_key, result)
+        if result["errors"]:
+            raise ValueError("; ".join(result["errors"]))
     return events
+
+
+def _verify_or_raise(cwd: Path) -> None:
+    """Run whole-log verification through the ``_VERIFY_STATUS_CACHE`` memo and
+    raise on a corrupt log (the ``read_events(verify=True)`` contract).
+
+    Called only on a ``_READ_EVENTS_CACHE`` hit, where ``verify_event_log(cwd)``
+    (events=None) consults the per-(repo, head) memo instead of re-hashing the
+    whole history. The corrupt-log outcome is memoized for the head, so a second
+    verify=True call raises again without re-reading.
+    """
+    result = verify_event_log(cwd)
+    if result["errors"]:
+        raise ValueError("; ".join(result["errors"]))
 
 
 def invalidate_read_events_cache(cwd: Path | None = None) -> None:

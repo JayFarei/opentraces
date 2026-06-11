@@ -22,51 +22,14 @@ journeys = [
 ]
 rules = ["unregistered-checkpoint", "unknown-precondition"]
 reason = "c-context-tree-substrate / c-rewound-session / c-compacted-session checkpoints deferred from plan 077 phase 4; build or delete by expiry"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
+issue = "https://github.com/JayFarei/opentraces/issues/42"
 added = 2026-06-10
 expires = 2026-09-08
 
 [[entries]]
-journeys = ["trail-mature-updates-patch-anchor"]
-rules = ["unknown-precondition"]
-reason = "declares precondition keys outside PRECONDITION_VOCAB; widen vocab with probe in phase 4 or re-spec the journey"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
-journeys = [
-  "pi-skill-detection-parity",
-  "pi-tool-bash-detection-parity",
-  "web-viewer-smoke",
-]
+journeys = ["pi-skill-detection-parity"]
 rules = ["baseline-red"]
-reason = "tier-0 journeys that FAIL on a fresh environment (verified pre-existing via stash A/B on the unmodified runner, 2026-06-09); fix the journeys or their worlds — green wall must not be machine-dependent"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
+reason = "blocked-on-pi-skill-capture-content: the real pi-readonly-search artifact contains only an ot_capture_status call; assertions need a capture where pi reads .agents/skills/opentraces/SKILL.md and a project file — re-spec the scenario then OT_REAL_PI=1 make capture-refresh SCENARIO=pi-readonly-search and re-publish via the PR #35 supply chain; do NOT weaken assertions."
+issue = "https://github.com/JayFarei/opentraces/issues/43"
 added = 2026-06-10
 expires = 2026-09-08
-
-[[entries]]
-journeys = ["tui-review-smoke"]
-rules = ["lane-unreachable"]
-reason = "requires 'decommissioned_ui' — a deliberately-never-satisfiable capability tombstone for the decommissioned TUI; delete the journey in PR-A review or re-home it"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
-journeys = [
-  "codex-parity-bash-debugging",
-  "codex-parity-multi-file-patch",
-  "codex-parity-permission-request",
-  "codex-parity-readonly-search",
-  "codex-parity-skill-invocation",
-  "pi-incremental-recovery",
-  "pi-full-parity-latest",
-]
-rules = ["baseline-red"]
-reason = "real-artifact cross-machine failures surfaced by the supply chain (2026-06-10): these journeys SKIPped silently before artifacts were fetchable; against the real restored worlds on a non-origin machine they fail (e.g. bash-debugging: persistent stale_count=1 that watcher tick does NOT reconcile, unlike the linear case). Per-artifact diagnosis owed; do NOT weaken the assertions"
-issue = "https://github.com/JayFarei/opentraces/issues/25"
-added = 2026-06-10
-expires = 2026-09-08
-

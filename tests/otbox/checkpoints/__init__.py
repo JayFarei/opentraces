@@ -315,3 +315,5 @@ from . import _context_tree_otel_with_mcp  # noqa: E402,F401  (registers c-conte
 from . import _legacy_v033  # noqa: E402,F401  (registers c-legacy-v033 + c-legacy-v033-upgraded)
 # Plan 080 bucket-spine-v2 family (issue #42 — the formerly-phantom checkpoints).
 from . import _bucket_spine_v2  # noqa: E402,F401  (registers c-bucket-spine-v2-* + c-bucket-spine-v1-legacy-fixture)
+# Issue #42 — context-tree substrate (plan 077 phase-4 deferral).
+from . import _context_tree_substrate  # noqa: E402,F401  (registers c-context-tree-substrate)

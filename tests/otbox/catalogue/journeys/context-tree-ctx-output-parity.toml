@@ -39,11 +39,14 @@ kind = "returncode"
 step = "show-json"
 equals = 0
 
+# Issue #42 envelope reconciliation: the shipped `ctx show --json`
+# envelope is `opentraces.context_tree.v1` (the shared context-tree
+# envelope), not the plan-077-draft `opentraces.context_node.v1`.
 [[assertions]]
 kind = "stdout_json"
 step = "show-json"
 path = "schema_version"
-equals = "opentraces.context_node.v1"
+equals = "opentraces.context_tree.v1"
 
 [[assertions]]
 kind = "stdout_json"
@@ -51,26 +54,29 @@ step = "show-json"
 path = "node.node_id"
 equals = "{first_node_id}"
 
-# The four layer ids are present.
+# The four layer ids are present. (Issue #42 reconciliation: the shipped
+# envelope carries each layer id under `layers.<type>.layer_id`, not on
+# the `node` object. Equal strictness — still a presence check on all
+# four layer ids, just at the shipped path.)
 [[assertions]]
 kind = "stdout_json"
 step = "show-json"
-path = "node.system_layer_id"
+path = "layers.system.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "show-json"
-path = "node.messages_layer_id"
+path = "layers.messages.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "show-json"
-path = "node.tool_registry_layer_id"
+path = "layers.tool_registry.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "show-json"
-path = "node.runtime_state_layer_id"
+path = "layers.runtime_state.layer_id"
 
 # Each layer's completeness + capture_method labels are present in
 # the JSON. The text mode must render every one of these.

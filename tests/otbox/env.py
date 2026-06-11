@@ -189,7 +189,53 @@ def resolve_cli_argv() -> list[str]:
     venv_python = REPO_ROOT / ".venv" / "bin" / "python"
     if venv_python.exists():
         return [str(venv_python), "-c", _CLI_BOOTSTRAP]
+    # Issue #42 phase 4 — last-resort bare ``python3``. If this interpreter
+    # cannot ``import opentraces`` (worktree with no ``.venv`` and no
+    # OT_CLI_BIN), every downstream checkpoint build dies with a
+    # ModuleNotFoundError three subprocess layers deep that names neither
+    # the cause nor the fix. Probe importability here and raise a clear,
+    # actionable error at the resolution boundary instead.
+    _assert_bare_python_has_cli_deps()
     return ["python3", "-c", _CLI_BOOTSTRAP]
+
+
+def _assert_bare_python_has_cli_deps() -> None:
+    """Fail loudly if the bare ``python3`` fallback can't import the CLI.
+
+    Resolution-time guard (issue #42 phase 4): the checkpoint builders
+    shell out to ``python3 -c "from opentraces.cli import main; ..."``.
+    Without a repo ``.venv`` or an ``OT_CLI_BIN`` wrapper that pins
+    ``PYTHONPATH`` at the worktree ``src``, that import explodes deep
+    inside a subprocess. Surface the real remedy here.
+    """
+    import shutil
+    import subprocess
+
+    py = shutil.which("python3") or "python3"
+    try:
+        probe = subprocess.run(
+            [py, "-c", "import opentraces.cli"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"otbox CLI resolution: could not probe bare python3 ({py!r}): "
+            f"{exc}. Set OT_CLI_BIN to a wrapper that pins PYTHONPATH to the "
+            "worktree src + a python with the opentraces deps installed."
+        ) from exc
+    if probe.returncode != 0:
+        raise RuntimeError(
+            "otbox CLI resolution: the bare 'python3' fallback cannot "
+            "'import opentraces.cli' (no repo .venv, no OT_CLI_BIN). "
+            "Every checkpoint build would fail with a ModuleNotFoundError "
+            "three subprocess layers deep. Fix: export OT_CLI_BIN to a "
+            "wrapper that pins PYTHONPATH=<worktree>/src:"
+            "<worktree>/packages/opentraces-schema/src and exec's a python "
+            "with the CLI deps (click, pydantic, ...). Probe stderr:\n"
+            f"{(probe.stderr or probe.stdout).strip()[:400]}"
+        )
 
 
 def isolated_env(
