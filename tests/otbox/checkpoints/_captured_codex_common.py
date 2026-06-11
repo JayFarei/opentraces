@@ -88,8 +88,10 @@ def _derive_audit_from_restored_box(
         or any(isinstance(step, dict) and step.get("context_node_id") for step in steps)
     )
     step_count = int(trace.get("step_count") or len(steps))
+    patches = record.get("patches") if isinstance(record.get("patches"), list) else []
 
     return {
+        "patch_count": len(patches),
         "scenario_name": capture_name,
         "session_id": trace.get("session_id") or "",
         "trace_id": trace.get("trace_id") or "",
