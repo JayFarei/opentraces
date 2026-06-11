@@ -205,7 +205,9 @@ export default function Hero({
           <div className="hero-pill-row">
             <div className="hero-pill">opentraces &nbsp; v{pkg.version}</div>
             <Link className="hero-announce" href="/blog/introducing-opentraces-0-4">
-              <span aria-hidden="true">←</span> Read the announcement
+              <span className="hero-announce-arrow-left" aria-hidden="true">←</span>
+              <span className="hero-announce-arrow-up" aria-hidden="true">↑</span>{" "}
+              Read the announcement
             </Link>
           </div>
           <div style={{ height: 16 }} />

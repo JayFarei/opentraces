@@ -404,6 +404,7 @@
     animation: pipe-flow-right 2.4s linear infinite;
   }
   @keyframes pipe-flow-right { to { background-position: -100% 0; } }
+  @keyframes pipe-flow-down { to { background-position: 0 -100%; } }
   .pipe-chev {
     position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
     width: 0; height: 0; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent;
@@ -613,7 +614,27 @@
     /* wide data panels scroll sideways instead of squeezing */
     .hub-panel { overflow-x: auto; }
     .tl-head, .tl-body, .tl-foot { min-width: 600px; }
-    .pipe { min-width: 600px; }
+    /* pipeline stacks vertically on mobile: no sideways scroll */
+    .pipe { min-width: 0; }
+    .pipe-row { grid-template-columns: 1fr; }
+    .pipe-arrow { height: 46px; }
+    .pipe-line {
+      left: 50%; right: auto; top: 6px; bottom: 13px; height: auto; width: 2px;
+      transform: translateX(-50%);
+      background: linear-gradient(180deg, var(--rainbow-stops), var(--rainbow-stops));
+      background-size: 100% 200%;
+      animation: pipe-flow-down 2.4s linear infinite;
+    }
+    .pipe-chev {
+      top: auto; bottom: 5px; right: auto; left: 50%; transform: translateX(-50%);
+      border-left: 3.5px solid transparent; border-right: 3.5px solid transparent;
+      border-top: 7px solid var(--fg-dim); border-bottom: none;
+    }
+    .pipe-lbl {
+      top: 50%; left: calc(50% + 14px); right: auto; transform: translateY(-50%);
+      text-align: left;
+    }
+    .pipe-remote { grid-template-columns: 1fr; }
     .x-post.reply { margin-left: 12px; }
     .term pre { font-size: 12px; padding: 13px 14px; }
   }

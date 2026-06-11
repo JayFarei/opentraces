@@ -489,6 +489,14 @@ html { color-scheme: light; }
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
+/* When the pill row stacks (narrow screens), the version pill sits above the
+   announce link, so the arrow points up instead of left. */
+.hero-announce-arrow-up { display: none; }
+@media (max-width: 480px) {
+  .hero-pill-row { flex-direction: column; align-items: flex-start; }
+  .hero-announce-arrow-left { display: none; }
+  .hero-announce-arrow-up { display: inline; }
+}
 
 /* ═══ Logo (favicon only) ═══ */
 .logo-glyph {
