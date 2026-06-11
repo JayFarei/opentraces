@@ -63,6 +63,11 @@ snapshot_report.html
 tests/otbox/captures/*/snapshot.tar.gz
 tests/otbox/captures/*/metadata.json
 
+# B0 acceptance ECHO report (synthetic harness, issue #61). Only the
+# real-agent report.json is ever committed; the echo-mode default output
+# stays local so a synthetic report can't pose as the committed evidence.
+tests/otbox/captures/_acceptance/echo-report.json
+
 # otbox journey footage (terminal-control). MEDIA ONLY — the recorder code is
 # committed, the generated MP4/recordings/gallery are not. Regenerate via
 # `make otbox-footage SCENARIO=<name>` / `make otbox-footage-all`.

@@ -160,6 +160,68 @@ def test_scenario_digest_stable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# par_calls — additive top-level scoring field (issue #61, B0 acceptance).
+# ---------------------------------------------------------------------------
+def test_par_calls_defaults_to_none() -> None:
+    """Scenarios without a ``par_calls`` key load fine and expose None."""
+    scenario = load_scenario("echo-meta")
+    assert scenario.par_calls is None
+
+
+def test_par_calls_parsed_when_declared() -> None:
+    """A top-level ``par_calls`` integer is parsed onto the Scenario."""
+    body = """
+        name = "par-fixture"
+        description = "par fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+        par_calls = 4
+
+        [[turns]]
+        prompt = "hello"
+        expect_regex = "(?i)hi"
+        timeout_s = 5
+
+        [capture]
+        artifact_dir = "par-fixture"
+        expected_paths = []
+    """
+    path = _write_scenario(Path.cwd(), "par-fixture", body)
+    try:
+        scenario = load_scenario("par-fixture")
+        assert scenario.par_calls == 4
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_par_calls_rejects_non_positive() -> None:
+    """A non-positive ``par_calls`` is a configuration error."""
+    body = """
+        name = "bad-par-fixture"
+        description = "bad par fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+        par_calls = 0
+
+        [[turns]]
+        prompt = "hello"
+        expect_regex = "(?i)hi"
+        timeout_s = 5
+
+        [capture]
+        artifact_dir = "bad-par-fixture"
+        expected_paths = []
+    """
+    path = _write_scenario(Path.cwd(), "bad-par-fixture", body)
+    try:
+        with pytest.raises(ScenarioError) as excinfo:
+            load_scenario("bad-par-fixture")
+        assert "par_calls" in str(excinfo.value)
+    finally:
+        path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
 # small extras — catalogue + agent validation, since they're cheap and
 # guard the surfaces Agent C will consume.
 # ---------------------------------------------------------------------------

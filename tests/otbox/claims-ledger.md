@@ -37,8 +37,8 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-11, post-issue-55 + issue-62 merges): 25 verified,
-  18 partial, 7 open, 7 tracked, 0 waived — 57 rows.
+- Status counts (2026-06-11, post-issue-55 + issue-62 + issue-61 merges): 25 verified,
+  19 partial, 7 open, 6 tracked, 0 waived — 57 rows.
 
 ## A. Capture (per harness)
 
@@ -52,7 +52,7 @@ Derivation rules (enforced by the gate):
 | CAP-6 | Hook failures never block the agent session (always exit 0) — 4 Claude scripts x 4 faults + missing-package sweep, Codex modules, git shim | A | verified | tests/otbox/test_faultpoints.py | — |
 | CAP-7 | OTel capture yields `completeness=full` layers; receiver-down never blocks agent traffic | A | partial | tests/test_otlp_capture.py, context-tree-otel-receiver-up, context-tree-otel-bypass-mode | — |
 | CAP-8 | Installers (`setup claude-code/codex-cli/pi/git`) are idempotent and preserve unrelated hooks (one refspec-duplication finding still open) | A | partial | tests/otbox/test_idempotency_sweep.py, pi-setup-dry-run, onboard-integrations | — |
-| CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds | A | tracked | — | #61 |
+| CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds (5 acceptance scenarios bind J1/J6/J7/J10/J13; deterministic scorer + schema-versioned report + warn-only freshness gate land in default CI via the echo-mode synthetic harness — the real-agent scored report + ledger flip to verified are the machine-gated ritual) | A | partial | tests/otbox/test_acceptance_report.py, tests/otbox/test_acceptance_scoring.py | #61 |
 
 ## B. Bucket and privacy boundary
 

@@ -1,0 +1,37 @@
+# B0 acceptance scenario — J13-agent-drives-cli (issue #61, plan 095 U9).
+#
+# A real agent free-navigates the CLI purely through the --json + next_steps
+# agent protocol: start from `opentraces status --json`, then follow the
+# next_steps graph it returns WITHOUT being told the exact commands. This
+# is the agent-protocol-orient shape — the product must be self-describing
+# enough that an agent can orient and act from the structured envelopes
+# alone. The end-state assertion confirms `status --json` emits a structured
+# next_steps array the agent could have walked (the #49 lesson — assert the
+# protocol surface is real, not just that the agent talked).
+#
+# Starts from c-captured-real-session so there IS state to orient over
+# (declared by the acceptance harness). Machine-gated on a real `claude`
+# binary.
+
+name = "acceptance-j13-free-navigation"
+description = "J13 — agent free-navigates the CLI via --json + next_steps: orient from `status --json` and follow the next_steps graph, asserting the protocol surface emits a real next_steps array."
+agent = "claude"
+binary_name = "claude"
+par_calls = 5
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "You have never used opentraces. Orient yourself using ONLY structured output: run `opentraces status --json`, read its `next_steps`, and follow that graph (running whatever `--json` commands it points you toward) until you can describe what this project contains. Do not guess commands — only run what the envelopes suggest."
+expect_regex = "(?i)(status|next_steps|next steps|trace|orient|json)"
+timeout_s = 300
+# End-state assertion: the orient surface itself is real — status --json
+# emits a next_steps key the agent could walk.
+verify_command = [".testvenv/bin/opentraces", "status", "--json"]
+verify_regex = "next_steps"
+
+[capture]
+artifact_dir = "acceptance-j13-free-navigation"
+expected_paths = []
+min_traces = 1
