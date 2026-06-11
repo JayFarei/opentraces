@@ -59,6 +59,7 @@ real `git_anchor_id`, `event_log_ref = "refs/opentraces/local/events/v1"`.
 | `journey <name> [--box ID] [--artifacts]` | run a catalogue journey, verdict PASS/FAIL/SKIP |
 | `matrix [filters] [--inventory [--strict]]` | run the (journey × base-checkpoint) matrix |
 |  `capture-refresh --scenario <name> [--all --agent <a>] [--check-versions] [--dry-run] [--base-checkpoint C]` | drive a simulated-user scenario and snapshot the result (plan 071) |
+| `acceptance [--echo] [--agent <a>] [--scenario <name>] [--out PATH]` | drive the 5 B0 acceptance arcs and write a scored report (issue #61) |
 | `artifacts [--box ID] [--label L]` | bundle journey-run evidence for a PR |
 | `status [--box ID]` / `list` | inspect boxes, snapshots, drivers, seeds, journeys |
 | `snapshot-rm <name>` | delete a snapshot |
@@ -519,6 +520,90 @@ to `SKIP` whenever `termctrl`, the agent binary, or `ffmpeg` is absent, so it
 never blocks default CI (the `echo-meta` scenario records with no real agent).
 All generated media is gitignored. See [`FOOTAGE.md`](FOOTAGE.md) for the full
 operator guide.
+
+## B0 acceptance ritual (issue #61, plan 095 U9)
+
+The acceptance ritual is the highest-fidelity capture lane: a **real agent
+drives the product through five end-to-end job arcs** and the run is scored
+into a committed, schema-versioned report. The five arcs each bind to one
+spec journey in `claims_map.py`:
+
+| Scenario TOML | Spec journey | Base world |
+|---|---|---|
+| `acceptance-j1-onboarding` | J1-enroll-machine | clean (`c-installed-source`) |
+| `acceptance-j6-find-past-work` | J6-find-past-work | captured (`c-captured-real-session`) |
+| `acceptance-j7-explain-commit` | J7-explain-commit-pr | captured |
+| `acceptance-j10-publish-dataset` | J10-publish-dataset | captured |
+| `acceptance-j13-free-navigation` | J13-agent-drives-cli | captured |
+
+Each scenario's prompt instructs the agent to drive the `opentraces` CLI
+through the full arc, and each declares a `par_calls` budget. Crucially, the
+turn `expect_regex` + `verify_command`/`verify_regex` + `capture.expected_paths`
+assert the **arc's real end-state** in the box, not just that the agent
+finished talking (the #49 lesson): J1 asserts the `.opentraces.json` marker
+landed, J6 asserts a non-empty candidate packet from the index, J7 asserts
+`trail blame commit HEAD` resolves a contributing session, J10 asserts a
+dataset manifest exists on disk, J13 asserts `status --json` emits a real
+`next_steps` array.
+
+**Operator procedure** (machine-gated — needs a real agent binary + auth):
+
+```bash
+make otbox-acceptance AGENT=claude                                          # all 5 arcs
+make otbox-acceptance AGENT=claude ACCEPTANCE_SCENARIO=acceptance-j1-onboarding  # one arc
+```
+
+This forks each scenario's base checkpoint, drives the real agent through
+the unified drive core (same as `capture-refresh`), scores each arc, and
+writes `tests/otbox/captures/_acceptance/report.json`. The same run can also
+emit MP4 footage; the operator watches the footage gallery before accepting
+the evidence, then commits the report (hooks-bypassed) — at which point the
+freshness gate flips from SKIP to active on the next CI run.
+
+**Scoring fields** (per journey, `opentraces.otbox.acceptance_report.v1`):
+`scenario`, `spec_journey`, `arc_completed` (PASS verdict AND every
+`expected_paths` present), `calls_vs_par` (`turn_count / par_calls`),
+`wall_clock_s`, `turn_count`, `par_calls`, `score`. The report's `provenance`
+block carries `captured_at`, `agent`, `binary_version`, per-scenario
+`scenario_digests`, `opentraces_schema_version`, and `opentraces_cli_version`.
+Scoring is **deterministic-first**: `arc_completed` / `calls_vs_par` /
+`wall_clock_s` come straight from the drive. `waste` / `run-intel` enrichment
+is optional (only when a QA trace exists); the report never depends on it (B1
+scoring is out of scope).
+
+**Echo mode** (default-CI safe, no real agent, no network):
+
+```bash
+.venv/bin/python -m tests.otbox acceptance --echo --json
+```
+
+drives all five scenarios against a deterministic synthetic harness (the
+`echo` precedent) and produces a valid report at the **gitignored**
+`captures/_acceptance/echo-report.json` (never the committed `report.json`
+path — a synthetic report must not pose as the real-agent evidence). With a
+real binary absent and `--echo` not requested, the verb SKIPs cleanly
+(exit-0 skip envelope), never FAILs — the `test_real_agent_optin.py`
+contract. The same applies inside a real-mode run: a drive whose preflight
+returns SKIP (missing termctrl/tmux) emits a skip envelope and writes **no
+report** — a machine that never ran the arcs cannot produce one. In real
+mode the CLI `--agent` is authoritative end-to-end (box prep, drive, row
+attribution, provenance) regardless of the TOMLs' default agent.
+
+**Freshness contract** (`test_acceptance_report.py`): the gate SKIPs clean
+when no report is committed (the OSS default); once a report is committed it
+**warns-only** (never fails) on a report older than 90 days, scenario-digest
+drift vs the current TOMLs, synthetic (non-real-agent) provenance, or an
+installed agent binary whose major/minor is ahead of the report's. The
+**only hard failure** is a schema-invalid committed report — and the schema
+is **strict**: exactly the five acceptance arcs with their spec-journey
+bindings (no missing/duplicate/extra rows), typed row fields, PASS/FAIL row
+verdicts (never SKIP), summary arithmetic consistent with the rows, and
+digest coverage for all five scenarios. A hollow or partial report
+(e.g. a `--scenario` subset run) correctly fails the gate; the CLI envelope
+flags this via `schema_valid`. CI never gates the score *value* — the score
+is operator-reviewed off the committed report and the footage gallery. The
+scorer math, report round-trip, strict-validator teeth, and each freshness
+predicate are unit-covered in `test_acceptance_scoring.py`.
 
 ## Tiered SSoT coverage gate (plan 069)
 

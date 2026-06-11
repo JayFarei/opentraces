@@ -1,0 +1,35 @@
+# B0 acceptance scenario — J6-find-past-work (issue #61, plan 095 U9).
+#
+# A real agent drives the discovery arc over a world that ALREADY has a
+# captured session: query the Trace Index, open a Trace Map for a hit,
+# then materialise a Slice / get a trace. The end-state assertion runs
+# the same `trace query --json` the agent should have run and confirms a
+# bounded candidate packet comes back NON-empty (the #49 lesson — assert
+# the arc surfaced a real trace, not just that the agent narrated it).
+#
+# Seeds from the c-captured-real-session base_checkpoint (a real captured
+# Claude session lives in the bucket) — declared by the acceptance harness,
+# NOT assumed bucket state. Machine-gated on a real `claude` binary.
+
+name = "acceptance-j6-find-past-work"
+description = "J6 — agent finds past work over a captured world: trace query -> map -> slice/get, asserting a non-empty candidate packet from the real index."
+agent = "claude"
+binary_name = "claude"
+par_calls = 4
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Find the past agent session that touched this project. Run `opentraces trace query --json 'edit'` to search the Trace Index, then open `opentraces trace map <trace-id> --json` for the top hit and summarise what that session did."
+expect_regex = "(?i)(trace|query|map|session|candidate)"
+timeout_s = 240
+# End-state assertion: the index returns at least one candidate for a
+# captured world (the JSON candidates array is non-empty).
+verify_command = [".testvenv/bin/opentraces", "trace", "query", "--json", "edit"]
+verify_regex = "(?s)\"candidates\"\\s*:\\s*\\[\\s*\\{"
+
+[capture]
+artifact_dir = "acceptance-j6-find-past-work"
+expected_paths = []
+min_traces = 1

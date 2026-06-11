@@ -159,6 +159,11 @@ class Scenario:
     turns: list[Turn]
     capture: CaptureSpec
     source_path: Path
+    # Issue #61 (B0 acceptance): declared "par" call budget for the
+    # scenario's job arc. ``None`` when the scenario doesn't declare one
+    # (every pre-acceptance scenario); the acceptance scorer reads it for
+    # the ``calls_vs_par`` ratio and tolerates absence.
+    par_calls: int | None = None
 
 
 class ScenarioError(Exception):
@@ -449,6 +454,21 @@ def load_scenario(name: str) -> Scenario:
     capture = _coerce_capture(_require(doc, "capture", where), where)
     initial_state = _coerce_initial_state(doc.get("initial_state"), where)
 
+    par_calls_raw = doc.get("par_calls")
+    par_calls: int | None = None
+    if par_calls_raw is not None:
+        try:
+            par_calls = int(par_calls_raw)
+        except (TypeError, ValueError) as exc:
+            raise ScenarioError(
+                f"{where}: 'par_calls' must be a positive integer, "
+                f"got {par_calls_raw!r}"
+            ) from exc
+        if par_calls < 1:
+            raise ScenarioError(
+                f"{where}: 'par_calls' must be >= 1 (got {par_calls})"
+            )
+
     return Scenario(
         name=scenario_name,
         description=description,
@@ -458,6 +478,7 @@ def load_scenario(name: str) -> Scenario:
         turns=turns,
         capture=capture,
         source_path=path,
+        par_calls=par_calls,
     )
 
 

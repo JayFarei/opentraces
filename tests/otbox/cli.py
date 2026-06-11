@@ -1505,6 +1505,231 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_acceptance(args: argparse.Namespace) -> int:
+    """Drive the 5 B0 acceptance scenarios and write a scored report.
+
+    Sibling of ``cmd_capture_refresh`` (issue #61, plan 095 U9), NOT a fork:
+    it reuses the same scenario parser, the same drive core, and the same
+    binary-absent / ``--echo`` SKIP semantics.
+
+    Modes:
+      * ``--echo`` — drive the deterministic synthetic harness (no real
+        agent, no network) and write a valid report to the GITIGNORED
+        echo-report.json default path. This is the default-CI
+        end-to-end path.
+      * real binary present (``--agent <a>``) — fork each scenario's
+        base_checkpoint, drive the real agent (the CLI ``--agent`` is
+        authoritative for prep/drive/attribution), score the drive, write
+        the report. Machine-gated (the maintainer ritual). A drive whose
+        preflight SKIPs (missing termctrl/tmux) emits a skip envelope and
+        writes NO report.
+      * real binary absent and ``--echo`` not requested — SKIP cleanly
+        (exit-0 skip envelope), never FAIL (the
+        ``test_real_agent_optin.py`` contract).
+    """
+    import shutil
+    import time
+
+    from . import acceptance as accept
+    from .simulated_users.scenario import load_scenario, scenario_digest
+
+    # Echo (synthetic) reports default to the gitignored ECHO_REPORT_PATH so
+    # a synthetic report never sits on the committed-report path by default.
+    default_out = accept.ECHO_REPORT_PATH if args.echo else accept.REPORT_PATH
+    out_path = Path(args.out) if args.out else default_out
+
+    # --- echo mode: deterministic, offline, default-CI safe ----------------
+    if args.echo:
+        report = accept.run_acceptance_echo()
+        accept.write_report(report, out_path)
+        payload = {
+            "action": "acceptance",
+            "status": "ok",
+            "mode": "echo",
+            "report_path": str(out_path),
+            "summary": report["summary"],
+        }
+        _emit(
+            payload,
+            json_mode=args.json,
+            human=(
+                f"acceptance (echo): {report['summary']['arcs_completed']}/"
+                f"{report['summary']['journeys']} arcs completed, "
+                f"mean_score={report['summary']['mean_score']}\n"
+                f"  report: {out_path}"
+            ),
+        )
+        return 0
+
+    # --- real-agent mode: requires --agent + a real binary on PATH ---------
+    agent = args.agent or "claude"
+    binary_name = {"claude": "claude", "codex": "codex", "pi": "pi"}.get(agent)
+    binary_path = shutil.which(binary_name) if binary_name else None
+    if binary_path is None:
+        payload = {
+            "action": "acceptance",
+            "status": "skipped",
+            "reason": (
+                f"agent binary {binary_name!r} not on PATH; pass --echo for "
+                f"the deterministic synthetic harness"
+            ),
+            "agent": agent,
+        }
+        _emit(
+            payload,
+            json_mode=args.json,
+            human=(
+                f"acceptance: SKIP — {binary_name!r} not on PATH "
+                f"(use --echo for the synthetic harness)"
+            ),
+        )
+        return 0
+
+    # Lazy imports — the real drive couples to the checkpoint + drive stack.
+    from .checkpoints import resolve_checkpoint
+    from .drivers import get_driver
+    from .simulated_users.runner import run_simulated_session
+
+    driver = get_driver("local")
+    scenarios = accept.ACCEPTANCE_SCENARIOS
+    if args.scenario:
+        scenarios = tuple(s for s in scenarios if s.name == args.scenario)
+        if not scenarios:
+            raise OtboxError(
+                f"acceptance: unknown scenario {args.scenario!r}; "
+                f"known: {accept.acceptance_scenario_names()}"
+            )
+
+    rows: list[dict] = []
+    binary_version = ""
+    for spec in scenarios:
+        scenario = load_scenario(spec.name)
+        cp_result = resolve_checkpoint(driver, spec.base_checkpoint)
+        box = cp_result.box
+
+        template_dir = scenario.initial_state.template_dir
+        if template_dir is not None and template_dir.exists():
+            for entry in template_dir.iterdir():
+                dest = box.project / entry.name
+                if entry.is_dir():
+                    shutil.copytree(entry, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(entry, dest)
+
+        output_dir = box.logs / "acceptance" / scenario.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        turns = _expand_capture_refresh_turns(
+            scenario.turns, _capture_refresh_template_context(box)
+        )
+
+        started = time.monotonic()
+        # The CLI ``--agent`` is authoritative end-to-end: box prep, the
+        # drive, and row attribution all use it. The TOMLs declare a
+        # default agent for portability but a codex/pi run must never prep
+        # or attribute as claude.
+        result = run_simulated_session(
+            driver,
+            box,
+            binary_path,
+            turns,
+            initial_state_dir=None,
+            output_dir=output_dir,
+            agent=agent,
+            scenario=scenario.name,
+        )
+        wall_clock_s = time.monotonic() - started
+        binary_version = result.binary_version or binary_version
+
+        verdict = result.turn_verdict or result.verdict
+        if verdict == "SKIP":
+            # The drive never ran (termctrl/tmux/binary preflight). A SKIP
+            # must surface as a skip envelope, NOT a scored report — a
+            # machine that never ran the arcs must not produce one.
+            try:
+                driver.teardown(box)
+            except Exception:  # noqa: BLE001 - teardown failures are non-fatal
+                pass
+            payload = {
+                "action": "acceptance",
+                "status": "skipped",
+                "agent": agent,
+                "scenario": scenario.name,
+                "reason": result.error_message
+                or "drive preflight returned SKIP",
+            }
+            _emit(
+                payload,
+                json_mode=args.json,
+                human=(
+                    f"acceptance: SKIP at {scenario.name} — "
+                    f"{payload['reason']} (no report written)"
+                ),
+            )
+            return 0
+
+        # End-state path presence (the #49 lesson): every declared
+        # expected_paths entry must exist in the driven box project.
+        paths_present = all(
+            (box.project / rel).exists()
+            for rel in scenario.capture.expected_paths
+        )
+
+        rows.append(
+            accept.score_journey(
+                scenario=scenario.name,
+                spec_journey=spec.spec_journey,
+                verdict=verdict,
+                turn_count=result.turn_count,
+                par_calls=scenario.par_calls,
+                expected_paths_present=paths_present,
+                wall_clock_s=wall_clock_s,
+                binary_version=result.binary_version,
+                agent=agent,
+            )
+        )
+        try:
+            driver.teardown(box)
+        except Exception:  # noqa: BLE001 - teardown failures are non-fatal
+            pass
+
+    digests = {s.name: scenario_digest(load_scenario(s.name)) for s in scenarios}
+    report = accept.build_report(
+        rows=rows,
+        agent=agent,
+        binary_version=binary_version,
+        scenario_digests=digests,
+    )
+    accept.write_report(report, out_path)
+    # Surface committed-gate validity in the envelope: a --scenario subset
+    # run is honest-but-partial and will (correctly) fail the strict
+    # committed-report schema, which requires all 5 arcs.
+    problems = accept.validate_report_schema(report)
+    payload = {
+        "action": "acceptance",
+        "status": "ok",
+        "mode": "real",
+        "agent": agent,
+        "report_path": str(out_path),
+        "summary": report["summary"],
+        "schema_valid": not problems,
+    }
+    if problems:
+        payload["schema_problems"] = problems
+    human = (
+        f"acceptance ({agent}): {report['summary']['arcs_completed']}/"
+        f"{report['summary']['journeys']} arcs completed, "
+        f"mean_score={report['summary']['mean_score']}\n"
+        f"  report: {out_path}"
+    )
+    if problems:
+        human += (
+            "\n  NOTE: report does NOT pass the committed-report schema "
+            "(partial run?); do not commit it as-is"
+        )
+    _emit(payload, json_mode=args.json, human=human)
+    return 0
+
+
 def cmd_footage(args: argparse.Namespace) -> int:
     """Record termctrl journey footage and build the gallery (additive).
 
@@ -1749,6 +1974,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_capref.add_argument("--base-checkpoint", default="c-installed-source",
                           help="base checkpoint to fork from (default: c-installed-source)")
     p_capref.set_defaults(func=cmd_capture_refresh)
+
+    p_accept = add(
+        "acceptance",
+        help="drive the 5 B0 acceptance scenarios and write a scored report (issue #61)",
+    )
+    p_accept.add_argument("--echo", action="store_true",
+                          help="drive the deterministic synthetic harness "
+                               "(no real agent, no network) — default-CI safe")
+    p_accept.add_argument("--agent", default=None,
+                          help="real agent to drive (claude/codex/pi); "
+                               "default claude. Ignored under --echo")
+    p_accept.add_argument("--scenario", default=None,
+                          help="drive a single acceptance scenario "
+                               "(default: all 5)")
+    p_accept.add_argument("--out", default=None,
+                          help="report output path (default: tests/otbox/"
+                               "captures/_acceptance/report.json; echo mode "
+                               "defaults to the gitignored echo-report.json)")
+    p_accept.set_defaults(func=cmd_acceptance)
 
     p_footage = add(
         "footage",

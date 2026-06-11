@@ -4,6 +4,7 @@
        otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf release-gate \
        capture-refresh \
        capture-refresh-check capture-refresh-all \
+       otbox-acceptance \
        otbox-footage otbox-footage-all \
        search-eval search-eval-real search-eval-xl search-eval-slope \
        search-eval-cache search-eval-live search-eval-profile search-eval-test
@@ -122,6 +123,19 @@ capture-refresh-check:
 AGENT ?= claude
 capture-refresh-all:
 	$(OTBOX_PY) -m tests.otbox capture-refresh --all --agent $(AGENT) --json
+
+# Issue #61 (plan 095 U9) — B0 acceptance ritual. Drives the 5 acceptance
+# scenarios (J1/J6/J7/J10/J13) through the real agent, scores each arc, and
+# writes the schema-versioned report to tests/otbox/captures/_acceptance/
+# report.json. Machine-gated: needs a real agent binary on PATH; SKIPs
+# cleanly otherwise. The default-CI safe path is `--echo` (synthetic
+# harness, no real agent, no network). Single-scenario override (its own var
+# so the capture-refresh `SCENARIO ?= echo-meta` default never leaks in):
+# `make otbox-acceptance AGENT=claude ACCEPTANCE_SCENARIO=acceptance-j1-onboarding`.
+ACCEPTANCE_SCENARIO ?=
+otbox-acceptance:
+	$(OTBOX_PY) -m tests.otbox acceptance --agent $(AGENT) \
+		$(if $(ACCEPTANCE_SCENARIO),--scenario $(ACCEPTANCE_SCENARIO),) --json
 
 # Journey footage (terminal-control). ADDITIVE visual-review aid: records an
 # MP4 of a simulated-user journey via `termctrl` and builds a gallery. Needs
