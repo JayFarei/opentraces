@@ -190,6 +190,82 @@ def test_query_exit_3_when_rebuild_fails(monkeypatch) -> None:
     assert payload["search_diagnostics"]["raw_trace_scan"] is False
 
 
+def test_query_after_trace_index_rebuild_is_read_only_steady_state() -> None:
+    # PR #24 honesty contract: the documented maintenance verb (`trace
+    # index`) produces a servable snapshot, and the NEXT query serves from it
+    # read-only (rebuilt_index=False) — no hidden second rebuild. This is the
+    # explicit "rebuild then query succeeds" end-to-end pair; the self-heal
+    # tests above cover the no-rebuild-first ordering.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_snapshot_path().exists()
+    runner = CliRunner()
+
+    rebuild = runner.invoke(main, ["trace", "index", "--json"])
+    assert rebuild.exit_code == 0, rebuild.output
+    assert default_snapshot_path().exists()
+
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert [item["trace_id"] for item in payload["candidates"]] == ["trace-site"]
+    assert payload["search_diagnostics"]["used_search_snapshot"] is True
+    assert payload["search_diagnostics"]["rebuilt_index"] is False
+    assert payload["search_diagnostics"]["raw_trace_scan"] is False
+
+
+def test_query_self_heal_notice_is_stderr_only_and_tty_gated(monkeypatch) -> None:
+    # PR #38 item M residual gap: the one-time self-heal notice
+    # (_notify_rebuilding) is TTY-gated by design, and CliRunner's captured
+    # stderr is not a TTY — so the notice was invisible to every test above
+    # and only covered indirectly via rebuilt_index diagnostics. Simulate an
+    # interactive stderr by patching the runner's stream wrapper and assert
+    # BOTH halves of the honesty contract: the staleness signpost lands on
+    # stderr (never stdout), and the --json stdout document stays pure
+    # parseable JSON.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    assert not default_snapshot_path().exists()
+    runner = CliRunner()
+
+    # Non-TTY consumers (pipes, scripts, CI) never see the notice, even when
+    # the self-heal actually runs.
+    quiet = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+    assert quiet.exit_code == 0, quiet.output
+    assert json.loads(quiet.stdout)["search_diagnostics"]["rebuilt_index"] is True
+    assert "rebuilding search snapshot" not in quiet.stderr
+
+    # Re-trigger the self-heal (stale dirty marker) with an interactive
+    # stderr: the operator-facing signpost must appear on stderr only.
+    mark_search_snapshot_dirty("test", trace_id="trace-site")
+    from click import testing as click_testing
+
+    original_isatty = click_testing._NamedTextIOWrapper.isatty
+
+    def stderr_is_a_tty(self):
+        if getattr(self, "name", "") == "<stderr>":
+            return True
+        return original_isatty(self)
+
+    monkeypatch.setattr(click_testing._NamedTextIOWrapper, "isatty", stderr_is_a_tty)
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    # stdout stays a single parseable JSON document even with the notice on.
+    payload = json.loads(result.stdout)
+    assert payload["search_diagnostics"]["rebuilt_index"] is True
+    assert "opentraces: rebuilding search snapshot (one-time)..." in result.stderr
+    assert "rebuilding search snapshot" not in result.stdout
+
+
 def test_trace_index_command_rebuilds_search_snapshot() -> None:
     _write_trace("demo-project", _trace("trace-site", "Fix site search"))
     runner = CliRunner()

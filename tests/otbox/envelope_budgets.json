@@ -9,6 +9,12 @@
     "max_tokens": 1900,
     "measured_at_seed": 920
   },
+  "bucket-manifest": {
+    "argv": ["bucket", "manifest", "--json"],
+    "max_tokens": 1750,
+    "measured_at_seed": 865,
+    "note": "Payload is the WHOLE manifest and grows with bucket trace count; the sentinel world holds one trace, so this budget is a floor that catches per-trace bloat, not corpus growth."
+  },
   "trace-index-status": {
     "argv": ["--json", "trace", "index", "status"],
     "max_tokens": 650,
@@ -20,20 +26,103 @@
     "max_tokens": 1500,
     "measured_at_seed": 32
   },
+  "trace-discover": {
+    "argv": ["trace", "discover", "farewell", "--json"],
+    "max_tokens": 1900,
+    "measured_at_seed": 955
+  },
   "trace-map": {
     "argv": ["trace", "map", "{trace_id}", "--json"],
     "max_tokens": 9000,
     "measured_at_seed": 4311
+  },
+  "trace-map-bursts": {
+    "argv": ["trace", "map", "{trace_id}", "--bursts", "--no-commit-lookup", "--json"],
+    "max_tokens": 2200,
+    "measured_at_seed": 1068
+  },
+  "trace-map-waste": {
+    "argv": ["trace", "map", "{trace_id}", "--waste", "--json"],
+    "max_tokens": 350,
+    "measured_at_seed": 159
+  },
+  "trace-map-run-intel": {
+    "argv": ["trace", "map", "{trace_id}", "--run-intel", "--json"],
+    "max_tokens": 150,
+    "measured_at_seed": 62,
+    "note": "Slightly above 2x: the happy-path sentinel session carries zero run signals, so the measured envelope is near-empty; 150 leaves room for ordinary additive envelope keys without masking a signal-bloat regression."
   },
   "trace-get": {
     "argv": ["trace", "get", "{trace_id}", "--json"],
     "max_tokens": 7500,
     "measured_at_seed": 3565
   },
+  "trace-get-card": {
+    "argv": ["trace", "get", "{trace_id}", "--card", "--json"],
+    "max_tokens": 1100,
+    "measured_at_seed": 513
+  },
+  "trace-slice-around-step": {
+    "argv": ["trace", "slice", "{trace_id}", "--around-step", "{edit_step_index}", "--json"],
+    "max_tokens": 15500,
+    "measured_at_seed": 7696
+  },
+  "trace-slice-bursts": {
+    "argv": ["trace", "slice", "{trace_id}", "--template", "bursts", "--no-commit-lookup", "--json"],
+    "max_tokens": 7600,
+    "measured_at_seed": 3801
+  },
+  "trace-compare": {
+    "argv": ["trace", "compare", "{trace_id}", "{trace_id}", "--json"],
+    "max_tokens": 1400,
+    "measured_at_seed": 673
+  },
+  "trail-track": {
+    "argv": ["trail", "track", "{trace_id}", "--json"],
+    "max_tokens": 11000,
+    "measured_at_seed": 5433
+  },
+  "trail-search-trace": {
+    "argv": ["trail", "search", "--trace", "{trace_id}", "--json"],
+    "max_tokens": 12000,
+    "measured_at_seed": 5994
+  },
+  "trail-blame-commit": {
+    "argv": ["trail", "blame", "commit", "{commit_sha}", "--json"],
+    "max_tokens": 7500,
+    "measured_at_seed": 3749
+  },
+  "trail-graph": {
+    "argv": ["trail", "graph", "--json"],
+    "max_tokens": 8800,
+    "measured_at_seed": 4400
+  },
   "ctx-list": {
     "argv": ["ctx", "list", "--json"],
     "max_tokens": 400,
     "measured_at_seed": 16
+  },
+  "ctx-tree": {
+    "argv": ["ctx", "tree", "{trace_id}", "--json"],
+    "max_tokens": 2000,
+    "measured_at_seed": 960
+  },
+  "ctx-show": {
+    "argv": ["ctx", "show", "{ctx_node_id}", "--json"],
+    "max_tokens": 900,
+    "measured_at_seed": 423,
+    "note": "{ctx_node_id} is probe-resolved by the measured fixture (root of `ctx tree {trace_id} --json`); no checkpoint audit field carries a ContextNode id."
+  },
+  "dataset-list": {
+    "argv": ["dataset", "list", "--json"],
+    "max_tokens": 1200,
+    "measured_at_seed": 593
+  },
+  "workflow-list": {
+    "argv": ["workflow", "list", "--json"],
+    "max_tokens": 400,
+    "measured_at_seed": 10,
+    "note": "Small-envelope floor (ctx-list precedent): strict 2x of a near-empty list (10 tokens) would turn any additive envelope key into a budget breach."
   },
   "doctor": {
     "argv": ["--json", "doctor"],
