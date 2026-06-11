@@ -37,8 +37,8 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-11, post-release-gate-095): 26 verified, 15 partial,
-  8 open, 7 tracked, 0 waived — 56 rows.
+- Status counts (2026-06-11, post-release-gate-095): 27 verified, 15 partial,
+  8 open, 7 tracked, 0 waived — 57 rows.
 
 ## A. Capture (per harness)
 
@@ -65,6 +65,7 @@ Derivation rules (enforced by the gate):
 | BKT-5 | `bucket verify` detects corrupted blobs and dangling refs (corrupted-blob fault world is the remaining follow-up) | B | partial | bucket-verify-detects-dangling, bucket-compression-integrity-roundtrip | #25 |
 | BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, live-hf-bucket-roundtrip, tests/otbox/test_live_hf_slice.py | — |
 | BKT-7 | Append-only hash-chained event log survives GC and rewrites | B | open | — | — |
+| BKT-8 | `bucket status`/`bucket manifest` are side-effect-free reads; self-heal is explicit via `bucket manifest --heal` / `bucket repair` (read-only digest == post-repair digest) | B | verified | bucket-read-verbs-side-effect-free, tests/core/test_bucket_store.py::test_bucket_read_verbs_are_side_effect_free, tests/core/test_bucket_store.py::test_readonly_node_count_matches_heal_when_live_log_is_trail_only, tests/core/test_bucket_store.py::test_manifest_write_repairs_stale_shape_with_unchanged_digest, migration-s5-read-in-place | #55 |
 
 ## C. Discovery (query/map/slice/get + intelligence)
 

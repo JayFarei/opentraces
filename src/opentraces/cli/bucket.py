@@ -107,7 +107,10 @@ def bucket_status_cmd(as_json: bool) -> None:
     """Show local bucket health, sync eligibility, and trail freshness."""
     from ..core.bucket_store import bucket_status
 
-    payload = bucket_status(write_manifest=True)
+    # Issue #55 — `bucket status` is a pure read: no manifest.json write, no
+    # per-trace envelope materialization. Self-heal is explicit via
+    # `bucket manifest --heal` / `bucket repair`.
+    payload = bucket_status(write_manifest=False, heal=False)
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -142,12 +145,24 @@ def bucket_status_cmd(as_json: bool) -> None:
 
 
 @bucket_group.command("manifest", cls=OpentracesCommand)
+@click.option(
+    "--heal",
+    is_flag=True,
+    help=(
+        "Persist manifest.json and materialize any missing per-trace "
+        "envelopes (self-heal). Without --heal this is a side-effect-free read."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_manifest_cmd(as_json: bool) -> None:
-    """Materialize and print the local bucket manifest."""
+def bucket_manifest_cmd(heal: bool, as_json: bool) -> None:
+    """Print the local bucket manifest (read-only; pass --heal to materialize)."""
     from ..core.bucket_store import bucket_manifest, bucket_manifest_path
 
-    manifest = bucket_manifest(write=True, include_objects=False)
+    # Issue #55 — default is a pure read: compute + print the manifest (incl.
+    # an in-memory reconcile of record-only orphans) without writing any byte
+    # under the bucket. `--heal` restores the materializing behavior (write
+    # manifest.json + per-trace envelopes), idempotent on a no-op.
+    manifest = bucket_manifest(write=heal, heal=heal, include_objects=False)
     if as_json:
         click.echo(_dump_json({"status": "ok", "manifest": manifest}))
         return
