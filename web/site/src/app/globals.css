@@ -442,6 +442,53 @@ html { color-scheme: light; }
   background: var(--surface);
   letter-spacing: 0.02em;
 }
+.hero-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.hero-announce {
+  position: relative;
+  overflow: hidden;
+  display: inline-block;
+  font-family: var(--font-label);
+  font-size: 11px;
+  padding: 5px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  background: var(--accent-bg);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  transition: border-color 0.15s, background 0.15s;
+}
+.hero-announce::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -100%;
+  width: 100%;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--accent) 26%, transparent) 50%,
+    transparent 70%
+  );
+  animation: hero-announce-shimmer 1.6s ease-in-out 0.5s 2;
+  pointer-events: none;
+}
+@keyframes hero-announce-shimmer {
+  to { transform: translateX(200%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-announce::after { animation: none; }
+}
+.hero-announce:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 
 /* ═══ Logo (favicon only) ═══ */
 .logo-glyph {
@@ -4291,6 +4338,7 @@ p {
 
 /* Pills / eyebrows that carried the old label font. */
 .hero-pill { font-family: var(--font-mono); letter-spacing: 0.16em; text-transform: uppercase; font-size: 10px; }
+.hero-announce { font-family: var(--font-mono); letter-spacing: 0.16em; text-transform: uppercase; font-size: 10px; }
 
 /* Pipeline diagram → OT card surfaces + HF mark (no emoji). */
 .pipe-card { background: var(--surface); border-color: var(--border); border-radius: var(--radius); overflow: hidden; }
