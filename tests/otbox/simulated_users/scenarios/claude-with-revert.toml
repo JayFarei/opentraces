@@ -12,12 +12,23 @@ template = "single-file-python-project"
 prompt = "Add a shout(name: str) helper to src/app.py that returns the upper-cased greeting, run a quick syntax check, and commit the change with message 'add shout helper'."
 expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
 timeout_s = 300
+# The shout commit must land before we can revert it.
+verify_command = ["git", "log", "-1", "--format=%s"]
+verify_regex = "(?i)shout"
 
 [[turns]]
 prompt = "Actually I changed my mind about that helper. Revert the commit you just made with git revert (keep history, do not reset), and confirm the revert commit landed."
 expect_regex = "(?is)(revert(ed)?|commit [0-9a-f]{7,})"
 timeout_s = 300
+# A real `git revert` writes the literal "This reverts commit " body marker —
+# the exact string sync.py::_find_revert_commit + _captured_with_revert.py
+# consume. A run where claude never lands the revert commit FAILs the drive.
+expect_revert_commit = true
 
 [capture]
 artifact_dir = "claude-with-revert"
 expected_paths = ["src/app.py"]
+min_traces = 1
+# Pre-snapshot floor mirroring the with-revert checkpoint's reverted-survival
+# world: a revert commit (body marker) must exist or no artifact is written.
+require_revert_commit = true

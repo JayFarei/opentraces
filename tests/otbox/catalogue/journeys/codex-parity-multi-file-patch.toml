@@ -47,9 +47,12 @@ equals = ["src/app.py", "src/helpers.py", "tests/test_app.py"]
 kind = "stdout_json_length_equals"
 step = "trace-map"
 path = "map.nodes.0.metadata.patches"
-# World-derived: the record's patch count (codex hunk granularity varies per
-# binary version; the cross-surface identity record==map is the contract).
-equals_var = "codex_patch_count"
+# World-derived from the LANDED DIFF, not the record: the burst projection
+# diff-reconciles per-file patch counts against `git show` (consecutive
+# same-file Edits land as one hunk), so the map view tracks the diff's
+# hunk count while the record keeps one patch per Edit call. Record
+# granularity stays asserted on the slice path via codex_patch_count.
+equals_var = "codex_landed_hunk_count"
 
 [[assertions]]
 kind = "returncode"

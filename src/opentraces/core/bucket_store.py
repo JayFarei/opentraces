@@ -19,11 +19,13 @@ module so all ~91 existing call sites remain importable from
 
 from __future__ import annotations
 
+import fcntl
 import gzip
 import json
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from opentraces.core._time import utc_now_str
@@ -572,6 +574,58 @@ def _events_for_trace_from_iter(
     return trail_events, context_events
 
 
+def _context_events_for_trace_readonly(
+    project_slug: str, trace_id: str
+) -> list[Any]:
+    """Return this trace's context events from canonical data WITHOUT writing.
+
+    Issue #55 read-only summary helper. Mirrors :func:`project_per_trace_exports`'s
+    event source order — the live Git event log for the matching opted-in
+    project first, then the bucket's own events mirror — so the in-memory
+    ``node_count`` equals the one the healed companion would carry. Never
+    touches disk under the bucket root.
+
+    The mirror fallback condition must match the writer's EXACTLY
+    (``not trail_events and not context_events``, never ``not
+    context_events`` alone): a trace whose live log holds trail events but
+    zero context events gets an EMPTY context companion on heal, so the
+    read-only count must not borrow the mirror's context events for it —
+    that would break the read-digest == post-heal-digest invariant.
+    """
+
+    from .trails import read_events
+
+    repo: Path | None = None
+    try:
+        for path, slug in _iter_opted_in_projects():
+            if slug == project_slug:
+                repo = path
+                break
+    except Exception:
+        repo = None
+
+    events_iter: list[Any] = []
+    if repo is not None:
+        try:
+            events_iter = list(read_events(repo, verify=False))
+        except Exception:
+            events_iter = []
+    trail_events, context_events = _events_for_trace_from_iter(
+        events_iter, trace_id
+    )
+
+    if not trail_events and not context_events:
+        try:
+            mirror_events = list(read_events_mirror_batches())
+        except (FileNotFoundError, ValueError, BucketLayoutError):
+            mirror_events = []
+        except Exception:
+            mirror_events = []
+        if mirror_events:
+            _, context_events = _events_for_trace_from_iter(mirror_events, trace_id)
+    return context_events
+
+
 def _write_per_trace_envelope(
     project_slug: str,
     trace_id: str,
@@ -695,11 +749,25 @@ def project_per_trace_exports(
 
 
 def _per_trace_v2_summary(
-    project_slug: str, trace_id: str, record: TraceRecord | None
+    project_slug: str,
+    trace_id: str,
+    record: TraceRecord | None,
+    *,
+    assume_envelope_present: bool = False,
 ) -> dict[str, Any]:
     """Compute the manifest summary block for one per-trace envelope.
 
     Plan 080 §4 — drives the ``traces[]`` entries in ``manifest.json``.
+
+    Issue #55 — ``assume_envelope_present`` is the read-only reconcile mode.
+    When set, the summary reflects the state the per-trace envelope WOULD have
+    after a self-heal, WITHOUT touching disk: :func:`_write_per_trace_envelope`
+    always writes all three companion files (framed gzip, non-zero size even
+    when logically empty), so ``has_trail`` / ``has_context`` / ``has_sources``
+    are all ``True`` post-heal, and ``node_count`` is read from the canonical
+    context events (read-only) instead of the not-yet-written companion. This
+    makes the read-only digest byte-identical to the digest a subsequent
+    ``bucket repair`` / ``bucket manifest --heal`` persists.
     """
 
     trail_path = trace_v1_trail_path(project_slug, trace_id)
@@ -707,9 +775,16 @@ def _per_trace_v2_summary(
     sources_path = trace_v1_sources_path(project_slug, trace_id)
     trace_json = trace_v1_json_path(project_slug, trace_id)
 
-    has_trail = trail_path.exists() and trail_path.stat().st_size > 0
-    has_context = context_path.exists() and context_path.stat().st_size > 0
-    has_sources = sources_path.exists() and sources_path.stat().st_size > 0
+    if assume_envelope_present:
+        # Heal always materializes all three framed companions (size > 0), so
+        # the post-heal disk view reports True for each regardless of content.
+        has_trail = True
+        has_context = True
+        has_sources = True
+    else:
+        has_trail = trail_path.exists() and trail_path.stat().st_size > 0
+        has_context = context_path.exists() and context_path.stat().st_size > 0
+        has_sources = sources_path.exists() and sources_path.stat().st_size > 0
 
     # Summary counters from TraceRecord when available.
     step_count = 0
@@ -740,13 +815,20 @@ def _per_trace_v2_summary(
             if isinstance(methods, list):
                 capture_methods = sorted(str(m) for m in methods if m)
 
-    # node_count from per-trace context.jsonl.gz (count distinct node payloads
-    # via context_node_observed events). Cheap because file is small.
-    node_count = 0
-    if has_context:
-        try:
-            from .context_tree.contract import CONTEXT_NODE_OBSERVED
+    # node_count: count distinct node payloads via context_node_observed
+    # events. In the default (materialized) path read the per-trace
+    # context.jsonl.gz (cheap — small file). In the read-only #55 path the
+    # companion is not on disk yet, so count the SAME events from canonical
+    # data (read-only) — what the healed companion would contain.
+    from .context_tree.contract import CONTEXT_NODE_OBSERVED
 
+    node_count = 0
+    if assume_envelope_present:
+        for event in _context_events_for_trace_readonly(project_slug, trace_id):
+            if getattr(event, "event_type", None) == CONTEXT_NODE_OBSERVED:
+                node_count += 1
+    elif has_context:
+        try:
             raw = _read_gzip_bytes(context_path).decode("utf-8")
             for line in raw.splitlines():
                 if not line.strip():
@@ -833,6 +915,33 @@ def iter_traces_v2(
         rows.append(_per_trace_v2_summary(proj_slug, tid, record))
     rows.sort(key=lambda item: (item["project_slug"], item["trace_id"]))
     return rows
+
+
+def trace_v2_summary_by_id(trace_id: str) -> dict[str, Any] | None:
+    """Resolve ONE trace's v2 summary row by ``trace_id`` (no manifest read).
+
+    Issue #54 — backs ``ctx info``'s documented ``trace.json`` fallback. When
+    the manifest has no row for ``trace_id`` but the per-trace envelope exists
+    on disk, this globs ``traces/v1/*/<trace_id>/trace.json`` and derives the
+    summary via :func:`_per_trace_v2_summary`, so the fallback's info block is
+    byte-identical to the block ``ctx info`` reads from a manifest row.
+    Returns ``None`` when no envelope exists. Bounded to one trace — NOT the
+    ``ctx list`` 10k-trace perf gate (a single-id ``ctx info`` lookup).
+    """
+
+    root = traces_v1_root()
+    if not root.exists():
+        return None
+    for trace_json in sorted(root.glob(f"*/{_path_part(trace_id)}/trace.json")):
+        proj_slug = unquote(trace_json.parent.parent.name)
+        record: TraceRecord | None = None
+        try:
+            raw = json.loads(trace_json.read_text(encoding="utf-8"))
+            record = TraceRecord.model_validate(raw)
+        except (OSError, ValueError, json.JSONDecodeError, ValidationError):
+            record = None
+        return _per_trace_v2_summary(proj_slug, trace_id, record)
+    return None
 
 
 def _iter_opted_in_projects() -> list[tuple[Path, str]]:
@@ -1862,6 +1971,7 @@ def _load_manifest(path: Path | None = None) -> dict[str, Any] | None:
 def bucket_manifest(
     *,
     write: bool = False,
+    heal: bool = True,
     include_objects: bool = False,
 ) -> dict[str, Any]:
     """Return the local bucket manifest used by future remote sync.
@@ -1869,6 +1979,17 @@ def bucket_manifest(
     The manifest is intentionally transport-neutral: it summarizes the
     canonical bucket substrate and the local projections that remote sync must
     treat as derived state.
+
+    Issue #55 — ``heal`` controls the #31 read-side reconcile's DISK side
+    effects. Default ``heal=True`` keeps the materializing behavior for every
+    internal caller (``bucket repair``, ``bucket_remote``, ``doctor``, ...).
+    The two CLI read verbs pass ``heal=False`` (and ``write=False``) so they
+    are byte-level side-effect-free: the reconcile loop still appends each
+    orphan's record-derived summary row IN MEMORY (so counts + ``bucket_digest``
+    stay identical to the healed state), but writes NO per-trace envelope and
+    NO ``manifest.json``. The summary is record-derived in both branches, so
+    the digest invariant holds (the read-only digest equals the digest a
+    later ``--heal`` / ``bucket repair`` persists to disk).
     """
 
     trace_snapshot = trace_record_snapshot(include_objects=include_objects)
@@ -1947,6 +2068,24 @@ def bucket_manifest(
         # auto-adopt them. Record-only staged traces (PR #63) carry the link
         # and self-heal here — their deferred projection.
         if _is_legacy_read_in_place_mirror(*pair):
+            continue
+        if not heal:
+            # Issue #55 read-only path: report the orphan in-memory WITHOUT
+            # touching disk. ``assume_envelope_present`` makes the summary
+            # reflect the POST-heal disk state (heal always writes all three
+            # framed companions, so has_trail/has_context/has_sources are True;
+            # node_count is counted from canonical context events read-only).
+            # Keeps counts + bucket_digest byte-identical to the healed state
+            # so the digest invariant (BKT-3/BKT-6) holds.
+            traces_v2_rows.append(
+                _per_trace_v2_summary(
+                    obj.project_slug,
+                    obj.trace_id,
+                    obj.record,
+                    assume_envelope_present=True,
+                )
+            )
+            _existing_pairs.add(pair)
             continue
         try:
             if _project_paths is None:
@@ -2085,8 +2224,218 @@ def bucket_manifest(
     # v1 field name (bucket_remote, datasets).
     manifest["digest"] = bucket_digest
     if write:
-        _atomic_write_json(bucket_manifest_path(), manifest)
+        # Write-only-on-change discipline (matches bucket_repair §5): persist
+        # manifest.json only when the content differs from the on-disk
+        # manifest. ``_atomic_write_json``'s same-bytes skip is not enough
+        # here because ``generated_at``/``updated_at`` advance every call —
+        # so byte-comparison would ALWAYS rewrite. The compare is the FULL
+        # manifest minus only those volatile timestamps (NOT the Resolution-H
+        # digest alone): the digest excludes machine-local keys and any field
+        # outside its material, so a digest-only skip could leave a
+        # stale-SHAPED manifest.json on disk after a code upgrade — bytes
+        # bucket_remote would then push. Content-compare keeps idempotent
+        # re-projections byte-stable (``bucket manifest --heal`` twice =
+        # no-op; issue #55) while any real shape/content change still writes.
+        manifest_path = bucket_manifest_path()
+        existing_view: Any = None
+        if manifest_path.exists():
+            try:
+                existing_doc = json.loads(
+                    manifest_path.read_text(encoding="utf-8")
+                )
+                if isinstance(existing_doc, dict):
+                    existing_view = _manifest_change_view(existing_doc)
+            except (OSError, ValueError, json.JSONDecodeError):
+                existing_view = None
+        if existing_view is None or existing_view != _manifest_change_view(
+            manifest
+        ):
+            _atomic_write_json(manifest_path, manifest)
     return manifest
+
+
+_MANIFEST_VOLATILE_KEYS = frozenset({"generated_at", "updated_at"})
+
+
+def _manifest_change_view(doc: dict[str, Any]) -> dict[str, Any]:
+    """Manifest content minus the per-call volatile timestamps.
+
+    The write-only-on-change compare in :func:`bucket_manifest` keys on this
+    view: two manifests that differ only in ``generated_at``/``updated_at``
+    are the SAME content (skip the rewrite, keep bytes stable); any other
+    delta — including shape changes invisible to ``bucket_digest`` — writes.
+    """
+
+    return {k: v for k, v in doc.items() if k not in _MANIFEST_VOLATILE_KEYS}
+
+
+def _minimal_manifest_doc() -> dict[str, Any]:
+    """A schema-valid empty ``opentraces.bucket.manifest.v2`` document.
+
+    Issue #54 — the seed the bounded capture-time upsert writes when no
+    ``manifest.json`` exists yet. It carries only the canonical v2 skeleton
+    (``schema_version`` + an empty ``traces[]`` + an empty ``events_v1``
+    index) plus empty compat blocks every ``.get()``-guarded consumer
+    (``bucket_remote``, ``datasets``) already tolerates. A later full
+    :func:`bucket_manifest` regeneration (run by ``bucket status`` / ``bucket
+    remote push`` / ``bucket repair``) overwrites it with the populated
+    blocks; the upsert never sweeps the object store to fill them in (that is
+    the #44 latency class this seed exists to avoid).
+    """
+
+    return {
+        "schema_version": BUCKET_MANIFEST_SCHEMA,
+        "bucket_root": "",
+        "root": str(paths.bucket_dir()),
+        "generated_at": utc_now_str(),
+        "updated_at": utc_now_str(),
+        "security_version": SECURITY_VERSION,
+        "traces": [],
+        "events_v1": {
+            "schema_version": BUCKET_EVENTS_INDEX_SCHEMA,
+            "batch_count": 0,
+            "last_batch_id": None,
+            "latest_event_sequence": 0,
+        },
+        "trace_records": {},
+        "trail": {},
+        "sync": {},
+        "raw_sources": {},
+        "trail_events": {},
+        "context_trees": {},
+    }
+
+
+@contextmanager
+def _manifest_upsert_lock() -> Iterator[None]:
+    """Bucket-level exclusive flock serializing the manifest upsert.
+
+    Issue #54 adversary finding — ingest's flock is keyed per ``session_id``,
+    so two concurrent ingests of DIFFERENT sessions could both read the same
+    ``manifest.json``, each append its own row, and the later atomic replace
+    would drop the earlier trace's row (lost update; the exact invisibility
+    class the upsert exists to close). Blocking is correct here because the
+    hold time is one read + one write of a small JSON doc (mirrors
+    ``ingest._FileLock``'s rationale).
+    """
+
+    lock_path = bucket_manifest_path().with_name("manifest.json.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def upsert_manifest_trace_row(
+    repo: Path | None,
+    *,
+    project_slug: str,
+    trace_id: str,
+    record: TraceRecord | None = None,
+) -> dict[str, Any] | None:
+    """Insert/replace one trace's ``traces[]`` row in ``bucket/manifest.json``.
+
+    Issue #54 — capture materializes the manifest row so the manifest-only
+    readers (``ctx list`` / ``ctx info``) see a freshly captured trace
+    immediately, WITHOUT a ``bucket manifest`` / ``bucket repair`` heal verb.
+    Called from :func:`opentraces.core.ingest.ingest_one_session` right after
+    :func:`project_per_trace_exports`, inside the ``if not trace_record_only``
+    guard.
+
+    Bounded to O(one trace): the summary row is computed via
+    :func:`_per_trace_v2_summary` from the per-trace envelope this ingest just
+    wrote (byte-identical to the row a full ``bucket_manifest`` regeneration
+    produces). It NEVER calls :func:`iter_trace_record_objects` /
+    :func:`trace_record_snapshot` or regenerates the whole manifest (the #44
+    post-commit latency class). When ``manifest.json`` is absent a minimal
+    schema-valid v2 doc is seeded; the row is upserted (replace if the
+    ``(project_slug, trace_id)`` pair already exists, else append) and
+    ``traces[]`` re-sorted; ``bucket_root`` + ``bucket_digest`` are recomputed
+    over the in-memory rows; the doc is written atomically with the same
+    write-only-on-change discipline as :func:`bucket_manifest` (compare the
+    full content minus volatile timestamps so idempotent re-captures stay
+    byte-stable). Returns the upserted row (``None`` only if the row could not
+    be computed — best-effort, never fatal to capture).
+
+    A subsequent full ``bucket_manifest(write=True)`` regeneration overwrites
+    the minimal compat blocks with the swept-store content; the per-trace row
+    is unchanged because both paths derive it from the same envelope.
+    """
+
+    row = _per_trace_v2_summary(project_slug, trace_id, record)
+
+    manifest_path = bucket_manifest_path()
+    with _manifest_upsert_lock():
+        doc: dict[str, Any] | None = None
+        existing_view: Any = None
+        if manifest_path.exists():
+            try:
+                raw_text = manifest_path.read_text(encoding="utf-8")
+                loaded = json.loads(raw_text)
+                if isinstance(loaded, dict):
+                    # Independent parse: ``doc`` is mutated below, so the
+                    # change-view compare must hold its own object graph.
+                    existing_view = _manifest_change_view(json.loads(raw_text))
+                    if loaded.get("schema_version") == BUCKET_MANIFEST_SCHEMA:
+                        doc = loaded
+            except (OSError, ValueError, json.JSONDecodeError):
+                doc = None
+                existing_view = None
+        if doc is None:
+            doc = _minimal_manifest_doc()
+
+        traces = [r for r in (doc.get("traces") or []) if isinstance(r, dict)]
+        traces = [
+            r
+            for r in traces
+            if (r.get("project_slug"), r.get("trace_id"))
+            != (project_slug, trace_id)
+        ]
+        traces.append(row)
+        traces.sort(key=lambda item: (item["project_slug"], item["trace_id"]))
+        doc["traces"] = traces
+
+        project_slugs = sorted({r["project_slug"] for r in traces})
+        doc["bucket_root"] = project_slugs[0] if len(project_slugs) == 1 else ""
+        doc["updated_at"] = utc_now_str()
+
+        # The digest covers the doc AS WRITTEN (self-consistent), not the
+        # digest a full swept regeneration would produce — the compat blocks
+        # stay as-loaded until heal. That transient delta is consumer-safe:
+        # every top-level-digest consumer regenerates first
+        # (``bucket_remote`` calls ``bucket_manifest(write=True)`` before
+        # every ``.get("digest")``; ``datasets`` recomputes ``write=False``);
+        # ``ctx info``'s ``digest`` is the per-trace ROW digest, which is
+        # byte-identical across both paths.
+        bucket_digest_material = _machine_neutral_digest_view(
+            {
+                "schema_version": doc["schema_version"],
+                "bucket_root": doc["bucket_root"],
+                "security_version": doc.get("security_version", SECURITY_VERSION),
+                "traces": sorted(
+                    traces, key=lambda r: (r["project_slug"], r["trace_id"])
+                ),
+                "events_v1": doc.get("events_v1", {}),
+                "trace_records": doc.get("trace_records", {}),
+                "trail": doc.get("trail", {}),
+                "raw_sources": doc.get("raw_sources", {}),
+                "trail_events": doc.get("trail_events", {}),
+                "sync": doc.get("sync", {}),
+            }
+        )
+        bucket_digest = _digest_payload(bucket_digest_material)
+        doc["bucket_digest"] = bucket_digest
+        doc["digest"] = bucket_digest
+
+        if existing_view is None or existing_view != _manifest_change_view(doc):
+            _atomic_write_json(manifest_path, doc)
+    return row
 
 
 _MACHINE_LOCAL_DIGEST_KEYS = frozenset({"root", "repo_path"})
@@ -2110,8 +2459,15 @@ def _machine_neutral_digest_view(value: Any) -> Any:
     return value
 
 
-def bucket_status(*, write_manifest: bool = True) -> dict[str, Any]:
-    manifest = bucket_manifest(write=write_manifest, include_objects=False)
+def bucket_status(
+    *, write_manifest: bool = True, heal: bool = True
+) -> dict[str, Any]:
+    # Issue #55 — ``heal`` mirrors :func:`bucket_manifest`. Internal callers
+    # keep the materializing default; the CLI ``bucket status`` read verb passes
+    # ``write_manifest=False, heal=False`` for a byte-level side-effect-free read.
+    manifest = bucket_manifest(
+        write=write_manifest, heal=heal, include_objects=False
+    )
     return {
         "status": "ok",
         "bucket": manifest,

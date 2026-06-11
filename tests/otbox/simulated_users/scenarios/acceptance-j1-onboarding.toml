@@ -1,0 +1,34 @@
+# B0 acceptance scenario — J1-enroll-machine (issue #61, plan 095 U9).
+#
+# A real agent drives the opentraces onboarding arc on a clean machine:
+# init the project, set up the git correlator, then run doctor and read
+# its health verdict. The arc's END-STATE is asserted by verify_command
+# (not just prompt completion — the #49 lesson): the project must carry
+# the .opentraces.json marker file `opentraces init` writes.
+#
+# Starts from c-installed-source (CLI installed, NO captured world) via
+# the single-file-python-project template. Machine-gated: needs a real
+# `claude` binary; SKIPs cleanly otherwise.
+
+name = "acceptance-j1-onboarding"
+description = "J1 — agent enrolls a fresh machine/project: opentraces init -> setup git -> doctor green, asserting the real on-disk end-state."
+agent = "claude"
+binary_name = "claude"
+par_calls = 4
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "You are onboarding this project to opentraces. Run `opentraces init` in this directory, then `opentraces setup git`, then `opentraces doctor --json`. Report the doctor health verdict you see."
+expect_regex = "(?i)(doctor|health|opentraces|init)"
+timeout_s = 240
+# End-state assertion: init must have written the per-project marker file
+# with a project_id (the #49 lesson — assert the arc landed, not the prompt).
+verify_command = ["cat", ".opentraces.json"]
+verify_regex = "project_id"
+
+[capture]
+artifact_dir = "acceptance-j1-onboarding"
+expected_paths = [".opentraces.json"]
+min_traces = 1

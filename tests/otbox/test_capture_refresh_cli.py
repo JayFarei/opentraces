@@ -240,3 +240,257 @@ def test_skip_when_real_binary_missing(tmp_path, monkeypatch):
     # No artifact should have been written.
     artifact = CAPTURES_ROOT / "echo-meta" / "snapshot.tar.gz"
     assert not artifact.exists(), "SKIP path produced an artifact"
+
+
+# ---------------------------------------------------------------------------
+# issue #49 — pre-snapshot contract-floor gate
+# ---------------------------------------------------------------------------
+def test_dry_run_envelope_frozen_and_human_text_surfaces_floors():
+    """The dry-run --json envelope keeps its pre-#49 shape (hard rule: no
+    shape changes to existing envelopes); the declared contract floors are
+    surfaced in the HUMAN dry-run text instead."""
+    _require_simulated_users()
+    scenario_mod = importlib.import_module("tests.otbox.simulated_users.scenario")
+    try:
+        scenario_mod.load_scenario("claude-with-revert")
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"claude-with-revert scenario not present: {exc}")
+
+    proc = _run_cli("--scenario", "claude-with-revert", "--dry-run", "--json")
+    assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+    payload = json.loads(proc.stdout)
+    assert "contract_floors" not in payload, (
+        "dry-run --json envelope grew a new key; existing envelope shapes "
+        "are frozen (grep journeys before changing)"
+    )
+
+    human = _run_cli("--scenario", "claude-with-revert", "--dry-run")
+    assert human.returncode == 0, f"stderr: {human.stderr}"
+    assert "contract floors" in human.stdout
+    assert "require_revert_commit=True" in human.stdout
+
+
+def test_expand_capture_refresh_turns_preserves_every_turn_field():
+    """Template expansion must NOT strip Turn fields: the issue #49 per-turn
+    contract (verify_command / verify_regex / expect_revert_commit /
+    fresh_session) — and any field added later — has to survive the trip
+    through ``_expand_capture_refresh_turns`` or the drive never sees it."""
+    _require_simulated_users()
+    from tests.otbox.cli import _expand_capture_refresh_turns
+    from tests.otbox.simulated_users.runner import Turn
+
+    turn = Turn(
+        prompt="open {trace_id}",
+        expect_regex="(?i)ok {trace_id}",
+        timeout_s=42.5,
+        verify_command=["git", "log", "--grep", "{trace_id}"],
+        verify_regex="trace {trace_id}",
+        expect_revert_commit=True,
+        fresh_session=True,
+    )
+    (expanded,) = _expand_capture_refresh_turns(
+        [turn], {"trace_id": "deadbeef"}
+    )
+
+    # String fields expand their placeholders.
+    assert expanded.prompt == "open deadbeef"
+    assert expanded.expect_regex == "(?i)ok deadbeef"
+    assert expanded.verify_regex == "trace deadbeef"
+    assert expanded.verify_command == ["git", "log", "--grep", "deadbeef"]
+    # Every NON-expanded field rides through identically — introspective so
+    # a future Turn field cannot be silently dropped again.
+    expanded_fields = {"prompt", "expect_regex", "verify_regex", "verify_command"}
+    for f in dataclasses.fields(Turn):
+        if f.name in expanded_fields:
+            continue
+        assert getattr(expanded, f.name) == getattr(turn, f.name), (
+            f"_expand_capture_refresh_turns dropped Turn.{f.name}"
+        )
+
+
+def _write_meta_scenario(name: str, body: str) -> Path:
+    """Write a temp scenario TOML into the package scenarios dir (the only
+    place ``load_scenario(name)`` resolves); caller unlinks in finally."""
+    import textwrap
+
+    scenarios_dir = (
+        REPO_ROOT / "tests" / "otbox" / "simulated_users" / "scenarios"
+    )
+    path = scenarios_dir / f"{name}.toml"
+    path.write_text(textwrap.dedent(body).lstrip())
+    return path
+
+
+def _cleanup_meta_capture_dir(name: str) -> None:
+    """Remove a temp meta-scenario's whole capture dir (incl. the gitignored
+    footage/ byproduct). Guarded to the -meta namespace these tests own."""
+    assert name.endswith("-meta"), name
+    target = CAPTURES_ROOT / name
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+
+
+def _teardown_box(payload: dict) -> None:
+    """Tear down the box a FAIL/sub-contract run intentionally left up."""
+    box_id = payload.get("box_id")
+    if not box_id:
+        return
+    subprocess.run(
+        [_venv_python(), "-m", "tests.otbox", "down", "--box", box_id],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def _interactive_lane_available() -> bool:
+    return bool(shutil.which("tmux")) and bool(shutil.which("termctrl"))
+
+
+def test_real_run_sub_contract_floor_gate_blocks_artifact():
+    """End-to-end through the REAL capture-refresh path (default-CI-safe):
+    a scenario that declares ``min_traces = 2`` on the echo agent (which
+    never mints a trace) must exit 4 with the sub-contract envelope and
+    write NO artifact — proving the contract-floor gate actually runs."""
+    _require_echo_scenario()
+    if not _interactive_lane_available():
+        pytest.skip("tmux/termctrl not installed on PATH")
+
+    name = "echo-floor-gate-meta"
+    path = _write_meta_scenario(
+        name,
+        f"""
+        name = "{name}"
+        description = "meta-test: contract-floor gate must reject a sub-contract capture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+
+        [initial_state]
+        template = "single-file-python-project"
+
+        [[turns]]
+        prompt = "Add a farewell helper to src/app.py"
+        expect_regex = "(?i)(I'll add|let me|adding)"
+        timeout_s = 15
+
+        [capture]
+        artifact_dir = "{name}"
+        expected_paths = ["src/app.py"]
+        min_traces = 2
+        """,
+    )
+    payload: dict = {}
+    try:
+        _cleanup_meta_capture_dir(name)
+        proc = _run_cli("--scenario", name, "--json")
+        assert proc.returncode == 4, (
+            f"expected sub-contract rc=4, got {proc.returncode}\n"
+            f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+        )
+        payload = json.loads(proc.stdout)
+        assert payload["status"] == "sub-contract", payload
+        assert payload["artifact_written"] is False
+        assert any("min_traces" in v for v in payload["violations"]), payload
+        artifact = CAPTURES_ROOT / name / "snapshot.tar.gz"
+        assert not artifact.exists(), "sub-contract run wrote an artifact"
+    finally:
+        path.unlink(missing_ok=True)
+        _teardown_box(payload)
+        _cleanup_meta_capture_dir(name)
+
+
+def test_real_run_turn_verification_failure_fails_capture():
+    """End-to-end through the REAL capture-refresh path (default-CI-safe):
+    a turn whose ``verify_regex`` cannot match the box state must FAIL the
+    run (rc=3) naming the assertion, and write NO artifact. This is the
+    test that catches per-turn contract fields being stripped between the
+    scenario TOML and the drive — a stripped contract would PASS here."""
+    _require_echo_scenario()
+    if not _interactive_lane_available():
+        pytest.skip("tmux/termctrl not installed on PATH")
+
+    name = "echo-verify-fail-meta"
+    marker = "marker-that-cannot-exist-zzz-471"
+    path = _write_meta_scenario(
+        name,
+        f"""
+        name = "{name}"
+        description = "meta-test: a failing per-turn verify_regex must sink the capture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+
+        [initial_state]
+        template = "single-file-python-project"
+
+        [[turns]]
+        prompt = "Add a farewell helper to src/app.py"
+        expect_regex = "(?i)(I'll add|let me|adding)"
+        timeout_s = 15
+        verify_command = ["cat", "src/app.py"]
+        verify_regex = "{marker}"
+
+        [capture]
+        artifact_dir = "{name}"
+        expected_paths = ["src/app.py"]
+        """,
+    )
+    payload: dict = {}
+    try:
+        _cleanup_meta_capture_dir(name)
+        proc = _run_cli("--scenario", name, "--json")
+        assert proc.returncode == 3, (
+            f"expected verify-FAIL rc=3, got {proc.returncode} — a PASS here "
+            f"means the per-turn contract was stripped before the drive\n"
+            f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+        )
+        payload = json.loads(proc.stdout)
+        assert payload["status"] == "failed", payload
+        assert marker in (payload.get("error") or ""), payload
+        artifact = CAPTURES_ROOT / name / "snapshot.tar.gz"
+        assert not artifact.exists(), "failed run wrote an artifact"
+    finally:
+        path.unlink(missing_ok=True)
+        _teardown_box(payload)
+        _cleanup_meta_capture_dir(name)
+
+
+def test_evaluate_capture_floors_reports_violations():
+    """The floor evaluator names each violated floor and is silent when
+    every floor is satisfied."""
+    from tests.otbox.cli import _evaluate_capture_floors
+    from tests.otbox.simulated_users.scenario import CaptureSpec
+
+    spec = CaptureSpec(
+        artifact_dir_name="x",
+        min_traces=3,
+        require_security_fingerprints=True,
+        require_revert_commit=True,
+    )
+
+    # Everything below the floor → three named violations.
+    facts = {"trace_count": 1, "security_fingerprinted": False, "has_revert_commit": False}
+    violations = _evaluate_capture_floors(facts, spec)
+    joined = " | ".join(violations)
+    assert len(violations) == 3, violations
+    assert "min_traces" in joined and "3" in joined
+    assert "security" in joined.lower()
+    assert "revert" in joined.lower()
+
+    # Everything at/above the floor → no violations.
+    ok_facts = {"trace_count": 4, "security_fingerprinted": True, "has_revert_commit": True}
+    assert _evaluate_capture_floors(ok_facts, spec) == []
+
+
+def test_evaluate_capture_floors_baseline_is_permissive():
+    """A default CaptureSpec (min_traces=1, no requirements) passes a
+    one-trace, no-security, no-revert world."""
+    from tests.otbox.cli import _evaluate_capture_floors
+    from tests.otbox.simulated_users.scenario import CaptureSpec
+
+    spec = CaptureSpec(artifact_dir_name="x")
+    facts = {"trace_count": 1, "security_fingerprinted": False, "has_revert_commit": False}
+    assert _evaluate_capture_floors(facts, spec) == []
+    # Zero traces still fails the implicit min_traces=1.
+    zero = {"trace_count": 0, "security_fingerprinted": False, "has_revert_commit": False}
+    assert _evaluate_capture_floors(zero, spec) != []

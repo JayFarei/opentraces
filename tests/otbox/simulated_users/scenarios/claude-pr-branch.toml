@@ -8,16 +8,37 @@ binary_name = "claude"
 [initial_state]
 template = "single-file-python-project"
 
-[[turns]]
-prompt = "Create a feature branch named feat/farewell-helper off the current branch, add a farewell(name: str) helper to src/app.py on that branch, run a quick check, and commit with message 'feat: add farewell helper'."
-expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
-timeout_s = 300
+# Restructured to a base-commit turn on main + two branch turns (issue #49):
+# each turn is a FRESH claude session so it lands its own trace (>= 3 traces),
+# and the two branch turns put >= 2 commits on feat/farewell-helper off main —
+# the _captured_with_pr_branch.py _BRANCH_COMMITS+1 = 3 floor and the >= 2
+# branch-commits-off-main shape `trail blame pr` consumes.
 
 [[turns]]
-prompt = "On the same branch, update README.md with a one-line description of the new helper and commit with message 'docs: mention farewell helper'. Then show me 'git log --oneline main..HEAD'."
+prompt = "On the main branch, add a one-line module docstring to the top of src/app.py and commit it with message 'chore: annotate app module'. This is the base commit before the feature branch."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+verify_command = ["git", "log", "-1", "--format=%s"]
+verify_regex = "(?i)chore"
+
+[[turns]]
+prompt = "Create a feature branch named feat/farewell-helper off main, add a farewell(name: str) helper to src/app.py on that branch, run a quick check, and commit with message 'feat: add farewell helper'."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+fresh_session = true
+verify_command = ["git", "log", "-1", "--format=%s"]
+verify_regex = "(?i)feat"
+
+[[turns]]
+prompt = "On the same feat/farewell-helper branch, update README.md with a one-line description of the new helper and commit with message 'docs: mention farewell helper'. Then show me 'git log --oneline main..HEAD'."
 expect_regex = "(?is)(farewell|docs:|[0-9a-f]{7,})"
 timeout_s = 300
+fresh_session = true
+# Two branch commits must sit ahead of main on this branch.
+verify_command = ["git", "rev-list", "--count", "main..HEAD"]
+verify_regex = "^[2-9]"
 
 [capture]
 artifact_dir = "claude-pr-branch"
 expected_paths = ["src/app.py", "README.md"]
+min_traces = 3

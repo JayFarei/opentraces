@@ -528,6 +528,52 @@ def _install_opentraces_hooks_in_box(box: Box, agent: str | None = "claude") -> 
     return None
 
 
+def _enable_security_tools_in_box(box: Box, tools: list[str]) -> str | None:
+    """Flip ``cfg.security.<tool>.enabled = True`` in the box config.
+
+    Mirrors the synthetic ``_captured_with_secrets.py`` config flip
+    (``load_config`` → set ``cfg.security.regex.enabled`` etc. →
+    ``save_config``). Must run AFTER ``opentraces init`` (the config
+    exists) and BEFORE the agent binary spawns (issue #49): the agent's
+    Stop-hook ingest sanitizes with the config active at capture time, so
+    a post-drive flip cannot fingerprint already-ingested traces.
+
+    Returns ``None`` on success or an error string the caller turns into
+    a FAIL.
+    """
+    from ..env import isolated_env
+
+    if not tools:
+        return None
+    testvenv_python = Path(box.project) / ".testvenv" / "bin" / "python"
+    if not testvenv_python.is_file():
+        return (
+            f"box python not found at {testvenv_python} — checkpoint "
+            f"`c-installed-source` did not run?"
+        )
+    flips = "; ".join(f"cfg.security.{t}.enabled = True" for t in tools)
+    snippet = (
+        "from opentraces.core.config import load_config, save_config; "
+        "cfg = load_config(); "
+        f"{flips}; "
+        "save_config(cfg)"
+    )
+    result = subprocess.run(
+        [str(testvenv_python), "-c", snippet],
+        cwd=str(box.project),
+        env=isolated_env(box),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return (
+            f"enable security tools {tools} failed (rc={result.returncode}): "
+            f"{(result.stderr or result.stdout).strip()[:200]}"
+        )
+    return None
+
+
 def _rebuild_trace_search_snapshot_in_box(box: Box) -> str | None:
     """Run the explicit trace search maintenance command inside a box."""
     from ..env import isolated_env
@@ -563,6 +609,7 @@ __all__ = [
     "_prep_codex_project_trust",
     "_prep_claude_project_trust",
     "_install_opentraces_hooks_in_box",
+    "_enable_security_tools_in_box",
     "_rebuild_trace_search_snapshot_in_box",
     "_build_env_prefix",
     "_strip_codex_project_tables",

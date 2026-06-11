@@ -169,6 +169,26 @@ def test_determinism_byte_identical():
 def test_envelope_shape():
     record = _record([_read_step(1, "a.py", 0)])
     d = detect_context_waste(record).to_dict()
-    assert d["schema_version"] == "opentraces.context_waste.v1"
+    assert d["schema_version"] == "opentraces.context_waste.v2"
     assert set(d) == {"schema_version", "trace_id", "fidelity", "thresholds", "findings", "summary", "limitations"}
     assert d["thresholds"]["large_output_chars"] == 12000
+
+
+def test_to_envelope_top_level_status():
+    """Issue #56: the CLI-facing envelope flattens the report and carries
+    schema_version + status at the top level (mirrors run_intel)."""
+    record = _record([_read_step(1, "a.py", 0)])
+    env = detect_context_waste(record).to_envelope()
+    assert set(env) == {
+        "schema_version",
+        "status",
+        "trace_id",
+        "fidelity",
+        "thresholds",
+        "findings",
+        "summary",
+        "limitations",
+    }
+    assert env["schema_version"] == "opentraces.context_waste.v2"
+    assert env["status"] == "ok"
+    assert env["trace_id"] == "trace-waste"

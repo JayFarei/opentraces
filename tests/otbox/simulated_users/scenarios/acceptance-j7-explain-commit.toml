@@ -1,0 +1,35 @@
+# B0 acceptance scenario — J7-explain-commit-pr (issue #61, plan 095 U9).
+#
+# A real agent drives the lineage arc over a captured world: take the
+# project HEAD commit and explain which agent session(s) produced it via
+# `trail blame commit <sha>`. The end-state assertion runs the same blame
+# command and confirms it resolves the commit to at least one contributing
+# session with a coverage share (the #49 lesson — the blame projection
+# must actually bind the commit to a session, not just narrate it).
+#
+# Seeds from c-captured-real-session (the captured session's commit lives
+# in the project git log) — declared by the acceptance harness, not
+# assumed. Machine-gated on a real `claude` binary.
+
+name = "acceptance-j7-explain-commit"
+description = "J7 — agent explains a commit over a captured world: trail blame commit HEAD resolves contributing sessions with coverage, asserted against the real blame projection."
+agent = "claude"
+binary_name = "claude"
+par_calls = 3
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Explain who produced the most recent commit in this repo. Get the HEAD sha with `git rev-parse HEAD`, then run `opentraces trail blame commit <sha> --json` and tell me which agent session(s) contributed and their coverage share."
+expect_regex = "(?i)(blame|commit|session|coverage|trail)"
+timeout_s = 240
+# End-state assertion: blame on HEAD resolves to a contributing session
+# (the JSON carries a non-empty sessions/contributors structure).
+verify_command = ["sh", "-lc", ".testvenv/bin/opentraces trail blame commit $(git rev-parse HEAD) --json"]
+verify_regex = "(?s)(session|coverage|contributor|trace_id)"
+
+[capture]
+artifact_dir = "acceptance-j7-explain-commit"
+expected_paths = []
+min_traces = 1

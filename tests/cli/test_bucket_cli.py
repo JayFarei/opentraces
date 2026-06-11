@@ -445,3 +445,75 @@ def test_setup_bucket_fake_remote_pull_now(tmp_path, monkeypatch):
     payload = json.loads(configured.output)
     assert payload["remote_sync"]["state"] == "pulled"
     assert [obj.trace_id for obj in iter_trace_record_objects()] == ["trace-setup-pull-now"]
+
+
+def test_ctx_info_falls_back_to_trace_json_when_manifest_row_missing():
+    """Issue #54 — ``ctx info``'s documented ``trace.json`` fallback.
+
+    When the per-trace envelope exists on disk but the manifest has no
+    ``traces[]`` row for it (a manifest that drifted, or was never written),
+    ``ctx info <trace> --json`` must fall back to deriving the info block from
+    the per-trace envelope rather than reporting ``trace_not_found_in_bucket``.
+    The fallback MUST derive the block via ``_per_trace_v2_summary`` so the
+    bytes equal the manifest path's bytes (the digest-stability assertion in
+    ctx-info-head-shape and the local/remote symmetric gate depend on this).
+    """
+    from opentraces.core.bucket_store import (
+        _per_trace_v2_summary,
+        project_per_trace_exports,
+    )
+
+    record = _trace("trace-ctx-info-fallback")
+    record.security.scanned = True
+    record.security.classifier_version = SECURITY_VERSION
+    write_trace_record(
+        record,
+        project_slug="fallbackproj",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    # Envelope on disk, but NO manifest row (no upsert / no heal verb run).
+    project_per_trace_exports(
+        None,
+        project_slug="fallbackproj",
+        trace_id="trace-ctx-info-fallback",
+        record=record,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["ctx", "info", "trace-ctx-info-fallback", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == "opentraces.ctx.info.v2"
+    info = payload["info"]
+    assert info["trace_id"] == "trace-ctx-info-fallback"
+    assert info["files"]["has_context"] is True
+    assert info["remote_sync_eligible"] is False
+
+    # Fallback bytes equal the manifest-path bytes: the info block is the
+    # SAME shape ``ctx info`` reads from a manifest row, derived from the
+    # same ``_per_trace_v2_summary`` source.
+    row = _per_trace_v2_summary("fallbackproj", "trace-ctx-info-fallback", record)
+    summary = row["summary"]
+    expected_info = {
+        "project_slug": row["project_slug"],
+        "trace_id": row["trace_id"],
+        "title": row["title"],
+        "lifecycle": row["lifecycle"],
+        "trace_path": row["trace_path"],
+        "files": row["files"],
+        "summary": {
+            "step_count": summary["step_count"],
+            "patch_count": summary["patch_count"],
+            "anchored_count": summary["anchored_count"],
+            "node_count": summary["node_count"],
+            "capture_methods": list(summary["capture_methods"]),
+        },
+        "remote_sync_eligible": row["remote_sync_eligible"],
+        "digest": row["digest"],
+    }
+    assert json.dumps(info, sort_keys=True) == json.dumps(
+        expected_info, sort_keys=True
+    )

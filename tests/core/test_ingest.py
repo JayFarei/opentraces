@@ -608,6 +608,127 @@ class TestIngestOneSession:
         trace_ids = [row["trace_id"] for row in manifest["traces"]]
         assert result.trace_id in trace_ids
 
+    def test_ingest_writes_manifest_json_so_ctx_readers_see_the_trace(
+        self, project_dir
+    ) -> None:
+        """Issue #54 — capture materializes ``bucket/manifest.json`` on disk.
+
+        ``ctx info`` / ``ctx list`` are manifest-only readers that open
+        ``manifest.json`` directly (``heal=False``, no in-memory reconcile).
+        Issue #31 wrote the per-trace envelope at capture time but never the
+        top-level manifest, so a freshly captured trace was invisible to those
+        readers until a ``bucket manifest`` / ``bucket repair`` heal verb ran.
+        After ingest the manifest must exist AND the captured trace's
+        ``traces[]`` row must be byte-identical to the row a subsequent full
+        ``bucket_manifest(write=True)`` regeneration produces (idempotent
+        same-bytes writers; digest excludes volatile timestamps).
+        """
+        import json as _json
+
+        from opentraces.core.bucket_store import (
+            bucket_manifest,
+            bucket_manifest_path,
+        )
+        from opentraces.core.ingest import ingest_one_session
+
+        path = _write_jsonl(project_dir, "sess-manifest-disk", turns=3)
+        result = ingest_one_session(path, project_dir)
+        assert result.error is None
+
+        # Manifest exists on disk after the capture chain — no heal verb ran.
+        manifest_path = bucket_manifest_path()
+        assert manifest_path.exists()
+        on_disk = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert on_disk.get("schema_version") == "opentraces.bucket.manifest.v2"
+        capture_row = next(
+            (r for r in on_disk["traces"] if r["trace_id"] == result.trace_id),
+            None,
+        )
+        assert capture_row is not None
+
+        # A full regeneration produces a byte-identical row for this trace.
+        regen = bucket_manifest(write=True, include_objects=False)
+        regen_row = next(
+            (r for r in regen["traces"] if r["trace_id"] == result.trace_id),
+            None,
+        )
+        assert regen_row is not None
+        assert _json.dumps(capture_row, sort_keys=True) == _json.dumps(
+            regen_row, sort_keys=True
+        )
+
+    def test_ingest_manifest_upsert_is_bounded_to_one_trace(
+        self, project_dir, monkeypatch
+    ) -> None:
+        """Issue #54 — the capture-time manifest upsert is O(one trace).
+
+        It must NOT call ``iter_trace_record_objects`` / ``trace_record_snapshot``
+        or otherwise regenerate the whole manifest on the ingest hot path (the
+        #44 post-commit latency class). The single-trace upsert reuses the
+        per-trace envelope this ingest just wrote, never sweeping the object
+        store.
+        """
+        from opentraces.core import bucket_store
+        from opentraces.core.ingest import ingest_one_session
+
+        sweep_calls = {"objects": 0, "snapshot": 0}
+
+        real_objects = bucket_store.iter_trace_record_objects
+        real_snapshot = bucket_store.trace_record_snapshot
+
+        def _objects(*args, **kwargs):
+            sweep_calls["objects"] += 1
+            return real_objects(*args, **kwargs)
+
+        def _snapshot(*args, **kwargs):
+            sweep_calls["snapshot"] += 1
+            return real_snapshot(*args, **kwargs)
+
+        monkeypatch.setattr(bucket_store, "iter_trace_record_objects", _objects)
+        monkeypatch.setattr(bucket_store, "trace_record_snapshot", _snapshot)
+        # ingest.py imports these lazily from bucket_store, so patching the
+        # module attribute is sufficient; pin the import surface explicitly too.
+        monkeypatch.setattr(
+            "opentraces.core.bucket_store.iter_trace_record_objects", _objects
+        )
+        monkeypatch.setattr(
+            "opentraces.core.bucket_store.trace_record_snapshot", _snapshot
+        )
+
+        path = _write_jsonl(project_dir, "sess-bounded-upsert", turns=3)
+        result = ingest_one_session(path, project_dir)
+        assert result.error is None
+
+        assert sweep_calls["objects"] == 0, "manifest upsert swept the object store"
+        assert sweep_calls["snapshot"] == 0, "manifest upsert took a full snapshot"
+
+    def test_record_only_ingest_writes_no_manifest_row(
+        self, project_dir
+    ) -> None:
+        """Issue #54 / PR #63 — ``--trace-record-only`` defers projection.
+
+        The record-only fast path writes the in-place JSONL + TraceRecord
+        object + raw-source link but no per-trace envelope, so the bounded
+        capture-time manifest upsert must also be skipped: no ``traces[]`` row,
+        and ``manifest.json`` is not materialized by this path. Later
+        ``bucket manifest --heal`` / ``bucket repair`` performs the deferred
+        projection (covered by the #31 self-heal sentinels).
+        """
+        import json as _json
+
+        from opentraces.core.bucket_store import bucket_manifest_path
+        from opentraces.core.ingest import ingest_one_session
+
+        path = _write_jsonl(project_dir, "sess-record-only-no-row", turns=3)
+        result = ingest_one_session(path, project_dir, trace_record_only=True)
+        assert result.error is None
+
+        manifest_path = bucket_manifest_path()
+        if manifest_path.exists():
+            on_disk = _json.loads(manifest_path.read_text(encoding="utf-8"))
+            trace_ids = [r["trace_id"] for r in on_disk.get("traces") or []]
+            assert result.trace_id not in trace_ids
+
     def test_unchanged_file_is_noop(self, project_dir) -> None:
         from opentraces.core.ingest import ingest_one_session
 

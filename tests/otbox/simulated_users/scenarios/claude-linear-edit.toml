@@ -16,7 +16,12 @@ template = "single-file-python-project"
 prompt = "In this repo, add a farewell(name: str) helper to src/app.py that returns 'goodbye, <name>', keep the existing greet helper working, run a quick syntax check, then commit the change with a concise message."
 expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
 timeout_s = 300
+# Declarative git-state floor: a commit must actually exist on HEAD whose
+# diff touched src/app.py — the TUI saying "committed" is not enough.
+verify_command = ["git", "log", "-1", "--name-only", "--format=%H"]
+verify_regex = "(?is)[0-9a-f]{7,}.*src/app\\.py"
 
 [capture]
 artifact_dir = "claude-linear-edit"
 expected_paths = ["src/app.py"]
+min_traces = 1

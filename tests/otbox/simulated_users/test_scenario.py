@@ -160,6 +160,68 @@ def test_scenario_digest_stable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# par_calls — additive top-level scoring field (issue #61, B0 acceptance).
+# ---------------------------------------------------------------------------
+def test_par_calls_defaults_to_none() -> None:
+    """Scenarios without a ``par_calls`` key load fine and expose None."""
+    scenario = load_scenario("echo-meta")
+    assert scenario.par_calls is None
+
+
+def test_par_calls_parsed_when_declared() -> None:
+    """A top-level ``par_calls`` integer is parsed onto the Scenario."""
+    body = """
+        name = "par-fixture"
+        description = "par fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+        par_calls = 4
+
+        [[turns]]
+        prompt = "hello"
+        expect_regex = "(?i)hi"
+        timeout_s = 5
+
+        [capture]
+        artifact_dir = "par-fixture"
+        expected_paths = []
+    """
+    path = _write_scenario(Path.cwd(), "par-fixture", body)
+    try:
+        scenario = load_scenario("par-fixture")
+        assert scenario.par_calls == 4
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_par_calls_rejects_non_positive() -> None:
+    """A non-positive ``par_calls`` is a configuration error."""
+    body = """
+        name = "bad-par-fixture"
+        description = "bad par fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+        par_calls = 0
+
+        [[turns]]
+        prompt = "hello"
+        expect_regex = "(?i)hi"
+        timeout_s = 5
+
+        [capture]
+        artifact_dir = "bad-par-fixture"
+        expected_paths = []
+    """
+    path = _write_scenario(Path.cwd(), "bad-par-fixture", body)
+    try:
+        with pytest.raises(ScenarioError) as excinfo:
+            load_scenario("bad-par-fixture")
+        assert "par_calls" in str(excinfo.value)
+    finally:
+        path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
 # small extras — catalogue + agent validation, since they're cheap and
 # guard the surfaces Agent C will consume.
 # ---------------------------------------------------------------------------
@@ -274,3 +336,199 @@ def test_validator_rejects_capture_missing_artifact_dir() -> None:
         assert "artifact_dir" in str(excinfo.value).lower()
     finally:
         path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# issue #49 — per-turn git-state verification + contract floors
+# ---------------------------------------------------------------------------
+def test_turn_parses_verify_command_and_regex() -> None:
+    """A [[turns]] entry may carry a declarative post-turn verification:
+    a ``verify_command`` (argv list) executed in the box AND a
+    ``verify_regex`` its combined output must match."""
+    body = """
+        name = "verify-cmd-meta"
+        description = "test fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+
+        [[turns]]
+        prompt = "commit it"
+        expect_regex = "(?i)committed"
+        timeout_s = 5
+        verify_command = ["git", "log", "-1", "--format=%H"]
+        verify_regex = "[0-9a-f]{7,}"
+
+        [capture]
+        artifact_dir = "verify-cmd-meta"
+        expected_paths = []
+    """
+    path = _write_scenario(Path.cwd(), "verify-cmd-meta", body)
+    try:
+        scenario = load_scenario("verify-cmd-meta")
+        turn = scenario.turns[0]
+        assert turn.verify_command == ["git", "log", "-1", "--format=%H"]
+        assert turn.verify_regex == "[0-9a-f]{7,}"
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_turn_parses_expect_revert_commit() -> None:
+    """``expect_revert_commit = true`` is a structured assertion that a
+    commit on HEAD carries the ``This reverts commit `` body marker."""
+    body = """
+        name = "revert-meta"
+        description = "test fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+
+        [[turns]]
+        prompt = "revert it"
+        expect_regex = "(?i)revert"
+        timeout_s = 5
+        expect_revert_commit = true
+
+        [capture]
+        artifact_dir = "revert-meta"
+        expected_paths = []
+    """
+    path = _write_scenario(Path.cwd(), "revert-meta", body)
+    try:
+        scenario = load_scenario("revert-meta")
+        assert scenario.turns[0].expect_revert_commit is True
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_turn_parses_fresh_session_flag() -> None:
+    """``fresh_session = true`` requests a fresh agent invocation for the
+    turn so the turn lands its own session JSONL (its own trace)."""
+    body = """
+        name = "fresh-session-meta"
+        description = "test fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+
+        [[turns]]
+        prompt = "first"
+        expect_regex = "(?i)ok"
+        timeout_s = 5
+
+        [[turns]]
+        prompt = "second"
+        expect_regex = "(?i)ok"
+        timeout_s = 5
+        fresh_session = true
+
+        [capture]
+        artifact_dir = "fresh-session-meta"
+        expected_paths = []
+    """
+    path = _write_scenario(Path.cwd(), "fresh-session-meta", body)
+    try:
+        scenario = load_scenario("fresh-session-meta")
+        assert scenario.turns[0].fresh_session is False
+        assert scenario.turns[1].fresh_session is True
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_echo_verify_scenario_carries_turn_contracts() -> None:
+    """The committed echo-verify meta scenario pins the issue #49 turn
+    contract on the default-CI echo lane: per-turn verify assertions plus
+    a fresh_session restart turn."""
+    scenario = load_scenario("echo-verify")
+    assert scenario.agent == "echo"
+    assert scenario.turns[0].verify_command == ["cat", "src/app.py"]
+    assert scenario.turns[0].verify_regex == "def greet"
+    assert scenario.turns[1].fresh_session is True
+
+
+def test_turn_verify_defaults_are_none() -> None:
+    """A turn without verification keys leaves the new fields unset so
+    legacy scenarios keep their TUI-regex-only behavior."""
+    scenario = load_scenario("echo-meta")
+    for turn in scenario.turns:
+        assert turn.verify_command is None
+        assert turn.verify_regex is None
+        assert turn.expect_revert_commit is False
+        assert turn.fresh_session is False
+
+
+def test_capture_parses_contract_floors() -> None:
+    """[capture] may declare quantitative pre-snapshot contract floors:
+    min_traces, require_security_fingerprints, require_revert_commit,
+    plus a security-tool enable list."""
+    body = """
+        name = "floors-meta"
+        description = "test fixture"
+        agent = "echo"
+        binary_name = "_echo_binary.py"
+
+        [[turns]]
+        prompt = "go"
+        expect_regex = "(?i)ok"
+        timeout_s = 5
+
+        [capture]
+        artifact_dir = "floors-meta"
+        expected_paths = []
+        min_traces = 3
+        require_security_fingerprints = true
+        require_revert_commit = true
+        enable_security_tools = ["regex", "entropy"]
+    """
+    path = _write_scenario(Path.cwd(), "floors-meta", body)
+    try:
+        scenario = load_scenario("floors-meta")
+        assert scenario.capture.min_traces == 3
+        assert scenario.capture.require_security_fingerprints is True
+        assert scenario.capture.require_revert_commit is True
+        assert scenario.capture.enable_security_tools == ["regex", "entropy"]
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_capture_floor_defaults() -> None:
+    """[capture] floors default to the permissive baseline (min_traces=1,
+    no security/revert requirement, no security tools enabled)."""
+    scenario = load_scenario("echo-meta")
+    assert scenario.capture.min_traces == 1
+    assert scenario.capture.require_security_fingerprints is False
+    assert scenario.capture.require_revert_commit is False
+    assert scenario.capture.enable_security_tools == []
+
+
+def test_claude_scenarios_declare_issue49_contracts() -> None:
+    """The five claude-* scenarios carry the hardened contracts issue #49
+    requires: per-turn commit verification on commit-claiming turns, the
+    revert marker on with-revert, the trace floors on multi-skill /
+    pr-branch, and the security-tool enable on with-secrets."""
+    # with-revert: turn 1 must assert the literal revert marker.
+    revert = load_scenario("claude-with-revert")
+    assert any(t.expect_revert_commit for t in revert.turns), (
+        "claude-with-revert must assert a revert commit on some turn"
+    )
+    assert revert.capture.require_revert_commit is True
+
+    # multi-skill: >= 3 traces via fresh sessions per turn.
+    multi = load_scenario("claude-multi-skill")
+    assert multi.capture.min_traces >= 3
+    assert sum(1 for t in multi.turns if t.fresh_session) >= 2, (
+        "multi-skill needs fresh-session turns to land >= 3 traces"
+    )
+
+    # pr-branch: >= 3 traces, >= 2 branch commits.
+    pr = load_scenario("claude-pr-branch")
+    assert pr.capture.min_traces >= 3
+
+    # with-secrets: enables the security tools so fingerprints exist.
+    secrets = load_scenario("claude-with-secrets")
+    assert "regex" in secrets.capture.enable_security_tools
+    assert "entropy" in secrets.capture.enable_security_tools
+    assert secrets.capture.require_security_fingerprints is True
+
+    # linear-edit: at least one turn carries a commit verification.
+    linear = load_scenario("claude-linear-edit")
+    assert any(
+        t.verify_command and t.verify_regex for t in linear.turns
+    ), "claude-linear-edit must verify a commit landed"

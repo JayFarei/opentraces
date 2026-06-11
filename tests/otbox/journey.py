@@ -488,6 +488,7 @@ def _captured_session(box: Box) -> dict[str, str]:
         result["commit_sha"] = str(codex_audit.get("commit_sha") or result.get("commit_sha", ""))
         result["step_index"] = str(codex_audit.get("step_index") or result.get("step_index", ""))
         result["codex_patch_count"] = str(codex_audit.get("patch_count") or "")
+        result["codex_landed_hunk_count"] = str(codex_audit.get("landed_hunk_count") or "")
         result["transcript_path"] = str(codex_audit.get("transcript_path") or result.get("transcript_path", ""))
 
     pi_audit = box.notes.get("c_captured_pi_session_audit") or {}

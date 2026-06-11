@@ -223,6 +223,110 @@ def test_runner_writes_pane_log(driver, installed_box, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# issue #49 — per-turn git-state verification + fresh_session, echo lane
+# ---------------------------------------------------------------------------
+def _overlay_template(box) -> None:
+    """Copy the single-file-python-project template into the box project so
+    the issue #49 verify_command assertions have real files to read."""
+    import shutil as _shutil
+
+    template = (
+        Path(__file__).resolve().parent / "templates" / "single-file-python-project"
+    )
+    box.project.mkdir(parents=True, exist_ok=True)
+    for entry in template.iterdir():
+        dest = box.project / entry.name
+        if entry.is_dir():
+            _shutil.copytree(entry, dest, dirs_exist_ok=True)
+        else:
+            _shutil.copy2(entry, dest)
+
+
+def test_runner_verify_command_passes_on_real_box_state(driver, installed_box, tmp_path):
+    """A turn whose verify_command matches the box's real state reaches
+    PASS — the verification ran INSIDE the box and agreed."""
+    _overlay_template(installed_box)
+    turns = [
+        Turn(
+            prompt="Add a farewell helper to src/app.py",
+            expect_regex=r"(?i)I'?ll add",
+            timeout_s=10.0,
+            verify_command=["cat", "src/app.py"],
+            verify_regex="def greet",
+        ),
+    ]
+    result = run_simulated_session(
+        driver=driver,
+        box=installed_box,
+        binary=str(ECHO_BINARY),
+        turns=turns,
+        output_dir=_output_dir(tmp_path),
+    )
+    assert result.verdict == "PASS", (
+        f"{result.verdict} — {result.error_message}\n{result.pane_excerpt}"
+    )
+    assert result.turn_count == 1
+
+
+def test_runner_verify_command_failure_fails_drive(driver, installed_box, tmp_path):
+    """A turn that matched the transcript regex but whose verify_command
+    output misses verify_regex FAILs the drive (no silent transcript pass),
+    naming the turn + the failed assertion."""
+    _overlay_template(installed_box)
+    turns = [
+        Turn(
+            prompt="Add a farewell helper to src/app.py",
+            expect_regex=r"(?i)I'?ll add",  # echo DOES print this
+            timeout_s=10.0,
+            verify_command=["cat", "src/app.py"],
+            verify_regex="this-marker-will-never-be-in-the-seed-file-zzz",
+        ),
+    ]
+    result = run_simulated_session(
+        driver=driver,
+        box=installed_box,
+        binary=str(ECHO_BINARY),
+        turns=turns,
+        output_dir=_output_dir(tmp_path),
+    )
+    assert result.verdict == "FAIL", (
+        f"expected FAIL, got {result.verdict} — {result.error_message}"
+    )
+    assert "turn 0" in result.error_message
+    assert "this-marker-will-never-be-in-the-seed-file-zzz" in result.error_message
+
+
+def test_runner_fresh_session_turn_drives_to_pass(driver, installed_box, tmp_path):
+    """A fresh_session turn restarts the echo binary and still reaches PASS
+    — the restart path is exercised default-CI-safe."""
+    _overlay_template(installed_box)
+    turns = [
+        Turn(
+            prompt="Add a farewell helper to src/app.py",
+            expect_regex=r"(?i)I'?ll add",
+            timeout_s=10.0,
+        ),
+        Turn(
+            prompt="yes",
+            expect_regex=r"(?i)Done!",
+            timeout_s=10.0,
+            fresh_session=True,
+        ),
+    ]
+    result = run_simulated_session(
+        driver=driver,
+        box=installed_box,
+        binary=str(ECHO_BINARY),
+        turns=turns,
+        output_dir=_output_dir(tmp_path),
+    )
+    assert result.verdict == "PASS", (
+        f"{result.verdict} — {result.error_message}\n{result.pane_excerpt}"
+    )
+    assert result.turn_count == 2
+
+
+# ---------------------------------------------------------------------------
 # 5. _prep_agent_home — claude HOME seeding (theme + auth + editor mode)
 # ---------------------------------------------------------------------------
 def test_prep_agent_home_noop_for_non_claude(tmp_path):

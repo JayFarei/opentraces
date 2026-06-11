@@ -66,6 +66,7 @@ from .prep import (  # noqa: F401 - re-exported for back-compat
     _build_env_prefix,
     _copy_initial_state,
     _detect_binary_version,
+    _enable_security_tools_in_box,
     _ensure_box_project_git_repo,
     _install_opentraces_hooks_in_box,
     _prep_agent_home,
@@ -88,11 +89,32 @@ class Turn:
     without coordinating with ``scenario.py`` (Agent B) and the CLI
     layer (Agent C). ``timeout_s`` defaults to 60s to match the
     scenario-TOML default.
+
+    Issue #49 adds optional per-turn git-state verification (run INSIDE
+    the box after ``expect_regex`` matches and BEFORE the next prompt is
+    sent) so a turn that claims "committed" against the TUI transcript
+    cannot pass without a commit actually landing:
+
+      * ``verify_command`` — argv executed in the box project via
+        ``driver.exec`` (e.g. ``["git", "log", "-1", "--format=%H"]``).
+      * ``verify_regex`` — pattern the verify command's combined
+        stdout+stderr must match.
+      * ``expect_revert_commit`` — structured assertion that HEAD (or a
+        recent commit) carries the literal ``This reverts commit `` body
+        marker (the exact string ``sync.py::_find_revert_commit`` and
+        ``_captured_with_revert.py`` consume).
+      * ``fresh_session`` — drive this turn as a fresh agent invocation
+        (not ``--continue``) so it lands its own session JSONL = its own
+        trace. Lets a multi-turn scenario yield N traces.
     """
 
     prompt: str
     expect_regex: str
     timeout_s: float = 60.0
+    verify_command: list[str] | None = None
+    verify_regex: str | None = None
+    expect_revert_commit: bool = False
+    fresh_session: bool = False
 
 
 @dataclass
@@ -254,10 +276,19 @@ def _run_claude_print_turns(
     env: dict[str, str],
     turns: list[Turn],
     pane_log_path: Path,
+    *,
+    driver: Driver | None = None,
+    box: Box | None = None,
 ) -> tuple[str, int, str, str]:
     """Drive ``claude --print`` turns in subprocess mode (no tmux).
 
     Returns ``(verdict, completed_turns, error_message, final_output)``.
+
+    ``driver`` + ``box`` are threaded through so the same per-turn
+    git-state verification the interactive lane runs (issue #49) also
+    guards the legacy ``--print`` lane: a turn that claims "committed"
+    against stdout still has to back it up with real box state. They are
+    optional so existing callers (and the echo meta-tests) keep working.
 
     Why not tmux for real claude:
       * ``claude``'s interactive TUI uses tmux's alternate-screen
@@ -289,7 +320,9 @@ def _run_claude_print_turns(
                 "--strict-mcp-config",
                 "--permission-mode", "bypassPermissions",
             ]
-            if turn_idx > 0:
+            # A fresh-session turn (issue #49) drops --continue so it starts a
+            # NEW claude session = its own session JSONL = its own trace.
+            if turn_idx > 0 and not turn.fresh_session:
                 cmd.append("--continue")
             cmd.append(turn.prompt)
             log.write(
@@ -349,6 +382,15 @@ def _run_claude_print_turns(
                     ),
                     last_stdout,
                 )
+            # Per-turn git-state verification (issue #49) — same falsifiable
+            # box-state check the interactive lane runs.
+            if driver is not None and box is not None:
+                verify_ok, verify_err = drive._run_turn_verification(
+                    driver, box, turn, turn_idx
+                )
+                if not verify_ok:
+                    log.write(f"--- VERIFY FAIL: {verify_err} ---\n")
+                    return "FAIL", completed, verify_err, last_stdout
             completed += 1
     return "PASS", completed, "", last_stdout
 
@@ -467,6 +509,7 @@ def run_simulated_session(
     scenario: str = "session",
     export_mp4: bool = False,
     record_dir: Path | None = None,
+    enable_security_tools: list[str] | None = None,
 ) -> ScenarioResult:
     """Drive an interactive session with ``binary`` inside ``box``.
 
@@ -546,6 +589,7 @@ def run_simulated_session(
             scenario=scenario,
             record_dir=record_dir,
             export_mp4=export_mp4,
+            enable_security_tools=enable_security_tools,
         )
         return ScenarioResult(
             verdict=sr.verdict,
@@ -672,6 +716,23 @@ def run_simulated_session(
             "PATH": f"{Path(box.project) / '.testvenv' / 'bin'}:{os.environ.get('PATH', '')}",
         }
 
+    # Issue #49: flip declared security detectors on BEFORE the agent drives
+    # (the hook install above ran `opentraces init`, so the config exists) —
+    # the Stop-hook ingest sanitizes with the config active at capture time.
+    # Claude's legacy lane installs hooks inside its own block below and runs
+    # the same flip there.
+    if enable_security_tools and normalized_agent in {"codex-cli", "pi"}:
+        sec_error = _enable_security_tools_in_box(box, enable_security_tools)
+        if sec_error is not None:
+            return ScenarioResult(
+                verdict="FAIL",
+                binary_path=binary_abs,
+                binary_version=binary_version,
+                turn_count=0,
+                pane_log_path=str(pane_log_path),
+                error_message=sec_error,
+            )
+
     # --- claude: --print headless mode (no tmux, no MCP prompts) -----------
     # ``claude``'s interactive TUI uses tmux's alternate-screen buffer and
     # blocks on MCP-server trust prompts; neither is dismissable from the
@@ -696,6 +757,17 @@ def run_simulated_session(
                 pane_log_path=str(pane_log_path),
                 error_message=hook_install_error,
             )
+        if enable_security_tools:
+            sec_error = _enable_security_tools_in_box(box, enable_security_tools)
+            if sec_error is not None:
+                return ScenarioResult(
+                    verdict="FAIL",
+                    binary_path=binary_abs,
+                    binary_version=binary_version,
+                    turn_count=0,
+                    pane_log_path=str(pane_log_path),
+                    error_message=sec_error,
+                )
         env = isolated_env(box, env_extra)
         verdict, completed_turns, error_message, final_out = _run_claude_print_turns(
             binary=binary_abs,
@@ -703,6 +775,8 @@ def run_simulated_session(
             env=env,
             turns=turns,
             pane_log_path=pane_log_path,
+            driver=driver,
+            box=box,
         )
         return ScenarioResult(
             verdict=verdict,

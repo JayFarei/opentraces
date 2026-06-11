@@ -20,24 +20,27 @@ deterministic "blob not locally resolvable" shape), exposed via
 node at `~/.otbox-bucket-spine/main_node_id`.
 
 Asserts:
-  (a) offline call on the dangling node: rc=4, status == "error",
-      error.kind == "blob_missing_offline", error.hint mentions
+  (a) offline call on the dangling node BEFORE warm: rc=4, status ==
+      "error", error.kind == "blob_missing_offline", error.hint mentions
       `bucket prefetch`.
   (b) The events head is UNCHANGED across the failed call (no write).
-  (c) Dropping --offline degrades gracefully (rc=0, node summary with
-      unresolved layers) — the offline branch was the gate.
-  (d) The same --offline flags on a locally-complete node exit 0 — the
-      gate is "blob missing locally", not "always fail offline".
+  (c) Issue #57 — dropping --offline and pointing at the fake remote
+      makes the fetch SUCCEED (rc=0): the dangling node's blobs live on
+      the fake remote, so `--remote file://<fake>/bucket-spine` resolves
+      them and warms the local cache.
+  (d) Issue #57 — `--offline` AFTER the warm now exits rc=0 (the local
+      blob-cache read rung serves the warmed blobs); offline is reachable
+      precisely because the cache was warmed, proving the gate is "blob
+      missing locally", not "always fail offline".
+  (e) The same --offline flags on a locally-complete (main) node exit 0.
 
-Re-specced for issue #42 (un-quarantine): rc=4 + the error envelope +
-hint were authored correctly and are kept verbatim; the
-"remove --offline and the remote fetch succeeds" step required a real
-HF repo (undefined `{fake_hf_repo_id}`; RemoteHubBackend has no fake
-dispatch) and was replaced by the graceful-degrade + local-hit arms;
-`verify.orphan_blob_count` never existed (non-mutation is pinned via
-the events-head equals_var); step rc declared via `expect_returncode`
-(the authored `expected_returncode` key is not a runner field).
-Out-of-vocab preconditions dropped.
+Issue #57: the "drop --offline and the fetch succeeds" arm is restored
+against the directory-backed fake dispatch (`get_backend('file:///abs/
+dir')` -> tokenless offline DirectoryHubBackend) and the now-shipped
+`ctx show` local-blob-cache read rung. The rc=4 + error-envelope + hint
+assertions are kept verbatim (they now describe the BEFORE-warm state).
+`expect_returncode` declares the rc=4 step (the authored
+`expected_returncode` key is not a runner field).
 """
 lane = "core"
 tier = 0
@@ -50,6 +53,7 @@ from_checkpoints = ["c-bucket-spine-v2-pushed-fake-remote-blob-dropped"]
 [preconditions]
 min_captured_traces = 1
 context_tree_built = true
+local_blobs_dropped = true
 
 # ---------------------------------------------------------------------
 # Step 1 — capture the pre-call events head (non-mutation baseline).
@@ -131,34 +135,60 @@ path = "bucket.events_v1.last_batch_id"
 equals_var = "offline-pre-status:bucket.events_v1.last_batch_id"
 
 # ---------------------------------------------------------------------
-# Step 4 — without --offline the same node degrades gracefully
-# (rc=0; node summary with unresolved layer summaries).
+# Step 4 — issue #57: drop --offline and point at the fake remote. The
+# dangling node's blobs live there, so the fetch SUCCEEDS (rc=0) and the
+# local cache is warmed.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "shell"
-id = "ctx-show-degrades-without-offline"
+id = "ctx-show-remote-fetch-succeeds"
 argv = ["bash", "-c",
-        "exec {project}/.testvenv/bin/opentraces ctx show \"$(cat {home}/.otbox-bucket-spine/dangling_node_id)\" --json"]
+        "exec {project}/.testvenv/bin/opentraces ctx show \"$(cat {home}/.otbox-bucket-spine/dangling_node_id)\" --remote file://{fake_remote}/bucket-spine --json"]
 
 [[assertions]]
 kind = "returncode"
-step = "ctx-show-degrades-without-offline"
+step = "ctx-show-remote-fetch-succeeds"
 equals = 0
 
 [[assertions]]
 kind = "stdout_json"
-step = "ctx-show-degrades-without-offline"
-path = "node.node_id"
+step = "ctx-show-remote-fetch-succeeds"
+path = "layers.system.fetched_from"
+equals = "remote"
 
 # ---------------------------------------------------------------------
-# Step 5 — the gate is "blob missing locally": --offline on a
-# locally-complete node succeeds.
+# Step 5 — issue #57: --offline AFTER the warm now exits rc=0; the local
+# blob-cache rung serves the warmed blobs. Offline is reachable BECAUSE
+# the cache was warmed — the gate is "blob missing locally".
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "ctx-show-offline-after-warm"
+argv = ["bash", "-c",
+        "exec {project}/.testvenv/bin/opentraces ctx show \"$(cat {home}/.otbox-bucket-spine/dangling_node_id)\" --offline --json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-show-offline-after-warm"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-offline-after-warm"
+path = "layers.system.fetched_from"
+equals = "cache"
+
+# ---------------------------------------------------------------------
+# Step 6 — the same --offline flags on a locally-complete (main) node
+# exit 0 — the gate is "blob missing locally", not "always fail offline".
+# (The main node's layers resolve from the projection, so the --remote
+# value is never reached.)
 # ---------------------------------------------------------------------
 [[steps]]
 type = "shell"
 id = "ctx-show-offline-local-complete"
 argv = ["bash", "-c",
-        "exec {project}/.testvenv/bin/opentraces ctx show \"$(cat {home}/.otbox-bucket-spine/main_node_id)\" --remote otbox/fake-bucket --offline --json"]
+        "exec {project}/.testvenv/bin/opentraces ctx show \"$(cat {home}/.otbox-bucket-spine/main_node_id)\" --remote file://{fake_remote}/bucket-spine --offline --json"]
 
 [[assertions]]
 kind = "returncode"

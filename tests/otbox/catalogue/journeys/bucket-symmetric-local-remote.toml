@@ -17,18 +17,21 @@ Asserts (all strict cross-step equals_var):
   - `ctx info <trace> --json`: identical info block (digest included).
   - `bucket remote pull` returns the exact digest the push recorded.
   - Post-pull `bucket remote status` is "current".
+  - The same three read verbs run with `--remote file://<fake_remote>/
+    bucket-spine` (the directory-backed fake dispatch, issue #57) return
+    byte-identical envelopes to their local counterparts — proving the
+    RemoteHubBackend read path is symmetric with the local backend from
+    default CI (offline, tokenless), not only in the live-HF lane.
 
-Re-specced for issue #42 (un-quarantine): the authored `--remote
-<hf-repo>` flag steps used an undefined `{fake_hf_repo_id}` template
-var (no producer exists) and two flags that were never implemented
-(`ctx tree --remote`, `trail blame commit --remote`); the
-RemoteHubBackend has no offline/fake dispatch (`get_backend` always
-builds a real hf_hub_download client), so the `--remote` read-verb arm
-is only coverable in the live-HF lane (`live-hf-read-remote`). This
-journey pins the same symmetry contract through the fake provider's
-push/wipe/pull roundtrip with byte-identity assertions instead.
-Out-of-vocab `bucket_spine_v2_layout` / `pushed_to_fake_remote`
-precondition keys dropped.
+Issue #57: the `--remote` read-verb arms are restored against the
+directory-backed fake dispatch (`get_backend('file:///abs/dir')` returns
+a tokenless, offline DirectoryHubBackend that reads the byte-exact HF
+in-repo tree `fake_remote_push` writes at the root). The existing
+push/wipe/pull identity chain (the BKT-3 payoff) is kept intact; the
+`--remote` arms are additive symmetry coverage on top of it. Residual
+live-lane-only surface (documented, NOT restored here because the flags
+were never implemented): `ctx tree --remote`, `trail blame commit
+--remote` — covered only by `live-hf-read-remote`.
 """
 lane = "core"
 tier = 0
@@ -41,6 +44,8 @@ from_checkpoints = ["c-bucket-spine-v2-pushed-fake-remote"]
 [preconditions]
 min_captured_traces = 1
 context_tree_built = true
+bucket_spine_v2_layout = true
+pushed_to_fake_remote = true
 
 # ---------------------------------------------------------------------
 # Step 1 — local reads BEFORE the roundtrip.
@@ -226,3 +231,69 @@ kind = "stdout_json"
 step = "remote-status-final"
 path = "remote.state"
 equals = "current"
+
+# ---------------------------------------------------------------------
+# Step 6 — issue #57: the directory-backed fake dispatch. The same three
+# read verbs against `--remote file://<fake_remote>/bucket-spine` return
+# byte-identical envelopes to their local counterparts (offline,
+# tokenless). This is the restored `--remote` read-verb symmetry arm.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-get-remote"
+argv = ["trace", "get", "{trace_id}", "--remote", "file://{fake_remote}/bucket-spine", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "trace-get-remote"
+path = "trace.trace_id"
+equals_var = "trace-get-local:trace.trace_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "trace-get-remote"
+path = "trace.session_id"
+equals_var = "trace-get-local:trace.session_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "trace-get-remote"
+path = "trace.patches"
+equals_var = "trace-get-local:trace.patches"
+
+[[steps]]
+type = "cli"
+id = "ctx-list-remote"
+argv = ["ctx", "list", "--remote", "file://{fake_remote}/bucket-spine", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-list-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-list-remote"
+path = "traces"
+equals_var = "ctx-list-local:traces"
+
+[[steps]]
+type = "cli"
+id = "ctx-info-remote"
+argv = ["ctx", "info", "{trace_id}", "--remote", "file://{fake_remote}/bucket-spine", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-info-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-info-remote"
+path = "info"
+equals_var = "ctx-info-local:info"

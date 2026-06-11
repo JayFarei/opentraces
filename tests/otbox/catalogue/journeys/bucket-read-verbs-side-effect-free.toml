@@ -1,0 +1,221 @@
+name = "bucket-read-verbs-side-effect-free"
+description = """
+Issue #55 mechanism journey (BRONZE) — `bucket status` and `bucket
+manifest` (without --heal) are byte-level side-effect-free READS.
+
+On a captured-session world (a real bucket built by the capture chain),
+the two read verbs must not move a single byte under the bucket root:
+
+  (a) capture a full content hash of every file under bucket/ (relative
+      path + bytes, sorted) and a count of per-trace v2 envelope dirs;
+  (b) run `bucket status --json` then `bucket manifest --json` — both
+      return the trace IN MEMORY (the #31 read-side reconcile still
+      reports orphans) but write nothing;
+  (c) re-capture the same content hash + envelope count and assert they
+      are byte-identical to (a) via cross-step equals_var — proves zero
+      writes, no manifest.json created if absent, no new envelope files;
+  (d) `bucket manifest --heal` then restores the materializing behavior
+      (writes manifest.json + envelopes) and a second --heal is a digest
+      no-op on the manifest bytes (bucket_repair's write-only-on-change
+      discipline).
+
+Tier 0 / bronze: forks from the artifact-preferred
+`c-captured-real-session` checkpoint so the read verbs run against a
+real captured bucket, not an empty-state envelope. The companion unit
+sentinel `tests/core/test_bucket_store.py::
+test_bucket_read_verbs_are_side_effect_free` pins the digest-invariant
+and orphan-record shape directly.
+"""
+lane = "core"
+tier = 0
+tier_label = "bronze"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — content hash of the bucket BEFORE the read verbs.
+# Emits JSON: dict(bucket_hash=<sha256>, envelope_count=<n>). The inline
+# script is brace-free on purpose — the journey runner expands argv via
+# str.format, so a literal "{" would be mis-parsed as a placeholder.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "hash-before"
+argv = [
+    "{py_bin}",
+    "-c",
+    "import hashlib,json,glob,os,sys; root=sys.argv[1]; h=hashlib.sha256(); files=sorted(p for p in glob.glob(os.path.join(root,'**','*'),recursive=True) if os.path.isfile(p)); [ h.update(os.path.relpath(f,root).encode())==None and h.update(b'\\x00')==None and h.update(open(f,'rb').read())==None and h.update(b'\\x00') for f in files ]; env=len(glob.glob(os.path.join(root,'traces','v1','*','*','trace.json'))); print(json.dumps(dict(bucket_hash=h.hexdigest() if os.path.isdir(root) else 'absent', envelope_count=env)))",
+    "{opentraces_dir}/bucket",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "hash-before"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "hash-before"
+path = "bucket_hash"
+
+# ---------------------------------------------------------------------
+# Step 2 — `bucket status --json` (read-only). Reports the trace.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "status-read"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "status-read"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-read"
+path = "bucket.schema_version"
+equals = "opentraces.bucket.manifest.v2"
+
+# The in-memory reconcile still enumerates the captured trace.
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "status-read"
+path = "bucket.trace_records.object_count"
+min = 1
+
+# ---------------------------------------------------------------------
+# Step 3 — `bucket manifest --json` (read-only). Reports the trace.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "manifest-read"
+argv = ["bucket", "manifest", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "manifest-read"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "manifest-read"
+path = "manifest.schema_version"
+equals = "opentraces.bucket.manifest.v2"
+
+[[assertions]]
+kind = "stdout_json"
+step = "manifest-read"
+path = "manifest.bucket_digest"
+
+# ---------------------------------------------------------------------
+# Step 4 — content hash AFTER both read verbs.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "hash-after"
+argv = [
+    "{py_bin}",
+    "-c",
+    "import hashlib,json,glob,os,sys; root=sys.argv[1]; h=hashlib.sha256(); files=sorted(p for p in glob.glob(os.path.join(root,'**','*'),recursive=True) if os.path.isfile(p)); [ h.update(os.path.relpath(f,root).encode())==None and h.update(b'\\x00')==None and h.update(open(f,'rb').read())==None and h.update(b'\\x00') for f in files ]; env=len(glob.glob(os.path.join(root,'traces','v1','*','*','trace.json'))); print(json.dumps(dict(bucket_hash=h.hexdigest() if os.path.isdir(root) else 'absent', envelope_count=env)))",
+    "{opentraces_dir}/bucket",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "hash-after"
+equals = 0
+
+# THE PROPERTY: the bucket tree is byte-identical — the read verbs wrote
+# nothing (no manifest.json created if absent, no new envelope files).
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "hash-after"
+path = "bucket_hash"
+equals_var = "hash-before:bucket_hash"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "hash-after"
+path = "envelope_count"
+equals_var = "hash-before:envelope_count"
+
+# ---------------------------------------------------------------------
+# Step 5 — `bucket manifest --heal` materializes (writes manifest.json).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "manifest-heal"
+argv = ["bucket", "manifest", "--heal", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "manifest-heal"
+equals = 0
+
+[[assertions]]
+kind = "path_exists"
+path = "{opentraces_dir}/bucket/manifest.json"
+
+# Heal does not change the content-bearing digest the read verb computed.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "manifest-heal"
+path = "manifest.bucket_digest"
+equals_var = "manifest-read:manifest.bucket_digest"
+
+# ---------------------------------------------------------------------
+# Step 6 — manifest.json byte snapshot, then a second --heal is a no-op.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "manifest-bytes-1"
+argv = [
+    "{py_bin}",
+    "-c",
+    "import hashlib,json,sys; b=open(sys.argv[1],'rb').read(); print(json.dumps(dict(manifest_bytes=hashlib.sha256(b).hexdigest())))",
+    "{opentraces_dir}/bucket/manifest.json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "manifest-bytes-1"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "manifest-heal-2"
+argv = ["bucket", "manifest", "--heal", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "manifest-heal-2"
+equals = 0
+
+[[steps]]
+type = "shell"
+id = "manifest-bytes-2"
+argv = [
+    "{py_bin}",
+    "-c",
+    "import hashlib,json,sys; b=open(sys.argv[1],'rb').read(); print(json.dumps(dict(manifest_bytes=hashlib.sha256(b).hexdigest())))",
+    "{opentraces_dir}/bucket/manifest.json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "manifest-bytes-2"
+equals = 0
+
+# Idempotency: a second --heal left manifest.json bytes untouched
+# (write-only-on-change discipline — timestamps preserved).
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "manifest-bytes-2"
+path = "manifest_bytes"
+equals_var = "manifest-bytes-1:manifest_bytes"

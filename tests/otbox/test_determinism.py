@@ -133,9 +133,11 @@ def intel_box(driver):
 def _envelope_schema_version(payload: dict) -> str:
     """Frozen-envelope version, wherever the surface carries it.
 
-    run-intel and compare emit ``schema_version`` top-level; the waste CLI
-    wrapper nests the ``opentraces.context_waste.v1`` envelope under a
-    ``waste`` key. Either way a real envelope must be present.
+    All three trace-intelligence surfaces (waste, run-intel, compare) emit
+    ``schema_version`` at the top level (issue #56 flattened the ``--waste``
+    envelope; ``opentraces.context_waste.v2``). The nested-dict fallback is kept
+    for resilience against any legacy/wrapped payload. Either way a real
+    envelope must be present.
     """
     if "schema_version" in payload:
         return str(payload["schema_version"])

@@ -1003,7 +1003,7 @@ def trace_index_compact_cmd(vacuum: bool, as_json: bool) -> None:
     "--waste",
     "as_waste",
     is_flag=True,
-    help="Emit the context-waste findings for the trace (opentraces.context_waste.v1).",
+    help="Emit the context-waste findings for the trace (opentraces.context_waste.v2).",
 )
 @click.option(
     "--large-output-chars",
@@ -1374,7 +1374,7 @@ def trace_slice_cmd(
     "--waste",
     "as_waste",
     is_flag=True,
-    help="Emit the context-waste findings for the trace (opentraces.context_waste.v1).",
+    help="Emit the context-waste findings for the trace (opentraces.context_waste.v2).",
 )
 @click.option(
     "--large-output-chars",
@@ -1673,7 +1673,7 @@ def _trace_get_waste_impl(
     file_read_window_min: int | None = None,
     search_window_min: int | None = None,
 ) -> None:
-    """Emit the context-waste findings for ``ref`` (opentraces.context_waste.v1)."""
+    """Emit the context-waste findings for ``ref`` (opentraces.context_waste.v2)."""
     from ..core.context_waste import detect_context_waste
 
     trace_id = _trace_id_from_ref(ref)
@@ -1689,7 +1689,7 @@ def _trace_get_waste_impl(
     if search_window_min is not None:
         kwargs["search_window_minutes"] = search_window_min
     report = detect_context_waste(record, **kwargs)
-    payload = {"status": "ok", "trace_id": trace_id, "waste": report.to_dict()}
+    payload = report.to_envelope()
     if as_json:
         click.echo(_dump_json(payload))
         return

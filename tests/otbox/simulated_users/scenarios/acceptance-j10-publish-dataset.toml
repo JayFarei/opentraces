@@ -1,0 +1,41 @@
+# B0 acceptance scenario — J10-publish-dataset (issue #61, plan 095 U9).
+#
+# A real agent drives the dataset arc over a captured world up to (but NOT
+# through) network egress: create a dataset bound to a workflow, run it to
+# project rows from the captured trace, then inspect dataset status. The
+# arc deliberately stops at the local row-projection + review boundary —
+# the actual `dataset publish` to HuggingFace is a network/auth step that
+# stays machine-gated and out of the driven prompt (no 'auth login' /
+# publish per the workflow boundary rules). The end-state assertion
+# confirms the dataset manifest exists on disk (the #49 lesson — the arc
+# materialised a real dataset, not just a narration).
+#
+# Seeds from c-captured-real-session (a captured trace exists to project
+# rows from) — declared by the acceptance harness. Machine-gated on a
+# real `claude` binary.
+
+name = "acceptance-j10-publish-dataset"
+description = "J10 — agent builds a dataset over a captured world: dataset new -> run -> status (local projection only, no network publish), asserting the dataset manifest landed on disk."
+agent = "claude"
+binary_name = "claude"
+par_calls = 5
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Build a local dataset from the captured sessions in this project. List the available workflow templates with `opentraces workflow templates --json`, create a workflow, then `opentraces dataset new <name> --workflow <path>`, run it with `opentraces dataset run`, and show me `opentraces dataset status --json`. Do NOT publish to HuggingFace — stop at the local review boundary."
+expect_regex = "(?i)(dataset|workflow|row|status|review)"
+timeout_s = 300
+# End-state assertion: a dataset manifest exists on disk. Datasets live at
+# $HOME/.opentraces/datasets/<name>/.opentraces/manifest.yaml (the box
+# redirects HOME). The `dataset list --json` fallback only satisfies the
+# regex with a NON-empty datasets array — the envelope's constant
+# "datasets" key over an empty list must not pass the arc.
+verify_command = ["sh", "-lc", 'ls "$HOME"/.opentraces/datasets/*/.opentraces/manifest.yaml 2>/dev/null || .testvenv/bin/opentraces dataset list --json']
+verify_regex = '(?s)(manifest\.yaml|"datasets":\s*\[\s*\{)'
+
+[capture]
+artifact_dir = "acceptance-j10-publish-dataset"
+expected_paths = []
+min_traces = 1

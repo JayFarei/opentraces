@@ -26,8 +26,8 @@ Derivation rules (enforced by the gate):
   verifier covers only part of the claim. Same resolution rules as
   verified (verifiers must exist and be unquarantined).
 - **open** — no executing verifier yet. Honest debt; never blocks the
-  gate. BKT-1 is the acknowledged deprioritized tail (maintainer decision
-  2026-06-10): it stays open and never blocks the gate.
+  gate. (BKT-1, formerly the acknowledged deprioritized tail, gained its
+  negative-space verifier via #62 on 2026-06-11 and is now verified.)
 - **tracked** — ownership transferred to a named GitHub issue; the Issue
   cell is REQUIRED (`#NNN`, or a `TBD-<tag>` placeholder until the issue
   is filed).
@@ -37,14 +37,14 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-11, post-release-gate-095): 26 verified, 15 partial,
-  8 open, 7 tracked, 0 waived — 56 rows.
+- Status counts (2026-06-11, post wave-1 merge train incl. issue-61): 26 verified,
+  19 partial, 7 open, 6 tracked, 0 waived — 58 rows.
 
 ## A. Capture (per harness)
 
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
-| CAP-1 | Claude Code session capture lands a queryable trace (hooks -> ingest -> index) on a real captured world | A | verified | agent-session-trail-explain-happy, tests/otbox/test_agent_session_slice.py | — |
+| CAP-1 | Claude Code session capture lands a queryable trace (hooks -> ingest -> index) on a real captured world (claude-linear-edit artifact meets its contract floor — 1 trace — and is restored, not synthetic-fallback; floor now enforced capture-side by the #49 pre-snapshot gate) | A | verified | agent-session-trail-explain-happy, tests/otbox/test_agent_session_slice.py | — |
 | CAP-2 | Codex CLI capture parity (13 scenarios incl. compaction, subagent, permission); 5 parity journeys remain quarantined baseline-red | A | partial | codex-parity-linear, codex-parity-compaction, codex-parity-subagent, codex-full-parity-latest | #25 |
 | CAP-3 | Pi capture parity incl. provider/context sidecars, fail-open extension; full-parity + incremental-recovery quarantined baseline-red | A | partial | pi-extension-capture-linear, pi-compaction-branch-fidelity, pi-context-tree-provider-fidelity | #25 |
 | CAP-4 | Global tracking is opt-out; repos auto-enroll on first capture; `excluded` marker respected (now enforced at the ingest choke point for ALL agents) | A | verified | capture-safety-tracking-mode, capture-safety-excluded-marker, tests/test_tracking_mode.py, tests/core/test_ingest.py::TestExcludedProjectGate | — |
@@ -52,19 +52,21 @@ Derivation rules (enforced by the gate):
 | CAP-6 | Hook failures never block the agent session (always exit 0) — 4 Claude scripts x 4 faults + missing-package sweep, Codex modules, git shim | A | verified | tests/otbox/test_faultpoints.py | — |
 | CAP-7 | OTel capture yields `completeness=full` layers; receiver-down never blocks agent traffic | A | partial | tests/test_otlp_capture.py, context-tree-otel-receiver-up, context-tree-otel-bypass-mode | — |
 | CAP-8 | Installers (`setup claude-code/codex-cli/pi/git`) are idempotent and preserve unrelated hooks (one refspec-duplication finding still open) | A | partial | tests/otbox/test_idempotency_sweep.py, pi-setup-dry-run, onboard-integrations | — |
-| CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds | A | tracked | — | #61 |
+| CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds (5 acceptance scenarios bind J1/J6/J7/J10/J13; deterministic scorer + schema-versioned report + warn-only freshness gate land in default CI via the echo-mode synthetic harness — the real-agent scored report + ledger flip to verified are the machine-gated ritual) | A | partial | tests/otbox/test_acceptance_report.py, tests/otbox/test_acceptance_scoring.py | #61 |
 
 ## B. Bucket and privacy boundary
 
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
-| BKT-1 | Raw traces never leave the bucket without explicit opt-in (negative-space verifier: NOTHING egressed during a full capture+publish arc) | B | open | — | #62 |
+| BKT-1 | Raw traces never leave the bucket without explicit opt-in (negative-space verifier: NOTHING egressed during a full capture+publish arc) | B | verified | tests/otbox/test_egress_verifier.py | #62 |
 | BKT-2 | `bucket replay --repo` reconstructs the canonical Git event ref byte-identically | B | verified | bucket-events-mirror-replay-equals-git, bucket-self-sufficient-everything | #25 |
-| BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/otbox/test_determinism.py | #25 |
+| BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/test_bucket_remote_symmetric.py, tests/otbox/test_determinism.py | #25 |
 | BKT-4 | `bucket repair` is idempotent; `prune` never touches events or trace.json | B | verified | bucket-prune-orphan-only, bucket-write-order-discipline-local, bucket-rebuild-context-tree-substrate | #25 |
 | BKT-5 | `bucket verify` detects corrupted blobs and dangling refs (corrupted-blob fault world is the remaining follow-up) | B | partial | bucket-verify-detects-dangling, bucket-compression-integrity-roundtrip | #25 |
-| BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, live-hf-bucket-roundtrip, tests/otbox/test_live_hf_slice.py | — |
+| BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane, with default-CI symmetry coverage via the directory-backed fake dispatch (file:// scheme, issue #57) | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, bucket-symmetric-local-remote, ctx-show-with-lazy-blob-fetch, ctx-show-offline-fails, live-hf-bucket-roundtrip, tests/test_bucket_remote_symmetric.py, tests/otbox/test_live_hf_slice.py | — |
 | BKT-7 | Append-only hash-chained event log survives GC and rewrites | B | open | — | — |
+| BKT-8 | `bucket status`/`bucket manifest` are side-effect-free reads; self-heal is explicit via `bucket manifest --heal` / `bucket repair` (read-only digest == post-repair digest) | B | verified | bucket-read-verbs-side-effect-free, tests/core/test_bucket_store.py::test_bucket_read_verbs_are_side_effect_free, tests/core/test_bucket_store.py::test_readonly_node_count_matches_heal_when_live_log_is_trail_only, tests/core/test_bucket_store.py::test_manifest_write_repairs_stale_shape_with_unchanged_digest, migration-s5-read-in-place | #55 |
+| BKT-9 | A freshly captured trace is immediately visible to the manifest-only readers (`ctx list` / `ctx info`) without a heal verb (capture materializes the manifest row via a bounded single-trace upsert; the row is byte-identical to a full `bucket manifest` regeneration; `--trace-record-only` ingest still defers projection) | B | verified | ctx-fresh-capture-visibility, tests/core/test_ingest.py::TestIngestOneSession::test_ingest_writes_manifest_json_so_ctx_readers_see_the_trace, tests/core/test_ingest.py::TestIngestOneSession::test_ingest_manifest_upsert_is_bounded_to_one_trace, tests/core/test_ingest.py::TestIngestOneSession::test_record_only_ingest_writes_no_manifest_row, tests/core/test_bucket_store.py::test_concurrent_manifest_upserts_lose_no_rows, tests/cli/test_bucket_cli.py::test_ctx_info_falls_back_to_trace_json_when_manifest_row_missing | #54 |
 
 ## C. Discovery (query/map/slice/get + intelligence)
 
@@ -81,9 +83,9 @@ Derivation rules (enforced by the gate):
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
 | TRL-1 | `trail blame commit <sha>` resolves a commit to contributing sessions with coverage shares | D | verified | trail-blame-and-graph, agent-session-trail-explain-happy | — |
-| TRL-2 | `trail blame pr render` walks branch commits to sessions with intent | D | verified | pr-blame-on-captured-branch | — |
+| TRL-2 | `trail blame pr render` walks branch commits to sessions with intent (world is synthetic fallback today: the committed claude-pr-branch artifact is sub-contract — 1 trace < 3 — until the machine-gated regen behind the #49 hardened scenarios lands) | D | partial | pr-blame-on-captured-branch | #49 |
 | TRL-3 | `trail blame pr create/update` posts/updates the GitHub PR idempotently (needs gh stub + golden body) | D | open | — | — |
-| TRL-4 | The 8 survival states are computed from real git history; a reverted edit shows `reverted` (gold journey asserts strict result_count >= 1 on dual artifact/synthetic worlds; only `reverted` is exercised credibly) | D | verified | survival-walk-reverted, tests/otbox/test_agent_session_slice.py | — |
+| TRL-4 | The 8 survival states are computed from real git history; a reverted edit shows `reverted` (gold journey asserts strict result_count >= 1; only `reverted` is exercised credibly — and the revert commit in the restored claude-with-revert artifact is delta-applied, not agent-landed, until the #49 regen with `expect_revert_commit` enforcement) | D | partial | survival-walk-reverted, tests/otbox/test_agent_session_slice.py | #49 |
 | TRL-5 | Reverse blame: any file:line resolves to session/prompt/diff | D | open | — | — |
 | TRL-6 | Post-commit hook stays within latency/memory budget on mature repos | D | tracked | — | #44 |
 
@@ -102,7 +104,7 @@ Derivation rules (enforced by the gate):
 |---|---|---|---|---|---|
 | SEC-1 | All tools default off; policies flip exactly the documented flag sets | F | verified | bucket-security-policy-basic, bucket-security-fresh-off, enable-security-tools | — |
 | SEC-2 | Canonical tool order enforced; `--tools` re-sorted (unit-level only) | F | partial | tests/security/test_pipeline_api.py::test_tools_canonical_order | — |
-| SEC-3 | A planted secret never appears in query output / published rows after sanitize (real negative assertion, synthetic secret world, no mutation kill) | F | verified | security-sanitize-captured-content, pi-security-sanitize-captured-content | — |
+| SEC-3 | A planted secret never appears in query output / published rows after sanitize (real negative assertion, no mutation kill; world is synthetic fallback: the claude-with-secrets artifact carries no security fingerprints — captured with tools off — until the #49 regen with the pre-drive `enable_security_tools` flip lands) | F | partial | security-sanitize-captured-content, pi-security-sanitize-captured-content | #49 |
 | SEC-4 | `dataset publish --check-only` blocks rows missing required tools, keyed on per-row evidence (bypass paths not probed) | F | partial | dataset-security-required-rejection | — |
 | SEC-5 | Capsule redaction floor (regex+entropy+business_logic) unconditional; prompts excluded by default | F | open | — | — |
 | SEC-6 | Post-processors always see post-redaction traces (ordering invariant; unit-level only) | F | partial | tests/core/test_processors.py::test_secret_absent_from_processor_stdin | — |
@@ -124,7 +126,7 @@ Derivation rules (enforced by the gate):
 |---|---|---|---|---|---|
 | AGT-1 | Every public command supports `--json` with a structured envelope (sweep executes in the PR lane; 4 of 5 KNOWN_FINDINGS fixed, 1 documented in-sweep waiver for watcher-tick array shape) | H | verified | tests/cli/test_json_surface_sweep.py | #25 |
 | AGT-2 | `--json` envelopes carry actionable `next_steps` forming a coherent graph to the documented goals (nightly-gating confirmed) | H | partial | tests/otbox/test_next_steps_walker.py | — |
-| AGT-3 | Frozen envelope contracts (`opentraces.context_*.v1` etc.) never drift without a version bump (`opentraces.security_tools.v1` newly frozen; non-versioned envelopes remain) | H | partial | tests/cli/test_json_surface_sweep.py::test_envelope_shapes_match_snapshot | — |
+| AGT-3 | Frozen envelope contracts (`opentraces.context_*.v1` etc.) never drift without a version bump (`opentraces.security_tools.v1` newly frozen; trace-intelligence `--waste` placement unified to flat top-level `schema_version`+`status` and bumped to `opentraces.context_waste.v2` per #56 — run_intel.v1/trace_compare.v1 byte-identical; non-versioned envelopes remain) | H | partial | tests/cli/test_json_surface_sweep.py::test_envelope_shapes_match_snapshot; tests/cli/test_context_waste_cli.py::test_trace_intelligence_envelopes_share_top_level_keys | #56 |
 | AGT-4 | The paste-in setup prompt drives an agent through install+auth+capture successfully | H | partial | prompt-install-auth-flow | — |
 | AGT-5 | Documented exit codes (e.g. 6 unresolved ref, 3 schema-ahead, 2 contract) stable across releases (exit 6/3/2 asserted at the CLI boundary, PR lane) | H | verified | tests/cli/test_exit_code_contract.py | — |
 | AGT-6 | Pi slash commands / model tools (`ot_search`, `ot_trace`, ...) respond correctly in-session (captures exist; no executing verifier) | H | open | — | — |

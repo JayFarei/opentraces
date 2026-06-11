@@ -1,0 +1,39 @@
+# Meta-test scenario (issue #49).
+#
+# Exercises the per-turn git-state verification machinery + the
+# fresh_session restart flag through the synthetic echo binary so the
+# new contract is covered in default CI without a real agent on PATH.
+#
+# The echo box ships the single-file-python-project template, so the
+# verify_command can assert on the seeded src/app.py without needing a
+# real commit. Turn 1 carries fresh_session so the restart path is
+# exercised too.
+
+name = "echo-verify"
+description = "Drive the synthetic echo binary with per-turn verify_command assertions + a fresh_session turn to meta-test the issue #49 contract machinery."
+agent = "echo"
+binary_name = "_echo_binary.py"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Add a farewell helper to src/app.py"
+expect_regex = "(?i)(I'll add|let me|adding)"
+timeout_s = 10
+# Falsifiable post-turn check against real box state — the seeded template
+# carries `def greet`, so this exercises the driver.exec verify path.
+verify_command = ["cat", "src/app.py"]
+verify_regex = "def greet"
+
+[[turns]]
+prompt = "yes"
+expect_regex = "(?i)(done|committed)"
+timeout_s = 10
+fresh_session = true
+verify_command = ["cat", "README.md"]
+verify_regex = "(?is)."
+
+[capture]
+artifact_dir = "echo-verify"
+expected_paths = ["src/app.py"]
