@@ -188,7 +188,7 @@ opentraces trace compare <trace-a> <trace-b> --json
 opentraces trace compare <trace-a> <trace-b> --no-quality --json
 ```
 
-- **Context waste** — `--waste` emits `opentraces.context_waste.v1`: `large_output` (>= 12000 chars), `repeated_file_read` (same file 3+ times in 20 min), and `repeated_search` (`rg|grep|find|ag|ack` 5+ times in 10 min) findings plus a `summary` count block. Override thresholds with `--large-output-chars`, `--file-read-window-min`, `--search-window-min`.
+- **Context waste** — `--waste` emits `opentraces.context_waste.v2`: `large_output` (>= 12000 chars), `repeated_file_read` (same file 3+ times in 20 min), and `repeated_search` (`rg|grep|find|ag|ack` 5+ times in 10 min) findings plus a `summary` count block. Override thresholds with `--large-output-chars`, `--file-read-window-min`, `--search-window-min`.
 - **Run signals** — `--run-intel` emits `opentraces.run_intel.v1` with deterministic `resteer` / `recovery` / `loop` / `failure` annotations. Recovery only fires after an uncleared prior failure; failure prefers structured tool errors over substring matches; a repeated command is one `loop` signal carrying `evidence.repeat_count`.
 - **Run compare** — `trace compare <a> <b>` emits `opentraces.trace_compare.v1` with top-level `{schema_version, status, trace_a, trace_b, fidelity: {a, b}, burst_gap, quality_included, delta}`. `delta` holds `{a, b, delta}` triples over `metrics`, deterministic quality persona scores under `quality` (skip with `--no-quality`, which sets `quality_included: false`), burst/signal counts under `bursts` and `signals`, and `security`. Both traces are pinned to the same burst gap (`--burst-gap`, default 35).
 

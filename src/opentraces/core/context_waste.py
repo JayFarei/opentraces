@@ -41,7 +41,11 @@ SEARCH_REPEAT_THRESHOLD = 5
 # tracebase isSearchCommand: /\b(rg|grep|find|ag|ack)\b/
 _SEARCH_RE = re.compile(r"\b(rg|grep|find|ag|ack)\b")
 
-CONTEXT_WASTE_SCHEMA_VERSION = "opentraces.context_waste.v1"
+# v2 (issue #56): the CLI envelope is flattened so schema_version + status sit
+# at the top level alongside run_intel / trace_compare. v0.4.0 shipped the v1
+# nested placement to PyPI, so the re-placement is observable drift and bumps
+# the frozen contract version per AGT-3.
+CONTEXT_WASTE_SCHEMA_VERSION = "opentraces.context_waste.v2"
 
 
 @dataclass
@@ -73,7 +77,7 @@ class ContextWasteFinding:
 
 @dataclass
 class ContextWasteReport:
-    """Frozen ``opentraces.context_waste.v1`` projection for a trace."""
+    """Frozen ``opentraces.context_waste.v2`` projection for a trace."""
 
     trace_id: str
     thresholds: dict[str, int]
@@ -93,8 +97,23 @@ class ContextWasteReport:
         }
 
     def to_dict(self) -> dict[str, Any]:
+        """Detector-level dict (no `status` key) for in-process / eval consumers."""
         return {
             "schema_version": CONTEXT_WASTE_SCHEMA_VERSION,
+            "trace_id": self.trace_id,
+            "fidelity": self.fidelity,
+            "thresholds": self.thresholds,
+            "findings": [f.to_dict() for f in self.findings],
+            "summary": self._summary(),
+            "limitations": self.limitations,
+        }
+
+    def to_envelope(self) -> dict[str, Any]:
+        """Flat CLI envelope (issue #56) — schema_version + status at the top
+        level, mirroring RunIntelReport.to_envelope() / compare_traces()."""
+        return {
+            "schema_version": CONTEXT_WASTE_SCHEMA_VERSION,
+            "status": "ok",
             "trace_id": self.trace_id,
             "fidelity": self.fidelity,
             "thresholds": self.thresholds,

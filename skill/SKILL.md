@@ -159,7 +159,7 @@ opentraces trace get <trace_id> --run-intel --json   # also: trace map --run-int
 opentraces trace compare <trace_a> <trace_b> --json  # add --no-quality to skip persona scores
 ```
 
-- **Context waste** — `--waste` emits `opentraces.context_waste.v1`: `large_output`
+- **Context waste** — `--waste` emits `opentraces.context_waste.v2`: `large_output`
   (>= 12000 chars), `repeated_file_read` (same file 3+ times in 20 min), and
   `repeated_search` (rg|grep|find|ag|ack 5+ times in 10 min) findings, with a
   `summary` count block.

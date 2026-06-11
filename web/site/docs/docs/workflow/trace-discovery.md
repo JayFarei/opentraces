@@ -101,7 +101,7 @@ opentraces trace get <trace-id> --run-intel --json   # resteer/recovery/loop/fai
 opentraces trace compare <trace-a> <trace-b> --json  # two-run delta
 ```
 
-- `--waste` emits `opentraces.context_waste.v1`: oversized tool outputs
+- `--waste` emits `opentraces.context_waste.v2`: oversized tool outputs
   (>= 12000 chars), the same file read 3+ times in 20 minutes, and search
   commands repeated 5+ times in 10 minutes, with a `summary` count block.
   Override the thresholds with `--large-output-chars`, `--file-read-window-min`,

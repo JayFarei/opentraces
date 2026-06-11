@@ -7,6 +7,19 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Trace Intelligence `--waste` envelope flattened + bumped to
+  `opentraces.context_waste.v2`.** `opentraces trace get|map --waste --json` now
+  emits a single flat envelope with `schema_version`, `status`, `trace_id`,
+  `fidelity`, `thresholds`, `findings`, `summary`, and `limitations` at the top
+  level — matching the `--run-intel` and `trace compare` envelopes. The old
+  shape nested the report under a `waste` key with `schema_version` inside it.
+  **Breaking for consumers** parsing `.waste.schema_version` from the v0.4.0
+  (v1) shape; read `.schema_version` / `.status` from the top level instead. The
+  `opentraces.run_intel.v1` and `opentraces.trace_compare.v1` envelopes are
+  unchanged.
+
 ## [0.4.0] - 2026-04-26
 
 This release consolidates everything that accumulated on the 0.4.0 line since
