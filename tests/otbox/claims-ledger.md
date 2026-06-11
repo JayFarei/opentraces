@@ -60,10 +60,10 @@ Derivation rules (enforced by the gate):
 |---|---|---|---|---|---|
 | BKT-1 | Raw traces never leave the bucket without explicit opt-in (negative-space verifier: NOTHING egressed during a full capture+publish arc) | B | open | — | #62 |
 | BKT-2 | `bucket replay --repo` reconstructs the canonical Git event ref byte-identically | B | verified | bucket-events-mirror-replay-equals-git, bucket-self-sufficient-everything | #25 |
-| BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/otbox/test_determinism.py | #25 |
+| BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/test_bucket_remote_symmetric.py, tests/otbox/test_determinism.py | #25 |
 | BKT-4 | `bucket repair` is idempotent; `prune` never touches events or trace.json | B | verified | bucket-prune-orphan-only, bucket-write-order-discipline-local, bucket-rebuild-context-tree-substrate | #25 |
 | BKT-5 | `bucket verify` detects corrupted blobs and dangling refs (corrupted-blob fault world is the remaining follow-up) | B | partial | bucket-verify-detects-dangling, bucket-compression-integrity-roundtrip | #25 |
-| BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, live-hf-bucket-roundtrip, tests/otbox/test_live_hf_slice.py | — |
+| BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane, with default-CI symmetry coverage via the directory-backed fake dispatch (file:// scheme, issue #57) | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, bucket-symmetric-local-remote, ctx-show-with-lazy-blob-fetch, ctx-show-offline-fails, live-hf-bucket-roundtrip, tests/test_bucket_remote_symmetric.py, tests/otbox/test_live_hf_slice.py | — |
 | BKT-7 | Append-only hash-chained event log survives GC and rewrites | B | open | — | — |
 
 ## C. Discovery (query/map/slice/get + intelligence)

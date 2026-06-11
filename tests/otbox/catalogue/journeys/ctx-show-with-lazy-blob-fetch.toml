@@ -14,20 +14,23 @@ Asserts:
       the offline gate is "layer missing locally", not "always fail"
       (the rc=4 arm lives in ctx-show-offline-fails on the same
       checkpoint).
+  (d) Issue #57 — the remote->cache provenance arm on the dangling
+      node: the FIRST `ctx show <dangling> --remote file://<fake>/
+      bucket-spine` call resolves all four layers with `fetched_from ==
+      "remote"` (the blobs live on the fake remote only) and warms the
+      local cache; the SECOND identical call resolves them with
+      `fetched_from == "cache"` (the local cache rung now READS what the
+      fetch wrote) with byte-identical layer ids (equals_var).
 
-Re-specced for issue #42 (un-quarantine): the authored remote-fetch arm
-(`fetched_from == "remote"` then `== "cache"`) is not coverable
-offline — `--remote` requires a real HF repo (RemoteHubBackend has no
-fake dispatch; the undefined `{fake_hf_repo_id}` var had no producer)
-AND the "cache" provenance is currently unreachable in the product:
-the lazy fetch writes blobs into the local bucket cache but `ctx show`
-never READS that cache (layers resolve from the event-log projection
-only), so a second `--remote` call re-fetches and `--offline` after a
-fetch still fails — filed as an out-of-scope product finding. The
-journey pins the real, offline-coverable provenance contract instead.
-The node is addressed via the checkpoint-written id file
-(`~/.otbox-bucket-spine/main_node_id`) because no `{first_context_node_id}`
-template var producer exists. Out-of-vocab preconditions dropped.
+Issue #57: the remote->cache arm is restored against the directory-backed
+fake dispatch (`get_backend('file:///abs/dir')` -> tokenless offline
+DirectoryHubBackend) AND the now-shipped `ctx show` local-blob-cache read
+rung (cli/ctx.py: projection(local) -> bucket blob cache(cache) ->
+remote(remote)). The checkpoint writes the dangling node's four REAL
+build_layer blobs to the fake remote ONLY (absent locally), so the first
+--remote call genuinely fetches and the second genuinely cache-hits. The
+node is addressed via the checkpoint-written id file
+(`~/.otbox-bucket-spine/dangling_node_id`).
 """
 lane = "core"
 tier = 0
@@ -40,6 +43,7 @@ from_checkpoints = ["c-bucket-spine-v2-pushed-fake-remote-blob-dropped"]
 [preconditions]
 min_captured_traces = 1
 context_tree_built = true
+local_blobs_dropped = true
 
 # ---------------------------------------------------------------------
 # Step 1 — fully-captured node: all four layers resolve locally with
@@ -149,3 +153,107 @@ kind = "stdout_json"
 step = "ctx-show-offline-local-hit"
 path = "layers.system.fetched_from"
 equals = "local"
+
+# ---------------------------------------------------------------------
+# Step 4 — issue #57: remote->cache provenance on the dangling node. Its
+# four layer blobs live on the FAKE REMOTE only. The FIRST --remote call
+# fetches them (fetched_from == "remote") and warms the local cache.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "ctx-show-remote-fetch"
+argv = ["bash", "-c",
+        "exec {project}/.testvenv/bin/opentraces ctx show \"$(cat {home}/.otbox-bucket-spine/dangling_node_id)\" --remote file://{fake_remote}/bucket-spine --json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-show-remote-fetch"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-fetch"
+path = "layers.system.fetched_from"
+equals = "remote"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-fetch"
+path = "layers.messages.fetched_from"
+equals = "remote"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-fetch"
+path = "layers.tool_registry.fetched_from"
+equals = "remote"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-fetch"
+path = "layers.runtime_state.fetched_from"
+equals = "remote"
+
+# ---------------------------------------------------------------------
+# Step 5 — the SECOND --remote call reads the warmed cache
+# (fetched_from == "cache") with byte-identical layer ids.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "ctx-show-remote-cache-hit"
+argv = ["bash", "-c",
+        "exec {project}/.testvenv/bin/opentraces ctx show \"$(cat {home}/.otbox-bucket-spine/dangling_node_id)\" --remote file://{fake_remote}/bucket-spine --json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-show-remote-cache-hit"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-cache-hit"
+path = "layers.system.fetched_from"
+equals = "cache"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-cache-hit"
+path = "layers.messages.fetched_from"
+equals = "cache"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-cache-hit"
+path = "layers.tool_registry.fetched_from"
+equals = "cache"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-cache-hit"
+path = "layers.runtime_state.fetched_from"
+equals = "cache"
+
+# Byte-identical layer ids across the remote fetch and the cache hit.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-show-remote-cache-hit"
+path = "layers.system.layer_id"
+equals_var = "ctx-show-remote-fetch:layers.system.layer_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-show-remote-cache-hit"
+path = "layers.messages.layer_id"
+equals_var = "ctx-show-remote-fetch:layers.messages.layer_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-show-remote-cache-hit"
+path = "layers.tool_registry.layer_id"
+equals_var = "ctx-show-remote-fetch:layers.tool_registry.layer_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-show-remote-cache-hit"
+path = "layers.runtime_state.layer_id"
+equals_var = "ctx-show-remote-fetch:layers.runtime_state.layer_id"

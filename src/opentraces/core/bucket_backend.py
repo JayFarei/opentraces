@@ -35,7 +35,7 @@ import gzip
 import json
 from pathlib import Path
 from typing import Any, Iterator
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlparse
 
 try:  # pragma: no cover - exercised by tests through monkeypatching.
     from huggingface_hub import hf_hub_download
@@ -63,6 +63,7 @@ __all__ = [
     "BucketBackend",
     "LocalBucketBackend",
     "RemoteHubBackend",
+    "DirectoryHubBackend",
     "get_backend",
 ]
 
@@ -416,6 +417,64 @@ class RemoteHubBackend(BucketBackend):
 
 
 # ---------------------------------------------------------------------------
+# Directory-backed fake dispatch (file:// scheme)
+# ---------------------------------------------------------------------------
+
+
+class DirectoryHubBackend(RemoteHubBackend):
+    """Read from a local directory holding the byte-exact HF in-repo tree.
+
+    Issue #57 — ``get_backend('file:///abs/dir')`` yields this backend so
+    the :class:`RemoteHubBackend` read path is coverable from default CI
+    (offline, tokenless) against the exact tree ``bucket remote push
+    --provider fake`` writes at the root (``manifest.json``, ``traces/v1/``,
+    ``blobs/v1/``, ``events/v1/index.json``).
+
+    Only two hooks change versus the HF parent:
+
+    - :meth:`_ensure_token` is a no-op (no network -> no auth).
+    - :meth:`_download` resolves ``root/<filename>`` directly instead of
+      calling ``hf_hub_download``.
+
+    Everything else — in-process caching, the v2 manifest schema check,
+    and the :class:`BucketRemoteError` / :class:`BucketLayoutError` error
+    shapes — is inherited verbatim, which is what makes the parity proof
+    (acceptance #3) hold without monkeypatching ``_download``.
+    """
+
+    def __init__(self, root: Path) -> None:
+        # ``repo_id`` is unused on the wire but kept non-empty for the
+        # parent's ``__init__`` guard and for diagnostic messages.
+        super().__init__(repo_id=f"file://{root}", token=None)
+        self._root = root
+        # No auth resolution will ever run; mark the token as resolved to
+        # ``None`` so ``_ensure_token`` short-circuits cleanly.
+        self._token = None
+        self._token_resolved = True
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    def _ensure_token(self) -> str | None:
+        # Directory dispatch is offline by construction: no token, no HF
+        # auth call. Return ``None`` rather than raising the auth error.
+        return None
+
+    def _download(self, filename: str) -> Path:
+        if filename in self._path_cache:
+            return self._path_cache[filename]
+        path = self._root / filename
+        if not path.exists():
+            raise BucketRemoteError(
+                f"remote bucket fetch failed: {self._root}:{filename}: "
+                "not present in directory-backed bucket"
+            )
+        self._path_cache[filename] = path
+        return path
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -423,13 +482,24 @@ class RemoteHubBackend(BucketBackend):
 def get_backend(remote: str | None) -> BucketBackend:
     """Return the appropriate backend for a ``--remote`` argument.
 
-    ``None`` or empty string -> :class:`LocalBucketBackend`. Any other
-    value is interpreted as a HuggingFace Hub dataset ``repo_id``
-    (e.g. ``"user/my-bucket"``) and yields a :class:`RemoteHubBackend`.
+    Dispatch:
+
+    - ``None`` / empty string -> :class:`LocalBucketBackend`.
+    - ``file:///abs/dir`` -> :class:`DirectoryHubBackend` (offline,
+      tokenless; reads the byte-exact HF in-repo tree from the named
+      directory — issue #57 fake dispatch). Routed on the ``file://``
+      scheme ONLY, which is unambiguous against HF ``repo_id``s.
+    - anything else -> :class:`RemoteHubBackend` with the argument
+      interpreted as a HuggingFace Hub dataset ``repo_id``
+      (e.g. ``"user/my-bucket"``).
     """
 
     if not remote:
         return LocalBucketBackend()
+    parsed = urlparse(remote)
+    if parsed.scheme == "file":
+        root = Path(unquote(parsed.path)).expanduser()
+        return DirectoryHubBackend(root=root)
     return RemoteHubBackend(repo_id=remote)
 
 

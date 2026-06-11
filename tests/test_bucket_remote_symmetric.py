@@ -41,7 +41,6 @@ import subprocess
 import tarfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -878,57 +877,32 @@ def test_remote_backend_without_auth_raises_bucket_remote_error(monkeypatch):
 @pytest.mark.skipif(
     not _BACKEND_AVAILABLE, reason="Track D1 (bucket_backend) not shipped"
 )
-def test_ctx_show_remote_triggers_get_layer_blob_call(
-    repo, fake_hf_root, remote_backend_factory, monkeypatch
-):
+def test_ctx_show_remote_triggers_get_layer_blob_call():
     """`ctx show <node> --remote` calls backend.get_layer_blob lazily.
 
     Plan 080 §7 — `ctx show` does 4 blob fetches. The lazy resolution path
     means the backend's `get_layer_blob` MUST be invoked at least once per
     layer when rendering a node remotely.
-
-    Strategy: mock the backend's get_layer_blob; invoke the ctx show wiring;
-    assert the mock was called. Track D2 wires this CLI path; until it
-    lands, ``xfail`` documents the contract.
     """
 
-    info = _project_envelope(repo, trace_id="trace-LAZY1", seed="lazy1")
-    from opentraces.core import paths
-
-    _copy_local_bucket_to_fake_hf(paths.bucket_dir(), fake_hf_root)
-
-    # Build a remote backend whose get_layer_blob is a counting mock.
-    real_remote = remote_backend_factory()
-    blob_mock = MagicMock(wraps=real_remote.get_layer_blob)
-    monkeypatch.setattr(real_remote, "get_layer_blob", blob_mock)
-
-    # The CLI wiring for `ctx show <node> --remote` lives in cli/context_tree.py
-    # (Track D2). We exercise the dispatcher directly so the test is
-    # independent of click runner wiring.
-    try:
-        from opentraces.cli.context_tree import (  # type: ignore[import-not-found]
-            ctx_show_with_backend,
-        )
-    except Exception:
-        pytest.xfail("Track D2 (ctx show --remote wiring) not yet shipped")
-        return
-
-    try:
-        ctx_show_with_backend(
-            node_id=info["node_id"],
-            trace_id=info["trace_id"],
-            project_slug=info["project_slug"],
-            backend=real_remote,
-            offline=False,
-        )
-    except Exception as exc:  # noqa: BLE001
-        pytest.xfail(
-            f"Track D2 entry-point exists but errored "
-            f"(likely follow-up wiring): {exc!r}"
-        )
-        return
-
-    assert blob_mock.called, "ctx show --remote did not invoke get_layer_blob"
+    # Issue #57 re-justification: the authored `ctx_show_with_backend`
+    # dispatcher in `cli/context_tree.py` was a D2-era contract that was
+    # never built — D2 wired `--remote` directly onto the `ctx show` Click
+    # command (`cli/ctx.py::ctx_show_cmd` -> `_lazy_fetch_layer_blob` ->
+    # `backend.get_layer_blob`), with no standalone `context_tree` module.
+    # The "remote triggers a blob fetch" behavior this stub guards is now
+    # covered end-to-end by `ctx-show-with-lazy-blob-fetch.toml` (the
+    # remote->cache provenance arm) and proven directly in
+    # `test_local_vs_file_backend_parity_no_monkeypatch` (get_layer_blob
+    # parity through the real directory-backed `_download`). Keep the xfail
+    # as a documented placeholder for the never-built dispatcher entry point.
+    pytest.xfail(
+        "cli/context_tree.ctx_show_with_backend dispatcher was never built; "
+        "D2 wired --remote on ctx show directly (cli/ctx.py). Behavior now "
+        "covered by ctx-show-with-lazy-blob-fetch.toml + "
+        "test_local_vs_file_backend_parity_no_monkeypatch (issue #57)."
+    )
+    return
 
 
 # --------------------------------------------------------------------------- #
@@ -939,52 +913,27 @@ def test_ctx_show_remote_triggers_get_layer_blob_call(
 @pytest.mark.skipif(
     not _BACKEND_AVAILABLE, reason="Track D1 (bucket_backend) not shipped"
 )
-def test_ctx_show_remote_offline_fails_fast_with_no_blob_calls(
-    repo, fake_hf_root, remote_backend_factory, monkeypatch
-):
+def test_ctx_show_remote_offline_fails_fast_with_no_blob_calls():
     """`ctx show <node> --remote --offline` MUST NOT issue a network call.
 
     Plan 080 §6 — `ctx show --offline` fails fast on missing blob. The
-    contract: zero remote `get_layer_blob` invocations, exit non-zero
-    (or raise), sub-100ms.
+    contract: zero remote `get_layer_blob` invocations, exit non-zero.
     """
 
-    info = _project_envelope(repo, trace_id="trace-OFF1", seed="off1")
-    # Deliberately DO NOT mirror to fake-HF — the offline path MUST NOT
-    # reach the wire.
-
-    # Build remote backend with a counting blob mock that explodes if
-    # called (the offline branch must skip the remote entirely).
-    real_remote = remote_backend_factory()
-    blob_mock = MagicMock(side_effect=RuntimeError("remote should not be called"))
-    monkeypatch.setattr(real_remote, "get_layer_blob", blob_mock)
-
-    try:
-        from opentraces.cli.context_tree import (  # type: ignore[import-not-found]
-            ctx_show_with_backend,
-        )
-    except Exception:
-        pytest.xfail("Track D2 (ctx show --remote wiring) not yet shipped")
-        return
-
-    # The CLI MUST fail without ever calling get_layer_blob.
-    with pytest.raises(Exception):  # noqa: BLE001
-        ctx_show_with_backend(
-            node_id=info["node_id"],
-            trace_id=info["trace_id"],
-            project_slug=info["project_slug"],
-            backend=real_remote,
-            offline=True,
-        )
-
-    # Defensive belt-and-braces: confirm no remote call was issued. The
-    # mock was wired to raise if called, so a violating offline path
-    # would surface as the test's wrapped Exception, but if it triggers
-    # a different code path the assertion below catches it.
-    assert not blob_mock.called, (
-        "ctx show --remote --offline invoked get_layer_blob; "
-        "the offline opt-out MUST stay local-only"
+    # Issue #57 re-justification: same as Section 9 — the never-built
+    # `cli/context_tree.ctx_show_with_backend` dispatcher made this stub
+    # unreachable. D2 wired `--offline` directly on `ctx show`
+    # (`cli/ctx.py::ctx_show_cmd` short-circuits to rc=4 BEFORE any backend
+    # is constructed). The "offline issues zero blob calls" contract is now
+    # covered end-to-end by `ctx-show-offline-fails.toml` (the
+    # `ctx show --remote --offline` rc=4 arm asserts the structured
+    # `blob_missing_offline` envelope without the wire ever being touched).
+    pytest.xfail(
+        "cli/context_tree.ctx_show_with_backend dispatcher was never built; "
+        "D2 wired --offline on ctx show directly (cli/ctx.py). Offline-no-fetch "
+        "contract now covered by ctx-show-offline-fails.toml (issue #57)."
     )
+    return
 
 
 # --------------------------------------------------------------------------- #
@@ -1010,3 +959,159 @@ def test_get_backend_dispatcher_returns_remote_for_hf_repo_id():
 
     backend = get_backend("user/repo")  # type: ignore[misc]
     assert isinstance(backend, RemoteHubBackend)  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# Section 12 — directory-backed fake dispatch (file:// scheme).               #
+#                                                                             #
+# Issue #57: get_backend('file:///abs/dir') returns a directory-backed       #
+# backend whose ``_download`` resolves ``root/<filename>`` with NO token     #
+# resolution and NO network. This makes the RemoteHubBackend read path       #
+# coverable from default CI against the byte-exact in-repo tree that         #
+# ``fake_remote_push`` already writes — so the symmetry contract is proven   #
+# without monkeypatching ``_download`` (acceptance #3).                       #
+# --------------------------------------------------------------------------- #
+
+
+def _push_to_fake_dir(local_bucket: Path, fake_dir: Path) -> None:
+    """Mirror the local bucket tree to ``fake_dir`` byte-for-byte.
+
+    Stands in for ``fake_remote_push``: the directory-backed backend
+    resolves ``<root>/<in-repo-filename>`` against exactly this tree, the
+    same shape ``bucket remote push --provider fake`` writes.
+    """
+
+    for src in local_bucket.rglob("*"):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(local_bucket)
+        dst = fake_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes())
+
+
+@pytest.mark.skipif(
+    not _BACKEND_AVAILABLE, reason="Track D1 (bucket_backend) not shipped"
+)
+def test_get_backend_file_url_returns_directory_backend(tmp_path):
+    """get_backend('file:///abs/dir') returns a directory-backed RemoteHubBackend.
+
+    The directory-backed backend is a sibling/subclass of RemoteHubBackend
+    so it inherits caching, schema checks, and error shapes verbatim. It
+    must NOT be a plain LocalBucketBackend (that reads ``paths.bucket_dir()``,
+    not the named directory).
+    """
+
+    fake_dir = tmp_path / "fake-remote-dir"
+    fake_dir.mkdir()
+    backend = get_backend(f"file://{fake_dir}")  # type: ignore[misc]
+    assert isinstance(backend, RemoteHubBackend)  # type: ignore[misc]
+    assert not isinstance(backend, LocalBucketBackend)  # type: ignore[misc]
+
+
+@pytest.mark.skipif(
+    not _BACKEND_AVAILABLE, reason="Track D1 (bucket_backend) not shipped"
+)
+def test_file_backend_download_resolves_root_filename_no_network(tmp_path):
+    """The directory backend's ``_download`` resolves ``root/<filename>``.
+
+    No token resolution, no network: ``_ensure_token`` is a no-op and
+    ``_download`` returns ``root / filename`` directly. A missing file
+    raises ``BucketRemoteError`` (same class as the HF path).
+    """
+
+    from opentraces.core.bucket_remote import BucketRemoteError
+
+    fake_dir = tmp_path / "fake-remote-dir"
+    fake_dir.mkdir()
+    (fake_dir / "manifest.json").write_text('{"hello": "world"}', encoding="utf-8")
+
+    backend = get_backend(f"file://{fake_dir}")  # type: ignore[misc]
+    # _ensure_token must NOT raise (no auth) and resolve to None.
+    assert backend._ensure_token() is None
+    resolved = backend._download("manifest.json")
+    assert resolved == fake_dir / "manifest.json"
+    with pytest.raises(BucketRemoteError):
+        backend._download("does/not/exist.json")
+
+
+@pytest.mark.skipif(
+    not _BACKEND_AVAILABLE, reason="Track D1 (bucket_backend) not shipped"
+)
+def test_file_backend_manifest_schema_mismatch_raises_layout_error(tmp_path):
+    """A schema-mismatch manifest raises BucketLayoutError (same as HF path)."""
+
+    from opentraces.core.bucket_store import BucketLayoutError
+
+    fake_dir = tmp_path / "fake-remote-dir"
+    fake_dir.mkdir()
+    (fake_dir / "manifest.json").write_text(
+        '{"schema_version": "opentraces.bucket.manifest.v1"}', encoding="utf-8"
+    )
+    backend = get_backend(f"file://{fake_dir}")  # type: ignore[misc]
+    with pytest.raises(BucketLayoutError):
+        backend.get_manifest()
+
+
+@pytest.mark.skipif(
+    not _BACKEND_AVAILABLE, reason="Track D1 (bucket_backend) not shipped"
+)
+def test_file_backend_missing_file_raises_bucket_remote_error(repo, tmp_path):
+    """A missing file under the fake-dir root raises BucketRemoteError."""
+
+    from opentraces.core import paths
+    from opentraces.core.bucket_remote import BucketRemoteError
+
+    _project_envelope(repo, trace_id="trace-FILE-MISS", seed="filemiss")
+    fake_dir = tmp_path / "fake-remote-dir"
+    fake_dir.mkdir()
+    _push_to_fake_dir(paths.bucket_dir(), fake_dir)
+
+    backend = get_backend(f"file://{fake_dir}")  # type: ignore[misc]
+    with pytest.raises(BucketRemoteError):
+        backend.get_trace_json("trace-NOT-PRESENT")
+
+
+@pytest.mark.skipif(
+    not _BACKEND_AVAILABLE, reason="Track D1 (bucket_backend) not shipped"
+)
+def test_local_vs_file_backend_parity_no_monkeypatch(repo, tmp_path):
+    """Local-vs-directory parity proven WITHOUT monkeypatching ``_download``.
+
+    Acceptance #3: get_manifest, get_trace_json, read_trail_jsonl_gz,
+    read_context_jsonl_gz, get_layer_blob return identical objects against
+    the same fake-remote tree — and the directory backend's real
+    ``_download`` (root/<filename>, offline) is exercised, not a fake.
+    """
+
+    from opentraces.core import paths
+
+    info = _project_envelope(repo, trace_id="trace-FILE-PAR", seed="filepar")
+    fake_dir = tmp_path / "fake-remote-dir"
+    fake_dir.mkdir()
+    _push_to_fake_dir(paths.bucket_dir(), fake_dir)
+
+    local = LocalBucketBackend()  # type: ignore[misc]
+    remote = get_backend(f"file://{fake_dir}")  # type: ignore[misc]
+    assert isinstance(remote, RemoteHubBackend)  # type: ignore[misc]
+
+    trace_id = info["trace_id"]
+    slug = info["project_slug"]
+
+    # 1. manifest
+    assert local.get_manifest() == remote.get_manifest()
+    # 2. trace.json
+    assert local.get_trace_json(trace_id) == remote.get_trace_json(trace_id)
+    # 3. trail companion
+    assert list(local.read_trail_jsonl_gz(trace_id)) == list(
+        remote.read_trail_jsonl_gz(trace_id)
+    )
+    # 4. context companion
+    local_ctx = list(local.read_context_jsonl_gz(trace_id))
+    remote_ctx = list(remote.read_context_jsonl_gz(trace_id))
+    assert local_ctx == remote_ctx
+    # 5. layer blob
+    layer_id = info["system_layer_id"]
+    assert local.get_layer_blob(
+        layer_id=layer_id, project_slug=slug
+    ) == remote.get_layer_blob(layer_id=layer_id, project_slug=slug)

@@ -176,6 +176,76 @@ def _cached_backend(remote: str) -> Any:
     return backend
 
 
+def _project_slug_for_node(node: Any, *, remote: str | None = None) -> str | None:
+    """Resolve a node's ``project_slug``: direct attr, else manifest join.
+
+    The node carries a ``trace_id``; the canonical trace -> project_slug
+    join lives in the bucket manifest's ``traces[]``. When ``remote`` is
+    set the manifest is read from the remote backend (the lazy-fetch
+    caller already needs this); otherwise the local manifest is consulted.
+    """
+    project_slug = getattr(node, "project_slug", None)
+    if project_slug:
+        return project_slug
+    trace_id = getattr(node, "trace_id", None)
+    if not trace_id:
+        return None
+    manifest: dict[str, Any] = {}
+    try:
+        if remote:
+            manifest = _cached_backend(remote).get_manifest()
+        else:
+            from ..core.bucket_backend import LocalBucketBackend
+
+            manifest = LocalBucketBackend().get_manifest()
+    except Exception:
+        return None
+    for entry in manifest.get("traces") or []:
+        if isinstance(entry, dict) and entry.get("trace_id") == trace_id:
+            return entry.get("project_slug")
+    return None
+
+
+def _cache_read_layer_blob(*, node: Any, layer_id: str) -> Any:
+    """Read a layer blob from the LOCAL bucket cache (no network).
+
+    Plan 080 §6/§7 — ``ctx show`` resolution order is
+    projection(local) -> bucket blob cache(cache) -> remote(remote). This
+    is the middle rung: a blob the projection didn't carry but that a
+    prior ``--remote`` fetch (or ``bucket prefetch``) wrote to
+    ``bucket/blobs/v1/<project>/context/<hh>/<hash>.json.gz``. Returns a
+    rehydrated ``ContextLayer`` on a cache hit, else ``None``. Issue #57:
+    without this rung the remote->cache and offline-after-warm arms are
+    unreachable (the cache that ``_lazy_fetch_layer_blob`` writes was
+    never read back).
+    """
+    project_slug = _project_slug_for_node(node)
+    if not project_slug:
+        return None
+    try:
+        from ..core.bucket_layout import blobs_v1_context_path
+
+        blob_path = blobs_v1_context_path(project_slug, layer_id)
+    except Exception:
+        return None
+    if not blob_path.exists():
+        return None
+    try:
+        from ..core.bucket_backend import LocalBucketBackend
+
+        payload = LocalBucketBackend().get_layer_blob(layer_id, project_slug)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        from ..core.context_tree.models import ContextLayer
+
+        return ContextLayer.model_validate(payload)
+    except Exception:
+        return None
+
+
 def _lazy_fetch_layer_blob(
     *,
     remote: str,
@@ -679,6 +749,17 @@ def ctx_show_cmd(
         # has it, "cache" if we resolved it from the local bucket cache,
         # "remote" if we lazy-fetched from the remote backend.
         fetched_from = "local" if layer is not None else None
+        # Plan 080 §6/§7 resolution order: projection(local) -> bucket
+        # blob cache(cache) -> remote(remote). The cache rung sits BEFORE
+        # the offline/remote branches so a warmed blob (from a prior
+        # --remote fetch or `bucket prefetch`) is served offline (issue
+        # #57: this is the rung that makes the offline-after-warm and
+        # repeat-fetch-is-cache arms reachable).
+        if layer is None and layer_id:
+            cached = _cache_read_layer_blob(node=node, layer_id=layer_id)
+            if cached is not None:
+                layer = cached
+                fetched_from = "cache"
         # Plan 080 §7 lazy-fetch path. With ``--remote`` we fetch
         # missing blobs from the remote. ``--offline`` is the HARD
         # opt-out: never contact the network, fail rc=4 with a clean
