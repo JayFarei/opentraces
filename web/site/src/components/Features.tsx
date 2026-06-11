@@ -9,7 +9,7 @@ const features = [
   { color: "var(--c-user)", title: "trace discovery", cmd: "opentraces trace query", desc: "query, map, slice, and get expose deterministic packets over a local BM25 + semantic index, without loading full transcripts." },
   { color: "var(--c-git)", title: "trace trails", cmd: "opentraces trail blame commit", desc: "blame commit, blame pr, graph, and track connect each trace patch to the Git history that accepted it, across eight survival states." },
   { color: "var(--c-exec)", title: "context tree", cmd: "opentraces ctx tree", desc: "ctx commands reconstruct what the agent saw at a step and produce resume packets." },
-  { color: "var(--c-push)", title: "trace intelligence", cmd: "opentraces trace --run-intel", desc: "Derive-on-demand signals about a run: context waste, run health, and A/B compare of two traces. No LLM, nothing persisted." },
+  { color: "var(--c-push)", title: "trace intelligence", cmd: "opentraces trace map --run-intel", desc: "Derive-on-demand signals about a run: context waste, run health, and A/B compare of two traces. No LLM, nothing persisted." },
   { color: "var(--c-plan)", title: "workflow templates", cmd: "opentraces workflow create", desc: "Skill-format packages project raw trace evidence into schema-valid dataset rows for a chosen objective." },
   { color: "var(--c-write)", title: "dataset row review", cmd: "opentraces dataset review", desc: "Approve, reject, reset, schedule, and publish projected rows; raw traces never leave the bucket." },
   { color: "var(--c-error)", title: "security tools", cmd: "opentraces security tools list", desc: "Nine detectors, transformers, and a judge run in one fixed order before egress, all explicit and default off." },

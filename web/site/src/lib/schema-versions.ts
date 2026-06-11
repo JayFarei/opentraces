@@ -477,8 +477,34 @@ const v060: SchemaVersion = {
   ]),
 };
 
+const v070: SchemaVersion = {
+  version: "0.7.0",
+  date: "2026-06-08",
+  summary: "Dataset security policy contract. A workflow declares the security posture of the rows it projects, and each dataset stores its resolved policy in the manifest. Additive only; the TraceRecord wire shape is unchanged.",
+  highlights: [
+    "WorkflowSecurityContract: a workflow's declared security posture (required_tools, optional_tools, default_enabled_tools, disallowed_tools, allow_disable_required)",
+    "DatasetSecurityPolicy: the resolved per-dataset policy stored on the manifest, seeded from a workflow contract and pinned to the source workflow digest",
+    "DatasetSecurityOverride: an explicit, recorded unsafe opt-out of a required security tool",
+    "DatasetManifest.security: additive optional field, defaults to an empty policy so existing manifests load unchanged",
+    "SecurityToolName Literal + SECURITY_TOOL_ORDER: canonical security tool vocabulary kept in sync with the runtime tool registry",
+    "CLI: `opentraces dataset security <name>` inspects/edits a dataset's policy; `--unsafe-override` records disabling a required tool",
+    "TraceRecord wire shape unchanged; migrate_record is a transparent no-op",
+  ],
+  models: v060.models.map((m) => {
+    if (m.id === "trace-record") {
+      return {
+        ...m,
+        fields: m.fields.map((f) =>
+          f.name === "schema_version" ? { ...f, description: 'e.g. "0.7.0"' } : f,
+        ),
+      };
+    }
+    return m;
+  }),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v060, v050, v040, v030, v020, v011, v010];
+export const versions: SchemaVersion[] = [v070, v060, v050, v040, v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

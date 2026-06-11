@@ -242,6 +242,7 @@ evidence.
 ```bash
 opentraces bucket status --json
 opentraces bucket manifest --json
+opentraces bucket manifest --heal --json
 opentraces bucket verify --sample 100 --json
 opentraces bucket verify --full --json
 opentraces bucket repair --json
@@ -266,6 +267,11 @@ read-only inspector. `--policy` applies a named bundle and accepts only
 `off|basic|recommended|strict`. `--tool ... --enable` / `--tool ... --disable`
 edits one tool at a time. It flips the same `cfg.security.<tool>.enabled` flags
 as `security tools` and `config set`, scoped to the bucket.
+
+`bucket status` and `bucket manifest` are side-effect-free reads: they never
+write under the bucket. Self-heal (materializing the top-level manifest from the
+per-trace envelopes on disk) is explicit via `bucket manifest --heal`, or do a
+full rebuild with `bucket repair`.
 
 The bucket is the private capture-time store. It is separate from datasets:
 bucket sync moves raw retained evidence, while dataset publish moves approved

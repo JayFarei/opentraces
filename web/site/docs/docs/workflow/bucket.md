@@ -53,12 +53,18 @@ or evolving evidence needed by Trace Trails, Context Tree, and replay.
 ```bash
 opentraces bucket status
 opentraces bucket manifest --json
+opentraces bucket manifest --heal --json
 opentraces bucket verify --sample 100 --json
 opentraces bucket verify --full --json
 ```
 
 `bucket status` avoids expensive blob enumeration. `bucket verify` recomputes
 blob hashes and checks for dangling references.
+
+`bucket status` and `bucket manifest` are side-effect-free reads: they never
+write under the bucket. Self-heal (materializing the top-level manifest from the
+per-trace envelopes on disk) is explicit via `bucket manifest --heal`, or do a
+full rebuild with `bucket repair`.
 
 ## Repair, Rebuild, And Replay
 

@@ -86,7 +86,7 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
 | **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
-| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
+| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.7.0` field semantics |
 | **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
 | **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
 | **[Trace Capsule](/docs/clients/trace-capsule)** | Share a single trace as a reproducible capsule; use `opentraces capsule` for the full CLI surface |
@@ -629,6 +629,12 @@ traces, first `opentraces bucket remote pull` and then rebuild the snapshot with
 `opentraces trace index rebuild`. (`trace get --remote-bucket` / `--remote
 owner/repo` remain the per-trace remote-read path.)
 
+`--semantic` expands a small static dictionary of service/library concepts
+observed in trace evidence (for example Hugging Face or MongoDB); it is not an
+embedding search. A query that matches no concept falls back to lexical
+matching where every token must match, so natural-language paraphrases can
+miss traces that concrete keywords would find.
+
 ## Trace Intelligence
 
 Deterministic, derive-on-demand signals about how a run went, layered on top of the Trace surface. No LLM, no schema change, nothing persisted; each is a frozen JSON envelope. Three capabilities: context waste, run signals, run compare.
@@ -694,6 +700,7 @@ evidence.
 ```bash
 opentraces bucket status --json
 opentraces bucket manifest --json
+opentraces bucket manifest --heal --json
 opentraces bucket verify --sample 100 --json
 opentraces bucket verify --full --json
 opentraces bucket repair --json
@@ -718,6 +725,11 @@ read-only inspector. `--policy` applies a named bundle and accepts only
 `off|basic|recommended|strict`. `--tool ... --enable` / `--tool ... --disable`
 edits one tool at a time. It flips the same `cfg.security.<tool>.enabled` flags
 as `security tools` and `config set`, scoped to the bucket.
+
+`bucket status` and `bucket manifest` are side-effect-free reads: they never
+write under the bucket. Self-heal (materializing the top-level manifest from the
+per-trace envelopes on disk) is explicit via `bucket manifest --heal`, or do a
+full rebuild with `bucket repair`.
 
 The bucket is the private capture-time store. It is separate from datasets:
 bucket sync moves raw retained evidence, while dataset publish moves approved
@@ -1052,7 +1064,7 @@ opentraces backfill
 opentraces git-backfill
 ```
 
-`git-backfill` is particularly useful after a first-time install of the post-commit hook or after a period where the hook failed silently.
+`git-backfill` is particularly useful after a first-time install of the post-commit hook or after a period where the hook failed silently. `backfill` (the attribution-cache refresh) is a hidden maintenance verb: it runs when typed but does not appear in `--help`.
 
 ### Blocked Rows in a Dataset
 
@@ -1324,12 +1336,18 @@ or evolving evidence needed by Trace Trails, Context Tree, and replay.
 ```bash
 opentraces bucket status
 opentraces bucket manifest --json
+opentraces bucket manifest --heal --json
 opentraces bucket verify --sample 100 --json
 opentraces bucket verify --full --json
 ```
 
 `bucket status` avoids expensive blob enumeration. `bucket verify` recomputes
 blob hashes and checks for dangling references.
+
+`bucket status` and `bucket manifest` are side-effect-free reads: they never
+write under the bucket. Self-heal (materializing the top-level manifest from the
+per-trace envelopes on disk) is explicit via `bucket manifest --heal`, or do a
+full rebuild with `bucket repair`.
 
 ## Repair, Rebuild, And Replay
 
@@ -1448,6 +1466,13 @@ opentraces trace query --cwd --json
 `trace query` returns `CandidatePacket` rows. Use `--include-slice intent` or
 `--include-slice evidence` when the consumer needs a bounded packet attached
 to the search hit.
+
+The `--semantic` facet is a lightweight concept layer, not embeddings: it
+expands a small static dictionary of service/library concepts (for example
+Hugging Face, MongoDB, OpenAI) and joins on concept ids when the query matches
+one. Anything else degrades to lexical full-text search where every token must
+match, so paraphrased queries can return zero hits even when related traces
+exist. Prefer query terms that actually appear in the trace.
 
 ## Map
 
@@ -1582,7 +1607,7 @@ bucket portable across machines.
 | Trail Event | Append-only fact used to rebuild projections |
 | `ot://` resource | Stable resolver path for a trace patch, Git anchor, file line, or context node |
 
-Schema `0.6.0` stores compact patch refs in `TraceRecord.patches[]`. Full
+Schema `0.7.0` stores compact patch refs in `TraceRecord.patches[]`. Full
 patch history and survival observations live in the Trail companion
 (`trail.jsonl.gz`) and the Git event log.
 
@@ -2204,7 +2229,8 @@ same bucket traces.
 
 ## File-Oriented Access
 
-For published Hugging Face datasets, `hf-mount` can expose shards as files:
+For published Hugging Face datasets, the third-party `hf-mount` tool can
+expose shards as files:
 
 ```bash
 hf-mount start repo datasets/your-org/agent-traces /mnt/traces
@@ -2213,7 +2239,9 @@ head -n 1 /mnt/traces/data/*.jsonl
 hf-mount stop /mnt/traces
 ```
 
-For private or gated datasets, authenticate with Hugging Face first.
+`hf-mount` is an external tool, not part of opentraces; install it separately
+and check its own documentation for platform support. For private or gated
+datasets, authenticate with Hugging Face first.
 
 ## Resolve Back To Evidence
 
@@ -2326,9 +2354,13 @@ The agent only loads full trace content after the candidate is clearly useful.
 
 ```bash
 opentraces trace query --cwd --since 30d --lex "database migration" --json
-opentraces trace query --skill opentraces --semantic "schema drift after publish" --json
+opentraces trace query --skill opentraces --semantic "huggingface push failing" --json
 opentraces trace get <trace-id> --bursts --json
 ```
+
+`--semantic` matches a small concept dictionary (services and libraries seen in
+trace evidence); queries outside it fall back to all-tokens-must-match lexical
+search, so keep query terms concrete.
 
 This lets an agent ask, "Have we solved something like this before?" without
 turning the answer into a dataset row.
@@ -2674,7 +2706,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 
 ```json
 {
-  "schema_version": "0.6.0",
+  "schema_version": "0.7.0",
   "trace_id": "uuid",
   "session_id": "uuid",
   "content_hash": "<sha256-hex>",
@@ -2748,7 +2780,7 @@ The top-level record. One per JSONL line, one per agent trace.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.6.0"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.7.0"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
@@ -3308,7 +3340,7 @@ opentraces sits at the intersection of four public standards. It adopts what wor
 
 A training trajectory serialization format for agent research. Defines the step-based TAO (Thought-Action-Observation) loop, with fields for token IDs, logprobs, and reward signals designed for RL and SFT pipelines.
 
-**Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; serializers are internal building blocks for dataset workflows rather than a supported top-level client workflow.
+**Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; serializers are internal building blocks for dataset workflows rather than a supported top-level client workflow. The ATIF serializer itself lives in `src/opentraces/publish/atif.py` and is invoked by dataset workflows; there is no `opentraces export` CLI verb.
 
 ## ADP (Agent Data Protocol)
 
@@ -3391,12 +3423,31 @@ source of truth.
 ## Current Version
 
 ```text
-0.6.0
+0.7.0
 ```
 
-`0.6.0` makes `TraceRecord.patches[]` the authoritative output spine and
-removes `Outcome.patch`. Consumers should join patch ids to the bucket Trail
-companion for full diff/history.
+`0.7.0` is additive: it introduces the dataset security policy contract
+(plan 092) without changing the `TraceRecord` wire shape, so existing trace
+parsers continue to work unchanged. `0.6.0` made `TraceRecord.patches[]` the
+authoritative output spine and removed `Outcome.patch`; consumers should join
+patch ids to the bucket Trail companion for full diff/history.
+
+### 0.7.0
+
+- `WorkflowSecurityContract` model — a dataset workflow's declared security
+  posture (`required_tools`, `optional_tools`, `default_enabled_tools`,
+  `disallowed_tools`, `allow_disable_required`).
+- `DatasetSecurityPolicy` model — the resolved per-dataset policy stored on the
+  manifest, seeded from a workflow contract and pinned to the source workflow
+  digest.
+- `DatasetSecurityOverride` model — an explicit recorded unsafe opt-out of a
+  required security tool.
+- `DatasetManifest.security` — additive optional field defaulting to an empty
+  policy, so existing manifests load unchanged.
+- `SecurityToolName` Literal and `SECURITY_TOOL_ORDER` tuple — the canonical
+  security tool vocabulary mirroring the runtime tool registry.
+- `TraceRecord` wire shape unchanged; `migrate_record` is a transparent no-op
+  across the `0.6.0` -> `0.7.0` bump.
 
 ### 0.6.0
 
@@ -4039,23 +4090,21 @@ You do not need to run `opentraces auth login` when `HF_TOKEN` is already set in
 
 ## Recommended Pattern
 
-For headless runs:
+For headless runs, seed from a JSONL file produced earlier in the pipeline:
 
 ```bash
 opentraces init --agent claude-code
-opentraces dataset new my-dataset --workflow my-workflow --schema schema.json
-opentraces dataset run my-dataset --executor claude-code-headless
-opentraces dataset review approve my-dataset --all
-opentraces dataset publish my-dataset --to my-org/dataset
-```
-
-If the runner is seeding from an existing JSONL file instead of running a workflow:
-
-```bash
 opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 opentraces dataset review approve my-import --all
 opentraces dataset publish my-import --to my-org/dataset
 ```
+
+Workflow-driven runs (`opentraces dataset new my-dataset --workflow my-workflow
+--schema schema.json`, then `opentraces dataset run my-dataset`) are designed to
+execute inside an agent session with `--executor current-agent`. The
+`--executor claude-code-headless` choice is a reserved seam: it currently exits
+with an executor-unavailable error instead of invoking Claude Code, so it is
+not yet a working CI pattern.
 
 ## Health Checks
 
@@ -4087,12 +4136,11 @@ Those commands assume the required binary or endpoint is already available.
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
   run: opentraces init --agent claude-code
 
-- name: Create dataset and run workflow
+- name: Create dataset from prepared rows
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
   run: |
-    opentraces dataset new ci-dataset --workflow ci-workflow --schema schema.json
-    opentraces dataset run ci-dataset --executor claude-code-headless
+    opentraces dataset new ci-dataset --rows-file rows.jsonl --schema schema.json
 
 - name: Approve and publish
   env:
@@ -4930,7 +4978,8 @@ When suggesting a schema change, include:
 | New optional field | Minor |
 | New optional model | Minor |
 | Field rename | Major |
-| Field removal | Major |
+| Field removal before 1.0 | Minor with rationale and a registered migration |
+| Field removal after 1.0 | Major with a registered migration |
 | Type change | Major |
 
 See [Versioning](/docs/schema/versioning) for full policy.

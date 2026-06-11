@@ -19,12 +19,31 @@ source of truth.
 ## Current Version
 
 ```text
-0.6.0
+0.7.0
 ```
 
-`0.6.0` makes `TraceRecord.patches[]` the authoritative output spine and
-removes `Outcome.patch`. Consumers should join patch ids to the bucket Trail
-companion for full diff/history.
+`0.7.0` is additive: it introduces the dataset security policy contract
+(plan 092) without changing the `TraceRecord` wire shape, so existing trace
+parsers continue to work unchanged. `0.6.0` made `TraceRecord.patches[]` the
+authoritative output spine and removed `Outcome.patch`; consumers should join
+patch ids to the bucket Trail companion for full diff/history.
+
+### 0.7.0
+
+- `WorkflowSecurityContract` model — a dataset workflow's declared security
+  posture (`required_tools`, `optional_tools`, `default_enabled_tools`,
+  `disallowed_tools`, `allow_disable_required`).
+- `DatasetSecurityPolicy` model — the resolved per-dataset policy stored on the
+  manifest, seeded from a workflow contract and pinned to the source workflow
+  digest.
+- `DatasetSecurityOverride` model — an explicit recorded unsafe opt-out of a
+  required security tool.
+- `DatasetManifest.security` — additive optional field defaulting to an empty
+  policy, so existing manifests load unchanged.
+- `SecurityToolName` Literal and `SECURITY_TOOL_ORDER` tuple — the canonical
+  security tool vocabulary mirroring the runtime tool registry.
+- `TraceRecord` wire shape unchanged; `migrate_record` is a transparent no-op
+  across the `0.6.0` -> `0.7.0` bump.
 
 ### 0.6.0
 

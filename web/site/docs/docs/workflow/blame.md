@@ -38,7 +38,7 @@ bucket portable across machines.
 | Trail Event | Append-only fact used to rebuild projections |
 | `ot://` resource | Stable resolver path for a trace patch, Git anchor, file line, or context node |
 
-Schema `0.6.0` stores compact patch refs in `TraceRecord.patches[]`. Full
+Schema `0.7.0` stores compact patch refs in `TraceRecord.patches[]`. Full
 patch history and survival observations live in the Trail companion
 (`trail.jsonl.gz`) and the Git event log.
 

@@ -139,7 +139,7 @@ const HERO_PANELS: Panel[] = [
       { label: "remote", value: "alice/team-traces", valCls: "s", status: "bound", statusCls: "di" },
     ],
     footer: "Only approved rows leave the bucket",
-    next: ["opentraces dataset publish eval", "opentraces dataset schedule eval --daily"],
+    next: ["opentraces dataset publish eval", "opentraces dataset schedule add eval --every 1d"],
   },
 ];
 

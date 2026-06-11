@@ -22,7 +22,7 @@ Every coding session leaves behind the data you actually want: prompts, tool cal
 
 ## What It Does
 
-1. Capture traces from supported agents (Claude Code and Codex CLI) via session hooks.
+1. Capture traces from supported agents (Claude Code, Codex CLI, and Pi) via session hooks and harness extensions.
 2. Store capture-time evidence in a private bucket: `trace.json`, patch history, Trail events, Context Tree events, source events, and content-addressed blobs.
 3. Search, map, and slice retained traces without loading full transcripts.
 4. Correlate trace patches to Git history via Trace Trails: blame, graph, and track.
@@ -303,7 +303,7 @@ The trace format lives in [`packages/opentraces-schema/`](packages/opentraces-sc
 - security metadata
 - optional attribution and commit correlation data
 
-The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OTel GenAI. Current schema version: `0.6.0`. `TraceRecord` is the spine; `Step.context_node_id` and `TraceRecord.context_tree_summary` are the Context Tree join keys, and `TraceRecord.patches[]` is the authoritative output set. `Outcome.patch` was removed; clients assemble diffs from `patches[]` and the trace's `trail.jsonl.gz`.
+The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OTel GenAI. Current schema version: `0.7.0`. `TraceRecord` is the spine; `Step.context_node_id` and `TraceRecord.context_tree_summary` are the Context Tree join keys, and `TraceRecord.patches[]` is the authoritative output set. `Outcome.patch` was removed; clients assemble diffs from `patches[]` and the trace's `trail.jsonl.gz`. `0.7.0` adds the additive dataset security policy contract (`DatasetManifest.security`); the `TraceRecord` wire shape is unchanged from `0.6.0`.
 
 ## Tell Your Agent
 

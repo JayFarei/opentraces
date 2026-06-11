@@ -279,6 +279,10 @@ opentraces ctx resolve ot://context-node/<id> --json
 opentraces ctx anchor-for-step <trace_id> <step_index>
 ```
 
+`ctx list`, `ctx info`, and `ctx show` accept `--remote <hf-repo>` (`user/repo`)
+to read a remote bucket manifest (and lazy-fetch missing layer blobs for `ctx
+show`) with output bytewise-equal to the local read.
+
 Claude/Codex JSONL capture gives a useful structural approximation. Codex uses
 `capture_method=transcript_reconstruction`, does not decrypt encrypted
 reasoning, and does not support snapshot-backed `--at-step` resume. For
