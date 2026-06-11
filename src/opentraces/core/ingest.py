@@ -543,6 +543,14 @@ def _ingest_locked(
         source_layer="canonical",
         legacy_mirror=True,
     )
+    # NOTE: this raw-source link is load-bearing beyond re-parse capability —
+    # it is the per-trace capture-time provenance marker that
+    # ``bucket_store._is_legacy_read_in_place_mirror`` keys on (PR #63) to
+    # tell a 0.4+ staged record (projection deferred, manifest/repair MUST
+    # materialize it later) apart from a plan-085-S5 legacy read-in-place
+    # mirror (never auto-adopted). Keep it UNCONDITIONAL: the
+    # ``--trace-record-only`` fast path skips ``project_per_trace_exports``
+    # below, and without this link its deferred projection would never happen.
     try:
         write_raw_source_artifact(
             jsonl_path,

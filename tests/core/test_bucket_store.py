@@ -471,3 +471,114 @@ def test_legacy_in_place_mirrors_never_auto_adopted(tmp_path):
     # The legacy JSONL is untouched in place.
     traces_dir = get_project_dir(project) / "traces"
     assert (traces_dir / "trace-legacy-in-place.jsonl").exists()
+
+
+def _simulate_record_only_ingest(project_dir: Path, record: TraceRecord, source_jsonl: Path) -> str:
+    """Write the exact on-disk shape ingest.py's ``--trace-record-only`` path produces.
+
+    Mirrors ``src/opentraces/core/ingest.py`` (the unconditional block after
+    the staging-JSONL write): in-place ``traces/<trace_id>.jsonl``, a
+    ``canonical`` TraceRecord object with ``legacy_mirror=True``, and the
+    capture-time raw-source artifact. ``project_per_trace_exports`` is
+    deliberately NOT called — the record-only fast path defers projection.
+    Returns the project slug.
+    """
+
+    from opentraces.core.bucket_store import (
+        write_raw_source_artifact,
+        write_trace_record,
+    )
+    from opentraces.core.config import get_project_dir, get_project_traces_dir
+
+    traces_dir = get_project_traces_dir(project_dir)
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    (traces_dir / f"{record.trace_id}.jsonl").write_text(record.to_jsonl_line() + "\n")
+    slug = get_project_dir(project_dir).name
+    write_trace_record(
+        record,
+        project_slug=slug,
+        source_layer="canonical",
+        legacy_mirror=True,
+    )
+    write_raw_source_artifact(
+        source_jsonl,
+        trace_id=record.trace_id,
+        project_slug=slug,
+        source_kind="claude-code-session-jsonl",
+        parser="claude-code",
+    )
+    return slug
+
+
+def test_record_only_ingest_is_materialized_by_manifest_self_heal(tmp_path):
+    """PR #63 — record-only staged traces are NOT legacy mirrors.
+
+    The ``--trace-record-only`` ingest fast path writes the in-place JSONL +
+    TraceRecord object + raw-source link and defers the per-trace v2
+    projection. The deferred projection must actually happen: the #31
+    manifest self-heal materializes the envelope instead of skipping it as a
+    plan-085-S5 read-in-place legacy mirror (the capture-time raw-source link
+    is the provenance discriminator — legacy mirrors never have one).
+    """
+
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_status,
+        trace_v1_json_path,
+    )
+
+    project = tmp_path / "hot"
+    _enroll_project(project, "cafef00dcafef00dcafef00dcafef00d")
+    record = _scanned_trace("trace-record-only-1")
+    source_jsonl = tmp_path / "session-record-only-1.jsonl"
+    source_jsonl.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    slug = _simulate_record_only_ingest(project, record, source_jsonl)
+
+    # The deferred projection happens at manifest time: row + envelope.
+    manifest = bucket_manifest(write=True, include_objects=False)
+    assert [row["trace_id"] for row in manifest["traces"]] == ["trace-record-only-1"]
+    assert trace_v1_json_path(slug, "trace-record-only-1").exists()
+
+    # `bucket status` (manifest-only reader) agrees.
+    status = bucket_status()
+    assert [row["trace_id"] for row in status["bucket"]["traces"]] == [
+        "trace-record-only-1"
+    ]
+
+    # The in-place JSONL stays untouched (record-only contract: the staged
+    # source is not consumed by materialization).
+    from opentraces.core.config import get_project_dir
+
+    assert (get_project_dir(project) / "traces" / "trace-record-only-1.jsonl").exists()
+
+
+def test_record_only_ingest_is_materialized_by_bucket_repair(tmp_path):
+    """PR #63 — `bucket repair` (and `bucket rebuild`) must project the
+    deferred record-only trace via the #28 bucket-sourced pass instead of
+    skipping it as a legacy in-place mirror.
+    """
+
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_repair,
+        rebuild_bucket_traces,
+        trace_v1_json_path,
+    )
+
+    project = tmp_path / "hot"
+    _enroll_project(project, "deadbeefdeadbeefdeadbeefdeadbeef")
+    record = _scanned_trace("trace-record-only-2")
+    source_jsonl = tmp_path / "session-record-only-2.jsonl"
+    source_jsonl.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    slug = _simulate_record_only_ingest(project, record, source_jsonl)
+
+    result = bucket_repair(dry_run=False)
+    assert result["bucket_sourced_traces"] == 1
+    assert trace_v1_json_path(slug, "trace-record-only-2").exists()
+
+    manifest = bucket_manifest(write=False, include_objects=False)
+    assert [row["trace_id"] for row in manifest["traces"]] == ["trace-record-only-2"]
+
+    # `bucket rebuild --substrate traces` takes the same bucket-sourced pass.
+    rebuilt = rebuild_bucket_traces()
+    assert rebuilt["bucket_sourced_traces"] == 1
