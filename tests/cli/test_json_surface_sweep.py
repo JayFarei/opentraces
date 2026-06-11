@@ -274,22 +274,20 @@ def _run_json(path: str) -> _RunResult:
 # regressions while the known set burns down; a fixed entry hard-fails until
 # it is removed (the unexpected-pass guard keeps this list honest).
 KNOWN_FINDINGS = {
-    "security tools list": (
-        "envelope is a JSON array, not an object with schema_version "
-        "(inconsistent with every other --json surface)"
-    ),
-    "setup privacy-filter": (
-        "exit 0 under --json with plain text ('privacy-filter: enabled ...') "
-        "and no JSON envelope; also flips the tool on as a side effect of a "
-        "bare invocation"
-    ),
-    "setup watcher stop": "exit 0 under --json with plain 'stopped.' — no envelope",
+    # WAIVED (deliberate shape choice, not an unfixed gap): the original
+    # finding — plain '(no enlisted projects)' text under --json — is fixed;
+    # the empty world now emits `[]`. The envelope stays a JSON ARRAY because
+    # the non-empty path emits one report object per enlisted project and
+    # live consumers index it positionally (`0.jsonl_activity` in
+    # tests/otbox/catalogue/journeys/migration-u-setup-5-watcher-tick-safe.toml,
+    # `tick[0]` in tests/integration/harness/trace_trails_full_stack_demo.py).
+    # A type-stable `[]` beats an empty-only object envelope; converting the
+    # whole command to `{"status": ..., "reports": [...]}` is a coordinated
+    # consumer-contract change tracked on issue #25.
     "setup watcher tick": (
-        "exit 0 under --json with plain '(no enlisted projects)' — no envelope"
-    ),
-    "workflow optimize": (
-        "leaks a raw WorkflowScriptError traceback on an empty world instead "
-        "of a clean error envelope"
+        "emits a type-stable JSON array (empty world: `[]`), not an object "
+        "envelope — array shape retained for positional consumers; "
+        "object-envelope conversion is a coordinated contract change"
     ),
 }
 

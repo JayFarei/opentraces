@@ -204,7 +204,13 @@ def tools_list(json_out: bool) -> None:
     cfg = load_config()
     infos = list_tools(cfg)
     if json_out:
-        click.echo(json.dumps([asdict(i) for i in infos]))
+        # Object envelope (not a bare array) — every other --json surface
+        # emits an object with `status`; consumers index `tools.<n>.<field>`.
+        click.echo(json.dumps({
+            "status": "ok",
+            "schema_version": "opentraces.security_tools.v1",
+            "tools": [asdict(i) for i in infos],
+        }))
         return
     for info in infos:
         marker = "on " if info.enabled else "off"
