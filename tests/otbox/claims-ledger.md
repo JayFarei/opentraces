@@ -37,8 +37,8 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-11, post-issue-49 code half + issue-55 merge + issue-62
-  BKT-1 verifier): 25 verified, 18 partial, 7 open, 7 tracked, 0 waived — 57 rows.
+- Status counts (2026-06-11, post-issue-55 + issue-62 merges): 25 verified,
+  18 partial, 7 open, 7 tracked, 0 waived — 57 rows.
 
 ## A. Capture (per harness)
 
