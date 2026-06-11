@@ -1,8 +1,14 @@
 name = "bucket-inspect"
 description = """
-Private bucket subsystem: report local bucket health and materialize
-the bucket manifest. Confirms every seeded trace lands in the
-project-local bucket and the manifest is generated on disk.
+Private bucket subsystem: report local bucket health (read-only) and
+materialize the bucket manifest on demand. Confirms every seeded trace
+lands in the project-local bucket, the read verbs still print the
+digest, and `bucket manifest --heal` generates manifest.json on disk.
+
+Issue #55 — `bucket status` and `bucket manifest` are side-effect-free
+reads (they compute + print the digest but write nothing). The manifest
+file is materialized by the explicit `bucket manifest --heal` step, so
+the on-disk `path_exists` assertion now binds to that verb.
 """
 lane = "core"
 tier = 0
@@ -19,6 +25,11 @@ type = "cli"
 id = "manifest"
 argv = ["bucket", "manifest"]
 
+[[steps]]
+type = "cli"
+id = "manifest-heal"
+argv = ["bucket", "manifest", "--heal"]
+
 [[assertions]]
 kind = "returncode"
 step = "status"
@@ -29,11 +40,18 @@ kind = "stdout_contains"
 step = "status"
 value = "remote eligible"
 
+# The read-only manifest still computes + prints the digest.
 [[assertions]]
 kind = "stdout_contains"
 step = "manifest"
 value = "digest: sha256:"
 
+[[assertions]]
+kind = "returncode"
+step = "manifest-heal"
+equals = 0
+
+# --heal is what materializes manifest.json on disk.
 [[assertions]]
 kind = "path_exists"
 path = "{opentraces_dir}/bucket/manifest.json"

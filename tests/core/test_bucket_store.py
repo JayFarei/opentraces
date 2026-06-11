@@ -582,3 +582,265 @@ def test_record_only_ingest_is_materialized_by_bucket_repair(tmp_path):
     # `bucket rebuild --substrate traces` takes the same bucket-sourced pass.
     rebuilt = rebuild_bucket_traces()
     assert rebuilt["bucket_sourced_traces"] == 1
+
+
+def _bucket_tree_byte_hash() -> str:
+    """Deterministic content hash of EVERY file under the bucket root.
+
+    Hashes (relative-path, file-bytes) pairs in sorted order — proves both
+    the file SET and every byte are unchanged. ``mtime``/permissions are
+    excluded so the property is purely "did any byte under the bucket move".
+    """
+
+    import hashlib
+
+    from opentraces.core import paths
+
+    root = paths.bucket_dir()
+    h = hashlib.sha256()
+    if not root.exists():
+        return "absent"
+    for f in sorted(p for p in root.rglob("*") if p.is_file()):
+        h.update(f.relative_to(root).as_posix().encode("utf-8"))
+        h.update(b"\0")
+        h.update(f.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def test_bucket_read_verbs_are_side_effect_free(tmp_path):
+    """Issue #55 — `bucket status` / `bucket manifest` (no --heal) are reads.
+
+    On a world holding a record-only orphan trace (the #31 shape: a
+    TraceRecord object + capture-time raw-source link, but NO per-trace v2
+    envelope), the read-only verbs:
+
+    * write ZERO bytes under the bucket root — the full bucket-tree byte
+      hash is identical before/after BOTH verbs, and no ``manifest.json`` is
+      created if absent;
+    * still report the orphan IN-MEMORY — ``manifest.traces`` includes it and
+      its count equals ``trace_records.object_count``;
+    * produce a read-only ``bucket_digest`` that EQUALS the digest a
+      subsequent self-heal / ``bucket repair`` persists to disk (the summary
+      is record-derived in both modes, so the digest invariant holds).
+
+    ``bucket manifest --heal`` (``write=True, heal=True``) then restores the
+    materializing behavior and is idempotent (a second --heal leaves
+    ``manifest.json`` byte-identical, matching bucket_repair's
+    write-only-on-change discipline).
+    """
+
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_manifest_path,
+        bucket_repair,
+        bucket_status,
+        trace_v1_json_path,
+    )
+
+    project = tmp_path / "hot"
+    _enroll_project(project, "0ddba110ddba110ddba110ddba110dd0")
+    record = _scanned_trace("trace-read-verb-orphan")
+    source_jsonl = tmp_path / "session-read-verb.jsonl"
+    source_jsonl.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    slug = _simulate_record_only_ingest(project, record, source_jsonl)
+
+    # The orphan starts with no per-trace envelope and no manifest.json.
+    assert not trace_v1_json_path(slug, "trace-read-verb-orphan").exists()
+    assert not bucket_manifest_path().exists()
+
+    before_hash = _bucket_tree_byte_hash()
+
+    # --- bucket status (read-only) -------------------------------------
+    status = bucket_status(write_manifest=False, heal=False)
+    status_rows = [row["trace_id"] for row in status["bucket"]["traces"]]
+    assert status_rows == ["trace-read-verb-orphan"]
+    assert (
+        len(status["bucket"]["traces"])
+        == status["bucket"]["trace_records"]["object_count"]
+    )
+    assert _bucket_tree_byte_hash() == before_hash, "bucket status mutated the bucket"
+    assert not trace_v1_json_path(slug, "trace-read-verb-orphan").exists()
+    assert not bucket_manifest_path().exists()
+
+    # --- bucket manifest (read-only) -----------------------------------
+    read_manifest = bucket_manifest(write=False, heal=False, include_objects=False)
+    assert [row["trace_id"] for row in read_manifest["traces"]] == [
+        "trace-read-verb-orphan"
+    ]
+    read_digest = read_manifest["bucket_digest"]
+    assert _bucket_tree_byte_hash() == before_hash, "bucket manifest mutated the bucket"
+    assert not trace_v1_json_path(slug, "trace-read-verb-orphan").exists()
+    assert not bucket_manifest_path().exists()
+
+    # --- digest invariant: read-only digest == post-repair digest ------
+    bucket_repair(dry_run=False)
+    assert trace_v1_json_path(slug, "trace-read-verb-orphan").exists()
+    post_repair = bucket_manifest(write=False, heal=False, include_objects=False)
+    assert post_repair["bucket_digest"] == read_digest, (
+        "read-only digest diverged from the persisted/post-repair digest"
+    )
+
+    # --- bucket manifest --heal materializes + is idempotent -----------
+    # Reset to a fresh orphan to prove --heal does the materialization.
+    project2 = tmp_path / "hot2"
+    _enroll_project(project2, "0ddba110ddba110ddba110ddba110dd1")
+    record2 = _scanned_trace("trace-read-verb-orphan-2")
+    source2 = tmp_path / "session-read-verb-2.jsonl"
+    source2.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    slug2 = _simulate_record_only_ingest(project2, record2, source2)
+    assert not trace_v1_json_path(slug2, "trace-read-verb-orphan-2").exists()
+
+    bucket_manifest(write=True, heal=True, include_objects=False)
+    assert trace_v1_json_path(slug2, "trace-read-verb-orphan-2").exists()
+    assert bucket_manifest_path().exists()
+    healed_manifest_bytes = bucket_manifest_path().read_bytes()
+
+    # A second --heal is a digest-compare no-op on the manifest bytes.
+    bucket_manifest(write=True, heal=True, include_objects=False)
+    assert bucket_manifest_path().read_bytes() == healed_manifest_bytes, (
+        "second --heal rewrote manifest.json (idempotency broken)"
+    )
+
+
+def test_readonly_node_count_matches_heal_when_live_log_is_trail_only(tmp_path):
+    """Issue #55 adversary finding 1 — mirror-fallback condition parity.
+
+    A trace whose LIVE Git event log holds trail events but ZERO context
+    events gets an EMPTY context companion on heal:
+    ``project_per_trace_exports`` only falls back to the bucket events
+    mirror when the live log yields NEITHER kind. The read-only #55 helper
+    must use the exact same condition — if it borrowed the mirror's context
+    events for this trace, the read-only ``node_count`` (and with it
+    ``bucket_digest``) would diverge from the digest a later ``--heal``
+    persists.
+    """
+
+    from opentraces.core.bucket_store import bucket_manifest, sync_events_mirror
+    from opentraces.core.config import (
+        Config,
+        ProjectRegistration,
+        get_project_dir,
+        save_config,
+    )
+    from opentraces.core.trails import TrailEventDraft, append_event_batch
+
+    project_id = "0ddba110ddba110ddba110ddba110dd2"
+    project = tmp_path / "hot"
+    _enroll_project(project, project_id)
+    _init_repo(project)
+    slug = get_project_dir(project).name
+    save_config(
+        Config(
+            projects={
+                str(project.resolve()): ProjectRegistration(
+                    project_id=project_id, slug=slug
+                )
+            }
+        )
+    )
+
+    trace_id = "trace-trail-only-live-log"
+    record = _scanned_trace(trace_id)
+    source_jsonl = tmp_path / "session-trail-only.jsonl"
+    source_jsonl.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    assert _simulate_record_only_ingest(project, record, source_jsonl) == slug
+
+    # Live log: ONE trail event, zero context events for this trace.
+    append_event_batch(
+        project,
+        [
+            TrailEventDraft(
+                event_type="trace_snapshot_created",
+                trace_id=trace_id,
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={"snapshot_id": "snap-1", "limitations": []},
+            )
+        ],
+        writer="test-fixture",
+    )
+
+    # Bucket events mirror: a FOREIGN repo's log carrying a context event
+    # for the SAME trace_id (the cross-machine restore shape).
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    _init_repo(foreign)
+    append_event_batch(
+        foreign,
+        [
+            TrailEventDraft(
+                event_type="context_node_observed",
+                trace_id=trace_id,
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={"node_id": "node-1"},
+            )
+        ],
+        writer="test-fixture",
+    )
+    sync_events_mirror(foreign, repo_id="foreign-repo")
+
+    read_manifest = bucket_manifest(write=False, heal=False, include_objects=False)
+    (read_row,) = [
+        row for row in read_manifest["traces"] if row["trace_id"] == trace_id
+    ]
+    # Heal writes the context companion from the live (trail-only) log, so the
+    # read-only count must NOT borrow the mirror's context event.
+    assert read_row["summary"]["node_count"] == 0
+    read_digest = read_manifest["bucket_digest"]
+
+    healed = bucket_manifest(write=True, heal=True, include_objects=False)
+    (healed_row,) = [
+        row for row in healed["traces"] if row["trace_id"] == trace_id
+    ]
+    assert healed_row["summary"]["node_count"] == 0
+    assert healed["bucket_digest"] == read_digest, (
+        "read-only digest diverged from the healed digest on the "
+        "trail-only-live-log shape"
+    )
+
+
+def test_manifest_write_repairs_stale_shape_with_unchanged_digest(tmp_path):
+    """Issue #55 adversary finding 2 — write-skip keys on content, not digest.
+
+    A code upgrade can change the manifest SHAPE without changing the
+    Resolution-H ``bucket_digest`` material. A digest-only skip would leave
+    the stale-shaped ``manifest.json`` on disk forever — the exact bytes
+    ``bucket_remote`` pushes. The compare must be the full manifest minus
+    only the volatile ``generated_at``/``updated_at``: timestamps-only drift
+    skips the rewrite (idempotency), any other on-disk delta rewrites.
+    """
+
+    from opentraces.core.bucket_store import (
+        BUCKET_MANIFEST_SCHEMA,
+        bucket_manifest,
+        bucket_manifest_path,
+        sync_trace_records_from_local_stores,
+    )
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcde2")
+    _write_project_trace(project, _trace("trace-stale-shape"))
+    sync_trace_records_from_local_stores()
+
+    bucket_manifest(write=True, include_objects=False)
+    path = bucket_manifest_path()
+    baseline = path.read_bytes()
+
+    # Unchanged content: a re-write is a byte-level no-op (timestamps would
+    # advance, so a naive full-byte compare would always rewrite).
+    bucket_manifest(write=True, include_objects=False)
+    assert path.read_bytes() == baseline
+
+    # Stale shape on disk, digest fields untouched: write=True must repair.
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["schema_version"] == BUCKET_MANIFEST_SCHEMA
+    doc["schema_version"] = "opentraces.bucket.manifest.v0-stale"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    bucket_manifest(write=True, include_objects=False)
+    repaired = json.loads(path.read_text(encoding="utf-8"))
+    assert repaired["schema_version"] == BUCKET_MANIFEST_SCHEMA, (
+        "stale-shaped manifest.json survived a write=True re-projection "
+        "(digest-only skip)"
+    )
