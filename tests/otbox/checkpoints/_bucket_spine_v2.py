@@ -80,11 +80,11 @@ _SESSION_2_COMMIT_SUBJECT = "Tidy greeting() whitespace"
 # The simple-refactor Edit lands on step 3 (1=user, 2=Read, 3=Edit).
 _EDIT_STEP_INDEX = 3
 
-# Deterministic fault-injection identities. Layer ids are pinned literals
-# (any sha256:<64-hex> string is a valid *reference*); the node id is
+# Deterministic fault-injection identities. The dangling node id is
 # DERIVED — ContextNode validates node_id against its canonical material —
-# so the seed script computes it via build_node and the checkpoint exposes
-# it through ``~/{_NODE_ID_DIR}/dangling_node_id`` for shell-step `$(cat)`.
+# so the seed script computes it via build_node (from real build_layer
+# layer ids; issue #57) and the checkpoint exposes it through
+# ``~/{_NODE_ID_DIR}/dangling_node_id`` for shell-step `$(cat)`.
 #
 # The node is bound to the MAIN trace (not a synthetic trace id) and gets
 # a high step_index: ``build_context_tree_projection`` has a
@@ -94,12 +94,6 @@ _EDIT_STEP_INDEX = 3
 # node on any LATER trace would never project. Reported as a product
 # defect; this checkpoint stays inside the working surface.
 _DANGLING_STEP_INDEX = 99
-_DANGLING_LAYER_IDS = {
-    "system_layer_id": "sha256:" + "feedface" * 8,
-    "messages_layer_id": "sha256:" + "cafef00d" * 8,
-    "tool_registry_layer_id": "sha256:" + "deadbeef" * 8,
-    "runtime_state_layer_id": "sha256:" + "baddcafe" * 8,
-}
 _ORPHAN_BLOB_HEX = "0f" * 32  # blobs/v1/<slug>/context/0f/<hex>.json.gz
 
 _HARNESS_SRC = Path(__file__).resolve().parents[1] / "fake_harnesses" / "claude"
@@ -475,24 +469,73 @@ def _blob_dropped_delta(driver: Driver, box: Box) -> None:
     paths = driver.paths(box)
     project = paths["project"]
     home = paths["home"]
-    main_trace_id = _audit(box)["trace_id"]
+    audit = _audit(box)
+    main_trace_id = audit["trace_id"]
+    project_slug = audit["project_slug"]
+    remote_root = audit["fake_remote_root"]
 
-    # Append one synthetic ContextNode whose four layer ids exist nowhere
-    # in the event log — the deterministic "layer blob not locally
-    # resolvable" shape `ctx show --offline` fails rc=4 on. No reconciled
-    # event is appended (the main trace's active leaf must stay put) and
-    # the events mirror is deliberately NOT resynced, so `bucket verify`
-    # stays clean.
+    # Issue #57 re-spec: the pinned ContextNode's four layer ids are REAL
+    # content-addressed build_layer outputs. No layer *events* are appended
+    # (so the layers miss the event-log projection -> `ctx show --offline`
+    # rc=4 before warm), and the layer blobs are written gzip-mtime-0 to
+    # the FAKE REMOTE only (`<fake_remote>/bucket-spine/blobs/v1/<slug>/
+    # context/<hh>/<hash>.json.gz`) — absent locally. So `ctx show --remote
+    # file://<remote>` fetches them (provenance 'remote', warms the local
+    # cache), a second call reads the cache (provenance 'cache'), and
+    # `--offline` AFTER the warm succeeds rc=0. The events mirror is NOT
+    # resynced, so `bucket verify` stays clean (the blobs are not local).
+    #
+    # The blob payload shape mirrors _build_context_layer_blob in
+    # bucket_context_store.py verbatim so DirectoryHubBackend.get_layer_blob
+    # rehydrates a valid ContextLayer.
     script = f"""
 import json
 from pathlib import Path
 from opentraces.core.context_tree import build_node
+from opentraces.core.context_tree.models import build_layer
 from opentraces.core.context_tree.contract import CONTEXT_NODE_OBSERVED
+from opentraces.core.bucket_context_store import CONTEXT_LAYER_BLOB_SCHEMA
 from opentraces.core.trails.event_log import append_event_batch
 from opentraces.core.trails.models import TrailEventDraft
+from opentraces.core._bucket_io import _atomic_write_gzip, _canonical_json
 
 project_dir = Path({json.dumps(project)})
 trace_id = {json.dumps(main_trace_id)}
+project_slug = {json.dumps(project_slug)}
+remote_blobs_root = (
+    Path({json.dumps(remote_root)}) / "blobs" / "v1" / project_slug / "context"
+)
+
+# Four real layers. Content is seeded distinctly per type so each layer_id
+# is unique and deterministic across rebuilds.
+_seed = "otbox-blob-dropped"
+layers = {{
+    "system": build_layer(
+        layer_type="system",
+        content={{"assembled_text": _seed + "-system", "components_present": ["claude_md"]}},
+        completeness="approximated",
+        capture_method="transcript_reconstruction",
+    ),
+    "messages": build_layer(
+        layer_type="messages",
+        content={{"messages": [{{"uuid": _seed + "-m1", "role": "user", "content_hash": "sha256:aa"}}]}},
+        completeness="full",
+        capture_method="transcript_reconstruction",
+    ),
+    "tool_registry": build_layer(
+        layer_type="tool_registry",
+        content={{"tools": [{{"name": "Edit"}}, {{"name": "Read"}}]}},
+        completeness="full",
+        capture_method="transcript_reconstruction",
+    ),
+    "runtime_state": build_layer(
+        layer_type="runtime_state",
+        content={{"cwd": "/otbox/blob-dropped", "permission_mode": "default"}},
+        completeness="full",
+        capture_method="transcript_reconstruction",
+    ),
+}}
+
 node = build_node(
     parent_node_id=None,
     branch_type="root",
@@ -500,12 +543,15 @@ node = build_node(
     transcript_uuid="otbox-blob-dropped-prompt-0001",
     transcript_offset=0,
     step_index={_DANGLING_STEP_INDEX},
-    system_layer_id={json.dumps(_DANGLING_LAYER_IDS["system_layer_id"])},
-    messages_layer_id={json.dumps(_DANGLING_LAYER_IDS["messages_layer_id"])},
-    tool_registry_layer_id={json.dumps(_DANGLING_LAYER_IDS["tool_registry_layer_id"])},
-    runtime_state_layer_id={json.dumps(_DANGLING_LAYER_IDS["runtime_state_layer_id"])},
-    capture_completeness="stub",
+    system_layer_id=layers["system"].layer_id,
+    messages_layer_id=layers["messages"].layer_id,
+    tool_registry_layer_id=layers["tool_registry"].layer_id,
+    runtime_state_layer_id=layers["runtime_state"].layer_id,
+    capture_completeness="full",
 )
+
+# Append ONLY the node event — no layer events (the layers stay
+# unresolvable from the local projection until a remote fetch warms them).
 drafts = [
     TrailEventDraft(event_type=CONTEXT_NODE_OBSERVED,
                     payload=node.model_dump(mode="json"),
@@ -513,21 +559,41 @@ drafts = [
                     capture_method=["transcript_reconstruction"]),
 ]
 append_event_batch(project_dir, drafts, writer="otbox-bucket-spine-fixture")
-print(json.dumps({{"emitted": len(drafts), "node_id": node.node_id}}))
+
+# Write the four blobs to the FAKE REMOTE only (gzip mtime=0, pretty).
+for layer in layers.values():
+    blob_payload = {{
+        "schema_version": CONTEXT_LAYER_BLOB_SCHEMA,
+        "layer_id": layer.layer_id,
+        "layer_type": layer.layer_type,
+        "capture_method": layer.capture_method,
+        "completeness": layer.completeness,
+        "content": layer.content,
+    }}
+    digest_hex = layer.layer_id.split(":", 1)[1]
+    blob_path = remote_blobs_root / digest_hex[:2] / (digest_hex + ".json.gz")
+    _atomic_write_gzip(blob_path, _canonical_json(blob_payload, pretty=True).encode("utf-8"))
+
+print(json.dumps({{
+    "emitted": len(drafts),
+    "node_id": node.node_id,
+    "system_layer_id": layers["system"].layer_id,
+}}))
 """
     script_path = f"{home}/_otbox_blob_dropped_seed.py"
     driver.put_text(box, script_path, script)
     seed = driver.exec(box, [f"{project}/.testvenv/bin/python", script_path], cwd=project)
     _check(seed, "blob-dropped node seed")
     try:
-        dangling_node_id = json.loads(seed.stdout.strip().splitlines()[-1])["node_id"]
+        emitted = json.loads(seed.stdout.strip().splitlines()[-1])
+        dangling_node_id = emitted["node_id"]
     except (ValueError, KeyError, IndexError) as exc:
         raise CheckpointError(
             f"{_FAMILY}-blob-dropped: seed emitted no node id ({seed.stdout[:200]})"
         ) from None
 
     # The dangling node must resolve in the projection (ctx show finds the
-    # node, misses the layers) — fail the build if not.
+    # node, misses the layers locally) — fail the build if not.
     show = _cli_json(
         driver, box, "ctx", "show", dangling_node_id, "--json",
         label="ctx show (dangling node)",
@@ -542,11 +608,11 @@ print(json.dumps({{"emitted": len(drafts), "node_id": node.node_id}}))
     if (layers.get("system") or {}).get("layer_id") is not None:
         raise CheckpointError(
             f"{_FAMILY}-blob-dropped: dangling node unexpectedly resolved a "
-            f"system layer — the offline rc=4 shape is gone"
+            f"system layer locally — the offline rc=4 shape is gone"
         )
-    audit = _audit(box)
     audit["dangling_node_id"] = dangling_node_id
     audit["dangling_trace_id"] = main_trace_id
+    audit["dangling_system_layer_id"] = emitted["system_layer_id"]
     _write_node_id_file(driver, box, "dangling_node_id", dangling_node_id)
 
 
@@ -788,7 +854,12 @@ register(
             "{fake_remote}/bucket-spine + one clean `bucket remote push` "
             "(post-push state verified 'current')."
         ),
-        provides={"captured_traces": 2, "context_tree_built": True},
+        provides={
+            "captured_traces": 2,
+            "context_tree_built": True,
+            "bucket_spine_v2_layout": True,
+            "pushed_to_fake_remote": True,
+        },
     )
 )
 
@@ -799,12 +870,20 @@ register(
         delta=_blob_dropped_delta,
         cache=True,
         description=(
-            "Pushed world + one synthetic ContextNode (pinned id "
-            "sha256:0badc0de…) whose four layer ids resolve to NO layer "
-            "events/blobs anywhere — the deterministic shape behind "
-            "`ctx show --offline` rc=4. Events mirror untouched, verify clean."
+            "Pushed world + one synthetic ContextNode whose four layer ids "
+            "are REAL build_layer outputs (issue #57) with NO layer events in "
+            "the log and their blobs written gzip-mtime-0 to the FAKE REMOTE "
+            "ONLY (absent locally). The deterministic shape behind both the "
+            "`ctx show --offline` rc=4 gate AND the remote->cache lazy-fetch "
+            "provenance arm. Events mirror untouched, verify clean."
         ),
-        provides={"captured_traces": 2, "context_tree_built": True},
+        provides={
+            "captured_traces": 2,
+            "context_tree_built": True,
+            "bucket_spine_v2_layout": True,
+            "pushed_to_fake_remote": True,
+            "local_blobs_dropped": True,
+        },
     )
 )
 
