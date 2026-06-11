@@ -10,6 +10,12 @@ bind it. This module reads the ledger and exposes it to the release gate so:
    resolve (journey missing from the catalogue, journey quarantined,
    pytest file absent) — fails the gate.
 3. A tracked row without an issue ref (``#NNN`` or ``TBD-<tag>``) fails.
+4. The parse FAILS CLOSED (PR #63): a ``|``-line that is not the column
+   header or separator must parse as a claim row or it is recorded as a
+   malformed-row violation (line number + snippet), never silently
+   dropped; and the header status-counts line ("N verified, N partial,
+   ... — N rows") must reconcile with the parsed tally, which also
+   catches whole-row deletions and stale headers.
 
 Vendored in-repo for the same reason as ``jtbd-command-map.md``: a gate
 whose SSoT lives in the gitignored kb/ cannot run in any clean checkout.
@@ -61,6 +67,24 @@ _ROW_RE = re.compile(
 
 _EMPTY_CELL = {"", "—", "-", "–"}
 
+# A claim row has exactly these 6 cells (mirrors _ROW_RE's groups).
+EXPECTED_CELLS = 6
+
+# Table separator: |---|---|...  (optionally :-aligned)
+_SEPARATOR_RE = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
+
+# Something that LOOKS like a claim id (used to name the offending row in
+# malformed-row violations even when the row itself doesn't parse).
+_CLAIM_ID_RE = re.compile(r"^[A-Z]+-\d+$")
+
+# Header status-counts line, e.g.:
+#   - Status counts (2026-06-11, ...): 26 verified, 15 partial,
+#     8 open, 7 tracked, 0 waived — 56 rows.
+# (may wrap across physical lines; parsed up to the next blank line)
+_COUNTS_HEAD_RE = re.compile(r"Status counts[^:\n]*:")
+_COUNT_PAIR_RE = re.compile(r"(\d+)\s+(verified|partial|open|waived|tracked)\b")
+_ROW_TOTAL_RE = re.compile(r"(\d+)\s+rows?\b")
+
 
 @dataclass(frozen=True)
 class ClaimRow:
@@ -82,6 +106,39 @@ class ClaimRow:
         return tuple(v for v in self.verifiers if is_pytest_verifier(v))
 
 
+@dataclass(frozen=True)
+class MalformedRow:
+    """A ``|``-line inside the ledger that should be a claim row but
+    doesn't parse. Recorded, never dropped (PR #63 fail-closed)."""
+
+    line_no: int
+    snippet: str
+    reason: str
+    claim_id: str | None  # first cell, when it looks like a claim id
+
+
+@dataclass(frozen=True)
+class HeaderCounts:
+    """The declared status tally from the ledger's status-counts line."""
+
+    counts: tuple[tuple[str, int], ...]  # (status, declared) pairs
+    total: int | None
+    line_no: int
+
+    def declared(self, status: str) -> int:
+        return dict(self.counts).get(status, 0)
+
+
+@dataclass(frozen=True)
+class LedgerParse:
+    """Full fail-closed parse result: rows + everything that did NOT
+    parse + the header's declared tally."""
+
+    rows: tuple[ClaimRow, ...]
+    malformed: tuple[MalformedRow, ...]
+    header_counts: HeaderCounts | None
+
+
 def is_pytest_verifier(verifier: str) -> bool:
     """Verifiers are either catalogue journey names or pytest node-id
     prefixes; the latter always start with ``tests/``."""
@@ -95,34 +152,95 @@ def _split_cell(cell: str) -> tuple[str, ...]:
     return tuple(p.strip().strip("`") for p in cell.split(",") if p.strip())
 
 
-def _parse_claims_doc(text: str) -> list[ClaimRow]:
+def _table_cells(stripped: str) -> list[str]:
+    """``| a | b |`` -> ``["a", "b"]`` (leading/trailing pipes removed)."""
+    inner = stripped
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    return [c.strip() for c in inner.split("|")]
+
+
+def _parse_header_counts(text: str) -> HeaderCounts | None:
+    m = _COUNTS_HEAD_RE.search(text)
+    if m is None:
+        return None
+    line_no = text.count("\n", 0, m.start()) + 1
+    tail = text[m.end():]
+    cut = tail.find("\n\n")  # the counts line may wrap; ends at a blank line
+    region = tail if cut == -1 else tail[:cut]
+    counts = tuple(
+        (status, int(n)) for n, status in _COUNT_PAIR_RE.findall(region)
+    )
+    total_m = _ROW_TOTAL_RE.search(region)
+    total = int(total_m.group(1)) if total_m else None
+    return HeaderCounts(counts=counts, total=total, line_no=line_no)
+
+
+def parse_claims_doc(text: str) -> LedgerParse:
+    """Fail-closed parse: every line that starts with ``|`` and is not the
+    column header or separator must parse as a claim row, or it is
+    recorded in ``malformed`` (line number + snippet), never dropped."""
     rows: list[ClaimRow] = []
-    for line in text.splitlines():
-        if not line.startswith("| "):
+    malformed: list[MalformedRow] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
             continue
-        m = _ROW_RE.match(line)
-        if not m:
+        if _SEPARATOR_RE.match(stripped):
             continue
-        cid, claim, axis, status, verifiers_cell, issue_cell = m.groups()
-        rows.append(
-            ClaimRow(
-                id=cid,
-                claim=claim.strip(),
-                axis=axis,
-                status=status,
-                verifiers=_split_cell(verifiers_cell),
-                issues=_split_cell(issue_cell),
+        cells = _table_cells(stripped)
+        if cells and cells[0].lower() == "id":
+            continue  # column-header row
+        m = _ROW_RE.match(stripped)
+        if m:
+            cid, claim, axis, status, verifiers_cell, issue_cell = m.groups()
+            rows.append(
+                ClaimRow(
+                    id=cid,
+                    claim=claim.strip(),
+                    axis=axis,
+                    status=status,
+                    verifiers=_split_cell(verifiers_cell),
+                    issues=_split_cell(issue_cell),
+                )
+            )
+            continue
+        claim_id = cells[0] if cells and _CLAIM_ID_RE.match(cells[0]) else None
+        if len(cells) != EXPECTED_CELLS:
+            reason = f"expected {EXPECTED_CELLS} cells, found {len(cells)}"
+        else:
+            reason = "does not match the claim-row grammar"
+        snippet = stripped if len(stripped) <= 100 else stripped[:97] + "..."
+        malformed.append(
+            MalformedRow(
+                line_no=line_no, snippet=snippet, reason=reason, claim_id=claim_id
             )
         )
-    return rows
+    return LedgerParse(
+        rows=tuple(rows),
+        malformed=tuple(malformed),
+        header_counts=_parse_header_counts(text),
+    )
+
+
+@lru_cache(maxsize=1)
+def parse_claims_ledger() -> LedgerParse:
+    """Parse the vendored ledger once per process; results are cached."""
+    if not CLAIMS_PATH.exists():
+        raise FileNotFoundError(f"claims ledger not found at {CLAIMS_PATH}")
+    return parse_claims_doc(CLAIMS_PATH.read_text())
 
 
 @lru_cache(maxsize=1)
 def load_claims_ledger() -> list[ClaimRow]:
-    """Parse the vendored ledger once per process; results are cached."""
-    if not CLAIMS_PATH.exists():
-        raise FileNotFoundError(f"claims ledger not found at {CLAIMS_PATH}")
-    return _parse_claims_doc(CLAIMS_PATH.read_text())
+    """Backward-compatible row view over :func:`parse_claims_ledger`.
+
+    Gate callers that want the fail-closed structural checks should pass
+    the full ``parse_claims_ledger()`` result to :func:`validate_ledger`.
+    """
+    return list(parse_claims_ledger().rows)
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +267,52 @@ def active_quarantined_journeys(today=None) -> set[str]:
     return out
 
 
+def _structural_problems(parse: LedgerParse) -> list[str]:
+    """Malformed-row violations + header-counts reconciliation. Catches
+    rows the old parser silently dropped (PR #63) AND whole-row deletions
+    or stale headers via the declared-vs-parsed tally."""
+    problems: list[str] = []
+    for bad in parse.malformed:
+        ident = f" ({bad.claim_id})" if bad.claim_id else ""
+        problems.append(
+            f"line {bad.line_no}{ident}: malformed ledger row, {bad.reason}: "
+            f"{bad.snippet!r}"
+        )
+
+    hc = parse.header_counts
+    if hc is None:
+        problems.append(
+            "ledger header: status-counts line missing "
+            "(expected '- Status counts (...): N verified, ... N rows.')"
+        )
+        return problems
+
+    tally: dict[str, int] = {}
+    for row in parse.rows:
+        tally[row.status] = tally.get(row.status, 0) + 1
+    for status in sorted(STATUS_VOCAB):
+        declared = hc.declared(status)
+        parsed = tally.get(status, 0)
+        if declared != parsed:
+            problems.append(
+                f"ledger header (line {hc.line_no}): declares {declared} "
+                f"{status} but {parsed} parsed"
+            )
+    if hc.total is None:
+        problems.append(
+            f"ledger header (line {hc.line_no}): row total missing "
+            "(expected '... N rows.')"
+        )
+    elif hc.total != len(parse.rows):
+        problems.append(
+            f"ledger header (line {hc.line_no}): declares {hc.total} rows "
+            f"but {len(parse.rows)} parsed"
+        )
+    return problems
+
+
 def validate_ledger(
-    rows: list[ClaimRow],
+    rows: list[ClaimRow] | LedgerParse,
     *,
     journey_names: set[str] | None = None,
     quarantined: set[str] | None = None,
@@ -158,11 +320,20 @@ def validate_ledger(
 ) -> list[str]:
     """Return a list of human-readable problems; empty means the ledger is
     structurally sound. Pure function over injected world state so the unit
-    tests can probe each rule without the real catalogue."""
+    tests can probe each rule without the real catalogue.
+
+    Pass a :class:`LedgerParse` (from ``parse_claims_ledger()``) to ALSO
+    run the fail-closed structural checks: malformed-row violations and
+    the header status-counts reconciliation. A bare ``list[ClaimRow]``
+    keeps the row-rule-only behavior for synthetic unit probes."""
     journey_names = journey_names if journey_names is not None else catalogue_journey_names()
     quarantined = quarantined if quarantined is not None else active_quarantined_journeys()
 
     problems: list[str] = []
+    if isinstance(rows, LedgerParse):
+        problems.extend(_structural_problems(rows))
+        rows = list(rows.rows)
+
     seen: set[str] = set()
     for row in rows:
         prefix = f"{row.id}:"

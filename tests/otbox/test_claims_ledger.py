@@ -14,6 +14,8 @@ Layers:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from .claims_ledger import (
@@ -25,6 +27,8 @@ from .claims_ledger import (
     derive_claim_status,
     derive_claim_statuses,
     load_claims_ledger,
+    parse_claims_doc,
+    parse_claims_ledger,
     validate_ledger,
 )
 
@@ -39,14 +43,27 @@ def _isolate_opentraces_global_state():
 
 def test_claims_ledger_parses():
     assert CLAIMS_PATH.exists(), f"vendored claims ledger missing: {CLAIMS_PATH}"
+    parse = parse_claims_ledger()
     rows = load_claims_ledger()
-    assert len(rows) >= 46, f"ledger shrank to {len(rows)} rows (expected >= 46)"
+    assert list(parse.rows) == rows, "load_claims_ledger drifted from the full parse"
+    assert parse.malformed == (), (
+        "malformed ledger rows: "
+        + "; ".join(f"line {m.line_no}: {m.reason}" for m in parse.malformed)
+    )
+    # The header counts ARE the shrink guard (replaces the old `>= 46` floor):
+    # a silently-dropped or deleted row diverges from the declared tally.
+    assert parse.header_counts is not None, "status-counts line missing from header"
+    assert parse.header_counts.total == len(rows), (
+        f"header declares {parse.header_counts.total} rows, parsed {len(rows)}"
+    )
     ids = [r.id for r in rows]
     assert len(ids) == len(set(ids)), "duplicate claim ids"
 
 
 def test_claims_ledger_validates_clean():
-    problems = validate_ledger(load_claims_ledger())
+    # Validate the FULL parse (rows + malformed rows + header counts), which
+    # is exactly what release_gate.check_claims feeds the gate.
+    problems = validate_ledger(parse_claims_ledger())
     detail = "\n".join(f"  {p}" for p in problems)
     assert not problems, f"{len(problems)} claims-ledger violation(s):\n{detail}"
 
@@ -136,6 +153,105 @@ def test_clean_row_produces_no_problems():
         [_row(status="verified", verifiers=("real-journey",))], **_WORLD
     )
     assert problems == []
+
+
+# -- 2b. structural kills (PR #63: malformed rows must fail CLOSED) ----------------
+#
+# These mutate a copy of the LIVE ledger text and prove the parser cannot
+# silently drop a table row: every `|`-line that is not the column header
+# or separator either parses as a claim row or surfaces as a violation,
+# and the header status-counts line must reconcile with the parsed tally.
+
+def _live_text() -> str:
+    return CLAIMS_PATH.read_text()
+
+
+def _line_of(text: str, prefix: str) -> tuple[int, str]:
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if line.startswith(prefix):
+            return line_no, line
+    raise AssertionError(f"no ledger line starts with {prefix!r}")
+
+
+def test_kill_extra_cell_row_is_reported_not_dropped():
+    text = _live_text()
+    line_no, line = _line_of(text, "| CAP-1 ")
+    parse = parse_claims_doc(text.replace(line, line + " extra-cell |", 1))
+
+    # The row no longer parses cleanly, but it must NOT vanish.
+    assert all(r.id != "CAP-1" for r in parse.rows)
+    assert len(parse.malformed) == 1
+    bad = parse.malformed[0]
+    assert bad.line_no == line_no
+    assert bad.claim_id == "CAP-1"
+    assert "expected 6 cells, found 7" in bad.reason
+    assert bad.snippet.startswith("| CAP-1 ")
+
+    problems = validate_ledger(parse)
+    named = [p for p in problems if "malformed ledger row" in p]
+    assert named, problems
+    assert any(f"line {line_no}" in p and "CAP-1" in p for p in named)
+    # The header reconciliation independently catches the shrink (55 vs 56).
+    assert any(re.search(r"declares \d+ rows but \d+ parsed", p) for p in problems)
+
+
+def test_kill_wrong_cell_count_with_valid_claim_id():
+    text = _live_text()
+    line_no, line = _line_of(text, "| DSC-2 ")
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    assert len(cells) == 6
+    truncated = "| " + " | ".join(cells[:-1]) + " |"  # drop the Issue cell
+    parse = parse_claims_doc(text.replace(line, truncated, 1))
+
+    assert all(r.id != "DSC-2" for r in parse.rows)
+    assert len(parse.malformed) == 1
+    bad = parse.malformed[0]
+    assert (bad.line_no, bad.claim_id) == (line_no, "DSC-2")
+    assert "expected 6 cells, found 5" in bad.reason
+
+    problems = validate_ledger(parse)
+    assert any(
+        "malformed ledger row" in p and f"line {line_no}" in p and "DSC-2" in p
+        for p in problems
+    ), problems
+
+
+def test_kill_whole_row_drop_caught_by_header_reconciliation():
+    text = _live_text()
+    line_no, line = _line_of(text, "| CAP-1 ")
+    parse = parse_claims_doc(text.replace(line + "\n", "", 1))
+
+    # A clean deletion leaves nothing malformed to see; only the header
+    # tally can catch it.
+    assert parse.malformed == ()
+    problems = validate_ledger(parse)
+    assert any(re.search(r"declares \d+ rows but \d+ parsed", p) for p in problems), problems
+    assert any(
+        re.search(r"declares \d+ verified but \d+ parsed", p) for p in problems
+    ), problems
+
+
+def test_kill_stale_header_status_counts():
+    text = _live_text()
+    header = parse_claims_ledger().header_counts
+    assert header is not None
+    n = header.declared("verified")
+    mutated = text.replace(f"{n} verified", f"{n + 1} verified", 1)
+    assert mutated != text
+    problems = validate_ledger(parse_claims_doc(mutated))
+    assert any(
+        f"declares {n + 1} verified but {n} parsed" in p for p in problems
+    ), problems
+
+
+def test_kill_missing_counts_line_fails_closed():
+    text = _live_text()
+    mutated = re.sub(r"- Status counts.*?rows\.\n", "", text, flags=re.S)
+    assert "Status counts" not in mutated
+    parse = parse_claims_doc(mutated)
+    assert parse.header_counts is None
+    problems = validate_ledger(parse)
+    assert any("status-counts line missing" in p for p in problems), problems
 
 
 # -- 3. run-ledger derivation -----------------------------------------------------

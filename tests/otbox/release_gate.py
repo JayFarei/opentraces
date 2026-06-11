@@ -44,10 +44,13 @@ def _check(name: str, status: str, detail: str = "") -> dict:
 # (a) claims gate
 # ---------------------------------------------------------------------------
 def check_claims(reds: list[str]) -> tuple[dict, list]:
-    from .claims_ledger import load_claims_ledger, validate_ledger
+    from .claims_ledger import parse_claims_ledger, validate_ledger
 
-    rows = load_claims_ledger()
-    problems = validate_ledger(rows)
+    # Validate the FULL parse (fail-closed): malformed rows + header-counts
+    # reconciliation are violations alongside the per-row rules (PR #63).
+    parse = parse_claims_ledger()
+    rows = list(parse.rows)
+    problems = validate_ledger(parse)
     for p in problems:
         reds.append(f"claims: {p}")
     status = "pass" if not problems else "fail"
