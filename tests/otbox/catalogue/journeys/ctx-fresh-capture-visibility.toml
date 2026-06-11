@@ -38,11 +38,12 @@ tier_label = "gold"
 trajectories = ["bucket-spine-and-self-sufficient"]
 persona = "agent"
 requires = ["cli", "git"]
-# Issue #54: the fresh-capture world. `c-captured-real-session` runs the
-# real `_capture` + post-commit + watcher-tick chain (cache=False, rebuilt
-# every run) and mints exactly one captured trace + its context tree, so
-# the pin and the preconditions below agree.
-from_checkpoints = ["c-captured-real-session"]
+# Issue #54: the fresh-capture world. `c-captured-fresh-session` runs the
+# real `_capture` + post-commit + watcher-tick chain UNCONDITIONALLY
+# (cache=False, no artifact restore — an artifact world is a capture made
+# by OLDER code and cannot witness the capture-time manifest upsert),
+# minting exactly one captured trace + its context tree on every resolve.
+from_checkpoints = ["c-captured-fresh-session"]
 
 [preconditions]
 min_captured_traces = 1

@@ -178,6 +178,17 @@ def _captured_session_delta(driver: Driver, box: Box) -> None:
         )
         return
 
+    _fresh_captured_session_delta(driver, box)
+
+
+def _fresh_captured_session_delta(driver: Driver, box: Box) -> None:
+    """Always run the synthetic capture chain — never artifact restore.
+
+    Issue #54's fresh-capture journeys assert on behavior of the CURRENT
+    capture code (capture-time manifest row upsert); an artifact world
+    restores a capture made by OLDER code, so artifact-preferred resolution
+    silently tests the wrong thing until the artifact batch is regenerated.
+    """
     paths = driver.paths(box)
     project = paths["project"]
     home = paths["home"]
@@ -494,6 +505,34 @@ register(
             # Advertised so the `ctx-fresh-capture-visibility` journey
             # (manifest-only-reader visibility of a fresh capture) resolves
             # against this world.
+            "context_tree_built": True,
+        },
+    )
+)
+
+
+register(
+    Checkpoint(
+        name="c-captured-fresh-session",
+        composed_from="c-installed-source",
+        delta=_fresh_captured_session_delta,
+        # cache=False: fresh-capture semantics — the claim under test IS
+        # the capture chain, so it must run every resolve, never restore
+        # from a snapshot or artifact.
+        cache=False,
+        description=(
+            "c-installed-source + the synthetic capture chain run "
+            "unconditionally (no artifact restore): the world a FRESH "
+            "capture by the current code produces. Issue #54's "
+            "fresh-capture visibility journeys pin this; "
+            "c-captured-real-session stays artifact-preferred."
+        ),
+        provides={
+            "captured_traces": 1,
+            "survival_states": ["alive_on_path"],
+            "branch_commits": 1,
+            "git_repo_present": True,
+            "post_commit_hook_installed": True,
             "context_tree_built": True,
         },
     )

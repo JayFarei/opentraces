@@ -90,8 +90,25 @@ def _derive_audit_from_restored_box(
     step_count = int(trace.get("step_count") or len(steps))
     patches = record.get("patches") if isinstance(record.get("patches"), list) else []
 
+    # Landed-hunk truth for the burst projection: `trace map --bursts`
+    # diff-reconciles per-file patch counts against `git show` (Git
+    # consolidates adjacent same-file Edits into one hunk), so the map's
+    # burst patch count tracks the DIFF, while the record keeps one patch
+    # per Edit call. Journeys assert the map view against this count and
+    # the record/slice view against ``patch_count``.
+    landed_hunk_count = 0
+    if commit_sha:
+        show = driver.exec(
+            box, ["git", "-C", project, "show", commit_sha, "--format="]
+        )
+        if show.ok:
+            landed_hunk_count = sum(
+                1 for line in show.stdout.splitlines() if line.startswith("@@")
+            )
+
     return {
         "patch_count": len(patches),
+        "landed_hunk_count": landed_hunk_count,
         "scenario_name": capture_name,
         "session_id": trace.get("session_id") or "",
         "trace_id": trace.get("trace_id") or "",
