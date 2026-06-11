@@ -8,21 +8,35 @@ binary_name = "claude"
 [initial_state]
 template = "single-file-python-project"
 
+# Each turn runs as a FRESH claude session (fresh_session) so it lands its own
+# session JSONL = its own trace; three turns therefore yield >= 3 traces, the
+# _captured_multi_skill.py _ITERATIONS=3 floor. (Turn 0 is the first session
+# and is implicitly fresh.)
+
 [[turns]]
 prompt = "Add a farewell(name: str) helper to src/app.py, run a quick check, and commit it with message 'add farewell helper'."
 expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
 timeout_s = 300
+verify_command = ["git", "log", "-1", "--format=%s"]
+verify_regex = "(?i)farewell"
 
 [[turns]]
 prompt = "Now create a docs/USAGE.md describing both helpers with one example each, and commit it with message 'document helpers'."
 expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
 timeout_s = 300
+fresh_session = true
+verify_command = ["git", "log", "-1", "--format=%s"]
+verify_regex = "(?i)document"
 
 [[turns]]
 prompt = "Finally add a tests/test_app.py with a minimal unit test for each helper, run it, and commit with message 'add helper tests'."
 expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,}|passed)"
 timeout_s = 360
+fresh_session = true
+verify_command = ["git", "log", "-1", "--format=%s"]
+verify_regex = "(?i)test"
 
 [capture]
 artifact_dir = "claude-multi-skill"
 expected_paths = ["src/app.py", "docs/USAGE.md", "tests/test_app.py"]
+min_traces = 3

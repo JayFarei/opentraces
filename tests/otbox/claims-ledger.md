@@ -37,14 +37,14 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-11, post-release-gate-095): 26 verified, 15 partial,
+- Status counts (2026-06-11, post-issue-49 code half): 23 verified, 18 partial,
   8 open, 7 tracked, 0 waived — 56 rows.
 
 ## A. Capture (per harness)
 
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
-| CAP-1 | Claude Code session capture lands a queryable trace (hooks -> ingest -> index) on a real captured world | A | verified | agent-session-trail-explain-happy, tests/otbox/test_agent_session_slice.py | — |
+| CAP-1 | Claude Code session capture lands a queryable trace (hooks -> ingest -> index) on a real captured world (claude-linear-edit artifact meets its contract floor — 1 trace — and is restored, not synthetic-fallback; floor now enforced capture-side by the #49 pre-snapshot gate) | A | verified | agent-session-trail-explain-happy, tests/otbox/test_agent_session_slice.py | — |
 | CAP-2 | Codex CLI capture parity (13 scenarios incl. compaction, subagent, permission); 5 parity journeys remain quarantined baseline-red | A | partial | codex-parity-linear, codex-parity-compaction, codex-parity-subagent, codex-full-parity-latest | #25 |
 | CAP-3 | Pi capture parity incl. provider/context sidecars, fail-open extension; full-parity + incremental-recovery quarantined baseline-red | A | partial | pi-extension-capture-linear, pi-compaction-branch-fidelity, pi-context-tree-provider-fidelity | #25 |
 | CAP-4 | Global tracking is opt-out; repos auto-enroll on first capture; `excluded` marker respected (now enforced at the ingest choke point for ALL agents) | A | verified | capture-safety-tracking-mode, capture-safety-excluded-marker, tests/test_tracking_mode.py, tests/core/test_ingest.py::TestExcludedProjectGate | — |
@@ -81,9 +81,9 @@ Derivation rules (enforced by the gate):
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
 | TRL-1 | `trail blame commit <sha>` resolves a commit to contributing sessions with coverage shares | D | verified | trail-blame-and-graph, agent-session-trail-explain-happy | — |
-| TRL-2 | `trail blame pr render` walks branch commits to sessions with intent | D | verified | pr-blame-on-captured-branch | — |
+| TRL-2 | `trail blame pr render` walks branch commits to sessions with intent (world is synthetic fallback today: the committed claude-pr-branch artifact is sub-contract — 1 trace < 3 — until the machine-gated regen behind the #49 hardened scenarios lands) | D | partial | pr-blame-on-captured-branch | #49 |
 | TRL-3 | `trail blame pr create/update` posts/updates the GitHub PR idempotently (needs gh stub + golden body) | D | open | — | — |
-| TRL-4 | The 8 survival states are computed from real git history; a reverted edit shows `reverted` (gold journey asserts strict result_count >= 1 on dual artifact/synthetic worlds; only `reverted` is exercised credibly) | D | verified | survival-walk-reverted, tests/otbox/test_agent_session_slice.py | — |
+| TRL-4 | The 8 survival states are computed from real git history; a reverted edit shows `reverted` (gold journey asserts strict result_count >= 1; only `reverted` is exercised credibly — and the revert commit in the restored claude-with-revert artifact is delta-applied, not agent-landed, until the #49 regen with `expect_revert_commit` enforcement) | D | partial | survival-walk-reverted, tests/otbox/test_agent_session_slice.py | #49 |
 | TRL-5 | Reverse blame: any file:line resolves to session/prompt/diff | D | open | — | — |
 | TRL-6 | Post-commit hook stays within latency/memory budget on mature repos | D | tracked | — | #44 |
 
@@ -102,7 +102,7 @@ Derivation rules (enforced by the gate):
 |---|---|---|---|---|---|
 | SEC-1 | All tools default off; policies flip exactly the documented flag sets | F | verified | bucket-security-policy-basic, bucket-security-fresh-off, enable-security-tools | — |
 | SEC-2 | Canonical tool order enforced; `--tools` re-sorted (unit-level only) | F | partial | tests/security/test_pipeline_api.py::test_tools_canonical_order | — |
-| SEC-3 | A planted secret never appears in query output / published rows after sanitize (real negative assertion, synthetic secret world, no mutation kill) | F | verified | security-sanitize-captured-content, pi-security-sanitize-captured-content | — |
+| SEC-3 | A planted secret never appears in query output / published rows after sanitize (real negative assertion, no mutation kill; world is synthetic fallback: the claude-with-secrets artifact carries no security fingerprints — captured with tools off — until the #49 regen with the pre-drive `enable_security_tools` flip lands) | F | partial | security-sanitize-captured-content, pi-security-sanitize-captured-content | #49 |
 | SEC-4 | `dataset publish --check-only` blocks rows missing required tools, keyed on per-row evidence (bypass paths not probed) | F | partial | dataset-security-required-rejection | — |
 | SEC-5 | Capsule redaction floor (regex+entropy+business_logic) unconditional; prompts excluded by default | F | open | — | — |
 | SEC-6 | Post-processors always see post-redaction traces (ordering invariant; unit-level only) | F | partial | tests/core/test_processors.py::test_secret_absent_from_processor_stdin | — |

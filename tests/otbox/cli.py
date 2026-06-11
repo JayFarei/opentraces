@@ -155,8 +155,15 @@ def _capture_refresh_template_context(box: Box) -> dict[str, str]:
 
 
 def _expand_capture_refresh_turns(turns, context: dict[str, str]):
-    """Replace ``{trace_id}``-style placeholders in scenario turns."""
-    from .simulated_users.runner import Turn
+    """Replace ``{trace_id}``-style placeholders in scenario turns.
+
+    Uses ``dataclasses.replace`` so every Turn field OUTSIDE the expanded
+    string fields (``verify_command``/``verify_regex``/
+    ``expect_revert_commit``/``fresh_session`` today, anything added later)
+    rides through untouched — rebuilding the Turn field-by-field silently
+    stripped the issue #49 per-turn contract before it reached the drive.
+    """
+    import dataclasses
 
     def expand(value: str) -> str:
         expanded = value
@@ -165,10 +172,20 @@ def _expand_capture_refresh_turns(turns, context: dict[str, str]):
         return expanded
 
     return [
-        Turn(
+        dataclasses.replace(
+            turn,
             prompt=expand(turn.prompt),
             expect_regex=expand(turn.expect_regex),
-            timeout_s=turn.timeout_s,
+            verify_regex=(
+                expand(turn.verify_regex)
+                if turn.verify_regex is not None
+                else None
+            ),
+            verify_command=(
+                [expand(arg) for arg in turn.verify_command]
+                if turn.verify_command is not None
+                else None
+            ),
         )
         for turn in turns
     ]
@@ -300,6 +317,112 @@ def _postprocess_capture_box(driver, box: Box, agent: str | None) -> list[dict]:
         )
 
     return reports
+
+
+# The literal body marker a real `git revert` writes — the same string
+# sync.py::_find_revert_commit + _captured_with_revert.py grep for.
+_REVERT_BODY_MARKER = "This reverts commit "
+
+
+def _capture_box_world_facts(driver, box: Box) -> dict:
+    """Cheap world-shape facts of a LIVE capture box (issue #49 gate).
+
+    Returns ``{"trace_count": int, "security_fingerprinted": bool,
+    "has_revert_commit": bool}`` — the live-box analogue of the archive
+    ``peek_artifact_world`` peek the captured-session checkpoints run on
+    restore. Reads state.json trace counts across every opted-in project,
+    inspects each TraceRecord for ``metadata.security.tools_applied``, and
+    scans the project git log for the revert body marker.
+    """
+    paths = driver.paths(box)
+    opentraces_dir = paths["opentraces_dir"]
+    project = paths["project"]
+
+    trace_count = 0
+    security_fingerprinted = False
+    state_dirs = [
+        path for path in driver.glob(box, f"{opentraces_dir}/projects/*")
+        if driver.exec(box, ["test", "-f", f"{path}/state.json"]).ok
+    ]
+    for state_dir in state_dirs:
+        raw = driver.exec(box, ["cat", f"{state_dir}/state.json"])
+        if not raw.ok:
+            continue
+        try:
+            state = json.loads(raw.stdout)
+        except json.JSONDecodeError:
+            continue
+        traces = (state.get("traces") or {}) if isinstance(state, dict) else {}
+        trace_count += len(traces)
+        for trace in traces.values():
+            if security_fingerprinted or not isinstance(trace, dict):
+                continue
+            file_path = trace.get("file_path")
+            if not isinstance(file_path, str) or not file_path:
+                continue
+            rec_raw = driver.exec(box, ["cat", file_path])
+            if not rec_raw.ok:
+                continue
+            first = next(
+                (line for line in rec_raw.stdout.splitlines() if line.strip()), ""
+            )
+            if not first:
+                continue
+            try:
+                record = json.loads(first)
+            except json.JSONDecodeError:
+                continue
+            sec = (record.get("metadata") or {}).get("security") or {}
+            if sec.get("tools_applied"):
+                security_fingerprinted = True
+
+    has_revert_commit = False
+    scan = driver.exec(
+        box,
+        ["git", "-C", project, "log", "-n", "50", "--format=%B"],
+        timeout=30,
+    )
+    if scan.ok and _REVERT_BODY_MARKER in (scan.stdout or ""):
+        has_revert_commit = True
+
+    return {
+        "trace_count": trace_count,
+        "security_fingerprinted": security_fingerprinted,
+        "has_revert_commit": has_revert_commit,
+    }
+
+
+def _evaluate_capture_floors(facts: dict, capture) -> list[str]:
+    """Return the list of violated pre-snapshot contract floors.
+
+    ``facts`` is a ``_capture_box_world_facts`` dict; ``capture`` is the
+    scenario's :class:`CaptureSpec`. Each returned string names the
+    violated floor so the gate's JSON payload + human message can point
+    the operator straight at the unmet requirement. An empty list means
+    every floor is satisfied. Mirrors the ``restore_from_capture`` peek
+    rejection logic so the capture side and the restore side agree on the
+    same contract.
+    """
+    violations: list[str] = []
+    have_traces = int(facts.get("trace_count") or 0)
+    if have_traces < capture.min_traces:
+        violations.append(
+            f"min_traces: captured {have_traces} trace(s) < required "
+            f"{capture.min_traces}"
+        )
+    if capture.require_security_fingerprints and not facts.get(
+        "security_fingerprinted"
+    ):
+        violations.append(
+            "require_security_fingerprints: no captured trace carries "
+            "metadata.security.tools_applied"
+        )
+    if capture.require_revert_commit and not facts.get("has_revert_commit"):
+        violations.append(
+            "require_revert_commit: no commit carries the "
+            f"{_REVERT_BODY_MARKER!r} body marker"
+        )
+    return violations
 
 
 def _scrub_capture_box_before_snapshot(driver, box: Box, agent: str | None) -> list[dict]:
@@ -1065,6 +1188,10 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
             "metadata_path": str(metadata_path),
             "expected_paths": list(scenario.capture.expected_paths),
         }
+        # The dry-run --json envelope is frozen at its pre-#49 shape (hard
+        # rule: no shape changes to existing envelopes); the declared
+        # contract floors are surfaced in the human text below and enforced
+        # by the post-run gate, whose sub-contract payload is a NEW envelope.
         human = (
             f"capture-refresh (dry-run): scenario={scenario.name!r} "
             f"agent={scenario.agent} binary={scenario.binary_name} "
@@ -1072,7 +1199,12 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
             f"  turns: {len(scenario.turns)}  "
             f"base_checkpoint: {base_checkpoint}\n"
             f"  artifact: {artifact_path}\n"
-            f"  metadata: {metadata_path}"
+            f"  metadata: {metadata_path}\n"
+            f"  contract floors: min_traces={scenario.capture.min_traces} "
+            f"require_security_fingerprints="
+            f"{scenario.capture.require_security_fingerprints} "
+            f"require_revert_commit={scenario.capture.require_revert_commit} "
+            f"enable_security_tools={scenario.capture.enable_security_tools}"
         )
         _emit(payload, json_mode=args.json, human=human)
         return 0
@@ -1167,6 +1299,13 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         scenario=scenario.name,
         record_dir=footage_dir,
         export_mp4=True,
+        # Issue #49: the runner flips the scenario's declared security
+        # detectors on during box prep — after `opentraces init`, BEFORE the
+        # agent spawns — so the agent's Stop-hook ingest sanitizes with the
+        # tools active and captured traces carry
+        # metadata.security.tools_applied fingerprints.
+        enable_security_tools=list(scenario.capture.enable_security_tools)
+        or None,
     )
 
     # FAIL → leave the box up for inspection, exit non-zero. The runner's
@@ -1226,7 +1365,78 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
     except OSError:
         pass
 
-    postprocess = _postprocess_capture_box(driver, box, scenario.agent)
+    # The security-tool flip itself ran pre-drive inside the runner's box
+    # prep (issue #49); record it in the postprocess report so metadata.json
+    # still documents which detectors were active during capture.
+    postprocess: list[dict] = []
+    if scenario.capture.enable_security_tools:
+        postprocess.append({
+            "step": "enable-security-tools",
+            "tools": list(scenario.capture.enable_security_tools),
+            "when": "pre-drive",
+            "ok": True,
+        })
+
+    postprocess.extend(_postprocess_capture_box(driver, box, scenario.agent))
+
+    # Issue #49: pre-snapshot contract-floor gate. Peek the live box's world
+    # shape and reject a sub-contract capture (too few traces / no security
+    # fingerprints / no revert commit) BEFORE writing any artifact, mirroring
+    # the restore_from_capture peek floors. A violation exits non-zero with a
+    # JSON payload naming the unmet floor and writes NO snapshot.tar.gz /
+    # metadata.json — so the machine-gated regen can never reproduce a
+    # sub-contract batch.
+    #
+    # Real capture agents (claude/codex/pi) are always gated. The echo/hermes
+    # meta-test lane never mints a trace, so it is gated only when the
+    # scenario DECLARES floors above the permissive baseline — which is also
+    # what lets default CI exercise this exact gate end-to-end (a meta
+    # scenario with min_traces > 1 must exit sub-contract with no artifact).
+    floors_declared = (
+        scenario.capture.min_traces > 1
+        or scenario.capture.require_security_fingerprints
+        or scenario.capture.require_revert_commit
+    )
+    floor_violations: list[str] = []
+    world_facts: dict = {}
+    if floors_declared or _capture_agent_name(scenario.agent) in {
+        "codex-cli",
+        "claude-code",
+        "pi",
+    }:
+        world_facts = _capture_box_world_facts(driver, box)
+        floor_violations = _evaluate_capture_floors(world_facts, scenario.capture)
+    if floor_violations:
+        payload = {
+            "action": "capture-refresh",
+            "status": "sub-contract",
+            "scenario": scenario.name,
+            "contract_floors": {
+                "min_traces": scenario.capture.min_traces,
+                "require_security_fingerprints": (
+                    scenario.capture.require_security_fingerprints
+                ),
+                "require_revert_commit": scenario.capture.require_revert_commit,
+            },
+            "world_facts": world_facts,
+            "violations": floor_violations,
+            "artifact_written": False,
+            "box_id": box.box_id,
+            "box_root": str(box.root),
+        }
+        _emit(
+            payload,
+            json_mode=args.json,
+            human=(
+                f"capture-refresh: SUB-CONTRACT — scenario={scenario.name!r} "
+                f"failed {len(floor_violations)} contract floor(s); NO "
+                f"artifact written:\n  "
+                + "\n  ".join(floor_violations)
+                + f"\n  world: {world_facts}\n  box left up at: {box.root}"
+            ),
+        )
+        return 4
+
     postprocess.extend(_scrub_capture_box_before_snapshot(driver, box, scenario.agent))
 
     # PASS → snapshot the box, copy the archive into the artifact dir.

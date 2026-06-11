@@ -48,6 +48,90 @@ __all__ = [
     "drive_session",
 ]
 
+# The literal body marker a real `git revert` writes — the exact string
+# sync.py::_find_revert_commit and _captured_with_revert.py grep for. The
+# expect_revert_commit turn assertion (issue #49) confirms it landed.
+_REVERT_BODY_MARKER = "This reverts commit "
+
+
+def _git_argv_in_project(project: str, argv: list[str]) -> list[str]:
+    """Re-root a ``git ...`` verify command at the box project.
+
+    The drive layer is host-side and ``driver.exec`` does not change the
+    process cwd for a Local driver the way an interactive session does, so
+    a bare ``["git", "log", ...]`` would run against the harness checkout.
+    For git commands we inject ``-C <project>`` right after ``git`` so the
+    assertion targets the box's repo regardless of the driver's cwd
+    handling. Non-git commands are passed through unchanged (the caller
+    sets ``cwd=project``).
+    """
+    if argv and argv[0] == "git" and "-C" not in argv[:2]:
+        return ["git", "-C", project, *argv[1:]]
+    return list(argv)
+
+
+def _run_turn_verification(
+    driver: Driver, box: Box, turn: Turn, turn_idx: int
+) -> tuple[bool, str]:
+    """Execute a turn's declarative git-state assertions INSIDE the box.
+
+    Returns ``(ok, error_message)``. Called after the turn's
+    ``expect_regex`` matches the TUI transcript and BEFORE the next prompt
+    is sent, so a turn that merely *says* "committed" cannot pass without
+    the box's git state actually backing it up. A failed assertion names
+    the turn and the failed check.
+
+    Two assertion families (both optional, evaluated in order):
+      * ``verify_command`` + ``verify_regex`` — run the argv in the box and
+        require the combined stdout+stderr to match the regex.
+      * ``expect_revert_commit`` — require some recent commit to carry the
+        literal ``This reverts commit `` body marker.
+    """
+    project = driver.paths(box)["project"]
+
+    if turn.verify_command is not None and turn.verify_regex is not None:
+        argv = _git_argv_in_project(project, turn.verify_command)
+        result = driver.exec(box, argv, cwd=project, timeout=30)
+        combined = f"{result.stdout}\n{result.stderr}"
+        if not result.ok:
+            return (
+                False,
+                (
+                    f"turn {turn_idx}: verify_command {turn.verify_command!r} "
+                    f"exited rc={result.returncode} "
+                    f"({result.stderr.strip()[:160] or 'no stderr'})"
+                ),
+            )
+        if not re.search(turn.verify_regex, combined):
+            return (
+                False,
+                (
+                    f"turn {turn_idx}: verify_regex {turn.verify_regex!r} did "
+                    f"not match verify_command {turn.verify_command!r} output "
+                    f"({combined.strip()[:160]!r})"
+                ),
+            )
+
+    if turn.expect_revert_commit:
+        scan = driver.exec(
+            box,
+            ["git", "-C", project, "log", "-n", "20", "--format=%B"],
+            cwd=project,
+            timeout=30,
+        )
+        body = scan.stdout if scan.ok else ""
+        if _REVERT_BODY_MARKER not in body:
+            return (
+                False,
+                (
+                    f"turn {turn_idx}: expect_revert_commit set but no commit "
+                    f"in the last 20 carries the {_REVERT_BODY_MARKER!r} body "
+                    f"marker (the revert never landed)"
+                ),
+            )
+
+    return True, ""
+
 
 # ---------------------------------------------------------------------------
 # per-turn result shape (unchanged from footage_runner)
@@ -338,6 +422,7 @@ def _prepare_box_for_agent(
     binary_version: str,
     agent: str | None,
     env_extra: dict[str, str] | None,
+    enable_security_tools: list[str] | None = None,
 ) -> tuple[str | None, str | None, dict[str, str] | None]:
     """Run the box-prep sequence for ``agent``.
 
@@ -391,6 +476,16 @@ def _prepare_box_for_agent(
         if hook_error is not None:
             return None, hook_error, env_extra
 
+    # Issue #49: flip the scenario's declared security detectors on AFTER
+    # `opentraces init` (the hook install above created the config) and
+    # BEFORE the agent spawns — the agent's Stop-hook ingest sanitizes with
+    # the config active at capture time, so a post-drive flip cannot
+    # fingerprint already-ingested traces.
+    if enable_security_tools and normalized in {"codex-cli", "claude", "pi"}:
+        sec_error = prep._enable_security_tools_in_box(box, enable_security_tools)
+        if sec_error is not None:
+            return None, sec_error, env_extra
+
     return None, None, env_extra
 
 
@@ -413,6 +508,7 @@ def drive_session(
     cols: int = 110,
     rows: int = 32,
     fps: int = 20,
+    enable_security_tools: list[str] | None = None,
 ) -> SessionResult:
     """Drive an interactive termctrl session of ``binary`` through ``turns``.
 
@@ -541,7 +637,8 @@ def drive_session(
 
     # --- agent-specific box prep (reuses prep helpers verbatim) ------------
     skip_msg, fail_msg, env_extra = _prepare_box_for_agent(
-        box, binary_abs, binary_version, agent, env_extra
+        box, binary_abs, binary_version, agent, env_extra,
+        enable_security_tools=enable_security_tools,
     )
     if skip_msg is not None:
         return _result(
@@ -572,70 +669,116 @@ def drive_session(
     normalized = _agent_name(agent)
     ready_budget = 4.0 if normalized in {"claude", "codex-cli", "pi"} else 2.5
 
-    start_argv = [
-        "start",
-        session,
-        "--record",
-        str(termctrl_path),
-        "--cwd",
-        str(box.project),
-        "--cols",
-        str(cols),
-        "--rows",
-        str(rows),
-        "--",
-        *env_prefix,
-        binary_abs,
-    ]
-    try:
-        spawn = _tc(*start_argv, timeout=30.0)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        return _result(
-            "FAIL", binary_path=binary_abs, binary_version=binary_version,
-            error_message=f"termctrl start failed: {exc}",
-        )
-    if spawn.returncode != 0:
-        return _result(
-            "FAIL", binary_path=binary_abs, binary_version=binary_version,
-            error_message=(
+    # A `fresh_session` turn (issue #49) restarts the agent binary so it
+    # lands its OWN session JSONL = its own trace. termctrl has no append
+    # mode, so each segment gets its OWN session name + record file
+    # (`<scenario>.termctrl`, `<scenario>.seg1.termctrl`, ...). The footage
+    # MP4 is exported from the FIRST segment; footage is best-effort and
+    # additive, so a later-segment recording gap must never sink a real
+    # multi-trace capture. Each (re)start re-runs the dialog-dismissal
+    # preamble like the initial spawn. The turn loop sends keys to
+    # ``active_session`` so it always targets the live segment.
+    spawn_count = 0
+    active_session = session
+
+    def _spawn_session(log) -> str:
+        """Spawn `binary_abs` in a fresh segment session, await ready +
+        dismiss dialogs.
+
+        Returns "" on success or an error string the caller turns into a
+        FAIL. Updates the enclosing ``active_session`` to the new segment.
+        """
+        nonlocal spawn_count, active_session
+        if spawn_count == 0:
+            seg_session = session
+            seg_record = termctrl_path
+        else:
+            seg_session = f"{session}-seg{spawn_count}"
+            seg_record = record_dir / f"{scenario}.seg{spawn_count}.termctrl"
+        active_session = seg_session
+        first = spawn_count == 0
+        spawn_count += 1
+        start_argv = [
+            "start",
+            seg_session,
+            "--record",
+            str(seg_record),
+            "--cwd",
+            str(box.project),
+            "--cols",
+            str(cols),
+            "--rows",
+            str(rows),
+            "--",
+            *env_prefix,
+            binary_abs,
+        ]
+        try:
+            spawn = _tc(*start_argv, timeout=30.0)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return f"termctrl start failed: {exc}"
+        if spawn.returncode != 0:
+            return (
                 f"termctrl start failed (rc={spawn.returncode}): "
                 f"{(spawn.stderr or spawn.stdout).strip()[:300]}"
-            ),
-        )
+            )
+
+        _await_ready(seg_session, budget_s=ready_budget)
+        _tc_mark(seg_session, "ready" if first else f"ready-seg{spawn_count - 1}", markers)
+        log.write(f"=== ready (segment {spawn_count - 1}) ===\n")
+        log.write(_tc_show(seg_session))
+        log.write("\n")
+
+        # Codex shows a hook-review trust modal the first time a fresh HOME sees
+        # the box's opentraces hooks; clear it ("Press t to trust all") or the
+        # first prompt is swallowed and the journey stalls on the dialog.
+        if normalized == "codex-cli":
+            if _dismiss_codex_hooks(seg_session):
+                _tc_mark(seg_session, "codex-hooks-trusted", markers)
+
+        # Claude shows blocking trust dialogs (MCP server discovery) at
+        # REPL startup on a fresh HOME; clear them or turn 0 is swallowed.
+        if normalized == "claude":
+            if _dismiss_claude_startup_dialogs(seg_session):
+                _tc_mark(seg_session, "claude-dialogs-dismissed", markers)
+
+        # pi >= 0.79 shows a "Trust project folder?" selector on a fresh
+        # HOME; select the default or turn 0 is swallowed. After the
+        # dismissal pi keeps initializing (tool downloads, changelog
+        # paint), so re-settle before turn 0 or the submit keypress is
+        # lost in the repaint.
+        if normalized == "pi":
+            if _dismiss_pi_startup_dialogs(seg_session):
+                _tc_mark(seg_session, "pi-dialogs-dismissed", markers)
+                _await_ready(seg_session, budget_s=6.0)
+        return ""
 
     last_frame = ""
     with pane_log_path.open("a", encoding="utf-8") as log:
         try:
-            _await_ready(session, budget_s=ready_budget)
-            _tc_mark(session, "ready", markers)
-            log.write("=== ready ===\n")
-            log.write(_tc_show(session))
-            log.write("\n")
-
-            # Codex shows a hook-review trust modal the first time a fresh HOME sees
-            # the box's opentraces hooks; clear it ("Press t to trust all") or the
-            # first prompt is swallowed and the journey stalls on the dialog.
-            if normalized == "codex-cli":
-                if _dismiss_codex_hooks(session):
-                    _tc_mark(session, "codex-hooks-trusted", markers)
-
-            # Claude shows blocking trust dialogs (MCP server discovery) at
-            # REPL startup on a fresh HOME; clear them or turn 0 is swallowed.
-            if normalized == "claude":
-                if _dismiss_claude_startup_dialogs(session):
-                    _tc_mark(session, "claude-dialogs-dismissed", markers)
-
-            # pi >= 0.79 shows a "Trust project folder?" selector on a fresh
-            # HOME; select the default or turn 0 is swallowed. After the
-            # dismissal pi keeps initializing (tool downloads, changelog
-            # paint), so re-settle before turn 0 or the submit keypress is
-            # lost in the repaint.
-            if normalized == "pi":
-                if _dismiss_pi_startup_dialogs(session):
-                    _tc_mark(session, "pi-dialogs-dismissed", markers)
-                    _await_ready(session, budget_s=6.0)
+            spawn_err = _spawn_session(log)
+            if spawn_err:
+                return _result(
+                    "FAIL", binary_path=binary_abs,
+                    binary_version=binary_version, error_message=spawn_err,
+                )
 
             for turn_idx, turn in enumerate(turns):
+                # A fresh-session turn (other than turn 0, which is already a
+                # fresh start) stops the current agent and respawns so the
+                # turn lands its own session JSONL = its own trace.
+                if turn.fresh_session and turn_idx > 0:
+                    _tc_mark(active_session, f"turn-{turn_idx}-fresh-session", markers)
+                    _tc_stop(active_session)
+                    spawn_err = _spawn_session(log)
+                    if spawn_err:
+                        verdict = "FAIL"
+                        error_message = (
+                            f"turn {turn_idx}: fresh-session respawn failed: "
+                            f"{spawn_err}"
+                        )
+                        break
+                session = active_session  # rebind so the turn body targets the live segment
                 _tc_mark(session, f"turn-{turn_idx}-prompt", markers)
                 _tc_send_prompt(session, turn.prompt)
                 if normalized == "pi":
@@ -723,6 +866,21 @@ def drive_session(
                     # stops at the first miss; we mirror that for parity but the
                     # video already captured the failure leading up to here.
                     break
+
+                # Per-turn git-state verification (issue #49): a turn that
+                # matched the TUI transcript still has to back it up with real
+                # box state (a commit landed / a revert marker exists) BEFORE
+                # the next prompt is sent. A miss FAILs the drive naming the
+                # turn + the failed assertion — no silent pass on the TUI regex.
+                verify_ok, verify_err = _run_turn_verification(
+                    driver, box, turn, turn_idx
+                )
+                if not verify_ok:
+                    verdict = "FAIL"
+                    error_message = verify_err
+                    log.write(f"=== turn {turn_idx} VERIFY FAIL: {verify_err} ===\n")
+                    break
+
                 completed_turns += 1
         finally:
             _tc_mark(session, "stop", markers)

@@ -50,12 +50,17 @@ except Exception:  # noqa: BLE001 - runner not yet available; use local shim
 
         Local shim used until Agent A's ``runner.py`` lands. The field
         names + types match Agent A's contract verbatim so swapping
-        modules is a no-op for any downstream consumer.
+        modules is a no-op for any downstream consumer. The issue #49
+        per-turn verification fields mirror runner.py's Turn exactly.
         """
 
         prompt: str
         expect_regex: str
         timeout_s: float = 60.0
+        verify_command: list[str] | None = None
+        verify_regex: str | None = None
+        expect_revert_commit: bool = False
+        fresh_session: bool = False
 
 
 __all__ = [
@@ -111,10 +116,29 @@ class CaptureSpec:
     ``expected_paths`` is the list of paths (relative to the box
     project) that MUST exist after the scenario completes. The runner
     treats a missing path as a hard failure.
+
+    Issue #49 adds pre-snapshot contract floors that ``capture-refresh``
+    enforces AFTER the post-capture ingest and BEFORE the snapshot is
+    written, mirroring the ``restore_from_capture`` peek floors so the
+    machine-gated regen can never reproduce a sub-contract batch:
+
+      * ``min_traces`` — minimum captured-trace count (default 1).
+      * ``require_security_fingerprints`` — at least one captured
+        TraceRecord must carry ``metadata.security.tools_applied``.
+      * ``require_revert_commit`` — some commit must carry the literal
+        ``This reverts commit `` body marker.
+      * ``enable_security_tools`` — security tools to flip on in the box
+        config BEFORE driving (e.g. ``["regex", "entropy"]``), the same
+        ``load_config``/``save_config`` flip the synthetic with-secrets
+        checkpoint does, so captured traces carry security fingerprints.
     """
 
     artifact_dir_name: str
     expected_paths: list[str] = field(default_factory=list)
+    min_traces: int = 1
+    require_security_fingerprints: bool = False
+    require_revert_commit: bool = False
+    enable_security_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -238,11 +262,50 @@ def _coerce_turns(raw_turns: Any, where: str) -> list[Turn]:
                 f"{where}: turns[{idx}].timeout_s must be > 0 "
                 f"(got {timeout_s})"
             )
+
+        # Optional per-turn git-state verification (issue #49).
+        verify_command_raw = raw.get("verify_command")
+        verify_command: list[str] | None = None
+        if verify_command_raw is not None:
+            if (
+                not isinstance(verify_command_raw, list)
+                or not verify_command_raw
+                or not all(isinstance(a, str) for a in verify_command_raw)
+            ):
+                raise ScenarioError(
+                    f"{where}: turns[{idx}].verify_command must be a "
+                    f"non-empty array of strings"
+                )
+            verify_command = [str(a) for a in verify_command_raw]
+
+        verify_regex_raw = raw.get("verify_regex")
+        verify_regex: str | None = None
+        if verify_regex_raw is not None:
+            verify_regex = str(verify_regex_raw)
+            if not verify_regex.strip():
+                raise ScenarioError(
+                    f"{where}: turns[{idx}].verify_regex must be non-empty "
+                    f"when present"
+                )
+
+        # A verify_command without a verify_regex (or vice versa) is an
+        # under-specified assertion — both halves are required to make a
+        # falsifiable git-state check.
+        if (verify_command is None) != (verify_regex is None):
+            raise ScenarioError(
+                f"{where}: turns[{idx}] must set BOTH verify_command and "
+                f"verify_regex (or neither)"
+            )
+
         out.append(
             Turn(
                 prompt=str(raw["prompt"]),
                 expect_regex=str(raw["expect_regex"]),
                 timeout_s=timeout_s,
+                verify_command=verify_command,
+                verify_regex=verify_regex,
+                expect_revert_commit=bool(raw.get("expect_revert_commit", False)),
+                fresh_session=bool(raw.get("fresh_session", False)),
             )
         )
     return out
@@ -277,9 +340,41 @@ def _coerce_capture(raw_capture: Any, where: str) -> CaptureSpec:
             f"{where}: [capture].expected_paths must be an array of strings"
         )
     expected_paths = [str(p) for p in expected_paths_raw]
+
+    # Contract floors (issue #49) — quantitative pre-snapshot requirements.
+    min_traces_raw = raw_capture.get("min_traces", 1)
+    try:
+        min_traces = int(min_traces_raw)
+    except (TypeError, ValueError) as exc:
+        raise ScenarioError(
+            f"{where}: [capture].min_traces must be an integer, "
+            f"got {min_traces_raw!r}"
+        ) from exc
+    if min_traces < 1:
+        raise ScenarioError(
+            f"{where}: [capture].min_traces must be >= 1 (got {min_traces})"
+        )
+
+    enable_security_raw = raw_capture.get("enable_security_tools", [])
+    if not isinstance(enable_security_raw, list) or not all(
+        isinstance(t, str) for t in enable_security_raw
+    ):
+        raise ScenarioError(
+            f"{where}: [capture].enable_security_tools must be an array of "
+            f"strings"
+        )
+
     return CaptureSpec(
         artifact_dir_name=artifact_dir,
         expected_paths=expected_paths,
+        min_traces=min_traces,
+        require_security_fingerprints=bool(
+            raw_capture.get("require_security_fingerprints", False)
+        ),
+        require_revert_commit=bool(
+            raw_capture.get("require_revert_commit", False)
+        ),
+        enable_security_tools=[str(t) for t in enable_security_raw],
     )
 
 
