@@ -1,0 +1,89 @@
+{
+  "journeys": [
+    {
+      "agent": "claude",
+      "arc_completed": true,
+      "binary_version": "2.1.175 (Claude Code)",
+      "calls_vs_par": 0.25,
+      "par_calls": 4,
+      "scenario": "acceptance-j1-onboarding",
+      "score": 1.0,
+      "spec_journey": "J1-enroll-machine",
+      "turn_count": 1,
+      "verdict": "PASS",
+      "wall_clock_s": 77.254
+    },
+    {
+      "agent": "claude",
+      "arc_completed": true,
+      "binary_version": "2.1.175 (Claude Code)",
+      "calls_vs_par": 0.25,
+      "par_calls": 4,
+      "scenario": "acceptance-j6-find-past-work",
+      "score": 1.0,
+      "spec_journey": "J6-find-past-work",
+      "turn_count": 1,
+      "verdict": "PASS",
+      "wall_clock_s": 118.547
+    },
+    {
+      "agent": "claude",
+      "arc_completed": true,
+      "binary_version": "2.1.175 (Claude Code)",
+      "calls_vs_par": 0.3333,
+      "par_calls": 3,
+      "scenario": "acceptance-j7-explain-commit",
+      "score": 1.0,
+      "spec_journey": "J7-explain-commit-pr",
+      "turn_count": 1,
+      "verdict": "PASS",
+      "wall_clock_s": 48.18
+    },
+    {
+      "agent": "claude",
+      "arc_completed": true,
+      "binary_version": "2.1.175 (Claude Code)",
+      "calls_vs_par": 0.2,
+      "par_calls": 5,
+      "scenario": "acceptance-j10-publish-dataset",
+      "score": 1.0,
+      "spec_journey": "J10-publish-dataset",
+      "turn_count": 1,
+      "verdict": "PASS",
+      "wall_clock_s": 591.074
+    },
+    {
+      "agent": "claude",
+      "arc_completed": true,
+      "binary_version": "2.1.175 (Claude Code)",
+      "calls_vs_par": 0.2,
+      "par_calls": 5,
+      "scenario": "acceptance-j13-free-navigation",
+      "score": 1.0,
+      "spec_journey": "J13-agent-drives-cli",
+      "turn_count": 1,
+      "verdict": "PASS",
+      "wall_clock_s": 10.89
+    }
+  ],
+  "provenance": {
+    "agent": "claude",
+    "binary_version": "2.1.175 (Claude Code)",
+    "captured_at": "2026-06-12T14:06:41.575857+00:00",
+    "opentraces_cli_version": "0.4.1",
+    "opentraces_schema_version": "0.7.0",
+    "scenario_digests": {
+      "acceptance-j1-onboarding": "a2ec56c7fea7eecee19fdd3e0b4533660abf3f364b43f164c001fa66a702f6fd",
+      "acceptance-j10-publish-dataset": "ef94242db7aa6eea2de8dd4a67ecc2f5f4b93f3104cf790d20a0b0e3b3c19beb",
+      "acceptance-j13-free-navigation": "e315f50e29c98a6d0ba99b8a0a74ed60260b4d1d101e24a747ca280544e75f3a",
+      "acceptance-j6-find-past-work": "2bb38c373429770aa403f5e3655763e2c743e8dc386f920fb25c4db3ec5df55c",
+      "acceptance-j7-explain-commit": "3fde62b45a62ae295632be31611ea0da9bf4d302085afb1dd04038b615f04157"
+    }
+  },
+  "schema_version": "opentraces.otbox.acceptance_report.v1",
+  "summary": {
+    "arcs_completed": 5,
+    "journeys": 5,
+    "mean_score": 1.0
+  }
+}
