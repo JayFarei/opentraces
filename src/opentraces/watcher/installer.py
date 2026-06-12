@@ -157,14 +157,20 @@ def _render_shim() -> str:
         "# opentraces watcher shim — one-shot sweep under launchd/systemd\n"
         "# supervision. Resolves the CLI at RUN time (#65): an interpreter\n"
         "# frozen at install time breaks silently when the install moves.\n"
+        "# Each candidate is VERIFIED to support the sweep verb before exec\n"
+        "# (codex P2): an older CLI in a probed location would otherwise be\n"
+        "# exec'd, fail with 'no such command' every interval, and silently\n"
+        "# stop the watcher after a reinstall/migration.\n"
         "for c in /opt/homebrew/bin/opentraces /usr/local/bin/opentraces \\\n"
         '         "$HOME/.local/bin/opentraces" '
         '"$(command -v opentraces 2>/dev/null)"; do\n'
-        '  if [ -n "$c" ] && [ -x "$c" ]; then\n'
+        '  if [ -n "$c" ] && [ -x "$c" ] \\\n'
+        '     && "$c" setup watcher sweep --help >/dev/null 2>&1; then\n'
         '    exec "$c" setup watcher sweep "$@"\n'
         "  fi\n"
         "done\n"
-        "# Fallback: interpreter recorded at install time.\n"
+        "# Fallback: interpreter recorded at install time (ships the verb —\n"
+        "# this installer and the verb landed in the same release).\n"
         f'exec "{py}" -m opentraces.watcher.daemon run-sweep "$@"\n'
     )
 

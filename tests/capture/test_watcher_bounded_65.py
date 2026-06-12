@@ -351,3 +351,63 @@ def test_gate_streams_through_sink_never_materialises(tmp_path, monkeypatch):
     result = mat_mod.has_unsearched_recent_patches(repo)
     assert calls, "gate must reach the scoped read (no watermark yet)"
     assert result is True  # one patch, never searched
+
+
+# --- #65 soak run 1: sweep wall budget + fair rotation ------------------------
+
+
+def test_sweep_budget_defers_tail_lru_order(tmp_path, monkeypatch):
+    """Soak run 1 sentinel: a sweep over more projects than its wall budget
+    allows must (a) stop at the budget, (b) report the deferred count, and
+    (c) have visited the LEAST recently ticked projects first so deferred
+    tails lead the next sweep."""
+    projects = []
+    for i in range(4):
+        p = tmp_path / f"p{i}"
+        p.mkdir()
+        projects.append(p)
+
+    # LRU signal: p2 never ticked (0), p0 old, p3 recent, p1 newest.
+    mtimes = {"p2": 0.0, "p0": 100.0, "p3": 200.0, "p1": 300.0}
+    monkeypatch.setattr(wd, "_last_tick_mtime",
+                        lambda p: mtimes.get(p.name, 0.0))
+    monkeypatch.setenv("OT_WATCHER_SWEEP_BUDGET_S", "0.45")
+
+    ticked: list[str] = []
+
+    def _slow_child(project_cwd, *, budget_mb, timeout_s, _argv=None):
+        ticked.append(project_cwd.name)
+        time.sleep(0.25)
+        return "ok"
+
+    monkeypatch.setattr(wd, "_tick_in_child", _slow_child)
+    summary = wd.run_sweep(projects=projects)
+    # 0.45s budget / 0.25s per tick → exactly 2 ticks fit.
+    assert ticked == ["p2", "p0"], "must visit least-recently-ticked first"
+    assert summary["ok"] == 2
+    assert summary["deferred"] == 2
+
+
+def test_maturation_deadline_pre_scan_bail(tmp_path):
+    """Codex P2 sentinel: an already-expired budget returns truncated WITHOUT
+    paying the shared scan (no git work at all on a spent budget)."""
+    from opentraces.core.trails.maturation import mature_trails
+
+    # Not even a git repo — if the pre-scan bail works, nothing touches it.
+    summary = mature_trails(tmp_path, deadline=time.monotonic() - 1)
+    assert summary.truncated is True
+    assert summary.commits_considered == 0
+
+
+def test_shim_verifies_candidate_supports_sweep_verb():
+    """Codex P2 sentinel: the shim must probe each CLI candidate for the
+    sweep verb before exec'ing it — an older CLI would otherwise be exec'd,
+    fail every interval, and silently stop the watcher post-migration."""
+    from opentraces.watcher.installer import _render_shim
+
+    shim = _render_shim()
+    assert 'setup watcher sweep --help >/dev/null 2>&1' in shim
+    # The verify must gate the SAME candidate that gets exec'd.
+    probe_idx = shim.index("sweep --help")
+    exec_idx = shim.index('exec "$c" setup watcher sweep')
+    assert probe_idx < exec_idx

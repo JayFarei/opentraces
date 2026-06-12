@@ -768,6 +768,32 @@ def _tick_timeout_s() -> float:
     return value if value > 0 else float(DEFAULT_TICK_TIMEOUT_S)
 
 
+# #65 soak finding (run 1): a real home can carry hundreds of enlistments, and
+# a sweep with only PER-CHILD budgets exceeded an hour — overlapping every
+# supervision interval. The sweep itself gets a wall budget; projects that
+# don't fit are DEFERRED, and the least-recently-ticked-first ordering below
+# guarantees deferred tails go first next sweep (no starvation).
+DEFAULT_SWEEP_BUDGET_S = 1500.0
+
+
+def _sweep_budget_s() -> float:
+    raw = os.environ.get("OT_WATCHER_SWEEP_BUDGET_S")
+    try:
+        value = float(raw) if raw else 0.0
+    except ValueError:
+        value = 0.0
+    return value if value > 0 else DEFAULT_SWEEP_BUDGET_S
+
+
+def _last_tick_mtime(project_cwd: Path) -> float:
+    """state.json mtime for fair sweep ordering; 0.0 (= never) on any miss."""
+    try:
+        state_path = get_project_state_path(project_cwd)
+        return state_path.stat().st_mtime if state_path.is_file() else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def _child_rss_mb(pid: int) -> float | None:
     """CURRENT RSS of ``pid`` in MiB, or None when unreadable."""
     statm = Path(f"/proc/{pid}/statm")
@@ -869,16 +895,28 @@ def run_sweep(
         except Exception:  # noqa: BLE001
             logger.exception("enlistment pruning failed")
     targets = projects if projects is not None else discover_enlisted_projects()
+    # Least-recently-ticked first: combined with the sweep budget below this
+    # is a fair rotation — projects deferred by one budget-cut sweep are at
+    # the FRONT of the next one.
+    targets = sorted(targets, key=_last_tick_mtime)
     budget_mb = _tick_budget_mb()
     timeout_s = _tick_timeout_s()
+    sweep_deadline = time.monotonic() + _sweep_budget_s()
     summary = {"projects": len(targets), "ok": 0, "rss_killed": 0,
-               "timeout_killed": 0, "errors": 0}
+               "timeout_killed": 0, "errors": 0, "deferred": 0}
     if prune_summary is not None:
         summary["pruned"] = (
             prune_summary.get("pruned_tmp", 0)
             + prune_summary.get("pruned_missing", 0)
         )
-    for p in targets:
+    for index, p in enumerate(targets):
+        if time.monotonic() >= sweep_deadline:
+            summary["deferred"] = len(targets) - index
+            logger.info(
+                "sweep budget reached: deferring %d projects to the next sweep",
+                summary["deferred"],
+            )
+            break
         try:
             if in_process:
                 run_once(p)
@@ -899,9 +937,10 @@ def run_sweep(
         else:
             summary["errors"] += 1
     logger.info(
-        "sweep complete: %d projects, %d ok, %d rss-killed, %d timeout-killed, %d errors",
+        "sweep complete: %d projects, %d ok, %d rss-killed, %d timeout-killed, "
+        "%d errors, %d deferred",
         summary["projects"], summary["ok"], summary["rss_killed"],
-        summary["timeout_killed"], summary["errors"],
+        summary["timeout_killed"], summary["errors"], summary["deferred"],
     )
     return summary
 

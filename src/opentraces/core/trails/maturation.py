@@ -65,6 +65,11 @@ def mature_trails(
     repo = Path(repo).resolve()
     commit_refs = tuple(commit_refs) if commit_refs is not None else None
     effective_version = attribution_version or ATTRIBUTION_VERSION
+    # #65 (codex P2): bail BEFORE any log work when the budget is already
+    # spent — a caller chaining budgeted phases must not pay the shared scan
+    # below out of an exhausted budget.
+    if deadline is not None and time.monotonic() >= deadline:
+        return MaturationSummary(truncated=True)
     commits = _candidate_commits(repo, commit_refs=commit_refs, max_commits=max_commits)
     errors = _candidate_errors(
         repo,
@@ -136,6 +141,14 @@ def mature_trails(
     # #23 step 2: sum each reconcile's reported search count via ``summary_out``
     # instead of reading the whole log twice (before/after) just to diff the
     # search-record delta.
+    # #65 (codex P2): the shared scan above is atomic by design — aborting it
+    # mid-stream would hand the commit loop PARTIAL dedup keys, and a missing
+    # search key re-emits an already-recorded search (violating the plan-090
+    # R5 invariant). So the budget brackets the scan instead of preempting it:
+    # checked before (above) and after (here). A scan that itself overruns the
+    # budget yields a truncated no-op tick — the watermark stays unstamped,
+    # the next tick retries, and the child's wall-clock budget remains the
+    # hard bound on total tick time.
     anchors_created = 0
     searches_completed = 0
     truncated = False
