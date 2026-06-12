@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import zlib
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -819,7 +820,7 @@ def _blob_content_matches_path(path: Path) -> tuple[bool, str | None]:
     try:
         raw = _read_gzip_bytes(path).decode("utf-8")
         payload = json.loads(raw)
-    except (OSError, gzip.BadGzipFile, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, EOFError, zlib.error, ValueError, json.JSONDecodeError) as exc:
         return False, f"unreadable blob: {exc}"
     if not isinstance(payload, dict):
         return False, "blob payload is not an object"
