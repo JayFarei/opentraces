@@ -853,9 +853,19 @@ def ctx_show_cmd(
     click.echo(f"  parent:          {node.parent_node_id or '-'}")
     click.echo(f"  completeness:    {node.capture_completeness}")
     click.echo("Layers:")
+    # Issue #42 (ctx-output-parity): capture_method is part of the JSON
+    # envelope's honest-provenance labels, so the text renderer must
+    # surface it too — a human reader must see e.g.
+    # `transcript_reconstruction` next to `approximated`. The header row
+    # names the columns so the labels themselves are visible in text mode.
+    click.echo(
+        f"  {'layer':15}  {'completeness':12}  {'capture_method':26}  "
+        f"{'bytes':>9}  layer_id"
+    )
     for layer_type, entry in layers_out.items():
         click.echo(
             f"  {layer_type:15}  {entry['completeness'] or '-':12}  "
+            f"{entry.get('capture_method') or '-':26}  "
             f"{entry['byte_count']:>8}B  {entry['layer_id'] or '-'}"
         )
         if as_full and "content" in entry:
@@ -1347,7 +1357,11 @@ def ctx_compactions_cmd(
     "--to-session",
     "to_session",
     default=None,
-    help="Friendly stem for the new session id (uuid4 suffix is appended).",
+    help=(
+        "Friendly stem for the new session id, used verbatim (sanitized); "
+        "an existing destination errors rc=4 instead of overwriting. "
+        "Omit for an anonymous sess-<uuid> id."
+    ),
 )
 @click.option(
     "--write",

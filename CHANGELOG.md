@@ -7,7 +7,30 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`ctx prune --to-session <stem>` now uses the stem verbatim (#42).**
+  Previously every stem got a uuid4 suffix, which made the documented rc=4
+  no-clobber contract unreachable: repeated `ctx prune --write` with the same
+  stem silently minted a new file instead of erroring, contradicting the
+  collision error's own hint ("use a different --to-session stem"). Repeats
+  now exit rc=4 with the structured `destination_exists` envelope. Anonymous
+  (stem-less) prunes still mint a fresh `sess-<uuid>` id. The prune packet
+  also gains additive `uuid_set` / `uuid_set_sorted` keys (the pruned record
+  uuids in active-path order), and `ctx show`'s text mode now renders each
+  layer's `capture_method` alongside `completeness` (the honest-provenance
+  labels were JSON-only).
+
 ### Fixed
+
+- **Context Tree projection dropped every trace after the first on
+  multi-session projects (#42).** `build_context_tree_projection` rebound its
+  `trace_id` filter parameter while handling compaction/reconciled events, so
+  `ctx tree`/`ctx compactions` on any trace ingested after the first returned
+  the `context_tree_not_captured` empty state despite the events being on the
+  log. Also, `orphan_branch_roots` now lists only true orphan roots (matching
+  the emitter's documented semantics) instead of every rewind node, removing
+  duplicate subtrees from `ctx tree --show-orphans`.
 
 - **Watcher daemon unbounded RSS, root-caused and bounded by construction
   (#65, third recurrence of #23/#45).** Profiling one tick on a real 872K-event

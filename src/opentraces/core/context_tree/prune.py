@@ -49,8 +49,10 @@ def prune_session_to_node(
         repo: Project directory holding the canonical event log.
         node_id: Target ContextNode (the leaf of the new session).
         source_jsonl_path: The original Claude Code JSONL transcript.
-        to_session: Optional friendly stem for the new session id;
-            joined with a uuid4 suffix to keep ids unique.
+        to_session: Optional friendly stem for the new session id; used
+            VERBATIM (sanitized) so repeated ``--write`` runs with the
+            same stem hit the documented rc=4 no-clobber contract.
+            When omitted, an anonymous ``sess-<uuid4>`` id is minted.
         write: If True, actually write the new JSONL; default dry-run.
     """
     projection = build_context_tree_projection(repo)
@@ -86,7 +88,7 @@ def prune_session_to_node(
     # Dry-run reports the would-be write target. We still compute the
     # record count by walking the source JSONL once so callers see what
     # they'd actually get.
-    pruned_records = _read_records_for_active_path(
+    pruned_records, pruned_uuids = _read_records_for_active_path(
         source_jsonl_path, active_path
     )
     record_count = len(pruned_records)
@@ -115,6 +117,12 @@ def prune_session_to_node(
         "source_jsonl": str(source_jsonl_path),
         "active_path_length": len(active_path),
         "wrote": write,
+        # Additive keys (issue #42, evolution norm): the pruned record
+        # uuids in active-path order + sorted, so consumers (and the
+        # fork-fidelity journey) can assert two-way uuid-set equality
+        # against the active path without re-reading the JSONL.
+        "uuid_set": pruned_uuids,
+        "uuid_set_sorted": sorted(pruned_uuids),
     }
 
 
@@ -124,39 +132,48 @@ def prune_session_to_node(
 
 
 def _new_session_id(to_session: str | None) -> str:
-    """Produce a fresh session id, optionally with a human-readable stem."""
-    suffix = uuid_lib.uuid4().hex[:12]
+    """Produce the session id for the pruned JSONL.
+
+    Issue #42: a caller-supplied ``to_session`` stem is used VERBATIM
+    (after conservative sanitization). The previous behavior appended a
+    uuid4 suffix to every stem, which made the documented rc=4
+    no-clobber contract unreachable from the CLI — repeated
+    ``ctx prune --write --to-session foo`` silently minted a new file
+    instead of erroring, contradicting the collision error's own hint
+    ("use a different --to-session stem"). Anonymous (no stem) calls
+    still mint a fresh ``sess-<uuid4>`` id.
+    """
     if to_session:
         # Conservative sanitization: keep only ascii word chars + dash
-        safe = "".join(
+        return "".join(
             ch if (ch.isalnum() or ch in "-_") else "-" for ch in to_session
         )
-        return f"{safe}-{suffix}"
-    return f"sess-{suffix}"
+    return f"sess-{uuid_lib.uuid4().hex[:12]}"
 
 
 def _read_records_for_active_path(
     source_jsonl_path: Path,
     active_path: list,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Read the original JSONL and emit the lines for the active path's uuids.
 
     Walks the source file once, keeping records whose uuid appears on
-    the active path. Returns the raw line text (preserving JSON
-    encoding) in active-path order. Records whose uuid does not match
-    are skipped; offset metadata on each ContextNode is consulted
-    opportunistically to detect transcript drift but does not gate
-    output (downstream pruner consumers may have re-encoded).
+    the active path. Returns ``(lines, uuids)`` in active-path order:
+    the raw line text (preserving JSON encoding) plus the matched
+    transcript uuids. Records whose uuid does not match are skipped;
+    offset metadata on each ContextNode is consulted opportunistically
+    to detect transcript drift but does not gate output (downstream
+    pruner consumers may have re-encoded).
     """
     if not source_jsonl_path.exists():
-        return []
+        return [], []
     uuid_to_node = {
         node.transcript_uuid: node
         for node in active_path
         if node.transcript_uuid
     }
     if not uuid_to_node:
-        return []
+        return [], []
     # uuid_to_line preserves the raw source line per active-path uuid
     uuid_to_line: dict[str, str] = {}
     with source_jsonl_path.open("r", encoding="utf-8") as handle:
@@ -172,8 +189,9 @@ def _read_records_for_active_path(
             if uuid in uuid_to_node and uuid not in uuid_to_line:
                 uuid_to_line[uuid] = raw
     # Emit in active-path order (root-first)
-    return [
-        uuid_to_line[node.transcript_uuid]
+    ordered_uuids = [
+        node.transcript_uuid
         for node in active_path
         if node.transcript_uuid in uuid_to_line
     ]
+    return [uuid_to_line[u] for u in ordered_uuids], ordered_uuids
