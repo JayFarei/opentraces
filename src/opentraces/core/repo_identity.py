@@ -169,7 +169,20 @@ def write_project_identity(
 # --------------------------------------------------------------------------- #
 
 def _claude_projects_root() -> Path:
-    return Path.home() / ".claude" / "projects"
+    """Resolve the Claude Code projects root, honoring ``cfg.projects_path``.
+
+    Single point of truth for every corpus-discovery consumer — fixes the
+    asymmetry where ``_current_project_session_dir`` honored the config
+    override but discovery was hardcoded (issue #60 item 4). Lazy import
+    avoids a config<->repo_identity cycle; fail-open to the default path
+    on any config read error (byte-identical default behavior:
+    ``get_projects_path`` falls back to ``~/.claude/projects``).
+    """
+    try:
+        from .config import get_projects_path, load_config
+        return get_projects_path(load_config())
+    except Exception:
+        return Path.home() / ".claude" / "projects"
 
 
 def discover_claude_jsonl_corpus(repo: Path) -> list[Path]:
