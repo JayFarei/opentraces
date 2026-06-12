@@ -906,3 +906,55 @@ def test_concurrent_manifest_upserts_lose_no_rows(tmp_path):
     present = {row["trace_id"] for row in doc["traces"]}
     missing = set(trace_ids) - present
     assert not missing, f"concurrent upserts lost manifest rows: {sorted(missing)}"
+
+
+def _write_context_blob(layer_id: str, payload: dict) -> Path:
+    """Write one content-addressed context blob the way the projector does."""
+
+    from opentraces.core._bucket_io import _atomic_write_bytes, _gzip_deterministic
+    from opentraces.core.bucket_layout import blobs_v1_context_path
+
+    path = blobs_v1_context_path("demo", layer_id)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    _atomic_write_bytes(path, _gzip_deterministic(raw))
+    return path
+
+
+def test_bucket_verify_reports_truncated_gzip_blob_as_blob_content_error():
+    """Issue #58 (BKT-5) — a TRUNCATED gzip blob (valid magic, cut tail)
+    raises ``EOFError`` from ``gzip.decompress``, which the pre-fix except
+    tuple in ``_blob_content_matches_path`` did not catch: ``bucket verify``
+    crashed with a traceback (rc=1) instead of reporting a structured
+    ``blob_content`` error (rc=3)."""
+
+    from opentraces.core.bucket_store import bucket_verify
+
+    layer_id = "sha256:" + "a" * 64
+    path = _write_context_blob(layer_id, {"layer_id": layer_id, "content": "x" * 256})
+    raw = path.read_bytes()
+    path.write_bytes(raw[: max(12, len(raw) // 2)])  # keep the gzip magic
+
+    result = bucket_verify(full=True)
+
+    assert result["ok"] is False
+    blob_errors = [e for e in result["errors"] if e["kind"] == "blob_content"]
+    assert len(blob_errors) == 1
+    assert "unreadable blob" in blob_errors[0]["detail"]
+
+
+def test_bucket_verify_reports_hash_mismatch_blob_as_blob_content_error():
+    """Issue #58 (BKT-5) — a valid gzip+JSON blob whose payload ``layer_id``
+    does not match the path-encoded hash is corrupted content and must be
+    reported as a ``blob_content`` error."""
+
+    from opentraces.core.bucket_store import bucket_verify
+
+    layer_id = "sha256:" + "b" * 64
+    _write_context_blob(layer_id, {"layer_id": "sha256:" + "0" * 64, "content": "y"})
+
+    result = bucket_verify(full=True)
+
+    assert result["ok"] is False
+    blob_errors = [e for e in result["errors"] if e["kind"] == "blob_content"]
+    assert len(blob_errors) == 1
+    assert "does not match path hash" in blob_errors[0]["detail"]
