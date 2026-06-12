@@ -1,0 +1,30 @@
+{
+  "status": {
+    "argv": [
+      "--json",
+      "status"
+    ],
+    "max_tokens": 626,
+    "measured_at_seed": 313
+  },
+  "trace-index-status": {
+    "argv": [
+      "trace",
+      "index",
+      "status",
+      "--json"
+    ],
+    "max_tokens": 488,
+    "measured_at_seed": 244,
+    "note": "Sentinel for the 348248c regression class: that commit re-expanded db_sizes to a per-table map (20+ FTS shadow tables per DB, 4.3x envelope blow) with green PR CI because no PR-lane check measured size. The compact default lives in _compact_db_entry (src/opentraces/cli/trace.py); --verbose restores the full breakdown."
+  },
+  "ctx-list": {
+    "argv": [
+      "ctx",
+      "list",
+      "--json"
+    ],
+    "max_tokens": 300,
+    "measured_at_seed": 103
+  }
+}
