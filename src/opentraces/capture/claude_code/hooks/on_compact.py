@@ -8,6 +8,8 @@ otherwise unavailable in the native JSONL.
 
 Install via: opentraces setup claude-code
 """
+from __future__ import annotations
+
 import json
 import sys
 from datetime import datetime, timezone

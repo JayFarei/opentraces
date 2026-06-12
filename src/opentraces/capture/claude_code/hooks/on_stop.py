@@ -15,6 +15,8 @@ Two responsibilities, both best-effort and never-raising:
 
 Install via: opentraces setup claude-code
 """
+from __future__ import annotations
+
 import json
 import subprocess
 import sys
