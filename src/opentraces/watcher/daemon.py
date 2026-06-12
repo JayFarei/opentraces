@@ -938,10 +938,17 @@ def run_sweep(
         except Exception:  # noqa: BLE001
             logger.exception("enlistment pruning failed")
     targets = projects if projects is not None else discover_enlisted_projects()
-    # Least-recently-ticked first: combined with the sweep budget below this
-    # is a fair rotation — projects deferred by one budget-cut sweep are at
-    # the FRONT of the next one.
-    targets = sorted(targets, key=_last_tick_mtime)
+    # Ordering (soak finding, #65): REAL projects before tmp-rooted leaked
+    # test worlds — on the live machine the leaked /tmp/prerel-* clones each
+    # burned a full child timeout and monopolised every bounded sweep while
+    # real projects sat deferred. Within each group, least-recently-ticked
+    # first: combined with the sweep budget below this is a fair rotation —
+    # projects deferred by one budget-cut sweep are at the FRONT of the next.
+    from .prune import _is_tmp_rooted
+
+    targets = sorted(
+        targets, key=lambda p: (_is_tmp_rooted(p), _last_tick_mtime(p))
+    )
     budget_mb = _tick_budget_mb()
     timeout_s = _tick_timeout_s()
     sweep_deadline = time.monotonic() + _sweep_budget_s()

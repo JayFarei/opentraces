@@ -75,13 +75,21 @@ def _newest_mtime(slug_dir: Path) -> float:
     ``state.json`` is rewritten on every tick/ingest, so this is a faithful
     "last activity" signal without walking trace payloads recursively.
     """
+    # NOTE: deliberately NOT seeded from slug_dir's own mtime — directory
+    # mtime refreshes on ANY entry create/delete (including the watcher's
+    # last_sweep_attempt marker below), which would shield stale leaks.
+    # project.json/state.json mtimes are the real activity signal.
     newest = 0.0
-    try:
-        newest = slug_dir.stat().st_mtime
-    except OSError:
+    if not slug_dir.is_dir():
         return 0.0
     try:
         for entry in slug_dir.iterdir():
+            # Soak finding (#65): last_sweep_attempt is WATCHER bookkeeping,
+            # stamped on every sweep attempt regardless of outcome. Counting
+            # it as activity resets the staleness clock each sweep, so a
+            # leaked tmp enlistment would never reach TMP_STALE_DAYS.
+            if entry.name == "last_sweep_attempt":
+                continue
             try:
                 newest = max(newest, entry.stat().st_mtime)
             except OSError:
