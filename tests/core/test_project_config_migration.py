@@ -190,6 +190,94 @@ class TestSaveOnlyNewKeys:
         assert "visibility" not in on_disk
 
 
+class TestReadPurity:
+    """``load_project_config`` is a pure read (issue #60 item 2).
+
+    Normalization/migration happens in memory only; the on-disk marker —
+    often git-committed — is healed exclusively by explicit write verbs
+    (``opentraces init``, ``config set ... --project``, i.e.
+    ``save_project_config``). Same family as issue #55.
+    """
+
+    def test_load_project_config_never_rewrites_id_carrying_marker(
+        self, tmp_path
+    ) -> None:
+        _write_legacy_marker(tmp_path, remote="hf://me/legacy", visibility="public")
+        marker = tmp_path / MARKER_FILENAME
+        before = marker.read_bytes()
+
+        data = load_project_config(tmp_path)
+
+        # The returned dict carries the migrated shape...
+        assert data["remotes"] == {
+            "origin": {"url": "hf://me/legacy", "visibility": "public"}
+        }
+        assert data["active_remote"] == "origin"
+        # ...but the marker on disk is byte-identical: reads never write.
+        assert marker.read_bytes() == before
+
+    def test_load_project_config_never_rewrites_modern_marker_missing_defaults(
+        self, tmp_path
+    ) -> None:
+        payload = {
+            "marker_version": "2",
+            "project_id": "moderndefaults",
+            "review_policy": "review",
+        }
+        marker = tmp_path / MARKER_FILENAME
+        marker.write_text(json.dumps(payload, indent=2))
+        before = marker.read_bytes()
+
+        data = load_project_config(tmp_path)
+
+        # Defaults are backfilled in memory...
+        assert data["push_policy"]
+        assert data["remotes"] == {}
+        assert data["active_remote"] is None
+        # ...without touching the marker.
+        assert marker.read_bytes() == before
+
+    def test_set_root_commit_sha_preserves_legacy_remote_keys(
+        self, tmp_path
+    ) -> None:
+        """The latent drop: a never-rewritten legacy marker reaching the
+        setter must not lose its remote. The setter used to rebuild policy
+        from ``_PORTABLE_FIELDS`` only, which excludes the legacy
+        ``remote`` / ``visibility`` keys — they were silently dropped."""
+        from opentraces.core.config import set_root_commit_sha
+
+        _write_legacy_marker(tmp_path, remote="hf://me/keepme", visibility="public")
+
+        set_root_commit_sha(tmp_path, "a" * 40)
+
+        on_disk = json.loads((tmp_path / MARKER_FILENAME).read_text())
+        assert on_disk["root_commit_sha"] == "a" * 40
+        assert on_disk["remotes"] == {
+            "origin": {"url": "hf://me/keepme", "visibility": "public"}
+        }
+        assert on_disk["active_remote"] == "origin"
+        # Migration is one-way: legacy keys never written back.
+        assert "remote" not in on_disk
+        assert "visibility" not in on_disk
+
+    def test_save_after_load_persists_normalization(self, tmp_path) -> None:
+        """The explicit heal path: load (pure) then an explicit write verb
+        persists the migrated shape with the original project_id."""
+        _write_legacy_marker(tmp_path, remote="hf://me/x", visibility="private")
+
+        data = load_project_config(tmp_path)
+        save_project_config(tmp_path, data)
+
+        on_disk = json.loads((tmp_path / MARKER_FILENAME).read_text())
+        assert on_disk["project_id"] == "abc123"
+        assert on_disk["remotes"] == {
+            "origin": {"url": "hf://me/x", "visibility": "private"}
+        }
+        assert on_disk["active_remote"] == "origin"
+        assert "remote" not in on_disk
+        assert "visibility" not in on_disk
+
+
 class TestRoundTripIdempotent:
     def test_legacy_load_save_load_yields_equivalent_data(self, tmp_path) -> None:
         _write_legacy_marker(tmp_path, remote="hf://me/x", visibility="private")
@@ -205,7 +293,7 @@ class TestRoundTripIdempotent:
     def test_marker_version_bumps_on_save_after_legacy_load(self, tmp_path) -> None:
         _write_legacy_marker(tmp_path)
 
-        load_project_config(tmp_path)  # auto-normalize+rewrite
+        load_project_config(tmp_path)  # pure read: normalizes in memory only
         save_project_config(
             tmp_path, {"remotes": {"origin": {"url": "hf://me/x", "visibility": "private"}}, "active_remote": "origin"}
         )

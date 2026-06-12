@@ -1059,11 +1059,35 @@ def opted_in_projects(config: Config) -> list[str]:
     return sorted(config.projects.keys())
 
 
+def _portable_policy_from_marker(marker: dict) -> dict:
+    """Pull portable + legacy fields out of a raw marker dict and
+    normalize them — in memory only, never writing back to disk.
+
+    Includes the legacy single-remote keys (``remote`` / ``visibility``)
+    so ``_normalize_project_data`` can migrate them into ``remotes`` /
+    ``active_remote``; rebuilding from ``_PORTABLE_FIELDS`` alone would
+    silently drop a legacy marker's remote (issue #60 item 2).
+    """
+    data = {k: marker[k] for k in _PORTABLE_FIELDS if k in marker}
+    if "remote" in marker:
+        data["remote"] = marker["remote"]
+    if "visibility" in marker:
+        data["visibility"] = marker["visibility"]
+    _normalize_project_data(data)
+    return data
+
+
 def load_project_config(project_dir: Path) -> dict:
     """Read project portable policy as a dict.
 
     Returns at least the policy defaults if no marker is present (matches
     legacy contract — callers expect a dict, not None).
+
+    Pure read: normalization/migration happens in memory only and is
+    NEVER persisted back into the (often git-committed) marker. The
+    marker is healed to the normalized shape only by explicit write
+    verbs — ``save_project_config`` via ``opentraces init`` or
+    ``opentraces config set ... --project``.
     """
     marker = _load_marker(project_dir)
     if marker is None:
@@ -1073,21 +1097,7 @@ def load_project_config(project_dir: Path) -> dict:
             "agents": [DEFAULT_AGENT],
         }
 
-    # Pull both new and legacy fields out of the on-disk marker so
-    # _normalize_project_data can migrate them.
-    data = {k: marker[k] for k in _PORTABLE_FIELDS if k in marker}
-    if "remote" in marker:
-        data["remote"] = marker["remote"]
-    if "visibility" in marker:
-        data["visibility"] = marker["visibility"]
-
-    changed = _normalize_project_data(data)
-    if changed and marker.get("project_id"):
-        # Persist normalized values back into the marker. A marker without
-        # a project_id (e.g. a bare committed ``{"excluded": true}``
-        # opt-out) is legal: normalize in memory only — persisting would
-        # mean minting an id, and reads must never mutate such a marker.
-        _write_marker(project_dir, marker["project_id"], data)
+    data = _portable_policy_from_marker(marker)
 
     # Synthesize legacy ``remote``/``visibility`` keys for back-compat
     # with callers that haven't been migrated yet (step 4).
@@ -1134,8 +1144,9 @@ def set_root_commit_sha(project_dir: Path, sha: str | None) -> None:
     """Persist ``root_commit_sha`` into the marker, preserving other fields."""
     marker = _load_marker_raw(project_dir) or {}
     project_id = marker.get("project_id") or uuid.uuid4().hex
-    # Build policy from existing marker's portable fields.
-    policy = {k: marker[k] for k in _PORTABLE_FIELDS if k in marker}
+    # Build policy from the existing marker, migrating legacy keys so a
+    # never-rewritten legacy marker doesn't lose its remote on write.
+    policy = _portable_policy_from_marker(marker)
     if sha:
         policy["root_commit_sha"] = sha
     else:
@@ -1162,7 +1173,7 @@ def set_first_run_backfill_decision(project_dir: Path, decision: str | None) -> 
         )
     marker = _load_marker_raw(project_dir) or {}
     project_id = marker.get("project_id") or uuid.uuid4().hex
-    policy = {k: marker[k] for k in _PORTABLE_FIELDS if k in marker}
+    policy = _portable_policy_from_marker(marker)
     if decision:
         policy["first_run_backfill_decision"] = decision
     else:
