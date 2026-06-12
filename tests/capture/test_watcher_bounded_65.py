@@ -493,3 +493,60 @@ def test_killed_projects_rotate_to_back_not_front(tmp_path, monkeypatch, _isolat
     assert wd._last_tick_mtime(fresh) < bad_key, (
         "never-attempted project must sort ahead of a recently-killed one"
     )
+
+
+# --- #65 soak findings round 2: marker/prune interaction + tmp deprioritised --
+
+
+def test_attempt_marker_does_not_reset_prune_staleness(tmp_path, monkeypatch, _isolate_opentraces_global_state):
+    """Soak sentinel: every sweep stamps last_sweep_attempt — if prune counted
+    it as activity, a leaked tmp enlistment's staleness clock would reset each
+    sweep and it would NEVER age out. A 30-day-stale tmp leak with a
+    seconds-old attempt marker must still be pruned."""
+    import opentraces.watcher.prune as prune_mod
+    from opentraces.core import paths as _paths
+
+    tmp_root = tmp_path / "tmproot"; tmp_root.mkdir()
+    monkeypatch.setattr(prune_mod, "_tmp_roots", lambda: [tmp_root.resolve()])
+    leak_target = tmp_root / "prerel-99"; leak_target.mkdir()
+
+    d = _make_enlistment(_paths.PROJECTS_DIR, "prerel-99-0000", leak_target,
+                         age_days=30)
+    (d / "last_sweep_attempt").touch()  # fresh marker, as every sweep leaves
+
+    summary = prune_enlistments()
+    assert summary["pruned_tmp"] == 1, (
+        "a fresh sweep-attempt marker must not shield a stale tmp leak"
+    )
+    assert not d.exists()
+
+
+def test_sweep_orders_real_projects_before_tmp_worlds(tmp_path, monkeypatch):
+    """Soak sentinel: leaked /tmp worlds each burned a full child timeout and
+    monopolised every bounded sweep on the live machine. Real projects must
+    sweep FIRST regardless of how stale the tmp worlds' rotation keys are."""
+    import opentraces.watcher.prune as prune_mod
+
+    tmp_root = tmp_path / "tmproot"; tmp_root.mkdir()
+    monkeypatch.setattr(prune_mod, "_tmp_roots", lambda: [tmp_root.resolve()])
+
+    tmp_world = tmp_root / "prerel-1"; tmp_world.mkdir()
+    real_a = tmp_path / "real-a"; real_a.mkdir()
+    real_b = tmp_path / "real-b"; real_b.mkdir()
+
+    # tmp world has the OLDEST rotation key (would win pure LRU).
+    mtimes = {"prerel-1": 0.0, "real-a": 200.0, "real-b": 100.0}
+    monkeypatch.setattr(wd, "_last_tick_mtime",
+                        lambda p: mtimes.get(p.name, 0.0))
+
+    ticked: list[str] = []
+
+    def _fake_child(project_cwd, *, budget_mb, timeout_s, _argv=None):
+        ticked.append(project_cwd.name)
+        return "ok"
+
+    monkeypatch.setattr(wd, "_tick_in_child", _fake_child)
+    wd.run_sweep(projects=[tmp_world, real_a, real_b])
+    assert ticked == ["real-b", "real-a", "prerel-1"], (
+        "real projects (LRU within group) must precede tmp-rooted worlds"
+    )
