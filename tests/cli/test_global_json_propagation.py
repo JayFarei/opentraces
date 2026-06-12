@@ -63,6 +63,23 @@ def test_global_json_status_emits_json(tmp_path, monkeypatch):
     assert isinstance(payload, dict)
 
 
+def test_status_subcommand_json_flag_emits_json(tmp_path, monkeypatch):
+    """`opentraces status --json` (trailing flag) matches the global form.
+
+    The natural invocation a fresh user/agent tries — surfaced by the J13
+    free-navigation acceptance arc (issue #61), which exited rc=2 before
+    status grew the subcommand-level flag every sibling verb already has.
+    """
+    project = _isolated_project(tmp_path)
+    monkeypatch.chdir(project)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["status", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = _parse_last_json(result.output)
+    assert isinstance(payload, dict)
+
+
 def test_global_json_trace_query_emits_json(tmp_path, monkeypatch):
     project = _isolated_project(tmp_path)
     monkeypatch.chdir(project)

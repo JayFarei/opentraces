@@ -1818,6 +1818,7 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
 @main.command(
     examples=[
         "opentraces status",
+        "opentraces status --json",
         "opentraces status --limit 0",
     ],
     see_also=[
@@ -1832,12 +1833,21 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     show_default=True,
     help="Show N most-recent traces. Use 0 to list all.",
 )
-def status(limit: int) -> None:
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit structured JSON (same as the global --json flag).",
+)
+def status(limit: int, as_json: bool) -> None:
     """Show status of the current opentraces project.
 
     Summarises inbox counts by stage, the active remote, and the most
     recent traces. A fast snapshot of what's waiting, staged, and shipped.
     """
+    global _json_mode
+    if as_json:
+        _json_mode = True
     import time as _time
     from ..core.config import (
         load_project_config, get_project_traces_dir, get_project_state_path,

@@ -81,7 +81,6 @@ GLOBAL_JSON_ONLY = {
     "setup watcher start",
     "setup watcher stop",
     "setup watcher uninstall",
-    "status",
     "trail blame pr create",
     "trail blame pr render",
     "trail blame pr update",
