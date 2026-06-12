@@ -494,6 +494,16 @@ def _captured_session(box: Box) -> dict[str, str]:
         result["step_index"] = str(codex_audit.get("step_index") or result.get("step_index", ""))
         result["codex_patch_count"] = str(codex_audit.get("patch_count") or "")
         result["codex_landed_hunk_count"] = str(codex_audit.get("landed_hunk_count") or "")
+        # Issue #42 (temporal-anchor retarget): the codex world's landed
+        # commit — what `ctx anchor-for-step` must resolve to once the
+        # codex emitter populates trail_anchor_hint.commit_id (v1.1 /
+        # codex-world regen; journey stays quarantined until then) —
+        # plus the step index of the first anchor-hinted node, resolved
+        # from the live event log at expansion time.
+        result["codex_anchor_commit"] = str(codex_audit.get("commit_sha") or "")
+        result["codex_anchor_step_index"] = _first_anchor_hint_step_index(
+            box, result["trace_id"]
+        )
         result["transcript_path"] = str(codex_audit.get("transcript_path") or result.get("transcript_path", ""))
 
     pi_audit = box.notes.get("c_captured_pi_session_audit") or {}
@@ -776,6 +786,30 @@ def _resolve_context_tree_node_template_vars(
         extras["orphan_leaf_node_id"] = str(orphans[-1].get("node_id") or "")
 
     return extras
+
+
+def _first_anchor_hint_step_index(box: Box, trace_id: str) -> str:
+    """Step index of the first ContextNode carrying a trail_anchor_hint.
+
+    Issue #42 (temporal-anchor retarget): the codex capture path stamps
+    a hint on every node; the journey addresses the first hinted step.
+    Empty string on miss so the journey fails loudly.
+    """
+    project = box.project
+    if not (project / ".git").exists() or not trace_id:
+        return ""
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:  # noqa: BLE001
+        return ""
+    for e in events:
+        if e.event_type != "context_node_observed" or e.trace_id != trace_id:
+            continue
+        p = e.payload or {}
+        if p.get("trail_anchor_hint") and p.get("step_index") is not None:
+            return str(p["step_index"])
+    return ""
 
 
 def _resolve_compaction_template_vars(box: Box, trace_id: str) -> dict[str, str]:
