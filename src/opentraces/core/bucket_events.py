@@ -98,9 +98,7 @@ def sync_events_mirror(
         _atomic_write_json(events_v1_index_path(), index)
         return index
 
-    from .trails.event_log import _is_ancestor
-
-    events = sorted(read_events(repo, verify=False), key=lambda e: e.event_sequence)
+    from .trails.event_log import _is_ancestor, read_events_since
 
     # Incremental fast-path: existing batch files are immutable (one batch per
     # append, content-addressed), so when the prior index head is an ancestor
@@ -129,10 +127,25 @@ def sync_events_mirror(
         # Nothing new since the last mirror; leave the bucket untouched.
         return prior_index
 
-    work_events = (
-        [e for e in events if e.event_sequence > prior_seq]
-        if incremental else events
-    )
+    # #65: the mirror was already WRITE-incremental but READ-full — every
+    # changed tick materialised the entire log (~872K pydantic events observed
+    # live, the 2GB snapshot pickle) only to filter it down to the appended
+    # suffix. Read just the suffix instead; the full read remains for true
+    # rebuilds (no/invalid prior index, rewritten history).
+    work_events: list[Any] | None = None
+    if incremental:
+        _, new_events = read_events_since(repo, prior_head)
+        if new_events is None:
+            incremental = False
+        else:
+            work_events = [
+                e for e in sorted(new_events, key=lambda e: e.event_sequence)
+                if e.event_sequence > prior_seq
+            ]
+    if work_events is None:
+        work_events = sorted(
+            read_events(repo, verify=False), key=lambda e: e.event_sequence
+        )
     seq_offset = prior_batch_count if incremental else 0
 
     # Group the events we need to write by batch_id, in sequence order.

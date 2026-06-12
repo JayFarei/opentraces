@@ -179,6 +179,9 @@ def reconcile_commit_anchors(
     events: list[TrailEvent] | None = None,
     summary_out: dict[str, Any] | None = None,
     deadline: float | None = None,
+    patch_events: list[TrailEvent] | None = None,
+    anchor_keys: set[tuple] | None = None,
+    search_keys: set[tuple] | None = None,
 ) -> list[dict[str, Any]]:
     """Search existing Trace Patches against a commit and append anchor events.
 
@@ -188,6 +191,18 @@ def reconcile_commit_anchors(
     ``capture_method=["manual_attach"]`` and a ``trace_id`` filter so the
     user can retroactively connect one trace's evidence to one commit
     without rewriting source events for other traces.
+
+    #65: ``patch_events``/``anchor_keys``/``search_keys`` are the
+    pre-extracted form of ``events`` — the batched maturation scan streams
+    the whole-log read through a sink that keeps ONLY patch events plus the
+    dedup key tuples, never retaining anchor/search events (the plan-090
+    summary events carry results[] arrays that ballooned to GBs when
+    re-materialised per tick). When all three are supplied, ``events`` is
+    not consulted. ``anchor_keys`` entries are ``(trace_patch_id,
+    commit_hex)``; ``search_keys`` entries are ``(trace_patch_id,
+    search_head_sha, attribution_version)`` — both already filtered (or
+    over-inclusive: keys for OTHER commits are harmless because every
+    membership test below includes this commit's sha).
     """
     repo = repo.resolve()
     effective_capture_method = (
@@ -215,63 +230,74 @@ def reconcile_commit_anchors(
     # commit_filter would — preserving plan-090 R5 dedup. When ``events`` is
     # None the per-commit scoped read is byte-identical (the post-commit hook
     # path is unchanged).
-    if events is None:
-        events = read_events_scoped(
-            repo,
-            event_types={
-                "trace_patch_created",
-                "git_anchor_created",
-                "git_anchor_search_completed",
-            },
-            commit_filter={
-                "git_anchor_created": "commit_id",
-                "git_anchor_search_completed": "search_head",
-            },
-            commit_sha=commit,
-        )
+    if patch_events is not None and anchor_keys is not None and search_keys is not None:
+        # #65 pre-extracted path: keys arrive ready-made; the patch list may
+        # still need the trace filter the legacy path applies below.
+        existing_anchor_keys = anchor_keys
+        existing_search_keys = search_keys
+        patch_events = [
+            event
+            for event in patch_events
+            if trace_id is None or event.trace_id == trace_id
+        ]
     else:
-        events = [
+        if events is None:
+            events = read_events_scoped(
+                repo,
+                event_types={
+                    "trace_patch_created",
+                    "git_anchor_created",
+                    "git_anchor_search_completed",
+                },
+                commit_filter={
+                    "git_anchor_created": "commit_id",
+                    "git_anchor_search_completed": "search_head",
+                },
+                commit_sha=commit,
+            )
+        else:
+            events = [
+                event
+                for event in events
+                if (
+                    event.event_type == "trace_patch_created"
+                    or (
+                        event.event_type == "git_anchor_created"
+                        and (event.payload.get("commit_id") or {}).get("hex") == commit
+                    )
+                    or (
+                        event.event_type == "git_anchor_search_completed"
+                        and (event.payload.get("search_head") or {}).get("hex") == commit
+                    )
+                )
+            ]
+        existing_anchor_keys = {
+            (id_from_payload(event.payload, "trace_patch"), (event.payload.get("commit_id") or {}).get("hex"))
+            for event in events
+            if event.event_type == "git_anchor_created"
+        }
+        # Dedup is per-(patch, commit, attribution_version). Expand BOTH the legacy
+        # per-patch search events and the new v2 summary events through the shared
+        # reader so the key set is identical across shapes (plan 090, R5). This is
+        # the single load-bearing invariant: an already-searched (patch, commit,
+        # version) must not be re-emitted, and a not-yet-searched patch (e.g. a
+        # late-ingested one) must still be searched.
+        existing_search_keys = {
+            (
+                record["trace_patch_id"],
+                record["search_head_sha"],
+                record["attribution_version"],
+            )
+            for event in events
+            if event.event_type == "git_anchor_search_completed"
+            for record in iter_search_records(event)
+        }
+        patch_events = [
             event
             for event in events
-            if (
-                event.event_type == "trace_patch_created"
-                or (
-                    event.event_type == "git_anchor_created"
-                    and (event.payload.get("commit_id") or {}).get("hex") == commit
-                )
-                or (
-                    event.event_type == "git_anchor_search_completed"
-                    and (event.payload.get("search_head") or {}).get("hex") == commit
-                )
-            )
+            if event.event_type == "trace_patch_created"
+            and (trace_id is None or event.trace_id == trace_id)
         ]
-    existing_anchor_keys = {
-        (id_from_payload(event.payload, "trace_patch"), (event.payload.get("commit_id") or {}).get("hex"))
-        for event in events
-        if event.event_type == "git_anchor_created"
-    }
-    # Dedup is per-(patch, commit, attribution_version). Expand BOTH the legacy
-    # per-patch search events and the new v2 summary events through the shared
-    # reader so the key set is identical across shapes (plan 090, R5). This is
-    # the single load-bearing invariant: an already-searched (patch, commit,
-    # version) must not be re-emitted, and a not-yet-searched patch (e.g. a
-    # late-ingested one) must still be searched.
-    existing_search_keys = {
-        (
-            record["trace_patch_id"],
-            record["search_head_sha"],
-            record["attribution_version"],
-        )
-        for event in events
-        if event.event_type == "git_anchor_search_completed"
-        for record in iter_search_records(event)
-    }
-    patch_events = [
-        event
-        for event in events
-        if event.event_type == "trace_patch_created"
-        and (trace_id is None or event.trace_id == trace_id)
-    ]
 
     # plan 090: collect every patch's search outcome into ONE per-commit
     # summary event (search_results) rather than appending one

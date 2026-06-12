@@ -309,6 +309,7 @@ def build_context_tree_projection(
     bucket_root: Path | None = None,
     project_slug: str | None = None,
     trace_id: str | None = None,
+    events: list | None = None,
 ) -> ContextTreeProjection:
     """Read the canonical event log and project Context Tree events.
 
@@ -334,6 +335,12 @@ def build_context_tree_projection(
             under which ``blobs/v1/<project>/context/...`` lives.
         project_slug: required when ``lazy=True``; the project namespace
             under ``blobs/v1/``.
+        events: pre-read event list (#65). The loop below dispatches only
+            on the four ``context_*`` event types, so feeding it a SCOPED
+            read of those types is semantically identical to the full
+            ``read_events`` walk — and avoids materialising the entire log
+            (~872K pydantic events observed live) on every changed watcher
+            tick. ``None`` preserves the full-read behavior.
     """
     if lazy and (bucket_root is None or project_slug is None):
         raise ValueError(
@@ -352,7 +359,7 @@ def build_context_tree_projection(
     subagent_session_ids_by_trace: dict[str, list[str]] = {}
     capture_limitations_by_trace: dict[str, list[str]] = {}
 
-    for event in read_events(repo):
+    for event in (events if events is not None else read_events(repo)):
         if trace_id is not None:
             ev_tid = event.trace_id or (
                 event.payload.get("trace_id")

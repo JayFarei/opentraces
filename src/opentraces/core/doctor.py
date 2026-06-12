@@ -392,6 +392,73 @@ def _attribution_status(cwd: Path) -> dict[str, Any]:
     }
 
 
+def _watcher_provenance() -> dict[str, Any]:
+    """Cross-check shim / running-daemon / installed-CLI provenance (#65).
+
+    The pipx→brew migration left the worker shim pointing at a deleted
+    interpreter while a dev-venv daemon kept running unfixed code — and no
+    surface could tell. This check reads the shim for frozen interpreter
+    paths, reads the daemon's self-declared status file, and compares both
+    against the installed CLI. ``drift`` lists every mismatch found.
+    """
+    import re
+
+    from ..core import paths as _paths
+
+    drift: list[str] = []
+    out: dict[str, Any] = {"drift": drift}
+
+    shim_path = _paths.OPENTRACES_DIR / "bin" / "ot-watcher"
+    out["shim_path"] = str(shim_path)
+    shim_text: str | None = None
+    if shim_path.is_file():
+        try:
+            shim_text = shim_path.read_text()
+        except OSError:
+            shim_text = None
+    out["shim_exists"] = shim_text is not None
+    if shim_text is not None:
+        for frozen in re.findall(r'exec "([^"]*python[^"]*)"', shim_text):
+            out["shim_frozen_interpreter"] = frozen
+            if not Path(frozen).exists():
+                drift.append("shim-interpreter-missing")
+        if "run-sweep" not in shim_text and "setup watcher sweep" not in shim_text:
+            drift.append("shim-legacy-verb")
+
+    cli_version: str | None = None
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            cli_version = version("opentraces")
+        except PackageNotFoundError:
+            cli_version = None
+    except Exception:  # noqa: BLE001
+        cli_version = None
+    out["cli_version"] = cli_version
+
+    status_path = _paths.OPENTRACES_DIR / "watcher.status.json"
+    out["status_file"] = str(status_path)
+    if status_path.is_file():
+        try:
+            declared = json.loads(status_path.read_text()) or {}
+        except (OSError, json.JSONDecodeError):
+            declared = {}
+        out["daemon_version"] = declared.get("version")
+        out["daemon_executable"] = declared.get("executable")
+        out["daemon_started_at"] = declared.get("started_at")
+        executable = declared.get("executable")
+        if executable and not Path(str(executable)).exists():
+            drift.append("daemon-executable-missing")
+        if (
+            cli_version
+            and declared.get("version")
+            and declared["version"] != cli_version
+        ):
+            drift.append("daemon-version-drift")
+    return out
+
+
 def _watcher_status() -> dict[str, Any]:
     """Report on watcher installation + running state."""
     try:
@@ -448,6 +515,13 @@ def _watcher_status() -> dict[str, Any]:
             except Exception:
                 pass
 
+    try:
+        provenance = _watcher_provenance()
+    except Exception:  # noqa: BLE001
+        provenance = {"drift": [], "error": "provenance-check-failed"}
+    if provenance.get("drift") and health == "ok":
+        health = "provenance-drift"
+
     return {
         "platform": st.platform,
         "installed": bool(st.installed),
@@ -456,6 +530,7 @@ def _watcher_status() -> dict[str, Any]:
         "interval_seconds": st.interval_seconds,
         "unit_path": str(st.unit_path) if st.unit_path else None,
         "health": health,
+        "provenance": provenance,
     }
 
 

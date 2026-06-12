@@ -134,7 +134,8 @@
         "anchors_created",
         "commits_considered",
         "errors",
-        "searches_completed"
+        "searches_completed",
+        "truncated"
       ]
     },
     {

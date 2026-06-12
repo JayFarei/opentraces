@@ -1550,9 +1550,14 @@ def test_reconcile_scoped_read_matches_full_read(tmp_path: Path, monkeypatch) ->
     event_log.invalidate_read_events_cache(repo_b)
 
     def _full_read_shim(cwd, *, event_types, commit_filter=None,
-                        commit_sha=None, commit_shas=None):
-        return [e for e in event_log.read_events(cwd, verify=False)
-                if e.event_type in event_types]
+                        commit_sha=None, commit_shas=None, sink=None):
+        events = [e for e in event_log.read_events(cwd, verify=False)
+                  if e.event_type in event_types]
+        if sink is not None:
+            for e in events:
+                sink(e)
+            return []
+        return events
 
     monkeypatch.setattr(reconciler_mod, "read_events_scoped", _full_read_shim)
     pre_b = {e.event_id for e in read_events(repo_b)}

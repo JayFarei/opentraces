@@ -48,6 +48,20 @@ logger = logging.getLogger("opentraces.watcher")
 DEFAULT_INTERVAL = 300
 QUIET_TICK_BUDGET_MS = 50  # target only; we don't enforce
 
+# #65: per-tick wall-clock budget for trail maturation. 0 disables the bound.
+DEFAULT_MATURATION_BUDGET_S = 120.0
+
+
+def _maturation_budget_s() -> float:
+    raw = os.environ.get("OT_MATURATION_TICK_BUDGET_S")
+    if raw is None or raw == "":
+        return DEFAULT_MATURATION_BUDGET_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_MATURATION_BUDGET_S
+    return max(0.0, value)
+
 # Test hook: monkeypatched by the crash-recovery scenario harness step.
 # When set, run_once raises RuntimeError(_CRASH_AFTER_PROBE) at the named
 # checkpoint. Valid values: "after_probe", "after_first_commit".
@@ -219,6 +233,44 @@ def _logs_dir() -> Path:
     return _paths.OPENTRACES_DIR / "logs"
 
 
+def _status_file_path() -> Path:
+    return _paths.OPENTRACES_DIR / "watcher.status.json"
+
+
+def _write_status_file(verb: str) -> None:
+    """Declare which code this daemon actually runs (#65 provenance).
+
+    The pipx→brew migration left a shim pointing at a deleted interpreter
+    while a dev-venv daemon ran unfixed code — and nothing could tell. The
+    daemon now self-declares on every start; ``opentraces doctor`` cross-checks
+    this against the installed CLI and flags drift. Best-effort: never fails
+    the sweep.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            pkg_version = version("opentraces")
+        except PackageNotFoundError:
+            pkg_version = None
+        payload = {
+            "schema_version": "opentraces.watcher_status.v1",
+            "version": pkg_version,
+            "executable": sys.executable,
+            "daemon_file": __file__,
+            "pid": os.getpid(),
+            "verb": verb,
+            "started_at": _utcnow().isoformat(),
+        }
+        path = _status_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        tmp.replace(path)
+    except Exception:  # noqa: BLE001
+        logger.debug("failed to write watcher status file", exc_info=True)
+
+
 _LOG_CONFIGURED = False
 
 def _configure_logging() -> None:
@@ -285,9 +337,23 @@ def _run_trace_trails_runtime(
         if not should_mature:
             should_mature = has_unsearched_recent_patches(project_cwd)
         if should_mature:
-            summary = mature_trails(project_cwd)
+            # #65: bound one tick's maturation by wall-clock. The per-patch
+            # deadline machinery (#44 Phase 2) is durable + idempotent, so a
+            # truncated sweep resumes next tick (watermark NOT stamped). A
+            # cold backlog amortises across ticks instead of doing 710K
+            # searches / 14GB peak in one.
+            budget_s = _maturation_budget_s()
+            summary = mature_trails(
+                project_cwd,
+                deadline=(time.monotonic() + budget_s) if budget_s else None,
+            )
             report.trail_maturation_searches = int(summary.searches_completed)
             report.trail_maturation_anchors = int(summary.anchors_created)
+            if summary.truncated:
+                logger.info(
+                    "trail maturation truncated at %.0fs budget for %s; "
+                    "resuming next tick", budget_s, project_cwd,
+                )
             if summary.errors:
                 logger.warning(
                     "trail maturation completed with errors for %s: %s",
@@ -323,10 +389,18 @@ def _run_trace_trails_runtime(
                 )
             # Plan 079: first-class Context Tree bucket projection. Stage 2
             # is additive; the trail-piggyback above remains.
+            #
+            # #65: bounded + watermark-gated. The unconditional call here
+            # previously did TWO full read_events walks per changed tick
+            # (~872K pydantic events + the 2GB snapshot pickle — the 12GB
+            # spike in the live capture). The daemon now (a) skips the
+            # projection entirely when no context_* events landed since the
+            # last projected head, and (b) feeds the projection from a
+            # SCOPED context-type read plus the all-type suffix, so its peak
+            # is bounded by context density, not log size. Repair/status
+            # verbs keep the legacy full-fidelity path.
             try:
-                from ..core.bucket_store import project_context_tree_to_bucket
-
-                project_context_tree_to_bucket(project_cwd, project_slug=project_slug)
+                _project_context_tree_bounded(project_cwd, project_slug)
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "bucket Context Tree projection failed for %s",
@@ -337,6 +411,93 @@ def _run_trace_trails_runtime(
     except Exception:  # noqa: BLE001
         logger.exception("Trace Trails runtime failed for %s", project_cwd)
         return False
+
+
+def _ctx_projection_watermark_path(project_cwd: Path) -> Path | None:
+    proc = subprocess.run(
+        ["git", "-C", str(project_cwd), "rev-parse", "--git-dir"],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    git_dir = Path(proc.stdout.strip())
+    if not git_dir.is_absolute():
+        git_dir = (project_cwd / git_dir).resolve()
+    return git_dir / "opentraces" / "context_projection_watermark.json"
+
+
+def _project_context_tree_bounded(project_cwd: Path, project_slug: str) -> None:
+    """Watermark-gated, scoped-read Context Tree bucket projection (#65)."""
+    from ..core.bucket_store import project_context_tree_to_bucket
+    from ..core.context_tree.contract import CONTEXT_EVENT_TYPES
+    from ..core.trails.event_log import (
+        _ref_head,
+        read_events_scoped,
+        read_events_since,
+    )
+
+    wm_path = _ctx_projection_watermark_path(project_cwd)
+    watermark: str | None = None
+    if wm_path is not None and wm_path.is_file():
+        try:
+            watermark = (json.loads(wm_path.read_text()) or {}).get("head")
+        except (OSError, json.JSONDecodeError):
+            watermark = None
+
+    head_now = _ref_head(project_cwd)
+    if head_now is None:
+        return  # no event log — nothing to project
+
+    suffix: list | None = None
+    if watermark:
+        head_now, suffix = read_events_since(project_cwd, watermark)
+        if head_now is None:
+            return
+        if suffix is not None and not any(
+            ev.event_type in CONTEXT_EVENT_TYPES for ev in suffix
+        ):
+            # No context activity since the last projection: heads are
+            # current for context purposes; just advance the watermark.
+            _stamp_ctx_watermark(wm_path, head_now)
+            return
+
+    # Bootstrap (no/stale watermark) or context activity present: project
+    # from the scoped context slice. Bounded by context density by
+    # construction — the daemon never takes the full-read path.
+    ctx_events = read_events_scoped(
+        project_cwd, event_types=set(CONTEXT_EVENT_TYPES)
+    )
+    changed_tids: set[str] = set()
+    source = suffix if suffix is not None else ctx_events
+    for ev in source:
+        if ev.event_type not in CONTEXT_EVENT_TYPES:
+            continue
+        tid = ev.trace_id or (
+            ev.payload.get("trace_id") if isinstance(ev.payload, dict) else None
+        )
+        if tid:
+            changed_tids.add(str(tid))
+    for tid in sorted(changed_tids):
+        project_context_tree_to_bucket(
+            project_cwd,
+            project_slug=project_slug,
+            trace_id=tid,
+            events=ctx_events,
+            seq_suffix=suffix or [],
+        )
+    _stamp_ctx_watermark(wm_path, head_now)
+
+
+def _stamp_ctx_watermark(wm_path: Path | None, head: str | None) -> None:
+    if wm_path is None or head is None:
+        return
+    try:
+        wm_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = wm_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"head": head}))
+        tmp.replace(wm_path)
+    except OSError:
+        logger.debug("failed to stamp context projection watermark", exc_info=True)
 
 
 def _bucket_reconcile_once(*, reason: str) -> dict:
@@ -578,12 +739,288 @@ def _reexec_self(interval: int) -> None:
     os.execv(sys.executable, argv)
 
 
+# --- budgeted child ticks + one-shot sweep (#65) ---------------------------
+
+# 4096MiB: the worst LEGITIMATE tick measured on the #65 repo (872K-event log,
+# maturation needle working set ~18K patches × ~34KB authored_text) peaks
+# around 2-3GiB; the budget leaves headroom above that while still killing
+# the pathological unbounded growth (8-15GB observed) long before it takes
+# the machine. Tune per-host via OT_WATCHER_TICK_MAX_RSS_MB.
+DEFAULT_TICK_MAX_RSS_MB = 4096
+DEFAULT_TICK_TIMEOUT_S = 900
+
+
+def _tick_budget_mb() -> float:
+    raw = os.environ.get("OT_WATCHER_TICK_MAX_RSS_MB")
+    try:
+        value = float(raw) if raw else 0.0
+    except ValueError:
+        value = 0.0
+    return value if value > 0 else float(DEFAULT_TICK_MAX_RSS_MB)
+
+
+def _tick_timeout_s() -> float:
+    raw = os.environ.get("OT_WATCHER_TICK_TIMEOUT_S")
+    try:
+        value = float(raw) if raw else 0.0
+    except ValueError:
+        value = 0.0
+    return value if value > 0 else float(DEFAULT_TICK_TIMEOUT_S)
+
+
+# #65 soak finding (run 1): a real home can carry hundreds of enlistments, and
+# a sweep with only PER-CHILD budgets exceeded an hour — overlapping every
+# supervision interval. The sweep itself gets a wall budget; projects that
+# don't fit are DEFERRED, and the least-recently-ticked-first ordering below
+# guarantees deferred tails go first next sweep (no starvation).
+DEFAULT_SWEEP_BUDGET_S = 1500.0
+
+
+def _sweep_budget_s() -> float:
+    raw = os.environ.get("OT_WATCHER_SWEEP_BUDGET_S")
+    try:
+        value = float(raw) if raw else 0.0
+    except ValueError:
+        value = 0.0
+    return value if value > 0 else DEFAULT_SWEEP_BUDGET_S
+
+
+# Minimum leftover budget worth starting a child for: below this, defer.
+MIN_CHILD_BUDGET_S = 30.0
+
+
+def _attempt_marker_path(project_cwd: Path) -> Path | None:
+    """Sweep-attempt marker inside the enlistment dir (pruned with it)."""
+    try:
+        return get_project_state_path(project_cwd).parent / "last_sweep_attempt"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _stamp_attempt(project_cwd: Path) -> None:
+    """Record that a sweep ATTEMPTED this project, regardless of verdict.
+
+    #65 (codex round 3): killed/errored ticks never stamp state.json, so
+    ordering by state mtime alone re-sorts the same pathological project to
+    the FRONT of every bounded sweep — starving healthy projects behind it.
+    The marker makes the ordering attempt-aware: one try per rotation.
+    """
+    marker = _attempt_marker_path(project_cwd)
+    if marker is None:
+        return
+    try:
+        marker.touch()
+    except OSError:
+        pass
+
+
+def _last_tick_mtime(project_cwd: Path) -> float:
+    """Last tick OR attempt time for fair sweep ordering; 0.0 = never.
+
+    max(state.json mtime, attempt-marker mtime): successful ticks advance
+    state.json, killed/errored ticks advance only the marker — either way
+    the project goes to the BACK of the next sweep's rotation.
+    """
+    newest = 0.0
+    try:
+        state_path = get_project_state_path(project_cwd)
+        if state_path.is_file():
+            newest = state_path.stat().st_mtime
+    except Exception:  # noqa: BLE001
+        pass
+    marker = _attempt_marker_path(project_cwd)
+    try:
+        if marker is not None and marker.is_file():
+            newest = max(newest, marker.stat().st_mtime)
+    except OSError:
+        pass
+    return newest
+
+
+def _child_rss_mb(pid: int) -> float | None:
+    """CURRENT RSS of ``pid`` in MiB, or None when unreadable."""
+    statm = Path(f"/proc/{pid}/statm")
+    if statm.is_file():
+        try:
+            resident_pages = int(statm.read_text().split()[1])
+            return resident_pages * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024)
+        except Exception:  # noqa: BLE001 — fall through to ps
+            pass
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)],
+            capture_output=True, text=True, check=False,
+        )
+        return int(out.stdout.strip()) / 1024.0
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _tick_in_child(
+    project_cwd: Path,
+    *,
+    budget_mb: float,
+    timeout_s: float,
+    _argv: list[str] | None = None,
+) -> str:
+    """Run one project tick in a budgeted child process.
+
+    Returns ``"ok"``, ``"rss_killed"``, ``"timeout_killed"``, or
+    ``"error:<rc>"``. The #65 invariant this enforces: a pathological project
+    can never take the sweep parent's memory with it — the child is killed at
+    the budget and the sweep continues with the next project.
+
+    ``_argv`` overrides the child command (tests substitute a controlled
+    allocator/sleeper so the kill paths are exercised against REAL processes
+    and REAL RSS readings, not monkeypatched meters).
+    """
+    argv = _argv or [sys.executable, "-m", "opentraces.watcher.daemon",
+                     "tick", str(project_cwd)]
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    started = time.monotonic()
+    verdict = "ok"
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            verdict = "ok" if rc == 0 else f"error:{rc}"
+            break
+        elapsed = time.monotonic() - started
+        rss = _child_rss_mb(proc.pid)
+        if rss is not None and rss >= budget_mb:
+            logger.warning(
+                "tick child for %s breached RSS budget (%.0fMiB >= %.0fMiB) — killed",
+                project_cwd, rss, budget_mb,
+            )
+            proc.kill()
+            proc.wait(timeout=10)
+            verdict = "rss_killed"
+            break
+        if elapsed >= timeout_s:
+            logger.warning(
+                "tick child for %s breached wall budget (%.0fs >= %.0fs) — killed",
+                project_cwd, elapsed, timeout_s,
+            )
+            proc.kill()
+            proc.wait(timeout=10)
+            verdict = "timeout_killed"
+            break
+        time.sleep(0.5)
+    return verdict
+
+
+def run_sweep(
+    *,
+    projects: list[Path] | None = None,
+    in_process: bool = False,
+) -> dict:
+    """One bounded pass over the enlisted projects, then return.
+
+    The production entrypoint for launchd supervision (#65): the installed
+    plist uses StartInterval+RunAtLoad with no KeepAlive, so a process that
+    exits after each sweep is restarted on the interval — the supervisor IS
+    the service loop, and a process that exits cannot accumulate memory
+    across sweeps by construction. Each project ticks in a budgeted child
+    (see ``_tick_in_child``) unless ``in_process`` is set (tests / debugging).
+    """
+    _configure_logging()
+    _write_status_file("run-sweep")
+    prune_summary: dict | None = None
+    if projects is None:
+        # #23 finished: drop leaked/dead enlistments BEFORE enumerating, so
+        # the sweep surface is the real project population, not 800+ test
+        # fixture leaks. Best-effort; never blocks the sweep.
+        try:
+            from .prune import prune_enlistments
+
+            prune_summary = prune_enlistments()
+        except Exception:  # noqa: BLE001
+            logger.exception("enlistment pruning failed")
+    targets = projects if projects is not None else discover_enlisted_projects()
+    # Least-recently-ticked first: combined with the sweep budget below this
+    # is a fair rotation — projects deferred by one budget-cut sweep are at
+    # the FRONT of the next one.
+    targets = sorted(targets, key=_last_tick_mtime)
+    budget_mb = _tick_budget_mb()
+    timeout_s = _tick_timeout_s()
+    sweep_deadline = time.monotonic() + _sweep_budget_s()
+    summary = {"projects": len(targets), "ok": 0, "rss_killed": 0,
+               "timeout_killed": 0, "errors": 0, "deferred": 0}
+    if prune_summary is not None:
+        summary["pruned"] = (
+            prune_summary.get("pruned_tmp", 0)
+            + prune_summary.get("pruned_missing", 0)
+        )
+    for index, p in enumerate(targets):
+        # #65 (codex round 3): cap each child to the REMAINING sweep budget —
+        # a child started with seconds left but a 900s per-child timeout
+        # would overrun the sweep budget by minutes and overlap the
+        # supervisor interval. Below MIN_CHILD_BUDGET_S, defer instead.
+        remaining = sweep_deadline - time.monotonic()
+        if remaining < MIN_CHILD_BUDGET_S:
+            summary["deferred"] = len(targets) - index
+            logger.info(
+                "sweep budget reached: deferring %d projects to the next sweep",
+                summary["deferred"],
+            )
+            break
+        try:
+            if in_process:
+                run_once(p)
+                verdict = "ok"
+            else:
+                verdict = _tick_in_child(
+                    p, budget_mb=budget_mb,
+                    timeout_s=min(timeout_s, remaining),
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("sweep tick escaped for %s", p)
+            verdict = "error:exception"
+        finally:
+            _stamp_attempt(p)
+        if verdict == "ok":
+            summary["ok"] += 1
+        elif verdict == "rss_killed":
+            summary["rss_killed"] += 1
+        elif verdict == "timeout_killed":
+            summary["timeout_killed"] += 1
+        else:
+            summary["errors"] += 1
+    logger.info(
+        "sweep complete: %d projects, %d ok, %d rss-killed, %d timeout-killed, "
+        "%d errors, %d deferred",
+        summary["projects"], summary["ok"], summary["rss_killed"],
+        summary["timeout_killed"], summary["errors"], summary["deferred"],
+    )
+    return summary
+
+
 def run_forever(interval: int = DEFAULT_INTERVAL, *,
                 projects: list[Path] | None = None) -> None:
-    """Service loop. Ticks every `interval` seconds across enlisted projects."""
+    """Legacy service loop. Ticks every `interval` seconds across enlisted
+    projects, in-process.
+
+    Production installs use the one-shot ``run-sweep`` verb under launchd
+    StartInterval supervision instead (#65). This loop remains for older
+    shims and tests; the #45 re-exec backstop now ALSO runs mid-sweep
+    (between projects — never mid-tick) so a multi-hour sweep can no longer
+    outrun the ceiling check.
+    """
     _configure_logging()
+    _write_status_file("run-forever")
     logger.info("watcher service starting (interval=%ds)", interval)
     max_rss_mb = _max_rss_mb()
+
+    def _check_backstop() -> None:
+        rss_mb = _current_rss_mb()
+        if rss_mb is not None and rss_mb >= max_rss_mb:
+            logger.warning(
+                "watcher RSS %.0fMiB >= ceiling %.0fMiB — re-exec backstop",
+                rss_mb, max_rss_mb,
+            )
+            _reexec_self(interval)
+
     while True:
         targets = projects if projects is not None else discover_enlisted_projects()
         for p in targets:
@@ -592,19 +1029,13 @@ def run_forever(interval: int = DEFAULT_INTERVAL, *,
             except Exception:  # noqa: BLE001
                 # run_once swallows its own errors; this is pure belt-and-braces.
                 logger.exception("run_once escaped for %s", p)
-        # #45 backstop: check CURRENT RSS only BETWEEN sweeps, never mid-tick.
-        # If we've crossed the ceiling, log loudly and re-exec a fresh daemon
-        # (same interval/argv) so accumulated allocator fragmentation / leaked
-        # references can't grow unbounded across a process designed to run
-        # forever. The scoped-read + per-tick cache invalidation above keep the
-        # steady-state floor low; this only fires on pathological growth.
-        rss_mb = _current_rss_mb()
-        if rss_mb is not None and rss_mb >= max_rss_mb:
-            logger.warning(
-                "watcher RSS %.0fMiB >= ceiling %.0fMiB — re-exec backstop",
-                rss_mb, max_rss_mb,
-            )
-            _reexec_self(interval)
+            # #65: the between-sweeps-only check was unreachable on real
+            # machines (869 enlistments × multi-minute ticks = the sweep never
+            # ends), which is how a 2048MiB ceiling coexisted with a 15.8GB
+            # daemon. Checking between projects keeps the "never mid-tick"
+            # safety property with a bound that can actually fire.
+            _check_backstop()
+        _check_backstop()
         time.sleep(max(1, int(interval)))
 
 
@@ -614,11 +1045,16 @@ def _cli_entry(argv: list[str]) -> int:
     """Minimal argv dispatcher used by the installed shim.
 
     Usage:
+        python -m opentraces.watcher.daemon run-sweep [--in-process]
         python -m opentraces.watcher.daemon run-forever [--interval 300]
         python -m opentraces.watcher.daemon tick <project>
     """
     if not argv or argv[0] in ("-h", "--help"):
         print(_cli_entry.__doc__ or "")
+        return 0
+    if argv[0] == "run-sweep":
+        summary = run_sweep(in_process="--in-process" in argv[1:])
+        print(json.dumps(summary))
         return 0
     if argv[0] == "run-forever":
         interval = DEFAULT_INTERVAL

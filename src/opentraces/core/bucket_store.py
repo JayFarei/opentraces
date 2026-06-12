@@ -607,6 +607,13 @@ def _context_events_for_trace_readonly(
     events_iter: list[Any] = []
     if repo is not None:
         try:
+            # Deliberately the FULL read, not the #65 trace-scoped one: this
+            # read-only helper is called in per-trace loops (doctor / bucket
+            # status over ~1K traces), where the process-level read_events
+            # memo amortises ONE full read across every trace. A trace-scoped
+            # read per call defeats the memo and turns the loop into
+            # O(traces × full-log-walk) — observed as a wedged doctor on a
+            # 874K-event repo during #65 verification.
             events_iter = list(read_events(repo, verify=False))
         except Exception:
             events_iter = []
@@ -691,6 +698,7 @@ def project_per_trace_exports(
     project_slug: str,
     trace_id: str,
     record: TraceRecord | None = None,
+    events: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Write the per-trace envelope under ``bucket/traces/v1/<proj>/<trace>/``.
 
@@ -718,15 +726,25 @@ def project_per_trace_exports(
     All gzipped files use ``mtime=0`` (Resolution H — deterministic).
     """
 
-    from .trails import read_events
+    from .trails.event_log import read_events_for_trace
 
     # 1. Filter events by trace_id (sequence order preserved). Prefer the live
     # Git event log; fall back to the bucket's own events mirror when there is
     # no repo, or the live log yields nothing for this trace.
+    #
+    # #65: trace-scoped read — the previous full ``read_events`` here ran per
+    # ingested trace per watcher tick, materialising the whole log (~872K
+    # pydantic events) plus the 2GB snapshot pickle. The raw prefilter
+    # over-includes; _events_for_trace_from_iter post-filters exactly.
+    # Loop callers (bucket repair / manifest rebuild over ~1K traces) MUST
+    # pass ``events`` (one shared full read) instead — a trace-scoped walk
+    # per loop iteration is O(traces × full-log-walk).
     events_iter: list[Any] = []
-    if repo is not None:
+    if events is not None:
+        events_iter = events
+    elif repo is not None:
         try:
-            events_iter = list(read_events(repo, verify=False))
+            events_iter = read_events_for_trace(repo, trace_id)
         except Exception:
             events_iter = []
     trail_events, context_events = _events_for_trace_from_iter(events_iter, trace_id)
@@ -975,6 +993,24 @@ def _iter_opted_in_projects() -> list[tuple[Path, str]]:
     return out
 
 
+def _events_for_export_loop(repo: Path) -> list[Any]:
+    """One full event read shared across a per-trace export loop (#65).
+
+    ``read_events`` memoises per (repo, head), so repair/rebuild loops pay one
+    full read instead of one per trace. Returns [] on any failure — the
+    per-trace export then falls back to its own (mirror) sources.
+    """
+
+    try:
+        from .trails import read_events
+    except Exception:
+        return []
+    try:
+        return list(read_events(repo, verify=False))
+    except Exception:
+        return []
+
+
 def _trace_ids_for_project(repo: Path) -> list[str]:
     """Return distinct ``trace_id`` values present in ``repo``'s event log.
 
@@ -1098,7 +1134,11 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
                 )
 
         # 2. Per-trace envelopes for every trace_id seen in the event log.
+        # #65: ONE shared full read for the whole loop (read_events memoises
+        # per head); the default per-call trace-scoped read would be
+        # O(traces × full-log-walk) here.
         trace_ids = _trace_ids_for_project(project_path)
+        shared_events = _events_for_export_loop(project_path) if trace_ids else []
         for trace_id in trace_ids:
             traces_projected += 1
             handled_pairs.add((project_slug, trace_id))
@@ -1109,6 +1149,7 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
                     project_path,
                     project_slug=project_slug,
                     trace_id=trace_id,
+                    events=shared_events,
                 )
             except Exception as exc:
                 errors.append(
@@ -1757,6 +1798,8 @@ def rebuild_bucket_traces() -> dict[str, Any]:
         trace_ids = _trace_ids_for_project(project_path)
         project_envelopes = 0
         errors: list[dict[str, Any]] = []
+        # #65: ONE shared full read for the whole loop (see repair loop).
+        shared_events = _events_for_export_loop(project_path) if trace_ids else []
         for tid in trace_ids:
             handled_pairs.add((project_slug, tid))
             try:
@@ -1764,6 +1807,7 @@ def rebuild_bucket_traces() -> dict[str, Any]:
                     project_path,
                     project_slug=project_slug,
                     trace_id=tid,
+                    events=shared_events,
                 )
                 project_envelopes += 1
             except Exception as exc:

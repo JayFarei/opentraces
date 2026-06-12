@@ -382,3 +382,30 @@ def test_phase1_gc_safety_for_event_log_blob_edges(tmp_path: Path) -> None:
     subprocess.run(["git", "cat-file", "-e", dangling_blob], cwd=tmp_path, check=True)
     tree_entries = _git(tmp_path, "ls-tree", "-r", "--name-only", EVENT_LOG_REF)
     assert f"objects/blobs/{dangling_blob}" in tree_entries.splitlines()
+
+
+def test_incremental_verify_bails_on_duplicate_suffix_sequence(tmp_path: Path) -> None:
+    """#65 codex P2 sentinel: a suffix event whose sequence is <= the verify
+    watermark (bad restore / external writer rewinding the counter) must make
+    the incremental fast-path bail (return None) so the full verify runs and
+    reports the corruption — never silently bless the head."""
+    _init_repo(tmp_path)
+    _append_simple(tmp_path, "tA", "s1")
+    _append_simple(tmp_path, "tA", "s2")
+    assert event_log_status(tmp_path)["state"] == "ok"
+    wm = event_log._load_verify_watermark(tmp_path)
+    assert wm is not None and int(wm["last_event_sequence"]) == 2
+
+    # Append a suffix batch, then corrupt its ledger shape: rewrite the
+    # watermark to claim a HIGHER sequence so the (valid) suffix events land
+    # at-or-below it — the duplicate/rewind shape from the watermark's view.
+    event_log.invalidate_read_events_cache(tmp_path)
+    _append_simple(tmp_path, "tB", "s3")
+    event_log.invalidate_read_events_cache(tmp_path)
+    head = event_log._ref_head(tmp_path)
+    forged = dict(wm)
+    forged["last_event_sequence"] = 3  # claims seq 3 already verified
+    inc = event_log._try_incremental_verify(tmp_path, head, forged)
+    assert inc is None, (
+        "suffix event at/below the watermark sequence must bail to full verify"
+    )
