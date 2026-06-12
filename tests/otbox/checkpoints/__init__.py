@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -265,22 +266,34 @@ def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
         driver.provision(box)
         box.save()
 
-    if cp.builder is not None:
-        cp.builder(driver, box)
-    if cp.delta is not None:
-        cp.delta(driver, box)
+    try:
+        if cp.builder is not None:
+            cp.builder(driver, box)
+        if cp.delta is not None:
+            cp.delta(driver, box)
 
-    # otbox 2.0 phase 4: a lying checkpoint cannot enter the cache. Every
-    # probe-backed key in the static ``provides`` is re-verified against the
-    # box that was actually built; mismatch raises instead of caching a
-    # world that doesn't contain what it advertises.
-    verify_provides(driver, box, cp)
+        # otbox 2.0 phase 4: a lying checkpoint cannot enter the cache. Every
+        # probe-backed key in the static ``provides`` is re-verified against the
+        # box that was actually built; mismatch raises instead of caching a
+        # world that doesn't contain what it advertises.
+        verify_provides(driver, box, cp)
 
-    box.notes["checkpoint"] = cp.name
-    box.save()
+        box.notes["checkpoint"] = cp.name
+        box.save()
 
-    if cp.cache and not _fault_armed:
-        driver.snapshot(box, snap_name, overwrite=True)
+        if cp.cache and not _fault_armed:
+            driver.snapshot(box, snap_name, overwrite=True)
+    except Exception:
+        # Issue #53: a failed cold build must not leak its partial box.
+        # The recursive chain threads ONE physical box, so the failure
+        # frame tears down the shared root; teardown is idempotent.
+        # Escape hatch for builder debugging: OTBOX_KEEP_FAILED_BOXES=1.
+        if os.environ.get("OTBOX_KEEP_FAILED_BOXES") != "1":
+            try:
+                driver.teardown(box)
+            except Exception:  # noqa: BLE001 - never mask the build error
+                pass
+        raise
 
     return CheckpointResult(
         name=cp.name, box=box, cache_hit=False,
