@@ -372,6 +372,9 @@ def test_sweep_budget_defers_tail_lru_order(tmp_path, monkeypatch):
     monkeypatch.setattr(wd, "_last_tick_mtime",
                         lambda p: mtimes.get(p.name, 0.0))
     monkeypatch.setenv("OT_WATCHER_SWEEP_BUDGET_S", "0.45")
+    # Shrink the real-world defer floor so the sub-second test budget drives
+    # the rotation (codex round 3 added MIN_CHILD_BUDGET_S=30s).
+    monkeypatch.setattr(wd, "MIN_CHILD_BUDGET_S", 0.05)
 
     ticked: list[str] = []
 
@@ -411,3 +414,82 @@ def test_shim_verifies_candidate_supports_sweep_verb():
     probe_idx = shim.index("sweep --help")
     exec_idx = shim.index('exec "$c" setup watcher sweep')
     assert probe_idx < exec_idx
+
+
+# --- #65 codex round 3: child timeout capped + attempt-aware rotation ---------
+
+
+def test_child_timeout_capped_to_remaining_sweep_budget(tmp_path, monkeypatch):
+    """A child started near the sweep deadline must get the REMAINING budget
+    as its timeout, not the full per-child default — and a tail with less
+    than MIN_CHILD_BUDGET_S left is deferred, never started."""
+    projects = [tmp_path / "a", tmp_path / "b", tmp_path / "c"]
+    for p in projects:
+        p.mkdir()
+    monkeypatch.setenv("OT_WATCHER_SWEEP_BUDGET_S", "40")
+    monkeypatch.setenv("OT_WATCHER_TICK_TIMEOUT_S", "900")
+    monkeypatch.setattr(wd, "_last_tick_mtime", lambda p: 0.0)
+
+    seen_timeouts: list[float] = []
+    clock = {"now": 1000.0}
+
+    def _fake_monotonic():
+        return clock["now"]
+
+    def _fake_child(project_cwd, *, budget_mb, timeout_s, _argv=None):
+        seen_timeouts.append(timeout_s)
+        clock["now"] += 35.0  # most of the budget consumed by the first tick
+        return "ok"
+
+    monkeypatch.setattr(wd.time, "monotonic", _fake_monotonic)
+    monkeypatch.setattr(wd, "_tick_in_child", _fake_child)
+    summary = wd.run_sweep(projects=projects)
+    # First child: 40s remaining → capped at 40 (not 900). After it, 5s
+    # remain (< MIN_CHILD_BUDGET_S=30) → b and c deferred, never started.
+    assert len(seen_timeouts) == 1
+    assert seen_timeouts[0] <= 40.0, "child timeout must be capped to remaining budget"
+    assert summary["ok"] == 1
+    assert summary["deferred"] == 2
+
+
+def test_killed_projects_rotate_to_back_not_front(tmp_path, monkeypatch, _isolate_opentraces_global_state):
+    """Codex round 3 sentinel: a project whose tick is rss-killed never
+    stamps state.json — the attempt marker must still advance its rotation
+    key so it goes to the BACK of the next sweep instead of starving the
+    healthy projects behind it."""
+    from opentraces.core import paths as _paths
+
+    bad = tmp_path / "bad"; bad.mkdir()
+    good = tmp_path / "good"; good.mkdir()
+
+    # Enlist both so get_project_state_path resolves inside the isolated home.
+    slug_dirs = {}
+    for name, p in (("bad", bad), ("good", good)):
+        d = _paths.PROJECTS_DIR / f"{name}-0000"
+        d.mkdir(parents=True)
+        (d / "project.json").write_text(json.dumps({"path": str(p)}))
+        slug_dirs[name] = d
+    monkeypatch.setattr(
+        wd, "get_project_state_path",
+        lambda p: slug_dirs[p.name] / "state.json",
+    )
+
+    def _killing_child(project_cwd, *, budget_mb, timeout_s, _argv=None):
+        return "rss_killed" if project_cwd.name == "bad" else "ok"
+
+    monkeypatch.setattr(wd, "_tick_in_child", _killing_child)
+    # Sweep 1: both attempted; bad gets killed, only the marker advances.
+    wd.run_sweep(projects=[bad, good])
+    assert (slug_dirs["bad"] / "last_sweep_attempt").is_file()
+
+    # bad's rotation key must now be RECENT (marker), not 0/never —
+    # so a fresh never-ticked project would sort ahead of it.
+    bad_key = wd._last_tick_mtime(bad)
+    assert bad_key > 0.0, "killed project must carry an attempt timestamp"
+    fresh = tmp_path / "fresh"; fresh.mkdir()
+    d = _paths.PROJECTS_DIR / "fresh-0000"; d.mkdir()
+    (d / "project.json").write_text(json.dumps({"path": str(fresh)}))
+    slug_dirs["fresh"] = d
+    assert wd._last_tick_mtime(fresh) < bad_key, (
+        "never-attempted project must sort ahead of a recently-killed one"
+    )

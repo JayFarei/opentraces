@@ -785,13 +785,56 @@ def _sweep_budget_s() -> float:
     return value if value > 0 else DEFAULT_SWEEP_BUDGET_S
 
 
+# Minimum leftover budget worth starting a child for: below this, defer.
+MIN_CHILD_BUDGET_S = 30.0
+
+
+def _attempt_marker_path(project_cwd: Path) -> Path | None:
+    """Sweep-attempt marker inside the enlistment dir (pruned with it)."""
+    try:
+        return get_project_state_path(project_cwd).parent / "last_sweep_attempt"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _stamp_attempt(project_cwd: Path) -> None:
+    """Record that a sweep ATTEMPTED this project, regardless of verdict.
+
+    #65 (codex round 3): killed/errored ticks never stamp state.json, so
+    ordering by state mtime alone re-sorts the same pathological project to
+    the FRONT of every bounded sweep — starving healthy projects behind it.
+    The marker makes the ordering attempt-aware: one try per rotation.
+    """
+    marker = _attempt_marker_path(project_cwd)
+    if marker is None:
+        return
+    try:
+        marker.touch()
+    except OSError:
+        pass
+
+
 def _last_tick_mtime(project_cwd: Path) -> float:
-    """state.json mtime for fair sweep ordering; 0.0 (= never) on any miss."""
+    """Last tick OR attempt time for fair sweep ordering; 0.0 = never.
+
+    max(state.json mtime, attempt-marker mtime): successful ticks advance
+    state.json, killed/errored ticks advance only the marker — either way
+    the project goes to the BACK of the next sweep's rotation.
+    """
+    newest = 0.0
     try:
         state_path = get_project_state_path(project_cwd)
-        return state_path.stat().st_mtime if state_path.is_file() else 0.0
+        if state_path.is_file():
+            newest = state_path.stat().st_mtime
     except Exception:  # noqa: BLE001
-        return 0.0
+        pass
+    marker = _attempt_marker_path(project_cwd)
+    try:
+        if marker is not None and marker.is_file():
+            newest = max(newest, marker.stat().st_mtime)
+    except OSError:
+        pass
+    return newest
 
 
 def _child_rss_mb(pid: int) -> float | None:
@@ -910,7 +953,12 @@ def run_sweep(
             + prune_summary.get("pruned_missing", 0)
         )
     for index, p in enumerate(targets):
-        if time.monotonic() >= sweep_deadline:
+        # #65 (codex round 3): cap each child to the REMAINING sweep budget —
+        # a child started with seconds left but a 900s per-child timeout
+        # would overrun the sweep budget by minutes and overlap the
+        # supervisor interval. Below MIN_CHILD_BUDGET_S, defer instead.
+        remaining = sweep_deadline - time.monotonic()
+        if remaining < MIN_CHILD_BUDGET_S:
             summary["deferred"] = len(targets) - index
             logger.info(
                 "sweep budget reached: deferring %d projects to the next sweep",
@@ -923,11 +971,14 @@ def run_sweep(
                 verdict = "ok"
             else:
                 verdict = _tick_in_child(
-                    p, budget_mb=budget_mb, timeout_s=timeout_s
+                    p, budget_mb=budget_mb,
+                    timeout_s=min(timeout_s, remaining),
                 )
         except Exception:  # noqa: BLE001
             logger.exception("sweep tick escaped for %s", p)
             verdict = "error:exception"
+        finally:
+            _stamp_attempt(p)
         if verdict == "ok":
             summary["ok"] += 1
         elif verdict == "rss_killed":
