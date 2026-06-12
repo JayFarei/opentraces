@@ -2,33 +2,37 @@ name = "context-tree-fork-fidelity"
 description = """
 Plan 077 substrate-fidelity journey #2 (gold) — `ctx prune --write`
 produces a JSONL whose active-path shape matches the requested
-mid-session resume point byte-for-byte.
+mid-session resume point exactly.
 
 The JSONL pruner (`prune_session_to_node`, R8) is the bridge that
 turns "resume from step N" from a missing feature into a one-shell-
 command `claude --resume <new-session-id>` operation. This journey
 asserts the bridge holds three structural invariants:
 
-  (a) `ctx prune --write --json` returns a fresh `new_session_id`
-      whose source-JSONL trail is materialized at the reported
-      `jsonl_path`.
+  (a) `ctx prune --write --json` returns the verbatim session stem
+      whose JSONL is materialized at the reported `jsonl_path`.
   (b) The new JSONL's record count equals the active-path length
-      from root to the chosen node, asserted via
-      `stdout_json_length_equals` so an off-by-one in the pruner
-      (drop the leaf, drop the root) fails loudly.
+      from root to the chosen node (off-by-one in the pruner —
+      drop the leaf, drop the root — fails loudly).
   (c) The new JSONL's record uuid set equals the active-path uuid
-      slice, asserted two-way via `stdout_json_set_contains` so
-      either direction (missing record OR extra record) fails.
+      slice two-way (`uuid_set` subset + `uuid_set_sorted` exact),
+      so either direction (missing record OR extra record) fails.
 
-Forks from `c-context-tree-substrate` (fixture: linear and multi-turn,
-both stable). Fails today because neither the `opentraces ctx prune`
-verb nor the underlying `prune_session_to_node` Phase 3 module exists
-yet.
+Issue #42 re-spec deltas from the plan-077 draft: `ctx prune`
+REQUIRES `--source-jsonl` (the shipped contract; {transcript_path}
+is re-derived box-relative at expansion time); the dry-run flag in
+the packet is `wrote: false` (not `dry_run: true`); `ctx step` emits
+`opentraces.context_tree.v1`; the active-path payload key is
+`nodes`; the uuid-set checks ride the additive `uuid_set` /
+`uuid_set_sorted` packet keys; the draft's `runtime_state.cwd/model`
+asserts are dropped (not part of the shipped prune packet — the
+resume-side equivalent lives in `ctx resume`).
+
+Forks from `c-context-tree-substrate` (multi-turn primary trace;
+{target_node_id} = the step-3 first-Edit node, active path length 4).
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
-# Plan 077 §"Coverage gate updates" — gold coverage of R8 (JSONL
-# pruner) and R7 (resume packet shape mirrored in pruner output).
+tier = 0
 tier_label = "gold"
 trajectories = ["context-tree-fork"]
 persona = "agent"
@@ -56,12 +60,13 @@ equals = 0
 kind = "stdout_json"
 step = "step-target"
 path = "schema_version"
-equals = "opentraces.context_node.v1"
+equals = "opentraces.context_tree.v1"
 
 [[assertions]]
 kind = "stdout_json"
 step = "step-target"
 path = "node.node_id"
+equals = "{target_node_id}"
 
 [[assertions]]
 kind = "stdout_json"
@@ -70,10 +75,9 @@ path = "node.trace_id"
 equals = "{trace_id}"
 
 # ---------------------------------------------------------------------
-# Step 2 — compute the active-path length to that node. The
-# `--leaf` flag walks root→leaf for the named branch tip; we pass
-# the target node id and assert the returned path's length is
-# strictly ≥1 (root + ≥0 descendants).
+# Step 2 — the active-path length to that node. `--leaf` walks
+# root -> leaf for the named branch tip; the shipped payload key is
+# `nodes`.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -97,24 +101,27 @@ step = "active-path-to-node"
 path = "active_leaf_id"
 equals = "{target_node_id}"
 
-# The fixture's `linear` shape pins exactly N=step_index+1 nodes from
-# root to the Edit step; the runner expands `active_path_length` from
-# the checkpoint audit.
+# The multi-turn fixture pins the active path root -> first Edit; the
+# runner expands {active_path_length} from the live event log.
 [[assertions]]
 kind = "stdout_json_length_equals"
 step = "active-path-to-node"
-path = "active_path"
+path = "nodes"
 equals_var = "active_path_length"
 
 # ---------------------------------------------------------------------
-# Step 3 — dry-run prune. Default output advertises the new session
-# id + the count of records that would be written. Dry run NEVER
-# touches disk; subsequent `--write` is the single source of truth.
+# Step 3 — dry-run prune (`wrote: false`). Reports the same record
+# count the eventual write produces; never touches disk.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "prune-dry-run"
-argv = ["ctx", "prune", "{target_node_id}", "--to-session", "fork-fidelity", "--json"]
+argv = [
+    "ctx", "prune", "{target_node_id}",
+    "--source-jsonl", "{transcript_path}",
+    "--to-session", "fork-fidelity",
+    "--json",
+]
 
 [[assertions]]
 kind = "returncode"
@@ -130,8 +137,8 @@ equals = "opentraces.context_resume.v1"
 [[assertions]]
 kind = "stdout_json"
 step = "prune-dry-run"
-path = "dry_run"
-equals = true
+path = "wrote"
+equals = false
 
 # Length contract (b) — the dry-run reports the same record count
 # the eventual write would produce.
@@ -142,15 +149,14 @@ path = "record_count"
 equals_var = "active_path_length"
 
 # ---------------------------------------------------------------------
-# Step 4 — write the new pruned JSONL. The CLI returns the new
-# session id + on-disk jsonl_path; both must be present and
-# coherent.
+# Step 4 — write the new pruned JSONL.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "prune-write"
 argv = [
     "ctx", "prune", "{target_node_id}",
+    "--source-jsonl", "{transcript_path}",
     "--to-session", "fork-fidelity",
     "--write", "--json",
 ]
@@ -166,15 +172,24 @@ step = "prune-write"
 path = "schema_version"
 equals = "opentraces.context_resume.v1"
 
+# Verbatim stem contract (issue #42 product fix).
 [[assertions]]
 kind = "stdout_json"
 step = "prune-write"
 path = "new_session_id"
+equals = "fork-fidelity"
 
 [[assertions]]
 kind = "stdout_json"
 step = "prune-write"
+path = "wrote"
+equals = true
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "prune-write"
 path = "jsonl_path"
+value = "fork-fidelity.jsonl"
 
 # Contract (b) — new JSONL record count equals active-path length to
 # the requested node.
@@ -192,33 +207,24 @@ step = "prune-write"
 path = "uuid_set"
 equals_var = "active_path_uuid_set"
 
-# Contract (c) reverse direction — the active-path slice contains
-# every uuid in the new JSONL (no extras leaked in from orphan
-# branches or post-node records).
+# Contract (c) reverse direction — sorted exact equality (no extras
+# leaked in from orphan branches or post-node records).
 [[assertions]]
 kind = "stdout_json_array_equals"
 step = "prune-write"
 path = "uuid_set_sorted"
 equals_var = "active_path_uuid_set_sorted"
 
-# The pruned JSONL's runtime_state layer carries cwd + model probed
-# from the source node; downstream `claude --resume` lands at the
-# correct cwd because of this.
-[[assertions]]
-kind = "stdout_json"
-step = "prune-write"
-path = "runtime_state.cwd"
-equals_var = "captured_cwd"
+# ---------------------------------------------------------------------
+# Step 5 — the on-disk JSONL exists where the CLI reported (next to
+# the source transcript).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "pruned-jsonl-on-disk"
+argv = ["bash", "-c", "test -f \"$(dirname {transcript_path})/fork-fidelity.jsonl\""]
 
 [[assertions]]
-kind = "stdout_json"
-step = "prune-write"
-path = "runtime_state.model"
-equals_var = "captured_model"
-
-# ---------------------------------------------------------------------
-# Step 5 — the on-disk JSONL exists where the CLI reported.
-# ---------------------------------------------------------------------
-[[assertions]]
-kind = "path_exists"
-path = "{home}/.claude/projects"
+kind = "returncode"
+step = "pruned-jsonl-on-disk"
+equals = 0
