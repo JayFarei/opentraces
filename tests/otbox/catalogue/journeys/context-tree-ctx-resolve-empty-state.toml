@@ -26,7 +26,7 @@ guaranteed-unknown) and asserts:
 Fails today because `ctx resolve` doesn't exist (rc≠0).
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier = 0
 tier_label = "silver"
 trajectories = ["context-tree-cli"]
 persona = "agent"

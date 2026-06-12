@@ -9,9 +9,7 @@
 [[entries]]
 journeys = [
   "context-tree-capture-fidelity",
-  "context-tree-ctx-output-parity",
   "context-tree-ctx-prune-no-clobber",
-  "context-tree-ctx-resolve-empty-state",
   "context-tree-demo-acceptance",
   "context-tree-determinism",
   "context-tree-fork-fidelity",
