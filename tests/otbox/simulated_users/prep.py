@@ -75,7 +75,14 @@ def _build_env_prefix(box: Box, env_extra: dict[str, str] | None) -> list[str]:
     overrides = {
         k: v for k, v in full_env.items() if os.environ.get(k) != v
     }
-    return ["env"] + [f"{k}={v}" for k, v in sorted(overrides.items())]
+    # Keys isolated_env REMOVED (host agent vars, HF credentials) must be
+    # explicitly unset or the spawned agent inherits them from the ambient
+    # environment — the #49 capture-zeroing leak (2026-06-12).
+    removed = [k for k in os.environ if k not in full_env]
+    argv = ["env"]
+    for k in sorted(removed):
+        argv += ["-u", k]
+    return argv + [f"{k}={v}" for k, v in sorted(overrides.items())]
 
 
 def _copy_initial_state(initial_state_dir: Path, project: Path) -> None:

@@ -256,6 +256,17 @@ def isolated_env(
     box-isolated — only the remote backend goes live.
     """
     env = os.environ.copy()
+    # Host-session agent vars must never leak into a box. A claude TUI that
+    # inherits CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_CHILD_SESSION treats
+    # itself as a child session and SKIPS conversation persistence to
+    # ~/.claude/projects (only ai-title + hook events land) — which silently
+    # zeroed trace capture when the #49 regen ran from inside a Claude Code
+    # session (2026-06-12). Scrub the whole family; explicit ``extra`` keys
+    # are applied after this and win (e.g. CLAUDE_CODE_ENABLE_TELEMETRY in
+    # the OTel checkpoints).
+    for key in list(env):
+        if key == "CLAUDECODE" or key.startswith(("CLAUDE_", "CODEX_")):
+            env.pop(key)
     env["HOME"] = str(box.home)
     if live_hf:
         # Live lane: do NOT strip credentials or set the fake-remote seams.
