@@ -11,6 +11,7 @@ the fixture locally.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -31,6 +32,40 @@ if str(_SCHEMA_SRC) not in sys.path:
 # this fixture with a no-op.
 from opentraces.core import paths as _paths  # noqa: E402
 from opentraces.core import config as _config  # noqa: E402
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _guard_real_home_enlistments():
+    """Fail the run if tests leak enlistments into the REAL ~/.opentraces.
+
+    #23/#65 guard: leaked test-fixture enlistments (``ot-h-*``, ``ot-otbox-*``)
+    multiplied the live watcher's sweep surface to 869 projects. Per-test HOME
+    isolation below covers in-process code, but subprocess paths that rebuild
+    their own environment can still escape — this session-level belt catches
+    any escape loudly instead of letting it accumulate on dev machines.
+    """
+    real_home = Path(os.environ.get("HOME") or Path.home())
+    real_projects = real_home / ".opentraces" / "projects"
+
+    def _names() -> set[str]:
+        if not real_projects.is_dir():
+            return set()
+        try:
+            return {entry.name for entry in real_projects.iterdir()}
+        except OSError:
+            return set()
+
+    before = _names()
+    yield
+    leaked = _names() - before
+    if leaked:
+        pytest.fail(
+            "tests leaked enlistments into the real ~/.opentraces/projects/: "
+            f"{sorted(leaked)[:10]}{' …' if len(leaked) > 10 else ''} — "
+            "every test must run against an isolated HOME "
+            "(see _isolate_opentraces_global_state)",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

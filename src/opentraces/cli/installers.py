@@ -2458,6 +2458,36 @@ def setup_watcher_restart() -> None:
     click.echo("restarted.")
 
 
+@setup_watcher_group.command("sweep")
+@click.option("--in-process", "in_process", is_flag=True,
+              help="Tick projects in this process instead of budgeted "
+                   "child processes (tests / debugging).")
+@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON.")
+def setup_watcher_sweep(in_process: bool, json_out: bool) -> None:
+    """Run one bounded sweep over all enlisted projects, then exit.
+
+    The production watcher entrypoint (#65): the launchd/systemd unit
+    re-runs the shim on its interval, the shim execs this verb, and each
+    project ticks in a child process with an RSS + wall-clock budget. A
+    process that exits after each sweep cannot accumulate memory across
+    sweeps; a pathological project is killed at its budget and the sweep
+    continues.
+    """
+    from ..watcher import daemon as _daemon
+
+    summary = _daemon.run_sweep(in_process=in_process)
+    if json_out:
+        click.echo(_setup_watcher_json.dumps(summary))
+        return
+    click.echo(
+        f"sweep: {summary['projects']} projects, {summary['ok']} ok, "
+        f"{summary['rss_killed']} rss-killed, "
+        f"{summary['timeout_killed']} timeout-killed, "
+        f"{summary['errors']} errors"
+        + (f", {summary['pruned']} enlistments pruned" if "pruned" in summary else "")
+    )
+
+
 @setup_watcher_group.command("tick")
 @click.option("--project", "project_dir", type=click.Path(
                   exists=True, file_okay=False, dir_okay=True, path_type=Path),

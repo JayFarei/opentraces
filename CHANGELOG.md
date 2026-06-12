@@ -7,6 +7,55 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Watcher daemon unbounded RSS, root-caused and bounded by construction
+  (#65, third recurrence of #23/#45).** Profiling one tick on a real 872K-event
+  log named four full-log materialisation paths, each now incremental or
+  streaming: the watcher reconciler persists a bounded projection at
+  `<git-dir>/opentraces/reconciler_projection.json` and reads only the appended
+  batch suffix per run (cold rebuilds stream through a retention sink; legacy
+  behavior via `OT_RECONCILER_FULL_READ=1`); the events-mirror sync and the
+  incremental event-log verify read the suffix instead of re-materialising
+  history; the per-trace bucket export uses a trace-scoped read; the watcher's
+  Context Tree projection is watermark-gated and fed from a scoped
+  context-type read. Measured on the #65 repro: an active tick dropped from
+  315s / 12.1GB peak RSS to 64s / 2.3GB, quiet ticks hold flat at ~280MB, and
+  the multi-GB `event_log_snapshot.pkl` is no longer rebuilt per tick.
+- **Maturation backlog amortised.** `mature_trails` accepts a wall-clock
+  `deadline` (watcher default 120s/tick via `OT_MATURATION_TICK_BUDGET_S`);
+  truncated sweeps skip the watermark stamp and resume next tick instead of
+  doing a 710K-search / 14GB cold drain in one tick. The batched scan also
+  streams anchor/search events down to dedup keys instead of retaining the
+  plan-090 summary events (GBs on drained-backlog repos).
+- **Leaked test enlistments pruned (#23 finished).** `run_sweep` quarantines
+  tmp-rooted/stale and missing-target/stale enlistments to
+  `~/.opentraces/pruned_projects/` (deleted after 30 days; `OT_WATCHER_PRUNE=0`
+  to disable), and the pytest session now FAILS if any test leaks an
+  enlistment into the real `~/.opentraces/projects/`.
+
+### Added
+
+- **One-shot `opentraces setup watcher sweep` + budgeted child ticks (#65).**
+  The installed watcher shim now execs a one-shot sweep under launchd/systemd
+  interval supervision, so a process that exits after each sweep cannot
+  accumulate memory across sweeps. Each project ticks in a child process with
+  an RSS budget (`OT_WATCHER_TICK_MAX_RSS_MB`, default 4096) and wall budget
+  (`OT_WATCHER_TICK_TIMEOUT_S`, default 900); a pathological project is killed
+  at its budget and the sweep continues. The legacy `run-forever` loop remains
+  for older shims, with its #45 RSS backstop now checked between projects
+  (mid-sweep) so it can actually fire.
+- **Watcher provenance (#65).** The shim resolves the `opentraces` CLI at RUN
+  time (probing brew/local bins) instead of freezing `sys.executable` at
+  install time, since the frozen-interpreter shim broke silently when the
+  install moved (pipx to brew). The daemon self-declares
+  `~/.opentraces/watcher.status.json` `{version, executable, pid, verb}` on
+  start, and `opentraces doctor` cross-checks shim/daemon/CLI and reports
+  drift (`shim-interpreter-missing`, `shim-legacy-verb`,
+  `daemon-version-drift`, `daemon-executable-missing`) under
+  `watcher.provenance`. Re-run `opentraces setup watcher install` to adopt
+  the new shim.
+
 ### Changed
 
 - **Trace Intelligence `--waste` envelope flattened + bumped to

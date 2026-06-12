@@ -138,11 +138,34 @@ def render_systemd_timer(interval: int = 300) -> str:
 # --- shim ------------------------------------------------------------------
 
 def _render_shim() -> str:
+    """Render the worker shim with RUN-time CLI resolution (#65).
+
+    The previous shim froze ``sys.executable`` at install time, which broke
+    silently when the install moved (pipx → brew left the shim pointing at a
+    deleted interpreter while a dev-venv daemon ran unfixed code). The shim
+    now resolves the ``opentraces`` CLI when it RUNS — probing well-known bin
+    dirs explicitly because launchd/systemd run with a minimal PATH — and
+    only falls back to the interpreter recorded at install time.
+
+    The verb is the one-shot ``run-sweep``: under StartInterval/timer
+    supervision a process that exits after each sweep cannot accumulate
+    memory across sweeps, so the supervisor IS the service loop.
+    """
     py = sys.executable or "python3"
     return (
         "#!/bin/sh\n"
-        "# opentraces watcher shim — invokes the Python daemon service loop.\n"
-        f'exec "{py}" -m opentraces.watcher.daemon run-forever "$@"\n'
+        "# opentraces watcher shim — one-shot sweep under launchd/systemd\n"
+        "# supervision. Resolves the CLI at RUN time (#65): an interpreter\n"
+        "# frozen at install time breaks silently when the install moves.\n"
+        "for c in /opt/homebrew/bin/opentraces /usr/local/bin/opentraces \\\n"
+        '         "$HOME/.local/bin/opentraces" '
+        '"$(command -v opentraces 2>/dev/null)"; do\n'
+        '  if [ -n "$c" ] && [ -x "$c" ]; then\n'
+        '    exec "$c" setup watcher sweep "$@"\n'
+        "  fi\n"
+        "done\n"
+        "# Fallback: interpreter recorded at install time.\n"
+        f'exec "{py}" -m opentraces.watcher.daemon run-sweep "$@"\n'
     )
 
 
