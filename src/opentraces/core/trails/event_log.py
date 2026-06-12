@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from opentraces.core._time import utc_now_str
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .models import (
     GitObjectID,
@@ -479,6 +479,66 @@ def _read_blobs_batch(cwd: Path, entries: list[tuple[str, str]]) -> list[bytes]:
     return blobs
 
 
+def _iter_blobs_batch(cwd: Path, entries: list[tuple[str, str]]):
+    """Stream blobs for ``entries`` via ONE ``git cat-file --batch`` process,
+    yielding each blob's bytes as it arrives (#65).
+
+    Unlike ``_read_blobs_batch`` (which slurps a whole chunk's stdout — up to
+    hundreds of MB transient on a mature log), peak memory here is one blob.
+    A feeder thread writes the oid list so a large request can't deadlock on
+    pipe back-pressure.
+    """
+    if not entries:
+        return
+    import threading
+
+    proc = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+
+    def _feed() -> None:
+        try:
+            assert proc.stdin is not None
+            for _path, oid in entries:
+                proc.stdin.write(f"{oid}\n".encode())
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    feeder = threading.Thread(target=_feed, daemon=True)
+    feeder.start()
+    out = proc.stdout
+    assert out is not None
+    try:
+        for _path, expected_oid in entries:
+            header = out.readline()
+            if not header:
+                raise RuntimeError("git cat-file --batch returned truncated stream")
+            parts = header.split()
+            if len(parts) != 3:
+                raise RuntimeError("git cat-file --batch returned malformed header")
+            oid, object_type, raw_size = parts
+            if oid.decode() != expected_oid or object_type != b"blob":
+                raise RuntimeError("git cat-file --batch returned unexpected object")
+            size = int(raw_size)
+            blob = out.read(size)
+            if blob is None or len(blob) != size:
+                raise RuntimeError("git cat-file --batch returned truncated blob")
+            out.read(1)  # trailing newline
+            yield blob
+    finally:
+        try:
+            out.close()
+        except OSError:
+            pass
+        proc.kill()
+        proc.wait()
+        feeder.join(timeout=5)
+
+
 def _read_events_in_range(cwd: Path, since: str | None, head: str) -> list[TrailEvent]:
     """Parse events from commits in ``since..head`` (or all of ``head``).
 
@@ -498,6 +558,37 @@ def _read_events_from_head(cwd: Path, head: str) -> list[TrailEvent]:
     events = _read_events_in_range(cwd, None, head)
     events.sort(key=lambda event: event.event_sequence)
     return events
+
+
+def read_events_since(
+    cwd: Path, since_head: str
+) -> tuple[str | None, list[TrailEvent] | None]:
+    """Incremental read: events appended after batch commit ``since_head``.
+
+    Returns ``(current_head, events)``. ``events`` is ``[]`` when the log
+    hasn't moved, the sorted suffix when ``since_head`` is an ancestor of the
+    current head, and ``None`` when an incremental read isn't possible
+    (``since_head`` unknown / history rewritten / no log) — callers fall back
+    to a full read and rebuild their watermark.
+
+    This is the #65 primitive: the log is append-only with non-cumulative
+    batch trees, so ``since..head`` is exactly the appended suffix and a
+    consumer holding a watermark never re-materialises history.
+    """
+    cwd = cwd.resolve()
+    head = _ref_head(cwd)
+    if head is None:
+        return None, None
+    if head == since_head:
+        return head, []
+    ancestor = _git(
+        cwd, ["merge-base", "--is-ancestor", since_head, head], check=False
+    )
+    if ancestor.returncode != 0:
+        return head, None
+    events = _read_events_in_range(cwd, since_head, head)
+    events.sort(key=lambda event: event.event_sequence)
+    return head, events
 
 
 def _read_head_batch_tail(cwd: Path, head: str) -> tuple[int, str] | None:
@@ -520,6 +611,52 @@ def _read_head_batch_tail(cwd: Path, head: str) -> tuple[int, str] | None:
     return event.event_sequence, event.event_id
 
 
+def _list_event_blob_entries(cwd: Path, head: str) -> list[tuple[str, str]]:
+    """One ``rev-list --objects`` pass: every event blob ``(path, oid)``
+    reachable from ``head``, sorted by zero-padded name == event_sequence.
+
+    ``rev-list --objects`` emits "<oid> <path>" for blobs/trees and "<oid>"
+    for commits.
+    """
+    entries: list[tuple[str, str]] = []
+    for line in _git(cwd, ["rev-list", "--objects", head]).stdout.splitlines():
+        oid, sep, path = line.partition(" ")
+        if not sep:
+            continue
+        if path.startswith("events/") and path.endswith(".json"):
+            entries.append((path, oid))
+    entries.sort(key=lambda entry: entry[0])
+    return entries
+
+
+def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
+    """Read every event whose body references ``trace_id`` — bounded by ONE
+    trace's footprint, never the whole log (#65).
+
+    The raw-bytes prefilter (``trace_id`` must appear in the blob) can only
+    over-include; callers that need exact ``trace_id`` matching post-filter
+    (``_events_for_trace_from_iter`` does). This replaced the full
+    ``read_events`` walk in the per-trace bucket export, which materialised
+    ~872K pydantic events + a 2GB snapshot pickle per ingested trace per tick
+    on the #65 repo.
+    """
+    cwd = cwd.resolve()
+    head = _ref_head(cwd)
+    if head is None or not trace_id:
+        return []
+    entries = _list_event_blob_entries(cwd, head)
+    if not entries:
+        return []
+    token = trace_id.encode()
+    matched: list[TrailEvent] = []
+    for raw in _iter_blobs_batch(cwd, entries):
+        if token not in raw:
+            continue
+        matched.append(TrailEvent.model_validate_json(raw))
+    matched.sort(key=lambda event: event.event_sequence)
+    return matched
+
+
 def read_events_scoped(
     cwd: Path,
     *,
@@ -527,6 +664,7 @@ def read_events_scoped(
     commit_filter: dict[str, str] | None = None,
     commit_sha: str | None = None,
     commit_shas: set[str] | None = None,
+    sink: "Callable[[TrailEvent], None] | None" = None,
 ) -> list[TrailEvent]:
     """Read only events of ``event_types``, streaming per-commit so the whole
     history is never materialised at once (Bug B hot-path reader).
@@ -563,18 +701,9 @@ def read_events_scoped(
     head = _ref_head(cwd)
     if head is None:
         return []
-    # One pass: every (path, oid) reachable from head. `rev-list --objects`
-    # emits "<oid> <path>" for blobs/trees and "<oid>" for commits.
-    entries: list[tuple[str, str]] = []
-    for line in _git(cwd, ["rev-list", "--objects", head]).stdout.splitlines():
-        oid, sep, path = line.partition(" ")
-        if not sep:
-            continue
-        if path.startswith("events/") and path.endswith(".json"):
-            entries.append((path, oid))
+    entries = _list_event_blob_entries(cwd, head)
     if not entries:
         return []
-    entries.sort(key=lambda entry: entry[0])  # zero-padded name == event_sequence
 
     # Cheap raw-bytes prefilter so only wanted blobs are JSON-parsed. Types that
     # carry a commit_filter (anchor/search events) are additionally gated on the
@@ -611,20 +740,30 @@ def read_events_scoped(
             return False
         return any(token in raw for token in filtered_tokens)
 
+    # #65: with a ``sink``, matching events are handed over one at a time (in
+    # event_sequence order — ``entries`` is sorted by the zero-padded name)
+    # and never retained here, so a consumer that keeps only a bounded
+    # projection (the reconciler's cold rebuild) has bounded peak RSS no
+    # matter how large the log is. Blobs stream one at a time through
+    # ``_iter_blobs_batch`` — the previous 8192-entry chunking slurped up to
+    # ~280MB of raw blob bytes per chunk on a mature log.
     matched: list[TrailEvent] = []
-    chunk = 8192
-    for start in range(0, len(entries), chunk):
-        for raw in _read_blobs_batch(cwd, entries[start:start + chunk]):
-            if not _wanted(raw):
+    for raw in _iter_blobs_batch(cwd, entries):
+        if not _wanted(raw):
+            continue
+        event = TrailEvent.model_validate_json(raw)
+        if event.event_type not in event_types:
+            continue
+        if event.event_type in commit_filter:
+            ref = (event.payload.get(commit_filter[event.event_type]) or {}).get("hex")
+            if ref not in wanted_shas:
                 continue
-            event = TrailEvent.model_validate_json(raw)
-            if event.event_type not in event_types:
-                continue
-            if event.event_type in commit_filter:
-                ref = (event.payload.get(commit_filter[event.event_type]) or {}).get("hex")
-                if ref not in wanted_shas:
-                    continue
+        if sink is not None:
+            sink(event)
+        else:
             matched.append(event)
+    if sink is not None:
+        return []
     matched.sort(key=lambda event: event.event_sequence)
     return matched
 
@@ -966,19 +1105,31 @@ def _try_incremental_verify(
     linear, _parent_errors, batch_count = _parents_are_linear(cwd)
     if not linear:
         return None
+    # #65: read ONLY the appended suffix. The previous "incremental" verify
+    # called the full ``read_events`` here just to slice off the suffix —
+    # which materialised the whole log (~874K pydantic events) and rebuilt
+    # the multi-GB snapshot pickle on every changed watcher tick. The log is
+    # gap-free and monotone, so suffix contiguity from the watermark sequence
+    # proves the trusted prefix is intact without re-reading it.
     try:
-        events = read_events(cwd, verify=False)
+        _suffix_head, new = read_events_since(cwd, str(wm["head"]))
     except Exception:  # noqa: BLE001
         return None
-    wm_seq = int(wm["last_event_sequence"])
-    new = sorted(
-        (e for e in events if e.event_sequence > wm_seq),
-        key=lambda e: e.event_sequence,
-    )
-    # Contiguity sanity: the count of trusted (≤ wm_seq) events must be exactly
-    # wm_seq. Any mismatch means the prefix changed — bail to a full verify.
-    if len(events) != wm_seq + len(new):
+    if new is None:
         return None
+    wm_seq = int(wm["last_event_sequence"])
+    # #65 (codex P2): do NOT filter the suffix down to events above the
+    # watermark — a suffix event with sequence <= wm_seq (bad restore,
+    # external writer rewinding the counter) is itself the corruption signal,
+    # and silently dropping it before the contiguity walk would let
+    # verify_event_log() bless the new head. Any such event bails to the full
+    # verify, which reports the real errors.
+    new = sorted(new, key=lambda e: e.event_sequence)
+    expected = wm_seq + 1
+    for event in new:
+        if event.event_sequence != expected:
+            return None  # duplicate/gap/overlap — bail to a full verify
+        expected += 1
     content_ok, chain_ok, errs, last_eid = _check_event_chain(
         new,
         start_sequence=wm_seq + 1,
@@ -988,12 +1139,13 @@ def _try_incremental_verify(
         return None
     last_seq = new[-1].event_sequence if new else wm_seq
     last_id = last_eid if new else wm.get("last_event_id")
+    event_count = wm_seq + len(new)
     result = {
         "ref": EVENT_LOG_REF,
         "exists": True,
         "head": head,
         "batch_count": batch_count,
-        "event_count": len(events),
+        "event_count": event_count,
         "batch_parents_linear": True,
         "content_hashes_valid": True,
         "event_chain_valid": True,
@@ -1004,7 +1156,7 @@ def _try_incremental_verify(
         "head": head,
         "last_event_sequence": last_seq,
         "last_event_id": last_id,
-        "event_count": len(events),
+        "event_count": event_count,
         "batch_count": batch_count,
     })
     return result

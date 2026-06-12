@@ -288,6 +288,17 @@
    "status"
   ]
  },
+ "setup watcher sweep": {
+  "schema_version": null,
+  "top_level_keys": [
+   "errors",
+   "ok",
+   "projects",
+   "pruned",
+   "rss_killed",
+   "timeout_killed"
+  ]
+ },
  "setup watcher uninstall": {
   "schema_version": null,
   "top_level_keys": [

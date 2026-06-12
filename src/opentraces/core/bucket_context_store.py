@@ -152,6 +152,8 @@ def project_context_tree_to_bucket(
     *,
     project_slug: str,
     trace_id: str | None = None,
+    events: list | None = None,
+    seq_suffix: list | None = None,
 ) -> dict[str, Any]:
     """Project Context Tree events from the canonical event log into the bucket.
 
@@ -161,6 +163,19 @@ def project_context_tree_to_bucket(
     head.json LAST so a partial run never points at missing blobs.
 
     See plan 079 §"Writer" for the full contract.
+
+    #65 bounded path: when ``events`` is supplied (a SCOPED full-history read
+    of the four ``context_*`` types — small by construction), it feeds both
+    the projection build and the reconciled-payload scan, and the two full
+    ``read_events`` walks this function previously performed per changed
+    watcher tick (~872K pydantic events + the 2GB snapshot pickle, observed
+    live) never happen. Per-trace ``events_processed_through_sequence`` is
+    then maintained INCREMENTALLY: prior head value ⊔ max sequence seen in
+    ``events`` and ``seq_suffix`` (the all-type suffix since the daemon's
+    projection watermark). That value may transiently under-report trail-only
+    activity for traces whose context didn't change — the bucket
+    repair/status verbs keep the exact full-fidelity accounting. Legacy
+    behavior (``events=None``) is unchanged.
     """
 
     from .context_tree.contract import CONTEXT_TREE_RECONCILED
@@ -169,7 +184,9 @@ def project_context_tree_to_bucket(
 
     # When a single trace is targeted (the per-session ingest path), build
     # only that trace's projection instead of re-walking the whole history.
-    projection = build_context_tree_projection(repo, trace_id=trace_id)
+    projection = build_context_tree_projection(
+        repo, trace_id=trace_id, events=events
+    )
     status = event_log_status(repo)
     event_log_head = status.get("head")
     blob_scope = _context_blob_scope()
@@ -180,20 +197,43 @@ def project_context_tree_to_bucket(
         target_trace_ids = sorted(projection.nodes_by_trace.keys())
 
     # Precompute reconciled payload + max event sequence per trace.
-    # NOTE: ``build_context_tree_projection`` above already called
-    # ``read_events(repo)`` with the default ``verify=True``. We share that
-    # cache key here to avoid a second full event-log walk per projection.
+    # NOTE: when ``events`` is None, ``build_context_tree_projection`` above
+    # already called ``read_events(repo)`` with the default ``verify=True``.
+    # We share that cache key here to avoid a second full event-log walk per
+    # projection.
     reconciled_by_trace: dict[str, dict[str, Any]] = {}
     max_seq_by_trace: dict[str, int] = {tid: 0 for tid in target_trace_ids}
     target_set = set(target_trace_ids)
-    for event in read_events(repo):
-        ev_trace_id = event.trace_id or (event.payload.get("trace_id") if isinstance(event.payload, dict) else None)
-        if not ev_trace_id or ev_trace_id not in target_set:
-            continue
-        if event.event_sequence > max_seq_by_trace.get(ev_trace_id, 0):
-            max_seq_by_trace[ev_trace_id] = event.event_sequence
-        if event.event_type == CONTEXT_TREE_RECONCILED:
-            reconciled_by_trace[ev_trace_id] = dict(event.payload or {})
+    if events is not None:
+        for tid in target_trace_ids:
+            prior = read_context_tree_head(project_slug, tid) or {}
+            max_seq_by_trace[tid] = int(
+                prior.get("events_processed_through_sequence") or 0
+            )
+        scan_sources: list = [events]
+        if seq_suffix:
+            scan_sources.append(seq_suffix)
+        for source in scan_sources:
+            for event in source:
+                ev_trace_id = event.trace_id or (
+                    event.payload.get("trace_id")
+                    if isinstance(event.payload, dict) else None
+                )
+                if not ev_trace_id or ev_trace_id not in target_set:
+                    continue
+                if event.event_sequence > max_seq_by_trace.get(ev_trace_id, 0):
+                    max_seq_by_trace[ev_trace_id] = event.event_sequence
+                if event.event_type == CONTEXT_TREE_RECONCILED:
+                    reconciled_by_trace[ev_trace_id] = dict(event.payload or {})
+    else:
+        for event in read_events(repo):
+            ev_trace_id = event.trace_id or (event.payload.get("trace_id") if isinstance(event.payload, dict) else None)
+            if not ev_trace_id or ev_trace_id not in target_set:
+                continue
+            if event.event_sequence > max_seq_by_trace.get(ev_trace_id, 0):
+                max_seq_by_trace[ev_trace_id] = event.event_sequence
+            if event.event_type == CONTEXT_TREE_RECONCILED:
+                reconciled_by_trace[ev_trace_id] = dict(event.payload or {})
 
     blobs_written = 0
     blobs_unchanged = 0
