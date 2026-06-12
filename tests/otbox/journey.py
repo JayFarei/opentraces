@@ -1617,6 +1617,34 @@ def render_transcript(
     ot_version = versions.get("opentraces", "unknown")
     schema_version = versions.get("schema", "unknown")
 
+    # Machine-path hygiene for the COMMITTED artifact: any absolute
+    # path into an otbox box root (current or origin box) renders as
+    # the stable `<box>` token, so regenerating the transcript on a
+    # different machine/box produces reviewable diffs instead of
+    # whole-file path churn.
+    import re as _re
+
+    _box_path_re = _re.compile(r"\S*?/\.otbox/boxes/otb_[0-9a-fA-F]+")
+    # Claude transcript dirs encode the project ABSOLUTE path with
+    # dashes (`-Users-...--otbox-boxes-otb-<id>-project`); normalize
+    # those too so the artifact carries no machine identity.
+    _box_encoded_re = _re.compile(r"-[A-Za-z0-9-]*-otbox-boxes-otb-[0-9a-fA-F]+-project")
+
+    def _redact(text: str) -> str:
+        text = _box_path_re.sub("<box>", text or "")
+        return _box_encoded_re.sub("<box-encoded-project>", text)
+
+    def _display_argv(step: "StepResult") -> str:
+        # cli steps render as the canonical user-facing invocation
+        # (`opentraces <argv>`), NOT the machine-local resolved argv
+        # (venv shims / OT_CLI_BIN wrappers would leak absolute paths
+        # into the committed artifact). Shell steps keep their argv.
+        if step.type == "cli" and isinstance(step.detail, dict) and step.detail.get("argv"):
+            return _redact("opentraces " + " ".join(str(a) for a in step.detail["argv"]))
+        if step.result and step.result.argv:
+            return _redact(" ".join(step.result.argv))
+        return step.step_id
+
     cli_steps = [s for s in result.steps if s.result is not None]
     n_commands = len(cli_steps)
     m_assertions = len(result.assertions)
@@ -1636,10 +1664,10 @@ def render_transcript(
     lines.append("")
 
     for human_index, step in enumerate(cli_steps, start=1):
-        argv = " ".join(step.result.argv) if step.result and step.result.argv else step.step_id
+        argv = _display_argv(step)
         lines.append(f"## {human_index}. {argv}")
         lines.append("")
-        body = _truncate_stdout(step.result.stdout if step.result else "")
+        body = _truncate_stdout(_redact(step.result.stdout if step.result else ""))
         # Fence the captured stdout so markdown renders it verbatim.
         lines.append("```")
         lines.append(body.rstrip("\n"))
@@ -1660,7 +1688,7 @@ def render_transcript(
     lines.append("| step | id | command | assertions | result |")
     lines.append("|------|----|---------|------------|--------|")
     for human_index, step in enumerate(cli_steps, start=1):
-        argv = " ".join(step.result.argv) if step.result and step.result.argv else step.step_id
+        argv = _display_argv(step)
         # Escape pipes in the command cell so the markdown table stays valid.
         argv_cell = argv.replace("|", "\\|")
         n_asserts = len(groups.get(step.step_id, []))

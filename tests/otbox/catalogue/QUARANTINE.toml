@@ -8,7 +8,6 @@
 
 [[entries]]
 journeys = [
-  "context-tree-demo-acceptance",
   "context-tree-temporal-anchor-precision",
 ]
 rules = ["unregistered-checkpoint", "unknown-precondition"]
