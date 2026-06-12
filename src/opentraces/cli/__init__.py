@@ -555,7 +555,7 @@ def _capture_sessions_into_project(
     """
     from ..core.config import (
         load_project_config, get_project_traces_dir, get_project_state_path,
-        project_is_opted_in,
+        project_is_opted_in, is_project_excluded,
     )
     from ..capture import get_parser
     from ..core.pipeline import process_trace
@@ -568,6 +568,15 @@ def _capture_sessions_into_project(
 
     if cfg is None:
         cfg = load_config()
+
+    # Per-project exclusion gate, mirroring the ingest choke-point
+    # contract (core/ingest.py::ingest_one_session): an excluded project
+    # never stages a trace and its marker is never touched —
+    # `is_project_excluded` reads the marker raw, no migration write.
+    # `project_is_opted_in` alone is just marker-exists, which an
+    # excluded-but-enrolled marker passes (issue #60 item 3).
+    if is_project_excluded(cfg, str(Path(project_dir).resolve())):
+        return 0, 0
 
     proj_config = load_project_config(project_dir)
     review_policy = normalize_review_policy(proj_config.get("review_policy"))
