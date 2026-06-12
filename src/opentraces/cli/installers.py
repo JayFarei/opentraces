@@ -158,6 +158,26 @@ def _prompt_bucket_security_policy(cfg) -> list[str]:
     else:
         changes = apply_bucket_security_policy(cfg, policy)
     _cli.save_config(cfg)
+
+    # TruffleHog rides in via the strict/custom paths. If the chosen policy
+    # enables it and the binary is missing, run the existing install flow
+    # inline right here — this is the wizard's single interactive security
+    # step (issue #66), so there is no later standalone prompt to catch it.
+    if "trufflehog" in enabled_security_tool_names(cfg):
+        from ..security.trufflehog import find_trufflehog, install_binary
+
+        if find_trufflehog() is None:
+            _cli.human_echo("    trufflehog binary not found — installing now")
+            ok, method = install_binary()
+            if ok and find_trufflehog():
+                _cli.human_echo(f"    installed via {method}")
+            else:
+                _cli.human_echo(
+                    f"    {_cli._err('install failed')} — run "
+                    "'opentraces setup trufflehog' or see "
+                    "https://github.com/trufflesecurity/trufflehog"
+                )
+
     if changes["disabled"]:
         _cli.human_echo(
             "    note: bucket security flags are global; turned OFF: "
@@ -558,13 +578,14 @@ def _run_setup_wizard() -> None:
       2. watcher                          (powers 'opentraces trail blame', default yes)
       3. entity-parser (sem)              (richer commit diffs, default yes)
       4. HuggingFace login                (log in now or skip)
-      5. private bucket sync              (remote by default when authenticated)
-      6. trufflehog                       (global config, default no)
-      7. llm-review                       (global config, default no)
-      8. closing panel — point at `opentraces init` + `opentraces doctor`
+      5. private bucket sync              (remote by default when authenticated;
+                                           the bucket security policy chosen here
+                                           is the single interactive security step)
+      6. security tool status             (trufflehog / llm-review, read-only)
+      7. closing panel — point at `opentraces init` + `opentraces doctor`
     """
     from ..capture import get_hook_installers
-    from ..security.trufflehog import find_trufflehog, install_binary
+    from ..security.trufflehog import find_trufflehog
     from ..watcher import installer as _winst
     from ..enrichment.entities import installer as _entinst
     from ..enrichment.entities import EntityRunner
@@ -711,8 +732,10 @@ def _run_setup_wizard() -> None:
                 "    private bucket sync will stay local until HuggingFace auth is configured."
             )
 
-    # 6. Optional: trufflehog. Default no — it's a global config
-    #    change; users can override per-project via `opentraces init`.
+    # 6. Security tool status (read-only). The bucket security policy above is
+    #    the wizard's single interactive security choice (issue #66); these
+    #    lines just surface the current global state. Enable via
+    #    `opentraces setup trufflehog` / `opentraces setup llm-review`.
     th_version = find_trufflehog()
     th_enabled = cfg.security.trufflehog.enabled
     th_label = (
@@ -720,37 +743,10 @@ def _run_setup_wizard() -> None:
         else _cli._dim("disabled" if not th_enabled else "enabled but missing")
     )
     _cli.human_echo(f"  {_cli._bold('trufflehog'):<28} {th_label}")
-    if not (th_enabled and th_version):
-        if _wizard_confirm(
-            "enable the optional TruffleHog secret detector globally?",
-            default=False,
-            hint="runs only when explicitly enabled; global setting",
-        ):
-            if th_version is None:
-                ok, method = install_binary()
-                if ok:
-                    _cli.human_echo(f"    installed via {method}")
-                    th_version = find_trufflehog()
-                else:
-                    _cli.human_echo(f"    {_cli._err('install failed')} — see https://github.com/trufflesecurity/trufflehog")
-            if th_version:
-                cfg.security.trufflehog.enabled = True
-                _cli.save_config(cfg)
-                _cli.human_echo(f"    {_cli._ok('enabled')}")
 
-    # 7. Optional: LLM review. Also a global config change.
     llm_enabled = getattr(cfg.security, "llm_review", None) and getattr(cfg.security.llm_review, "enabled", False)
     llm_label = _cli._ok("enabled") if llm_enabled else _cli._dim("disabled")
     _cli.human_echo(f"  {_cli._bold('llm-review'):<28} {llm_label}")
-    if not llm_enabled:
-        if _wizard_confirm(
-            "enable optional LLM dataset-row review globally?",
-            default=False,
-            hint="configure via 'opentraces setup llm-review'; global setting",
-        ):
-            _cli.human_hint(
-                "    run 'opentraces setup llm-review' to pick provider/model."
-            )
 
     _cli.human_echo("")
     _cli.human_echo(_cli._bold("Next steps"))
@@ -768,6 +764,12 @@ def _run_setup_wizard() -> None:
         )
     _cli.human_echo(
         f"  • to inspect health:   {_cli._bold('opentraces doctor')}"
+    )
+    _cli.human_echo(
+        f"  • optional secret scanning:   {_cli._bold('opentraces setup trufflehog')}"
+    )
+    _cli.human_echo(
+        f"  • optional LLM row review:    {_cli._bold('opentraces setup llm-review')}"
     )
     _cli.human_echo("  • dataset review policy lives in the dataset manifest and review commands.")
 
