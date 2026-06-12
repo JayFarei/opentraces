@@ -219,8 +219,48 @@ def has_unsearched_recent_patches(
     # Bug B closed on the hook path. ``trace_patch_created`` carries no
     # commit_filter (kept in full for the patch_ids set); the two anchor/search
     # types are commit-keyed to the candidate commits, mirroring mature_trails.
+    #
+    # #65 (codex P1): stream the read down to the three KEY SETS the gate
+    # actually consults — never retain the events. On a truncated-backlog repo
+    # the maturation watermark is deliberately unstamped, so EVERY quiet tick
+    # passes through this gate before the budgeted mature_trails call; a
+    # materialised slice here (fat trace_patch_created authored_text + the
+    # plan-090 summary results[] arrays) re-opens the multi-GB path the sink
+    # closed in mature_trails, and the child gets RSS-killed before the
+    # budgeted worker can make progress — defeating amortisation entirely.
+    patch_ids: set[str] = set()
+    searched: set[tuple] = set()
+    anchored: set[tuple] = set()
+
+    def _gate_sink(event) -> None:
+        etype = event.event_type
+        if etype == "trace_patch_created":
+            trace_patch_id = id_from_payload(event.payload, "trace_patch")
+            if trace_patch_id:
+                patch_ids.add(trace_patch_id)
+        elif etype == "git_anchor_search_completed":
+            for record in iter_search_records(event):
+                searched.add((
+                    record["trace_patch_id"],
+                    record["search_head_sha"],
+                    record["attribution_version"],
+                ))
+        elif etype == "git_anchor_created":
+            # #23 step 4: close the gate/worker asymmetry. The worker
+            # (reconcile_commit_anchors) skips a (patch, commit) pair when
+            # EITHER a search record OR an anchor already exists for it. The
+            # gate must mirror that, else a pair with an
+            # anchor-but-no-search-record (possible across attribution
+            # versions / legacy logs) reads as "unsearched" forever -> the
+            # worker is invoked every tick, does nothing, never records a new
+            # search -> livelock.
+            anchored.add((
+                id_from_payload(event.payload, "trace_patch"),
+                (event.payload.get("commit_id") or {}).get("hex"),
+            ))
+
     try:
-        events = read_events_scoped(
+        read_events_scoped(
             repo,
             event_types={
                 "trace_patch_created",
@@ -232,44 +272,14 @@ def has_unsearched_recent_patches(
                 "git_anchor_search_completed": "search_head",
             },
             commit_shas=set(commits),
+            sink=_gate_sink,
         )
     except Exception:
         return False
-    patch_ids = {
-        trace_patch_id
-        for event in events
-        if event.event_type == "trace_patch_created"
-        for trace_patch_id in [id_from_payload(event.payload, "trace_patch")]
-        if trace_patch_id
-    }
     if not patch_ids:
         if state is not None:
             _save_maturation_watermark(repo, state)
         return False
-    searched = {
-        (
-            record["trace_patch_id"],
-            record["search_head_sha"],
-            record["attribution_version"],
-        )
-        for event in events
-        if event.event_type == "git_anchor_search_completed"
-        for record in iter_search_records(event)
-    }
-    # #23 step 4: close the gate/worker asymmetry. The worker
-    # (reconcile_commit_anchors) skips a (patch, commit) pair when EITHER a search
-    # record OR an anchor already exists for it. The gate must mirror that, else a
-    # pair with an anchor-but-no-search-record (possible across attribution
-    # versions / legacy logs) reads as "unsearched" forever -> the worker is
-    # invoked every tick, does nothing, never records a new search -> livelock.
-    anchored = {
-        (
-            id_from_payload(event.payload, "trace_patch"),
-            (event.payload.get("commit_id") or {}).get("hex"),
-        )
-        for event in events
-        if event.event_type == "git_anchor_created"
-    }
     has_unsearched = any(
         (trace_patch_id, commit, effective_version) not in searched
         and (trace_patch_id, commit) not in anchored

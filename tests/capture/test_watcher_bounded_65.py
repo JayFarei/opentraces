@@ -303,3 +303,51 @@ def test_maturation_deadline_truncates_and_skips_watermark(tmp_path):
     full = mature_trails(repo)
     assert full.truncated is False
     assert _load_maturation_watermark(repo) is not None
+
+
+# --- #65 codex P1: the quiet-tick gate must stream, never materialise --------
+
+
+def test_gate_streams_through_sink_never_materialises(tmp_path, monkeypatch):
+    """#65 codex P1 sentinel: on a truncated-backlog repo the maturation
+    watermark is deliberately unstamped, so EVERY quiet tick re-enters
+    has_unsearched_recent_patches before the budgeted worker. The gate must
+    route its scoped read through a streaming sink (key extraction only) —
+    a materialised event list here re-opens the multi-GB path and gets the
+    child RSS-killed before the budgeted mature_trails can make progress.
+    """
+    import subprocess as sp
+
+    from opentraces.core.trails import TrailEventDraft, append_event_batch
+    from opentraces.core.trails import maturation as mat_mod
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sp.run(["git", "init", "-q"], cwd=repo, check=True)
+    sp.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    sp.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    (repo / "f.txt").write_text("x\n")
+    sp.run(["git", "add", "-A"], cwd=repo, check=True)
+    sp.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+    append_event_batch(repo, [TrailEventDraft(
+        event_type="trace_patch_created", trace_id="tr1", step_index=1,
+        capture_method=["hook_posttooluse"],
+        payload={"trace_patch_id": "tracepatch-sha256:gate", "file_path": "f.txt",
+                 "authored_text": "x\n"},
+    )], writer="test")
+
+    real_scoped = mat_mod.read_events_scoped
+    calls: list[bool] = []
+
+    def _spy(repo_arg, **kwargs):
+        calls.append(kwargs.get("sink") is not None)
+        assert kwargs.get("sink") is not None, (
+            "gate called read_events_scoped WITHOUT a sink — "
+            "materialised slice on the per-quiet-tick path"
+        )
+        return real_scoped(repo_arg, **kwargs)
+
+    monkeypatch.setattr(mat_mod, "read_events_scoped", _spy)
+    result = mat_mod.has_unsearched_recent_patches(repo)
+    assert calls, "gate must reach the scoped read (no watermark yet)"
+    assert result is True  # one patch, never searched

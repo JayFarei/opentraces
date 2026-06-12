@@ -1118,14 +1118,17 @@ def _try_incremental_verify(
     if new is None:
         return None
     wm_seq = int(wm["last_event_sequence"])
-    new = sorted(
-        (e for e in new if e.event_sequence > wm_seq),
-        key=lambda e: e.event_sequence,
-    )
+    # #65 (codex P2): do NOT filter the suffix down to events above the
+    # watermark — a suffix event with sequence <= wm_seq (bad restore,
+    # external writer rewinding the counter) is itself the corruption signal,
+    # and silently dropping it before the contiguity walk would let
+    # verify_event_log() bless the new head. Any such event bails to the full
+    # verify, which reports the real errors.
+    new = sorted(new, key=lambda e: e.event_sequence)
     expected = wm_seq + 1
     for event in new:
         if event.event_sequence != expected:
-            return None  # gap/overlap — bail to a full verify
+            return None  # duplicate/gap/overlap — bail to a full verify
         expected += 1
     content_ok, chain_ok, errs, last_eid = _check_event_chain(
         new,
