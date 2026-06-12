@@ -10,6 +10,13 @@ PR), never an accident.
 
 Budgets were seeded at roughly 2x the measured size on the sentinel
 world, so ordinary additive evolution fits and bloat regressions fail.
+
+Measurement is path-normalized (issue #51): absolute box paths embedded
+in envelopes (e.g. ``search_snapshot.path``) are collapsed to ``<ROOT>``
+via the shared ``tests/envelope_measure.py`` helper before counting, so
+identical envelopes measure identically across checkouts. Normalization
+only SHRINKS measured values, so all previously committed budgets stay
+valid without a re-seed.
 """
 
 from __future__ import annotations
@@ -19,16 +26,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.envelope_measure import approx_tokens
+
 from .checkpoints import resolve_checkpoint
 from .drivers import get_driver
 
 BUDGETS_PATH = Path(__file__).parent / "envelope_budgets.json"
 
 _CHECKPOINT = "c-captured-real-session"
-
-
-def _approx_tokens(text: str) -> int:
-    return len(text) // 4
 
 
 def _render(part: str, subs: dict[str, str]) -> str:
@@ -77,13 +82,22 @@ def measured():
         subs["{ctx_node_id}"] = _first_ctx_node_id(
             driver, box, subs["{trace_id}"]
         )
+        # Path-normalized measurement (issue #51): both raw and resolved
+        # forms of each box root (macOS /var vs /private/var).
+        roots: list[str] = []
+        for raw in (str(box.root), str(box.home)):
+            roots.append(raw)
+            try:
+                roots.append(str(Path(raw).resolve()))
+            except OSError:
+                pass
         out: dict[str, dict] = {}
         for label, spec in budgets.items():
             argv = [_render(part, subs) for part in spec["argv"]]
             res = driver.exec(box, [*driver.cli_argv(box), *argv])
             out[label] = {
                 "rc": res.returncode,
-                "tokens": _approx_tokens(res.stdout or ""),
+                "tokens": approx_tokens(res.stdout or "", roots),
                 "budget": int(spec["max_tokens"]),
             }
         return out
