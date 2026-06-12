@@ -1588,9 +1588,15 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
     # Lazy imports — the real drive couples to the checkpoint + drive stack.
     from .checkpoints import resolve_checkpoint
     from .drivers import get_driver
+    from .footage import CAPTURES_ROOT, _footage_dir, build_gallery
+    from .simulated_users.footage_runner import (
+        FootageResult,
+        FootageTurnResult,
+    )
     from .simulated_users.runner import run_simulated_session
 
     driver = get_driver("local")
+    captures_root = CAPTURES_ROOT if not args.out else out_path.parent
     scenarios = accept.ACCEPTANCE_SCENARIOS
     if args.scenario:
         scenarios = tuple(s for s in scenarios if s.name == args.scenario)
@@ -1600,7 +1606,64 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
                 f"known: {accept.acceptance_scenario_names()}"
             )
 
+    def _footage_result_from_dir(
+        record_dir: Path,
+        *,
+        fallback: object,
+        scenario_name: str,
+        agent_name: str,
+    ) -> FootageResult:
+        data: dict[str, object] = {}
+        try:
+            data = json.loads((record_dir / "result.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+
+        turn_rows = data.get("turns") if isinstance(data, dict) else []
+        turns: list[FootageTurnResult] = []
+        if isinstance(turn_rows, list):
+            for row in turn_rows:
+                if isinstance(row, dict):
+                    try:
+                        turns.append(FootageTurnResult(**row))
+                    except TypeError:
+                        continue
+
+        return FootageResult(
+            verdict=str(data.get("verdict") or getattr(fallback, "verdict", "")),
+            binary_path=str(
+                data.get("binary_path") or getattr(fallback, "binary_path", "")
+            ),
+            binary_version=str(
+                data.get("binary_version")
+                or getattr(fallback, "binary_version", "")
+            ),
+            agent=str(data.get("agent") or agent_name),
+            scenario=str(data.get("scenario") or scenario_name),
+            turn_count=int(
+                data.get("turn_count") or getattr(fallback, "turn_count", 0)
+            ),
+            mp4_path=str(
+                data.get("mp4_path") or getattr(fallback, "mp4_path", "")
+            ),
+            termctrl_path=str(
+                data.get("termctrl_path")
+                or getattr(fallback, "termctrl_path", "")
+            ),
+            markers=list(data.get("markers") or []),
+            turns=turns,
+            duration_s=float(data.get("duration_s") or 0.0),
+            cols=int(data.get("cols") or 110),
+            rows=int(data.get("rows") or 32),
+            fps=int(data.get("fps") or 20),
+            error_message=str(
+                data.get("error_message")
+                or getattr(fallback, "error_message", "")
+            ),
+        )
+
     rows: list[dict] = []
+    footage_results: list[FootageResult] = []
     binary_version = ""
     for spec in scenarios:
         scenario = load_scenario(spec.name)
@@ -1618,6 +1681,10 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
 
         output_dir = box.logs / "acceptance" / scenario.name
         output_dir.mkdir(parents=True, exist_ok=True)
+        footage_dir = _footage_dir(
+            scenario.name, agent, captures_root=captures_root
+        )
+        footage_dir.mkdir(parents=True, exist_ok=True)
         turns = _expand_capture_refresh_turns(
             scenario.turns, _capture_refresh_template_context(box)
         )
@@ -1636,6 +1703,8 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
             output_dir=output_dir,
             agent=agent,
             scenario=scenario.name,
+            record_dir=footage_dir,
+            export_mp4=True,
         )
         wall_clock_s = time.monotonic() - started
         binary_version = result.binary_version or binary_version
@@ -1688,6 +1757,33 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
             )
         )
         try:
+            (footage_dir / "scenario.json").write_text(
+                json.dumps(
+                    {
+                        "name": scenario.name,
+                        "description": scenario.description,
+                        "agent": agent,
+                        "binary_name": binary_name,
+                        "turn_count": len(scenario.turns),
+                        "scenario_digest": scenario_digest(scenario),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        footage_results.append(
+            _footage_result_from_dir(
+                footage_dir,
+                fallback=result,
+                scenario_name=scenario.name,
+                agent_name=agent,
+            )
+        )
+        try:
             driver.teardown(box)
         except Exception:  # noqa: BLE001 - teardown failures are non-fatal
             pass
@@ -1700,6 +1796,9 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
         scenario_digests=digests,
     )
     accept.write_report(report, out_path)
+    gallery_path = build_gallery(
+        footage_results, captures_root=captures_root
+    )
     # Surface committed-gate validity in the envelope: a --scenario subset
     # run is honest-but-partial and will (correctly) fail the strict
     # committed-report schema, which requires all 5 arcs.
@@ -1710,6 +1809,8 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
         "mode": "real",
         "agent": agent,
         "report_path": str(out_path),
+        "gallery_path": str(gallery_path),
+        "gallery_dir": str(gallery_path.parent),
         "summary": report["summary"],
         "schema_valid": not problems,
     }
@@ -1719,7 +1820,8 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
         f"acceptance ({agent}): {report['summary']['arcs_completed']}/"
         f"{report['summary']['journeys']} arcs completed, "
         f"mean_score={report['summary']['mean_score']}\n"
-        f"  report: {out_path}"
+        f"  report: {out_path}\n"
+        f"  gallery: {gallery_path}"
     )
     if problems:
         human += (

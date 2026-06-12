@@ -69,8 +69,13 @@ def _binary_for(scenario: Scenario, agent: str) -> str | None:
     return shutil.which(binary_name)
 
 
-def _footage_dir(scenario_name: str, agent: str) -> Path:
-    return CAPTURES_ROOT / scenario_name / "footage" / agent
+def _footage_dir(
+    scenario_name: str,
+    agent: str,
+    *,
+    captures_root: Path | None = None,
+) -> Path:
+    return (captures_root or CAPTURES_ROOT) / scenario_name / "footage" / agent
 
 
 # ---------------------------------------------------------------------------
@@ -265,17 +270,28 @@ def record_all(
 # ---------------------------------------------------------------------------
 # gallery
 # ---------------------------------------------------------------------------
-def build_gallery(results: list[FootageResult]) -> Path:
+def build_gallery(
+    results: list[FootageResult],
+    *,
+    captures_root: Path | None = None,
+) -> Path:
     """Render ``tests/otbox/captures/_footage/gallery.html`` + ``.json``.
 
     The gallery is a self-contained single HTML file referencing each MP4
     by a path relative to the gallery directory. Returns the gallery path.
     """
-    FOOTAGE_GALLERY_DIR.mkdir(parents=True, exist_ok=True)
-    gallery_html = FOOTAGE_GALLERY_DIR / "gallery.html"
-    gallery_json = FOOTAGE_GALLERY_DIR / "gallery.json"
+    gallery_dir = (
+        (captures_root / "_footage") if captures_root is not None
+        else FOOTAGE_GALLERY_DIR
+    )
+    gallery_dir.mkdir(parents=True, exist_ok=True)
+    gallery_html = gallery_dir / "gallery.html"
+    gallery_json = gallery_dir / "gallery.json"
 
-    cards = [_card_payload(r) for r in results]
+    cards = [
+        _card_payload(r, captures_root=captures_root, gallery_dir=gallery_dir)
+        for r in results
+    ]
     gallery_json.write_text(
         json.dumps({"cards": cards}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -286,7 +302,12 @@ def build_gallery(results: list[FootageResult]) -> Path:
     return gallery_html
 
 
-def _card_payload(result: FootageResult) -> dict:
+def _card_payload(
+    result: FootageResult,
+    *,
+    captures_root: Path | None = None,
+    gallery_dir: Path | None = None,
+) -> dict:
     """Flatten a FootageResult into a gallery card dict.
 
     ``mp4_rel`` is the MP4 path relative to the gallery dir so the HTML is
@@ -294,7 +315,9 @@ def _card_payload(result: FootageResult) -> dict:
     """
     scenario = result.scenario
     agent = result.agent or "unknown"
-    footage_dir = _footage_dir(scenario, agent)
+    footage_dir = _footage_dir(
+        scenario, agent, captures_root=captures_root
+    )
 
     description = ""
     scenario_meta = footage_dir / "scenario.json"
@@ -312,7 +335,8 @@ def _card_payload(result: FootageResult) -> dict:
             import os as _os
 
             mp4_rel = _os.path.relpath(
-                Path(result.mp4_path).resolve(), FOOTAGE_GALLERY_DIR.resolve()
+                Path(result.mp4_path).resolve(),
+                (gallery_dir or FOOTAGE_GALLERY_DIR).resolve(),
             )
         except ValueError:
             mp4_rel = result.mp4_path

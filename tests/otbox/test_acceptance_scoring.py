@@ -473,9 +473,11 @@ def test_cli_acceptance_agent_override_threads_through_drive_and_rows(
     from tests.otbox.cli import main
 
     seen_agents: list[str] = []
+    seen_drive_kwargs: list[dict] = []
 
     def fake_runner(*_args, **kwargs):
         seen_agents.append(kwargs.get("agent"))
+        seen_drive_kwargs.append(kwargs)
         return SimpleNamespace(
             verdict="PASS", turn_verdict="PASS", turn_count=3,
             binary_version="codex 0.139.0", error_message="",
@@ -489,6 +491,8 @@ def test_cli_acceptance_agent_override_threads_through_drive_and_rows(
     ])
     assert rc == 0
     assert seen_agents == ["codex"]
+    assert seen_drive_kwargs[0]["export_mp4"] is True
+    assert str(seen_drive_kwargs[0]["record_dir"]).startswith(str(tmp_path))
     report = json.loads(out.read_text())
     assert report["journeys"][0]["agent"] == "codex"
     assert report["provenance"]["agent"] == "codex"
@@ -496,6 +500,7 @@ def test_cli_acceptance_agent_override_threads_through_drive_and_rows(
     # does NOT pass the strict committed-report schema.
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_valid"] is False
+    assert payload["gallery_path"].startswith(str(tmp_path))
 
 
 # ---------------------------------------------------------------------------
