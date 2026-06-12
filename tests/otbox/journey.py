@@ -577,7 +577,62 @@ def _captured_session(box: Box) -> dict[str, str]:
                 edit_step_index=ct_audit.get("step_index"),
             )
         )
+        # Box-relative transcript re-derivation (never bake absolutes):
+        # the prune-family journeys need ``--source-jsonl {transcript_path}``.
+        result["transcript_path"] = _box_transcript_path(box, result["session_id"])
+
+    # Issue #42 — compacted-session world (c-compacted-session). Overrides
+    # the substrate's primary trace with the compacted trace and serves the
+    # compaction template vars, resolved live from the event log.
+    compacted_audit = box.notes.get("c_compacted_session_audit") or {}
+    if compacted_audit:
+        result["trace_id"] = str(
+            compacted_audit.get("trace_id") or result.get("trace_id", "")
+        )
+        result["session_id"] = str(
+            compacted_audit.get("session_id") or result.get("session_id", "")
+        )
+        result.update(_resolve_compaction_template_vars(box, result["trace_id"]))
+        result["transcript_path"] = _box_transcript_path(box, result["session_id"])
+
+    # Issue #42 — rewound-session re-pin (c-rewound-session). Flips the
+    # journey-facing {trace_id} to the rewound trace (the substrate audit
+    # pins the multi-turn primary, which has NO orphan branches) and serves
+    # the subagent-linkage vars for context-tree-branching-fidelity.
+    rewound_audit = box.notes.get("c_rewound_session_audit") or {}
+    if rewound_audit:
+        result["trace_id"] = str(
+            rewound_audit.get("trace_id") or result.get("trace_id", "")
+        )
+        result["session_id"] = str(
+            rewound_audit.get("session_id") or result.get("session_id", "")
+        )
+        result["subagent_trace_id"] = str(
+            rewound_audit.get("subagent_trace_id")
+            or result.get("subagent_trace_id", "")
+        )
+        result["subagent_session_ids_expected"] = json.dumps(
+            [str(s) for s in (rewound_audit.get("subagent_session_ids_expected") or [])]
+        )
+        result.update(
+            _resolve_subagent_fork_template_vars(box, result["subagent_trace_id"])
+        )
     return result
+
+
+def _box_transcript_path(box: Box, session_id: str) -> str:
+    """Locate the on-box Claude transcript for ``session_id``.
+
+    Re-derived from the CURRENT box at template-expansion time (the
+    encoded project dir name embeds the origin box's absolute path, so
+    globbing — not re-encoding — is the snapshot/restore-safe lookup).
+    """
+    if not session_id:
+        return ""
+    matches = sorted(
+        (box.home / ".claude" / "projects").glob(f"*/{session_id}.jsonl")
+    )
+    return str(matches[0]) if matches else ""
 
 
 def _resolve_context_tree_node_template_vars(
@@ -614,6 +669,7 @@ def _resolve_context_tree_node_template_vars(
         "first_node_id": "",
         "first_read_node_id": "",
         "target_node_id": "",
+        "step_7_node_id": "",
         "expected_node_count": "",
         "active_path_length": "",
         "active_path_uuid_set": "[]",
@@ -705,6 +761,13 @@ def _resolve_context_tree_node_template_vars(
     if read_node is not None:
         extras["first_read_node_id"] = str(read_node.get("node_id") or "")
 
+    # demo-acceptance addresses "the node at step 7" explicitly.
+    step_7 = next(
+        (n for n in primary_sorted if n.get("step_index") == 7), None
+    )
+    if step_7 is not None:
+        extras["step_7_node_id"] = str(step_7.get("node_id") or "")
+
     # rewind orphan branch nodes.
     orphans = [n for n in rewound_nodes if n.get("branch_type") == "rewind_branch"]
     orphans = _by_step(orphans)
@@ -712,6 +775,101 @@ def _resolve_context_tree_node_template_vars(
         extras["orphan_root_node_id"] = str(orphans[0].get("node_id") or "")
         extras["orphan_leaf_node_id"] = str(orphans[-1].get("node_id") or "")
 
+    return extras
+
+
+def _resolve_compaction_template_vars(box: Box, trace_id: str) -> dict[str, str]:
+    """Derive the compaction template vars from the live event log.
+
+    Issue #42 / c-compacted-session. Resolved at template-expansion time
+    (content-addressed node ids are never baked into the snapshot).
+
+    Vars served:
+      {compaction_pre_node_id}            pre-boundary node
+      {compaction_post_node_id}           post-boundary (compaction_fork) node
+      {compaction_removed_uuids}          JSON list, event (=transcript) order
+      {compaction_removed_uuids_sorted}   sorted variant
+      {large_messages_node_id}            a node referencing the largest
+                                          messages layer of the trace
+    """
+    import json as _json
+
+    extras: dict[str, str] = {
+        "compaction_pre_node_id": "",
+        "compaction_post_node_id": "",
+        "compaction_removed_uuids": "[]",
+        "compaction_removed_uuids_sorted": "[]",
+        "large_messages_node_id": "",
+    }
+    project = box.project
+    if not (project / ".git").exists() or not trace_id:
+        return extras
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:  # noqa: BLE001
+        return extras
+
+    layer_sizes: dict[str, int] = {}
+    nodes: list[dict] = []
+    for e in events:
+        if e.trace_id != trace_id:
+            continue
+        p = e.payload or {}
+        if e.event_type == "context_compaction_observed":
+            if not extras["compaction_pre_node_id"]:
+                extras["compaction_pre_node_id"] = str(p.get("pre_node_id") or "")
+                extras["compaction_post_node_id"] = str(p.get("post_node_id") or "")
+                removed = [str(u) for u in (p.get("lossy_diff_removed_uuids") or [])]
+                extras["compaction_removed_uuids"] = _json.dumps(removed)
+                extras["compaction_removed_uuids_sorted"] = _json.dumps(sorted(removed))
+        elif e.event_type == "context_layer_captured":
+            if p.get("layer_type") == "messages" and p.get("layer_id"):
+                size = len(_json.dumps(p.get("content"), separators=(",", ":")))
+                layer_sizes[str(p["layer_id"])] = size
+        elif e.event_type == "context_node_observed":
+            nodes.append(p)
+
+    if layer_sizes and nodes:
+        largest_layer = max(layer_sizes, key=lambda k: layer_sizes[k])
+        for n in nodes:
+            if str(n.get("messages_layer_id") or "") == largest_layer:
+                extras["large_messages_node_id"] = str(n.get("node_id") or "")
+                break
+    return extras
+
+
+def _resolve_subagent_fork_template_vars(
+    box: Box, subagent_trace_id: str
+) -> dict[str, str]:
+    """Derive the subagent-fork vars for context-tree-branching-fidelity.
+
+    Vars served:
+      {subagent_fork_node_id}       first subagent_fork node on the trace
+      {subagent_child_session_id}   that node's subagent_session_id
+    """
+    extras: dict[str, str] = {
+        "subagent_fork_node_id": "",
+        "subagent_child_session_id": "",
+    }
+    project = box.project
+    if not (project / ".git").exists() or not subagent_trace_id:
+        return extras
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:  # noqa: BLE001
+        return extras
+    for e in events:
+        if e.event_type != "context_node_observed" or e.trace_id != subagent_trace_id:
+            continue
+        p = e.payload or {}
+        if p.get("branch_type") == "subagent_fork":
+            extras["subagent_fork_node_id"] = str(p.get("node_id") or "")
+            extras["subagent_child_session_id"] = str(
+                p.get("subagent_session_id") or ""
+            )
+            break
     return extras
 
 

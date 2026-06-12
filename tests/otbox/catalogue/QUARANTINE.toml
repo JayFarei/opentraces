@@ -10,11 +10,9 @@
 journeys = [
   "context-tree-branching-fidelity",
   "context-tree-capture-fidelity",
-  "context-tree-compaction-fidelity",
   "context-tree-ctx-output-parity",
   "context-tree-ctx-prune-no-clobber",
   "context-tree-ctx-resolve-empty-state",
-  "context-tree-ctx-show-bounded-default",
   "context-tree-demo-acceptance",
   "context-tree-determinism",
   "context-tree-fork-fidelity",

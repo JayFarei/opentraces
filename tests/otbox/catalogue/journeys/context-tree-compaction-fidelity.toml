@@ -2,39 +2,49 @@ name = "context-tree-compaction-fidelity"
 description = """
 Plan 077 substrate-fidelity journey #3 (gold) — compaction is a
 first-class fork; we capture both sides of the boundary and the
-lossy diff between them honestly.
+removed-message span between them honestly.
 
 Compaction (the `/compact` slash command or auto-compaction at
 context-window pressure) is the unique-to-substrate event: the
 JSONL summary record replaces a span of prior records with one
 shorter synthesis, and the model can no longer see what was
-discussed before. Today opentraces silently loses this; the
-Context Tree substrate captures it explicitly via
-`context_compaction_observed` events (R9).
+discussed before. The Context Tree substrate captures it
+explicitly via `context_compaction_observed` events (R9).
 
-This journey forks from `c-compacted-session` (a captured session
-crossing one `/compact` boundary; Phase 4 swaps the synthetic
-fixture for a real capture) and asserts four properties via the
+Forks from `c-compacted-session` (issue #42: the synthetic
+`context-tree-compacted` corpus — 5 pre-compaction turns, one
+manual /compact boundary with a pinned summary uuid, 2
+post-compaction turns — ingested through the real fake-harness +
+`_ingest-session` chain) and asserts four properties via the
 `ctx compactions` and `ctx show` CLI surfaces:
 
   (a) Exactly K `context_compaction_observed` events for K
-      compactions (the fixture pins K=1).
-  (b) `pre_node_id` references a messages layer with
-      `is_summary: false`, and `post_node_id` references one with
-      `is_summary: true` — the polarity is load-bearing.
-  (c) The pre-node's messages.uuid_set is a strict superset of the
-      post-node's messages.uuid_set minus the summary uuid; equivalently,
-      `lossy_diff.removed_message_uuids` equals the exact symmetric
-      difference (a quality check, not a presence check).
-  (d) `ctx show --full` on each side returns the canonical layer
-      headers and the layers' completeness/capture_method labels
-      are honest (post: `approximated` / `transcript_reconstruction`).
+      compactions (the fixture pins K=1), with non-null
+      pre_node_id / post_node_id.
+  (b) `removed_message_uuids` equals the deterministic fixture
+      span exactly (order-sensitive array equality against the
+      runner's event-log-derived `{compaction_removed_uuids}` —
+      the checkpoint independently pins that span against the
+      fixture's literal uuid list, so this is NOT circular).
+  (c) `--show-loss` materializes `loss_detail` whose
+      removed_message_uuids match the same span two-way.
+  (d) The post node's `branch_type` is `compaction_fork`, the
+      pre node's is `linear`, and both sides reference the SAME
+      session-level messages layer (the documented v1 honest
+      scope: one shared messages layer per session, no per-side
+      is_summary polarity — see CLAUDE.md "Context Tree v1
+      honest scope").
 
-Fails today because neither the `context_compaction_observed` event
-emission (Phase 2) nor the `ctx compactions` verb (Phase 3) exists.
+Issue #42 re-spec deltas from the plan-077 draft: `ctx show`
+emits `opentraces.context_tree.v1` (not the draft
+`context_node.v1`); `lossy_diff_layer_id` is never set in v1
+(the draft's presence assert is replaced by the removed-uuid
+span equality, a strictly stronger check); the draft's
+`is_summary` polarity + per-side completeness asserts are
+dropped because v1 shares ONE session-level messages layer.
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier = 0
 tier_label = "gold"
 trajectories = ["context-tree-compaction"]
 persona = "agent"
@@ -47,8 +57,9 @@ context_tree_built = true
 requires_compactions_min = 1
 
 # ---------------------------------------------------------------------
-# Step 1 — list compaction boundaries. Envelope shape: list of
-# {index, pre_node_id, post_node_id, lossy_diff_layer_id,
+# Step 1 — list compaction boundaries. Shipped row shape:
+# {index, pre_node_id, post_node_id, lossy_diff_layer_id (null in v1),
+#  compacted_span_first_uuid, compacted_span_last_uuid,
 #  removed_message_uuids}.
 # ---------------------------------------------------------------------
 [[steps]]
@@ -73,8 +84,7 @@ step = "compactions-list"
 path = "trace_id"
 equals = "{trace_id}"
 
-# Contract (a) — exactly K events for K compactions. The
-# `c-compacted-session` fixture pins K=1 (single /compact boundary).
+# Contract (a) — exactly K rows for K compactions (fixture pins K=1).
 [[assertions]]
 kind = "stdout_json_length_equals"
 step = "compactions-list"
@@ -97,15 +107,35 @@ kind = "stdout_json"
 step = "compactions-list"
 path = "compactions.0.post_node_id"
 
+# Contract (b) — the removed span equals the deterministic fixture
+# span exactly (order-sensitive). The runner expands
+# {compaction_removed_uuids} from the live event log at expansion
+# time; the c-compacted-session checkpoint refuses to cache unless
+# that same payload equals the fixture's literal 30-uuid list.
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "compactions-list"
+path = "compactions.0.removed_message_uuids"
+equals_var = "compaction_removed_uuids"
+
+# The span boundary uuids are the fixture's pinned first/last
+# pre-compaction records.
 [[assertions]]
 kind = "stdout_json"
 step = "compactions-list"
-path = "compactions.0.lossy_diff_layer_id"
+path = "compactions.0.compacted_span_first_uuid"
+equals = "user-otbox-ctx-compacted-pre-1-a-prompt"
+
+[[assertions]]
+kind = "stdout_json"
+step = "compactions-list"
+path = "compactions.0.compacted_span_last_uuid"
+equals = "asst-otbox-ctx-compacted-pre-5-e-close"
 
 # ---------------------------------------------------------------------
 # Step 2 — drill into the compaction. `--show-loss` materializes the
-# lossy_diff_layer's content so we can assert the removed_message_uuids
-# set.
+# loss_detail block (pre/post node ids, span uuids, summary_text_hash,
+# removed_message_uuids).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -123,32 +153,37 @@ step = "compaction-detail"
 path = "schema_version"
 equals = "opentraces.context_tree.v1"
 
-# Contract (c) — `removed_message_uuids` is exactly the symmetric
-# difference (pre uuids \ post uuids \ {summary_uuid}). The runner
-# expands `compaction_removed_uuids` from the checkpoint audit.
+# Contract (c) one direction — every expected uuid is in loss_detail.
 [[assertions]]
 kind = "stdout_json_set_contains"
 step = "compaction-detail"
-path = "lossy_diff.removed_message_uuids"
+path = "compactions.0.loss_detail.removed_message_uuids"
 equals_var = "compaction_removed_uuids"
 
-# Reverse direction: the assertion above is one-way; this one asserts
-# the runner's expected set fully contains the actual emitted set
-# (the two together pin set-equality without growing the vocabulary).
+# Contract (c) both directions — exact order-sensitive equality (no
+# extra uuids leaked in, none dropped).
 [[assertions]]
 kind = "stdout_json_array_equals"
 step = "compaction-detail"
-path = "lossy_diff.removed_message_uuids_sorted"
-equals_var = "compaction_removed_uuids_sorted"
+path = "compactions.0.loss_detail.removed_message_uuids"
+equals_var = "compaction_removed_uuids"
+
+# The lossy summary's identity hash is present (v1 keeps the summary
+# text opaque; the hash is the deterministic stand-in).
+[[assertions]]
+kind = "stdout_json"
+step = "compaction-detail"
+path = "compactions.0.loss_detail.summary_text_hash"
 
 # ---------------------------------------------------------------------
-# Step 3 — pre-compaction node. messages layer must have
-# is_summary: false (the pre-side is the raw conversation).
+# Step 3 — pre-compaction node. branch_type is `linear` (the last
+# pre-boundary close); the messages layer is the shared session-level
+# layer, honestly labeled full / transcript_reconstruction.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "show-pre-node"
-argv = ["ctx", "show", "{compaction_pre_node_id}", "--full", "--json"]
+argv = ["ctx", "show", "{compaction_pre_node_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -159,13 +194,19 @@ equals = 0
 kind = "stdout_json"
 step = "show-pre-node"
 path = "schema_version"
-equals = "opentraces.context_node.v1"
+equals = "opentraces.context_tree.v1"
 
 [[assertions]]
 kind = "stdout_json"
 step = "show-pre-node"
-path = "layers.messages.is_summary"
-equals = false
+path = "node.node_id"
+equals = "{compaction_pre_node_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-pre-node"
+path = "node.branch_type"
+equals = "linear"
 
 [[assertions]]
 kind = "stdout_json"
@@ -180,15 +221,15 @@ path = "layers.messages.capture_method"
 equals = "transcript_reconstruction"
 
 # ---------------------------------------------------------------------
-# Step 4 — post-compaction node. messages layer must have
-# is_summary: true (the post-side IS the summary substituting a
-# span of pre messages). Completeness drops to `approximated` because
-# the summary is lossy by construction.
+# Step 4 — post-compaction node. Contract (d): branch_type is
+# `compaction_fork`, and the messages layer reference is IDENTICAL to
+# the pre node's (v1 documented honest scope — one shared
+# session-level messages layer, no per-side summary polarity).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "show-post-node"
-argv = ["ctx", "show", "{compaction_post_node_id}", "--full", "--json"]
+argv = ["ctx", "show", "{compaction_post_node_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -199,20 +240,19 @@ equals = 0
 kind = "stdout_json"
 step = "show-post-node"
 path = "schema_version"
-equals = "opentraces.context_node.v1"
+equals = "opentraces.context_tree.v1"
 
 [[assertions]]
 kind = "stdout_json"
 step = "show-post-node"
-path = "layers.messages.is_summary"
-equals = true
+path = "node.node_id"
+equals = "{compaction_post_node_id}"
 
-# Honest gap: compaction summary is lossy by construction.
 [[assertions]]
 kind = "stdout_json"
 step = "show-post-node"
-path = "layers.messages.completeness"
-equals = "approximated"
+path = "node.branch_type"
+equals = "compaction_fork"
 
 [[assertions]]
 kind = "stdout_json"
@@ -220,7 +260,10 @@ step = "show-post-node"
 path = "layers.messages.capture_method"
 equals = "transcript_reconstruction"
 
+# Shared session-level messages layer: post side references the SAME
+# layer id as the pre side (cross-step equality).
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_equals_var"
 step = "show-post-node"
-path = "layers.messages.summary_of_span"
+path = "layers.messages.layer_id"
+equals_var = "show-pre-node:layers.messages.layer_id"
