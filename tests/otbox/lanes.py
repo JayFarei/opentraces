@@ -42,6 +42,28 @@ LANE_CAPABILITIES: dict[str, frozenset[str]] = {
     ),
 }
 
+# Capabilities that legitimately vary by host or opt-in gate. A tier-0
+# journey SKIPping on one of these is a visible pytest skip; SKIPping on
+# anything else (cli/git missing = broken box, precondition pin conflicts =
+# authoring bugs) is graveyard formation and hard-fails the sweep (issue #52).
+# fetched_artifacts is included because journey._capabilities() never emits
+# it — it is provided only by the nightly lane's artifact-fetch step.
+HOST_CONDITIONAL_CAPS = frozenset(
+    {"tmux", "termctrl", "tier1", "real_repl", "live_hf", "fetched_artifacts"}
+)
+
+
+def tier0_skip_disposition(reason: str, missing: set[str]) -> str:
+    """'skip' (legitimate host/opt-in gap) or 'fail' (graveyard formation)."""
+    if (
+        reason.startswith("missing capabilities")
+        and missing
+        and missing <= HOST_CONDITIONAL_CAPS
+    ):
+        return "skip"
+    return "fail"
+
+
 # The fixed PR-lane sentinel set: fast, hermetic, one journey per major
 # surface (capture chain, bucket, discovery, trail, security, datasets,
 # config, health). Editing this list is a reviewed diff by design.

@@ -164,7 +164,8 @@ def test_snapshot_restore_rewrites_trace_index_sqlite_paths(driver):
     [j["name"] for j in available_journeys() if j["tier"] == 0],
 )
 def test_tier0_catalogue_journey(driver, journey_name):
-    """Every Tier 0 catalogue journey must PASS (or SKIP on a missing dep)."""
+    """Every Tier 0 catalogue journey must PASS. Host/opt-in capability gaps
+    surface as visible pytest skips; any other SKIP hard-fails (issue #52)."""
     import datetime as _dt
 
     from tests.otbox.catalogue_lint import load_quarantine
@@ -194,7 +195,21 @@ def test_tier0_catalogue_journey(driver, journey_name):
     try:
         result = run_journey(driver, box, journey_name)
         _record_ledger_verdict(journey_name, result)
-        if result.verdict not in ("PASS", "SKIP"):
+        if result.verdict == "SKIP":
+            # Issue #52: SKIP must never show as a green dot. Host/opt-in
+            # capability gaps become visible pytest skips; everything else
+            # (missing core caps, precondition pin conflicts) hard-fails.
+            # The raw verdict is already in the ledger record above.
+            from tests.otbox.journey import _capabilities
+            from tests.otbox.lanes import tier0_skip_disposition
+            missing = set(meta["requires"]) - _capabilities(driver, box)
+            if tier0_skip_disposition(result.reason or "", missing) == "skip":
+                pytest.skip(f"{journey_name}: {result.reason}")
+            pytest.fail(
+                f"{journey_name}: SKIP in the tier-0 sweep is graveyard "
+                f"formation ({result.reason})"
+            )
+        if result.verdict != "PASS":
             # Surface the failing step + assertion detail so CI logs show the
             # ROOT cause (rc/stderr), not just "step failure; N assertions".
             # flush=True + a journey-scoped tag so lines can't be misattributed
@@ -211,7 +226,7 @@ def test_tier0_catalogue_journey(driver, journey_name):
             for a in getattr(result, "assertions", []) or []:
                 if not a.ok:
                     print(f"{tag} ASSERT FAIL [{a.kind}] {a.message[:240]}", flush=True)
-        assert result.verdict in ("PASS", "SKIP"), f"{journey_name}: {result.reason}"
+        assert result.verdict == "PASS", f"{journey_name}: {result.reason}"
     finally:
         if box.root.exists():
             driver.teardown(box)

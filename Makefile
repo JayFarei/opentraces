@@ -61,7 +61,7 @@ otbox-slice:
 	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py::test_vertical_slice -v
 
 otbox-journeys:
-	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py -v
+	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py -v -ra
 
 # Tier 1 (plan 061). Opt-in: OT_OTBOX_TIER1=1. With OT_OTBOX_SSH_TARGET
 # set, runs against the operator's tailnet target; without it, spins up
