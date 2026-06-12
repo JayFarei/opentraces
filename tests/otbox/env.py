@@ -44,6 +44,10 @@ class Box:
     created: str = field(default_factory=utc_now)
     restored_from: str | None = None
     notes: dict = field(default_factory=dict)
+    # Issue #53: liveness guard for `otbox gc` — the pid of the process
+    # that created this box. A dead owner pid marks the box as killed-run
+    # residue (subject to the gc age grace); `None` for legacy metas.
+    owner_pid: int | None = field(default_factory=os.getpid)
 
     # ----- layout ---------------------------------------------------------
     @property
@@ -87,6 +91,7 @@ class Box:
             "created": self.created,
             "restored_from": self.restored_from,
             "notes": self.notes,
+            "owner_pid": self.owner_pid,
         }
 
     def save(self) -> None:
@@ -103,6 +108,7 @@ class Box:
             created=data.get("created", utc_now()),
             restored_from=data.get("restored_from"),
             notes=data.get("notes", {}),
+            owner_pid=data.get("owner_pid"),
         )
 
     @classmethod

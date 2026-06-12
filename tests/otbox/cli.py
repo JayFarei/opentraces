@@ -773,6 +773,38 @@ def cmd_down(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gc(args: argparse.Namespace) -> int:
+    """Sweep killed-run box residue + aged capture-refresh snapshots (issue #53)."""
+    from .env import BOXES_DIR, SNAPSHOTS_DIR
+    from .gc import sweep
+
+    ensure_state_root()
+    result = sweep(
+        boxes_dir=BOXES_DIR,
+        snapshots_dir=SNAPSHOTS_DIR,
+        current_box_id=get_current_box_id(),
+        min_age_hours=args.max_age,
+        dry_run=args.dry_run,
+    )
+    verb = "would remove" if args.dry_run else "removed"
+    _emit(
+        {"action": "gc", **result},
+        json_mode=args.json,
+        human=(
+            f"gc: {verb} {len(result['removed_boxes'])} box(es) "
+            f"({', '.join(result['removed_boxes']) or 'none'}), "
+            f"{len(result['removed_snapshots'])} snapshot(s) "
+            f"({', '.join(result['removed_snapshots']) or 'none'}); "
+            f"kept {len(result['kept'])}: "
+            + (
+                ", ".join(f"{k['box_id']} ({k['reason']})" for k in result["kept"])
+                or "(none)"
+            )
+        ),
+    )
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     box = resolve_box(args.box)
     if not args.command:
@@ -1446,6 +1478,14 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(snap_info.archive, artifact_path)
 
+    # Issue #53: the intermediate snapshot is unique-per-run residue once
+    # the archive is copied into tests/otbox/captures/ — nothing reads it
+    # afterwards (restore_from_capture reads only the captures dir).
+    try:
+        delete_snapshot(snap_name)
+    except OSError:
+        pass
+
     # Write provenance metadata next to the artifact.
     try:
         from opentraces import __version__ as cli_version
@@ -1998,6 +2038,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_down.add_argument("--box", metavar="BOX_ID")
     p_down.add_argument("--all", action="store_true", help="tear down every box")
     p_down.set_defaults(func=cmd_down)
+
+    p_gc = add("gc", help="sweep killed-run box residue + stale capture-refresh snapshots")
+    p_gc.add_argument("--dry-run", action="store_true", help="report without deleting")
+    p_gc.add_argument("--max-age", type=float, default=1.0, metavar="HOURS",
+                      help="age grace in hours (default: 1.0)")
+    p_gc.set_defaults(func=cmd_gc)
 
     p_run = add("run", help="run a command inside a box")
     p_run.add_argument("--box", metavar="BOX_ID")

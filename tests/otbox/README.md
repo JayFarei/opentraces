@@ -54,6 +54,7 @@ real `git_anchor_id`, `event_log_ref = "refs/opentraces/local/events/v1"`.
 | `snapshot <name> [--box ID] [--overwrite]` | freeze a box to `.otbox/snapshots/<name>.tar.gz` |
 | `restore <name> [--driver D] [--id ID]` | fork a fresh box from a snapshot |
 | `down [--box ID] [--all]` | tear a box down — leaves zero host residue |
+| `gc [--dry-run] [--max-age HOURS]` | sweep killed-run residue under `.otbox/` (issue #53) |
 | `run [--box ID] -- <cmd...>` | run an arbitrary command inside a box |
 | `ssh [--box ID] [--root]` | drop into the box's project dir (Tier 0 or Tier 1) |
 | `journey <name> [--box ID] [--artifacts]` | run a catalogue journey, verdict PASS/FAIL/SKIP |
@@ -64,6 +65,18 @@ real `git_anchor_id`, `event_log_ref = "refs/opentraces/local/events/v1"`.
 | `status [--box ID]` / `list` | inspect boxes, snapshots, drivers, seeds, journeys |
 | `snapshot-rm <name>` | delete a snapshot |
 | `image build [--tag T]` | build the Linux runtime image for the `docker` driver |
+
+`otbox gc` (also `make otbox-gc`) sweeps what a *killed* run leaves behind:
+boxes whose meta `owner_pid` is dead, meta-less crash stubs that
+`down --all` cannot see, and aged `_capture-refresh-*` snapshot archives
+(their payload already lives in `tests/otbox/captures/`). Keep rules are
+asymmetric by design — the current-pointer box, any box with a live owner
+pid, anything younger than the age grace (`--max-age`, default 1 hour),
+the `_checkpoint-*` content-addressed cache, and user-named snapshots are
+never touched; guard failures keep garbage rather than delete a live box.
+Failed checkpoint cold builds and matrix error rows tear their own boxes
+down in-run (set `OTBOX_KEEP_FAILED_BOXES=1` to keep a failed build's box
+around for debugging).
 
 ## Architecture
 
