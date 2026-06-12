@@ -93,9 +93,9 @@ Derivation rules (enforced by the gate):
 
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
-| CTX-1 | `ctx tree/step/reads/writes` reconstruct what the model saw per step (phantom checkpoints owned by the otbox-debt lane) | E | tracked | — | #42 |
-| CTX-2 | `ctx resume` produces a usable continuation packet | E | tracked | — | #42 |
-| CTX-3 | Compaction and rewind branches structurally correct | E | tracked | — | #42 |
+| CTX-1 | `ctx tree/step/reads/writes` reconstruct what the model saw per step (v1 JSONL path serves SESSION-LEVEL shared layers per node — the documented honest scope — so per-step reconstruction is an approximation; anchor precision stays red-quarantined on the codex world pending trail_anchor_hint commit_id wiring) | E | partial | context-tree-capture-fidelity, context-tree-demo-acceptance | #42 |
+| CTX-2 | `ctx resume` produces a usable continuation packet (the prune→resume bridge is journey-verified end-to-end: record-count + uuid-set fidelity and the rc=4 no-clobber contract; the resume packet itself is unit-level) | E | partial | context-tree-fork-fidelity, context-tree-ctx-prune-no-clobber, tests/context_tree/test_context_tree_resume.py | #42 |
+| CTX-3 | Compaction and rewind branches structurally correct | E | verified | context-tree-compaction-fidelity, context-tree-branching-fidelity | #42 |
 | CTX-4 | OTel vs JSONL structural equivalence for the same session | E | tracked | — | #42 |
 
 ## F. Security pipeline
