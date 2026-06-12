@@ -10,7 +10,6 @@
 journeys = [
   "context-tree-ctx-prune-no-clobber",
   "context-tree-demo-acceptance",
-  "context-tree-determinism",
   "context-tree-fork-fidelity",
   "context-tree-temporal-anchor-precision",
 ]
