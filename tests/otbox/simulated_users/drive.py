@@ -805,6 +805,22 @@ def drive_session(
                 # completion text is still detected.
                 seen_frames: list[str] = []
                 last_approval_frame = ""
+                # Record-to-completion (operator footage-gate finding,
+                # 2026-06-12): a loose expect_regex can match the agent's
+                # EARLY output while it is still working. Breaking there
+                # truncated the MP4 mid-turn and let the per-turn git
+                # verification race a still-working agent. After the regex
+                # matches we KEEP polling (approvals included) until the
+                # screen is stable for 3 consecutive polls with no busy
+                # marker, or the turn deadline lapses (matched stands).
+                completion_stable_hits = 0
+                prev_screen = ""
+                busy_markers = (
+                    "esc to interrupt",
+                    "ctrl+c to interrupt",
+                    "esc to cancel",
+                    "do you want to",  # pending approval dialog ≠ done
+                )
                 while time.monotonic() < deadline:
                     time.sleep(0.3)
                     screen = _tc_show(session)
@@ -826,14 +842,26 @@ def drive_session(
                         _tc_key(session, "enter")
                         _tc_mark(session, f"turn-{turn_idx}-approval", markers)
                         last_approval_frame = screen
+                        completion_stable_hits = 0
+                        prev_screen = screen
                         continue
-                    haystack = "\n".join(seen_frames)
-                    logs = _tc_logs(session)
-                    if logs:
-                        haystack = f"{haystack}\n{logs}"
-                    if pattern.search(haystack):
-                        matched = True
-                        break
+                    if not matched:
+                        haystack = "\n".join(seen_frames)
+                        logs = _tc_logs(session)
+                        if logs:
+                            haystack = f"{haystack}\n{logs}"
+                        if pattern.search(haystack):
+                            matched = True
+                            _tc_mark(session, f"turn-{turn_idx}-matched", markers)
+                    else:
+                        busy = any(m in lower for m in busy_markers)
+                        if screen.strip() and screen == prev_screen and not busy:
+                            completion_stable_hits += 1
+                            if completion_stable_hits >= 3:
+                                break
+                        else:
+                            completion_stable_hits = 0
+                    prev_screen = screen
 
                 elapsed = time.monotonic() - turn_started
                 _tc_mark(session, f"turn-{turn_idx}-response", markers)
