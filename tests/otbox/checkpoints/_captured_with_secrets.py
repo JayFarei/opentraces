@@ -64,7 +64,7 @@ _SESSION_ID = "sess-otbox-session-with-secrets"
 # substring so a partial mid-key redaction still reads as "the secret
 # survived" — the boundary we care about is "is the bearer literal
 # usable as-is".
-_SECRET_CANARY = "sk-test-abc123def456"
+_SECRET_CANARY = "sk-proj-OtboxCanary_0000"
 
 # tests/otbox/fake_harnesses/claude
 _HARNESS_SRC = Path(__file__).resolve().parents[1] / "fake_harnesses" / "claude"

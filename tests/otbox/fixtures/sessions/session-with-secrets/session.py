@@ -54,7 +54,7 @@ _CONFIG_AFTER = (
     'These literals are synthetic and only exist to drive the security pipeline.\n'
     '"""\n'
     '\n'
-    'OPENAI_API_KEY = "sk-test-abc123def456ghi789jkl012mno345pqr678stu901"\n'
+    'OPENAI_API_KEY = "sk-proj-OtboxCanary_0000000000000000000000000000"\n'
     'GITHUB_TOKEN = "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"\n'
     'INTERNAL_SECRET = "0x" + "deadbeef" * 8\n'
 )

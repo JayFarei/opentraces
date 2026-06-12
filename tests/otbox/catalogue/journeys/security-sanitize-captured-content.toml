@@ -14,7 +14,7 @@ enabled regex + entropy:
   1. The security pipeline ACTUALLY RAN at ingest time — the trace's
      `metadata.security.tools_applied` list is non-empty and the
      opted-in regex + entropy detectors recorded findings.
-  2. The user-facing projection (`trace query --tool Edit --json`)
+  2. The user-facing projection (`trace query --file-op edit --json`)
      does NOT leak the secret literal — proving the trace_query
      consumer surface is safe to forward to dashboards / Slack / PRs.
   3. The captured file (`src/config.py`) DOES surface as a facet —
@@ -75,7 +75,7 @@ equals = 0
 [[steps]]
 type = "cli"
 id = "trace-query-edits"
-argv = ["trace", "query", "--tool", "Edit", "--json"]
+argv = ["trace", "query", "--file-op", "edit", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -114,12 +114,12 @@ value = "src/config.py"
 [[assertions]]
 kind = "stdout_not_contains"
 step = "trace-query-edits"
-value = "sk-test-abc123def456"
+value = "sk-proj-OtboxCanary_0000"
 
 [[steps]]
 type = "shell"
 id = "no-secret-in-query"
-argv = ["bash", "-c", "! {repo_root}/otd trace query --tool Edit --json | grep -q 'sk-test-abc123def456'"]
+argv = ["bash", "-c", "! {repo_root}/otd trace query --file-op edit --json | grep -q 'sk-proj-OtboxCanary_0000'"]
 
 [[assertions]]
 kind = "returncode"

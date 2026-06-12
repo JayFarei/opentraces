@@ -190,6 +190,16 @@ def _derive_pr_branch_audit_from_restored_box(
         if log.ok and log.stdout.strip():
             branch_commit_shas = log.stdout.strip().splitlines()
 
+    # Subjects pair 1:1 with the shas. Journeys must assert on these via
+    # {branch_commit_subject_N} template vars, never literal subjects —
+    # real-agent artifacts word their own commits (#49 regen finding).
+    branch_commit_subjects: list[str] = []
+    for sha in branch_commit_shas:
+        sub = driver.exec(box, [
+            "git", "-C", project, "log", "-1", "--format=%s", sha,
+        ])
+        branch_commit_subjects.append(sub.stdout.strip() if sub.ok else "")
+
     # Synthetic-shaped artifacts carry the parent corpus session; the
     # remaining traces (capture order) are the branch sessions. Real
     # artifacts have no parent session — every trace is branch work.
@@ -209,6 +219,7 @@ def _derive_pr_branch_audit_from_restored_box(
         "branch_name": branch_name,
         "branch_commit_count": len(branch_commit_shas),
         "branch_commit_shas": branch_commit_shas,
+        "branch_commit_subjects": branch_commit_subjects,
         "branch_trace_ids": branch_trace_ids,
         "head_commit_sha": head_commit_sha,
         "parent_trace_id": parent_trace_id,
@@ -437,12 +448,18 @@ def _captured_with_pr_branch_delta(driver: Driver, box: Box) -> None:
 
     head_commit_sha = _git(driver, box, "rev-parse", "HEAD").stdout.strip()
 
+    branch_commit_subjects = [
+        _git(driver, box, "log", "-1", "--format=%s", sha).stdout.strip()
+        for sha in branch_commit_shas
+    ]
+
     box.notes["c_captured_with_pr_branch_audit"] = {
         "base_commit_sha": base_commit_sha,
         "base_branch": "main",
         "branch_name": _BRANCH_NAME,
         "branch_commit_count": len(branch_commit_shas),
         "branch_commit_shas": branch_commit_shas,
+        "branch_commit_subjects": branch_commit_subjects,
         "branch_trace_ids": branch_trace_ids,
         "head_commit_sha": head_commit_sha,
         "parent_trace_id": parent_audit.get("trace_id"),

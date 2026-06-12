@@ -448,6 +448,11 @@ def _captured_session(box: Box) -> dict[str, str]:
     result["base_commit_sha"] = str(pr_audit.get("base_commit_sha") or "")
     result["head_commit_sha"] = str(pr_audit.get("head_commit_sha") or "")
     result["branch_commit_count"] = str(pr_audit.get("branch_commit_count") or 0)
+    # Subjects are world-derived (#49 regen: real agents word their own
+    # commits); journeys assert via these vars, never literal subjects.
+    _pr_subjects = pr_audit.get("branch_commit_subjects") or []
+    result["branch_commit_subject_1"] = str(_pr_subjects[0]) if len(_pr_subjects) > 0 else ""
+    result["branch_commit_subject_2"] = str(_pr_subjects[1]) if len(_pr_subjects) > 1 else ""
 
     # Plan 085: expose the legacy-world checkpoint audits so migration
     # journeys forking from c-legacy-v033 / -upgraded can address the

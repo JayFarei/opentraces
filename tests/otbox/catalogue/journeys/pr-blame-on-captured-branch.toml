@@ -99,17 +99,19 @@ value = "## Intent"
 
 # The What Changed section enumerates every commit's subject in
 # `base_commit_sha..HEAD`. With 2 branch commits the body MUST list
-# both subjects ("PR branch commit 1" / "PR branch commit 2") — proof
-# the range walker iterated both commits, not just HEAD.
+# both subjects — proof the range walker iterated both commits, not
+# just HEAD. Subjects come from the checkpoint audit ({branch_commit_subject_N})
+# because real-agent artifacts word their own commits (#49 regen finding);
+# the synthetic world resolves the same vars to "PR branch commit N".
 [[assertions]]
 kind = "stdout_contains"
 step = "render-body"
-value = "PR branch commit 1"
+value = "{branch_commit_subject_1}"
 
 [[assertions]]
 kind = "stdout_contains"
 step = "render-body"
-value = "PR branch commit 2"
+value = "{branch_commit_subject_2}"
 
 # Per-commit detail blocks reference each commit's short SHA. The
 # first 7 chars of every branch commit SHA appear in the body's
