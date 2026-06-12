@@ -454,6 +454,14 @@ def _captured_session(box: Box) -> dict[str, str]:
     result["branch_commit_subject_1"] = str(_pr_subjects[0]) if len(_pr_subjects) > 0 else ""
     result["branch_commit_subject_2"] = str(_pr_subjects[1]) if len(_pr_subjects) > 1 else ""
 
+    # Multi-skill world query material (wave-2 exit-gate finding): the
+    # journey queries the index via the world's own head commit subject,
+    # never a synthetic-corpus literal.
+    ms_audit = box.notes.get("c_captured_multi_skill_audit") or {}
+    result["multi_skill_head_commit_subject"] = str(
+        ms_audit.get("head_commit_subject") or ""
+    )
+
     # Plan 085: expose the legacy-world checkpoint audits so migration
     # journeys forking from c-legacy-v033 / -upgraded can address the
     # restored 0.3.0 trace via {legacy_trace_id} and the fresh 0.4 capture
