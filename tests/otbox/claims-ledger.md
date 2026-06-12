@@ -37,8 +37,8 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-12, post #61 real-agent acceptance ritual): 27 verified,
-  18 partial, 7 open, 6 tracked, 0 waived — 58 rows.
+- Status counts (2026-06-12, post wave-2 merge train): 30 verified,
+  18 partial, 7 open, 3 tracked, 0 waived — 58 rows.
 
 ## A. Capture (per harness)
 
@@ -62,7 +62,7 @@ Derivation rules (enforced by the gate):
 | BKT-2 | `bucket replay --repo` reconstructs the canonical Git event ref byte-identically | B | verified | bucket-events-mirror-replay-equals-git, bucket-self-sufficient-everything | #25 |
 | BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/test_bucket_remote_symmetric.py, tests/otbox/test_determinism.py | #25 |
 | BKT-4 | `bucket repair` is idempotent; `prune` never touches events or trace.json | B | verified | bucket-prune-orphan-only, bucket-write-order-discipline-local, bucket-rebuild-context-tree-substrate | #25 |
-| BKT-5 | `bucket verify` detects corrupted blobs and dangling refs (corrupted-blob fault world is the remaining follow-up) | B | verified | bucket-verify-detects-dangling, bucket-verify-detects-corrupted-blob, bucket-compression-integrity-roundtrip, tests/core/test_bucket_store.py::test_bucket_verify_reports_truncated_gzip_blob_as_blob_content_error | #25 |
+| BKT-5 | `bucket verify` detects corrupted blobs and dangling refs | B | verified | bucket-verify-detects-dangling, bucket-verify-detects-corrupted-blob, bucket-compression-integrity-roundtrip, tests/core/test_bucket_store.py::test_bucket_verify_reports_truncated_gzip_blob_as_blob_content_error | #25 |
 | BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane, with default-CI symmetry coverage via the directory-backed fake dispatch (file:// scheme, issue #57) | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, bucket-symmetric-local-remote, ctx-show-with-lazy-blob-fetch, ctx-show-offline-fails, live-hf-bucket-roundtrip, tests/test_bucket_remote_symmetric.py, tests/otbox/test_live_hf_slice.py | — |
 | BKT-7 | Append-only hash-chained event log survives GC and rewrites | B | open | — | — |
 | BKT-8 | `bucket status`/`bucket manifest` are side-effect-free reads; self-heal is explicit via `bucket manifest --heal` / `bucket repair` (read-only digest == post-repair digest) | B | verified | bucket-read-verbs-side-effect-free, tests/core/test_bucket_store.py::test_bucket_read_verbs_are_side_effect_free, tests/core/test_bucket_store.py::test_readonly_node_count_matches_heal_when_live_log_is_trail_only, tests/core/test_bucket_store.py::test_manifest_write_repairs_stale_shape_with_unchanged_digest, migration-s5-read-in-place | #55 |
