@@ -5,34 +5,40 @@ Plan 077 keystone journey — the v1 acceptance test, mechanized.
 Plan 077 §"The demo" pins eight copy-pasteable commands that prove
 the Context Tree substrate is navigable end-to-end on a real
 captured session. This journey runs those eight commands in
-sequence, asserts the documented contract at each step, and
-(on full PASS) writes the rendered markdown artifact to
+sequence, asserts the SHIPPED contract at each step, and (run with
+--save-transcript) regenerates the committed markdown artifact at
 `tests/otbox/captures/context-tree-demo/transcript.md` — the
-conviction event the plan calls out:
+conviction event: a human reads the committed transcript and
+verifies the substrate works without running anything.
 
-  "A human reads the committed transcript and verifies the
-   substrate works without running anything."
+Silver tier per plan 077 §"Two tiers": step 6 (`claude --resume`)
+is structural verification of the pruned JSONL (parse + uuid-set
+equality against the prune packet), not a live agent invocation.
+Deterministic in CI. Gold variant (PTY runner) deferred to v1.1.
 
-The transcript renderer is already in place (Agent A landed
-`render_transcript` + `save_transcript` in `tests/otbox/journey.py`
-during Phase 1). This TOML is the contract the renderer renders.
+Issue #42 re-spec deltas from the plan-077 draft (shipped-envelope
+truth): `ctx step` emits `opentraces.context_tree.v1` with layer ids
+under `layers.<type>.layer_id`; read rows are
+{step_index, node_id, uuid, role, content_hash} (no
+result_uuid/result_bytes/tool_name); write rows are
+{step_index, node_id, uuid, role, content_hash, transcript_offset}
+(no tool_name/target_path/mutation_kind) and `--with-trail-anchor`
+joins the per-node hint which the claude_code JSONL path leaves
+null (asserted verbatim as `"trail_anchor_hint": null` — the
+documented honest gap; the populated-anchor half lives on the codex
+world, see context-tree-temporal-anchor-precision); `ctx prune`
+requires `--source-jsonl` and uses the verbatim stem; the drafted
+`ctx verify-session` verb does not exist — step 6 is a python
+parse-check shell step cross-checked against the prune packet via
+equals_var; `trace query` is read-only and requires a filter
+(--lex); `ctx diff` nests under `diff.*`.
 
-Silver tier per plan 077 §"Two tiers" → "Silver demo-acceptance":
-step 6 (`claude --resume`) is replaced by structural verification
-of the pruned JSONL (parse-as-Claude-Code-session + uuid set
-equality), not a live agent invocation. Deterministic in CI.
-Gold variant (PTY runner) deferred to v1.1.
-
-Forks from `c-context-tree-substrate` (the multi-turn fixture
-specifically — its 3-Edits-in-3-commits shape is what makes the
-`--from-step 5 --to-step 9` reads/writes range meaningful).
-
-Fails today because the entire `opentraces ctx` CLI (Phase 3)
-doesn't exist; the journey is the contract Phase 3 must satisfy
-to ship.
+Forks from `c-context-tree-substrate` (the multi-turn fixture — its
+3-Edits-in-3-commits shape is what makes the --from-step 5
+--to-step 9 range meaningful).
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier = 0
 tier_label = "gold"
 trajectories = ["context-tree-demo"]
 persona = "agent"
@@ -40,9 +46,8 @@ requires = ["cli", "git"]
 from_checkpoints = ["c-context-tree-substrate"]
 
 # Plan 077 §"Demo acceptance journey" — the transcript artifact is
-# the v1 acceptance proof. The runner gains a small
-# --save-transcript mode (already landed) that writes the rendered
-# markdown when all assertions pass.
+# the v1 acceptance proof, regenerated via
+# `otbox journey context-tree-demo-acceptance --save-transcript <path>`.
 [artifacts]
 transcript = "tests/otbox/captures/context-tree-demo/transcript.md"
 
@@ -50,7 +55,7 @@ transcript = "tests/otbox/captures/context-tree-demo/transcript.md"
 min_captured_traces = 1
 context_tree_built = true
 # The demo's --from-step 5 --to-step 9 range needs the multi-turn
-# fixture, which produces ≥3 Edit commits across that range.
+# fixture, which produces >= 3 Edit steps across the session.
 requires_edit_commits_min = 3
 
 # =====================================================================
@@ -79,7 +84,7 @@ path = "trace_id"
 equals = "{trace_id}"
 
 # Multi-turn fixture pins the node count; the runner expands
-# {expected_node_count} from the checkpoint audit.
+# {expected_node_count} from the live event log.
 [[assertions]]
 kind = "stdout_json_length_equals"
 step = "demo-1-tree"
@@ -108,7 +113,7 @@ equals = 0
 kind = "stdout_json"
 step = "demo-2-step"
 path = "schema_version"
-equals = "opentraces.context_node.v1"
+equals = "opentraces.context_tree.v1"
 
 [[assertions]]
 kind = "stdout_json"
@@ -120,27 +125,29 @@ equals = 7
 kind = "stdout_json"
 step = "demo-2-step"
 path = "node.node_id"
+equals = "{step_7_node_id}"
 
-# All four layer ids present (the cross-substrate join contract).
+# All four layer references present (the cross-substrate join
+# contract; shipped location: layers.<type>.layer_id).
 [[assertions]]
 kind = "stdout_json"
 step = "demo-2-step"
-path = "node.system_layer_id"
-
-[[assertions]]
-kind = "stdout_json"
-step = "demo-2-step"
-path = "node.messages_layer_id"
+path = "layers.system.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "demo-2-step"
-path = "node.tool_registry_layer_id"
+path = "layers.messages.layer_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "demo-2-step"
-path = "node.runtime_state_layer_id"
+path = "layers.tool_registry.layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "layers.runtime_state.layer_id"
 
 # =====================================================================
 # 3. what did the agent SEE between steps 5 and 9?
@@ -162,10 +169,8 @@ step = "demo-3-reads"
 path = "schema_version"
 equals = "opentraces.context_reads.v1"
 
-# At least one read row in the 5..9 window (multi-turn fixture has
-# Read tool calls embedded). Each row carries the canonical
-# {step_index, node_id, tool_use_id, tool_name, tool_input_hash,
-#  result_uuid, result_bytes, source} shape.
+# At least one read row in the 5..9 window, with the shipped
+# {step_index, node_id, uuid, role, content_hash} row shape.
 [[assertions]]
 kind = "stdout_json"
 step = "demo-3-reads"
@@ -174,17 +179,17 @@ path = "reads.0.step_index"
 [[assertions]]
 kind = "stdout_json"
 step = "demo-3-reads"
-path = "reads.0.tool_name"
+path = "reads.0.node_id"
 
 [[assertions]]
 kind = "stdout_json"
 step = "demo-3-reads"
-path = "reads.0.result_uuid"
+path = "reads.0.uuid"
 
 [[assertions]]
 kind = "stdout_json"
 step = "demo-3-reads"
-path = "reads.0.result_bytes"
+path = "reads.0.content_hash"
 
 # =====================================================================
 # 4. what did the agent WRITE in the same range?
@@ -210,38 +215,41 @@ step = "demo-4-writes"
 path = "schema_version"
 equals = "opentraces.context_writes.v1"
 
-# At least one write row, with the trail_anchor_hint joined in
-# (the --with-trail-anchor flag is the load-bearing differentiator
-# from the bare `ctx writes` call).
+# Shipped write-row shape: uuid / role / transcript_offset.
 [[assertions]]
 kind = "stdout_json"
 step = "demo-4-writes"
-path = "writes.0.tool_name"
+path = "writes.0.uuid"
 
 [[assertions]]
 kind = "stdout_json"
 step = "demo-4-writes"
-path = "writes.0.target_path"
+path = "writes.0.role"
+equals = "assistant"
 
 [[assertions]]
 kind = "stdout_json"
 step = "demo-4-writes"
-path = "writes.0.trail_anchor_hint.commit_id"
+path = "writes.0.transcript_offset"
 
+# --with-trail-anchor joins the per-node hint; on the claude_code
+# JSONL path the hint is the documented null (the key is PRESENT,
+# its value honestly null — asserted verbatim on the rendered JSON).
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_contains"
 step = "demo-4-writes"
-path = "writes.0.mutation_kind"
+value = "\"trail_anchor_hint\": null"
 
 # =====================================================================
 # 5a. prune to step 7 dry-run
-#     (`opentraces ctx prune $NODE --to-session rewind-step7`)
+#     (`opentraces ctx prune $NODE --source-jsonl ... --to-session rewind-step7`)
 # =====================================================================
 [[steps]]
 type = "cli"
 id = "demo-5a-prune-dryrun"
 argv = [
     "ctx", "prune", "{step_7_node_id}",
+    "--source-jsonl", "{transcript_path}",
     "--to-session", "rewind-step7",
     "--json",
 ]
@@ -260,8 +268,8 @@ equals = "opentraces.context_resume.v1"
 [[assertions]]
 kind = "stdout_json"
 step = "demo-5a-prune-dryrun"
-path = "dry_run"
-equals = true
+path = "wrote"
+equals = false
 
 [[assertions]]
 kind = "stdout_json"
@@ -270,13 +278,13 @@ path = "record_count"
 
 # =====================================================================
 # 5b. prune to step 7 with --write
-#     (`opentraces ctx prune $NODE --to-session rewind-step7 --write --json`)
 # =====================================================================
 [[steps]]
 type = "cli"
 id = "demo-5b-prune-write"
 argv = [
     "ctx", "prune", "{step_7_node_id}",
+    "--source-jsonl", "{transcript_path}",
     "--to-session", "rewind-step7",
     "--write", "--json",
 ]
@@ -296,28 +304,39 @@ equals = "opentraces.context_resume.v1"
 kind = "stdout_json"
 step = "demo-5b-prune-write"
 path = "new_session_id"
+equals = "rewind-step7"
 
 [[assertions]]
 kind = "stdout_json"
 step = "demo-5b-prune-write"
+path = "wrote"
+equals = true
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "demo-5b-prune-write"
 path = "jsonl_path"
+value = "rewind-step7.jsonl"
+
+# The write reports the same record count the dry-run promised.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "demo-5b-prune-write"
+path = "record_count"
+equals_var = "demo-5a-prune-dryrun:record_count"
 
 # =====================================================================
-# 6. (SILVER variant per plan 077) — structural verification of
-#    the pruned JSONL in lieu of `claude --resume`. The CLI
-#    exposes a `ctx verify-session` verb that parses the new
-#    JSONL as a valid Claude Code session and asserts the uuid
-#    set equals the pruned-to active path slice. Gold (PTY
-#    runner) deferred to v1.1.
+# 6. (SILVER variant per plan 077) — structural verification of the
+#    pruned JSONL in lieu of `claude --resume`: every line parses as
+#    a Claude Code JSONL record and the uuid sequence equals the
+#    prune packet's uuid_set. (The drafted `ctx verify-session` verb
+#    does not exist; this is the equivalent check through the
+#    box-installed python, cross-checked via equals_var.)
 # =====================================================================
 [[steps]]
-type = "cli"
+type = "shell"
 id = "demo-6-verify-pruned"
-argv = [
-    "ctx", "verify-session", "{pruned_session_id}",
-    "--against-node", "{step_7_node_id}",
-    "--json",
-]
+argv = [".testvenv/bin/python", "-c", "import json, os, sys; p = os.path.join(os.path.dirname(sys.argv[1]), 'rewind-step7.jsonl'); recs = [json.loads(l) for l in open(p, encoding='utf-8') if l.strip()]; print(json.dumps({'parse_ok': all(isinstance(r, dict) for r in recs), 'record_count': len(recs), 'uuids': [r.get('uuid') for r in recs]}))", "{transcript_path}"]
 
 [[assertions]]
 kind = "returncode"
@@ -327,31 +346,34 @@ equals = 0
 [[assertions]]
 kind = "stdout_json"
 step = "demo-6-verify-pruned"
-path = "schema_version"
-equals = "opentraces.context_resume.v1"
-
-[[assertions]]
-kind = "stdout_json"
-step = "demo-6-verify-pruned"
 path = "parse_ok"
 equals = true
 
+# The on-disk record count equals what the prune packet reported.
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_equals_var"
 step = "demo-6-verify-pruned"
-path = "uuid_set_matches"
-equals = true
+path = "record_count"
+equals_var = "demo-5b-prune-write:record_count"
+
+# uuid_set_matches, mechanized: the on-disk uuid sequence equals the
+# packet's uuid_set (active-path order), element-wise.
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "demo-6-verify-pruned"
+path = "uuids"
+equals_var = "demo-5b-prune-write:uuid_set"
 
 # =====================================================================
-# 7. (SILVER variant) — capture the "new trace" surrogate. In
-#    the silver flow this is a no-op proof that `trace query
-#    --limit 1` round-trips the pruned session id; in gold it
-#    would be the post-`--resume` real new trace.
+# 7. (SILVER variant) — the trace surface round-trips: the read-only
+#    Trace Index answers a lexical query over the captured session.
+#    (`trace query` requires a filter; --lex hits the fixture's
+#    "helper" prompts.)
 # =====================================================================
 [[steps]]
 type = "cli"
 id = "demo-7-trace-query"
-argv = ["trace", "query", "--limit", "1", "--json"]
+argv = ["trace", "query", "--lex", "helper", "--limit", "1", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -365,12 +387,9 @@ path = "candidates.0.trace_id"
 
 # =====================================================================
 # 8. confirm the pre-fork node is byte-identical
-#    (`opentraces ctx diff <step-7-node-A> <step-7-node-A> --layer messages`)
-#    In the silver flow both sides resolve to the SAME node id
-#    (since step 6 was structural verification, not a real new
-#    capture). This asserts the diff verb returns the canonical
-#    "no changes" envelope when comparing a node to itself — the
-#    load-bearing identity property.
+#    (`opentraces ctx diff <step-7-node> <step-7-node> --layer messages`)
+#    Identity property: the canonical "no changes" envelope when
+#    comparing a node to itself. Shipped shape nests under `diff`.
 # =====================================================================
 [[steps]]
 type = "cli"
@@ -391,22 +410,20 @@ step = "demo-8-diff"
 path = "schema_version"
 equals = "opentraces.context_tree.v1"
 
-# Identity property: empty added/removed/changed when comparing a
-# node to itself.
 [[assertions]]
 kind = "stdout_json_length_equals"
 step = "demo-8-diff"
-path = "added"
+path = "diff.added"
 equals = 0
 
 [[assertions]]
 kind = "stdout_json_length_equals"
 step = "demo-8-diff"
-path = "removed"
+path = "diff.removed"
 equals = 0
 
 [[assertions]]
 kind = "stdout_json_length_equals"
 step = "demo-8-diff"
-path = "changed"
+path = "diff.changed"
 equals = 0

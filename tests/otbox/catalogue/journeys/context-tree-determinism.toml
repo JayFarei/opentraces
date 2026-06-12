@@ -1,38 +1,43 @@
 name = "context-tree-determinism"
 description = """
 Plan 077 substrate-fidelity journey #6 (silver) — running capture
-twice on the same source JSONL must produce byte-identical event
-ids. Catches non-determinism in layer canonicalization, dict
-ordering, and timestamp leakage into content hashes.
+twice on the same source JSONL must produce identical
+content-addressed layer ids and structurally identical nodes.
+Catches non-determinism in layer canonicalization, dict ordering,
+and timestamp leakage into content hashes.
 
-The Context Tree substrate is content-addressed end to end:
-`layer_id = sha256(canonical_layer_material)`,
-`node_id = sha256(canonical_node_material)`,
-`event_id = sha256(canonical_event_material)`. If two captures of the
-same JSONL produce different ids, something timing-dependent or
-sort-dependent leaked into the canonicalization — silently
-poisoning the dedup and survival projections downstream.
+The Context Tree substrate is content-addressed:
+`layer_id = sha256(canonical_layer_material)`. If two captures of
+the same JSONL produce different layer ids, something
+timing-dependent or sort-dependent leaked into the canonicalization
+— silently poisoning dedup downstream.
 
-This journey runs capture twice into two fresh repos (sub-projects
-under the same box) and asserts that the sorted event_id lists for
-both `context_layer_captured` and `context_node_observed` events
-are equal between the two runs.
+Issue #42 re-spec deltas from the plan-077 draft: the drafted
+`ctx capture-from-jsonl` verb and the `--event-type` / `--sort-by`
+tree flags do not exist. The shipped re-capture path is the real
+ingest chain: two fresh git-init project dirs, two `_ingest-session`
+runs of the SAME multi-turn transcript ({transcript_path}, re-derived
+box-relative at expansion time), then `ctx tree --json` per run via
+the box-installed CLI (a shell step derives each run's minted
+trace_id from its own event log).
 
-The journey drives both the CLI (the user-visible capture path) and
-a helper that walks the canonical event log; the assertion uses
-`stdout_json_array_equals` for strict order-sensitive equality after
-both lists are sorted alphabetically by the helper. The library-only
-nature of this journey (`tests/otbox/journeys/.../determinism` per
-plan 077 §"Which journeys drive the CLI vs the library") means the
-helper is `ctx tree --json` invoked twice across two captures
-rather than a Python script.
+Identity-contract note (source truth, models.py::build_node): the
+random per-ingest `trace_id` is PART of node identity by design
+("every field except node_id is part of identity"), so the draft's
+byte-identical node-id comparison across two ingests is
+unrepresentable under the shipped contract. The equal-strength
+realizable properties asserted instead:
 
-Fails today because the underlying capture chain (Phase 2) doesn't
-exist; once it does, any non-determinism (dict iteration order,
-implicit time.time() in a canonicalizer) fails this journey loudly.
+  (a) sorted `context_layer_captured` layer_id lists are
+      byte-identical across the two runs (layers carry no trace_id —
+      this IS the content-addressed canonicalization surface), and
+  (b) the node sequences are element-wise identical across every
+      identity field EXCEPT the trace-scoped ones (branch_type,
+      step_index, transcript_uuid/parent/offset, all four layer
+      references, capture_completeness).
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier = 0
 tier_label = "silver"
 trajectories = ["context-tree-determinism"]
 persona = "agent"
@@ -44,169 +49,128 @@ min_captured_traces = 1
 context_tree_built = true
 
 # ---------------------------------------------------------------------
-# Step 1 — re-capture the same JSONL into a sub-project. The
-# `ctx capture-from-jsonl <path>` verb (Phase 3 helper, mirrors
-# `_ingest-session`) ingests an explicit JSONL into a fresh
-# project root and returns the resulting trace_id + event count.
-# Using --project to isolate the second capture from the first.
+# Step 1 — two fresh project dirs. `_ingest-session --project`
+# auto-enrolls them (capture is global-default opt-out).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "det-prepare-dirs"
+argv = ["bash", "-c", "mkdir -p {home}/det-a {home}/det-b && git -C {home}/det-a init -q && git -C {home}/det-b init -q"]
+
+[[assertions]]
+kind = "returncode"
+step = "det-prepare-dirs"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 2 + 3 — ingest the SAME transcript into both runs through the
+# real capture chain.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "capture-run-a"
-argv = [
-    "ctx", "capture-from-jsonl", "{captured_jsonl_path}",
-    "--project", "{project}/.opentraces-det-a",
-    "--json",
-]
+argv = ["_ingest-session", "{transcript_path}", "--project", "{home}/det-a"]
 
 [[assertions]]
 kind = "returncode"
 step = "capture-run-a"
 equals = 0
 
-[[assertions]]
-kind = "stdout_json"
-step = "capture-run-a"
-path = "schema_version"
-equals = "opentraces.context_tree.v1"
-
-[[assertions]]
-kind = "stdout_json"
-step = "capture-run-a"
-path = "trace_id"
-
-# ---------------------------------------------------------------------
-# Step 2 — second run into a sibling project root.
-# ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "capture-run-b"
-argv = [
-    "ctx", "capture-from-jsonl", "{captured_jsonl_path}",
-    "--project", "{project}/.opentraces-det-b",
-    "--json",
-]
+argv = ["_ingest-session", "{transcript_path}", "--project", "{home}/det-b"]
 
 [[assertions]]
 kind = "returncode"
 step = "capture-run-b"
 equals = 0
 
+# ---------------------------------------------------------------------
+# Step 4 + 5 — `ctx tree --json` per run through the box-installed
+# CLI. The minted trace id is per-ingest random (by contract), so a
+# shell step derives it from the run's own event log first.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "tree-run-a"
+argv = ["bash", "-c", '''tid=$(.testvenv/bin/python -c "import sys; from pathlib import Path; from opentraces.core.trails.event_log import read_events; print(next(e.trace_id for e in read_events(Path(sys.argv[1]), verify=False) if e.event_type=='context_node_observed'))" {home}/det-a) && .testvenv/bin/opentraces ctx tree "$tid" --project {home}/det-a --json''']
+
+[[assertions]]
+kind = "returncode"
+step = "tree-run-a"
+equals = 0
+
 [[assertions]]
 kind = "stdout_json"
-step = "capture-run-b"
+step = "tree-run-a"
 path = "schema_version"
 equals = "opentraces.context_tree.v1"
 
+# Run A's node count matches the substrate's pinned multi-turn count
+# (the transcript fully re-projects, nothing silently dropped).
 [[assertions]]
-kind = "stdout_json"
-step = "capture-run-b"
-path = "trace_id"
+kind = "stdout_json_length_equals"
+step = "tree-run-a"
+path = "nodes"
+equals_var = "expected_node_count"
 
-# ---------------------------------------------------------------------
-# Step 3 — sorted event_id list for run A, filtered to
-# context_layer_captured events. Exposed via
-# `ctx tree --event-type <t> --sort-by event_id --json`.
-# ---------------------------------------------------------------------
 [[steps]]
-type = "cli"
-id = "events-run-a-layers"
-argv = [
-    "ctx", "tree", "{trace_id}",
-    "--project", "{project}/.opentraces-det-a",
-    "--event-type", "context_layer_captured",
-    "--sort-by", "event_id",
-    "--json",
-]
+type = "shell"
+id = "tree-run-b"
+argv = ["bash", "-c", '''tid=$(.testvenv/bin/python -c "import sys; from pathlib import Path; from opentraces.core.trails.event_log import read_events; print(next(e.trace_id for e in read_events(Path(sys.argv[1]), verify=False) if e.event_type=='context_node_observed'))" {home}/det-b) && .testvenv/bin/opentraces ctx tree "$tid" --project {home}/det-b --json''']
 
 [[assertions]]
 kind = "returncode"
-step = "events-run-a-layers"
+step = "tree-run-b"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-run-b"
+path = "nodes"
+equals_var = "expected_node_count"
+
+# ---------------------------------------------------------------------
+# Step 6 + 7 — the canonical determinism comparison: sorted layer ids
+# plus trace-id-independent structural node rows per run, read off
+# each run's event log.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "canonical-run-a"
+argv = [".testvenv/bin/python", "-c", "import json, sys; from pathlib import Path; from opentraces.core.trails.event_log import read_events; evs = list(read_events(Path(sys.argv[1]), verify=False)); fields = ('branch_type','step_index','transcript_uuid','transcript_parent_uuid','transcript_offset','system_layer_id','messages_layer_id','tool_registry_layer_id','runtime_state_layer_id','capture_completeness','subagent_session_id'); print(json.dumps({'layer_ids': sorted({e.payload['layer_id'] for e in evs if e.event_type=='context_layer_captured'}), 'structural_nodes': [{k: e.payload.get(k) for k in fields} for e in evs if e.event_type=='context_node_observed']}))", "{home}/det-a"]
+
+[[assertions]]
+kind = "returncode"
+step = "canonical-run-a"
 equals = 0
 
 [[assertions]]
 kind = "stdout_json"
-step = "events-run-a-layers"
-path = "schema_version"
-equals = "opentraces.context_tree.v1"
+step = "canonical-run-a"
+path = "layer_ids.0"
 
-[[assertions]]
-kind = "stdout_json"
-step = "events-run-a-layers"
-path = "event_ids"
-
-# ---------------------------------------------------------------------
-# Step 4 — same query for run B. Must produce the same sorted
-# event_id list.
-# ---------------------------------------------------------------------
 [[steps]]
-type = "cli"
-id = "events-run-b-layers"
-argv = [
-    "ctx", "tree", "{trace_id}",
-    "--project", "{project}/.opentraces-det-b",
-    "--event-type", "context_layer_captured",
-    "--sort-by", "event_id",
-    "--json",
-]
+type = "shell"
+id = "canonical-run-b"
+argv = [".testvenv/bin/python", "-c", "import json, sys; from pathlib import Path; from opentraces.core.trails.event_log import read_events; evs = list(read_events(Path(sys.argv[1]), verify=False)); fields = ('branch_type','step_index','transcript_uuid','transcript_parent_uuid','transcript_offset','system_layer_id','messages_layer_id','tool_registry_layer_id','runtime_state_layer_id','capture_completeness','subagent_session_id'); print(json.dumps({'layer_ids': sorted({e.payload['layer_id'] for e in evs if e.event_type=='context_layer_captured'}), 'structural_nodes': [{k: e.payload.get(k) for k in fields} for e in evs if e.event_type=='context_node_observed']}))", "{home}/det-b"]
 
 [[assertions]]
 kind = "returncode"
-step = "events-run-b-layers"
+step = "canonical-run-b"
 equals = 0
 
-# The core property: sorted event_id lists for context_layer_captured
-# events are equal between the two repos. The runner expands
-# {events_run_a_layer_ids} from the previous step's stdout (templating
-# engine captures step outputs into variables for later reference).
+# Property (a) — byte-identical content-addressed layer ids.
 [[assertions]]
 kind = "stdout_json_array_equals"
-step = "events-run-b-layers"
-path = "event_ids"
-equals_var = "events_run_a_layer_ids"
+step = "canonical-run-b"
+path = "layer_ids"
+equals_var = "canonical-run-a:layer_ids"
 
-# ---------------------------------------------------------------------
-# Step 5 — same property for context_node_observed events.
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "events-run-a-nodes"
-argv = [
-    "ctx", "tree", "{trace_id}",
-    "--project", "{project}/.opentraces-det-a",
-    "--event-type", "context_node_observed",
-    "--sort-by", "event_id",
-    "--json",
-]
-
-[[assertions]]
-kind = "returncode"
-step = "events-run-a-nodes"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "events-run-a-nodes"
-path = "event_ids"
-
-[[steps]]
-type = "cli"
-id = "events-run-b-nodes"
-argv = [
-    "ctx", "tree", "{trace_id}",
-    "--project", "{project}/.opentraces-det-b",
-    "--event-type", "context_node_observed",
-    "--sort-by", "event_id",
-    "--json",
-]
-
-[[assertions]]
-kind = "returncode"
-step = "events-run-b-nodes"
-equals = 0
-
+# Property (b) — element-wise identical structural node rows.
 [[assertions]]
 kind = "stdout_json_array_equals"
-step = "events-run-b-nodes"
-path = "event_ids"
-equals_var = "events_run_a_node_ids"
+step = "canonical-run-b"
+path = "structural_nodes"
+equals_var = "canonical-run-a:structural_nodes"

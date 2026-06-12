@@ -15,7 +15,7 @@ as a substring. Order-insensitive, no LLM oracle.
 Fails today because neither mode exists yet.
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier = 0
 tier_label = "silver"
 trajectories = ["context-tree-cli"]
 persona = "agent"
