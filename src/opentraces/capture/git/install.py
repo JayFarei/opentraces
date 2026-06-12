@@ -74,6 +74,34 @@ def _chmod_x(path: Path) -> None:
     path.chmod(st | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _ensure_notes_refspec(repo: Path) -> None:
+    """Ensure exactly one notes fetch refspec entry (fixed-point;
+    also converges legacy duplicates from pre-#59 installs)."""
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--get-all", "remote.origin.fetch"],
+            cwd=str(repo), capture_output=True, text=True, timeout=5,
+        )
+        existing = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        count = existing.count(NOTES_REFSPEC)
+        if count == 1:
+            return
+        if count == 0:
+            subprocess.check_call(
+                ["git", "config", "--add", "remote.origin.fetch", NOTES_REFSPEC],
+                cwd=str(repo), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            # Legacy duplicated state: collapse all identical entries to one.
+            subprocess.check_call(
+                ["git", "config", "--fixed-value", "--replace-all",
+                 "remote.origin.fetch", NOTES_REFSPEC, NOTES_REFSPEC],
+                cwd=str(repo), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    except Exception:
+        pass  # no origin remote / read failure is fine, matches existing behavior
+
+
 def install(repo: Path) -> bool:
     """Install the opentraces post-commit hook + notes refspec.
 
@@ -109,14 +137,7 @@ def install(repo: Path) -> bool:
     _chmod_x(pc)
 
     # Fetch refspec: ensure notes come along on `git fetch`.
-    try:
-        subprocess.check_call(
-            ["git", "config", "--add", "remote.origin.fetch", NOTES_REFSPEC],
-            cwd=str(repo),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass  # no origin remote is fine
+    _ensure_notes_refspec(repo)
     return True
 
 
