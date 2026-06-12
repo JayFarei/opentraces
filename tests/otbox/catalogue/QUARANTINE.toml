@@ -8,7 +8,6 @@
 
 [[entries]]
 journeys = [
-  "context-tree-capture-fidelity",
   "context-tree-ctx-prune-no-clobber",
   "context-tree-demo-acceptance",
   "context-tree-determinism",
