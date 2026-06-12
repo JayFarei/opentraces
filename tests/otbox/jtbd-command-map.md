@@ -60,7 +60,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **manual-inbox-recovery** | 1/1 | 2 | `_scan` after missed hooks |
 | **schema-migration** | 1/1 | 2 | `migrate` + `_migrate-trace-ids` |
 | **attribution-backfill** | 1 → 2 | 2 | `backfill` (cache) + `git-backfill` (notes refs) |
-| **enable-live-attribution** | 1 → 3 + lifecycle | 2 | `setup watcher install/start/stop/restart/status/tick/uninstall` |
+| **enable-live-attribution** | 1 → 3 + lifecycle | 2 | `setup watcher install/start/stop/restart/status/tick/sweep/uninstall` |
 | **retrieve-relevant-traces** ★ | 1 → 3 | 3 (Trace) + 6 (Dataset) | `trace query` → result handling → downstream consumer |
 | **inspect-trace-context** | 1 → 2 | 3 | `trace map` for structural inspection |
 | **inspect-context-tree** | 1 → 9 | 3 | `ctx tree/show/step/reads/writes/diff/compactions/list/info` for what the model saw |
@@ -167,6 +167,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `setup watcher status` | Developer checks whether the watcher unit is installed + running before debugging a missing `trail blame` entry | enable-live-attribution (check) | unowned | human |
 | `setup watcher uninstall` | Developer removes the watcher unit + shim entirely so the daemon no longer runs | enable-live-attribution (3/3) | unowned | human |
 | `setup watcher tick` | Developer triggers a single synchronous watcher tick + prints the report so they can diagnose attribution coverage without waiting for the scheduled poll | enable-live-attribution (diagnostic) | unowned | human |
+| `setup watcher sweep` | Production watcher entrypoint (#65): runs one bounded sweep over all enlisted projects then exits, so the launchd/systemd unit ticks every project without a long-lived daemon pinning RSS | enable-live-attribution (lifecycle: sweep) | unowned | human |
 | `capture-otlp start` | Developer starts the local OTLP receiver so Claude Code telemetry can be collected for Context Tree capture | configure-otel-capture (2/6) | unowned | human |
 | `capture-otlp status` | Developer checks receiver health, capture counts, uptime, and raw-body footprint before trusting OTel-backed Context Tree evidence | configure-otel-capture (3/6) | unowned | both |
 | `capture-otlp flush` | Developer flushes receiver snapshots into a project's canonical event log so captured Context Tree layers become queryable by `ctx` | configure-otel-capture (4/6) | unowned | both |
