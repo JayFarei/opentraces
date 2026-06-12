@@ -51,7 +51,7 @@ Derivation rules (enforced by the gate):
 | CAP-5 | `init --import-existing` backfills historical Claude sessions | A | verified | capture-safety-import-existing, tests/cli/test_cli_init_autoscan.py | — |
 | CAP-6 | Hook failures never block the agent session (always exit 0) — 4 Claude scripts x 4 faults + missing-package sweep, Codex modules, git shim | A | verified | tests/otbox/test_faultpoints.py | — |
 | CAP-7 | OTel capture yields `completeness=full` layers; receiver-down never blocks agent traffic | A | partial | tests/test_otlp_capture.py, context-tree-otel-receiver-up, context-tree-otel-bypass-mode | — |
-| CAP-8 | Installers (`setup claude-code/codex-cli/pi/git`) are idempotent and preserve unrelated hooks (one refspec-duplication finding still open) | A | partial | tests/otbox/test_idempotency_sweep.py, pi-setup-dry-run, onboard-integrations | — |
+| CAP-8 | Installers (`setup claude-code/codex-cli/pi/git`) are idempotent and preserve unrelated hooks | A | verified | tests/otbox/test_idempotency_sweep.py, tests/capture/test_installers_git_hook.py, pi-setup-dry-run, onboard-integrations | — |
 | CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds (5 acceptance scenarios bind J1/J6/J7/J10/J13; deterministic scorer + schema-versioned report + warn-only freshness gate land in default CI via the echo-mode synthetic harness; real-agent ritual executed 2026-06-12 — claude 2.1.175, 5/5 arcs PASS mean 1.0, operator footage review approved, committed report at tests/otbox/captures/_acceptance/report.json) | A | verified | tests/otbox/test_acceptance_report.py, tests/otbox/test_acceptance_scoring.py | #61 |
 
 ## B. Bucket and privacy boundary

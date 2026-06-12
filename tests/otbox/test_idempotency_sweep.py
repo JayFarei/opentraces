@@ -152,11 +152,9 @@ def test_verb_reaches_fixed_point(driver, verb, masks):
 # ---------------------------------------------------------------------------
 #
 # Contract surface per installer = the settings file it merges into plus
-# the hook-script dir it owns. The digest deliberately EXCLUDES
-# ``.git/config`` for `setup git`: the notes-refspec `git config --add`
-# is a KNOWN non-idempotent edge (each run appends a duplicate
-# `remote.origin.fetch` line) tracked as a release-gate finding — pinning
-# it here would freeze the bug as contract.
+# the hook-script dir it owns. For `setup git` the contract now INCLUDES
+# ``.git/config``: the notes-refspec write is fixed-point as of #59
+# (exactly one `remote.origin.fetch` notes entry, duplicates converged).
 
 
 def _fresh_box(driver) -> Box:
@@ -271,7 +269,11 @@ def test_setup_git_fixed_point_preserves_user_hook(driver):
         user_hook.chmod(0o755)
 
         hooks_dir = box.project / ".git" / "hooks"
-        contract = [hooks_dir / "post-commit", hooks_dir / "opentraces-post-commit"]
+        contract = [
+            hooks_dir / "post-commit",
+            hooks_dir / "opentraces-post-commit",
+            box.project / ".git" / "config",
+        ]
         _run_twice_to_fixed_point(driver, box, ["setup", "git"], contract)
 
         chained = (hooks_dir / "post-commit").read_text()
@@ -279,6 +281,9 @@ def test_setup_git_fixed_point_preserves_user_hook(driver):
         assert "echo user-hook-ran" in chained
         assert chained.count("# >>> opentraces post-commit chain >>>") == 1
         assert (hooks_dir / "opentraces-post-commit").exists()
+        # Notes refspec is fixed-point (#59): exactly one entry, never duplicated.
+        git_config = (box.project / ".git" / "config").read_text()
+        assert git_config.count("+refs/notes/opentraces:refs/notes/opentraces") == 1
     finally:
         if box.root.exists():
             driver.teardown(box)
