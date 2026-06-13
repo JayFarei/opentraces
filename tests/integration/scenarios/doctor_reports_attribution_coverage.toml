@@ -5,6 +5,9 @@ description = "After init + a write_attribution fixture, `ot doctor --json` surf
 type = "reset"
 
 [[steps]]
+type = "isolate_home"
+
+[[steps]]
 type = "write_file"
 path = "hello.py"
 content = "print('hi')\n"

@@ -90,6 +90,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -145,6 +146,81 @@ def _otd_path() -> Path:
     return _repo_root() / "otd"
 
 
+def _env_overrides(state) -> dict[str, str]:
+    return dict(getattr(state, "_env_overrides", None) or {})
+
+
+def _set_env_override(state, key: str, value: str | Path) -> None:
+    overrides = _env_overrides(state)
+    overrides[key] = str(value)
+    state._env_overrides = overrides
+
+
+def _subprocess_env(state) -> dict[str, str]:
+    env = {**os.environ}
+    env.update(_env_overrides(state))
+    return env
+
+
+def _scenario_home(state, params: dict) -> Path:
+    raw = Path(params.get("home") or ".opentraces-test-home")
+    home = raw if raw.is_absolute() else state.project_dir / raw
+    home = home.resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    opentraces_dir = home / ".opentraces"
+    (opentraces_dir / "projects").mkdir(parents=True, exist_ok=True)
+    (opentraces_dir / "staging").mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def _set_isolated_home(state, params: dict) -> Path:
+    home = _scenario_home(state, params)
+    _set_env_override(state, "HOME", home)
+    return home
+
+
+@contextmanager
+def _opentraces_home_context(state):
+    """Temporarily route in-process opentraces globals to state.HOME."""
+    home = _env_overrides(state).get("HOME")
+    if not home:
+        yield
+        return
+
+    from opentraces.core import config as _config
+    from opentraces.core import paths as _paths
+
+    home_path = Path(home)
+    opentraces_dir = home_path / ".opentraces"
+    attrs = {
+        "OPENTRACES_DIR": opentraces_dir,
+        "CONFIG_PATH": opentraces_dir / "config.json",
+        "CREDENTIALS_PATH": opentraces_dir / "credentials",
+        "PROJECTS_DIR": opentraces_dir / "projects",
+        "STAGING_DIR": opentraces_dir / "staging",
+    }
+    for path in (opentraces_dir, attrs["PROJECTS_DIR"], attrs["STAGING_DIR"]):
+        path.mkdir(parents=True, exist_ok=True)
+
+    old_env = os.environ.get("HOME")
+    old_attrs = []
+    try:
+        os.environ["HOME"] = str(home_path)
+        for mod in (_paths, _config):
+            for name, value in attrs.items():
+                if hasattr(mod, name):
+                    old_attrs.append((mod, name, getattr(mod, name)))
+                    setattr(mod, name, value)
+        yield
+    finally:
+        if old_env is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = old_env
+        for mod, name, value in reversed(old_attrs):
+            setattr(mod, name, value)
+
+
 def _json_from_stdout(stdout: str) -> dict:
     try:
         return json.loads(stdout)
@@ -163,6 +239,7 @@ def _run_otd_json(state, args: list[str]) -> dict:
         cwd=state.project_dir,
         capture_output=True,
         text=True,
+        env=_subprocess_env(state),
     )
     if r.returncode != 0:
         raise AssertionError(
@@ -507,6 +584,7 @@ def _step_start_watcher(state: RunState, params: dict) -> None:
     state.watcher_proc = subprocess.Popen(
         [sys.executable, str(SPIKE), "watch", str(state.project_dir)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=_subprocess_env(state),
     )
     time.sleep(1.0)  # let initial poll happen
 
@@ -561,16 +639,17 @@ def _step_run_backfill(state: RunState, params: dict) -> None:
 def _step_trail_preflight(state: RunState, params: dict) -> None:
     """Verify and optionally install the local dev CLI path for a real scenario."""
     expected_version = params.get("expected_version")
-    version = _run([str(_otd_path()), "--version"], cwd=state.project_dir)
+    env = _subprocess_env(state)
+    version = _run([str(_otd_path()), "--version"], cwd=state.project_dir, env=env)
     if expected_version and expected_version not in version.stdout:
         raise AssertionError(
             f"expected otd version containing {expected_version!r}, "
             f"got {version.stdout.strip()!r}"
         )
     if params.get("setup_claude_code", True):
-        _run([str(_otd_path()), "setup", "claude-code"], cwd=state.project_dir)
+        _run([str(_otd_path()), "setup", "claude-code"], cwd=state.project_dir, env=env)
     if params.get("setup_git", True):
-        _run([str(_otd_path()), "setup", "git"], cwd=state.project_dir)
+        _run([str(_otd_path()), "setup", "git"], cwd=state.project_dir, env=env)
         owned = state.project_dir / ".git" / "hooks" / "opentraces-post-commit"
         if not owned.exists():
             raise AssertionError(f"git hook was not installed at {owned}")
@@ -578,8 +657,14 @@ def _step_trail_preflight(state: RunState, params: dict) -> None:
         _run(
             [str(_otd_path()), "doctor"],
             cwd=state.project_dir,
+            env=env,
             check=bool(params.get("doctor_check", False)),
         )
+
+
+def _step_isolate_home(state: RunState, params: dict) -> None:
+    """Route later subprocess and in-process opentraces state to local HOME."""
+    _set_isolated_home(state, params)
 
 
 def _step_invoke_cli(state: RunState, params: dict) -> None:
@@ -588,18 +673,17 @@ def _step_invoke_cli(state: RunState, params: dict) -> None:
     Honors ``state._pending_stdin`` (from ``mock_stdin``) and
     ``state._env_overrides`` (from ``stage_claude_corpus``).
     """
+    if params.get("isolated_home"):
+        _set_isolated_home(state, params)
     args = list(params.get("args") or [])
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     otd = repo_root / "otd"
-    env = {**os.environ}
-    overrides = getattr(state, "_env_overrides", None) or {}
-    env.update({k: str(v) for k, v in overrides.items()})
     stdin_text = getattr(state, "_pending_stdin", None)
     r = subprocess.run(
         [str(otd), *args], cwd=state.project_dir,
         capture_output=True, text=True,
         input=stdin_text if stdin_text is not None else None,
-        env=env,
+        env=_subprocess_env(state),
     )
     state._pending_stdin = None
     state.last_cli = {
@@ -801,9 +885,7 @@ def _step_stage_claude_corpus(state: RunState, params: dict) -> None:
     (corpus / params.get("session", "session-a.jsonl")).write_text(
         params.get("content", "{}\n")
     )
-    overrides = getattr(state, "_env_overrides", None) or {}
-    overrides["HOME"] = str(home)
-    state._env_overrides = overrides
+    _set_env_override(state, "HOME", home)
 
 
 def _step_watcher_run_once(state: RunState, params: dict) -> None:
@@ -854,8 +936,9 @@ def _step_write_attribution(state: RunState, params: dict) -> None:
     payload.setdefault("commit_sha", sha)
     payload.setdefault("project_slug", state.project_dir.name)
     payload.setdefault("generated_at", "2026-04-14T00:00:00Z")
-    c = AttributionCache(state.project_dir)
-    c.write_attribution(sha, payload)
+    with _opentraces_home_context(state):
+        c = AttributionCache(state.project_dir)
+        c.write_attribution(sha, payload)
 
 
 def _step_write_entity_cache(state: RunState, params: dict) -> None:
@@ -873,12 +956,13 @@ def _step_write_entity_cache(state: RunState, params: dict) -> None:
     sha = subprocess.check_output(
         ["git", "rev-parse", ref], cwd=state.project_dir, text=True
     ).strip()
-    c = AttributionCache(state.project_dir)
-    p = c.entity_path(sha)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    _os.replace(tmp, p)
+    with _opentraces_home_context(state):
+        c = AttributionCache(state.project_dir)
+        p = c.entity_path(sha)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+        _os.replace(tmp, p)
 
 
 def _step_delete_cache_entry(state: RunState, params: dict) -> None:
@@ -888,10 +972,11 @@ def _step_delete_cache_entry(state: RunState, params: dict) -> None:
     sha = subprocess.check_output(
         ["git", "rev-parse", ref], cwd=state.project_dir, text=True
     ).strip()
-    c = AttributionCache(state.project_dir)
-    p = c.attribution_path(sha)
-    if p.is_file():
-        p.unlink()
+    with _opentraces_home_context(state):
+        c = AttributionCache(state.project_dir)
+        p = c.attribution_path(sha)
+        if p.is_file():
+            p.unlink()
 
 
 STEP_HANDLERS = {
@@ -906,6 +991,7 @@ STEP_HANDLERS = {
     "start_watcher": _step_start_watcher,
     "stop_watcher": _step_stop_watcher,
     "init_opentraces": _step_init_opentraces,
+    "isolate_home": _step_isolate_home,
     "run_backfill": _step_run_backfill,
     "trail_preflight": _step_trail_preflight,
     "trail_select_patch": _step_trail_select_patch,

@@ -23,6 +23,12 @@ from ..security.trufflehog import find_trufflehog
 from ..security.version import SECURITY_VERSION
 
 
+_BUCKET_MANIFEST_SCHEMA = "opentraces.bucket.manifest.v2"
+_DOCTOR_BUCKET_MANIFEST_MAX_BYTES = 16 * 1024 * 1024
+_DOCTOR_EVENT_LOG_MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+_DOCTOR_EVENT_LOG_MAX_BATCHES = 1_000
+
+
 # --- Trace Trails event-log panel (plan 054 phase 1) ----------------------
 
 
@@ -107,76 +113,127 @@ def _trace_index_status() -> dict[str, Any]:
 
 
 def _bucket_status() -> dict[str, Any]:
-    """Report local bucket health for future remote sync."""
-    try:
-        from .bucket_store import bucket_manifest
+    """Report local bucket health without regenerating bucket projections."""
+    from . import paths
+    from .bucket_layout import bucket_manifest_path
 
-        manifest = bucket_manifest(write=True, include_objects=False)
+    manifest_path = bucket_manifest_path()
+    base = {
+        "root": str(paths.bucket_dir()),
+        "digest": None,
+        "trace_records": {},
+        "trail": {},
+        "sync": {},
+        "manifest_path": str(manifest_path),
+        "context_tree": _bucket_context_tree_section(None),
+    }
+    if not manifest_path.exists():
         return {
-            "state": "ok",
-            "root": manifest.get("root"),
-            "digest": manifest.get("digest"),
-            "trace_records": manifest.get("trace_records") or {},
-            "trail": manifest.get("trail") or {},
-            "sync": manifest.get("sync") or {},
-            "manifest_path": str(
-                Path(str(manifest.get("root") or "")) / "manifest.json"
-            )
-            if manifest.get("root")
-            else None,
-            "context_tree": _bucket_context_tree_section(),
+            **base,
+            "state": "not-built",
+            "advice": "run 'opentraces bucket status' to build the bucket manifest",
         }
-    except Exception as exc:
+
+    try:
+        manifest_bytes = manifest_path.stat().st_size
+    except OSError as exc:
+        return {**base, "state": "error", "error": str(exc)}
+
+    max_bytes = _doctor_bucket_manifest_max_bytes()
+    if manifest_bytes > max_bytes:
         return {
+            **base,
+            "state": "too-large",
+            "manifest_bytes": manifest_bytes,
+            "max_manifest_bytes": max_bytes,
+            "advice": "run 'opentraces bucket status' for a full bucket scan",
+        }
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {**base, "state": "error", "error": str(exc)}
+    if not isinstance(manifest, dict):
+        return {**base, "state": "error", "error": "manifest is not a JSON object"}
+    if manifest.get("schema_version") != _BUCKET_MANIFEST_SCHEMA:
+        return {
+            **base,
             "state": "error",
-            "error": str(exc),
-            "context_tree": _bucket_context_tree_section(),
-        }
-
-
-def _bucket_context_tree_section() -> dict[str, Any]:
-    """Plan 079 R16: doctor surface for the bucket Context Tree projection.
-
-    Required keys: ``last_projection_at``, ``events_since_last_projection``,
-    ``oldest_unprojected_event_time``, ``trace_count``, ``layer_blob_count``,
-    ``dangling_layer_refs``, ``remote_sync_eligible``. Reuses the
-    aggregator that backs ``opentraces bucket context-tree status`` so the
-    two surfaces never drift.
-    """
-    try:
-        from .bucket_store import (
-            compute_context_tree_status,
-            iter_context_tree_traces,
-        )
-
-        ct = compute_context_tree_status()
-        rows = iter_context_tree_traces()
-        remote_sync_eligible = bool(rows) and all(
-            row.get("remote_sync_eligible") is True for row in rows
-        )
-        return {
-            "last_projection_at": ct.get("last_projection_at"),
-            "events_since_last_projection": int(
-                ct.get("events_since_last_projection", 0) or 0
+            "error": (
+                "manifest schema is "
+                f"{manifest.get('schema_version')!r}, expected "
+                f"{_BUCKET_MANIFEST_SCHEMA!r}"
             ),
-            "oldest_unprojected_event_time": ct.get("oldest_unprojected_event_time"),
-            "trace_count": int(ct.get("trace_count", 0) or 0),
-            "layer_blob_count": int(ct.get("unique_layer_blob_count", 0) or 0),
-            "dangling_layer_refs": int(ct.get("dangling_layer_refs_count", 0) or 0),
-            "remote_sync_eligible": remote_sync_eligible,
         }
-    except Exception as exc:
-        return {
-            "state": "error",
-            "error": str(exc),
-            "last_projection_at": None,
-            "events_since_last_projection": 0,
-            "oldest_unprojected_event_time": None,
-            "trace_count": 0,
-            "layer_blob_count": 0,
-            "dangling_layer_refs": 0,
-            "remote_sync_eligible": False,
-        }
+
+    return {
+        **base,
+        "state": "ok",
+        "root": manifest.get("root") or str(paths.bucket_dir()),
+        "digest": manifest.get("digest") or manifest.get("bucket_digest"),
+        "trace_records": manifest.get("trace_records") or {},
+        "trail": manifest.get("trail") or {},
+        "sync": manifest.get("sync") or {},
+        "manifest_bytes": manifest_bytes,
+        "context_tree": _bucket_context_tree_section(manifest),
+    }
+
+
+def _doctor_bucket_manifest_max_bytes() -> int:
+    raw = os.environ.get("OPENTRACES_DOCTOR_BUCKET_MANIFEST_MAX_BYTES")
+    if raw:
+        try:
+            return max(1024, int(raw))
+        except ValueError:
+            return _DOCTOR_BUCKET_MANIFEST_MAX_BYTES
+    return _DOCTOR_BUCKET_MANIFEST_MAX_BYTES
+
+
+def _bucket_context_tree_section(
+    manifest: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a bounded Context Tree bucket summary from the manifest.
+
+    ``compute_context_tree_status`` walks every projected head and opted-in
+    event log. Doctor is a health check, so it reports the latest persisted
+    manifest summary instead of rebuilding that state.
+    """
+    defaults = {
+        "state": "not-built",
+        "last_projection_at": None,
+        "events_since_last_projection": 0,
+        "oldest_unprojected_event_time": None,
+        "trace_count": 0,
+        "layer_blob_count": 0,
+        "dangling_layer_refs": 0,
+        "remote_sync_eligible": False,
+        "source": "persisted_manifest",
+    }
+    if not manifest:
+        return defaults
+    snapshot = manifest.get("context_trees") or {}
+    if not isinstance(snapshot, dict) or not snapshot:
+        return defaults
+
+    def _int_field(name: str) -> int:
+        try:
+            return int(snapshot.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        **defaults,
+        "state": snapshot.get("state") or "ok",
+        "last_projection_at": snapshot.get("last_projection_at"),
+        "events_since_last_projection": _int_field("events_since_last_projection"),
+        "oldest_unprojected_event_time": snapshot.get(
+            "oldest_unprojected_event_time"
+        ),
+        "trace_count": _int_field("trace_count"),
+        "layer_blob_count": _int_field("unique_layer_blob_count"),
+        "dangling_layer_refs": _int_field("dangling_layer_refs_count"),
+        "remote_sync_eligible": bool(snapshot.get("remote_sync_eligible", False)),
+    }
 
 
 def _legacy_trace_index_artifacts() -> list[dict[str, Any]]:
@@ -203,6 +260,58 @@ def _trail_event_log_status(cwd: Path) -> dict[str, Any]:
     """Report integrity for the canonical local Trace Trails event log."""
     try:
         from .trails import event_log_status
+        from .trails.event_log import EVENT_LOG_REF, _load_verify_watermark, _ref_head
+
+        head = _ref_head(cwd)
+        if head is None:
+            return {
+                "ref": EVENT_LOG_REF,
+                "exists": False,
+                "head": None,
+                "batch_count": 0,
+                "event_count": 0,
+                "batch_parents_linear": False,
+                "content_hashes_valid": False,
+                "event_chain_valid": False,
+                "state": "missing",
+                "errors": [],
+            }
+
+        skip_reason = _doctor_event_log_skip_reason(cwd, head=head)
+        if skip_reason is not None:
+            batch_count = _event_log_batch_count(cwd, head)
+            watermark = _load_verify_watermark(cwd)
+            base = {
+                "ref": EVENT_LOG_REF,
+                "exists": True,
+                "head": head,
+                "batch_count": batch_count,
+                "doctor_scan_skipped": True,
+                "skip_reason": skip_reason,
+                "advice": "run 'opentraces trail status' for full event-log verification",
+                "errors": [],
+            }
+            if watermark and watermark.get("head") == head:
+                return {
+                    **base,
+                    "state": "ok",
+                    "event_count": watermark.get("last_event_sequence", 0),
+                    "last_event_sequence": watermark.get("last_event_sequence"),
+                    "last_event_id": watermark.get("last_event_id"),
+                    "batch_parents_linear": True,
+                    "content_hashes_valid": True,
+                    "event_chain_valid": True,
+                    "verification_source": "cached_watermark",
+                }
+            return {
+                **base,
+                "state": "unverified_large",
+                "event_count": None,
+                "batch_parents_linear": None,
+                "content_hashes_valid": None,
+                "event_chain_valid": None,
+                "verification_source": "skipped_large_log",
+            }
 
         return event_log_status(cwd)
     except Exception as exc:
@@ -218,6 +327,72 @@ def _trail_event_log_status(cwd: Path) -> dict[str, Any]:
             "state": "error",
             "errors": [str(exc)],
         }
+
+
+def _doctor_event_log_skip_reason(cwd: Path, *, head: str | None = None) -> str | None:
+    """Return why doctor should avoid a whole event-log scan, or None."""
+    try:
+        from .trails.event_log import _event_cache_path, _ref_head
+    except Exception:
+        return None
+
+    head = head or _ref_head(cwd)
+    if head is None:
+        return None
+
+    snapshot_max = _doctor_event_log_max_snapshot_bytes()
+    snapshot_path = _event_cache_path(cwd)
+    if snapshot_path is not None and snapshot_path.is_file():
+        try:
+            size = snapshot_path.stat().st_size
+        except OSError:
+            size = 0
+        if size > snapshot_max:
+            return f"event snapshot {size} bytes exceeds doctor limit {snapshot_max}"
+
+    batch_count = _event_log_batch_count(cwd, head)
+    batch_max = _doctor_event_log_max_batches()
+    if batch_count is not None and batch_count > batch_max:
+        return f"event log has {batch_count} batches; doctor limit is {batch_max}"
+    return None
+
+
+def _doctor_event_log_max_snapshot_bytes() -> int:
+    raw = os.environ.get("OPENTRACES_DOCTOR_EVENT_LOG_MAX_SNAPSHOT_BYTES")
+    if raw:
+        try:
+            return max(1024, int(raw))
+        except ValueError:
+            return _DOCTOR_EVENT_LOG_MAX_SNAPSHOT_BYTES
+    return _DOCTOR_EVENT_LOG_MAX_SNAPSHOT_BYTES
+
+
+def _doctor_event_log_max_batches() -> int:
+    raw = os.environ.get("OPENTRACES_DOCTOR_EVENT_LOG_MAX_BATCHES")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return _DOCTOR_EVENT_LOG_MAX_BATCHES
+    return _DOCTOR_EVENT_LOG_MAX_BATCHES
+
+
+def _event_log_batch_count(cwd: Path, head: str) -> int | None:
+    try:
+        import subprocess as _sp
+
+        proc = _sp.run(
+            ["git", "rev-list", "--count", head],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        return int(proc.stdout.strip())
+    except (OSError, ValueError):
+        return None
 
 
 # --- post-commit hook panel (plan 047) ------------------------------------
@@ -992,19 +1167,26 @@ def _context_tree_status(cwd: Path | None = None) -> dict[str, Any]:
     # limitations. Both the JSONL pipeline and the OTLP flush emit
     # these, so these fields reflect "any source has reconciled at
     # least one session" across the substrate.
+    context_scan_skip_reason = _doctor_event_log_skip_reason(cwd) if cwd else None
     last_reconciled_at, capture_limitations_by_trace = (
-        _scan_context_tree_reconciled(cwd) if cwd else (None, {})
+        (None, {})
+        if context_scan_skip_reason is not None
+        else (_scan_context_tree_reconciled(cwd) if cwd else (None, {}))
     )
 
     return {
         "otel_receiver": otel_receiver,
         "last_reconciled_at": last_reconciled_at,
         "capture_limitations_by_trace": capture_limitations_by_trace,
+        "scan_skipped": context_scan_skip_reason is not None,
+        "skip_reason": context_scan_skip_reason,
     }
 
 
 def _scan_context_tree_reconciled(cwd: Path) -> tuple[str | None, dict[str, list[str]]]:
     """Single-pass scan: latest event_time + per-trace capture_limitations."""
+    if _doctor_event_log_skip_reason(cwd) is not None:
+        return None, {}
     try:
         from .trails.event_log import read_events
     except ImportError:
@@ -1043,6 +1225,16 @@ def _trail_capture_audit(cwd: Path) -> dict[str, Any]:
     ``trace_patch_created`` events in the last 7 days. The audit logic
     lives in ``cli.doctor`` so cluster-C tests can target it without
     monkey-patching this aggregator."""
+    skip_reason = _doctor_event_log_skip_reason(cwd)
+    if skip_reason is not None:
+        return {
+            "state": "skipped",
+            "reason": skip_reason,
+            "window_days": 7,
+            "traces_scanned": 0,
+            "incomplete": [],
+            "advice": "run a focused trail-capture audit outside doctor",
+        }
     try:
         from ..cli.doctor import audit_trail_capture
         return audit_trail_capture(cwd, days=7)
