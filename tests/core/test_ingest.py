@@ -1241,3 +1241,34 @@ class TestExcludedProjectGate:
 
         assert report.results == []
         assert (project_dir / ".opentraces.json").read_bytes() == marker_before
+
+
+# --------------------------------------------------------------------------- #
+# Marker read-purity on the capture hot path (issue #60 item 2)
+# --------------------------------------------------------------------------- #
+
+def test_ingest_does_not_rewrite_marker_bytes(tmp_path) -> None:
+    """The capture hot path must never rewrite the user's (often
+    git-committed) ``.opentraces.json``. A legacy-shaped marker triggers
+    in-memory normalization on load — that normalization must NOT be
+    persisted by a pure read; only explicit write verbs heal the file."""
+    from opentraces.core.ingest import ingest_one_session
+
+    proj = tmp_path / "legacy-marker-proj"
+    proj.mkdir()
+    marker = proj / ".opentraces.json"
+    marker.write_text(json.dumps({
+        "marker_version": "1",
+        "project_id": "legacy-proj-0001",
+        "review_policy": "review",
+        "remote": "test/legacy",
+        "visibility": "private",
+        "agents": ["claude-code"],
+    }, indent=2))
+    marker_before = marker.read_bytes()
+    path = _write_jsonl(proj, "sess-marker-purity", turns=3)
+
+    result = ingest_one_session(path, proj)
+
+    assert result.action == "new"
+    assert marker.read_bytes() == marker_before

@@ -17,6 +17,14 @@ def _sh(cmd: list[str], cwd: Path) -> None:
     )
 
 
+def _fetch_refspecs(repo: Path) -> list[str]:
+    proc = subprocess.run(
+        ["git", "config", "--get-all", "remote.origin.fetch"],
+        cwd=str(repo), capture_output=True, text=True,
+    )
+    return [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+
+
 @pytest.fixture
 def repo(tmp_path):
     _sh(["git", "init", "-q", "-b", "main"], tmp_path)
@@ -81,3 +89,29 @@ class TestInstaller:
     def test_not_a_git_repo_returns_false(self, tmp_path):
         assert git_hook.install(tmp_path) is False
         assert git_hook.status(tmp_path)["installed"] is False
+
+    def test_repeated_install_does_not_duplicate_refspec(self, repo):
+        _sh(["git", "remote", "add", "origin", "https://example.invalid/r.git"], repo)
+        git_hook.install(repo)
+        git_hook.install(repo)
+        git_hook.install(repo)
+        assert _fetch_refspecs(repo).count(git_hook.NOTES_REFSPEC) == 1
+
+    def test_install_dedupes_preexisting_duplicate_refspec(self, repo):
+        _sh(["git", "remote", "add", "origin", "https://example.invalid/r.git"], repo)
+        _sh(["git", "config", "--add", "remote.origin.fetch", git_hook.NOTES_REFSPEC], repo)
+        _sh(["git", "config", "--add", "remote.origin.fetch", git_hook.NOTES_REFSPEC], repo)
+        git_hook.install(repo)
+        assert _fetch_refspecs(repo).count(git_hook.NOTES_REFSPEC) == 1
+
+    def test_install_preserves_unrelated_fetch_refspecs(self, repo):
+        _sh(["git", "remote", "add", "origin", "https://example.invalid/r.git"], repo)
+        # Force the dedupe (--fixed-value --replace-all) path while the
+        # default refspec is present: only the exact notes refspec may be
+        # collapsed; anything else must survive untouched.
+        _sh(["git", "config", "--add", "remote.origin.fetch", git_hook.NOTES_REFSPEC], repo)
+        _sh(["git", "config", "--add", "remote.origin.fetch", git_hook.NOTES_REFSPEC], repo)
+        git_hook.install(repo)
+        refspecs = _fetch_refspecs(repo)
+        assert "+refs/heads/*:refs/remotes/origin/*" in refspecs
+        assert refspecs.count(git_hook.NOTES_REFSPEC) == 1

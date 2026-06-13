@@ -37,8 +37,8 @@ Derivation rules (enforced by the gate):
   as `tests/otbox/catalogue/journeys/<name>.toml`) and/or pytest node-id
   prefixes (`tests/...py` or `tests/...py::test_name`; the file part must
   exist). Empty cells render as `—`.
-- Status counts (2026-06-12, post #61 real-agent acceptance ritual): 27 verified,
-  18 partial, 7 open, 6 tracked, 0 waived — 58 rows.
+- Status counts (2026-06-12, post wave-2 merge train): 30 verified,
+  18 partial, 7 open, 3 tracked, 0 waived — 58 rows.
 
 ## A. Capture (per harness)
 
@@ -51,7 +51,7 @@ Derivation rules (enforced by the gate):
 | CAP-5 | `init --import-existing` backfills historical Claude sessions | A | verified | capture-safety-import-existing, tests/cli/test_cli_init_autoscan.py | — |
 | CAP-6 | Hook failures never block the agent session (always exit 0) — 4 Claude scripts x 4 faults + missing-package sweep, Codex modules, git shim | A | verified | tests/otbox/test_faultpoints.py | — |
 | CAP-7 | OTel capture yields `completeness=full` layers; receiver-down never blocks agent traffic | A | partial | tests/test_otlp_capture.py, context-tree-otel-receiver-up, context-tree-otel-bypass-mode | — |
-| CAP-8 | Installers (`setup claude-code/codex-cli/pi/git`) are idempotent and preserve unrelated hooks (one refspec-duplication finding still open) | A | partial | tests/otbox/test_idempotency_sweep.py, pi-setup-dry-run, onboard-integrations | — |
+| CAP-8 | Installers (`setup claude-code/codex-cli/pi/git`) are idempotent and preserve unrelated hooks | A | verified | tests/otbox/test_idempotency_sweep.py, tests/capture/test_installers_git_hook.py, pi-setup-dry-run, onboard-integrations | — |
 | CAP-9 | Regenerated capture batches (B0 capture-refresh) stay green via acceptance journeys on the refreshed worlds (5 acceptance scenarios bind J1/J6/J7/J10/J13; deterministic scorer + schema-versioned report + warn-only freshness gate land in default CI via the echo-mode synthetic harness; real-agent ritual executed 2026-06-12 — claude 2.1.175, 5/5 arcs PASS mean 1.0, operator footage review approved, committed report at tests/otbox/captures/_acceptance/report.json) | A | verified | tests/otbox/test_acceptance_report.py, tests/otbox/test_acceptance_scoring.py | #61 |
 
 ## B. Bucket and privacy boundary
@@ -62,7 +62,7 @@ Derivation rules (enforced by the gate):
 | BKT-2 | `bucket replay --repo` reconstructs the canonical Git event ref byte-identically | B | verified | bucket-events-mirror-replay-equals-git, bucket-self-sufficient-everything | #25 |
 | BKT-3 | Cross-machine byte-identity (gzip mtime=0 everywhere) | B | verified | bucket-cross-machine-content-identity, bucket-symmetric-local-remote, tests/test_bucket_remote_symmetric.py, tests/otbox/test_determinism.py | #25 |
 | BKT-4 | `bucket repair` is idempotent; `prune` never touches events or trace.json | B | verified | bucket-prune-orphan-only, bucket-write-order-discipline-local, bucket-rebuild-context-tree-substrate | #25 |
-| BKT-5 | `bucket verify` detects corrupted blobs and dangling refs (corrupted-blob fault world is the remaining follow-up) | B | partial | bucket-verify-detects-dangling, bucket-compression-integrity-roundtrip | #25 |
+| BKT-5 | `bucket verify` detects corrupted blobs and dangling refs | B | verified | bucket-verify-detects-dangling, bucket-verify-detects-corrupted-blob, bucket-compression-integrity-roundtrip, tests/core/test_bucket_store.py::test_bucket_verify_reports_truncated_gzip_blob_as_blob_content_error | #25 |
 | BKT-6 | Remote sync push order blobs -> events -> envelopes -> manifest; diff/status honest; proven against REAL HF in the ci-release live lane, with default-CI symmetry coverage via the directory-backed fake dispatch (file:// scheme, issue #57) | B | verified | bucket-remote-push, bucket-remote-pull, bucket-remote-digests, bucket-symmetric-local-remote, ctx-show-with-lazy-blob-fetch, ctx-show-offline-fails, live-hf-bucket-roundtrip, tests/test_bucket_remote_symmetric.py, tests/otbox/test_live_hf_slice.py | — |
 | BKT-7 | Append-only hash-chained event log survives GC and rewrites | B | open | — | — |
 | BKT-8 | `bucket status`/`bucket manifest` are side-effect-free reads; self-heal is explicit via `bucket manifest --heal` / `bucket repair` (read-only digest == post-repair digest) | B | verified | bucket-read-verbs-side-effect-free, tests/core/test_bucket_store.py::test_bucket_read_verbs_are_side_effect_free, tests/core/test_bucket_store.py::test_readonly_node_count_matches_heal_when_live_log_is_trail_only, tests/core/test_bucket_store.py::test_manifest_write_repairs_stale_shape_with_unchanged_digest, migration-s5-read-in-place | #55 |
@@ -93,9 +93,9 @@ Derivation rules (enforced by the gate):
 
 | ID | Claim | Axis | Status | Verifiers | Issue |
 |---|---|---|---|---|---|
-| CTX-1 | `ctx tree/step/reads/writes` reconstruct what the model saw per step (phantom checkpoints owned by the otbox-debt lane) | E | tracked | — | #42 |
-| CTX-2 | `ctx resume` produces a usable continuation packet | E | tracked | — | #42 |
-| CTX-3 | Compaction and rewind branches structurally correct | E | tracked | — | #42 |
+| CTX-1 | `ctx tree/step/reads/writes` reconstruct what the model saw per step (v1 JSONL path serves SESSION-LEVEL shared layers per node — the documented honest scope — so per-step reconstruction is an approximation; anchor precision stays red-quarantined on the codex world pending trail_anchor_hint commit_id wiring) | E | partial | context-tree-capture-fidelity, context-tree-demo-acceptance | #42 |
+| CTX-2 | `ctx resume` produces a usable continuation packet (the prune→resume bridge is journey-verified end-to-end: record-count + uuid-set fidelity and the rc=4 no-clobber contract; the resume packet itself is unit-level) | E | partial | context-tree-fork-fidelity, context-tree-ctx-prune-no-clobber, tests/context_tree/test_context_tree_resume.py | #42 |
+| CTX-3 | Compaction and rewind branches structurally correct | E | verified | context-tree-compaction-fidelity, context-tree-branching-fidelity | #42 |
 | CTX-4 | OTel vs JSONL structural equivalence for the same session | E | tracked | — | #42 |
 
 ## F. Security pipeline

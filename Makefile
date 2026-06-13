@@ -1,7 +1,7 @@
 .PHONY: version-check dirty-check clean build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
-       otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf release-gate \
+       otbox-matrix otbox-inventory otbox-gc otbox-agent-session otbox-live-hf release-gate \
        capture-refresh \
        capture-refresh-check capture-refresh-all \
        otbox-acceptance \
@@ -61,7 +61,7 @@ otbox-slice:
 	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py::test_vertical_slice -v
 
 otbox-journeys:
-	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py -v
+	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py -v -ra
 
 # Tier 1 (plan 061). Opt-in: OT_OTBOX_TIER1=1. With OT_OTBOX_SSH_TARGET
 # set, runs against the operator's tailnet target; without it, spins up
@@ -77,6 +77,12 @@ otbox-matrix:
 
 otbox-inventory:
 	./otbox matrix --inventory --strict
+
+# Issue #53. Sweep killed-run box residue (dead-pid boxes, meta-less
+# stubs) and aged _capture-refresh-* snapshots. Never touches the
+# current box, live runs, or the _checkpoint-* snapshot cache.
+otbox-gc:
+	./otbox gc --json
 
 # Release gate (U0/U11): jtbd inventory strict, the claims-ledger gate,
 # envelope budgets, catalogue lint, then the rollup verdict. Pass

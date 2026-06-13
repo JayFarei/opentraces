@@ -454,6 +454,14 @@ def _captured_session(box: Box) -> dict[str, str]:
     result["branch_commit_subject_1"] = str(_pr_subjects[0]) if len(_pr_subjects) > 0 else ""
     result["branch_commit_subject_2"] = str(_pr_subjects[1]) if len(_pr_subjects) > 1 else ""
 
+    # Multi-skill world query material (wave-2 exit-gate finding): the
+    # journey queries the index via the world's own head commit subject,
+    # never a synthetic-corpus literal.
+    ms_audit = box.notes.get("c_captured_multi_skill_audit") or {}
+    result["multi_skill_head_commit_subject"] = str(
+        ms_audit.get("head_commit_subject") or ""
+    )
+
     # Plan 085: expose the legacy-world checkpoint audits so migration
     # journeys forking from c-legacy-v033 / -upgraded can address the
     # restored 0.3.0 trace via {legacy_trace_id} and the fresh 0.4 capture
@@ -494,6 +502,16 @@ def _captured_session(box: Box) -> dict[str, str]:
         result["step_index"] = str(codex_audit.get("step_index") or result.get("step_index", ""))
         result["codex_patch_count"] = str(codex_audit.get("patch_count") or "")
         result["codex_landed_hunk_count"] = str(codex_audit.get("landed_hunk_count") or "")
+        # Issue #42 (temporal-anchor retarget): the codex world's landed
+        # commit — what `ctx anchor-for-step` must resolve to once the
+        # codex emitter populates trail_anchor_hint.commit_id (v1.1 /
+        # codex-world regen; journey stays quarantined until then) —
+        # plus the step index of the first anchor-hinted node, resolved
+        # from the live event log at expansion time.
+        result["codex_anchor_commit"] = str(codex_audit.get("commit_sha") or "")
+        result["codex_anchor_step_index"] = _first_anchor_hint_step_index(
+            box, result["trace_id"]
+        )
         result["transcript_path"] = str(codex_audit.get("transcript_path") or result.get("transcript_path", ""))
 
     pi_audit = box.notes.get("c_captured_pi_session_audit") or {}
@@ -577,7 +595,62 @@ def _captured_session(box: Box) -> dict[str, str]:
                 edit_step_index=ct_audit.get("step_index"),
             )
         )
+        # Box-relative transcript re-derivation (never bake absolutes):
+        # the prune-family journeys need ``--source-jsonl {transcript_path}``.
+        result["transcript_path"] = _box_transcript_path(box, result["session_id"])
+
+    # Issue #42 — compacted-session world (c-compacted-session). Overrides
+    # the substrate's primary trace with the compacted trace and serves the
+    # compaction template vars, resolved live from the event log.
+    compacted_audit = box.notes.get("c_compacted_session_audit") or {}
+    if compacted_audit:
+        result["trace_id"] = str(
+            compacted_audit.get("trace_id") or result.get("trace_id", "")
+        )
+        result["session_id"] = str(
+            compacted_audit.get("session_id") or result.get("session_id", "")
+        )
+        result.update(_resolve_compaction_template_vars(box, result["trace_id"]))
+        result["transcript_path"] = _box_transcript_path(box, result["session_id"])
+
+    # Issue #42 — rewound-session re-pin (c-rewound-session). Flips the
+    # journey-facing {trace_id} to the rewound trace (the substrate audit
+    # pins the multi-turn primary, which has NO orphan branches) and serves
+    # the subagent-linkage vars for context-tree-branching-fidelity.
+    rewound_audit = box.notes.get("c_rewound_session_audit") or {}
+    if rewound_audit:
+        result["trace_id"] = str(
+            rewound_audit.get("trace_id") or result.get("trace_id", "")
+        )
+        result["session_id"] = str(
+            rewound_audit.get("session_id") or result.get("session_id", "")
+        )
+        result["subagent_trace_id"] = str(
+            rewound_audit.get("subagent_trace_id")
+            or result.get("subagent_trace_id", "")
+        )
+        result["subagent_session_ids_expected"] = json.dumps(
+            [str(s) for s in (rewound_audit.get("subagent_session_ids_expected") or [])]
+        )
+        result.update(
+            _resolve_subagent_fork_template_vars(box, result["subagent_trace_id"])
+        )
     return result
+
+
+def _box_transcript_path(box: Box, session_id: str) -> str:
+    """Locate the on-box Claude transcript for ``session_id``.
+
+    Re-derived from the CURRENT box at template-expansion time (the
+    encoded project dir name embeds the origin box's absolute path, so
+    globbing — not re-encoding — is the snapshot/restore-safe lookup).
+    """
+    if not session_id:
+        return ""
+    matches = sorted(
+        (box.home / ".claude" / "projects").glob(f"*/{session_id}.jsonl")
+    )
+    return str(matches[0]) if matches else ""
 
 
 def _resolve_context_tree_node_template_vars(
@@ -614,6 +687,7 @@ def _resolve_context_tree_node_template_vars(
         "first_node_id": "",
         "first_read_node_id": "",
         "target_node_id": "",
+        "step_7_node_id": "",
         "expected_node_count": "",
         "active_path_length": "",
         "active_path_uuid_set": "[]",
@@ -705,6 +779,13 @@ def _resolve_context_tree_node_template_vars(
     if read_node is not None:
         extras["first_read_node_id"] = str(read_node.get("node_id") or "")
 
+    # demo-acceptance addresses "the node at step 7" explicitly.
+    step_7 = next(
+        (n for n in primary_sorted if n.get("step_index") == 7), None
+    )
+    if step_7 is not None:
+        extras["step_7_node_id"] = str(step_7.get("node_id") or "")
+
     # rewind orphan branch nodes.
     orphans = [n for n in rewound_nodes if n.get("branch_type") == "rewind_branch"]
     orphans = _by_step(orphans)
@@ -712,6 +793,125 @@ def _resolve_context_tree_node_template_vars(
         extras["orphan_root_node_id"] = str(orphans[0].get("node_id") or "")
         extras["orphan_leaf_node_id"] = str(orphans[-1].get("node_id") or "")
 
+    return extras
+
+
+def _first_anchor_hint_step_index(box: Box, trace_id: str) -> str:
+    """Step index of the first ContextNode carrying a trail_anchor_hint.
+
+    Issue #42 (temporal-anchor retarget): the codex capture path stamps
+    a hint on every node; the journey addresses the first hinted step.
+    Empty string on miss so the journey fails loudly.
+    """
+    project = box.project
+    if not (project / ".git").exists() or not trace_id:
+        return ""
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:  # noqa: BLE001
+        return ""
+    for e in events:
+        if e.event_type != "context_node_observed" or e.trace_id != trace_id:
+            continue
+        p = e.payload or {}
+        if p.get("trail_anchor_hint") and p.get("step_index") is not None:
+            return str(p["step_index"])
+    return ""
+
+
+def _resolve_compaction_template_vars(box: Box, trace_id: str) -> dict[str, str]:
+    """Derive the compaction template vars from the live event log.
+
+    Issue #42 / c-compacted-session. Resolved at template-expansion time
+    (content-addressed node ids are never baked into the snapshot).
+
+    Vars served:
+      {compaction_pre_node_id}            pre-boundary node
+      {compaction_post_node_id}           post-boundary (compaction_fork) node
+      {compaction_removed_uuids}          JSON list, event (=transcript) order
+      {compaction_removed_uuids_sorted}   sorted variant
+      {large_messages_node_id}            a node referencing the largest
+                                          messages layer of the trace
+    """
+    import json as _json
+
+    extras: dict[str, str] = {
+        "compaction_pre_node_id": "",
+        "compaction_post_node_id": "",
+        "compaction_removed_uuids": "[]",
+        "compaction_removed_uuids_sorted": "[]",
+        "large_messages_node_id": "",
+    }
+    project = box.project
+    if not (project / ".git").exists() or not trace_id:
+        return extras
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:  # noqa: BLE001
+        return extras
+
+    layer_sizes: dict[str, int] = {}
+    nodes: list[dict] = []
+    for e in events:
+        if e.trace_id != trace_id:
+            continue
+        p = e.payload or {}
+        if e.event_type == "context_compaction_observed":
+            if not extras["compaction_pre_node_id"]:
+                extras["compaction_pre_node_id"] = str(p.get("pre_node_id") or "")
+                extras["compaction_post_node_id"] = str(p.get("post_node_id") or "")
+                removed = [str(u) for u in (p.get("lossy_diff_removed_uuids") or [])]
+                extras["compaction_removed_uuids"] = _json.dumps(removed)
+                extras["compaction_removed_uuids_sorted"] = _json.dumps(sorted(removed))
+        elif e.event_type == "context_layer_captured":
+            if p.get("layer_type") == "messages" and p.get("layer_id"):
+                size = len(_json.dumps(p.get("content"), separators=(",", ":")))
+                layer_sizes[str(p["layer_id"])] = size
+        elif e.event_type == "context_node_observed":
+            nodes.append(p)
+
+    if layer_sizes and nodes:
+        largest_layer = max(layer_sizes, key=lambda k: layer_sizes[k])
+        for n in nodes:
+            if str(n.get("messages_layer_id") or "") == largest_layer:
+                extras["large_messages_node_id"] = str(n.get("node_id") or "")
+                break
+    return extras
+
+
+def _resolve_subagent_fork_template_vars(
+    box: Box, subagent_trace_id: str
+) -> dict[str, str]:
+    """Derive the subagent-fork vars for context-tree-branching-fidelity.
+
+    Vars served:
+      {subagent_fork_node_id}       first subagent_fork node on the trace
+      {subagent_child_session_id}   that node's subagent_session_id
+    """
+    extras: dict[str, str] = {
+        "subagent_fork_node_id": "",
+        "subagent_child_session_id": "",
+    }
+    project = box.project
+    if not (project / ".git").exists() or not subagent_trace_id:
+        return extras
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:  # noqa: BLE001
+        return extras
+    for e in events:
+        if e.event_type != "context_node_observed" or e.trace_id != subagent_trace_id:
+            continue
+        p = e.payload or {}
+        if p.get("branch_type") == "subagent_fork":
+            extras["subagent_fork_node_id"] = str(p.get("node_id") or "")
+            extras["subagent_child_session_id"] = str(
+                p.get("subagent_session_id") or ""
+            )
+            break
     return extras
 
 
@@ -1459,6 +1659,34 @@ def render_transcript(
     ot_version = versions.get("opentraces", "unknown")
     schema_version = versions.get("schema", "unknown")
 
+    # Machine-path hygiene for the COMMITTED artifact: any absolute
+    # path into an otbox box root (current or origin box) renders as
+    # the stable `<box>` token, so regenerating the transcript on a
+    # different machine/box produces reviewable diffs instead of
+    # whole-file path churn.
+    import re as _re
+
+    _box_path_re = _re.compile(r"\S*?/\.otbox/boxes/otb_[0-9a-fA-F]+")
+    # Claude transcript dirs encode the project ABSOLUTE path with
+    # dashes (`-Users-...--otbox-boxes-otb-<id>-project`); normalize
+    # those too so the artifact carries no machine identity.
+    _box_encoded_re = _re.compile(r"-[A-Za-z0-9-]*-otbox-boxes-otb-[0-9a-fA-F]+-project")
+
+    def _redact(text: str) -> str:
+        text = _box_path_re.sub("<box>", text or "")
+        return _box_encoded_re.sub("<box-encoded-project>", text)
+
+    def _display_argv(step: "StepResult") -> str:
+        # cli steps render as the canonical user-facing invocation
+        # (`opentraces <argv>`), NOT the machine-local resolved argv
+        # (venv shims / OT_CLI_BIN wrappers would leak absolute paths
+        # into the committed artifact). Shell steps keep their argv.
+        if step.type == "cli" and isinstance(step.detail, dict) and step.detail.get("argv"):
+            return _redact("opentraces " + " ".join(str(a) for a in step.detail["argv"]))
+        if step.result and step.result.argv:
+            return _redact(" ".join(step.result.argv))
+        return step.step_id
+
     cli_steps = [s for s in result.steps if s.result is not None]
     n_commands = len(cli_steps)
     m_assertions = len(result.assertions)
@@ -1478,10 +1706,10 @@ def render_transcript(
     lines.append("")
 
     for human_index, step in enumerate(cli_steps, start=1):
-        argv = " ".join(step.result.argv) if step.result and step.result.argv else step.step_id
+        argv = _display_argv(step)
         lines.append(f"## {human_index}. {argv}")
         lines.append("")
-        body = _truncate_stdout(step.result.stdout if step.result else "")
+        body = _truncate_stdout(_redact(step.result.stdout if step.result else ""))
         # Fence the captured stdout so markdown renders it verbatim.
         lines.append("```")
         lines.append(body.rstrip("\n"))
@@ -1502,7 +1730,7 @@ def render_transcript(
     lines.append("| step | id | command | assertions | result |")
     lines.append("|------|----|---------|------------|--------|")
     for human_index, step in enumerate(cli_steps, start=1):
-        argv = " ".join(step.result.argv) if step.result and step.result.argv else step.step_id
+        argv = _display_argv(step)
         # Escape pipes in the command cell so the markdown table stays valid.
         argv_cell = argv.replace("|", "\\|")
         n_asserts = len(groups.get(step.step_id, []))

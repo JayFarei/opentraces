@@ -143,6 +143,86 @@ class TestStatusGate:
             assert payload["excluded"] is True
 
 
+def _write_excluded_marker(project: Path) -> bytes:
+    """Excluded-but-enrolled marker (carries a project_id); returns bytes."""
+    marker = project / ".opentraces.json"
+    marker.write_text(json.dumps({
+        "marker_version": "2",
+        "project_id": "excluded-0001",
+        "excluded": True,
+        "review_policy": "review",
+    }, indent=2))
+    return marker.read_bytes()
+
+
+def _write_session_jsonl(session_dir: Path, session_id: str = "sess-cap-1") -> Path:
+    """Minimal parseable Claude Code session JSONL (one full turn)."""
+    session_dir.mkdir(parents=True, exist_ok=True)
+    path = session_dir / f"{session_id}.jsonl"
+    ts = "2026-04-15T07:00:01Z"
+    lines = [
+        {"type": "user", "sessionId": session_id, "timestamp": ts,
+         "message": {"role": "user", "content": "prompt 1"}},
+        {"type": "assistant", "sessionId": session_id, "timestamp": ts,
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu_1", "name": "Read",
+              "input": {"file_path": "x.py"}}],
+             "usage": {"input_tokens": 10, "output_tokens": 10}}},
+        {"type": "user", "sessionId": session_id, "timestamp": ts,
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]}},
+    ]
+    with path.open("w") as f:
+        for line in lines:
+            f.write(json.dumps(line) + "\n")
+    return path
+
+
+class TestCaptureExclusionGate:
+    """Issue #60 item 3: `_capture` (and the `_capture_sessions_into_project`
+    helper it calls) must honor the per-project exclusion gate, matching
+    the ingest choke-point contract (plan 095 / CAP-4). An excluded marker
+    still passes `project_is_opted_in` (marker-exists check), so without
+    the gate `_capture` pollutes the bucket."""
+
+    def test_capture_command_skips_excluded_project(
+        self, runner, isolated_home, tmp_path
+    ) -> None:
+        project = tmp_path / "excluded-proj"
+        project.mkdir()
+        marker_before = _write_excluded_marker(project)
+        session_dir = tmp_path / "sessions"
+        _write_session_jsonl(session_dir)
+
+        result = runner.invoke(
+            main,
+            ["_capture", "--session-dir", str(session_dir),
+             "--project-dir", str(project)],
+        )
+
+        assert result.exit_code == 0, result.output
+        # Nothing staged anywhere under the global projects dir.
+        from opentraces.core.config import PROJECTS_DIR
+
+        assert list(PROJECTS_DIR.glob("**/traces/*.jsonl")) == []
+        # The marker is byte-identical — raw read, no migration write.
+        assert (project / ".opentraces.json").read_bytes() == marker_before
+
+    def test_capture_sessions_into_project_respects_exclusion(
+        self, isolated_home, tmp_path
+    ) -> None:
+        from opentraces.cli import _capture_sessions_into_project
+
+        project = tmp_path / "excluded-proj-direct"
+        project.mkdir()
+        marker_before = _write_excluded_marker(project)
+        session_dir = tmp_path / "sessions-direct"
+        _write_session_jsonl(session_dir, session_id="sess-cap-2")
+
+        assert _capture_sessions_into_project(session_dir, project) == (0, 0)
+        assert (project / ".opentraces.json").read_bytes() == marker_before
+
+
 class TestBareMarkerTolerance:
     def test_load_project_config_tolerates_marker_without_project_id(
         self, tmp_path

@@ -170,6 +170,7 @@ def run_matrix(
     for base, journey_group in by_base.items():
         for journey in journey_group:
             row_start = time.monotonic()
+            box = None
             try:
                 if base is None:
                     # Legacy seed path: this matrix run doesn't seed
@@ -195,7 +196,6 @@ def run_matrix(
                         checkpoint_cache_hit=cp_result.cache_hit,
                         box_id=box.box_id,
                     )
-                    driver.teardown(box)
             except CheckpointError as exc:
                 row = MatrixRow(
                     journey=journey["name"],
@@ -212,6 +212,15 @@ def run_matrix(
                     reason=f"{type(exc).__name__}: {exc}",
                     duration_s=round(time.monotonic() - row_start, 3),
                 )
+            finally:
+                # Issue #53: tear the row's box down on every path — a
+                # journey that raises must not leak its box. Teardown
+                # failures never overwrite the row verdict.
+                if box is not None:
+                    try:
+                        driver.teardown(box)
+                    except Exception:  # noqa: BLE001 - keep the row verdict
+                        pass
             report.rows.append(row)
 
     report.duration_s = round(time.monotonic() - start, 3)

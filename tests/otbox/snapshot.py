@@ -14,7 +14,9 @@ offline, deterministic, substrate-agnostic.
 from __future__ import annotations
 
 import json
+import os
 import re
+import secrets
 import sqlite3
 import tarfile
 import time
@@ -66,6 +68,35 @@ def _meta_path(name: str) -> Path:
     return SNAPSHOTS_DIR / f"{name}.json"
 
 
+def _unique_partial_path(target: Path) -> Path:
+    """Per-writer temp path in target's directory: ``<name>.<pid>-<rand>.partial``.
+
+    Concurrent writers (e.g. two pytest runs cold-building the same
+    content-addressed checkpoint) must never share a temp path: a shared
+    path means interleaved writes plus a ``FileNotFoundError`` for the
+    writer that renames second (issue #50). ``<pid>`` makes losing-writer
+    diagnosis greppable; the random token covers pid reuse and two
+    snapshots inside one process. The ``.partial`` suffix keeps leftovers
+    self-describing and outside the ``*.tar.gz`` listing glob.
+    """
+    return target.parent / f"{target.name}.{os.getpid()}-{secrets.token_hex(4)}.partial"
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` via a unique temp + atomic rename.
+
+    A concurrent reader never observes torn/empty content; same-directory
+    rename keeps the swap atomic on POSIX.
+    """
+    tmp = _unique_partial_path(path)
+    try:
+        tmp.write_text(text)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(path)
+
+
 def snapshot_exists(name: str) -> bool:
     return _archive_path(name).exists() and _meta_path(name).exists()
 
@@ -97,11 +128,17 @@ def create_snapshot(box: Box, name: str, *, overwrite: bool = False) -> Snapshot
             f"snapshot {name!r} already exists; pass overwrite=True to replace it"
         )
 
-    tmp = archive.with_suffix(".tar.gz.partial")
-    with tarfile.open(tmp, "w:gz") as tar:
-        # arcname="." keeps the archive relocatable: it extracts straight
-        # into whatever box root we later restore into.
-        tar.add(box.root, arcname=".")
+    tmp = _unique_partial_path(archive)
+    try:
+        with tarfile.open(tmp, "w:gz") as tar:
+            # arcname="." keeps the archive relocatable: it extracts straight
+            # into whatever box root we later restore into.
+            tar.add(box.root, arcname=".")
+    except BaseException:
+        # With per-writer unique temps, failure cleanup is mandatory or
+        # orphaned partials accumulate.
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(archive)
 
     info = SnapshotInfo(
@@ -114,7 +151,9 @@ def create_snapshot(box: Box, name: str, *, overwrite: bool = False) -> Snapshot
         created=utc_now(),
         size_bytes=archive.stat().st_size,
     )
-    _meta_path(name).write_text(json.dumps(info.to_dict(), indent=2, sort_keys=True) + "\n")
+    _atomic_write_text(
+        _meta_path(name), json.dumps(info.to_dict(), indent=2, sort_keys=True) + "\n"
+    )
     return info
 
 

@@ -408,7 +408,14 @@ class RemoteDriver(Driver):
         import time as _time
 
         from ..env import utc_now
-        from ..snapshot import SnapshotError, SnapshotInfo, _archive_path, _meta_path  # noqa: PLC2701
+        from ..snapshot import (  # noqa: PLC2701
+            SnapshotError,
+            SnapshotInfo,
+            _archive_path,
+            _atomic_write_text,
+            _meta_path,
+            _unique_partial_path,
+        )
 
         target = box.notes.get("remote_target") or self._require()
         remote_root = self._remote_root(box)
@@ -431,7 +438,7 @@ class RemoteDriver(Driver):
         # Hard invariant: ssh-control sockets etc. must never end up in
         # the archive (Tier 0 archives don't have them either).
         ssh_argv = self._ssh_base(box) + [target, tar_cmd]
-        tmp = archive.with_suffix(".tar.gz.partial")
+        tmp = _unique_partial_path(archive)
         start = _time.monotonic()
         with tmp.open("wb") as f:
             proc = subprocess.run(ssh_argv, stdout=f, stderr=subprocess.PIPE, timeout=600)
@@ -449,7 +456,9 @@ class RemoteDriver(Driver):
             seed=box.seed, driver=box.driver, created=utc_now(),
             size_bytes=archive.stat().st_size,
         )
-        _meta_path(name).write_text(_json.dumps(info.to_dict(), indent=2, sort_keys=True) + "\n")
+        _atomic_write_text(
+            _meta_path(name), _json.dumps(info.to_dict(), indent=2, sort_keys=True) + "\n"
+        )
         # Stash duration for the caller.
         box.notes["last_snapshot_seconds"] = round(_time.monotonic() - start, 3)
         return info

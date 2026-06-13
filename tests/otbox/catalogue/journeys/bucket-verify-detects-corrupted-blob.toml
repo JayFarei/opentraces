@@ -1,0 +1,143 @@
+name = "bucket-verify-detects-corrupted-blob"
+description = """
+Plan 080 Phase C mechanism journey (GOLD, issue #58 / BKT-5) — `bucket
+verify` detects CORRUPTED blob content: referenced blobs that still
+exist on disk but whose bytes are no longer trustworthy.
+
+Setup (c-bucket-spine-v2-corrupted-blob-injected): two referenced
+context blobs corrupted in place — one TRUNCATED gzip stream (valid
+magic, cut tail: the `EOFError` shape the pre-#58 except tuple in
+`_blob_content_matches_path` crashed on with a traceback / rc=1
+instead of a structured error / rc=3) and one valid gzip+JSON blob
+whose payload `layer_id` no longer matches the path-encoded hash.
+Event log, mirror, and per-trace envelopes untouched, so the dangling
+arm stays clean: the content-integrity arm must trip ALONE.
+
+Asserts:
+  (a) `bucket verify --full --json` exits NON-zero (rc=3, the CLI's
+      verify-gate exit code) with a structured envelope.
+  (b) `ok == false`, `status == "error"`, and
+      `verify.dangling_count == 0` (arm separation).
+  (c) Exactly 2 errors, both `kind == "blob_content"`; the details
+      cover BOTH fault classes ("unreadable blob" for the truncated
+      gzip, "does not match path hash" for the mismatched layer_id).
+  (d) The events head is UNCHANGED across the verify call (verify is
+      strictly read-only).
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-corrupted-blob-injected"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — capture pre-verify events head (verify must not mutate it).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "verify-corrupted-pre-status"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "verify-corrupted-pre-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-corrupted-pre-status"
+path = "bucket.events_v1.last_batch_id"
+
+# ---------------------------------------------------------------------
+# Step 2 — verify exits non-zero with a structured blob_content
+# envelope covering BOTH fault classes.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "verify-corrupted-call"
+argv = ["bucket", "verify", "--full", "--json"]
+expect_returncode = 3
+
+[[assertions]]
+kind = "returncode"
+step = "verify-corrupted-call"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-corrupted-call"
+path = "ok"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-corrupted-call"
+path = "status"
+equals = "error"
+
+# Arm separation: the content arm trips ALONE (no dangling refs).
+[[assertions]]
+kind = "stdout_json"
+step = "verify-corrupted-call"
+path = "verify.dangling_count"
+equals = 0
+
+# Exactly the two injected faults, both content-integrity failures.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "verify-corrupted-call"
+path = "errors"
+equals = 2
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-corrupted-call"
+path = "errors.0.kind"
+equals = "blob_content"
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-corrupted-call"
+path = "errors.1.kind"
+equals = "blob_content"
+
+# Fault A — truncated gzip surfaces as an unreadable blob (the EOFError
+# class the pre-#58 code crashed on).
+[[assertions]]
+kind = "stdout_json_contains"
+step = "verify-corrupted-call"
+path = "errors"
+value = "unreadable blob"
+
+# Fault B — layer_id / path-hash mismatch.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "verify-corrupted-call"
+path = "errors"
+value = "does not match path hash"
+
+# ---------------------------------------------------------------------
+# Step 3 — post-verify events head unchanged (verify is strictly
+# read-only).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "verify-corrupted-post-status"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "verify-corrupted-post-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "verify-corrupted-post-status"
+path = "bucket.events_v1.last_batch_id"
+equals_var = "verify-corrupted-pre-status:bucket.events_v1.last_batch_id"

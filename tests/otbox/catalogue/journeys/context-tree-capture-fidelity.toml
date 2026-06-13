@@ -9,44 +9,53 @@ event taxonomy (alongside Trace and Trail) describing what the LLM
 saw at each decision point: assembled system layer, message history,
 tool registry, runtime state.
 
-This journey forks from `c-context-tree-substrate` (a captured Claude
-session ingested through the Phase 2 parser extension) and asserts
-three structural properties of the captured tree, via the CLI
-surface (`ctx reads`, `ctx writes`, `ctx show`):
+Forks from `c-context-tree-substrate` and asserts, via the CLI
+surface (`ctx reads`, `ctx show`, `ctx anchor-for-step`):
 
-  (a) Every JSONL `tool_result` uuid surfaced by `ctx reads --json`
-      appears in the `messages` layer pointed at by the corresponding
-      step's `messages_layer_id` — via `stdout_json_set_contains`
-      against `ctx show <node> --full --json`.
-  (b) Every `tool_use` tool name resolved at step N appears in the
-      tool_registry layer pointed at by `node_for_step(N).tool_registry_layer_id`,
-      not just "some reachable layer".
-  (c) Every CLAUDE.md path observed via `InstructionsLoaded` /
-      `system.init` appears in the system layer's `claude_md_set`
-      with the on-disk content hash at capture time.
+  (a) `ctx reads --json` surfaces the per-record read rows
+      ({step_index, node_id, uuid, role, content_hash}) and the
+      first read's uuid appears inside the messages layer the
+      corresponding node references (`ctx show <node> --full`).
+  (b) Every tool name the fixture's init record registered
+      (Read, Edit, Bash) appears in the tool_registry layer's
+      `content.tools` rows for the Edit-step node.
+  (c) The project-scope CLAUDE.md observed at capture time appears
+      in the system layer's `content.claude_md_set` with scope
+      `project` (the substrate checkpoint seeds {project}/CLAUDE.md
+      before ingest).
+  (d) Honest completeness labels: messages is full /
+      transcript_reconstruction; system + tool_registry are
+      approximated / transcript_reconstruction.
+  (e) `ctx anchor-for-step` exits rc=3 with the honest empty-state
+      message on this world — the claude_code JSONL capture path
+      never populates trail_anchor_hint (absorbed from the
+      temporal-anchor journey's shippable slice; the rc=0 half is
+      retargeted to the codex world, see
+      context-tree-temporal-anchor-precision).
+
+Issue #42 re-spec deltas from the plan-077 draft: `ctx show`
+emits `opentraces.context_tree.v1` (not the draft
+`context_node.v1`); `ctx step` has no `--full`, so the layer-content
+checks go through `ctx show {target_node_id} --full --json`; read
+rows carry `uuid`/`content_hash` (not `result_uuid`/`tool_name`);
+the registry rows live at `content.tools` (dicts, asserted via
+substring containment); CLAUDE.md entries live at
+`content.claude_md_set` with absolute capture-time paths (asserted
+via the `/CLAUDE.md` + scope substrings); system + tool_registry
+capture_method is `transcript_reconstruction` (the draft's
+`hardcoded_template` value does not exist in the shipped vocab).
 
 Covers requirements R3 (cover everything the model saw) and R5
-(honest capture completeness labels). Fails today because the
-`opentraces ctx` CLI doesn't exist yet — the journey is the contract
-the Phase 3 CLI must satisfy.
+(honest capture completeness labels).
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
-# Plan 069 R4 / plan 077 §"Coverage gate updates" — silver coverage
-# of R3 + R5.
+tier = 0
 tier_label = "silver"
 trajectories = ["context-tree-capture"]
 persona = "agent"
 requires = ["cli", "git"]
-# Plan 069 R8: explicit pin. c-context-tree-substrate is the
-# Phase 1 fixture-backed checkpoint that materializes a
-# ContextTreeProjection during setup so journeys query indexed
-# state without rebuilding (plan 077 §"Otbox extensions required").
 from_checkpoints = ["c-context-tree-substrate"]
 
-# Plan 069 R1: declarative world-state needs. At least one captured
-# trace whose Context Tree has been built (the Phase 2 reconciler
-# stamps `context_tree_built = true` in the checkpoint's audit).
 [preconditions]
 min_captured_traces = 1
 context_tree_built = true
@@ -82,8 +91,8 @@ step = "tree-shape"
 path = "active_leaf_id"
 
 # ---------------------------------------------------------------------
-# Step 2 — (a) every tool_result uuid surfaced by `ctx reads` is
-# present in the messages layer of the corresponding node.
+# Step 2 — (a) `ctx reads` surfaces the read rows with the shipped
+# {step_index, node_id, uuid, role, content_hash} shape.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -101,12 +110,10 @@ step = "reads-surfaced"
 path = "schema_version"
 equals = "opentraces.context_reads.v1"
 
-# Presence check — at least one read row surfaced (fixture guarantees
-# ≥1 Read tool call).
 [[assertions]]
 kind = "stdout_json"
 step = "reads-surfaced"
-path = "reads.0.result_uuid"
+path = "reads.0.uuid"
 
 [[assertions]]
 kind = "stdout_json"
@@ -116,12 +123,19 @@ path = "reads.0.node_id"
 [[assertions]]
 kind = "stdout_json"
 step = "reads-surfaced"
-path = "reads.0.tool_name"
+path = "reads.0.content_hash"
+
+# The first read row is the fixture's pinned opening prompt record.
+[[assertions]]
+kind = "stdout_json"
+step = "reads-surfaced"
+path = "reads.0.uuid"
+equals = "user-otbox-ctx-multi-turn-1-prompt"
 
 # ---------------------------------------------------------------------
-# Step 3 — `ctx show --full` on the first read's node returns the
-# materialized layer set; the messages layer's uuid set must contain
-# the read's result_uuid (substrate-fidelity property (a)).
+# Step 3 — `ctx show --full` on the first read's node materializes the
+# messages layer; its content must contain the read's uuid
+# (substrate-fidelity property (a)).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -137,12 +151,12 @@ equals = 0
 kind = "stdout_json"
 step = "show-first-read-node"
 path = "schema_version"
-equals = "opentraces.context_node.v1"
+equals = "opentraces.context_tree.v1"
 
 [[assertions]]
 kind = "stdout_json"
 step = "show-first-read-node"
-path = "node.messages_layer_id"
+path = "layers.messages.layer_id"
 
 # Layer completeness must be honestly labeled. messages layers built
 # from JSONL records are `full` / `transcript_reconstruction`; the
@@ -159,16 +173,22 @@ step = "show-first-read-node"
 path = "layers.messages.capture_method"
 equals = "transcript_reconstruction"
 
+# Property (a) — the surfaced read's uuid is inside the messages layer
+# content the node references.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "show-first-read-node"
+path = "layers.messages.content.messages"
+value = "user-otbox-ctx-multi-turn-1-prompt"
+
 # ---------------------------------------------------------------------
-# Step 4 — (b) every tool_use's tool name at step N is present in
-# the tool_registry layer of node_for_step(N). The fixture pins the
-# tool set so we assert the registry contains the canonical
-# baseline (Read, Edit, Bash) via set containment.
+# Step 4 — (b) + (c) on the Edit-step node ({target_node_id}; `ctx
+# step` has no --full, so the content checks ride `ctx show`).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "step-tool-registry"
-argv = ["ctx", "step", "{trace_id}", "{step_index}", "--full", "--json"]
+argv = ["ctx", "show", "{target_node_id}", "--full", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -179,25 +199,38 @@ equals = 0
 kind = "stdout_json"
 step = "step-tool-registry"
 path = "schema_version"
-equals = "opentraces.context_node.v1"
+equals = "opentraces.context_tree.v1"
 
 [[assertions]]
 kind = "stdout_json"
 step = "step-tool-registry"
-path = "node.tool_registry_layer_id"
+path = "layers.tool_registry.layer_id"
 
-# The tool_registry layer's `tools` list must include each tool used
-# at this step. The fixture's `linear` shape pins {Read, Edit, Bash};
-# `multi-turn` is a strict superset. Order-insensitive subset check.
+# The tool_registry layer's `content.tools` rows must include each
+# tool the fixture's init record registered. Rows are dicts, so the
+# containment is substring-shaped over the canonical '"name": "X"'
+# serialization.
 [[assertions]]
-kind = "stdout_json_set_contains"
+kind = "stdout_json_contains"
 step = "step-tool-registry"
-path = "layers.tool_registry.tool_names"
-equals = ["Read", "Edit", "Bash"]
+path = "layers.tool_registry.content.tools"
+value = "\"name\": \"Read\""
 
-# Honest completeness: built-in tool schemas are approximated
-# (capture_method = hardcoded_template, keyed by Claude Code version)
-# per plan 077 §"Honest gaps and how we label them".
+[[assertions]]
+kind = "stdout_json_contains"
+step = "step-tool-registry"
+path = "layers.tool_registry.content.tools"
+value = "\"name\": \"Edit\""
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "step-tool-registry"
+path = "layers.tool_registry.content.tools"
+value = "\"name\": \"Bash\""
+
+# Honest completeness (d): built-in tool schemas are approximated,
+# reconstructed from the transcript (shipped vocab: the draft's
+# `hardcoded_template` does not exist).
 [[assertions]]
 kind = "stdout_json"
 step = "step-tool-registry"
@@ -208,30 +241,32 @@ equals = "approximated"
 kind = "stdout_json"
 step = "step-tool-registry"
 path = "layers.tool_registry.capture_method"
-equals = "hardcoded_template"
+equals = "transcript_reconstruction"
 
-# ---------------------------------------------------------------------
-# Step 5 — (c) every CLAUDE.md path observed via system.init appears
-# in the system layer's `claude_md_set` with the on-disk content hash
-# captured at session time. The fixture pins `<project>/CLAUDE.md` as
-# the canonical entry; set-containment guards against missing or
-# mis-ordered paths.
-# ---------------------------------------------------------------------
+# (c) — the seeded project-scope CLAUDE.md is in claude_md_set with
+# its on-disk content hash captured at session time.
 [[assertions]]
 kind = "stdout_json"
 step = "step-tool-registry"
-path = "node.system_layer_id"
+path = "layers.system.layer_id"
 
 [[assertions]]
-kind = "stdout_json"
+kind = "stdout_json_contains"
 step = "step-tool-registry"
-path = "layers.system.claude_md_paths"
+path = "layers.system.content.claude_md_set"
+value = "/CLAUDE.md"
 
 [[assertions]]
-kind = "stdout_json_set_contains"
+kind = "stdout_json_contains"
 step = "step-tool-registry"
-path = "layers.system.claude_md_paths"
-equals = ["CLAUDE.md"]
+path = "layers.system.content.claude_md_set"
+value = "\"scope\": \"project\""
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "step-tool-registry"
+path = "layers.system.content.claude_md_set"
+value = "content_hash"
 
 # system layer is approximated (static-core-prompt body is never on
 # disk — plan 077 §"Honest gaps").
@@ -245,4 +280,30 @@ equals = "approximated"
 kind = "stdout_json"
 step = "step-tool-registry"
 path = "layers.system.capture_method"
-equals = "hardcoded_template"
+equals = "transcript_reconstruction"
+
+# ---------------------------------------------------------------------
+# Step 5 — (e) the claude-path anchor empty state is honest: rc=3 with
+# a message naming the missing field, never a traceback (absorbed from
+# the temporal-anchor journey's claude-world slice).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "anchor-empty-state"
+argv = ["ctx", "anchor-for-step", "{trace_id}", "{step_index}"]
+expect_returncode = 3
+
+[[assertions]]
+kind = "returncode"
+step = "anchor-empty-state"
+equals = 3
+
+[[assertions]]
+kind = "stderr_contains"
+step = "anchor-empty-state"
+value = "No trail_anchor_hint.commit_id"
+
+[[assertions]]
+kind = "stderr_not_contains"
+step = "anchor-empty-state"
+value = "Traceback"

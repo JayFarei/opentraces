@@ -1,6 +1,6 @@
 """Bucket-spine-v2 checkpoint family — plan 080 phases B/C/D worlds (issue #42).
 
-Nine deterministic, fully synthetic checkpoints (plus the v1-legacy
+Ten deterministic, fully synthetic checkpoints (plus the v1-legacy
 migration fixture) that un-quarantine the plan-080 bucket journeys.
 Everything composes off ``c-installed-source`` through the proven
 fake-claude harness chain (see ``_captured_session.py``), so the family
@@ -17,6 +17,7 @@ Family tree::
                   │           └── c-bucket-spine-v2-cross-machine
                   ├── c-bucket-spine-v2-crash-injected-w1   (orphan blob)
                   ├── c-bucket-spine-v2-dangling-ref-injected (blob deleted)
+                  ├── c-bucket-spine-v2-corrupted-blob-injected (blob content corrupted)
                   ├── c-bucket-spine-v2-bucket-only          (project .git gone)
                   └── c-bucket-spine-v1-legacy-fixture       (plan-079 layout)
 
@@ -37,6 +38,12 @@ Honesty notes (what the worlds really contain):
   reports and removes it.
 * ``dangling-ref-injected`` deletes one referenced blob file, so
   ``bucket verify --full`` exits 3 with ``dangling_count >= 1``.
+* ``corrupted-blob-injected`` corrupts two referenced blobs IN PLACE
+  (issue #58 / BKT-5): one truncated gzip (the ``EOFError`` shape the
+  pre-fix except tuple crashed on) and one valid gzip+JSON whose
+  ``layer_id`` mismatches the path hash. ``bucket verify --full`` exits 3
+  with exactly 2 ``blob_content`` errors and ``dangling_count == 0`` —
+  the content arm trips alone.
 * ``bucket-only`` removes the project working tree's ``.git`` entirely:
   no canonical ref, no notes — the §13 self-sufficiency surface must come
   from ``~/.opentraces`` (bucket + state) alone.
@@ -734,6 +741,105 @@ print(json.dumps({{"deleted_blob": str(target)}}))
 
 
 # ---------------------------------------------------------------------------
+# 8b. c-bucket-spine-v2-corrupted-blob-injected
+# ---------------------------------------------------------------------------
+def _corrupted_blob_delta(driver: Driver, box: Box) -> None:
+    audit = _audit(box)
+    home = driver.paths(box)["home"]
+    project = driver.paths(box)["project"]
+
+    # Corrupt TWO referenced context blobs IN PLACE (issue #58 / BKT-5):
+    # Fault A truncates the gzip stream (valid magic, cut tail — the
+    # EOFError shape the pre-fix except tuple crashed on); Fault B keeps a
+    # valid gzip+JSON blob whose payload layer_id no longer matches the
+    # path hash. Event log, mirror, and per-trace envelopes untouched, so
+    # the dangling arm stays clean (arm separation).
+    script = f"""
+import gzip
+import json
+from opentraces.core._bucket_io import _atomic_write_bytes, _gzip_deterministic
+from opentraces.core.bucket_layout import blobs_v1_root
+
+blobs = sorted(blobs_v1_root().glob("*/context/*/*.json.gz"))
+if len(blobs) < 2:
+    raise SystemExit(f"need >= 2 context blobs to corrupt, found {{len(blobs)}}")
+
+# Fault A — truncated gzip (keep the magic so EOFError is exercised,
+# not just BadGzipFile).
+raw = blobs[0].read_bytes()
+blobs[0].write_bytes(raw[: max(12, len(raw) // 2)])
+
+# Fault B — valid gzip+JSON whose layer_id mismatches the path hash.
+payload = json.loads(gzip.decompress(blobs[1].read_bytes()).decode("utf-8"))
+payload["layer_id"] = "sha256:" + "0" * 64
+data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+_atomic_write_bytes(blobs[1], _gzip_deterministic(data))
+
+root = blobs_v1_root()
+print(json.dumps({{
+    "truncated_blob": blobs[0].relative_to(root).as_posix(),
+    "hash_mismatch_blob": blobs[1].relative_to(root).as_posix(),
+}}))
+"""
+    script_path = f"{home}/_otbox_corrupted_blob_seed.py"
+    driver.put_text(box, script_path, script)
+    seed_run = driver.exec(
+        box, [f"{project}/.testvenv/bin/python", script_path], cwd=project
+    )
+    _check(seed_run, "corrupted-blob seed")
+    try:
+        seeded = json.loads(seed_run.stdout.strip().splitlines()[-1])
+    except (ValueError, json.JSONDecodeError, IndexError):
+        seeded = {}
+
+    cli = resolve_cli_argv()
+    verify_run = driver.exec(box, [*cli, "bucket", "verify", "--full", "--json"])
+    if verify_run.returncode != 3:
+        raise CheckpointError(
+            f"{_FAMILY}-corrupted-blob-injected: verify rc={verify_run.returncode}, "
+            f"expected 3 (corrupted blobs must trip the gate): "
+            f"{verify_run.stdout[:300]}"
+        )
+    try:
+        verify = json.loads(verify_run.stdout.strip())
+    except (ValueError, json.JSONDecodeError):
+        verify = {}
+    errors = (verify.get("verify") or {}).get("errors")
+    if errors is None:
+        errors = verify.get("errors") or []
+    if len(errors) != 2:
+        raise CheckpointError(
+            f"{_FAMILY}-corrupted-blob-injected: expected exactly 2 verify "
+            f"errors, got {len(errors)} ({json.dumps(errors)[:300]})"
+        )
+    kinds = {err.get("kind") for err in errors}
+    if kinds != {"blob_content"}:
+        raise CheckpointError(
+            f"{_FAMILY}-corrupted-blob-injected: expected both errors to be "
+            f"kind=blob_content, got {sorted(kinds)}"
+        )
+    details = " | ".join(str(err.get("detail")) for err in errors)
+    if "unreadable blob" not in details:
+        raise CheckpointError(
+            f"{_FAMILY}-corrupted-blob-injected: no 'unreadable blob' detail "
+            f"(truncated-gzip arm missing): {details[:300]}"
+        )
+    if "does not match path hash" not in details:
+        raise CheckpointError(
+            f"{_FAMILY}-corrupted-blob-injected: no 'does not match path hash' "
+            f"detail (hash-mismatch arm missing): {details[:300]}"
+        )
+    if int(verify.get("verify", {}).get("dangling_count") or 0) != 0:
+        raise CheckpointError(
+            f"{_FAMILY}-corrupted-blob-injected: dangling_count != 0 — the "
+            f"content arm must trip alone (arm separation): "
+            f"{verify_run.stdout[:300]}"
+        )
+    audit["corrupted_blob_injected"] = True
+    audit["corrupted_blobs"] = seeded
+
+
+# ---------------------------------------------------------------------------
 # 9. c-bucket-spine-v2-bucket-only
 # ---------------------------------------------------------------------------
 def _bucket_only_delta(driver: Driver, box: Box) -> None:
@@ -926,6 +1032,23 @@ register(
         description=(
             "Anchored world with ONE referenced context blob deleted from "
             "disk: `bucket verify --full` exits 3 with dangling_count >= 1 "
+            "(build-verified)."
+        ),
+        provides={"captured_traces": 1, "context_tree_built": True},
+    )
+)
+
+register(
+    Checkpoint(
+        name="c-bucket-spine-v2-corrupted-blob-injected",
+        composed_from="c-bucket-spine-v2-one-trace-anchored",
+        delta=_corrupted_blob_delta,
+        cache=True,
+        description=(
+            "Anchored world with TWO referenced context blobs corrupted in "
+            "place (one truncated gzip, one valid gzip whose layer_id "
+            "mismatches the path hash): `bucket verify --full` exits 3 with "
+            "exactly 2 blob_content errors and dangling_count == 0 "
             "(build-verified)."
         ),
         provides={"captured_traces": 1, "context_tree_built": True},

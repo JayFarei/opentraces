@@ -55,10 +55,9 @@ from ..env import REPO_ROOT, Box, resolve_cli_argv
 from . import Checkpoint, CheckpointError, register
 from ._captured_helpers import (
     check as _check_helper,
-    encode_claude_path,
     git as _git_helper,
-    harness_interpreter,
-    harness_source_with_shebang,
+    run_corpus_and_ingest,
+    stage_harness_with_sessions,
 )
 
 _CHECKPOINT_NAME = "c-context-tree-substrate"
@@ -92,28 +91,16 @@ def _git(driver: Driver, box: Box, *args: str):
 
 def _stage_harness(driver: Driver, box: Box, home: str) -> tuple[str, str]:
     """Place the fake-claude harness + the three context-tree corpora on
-    the box. Returns (harness_dst, sessions_dir)."""
-    bin_dir = f"{home}/bin"
-    sessions_dir = f"{home}/share/otbox/sessions"
-    driver.mkdir(box, bin_dir)
-    driver.mkdir(box, sessions_dir)
-    harness_dst = f"{bin_dir}/claude"
-    driver.put_text(box, harness_dst, harness_source_with_shebang(_HARNESS_SRC))
-    _check(driver.exec(box, ["chmod", "+x", harness_dst]), "chmod +x harness")
-
-    # Only copy the text source files (session.py / subagent_session.py /
-    # meta.json). Skip __pycache__ and any non-text artifact — read_text()
-    # on a .pyc blows up with UnicodeDecodeError, and the harness only
-    # imports session.py + sibling modules.
-    _TEXT_SUFFIXES = {".py", ".json"}
-    for session_name in (_PRIMARY_SESSION, _SUBAGENT_SESSION, _REWOUND_SESSION):
-        corpus_src = _SESSIONS_SRC / session_name
-        session_dst = f"{sessions_dir}/{session_name}"
-        driver.mkdir(box, session_dst)
-        for child in sorted(corpus_src.iterdir()):
-            if child.is_file() and child.suffix in _TEXT_SUFFIXES:
-                driver.put_text(box, f"{session_dst}/{child.name}", child.read_text())
-    return harness_dst, sessions_dir
+    the box. Returns (harness_dst, sessions_dir). Delegates to the
+    hoisted ``_captured_helpers.stage_harness_with_sessions`` (issue #42)
+    so composed checkpoints (c-compacted-session) reuse the same chain."""
+    return stage_harness_with_sessions(
+        driver, box, home,
+        harness_src=_HARNESS_SRC,
+        sessions_src=_SESSIONS_SRC,
+        session_names=(_PRIMARY_SESSION, _SUBAGENT_SESSION, _REWOUND_SESSION),
+        checkpoint=_CHECKPOINT_NAME,
+    )
 
 
 def _run_and_ingest(
@@ -129,22 +116,12 @@ def _run_and_ingest(
     cli: list[str],
 ) -> None:
     """Drive one corpus through the harness + _ingest-session chain."""
-    encoded_project = encode_claude_path(project)
-    transcript_path = f"{home}/.claude/projects/{encoded_project}/{session_id}.jsonl"
-    _check(
-        driver.exec(box, [harness_interpreter(), harness_dst], env_extra={
-            "OTBOX_FAKE_SESSION": session_name,
-            "OTBOX_FAKE_SESSIONS_DIR": sessions_dir,
-            "OTBOX_PROJECT_DIR": project,
-            "OTBOX_TRANSCRIPT_PATH": transcript_path,
-        }),
-        f"fake harness ({session_name})",
-    )
-    _check(
-        driver.exec(box, [
-            *cli, "_ingest-session", transcript_path, "--project", project,
-        ]),
-        f"_ingest-session ({session_name})",
+    run_corpus_and_ingest(
+        driver, box,
+        project=project, home=home,
+        harness_dst=harness_dst, sessions_dir=sessions_dir,
+        session_name=session_name, session_id=session_id,
+        cli=cli, checkpoint=_CHECKPOINT_NAME,
     )
 
 
@@ -158,6 +135,16 @@ def _context_tree_substrate_delta(driver: Driver, box: Box) -> None:
     driver.put_text(
         box, f"{project}/README.md",
         "# otbox context-tree substrate checkpoint (issue #42 / plan 077)\n",
+    )
+    # Seed a project-scope CLAUDE.md BEFORE any corpus is ingested: the
+    # claude_code system-layer builder reads the memory chain from disk
+    # at ingest time, so this file is what makes the capture-fidelity
+    # journey's `claude_md_set` containment assertion meaningful.
+    driver.put_text(
+        box, f"{project}/CLAUDE.md",
+        "# context-tree substrate project\n\n"
+        "Deterministic project memory seeded by the c-context-tree-substrate "
+        "otbox checkpoint (issue #42).\n",
     )
     driver.mkdir(box, f"{project}/src")
     # Seed the files the corpora Read/Edit so the first Read returns

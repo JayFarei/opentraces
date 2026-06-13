@@ -171,10 +171,19 @@ def _derive_multi_skill_audit_from_restored_box(
         "commit_shas": commit_shas,
         "skills_invoked": skills_invoked,
         "head_commit_sha": commit_shas[-1] if commit_shas else None,
+        # World-derived query material: real-agent artifacts word their own
+        # commits/files, so journeys must query via this, never a literal
+        # token baked from the synthetic corpus (wave-2 exit-gate finding).
+        "head_commit_subject": _head_commit_subject(driver, box, project),
         "state_dir": state_dir,
         "iterations": iteration_audits,
         "capture_metadata": capture_metadata_from_artifact(cap_meta),
     }
+
+
+def _head_commit_subject(driver: Driver, box: Box, project: str) -> str:
+    sub = driver.exec(box, ["git", "-C", project, "log", "-1", "--format=%s"])
+    return sub.stdout.strip() if sub.ok else ""
 
 
 def _captured_multi_skill_delta(driver: Driver, box: Box) -> None:
@@ -401,6 +410,7 @@ def _captured_multi_skill_delta(driver: Driver, box: Box) -> None:
         "commit_shas": commit_shas,
         "skills_invoked": skills_invoked,
         "head_commit_sha": commit_shas[-1] if commit_shas else None,
+        "head_commit_subject": _head_commit_subject(driver, box, project),
         "state_dir": state_dir,
         "iterations": iteration_audits,
         "capture_metadata": synthetic_capture_metadata(),

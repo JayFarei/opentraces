@@ -1,151 +1,74 @@
 name = "context-tree-temporal-anchor-precision"
 description = """
-Plan 077 substrate-fidelity journey #5 (silver) — for each Edit
-step N, the Context Tree's per-node `trail_anchor_hint` resolves to
-the specific git commit that contains that Edit's blob (not the
-session's last commit, not the previous Edit's commit).
+Plan 077 substrate-fidelity journey #5 (silver) — the per-node
+`trail_anchor_hint` resolves an Edit step to the specific git commit
+that landed it (R10, the ContextNode -> Trail one-hop join).
 
-Cross-substrate join (R10): every ContextNode carries a
-`trail_anchor_hint` pointer (commit_id + working_tree_hash) so
-"what context did the model see when it edited file F" joins
-ContextNode to Trail in one hop. The downgrade from gold to silver
-(plan 077 §"What we cut from v1") happens because the helper
-`ctx anchor-for-step` becomes a thin scalar check — the broader
-`ctx writes --with-trail-anchor` surface gives the same evidence.
+DISPOSITION (issue #42, operator decision 2026-06-12: RETARGET to
+documented functionality, never delete). The plan-077 draft could
+not pass on the claude substrate world: (a) the claude_code JSONL
+capture path never sets `trail_anchor_hint` (only codex/pi do), so
+`ctx anchor-for-step` always exits rc=3 there (that honest empty
+state is asserted by context-tree-capture-fidelity); (b) the
+drafted `--json` + `context_resolve.v1` envelope is draft fiction —
+the shipped verb is scalar-only; (c) the substrate world lands all
+3 edits in one commit. So this journey is RE-SPECCED against
+`c-captured-codex-real-session`, the world whose capture path
+populates anchor hints, asserting the SHIPPED scalar contract:
+rc=0 with the scalar output equal to the codex world's landed
+commit (`{codex_anchor_commit}`, world-derived from the checkpoint
+audit), cross-checked against `ctx writes --with-trail-anchor`.
 
-This journey forks from `c-context-tree-substrate` with the
-`multi-turn` fixture which pins **3 Edit steps committed across 3
-separate git commits**. For each Edit step, `ctx anchor-for-step`
-must return the commit containing that specific Edit's blob; an
-off-by-one (commit N-1 or N+1) fails.
-
-Fails today because neither the `trail_anchor_hint` payload field
-on ContextNode (Phase 2) nor the `ctx anchor-for-step` verb
-(Phase 3) exist yet.
+QUARANTINED (baseline-red), evidence from the 2026-06-12 pre-step
+peek of the restored codex world's event log: all 9 ContextNodes
+carry a populated `trail_anchor_hint`, but the codex emitter's hint
+shape is `{source: parsed_trace_record, session_id, step_index}` —
+NO `commit_id` — so the scalar verb still exits rc=3 ("No
+trail_anchor_hint.commit_id"). Blocked on codex-world regen / the
+v1.1 anchor-hint commit_id wiring (claude path included). Do NOT
+weaken the assertions to make this green; the journey IS the
+contract that wiring must satisfy.
 """
 lane = "core"
-tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier = 1  # quarantined: blocked on codex-world regen / v1.1 anchor commit_id wiring
 tier_label = "silver"
 trajectories = ["context-tree-temporal-anchor"]
 persona = "agent"
 requires = ["cli", "git"]
-from_checkpoints = ["c-context-tree-substrate"]
+from_checkpoints = ["c-captured-codex-real-session"]
 
 [preconditions]
 min_captured_traces = 1
 context_tree_built = true
-requires_edit_commits_min = 3
 
 # ---------------------------------------------------------------------
-# Step 1 — first Edit step's anchor. The runner expands
-# {edit_step_0_index} + {edit_step_0_commit} from the multi-turn
-# fixture's audit (Phase 1 will pin these values).
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "anchor-for-step-0"
-argv = ["ctx", "anchor-for-step", "{trace_id}", "{edit_step_0_index}", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "anchor-for-step-0"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-0"
-path = "schema_version"
-equals = "opentraces.context_resolve.v1"
-
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-0"
-path = "trace_id"
-equals = "{trace_id}"
-
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-0"
-path = "step_index"
-equals_var = "edit_step_0_index"
-
-# The load-bearing scalar: this Edit's commit, not the session's
-# last commit. Off-by-one fails because edit_step_1_commit /
-# edit_step_2_commit are distinct shas in the fixture.
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-0"
-path = "trail_anchor_hint.commit_id"
-equals_var = "edit_step_0_commit"
-
-# Blob id is the second half of the (commit_id, blob_id) pair that
-# pins the working-tree state at the Edit point.
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-0"
-path = "trail_anchor_hint.blob_id"
-
-# ---------------------------------------------------------------------
-# Step 2 — second Edit step's anchor. Distinct commit_id.
+# Step 1 — the SHIPPED scalar contract: `ctx anchor-for-step` prints
+# the anchoring commit id (rc=0). {codex_anchor_step_index} is the
+# first anchor-hinted node's step, resolved from the live event log
+# at expansion time; {codex_anchor_commit} is the world's landed
+# commit sha from the checkpoint audit.
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
-id = "anchor-for-step-1"
-argv = ["ctx", "anchor-for-step", "{trace_id}", "{edit_step_1_index}", "--json"]
+id = "anchor-for-edit-step"
+argv = ["ctx", "anchor-for-step", "{trace_id}", "{codex_anchor_step_index}"]
 
 [[assertions]]
 kind = "returncode"
-step = "anchor-for-step-1"
+step = "anchor-for-edit-step"
 equals = 0
 
+# The load-bearing scalar: this Edit's landing commit, not an empty
+# string and not a different sha.
 [[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-1"
-path = "schema_version"
-equals = "opentraces.context_resolve.v1"
-
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-1"
-path = "step_index"
-equals_var = "edit_step_1_index"
-
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-1"
-path = "trail_anchor_hint.commit_id"
-equals_var = "edit_step_1_commit"
+kind = "stdout_contains"
+step = "anchor-for-edit-step"
+value = "{codex_anchor_commit}"
 
 # ---------------------------------------------------------------------
-# Step 3 — third Edit step's anchor. Distinct again.
-# ---------------------------------------------------------------------
-[[steps]]
-type = "cli"
-id = "anchor-for-step-2"
-argv = ["ctx", "anchor-for-step", "{trace_id}", "{edit_step_2_index}", "--json"]
-
-[[assertions]]
-kind = "returncode"
-step = "anchor-for-step-2"
-equals = 0
-
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-2"
-path = "step_index"
-equals_var = "edit_step_2_index"
-
-[[assertions]]
-kind = "stdout_json"
-step = "anchor-for-step-2"
-path = "trail_anchor_hint.commit_id"
-equals_var = "edit_step_2_commit"
-
-# ---------------------------------------------------------------------
-# Step 4 — bulk cross-check via `ctx writes --with-trail-anchor`.
-# Each write row carries the same trail_anchor_hint as its
-# corresponding `anchor-for-step` scalar; this guards against
-# divergence between the two CLI surfaces.
+# Step 2 — bulk cross-check via `ctx writes --with-trail-anchor`:
+# the write rows' joined hint carries the same commit_id as the
+# scalar verb (guards against divergence between the two surfaces).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
@@ -163,19 +86,8 @@ step = "writes-with-anchors"
 path = "schema_version"
 equals = "opentraces.context_writes.v1"
 
-# Exactly 3 Edit/Write rows for the 3 commits.
 [[assertions]]
-kind = "stdout_json_length_equals"
+kind = "stdout_json"
 step = "writes-with-anchors"
-path = "writes"
-equals = 3
-
-# Ordered list of commit_ids across the writes must equal the
-# fixture's pinned [edit_step_0_commit, edit_step_1_commit,
-# edit_step_2_commit]. `stdout_json_array_equals` is order-sensitive,
-# which is exactly what we want — the Edits land in step order.
-[[assertions]]
-kind = "stdout_json_array_equals"
-step = "writes-with-anchors"
-path = "writes_commit_ids"
-equals_var = "edit_commit_ids_ordered"
+path = "writes.0.trail_anchor_hint.commit_id"
+equals = "{codex_anchor_commit}"

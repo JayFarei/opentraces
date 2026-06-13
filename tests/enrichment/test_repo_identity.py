@@ -137,3 +137,40 @@ def test_discover_claude_jsonl_corpus_current_path(tmp_path, monkeypatch):
     found = ri.discover_claude_jsonl_corpus(tmp_path)
     assert len(found) == 1
     assert found[0].name == "session-1.jsonl"
+
+
+def test_discover_claude_jsonl_corpus_honors_custom_projects_path(
+    tmp_path, monkeypatch
+):
+    """Issue #60 item 4: corpus discovery must honor ``cfg.projects_path``
+    like ``_current_project_session_dir`` does — a custom-``projects_path``
+    user silently got nothing from every corpus-discovery consumer while
+    ``_claude_projects_root()`` was hardcoded to ``~/.claude/projects``."""
+    _git("init", "-q", "-b", "main", cwd=tmp_path)
+    (tmp_path / "a").write_text("x\n")
+    _git("add", ".", cwd=tmp_path)
+    _git("-c", "user.email=a@a", "-c", "user.name=a",
+         "commit", "-q", "-m", "i", cwd=tmp_path)
+
+    # Fake home with NO ~/.claude/projects at all — only the custom root
+    # configured via cfg.projects_path holds the corpus.
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    ri._cached_root.cache_clear()
+
+    custom_root = tmp_path / "custom-projects"
+    from opentraces.core.config import Config
+
+    monkeypatch.setattr(
+        "opentraces.core.config.load_config",
+        lambda: Config(projects_path=str(custom_root)),
+    )
+
+    enc = ri.encode_claude_path(tmp_path)
+    corpus_dir = custom_root / enc
+    corpus_dir.mkdir(parents=True)
+    (corpus_dir / "session-1.jsonl").write_text("{}\n")
+
+    found = ri.discover_claude_jsonl_corpus(tmp_path)
+    assert [p.name for p in found] == ["session-1.jsonl"]

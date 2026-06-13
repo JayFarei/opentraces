@@ -662,3 +662,90 @@ def encode_claude_path(project: str) -> str:
     from opentraces.core.repo_identity import encode_claude_path as _enc
 
     return _enc(Path(project))
+
+
+# ---------------------------------------------------------------------------
+# Context-tree corpus staging + ingest (issue #42 — hoisted from
+# _context_tree_substrate so c-compacted-session can reuse the exact
+# same fake-harness + ``_ingest-session`` chain without copy-paste).
+# ---------------------------------------------------------------------------
+
+# Only copy the text source files (session.py / subagent_session.py /
+# meta.json). Skip __pycache__ and any non-text artifact — read_text()
+# on a .pyc blows up with UnicodeDecodeError, and the harness only
+# imports session.py + sibling modules.
+_CORPUS_TEXT_SUFFIXES = frozenset({".py", ".json"})
+
+
+def stage_harness_with_sessions(
+    driver,
+    box: Box,
+    home: str,
+    *,
+    harness_src: Path,
+    sessions_src: Path,
+    session_names: tuple[str, ...],
+    checkpoint: str,
+) -> tuple[str, str]:
+    """Place a fake-agent harness + the named session corpora on the box.
+
+    Returns ``(harness_dst, sessions_dir)``. Idempotent: re-staging the
+    same harness/corpus over an existing copy is a byte-identical
+    overwrite, so composed checkpoints can call this again to add their
+    own corpora on top of a parent's staging.
+    """
+    bin_dir = f"{home}/bin"
+    sessions_dir = f"{home}/share/otbox/sessions"
+    driver.mkdir(box, bin_dir)
+    driver.mkdir(box, sessions_dir)
+    harness_dst = f"{bin_dir}/{harness_src.name}"
+    driver.put_text(box, harness_dst, harness_source_with_shebang(harness_src))
+    check(
+        driver.exec(box, ["chmod", "+x", harness_dst]),
+        checkpoint=checkpoint, label="chmod +x harness",
+    )
+    for session_name in session_names:
+        corpus_src = sessions_src / session_name
+        session_dst = f"{sessions_dir}/{session_name}"
+        driver.mkdir(box, session_dst)
+        for child in sorted(corpus_src.iterdir()):
+            if child.is_file() and child.suffix in _CORPUS_TEXT_SUFFIXES:
+                driver.put_text(box, f"{session_dst}/{child.name}", child.read_text())
+    return harness_dst, sessions_dir
+
+
+def run_corpus_and_ingest(
+    driver,
+    box: Box,
+    *,
+    project: str,
+    home: str,
+    harness_dst: str,
+    sessions_dir: str,
+    session_name: str,
+    session_id: str,
+    cli: list[str],
+    checkpoint: str,
+) -> str:
+    """Drive one corpus through the harness + ``_ingest-session`` chain.
+
+    Returns the box-absolute transcript path the harness wrote.
+    """
+    encoded_project = encode_claude_path(project)
+    transcript_path = f"{home}/.claude/projects/{encoded_project}/{session_id}.jsonl"
+    check(
+        driver.exec(box, [harness_interpreter(), harness_dst], env_extra={
+            "OTBOX_FAKE_SESSION": session_name,
+            "OTBOX_FAKE_SESSIONS_DIR": sessions_dir,
+            "OTBOX_PROJECT_DIR": project,
+            "OTBOX_TRANSCRIPT_PATH": transcript_path,
+        }),
+        checkpoint=checkpoint, label=f"fake harness ({session_name})",
+    )
+    check(
+        driver.exec(box, [
+            *cli, "_ingest-session", transcript_path, "--project", project,
+        ]),
+        checkpoint=checkpoint, label=f"_ingest-session ({session_name})",
+    )
+    return transcript_path

@@ -399,33 +399,49 @@ def build_context_tree_projection(
             if node.parent_node_id:
                 children_of.setdefault(node.parent_node_id, []).append(node.node_id)
             if node.branch_type == "rewind_branch":
-                orphan_branch_roots_by_trace.setdefault(node.trace_id, []).append(
-                    node.node_id
+                # Only true orphan ROOTS (parent is not itself a rewind
+                # node) — matching the emitter's documented
+                # ``context_tree_reconciled.orphan_branch_roots`` semantics.
+                # Counting every rewind node duplicated the subtree in
+                # ``ctx tree --show-orphans`` (issue #42). Parents always
+                # precede children in the emitted event order, so the
+                # lookup is safe at insert time.
+                parent = (
+                    nodes_by_id.get(node.parent_node_id)
+                    if node.parent_node_id else None
                 )
+                if parent is None or parent.branch_type != "rewind_branch":
+                    orphan_branch_roots_by_trace.setdefault(
+                        node.trace_id, []
+                    ).append(node.node_id)
             if node.subagent_session_id:
                 subagent_session_ids_by_trace.setdefault(node.trace_id, []).append(
                     node.subagent_session_id
                 )
         elif et == CONTEXT_COMPACTION_OBSERVED:
-            trace_id = event.trace_id or event.payload.get("trace_id")
-            if not trace_id:
+            # NB: must NOT rebind ``trace_id`` (the filter parameter) —
+            # doing so silently locked the projection onto the first
+            # compacted/reconciled trace and dropped every other trace's
+            # events on multi-session projects (issue #42).
+            ev_trace_id = event.trace_id or event.payload.get("trace_id")
+            if not ev_trace_id:
                 continue
             pre = event.payload.get("pre_node_id")
             post = event.payload.get("post_node_id")
             if pre and post:
-                compactions_by_trace.setdefault(trace_id, []).append((pre, post))
-            compaction_events_by_trace.setdefault(trace_id, []).append(
+                compactions_by_trace.setdefault(ev_trace_id, []).append((pre, post))
+            compaction_events_by_trace.setdefault(ev_trace_id, []).append(
                 dict(event.payload)
             )
         elif et == CONTEXT_TREE_RECONCILED:
-            trace_id = event.trace_id or event.payload.get("trace_id")
-            if not trace_id:
+            ev_trace_id = event.trace_id or event.payload.get("trace_id")
+            if not ev_trace_id:
                 continue
             leaf = event.payload.get("active_path_leaf_id")
-            active_leaves_by_trace[trace_id] = leaf
+            active_leaves_by_trace[ev_trace_id] = leaf
             for lim in event.payload.get("capture_limitations", []) or []:
                 if isinstance(lim, str):
-                    capture_limitations_by_trace.setdefault(trace_id, []).append(lim)
+                    capture_limitations_by_trace.setdefault(ev_trace_id, []).append(lim)
 
     return ContextTreeProjection(
         nodes_by_id=nodes_by_id,

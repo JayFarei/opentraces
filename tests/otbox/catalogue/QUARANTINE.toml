@@ -7,21 +7,9 @@
 # green — quarantine records debt, it does not erase it.
 
 [[entries]]
-journeys = [
-  "context-tree-branching-fidelity",
-  "context-tree-capture-fidelity",
-  "context-tree-compaction-fidelity",
-  "context-tree-ctx-output-parity",
-  "context-tree-ctx-prune-no-clobber",
-  "context-tree-ctx-resolve-empty-state",
-  "context-tree-ctx-show-bounded-default",
-  "context-tree-demo-acceptance",
-  "context-tree-determinism",
-  "context-tree-fork-fidelity",
-  "context-tree-temporal-anchor-precision",
-]
-rules = ["unregistered-checkpoint", "unknown-precondition"]
-reason = "c-context-tree-substrate / c-rewound-session / c-compacted-session checkpoints deferred from plan 077 phase 4; build or delete by expiry"
+journeys = ["context-tree-temporal-anchor-precision"]
+rules = ["baseline-red"]
+reason = "blocked on codex-world regen / v1.1 trail_anchor_hint commit_id wiring: the journey is RETARGETED (operator decision 2026-06-12, never delete) to c-captured-codex-real-session asserting the shipped scalar ctx anchor-for-step contract, but the committed codex artifact's hints are {source, session_id, step_index} with NO commit_id (pre-step event-log peek: 9/9 hinted nodes, 0 with commit_id), so the verb exits rc=3; the claude-path rc=3 honest empty state is covered by context-tree-capture-fidelity. Do NOT weaken assertions."
 issue = "https://github.com/JayFarei/opentraces/issues/42"
 added = 2026-06-10
 expires = 2026-09-08

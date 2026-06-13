@@ -291,6 +291,7 @@
  "setup watcher sweep": {
   "schema_version": null,
   "top_level_keys": [
+   "deferred",
    "errors",
    "ok",
    "projects",

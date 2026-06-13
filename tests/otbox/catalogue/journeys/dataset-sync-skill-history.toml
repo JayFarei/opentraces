@@ -71,27 +71,36 @@ min_captured_traces = 3
 
 # ---------------------------------------------------------------------
 # 1. Trace Index surfaces the captured multi-skill history.
-#    The multi-skill corpus creates src/feature_<i>.py per session, so
-#    "feature" is a stable lexical match across all 3 captured traces.
+#    Query material is WORLD-DERIVED ({multi_skill_head_commit_subject}
+#    from the checkpoint audit): real-agent artifacts word their own
+#    commits and files, so the old synthetic-corpus literal ("feature")
+#    read as empty output on the regenerated 2.1.175 world (wave-2
+#    exit-gate finding, same class as the #49 gold-journey couplings).
 # ---------------------------------------------------------------------
 [[steps]]
 type = "cli"
 id = "trace-query-feature"
-argv = ["trace", "query", "feature"]
+argv = ["trace", "query", "{multi_skill_head_commit_subject}", "--json"]
 
 [[assertions]]
 kind = "returncode"
 step = "trace-query-feature"
 equals = 0
 
-# At least one of the 3 captured trace ids surfaces. The corpus uses
-# the literal "feature_<index>" in commit subjects + edited paths, so
-# "feature" matches all three; we assert one canonical token from the
-# corpus is present in stdout.
+# A captured trace surfaces as the top candidate — the load-bearing
+# claim (the index covers the captured multi-skill history), now world
+# agnostic: the synthetic world resolves the subject to its
+# feature_<i> wording, the real world to the agent's own commit.
 [[assertions]]
-kind = "stdout_contains"
+kind = "stdout_json"
 step = "trace-query-feature"
-value = "feature"
+path = "candidates.0.candidate_kind"
+equals = "trace"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query-feature"
+path = "candidates.0.trace_id"
 
 # ---------------------------------------------------------------------
 # 2. Baseline: schedule registry is empty before we touch it.
