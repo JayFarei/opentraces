@@ -489,10 +489,18 @@ html { color-scheme: light; }
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-/* When the pill row stacks (narrow screens), the version pill sits above the
-   announce link, so the arrow points up instead of left. */
+/* When the announce link no longer fits beside the version pill it drops below
+   it, so the arrow should point up instead of left. How much room the row has is
+   driven by hero-left's width — the two-column hero grid squeezes it well before
+   any viewport breakpoint — so we key the flip to a container query on hero-left
+   (the container lives on the parent because an element can't respond to its own
+   container query). At the breakpoint we *force* the column stack rather than
+   leaning on the intrinsic flex-wrap point: that intrinsic point drifts by a few
+   px with font rendering, which would otherwise let the layout wrap while the
+   arrow still pointed left. Threshold sits just above the ~390px of pill+gap+
+   announce content so the stack and the arrow always flip together. */
 .hero-announce-arrow-up { display: none; }
-@media (max-width: 480px) {
+@container hero-left (max-width: 394px) {
   .hero-pill-row { flex-direction: column; align-items: flex-start; }
   .hero-announce-arrow-left { display: none; }
   .hero-announce-arrow-up { display: inline; }
@@ -537,7 +545,7 @@ html { color-scheme: light; }
 }
 
 /* ═══ Hero CTAs — Copy Prompt (agent deck) + View Docs ═══ */
-.hero-left { min-width: 0; }
+.hero-left { min-width: 0; container-type: inline-size; container-name: hero-left; }
 
 /* Left column action stack: the CTA row defines the width, and the installs
    card matches it (same length, shared left edge). */

@@ -215,7 +215,7 @@ export default function Hero({
           <p className="hero-sub">
             The unit of work is no longer the diff. It is the session you ran to produce it. Every prompt, tool call, and edit is behind the outcome.
             <br /><br />
-            opentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, evals, and datasets.
+            opentraces is a local-first evidence layer for agent work, capturing what the agent sees, does, and changes.
           </p>
           <div className="hero-cta-stack">
           <div className="hero-cta">

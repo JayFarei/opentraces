@@ -743,31 +743,40 @@
 
 <div class="wrap">
 <section>
-  <p>There is an irony in today's tools. We spend our days inside
-  agent sessions and reviewing what they produce, yet we still treat the software
-  as the unit of work, when our value add has moved up to orchestrating the
-  context, the verifiers, and the process within.</p>
+  <p>There is an irony in today's tools. We spend our days steering ever longer
+  agent sessions, supervised and unsupervised, then reviewing what they produce.
+  Yet we still treat only the software they produce as the unit of work worth
+  keeping.</p>
 
-  <p>The source of our value is no longer just the software. It is the trace of
-  how that software came to exist.</p>
+  <p>Our value has moved up a layer. It now lives in how we orchestrate the
+  context, the verifiers, and the rails agents run within. But that work is still
+  treated as ephemeral.</p>
 
-  <p>Almost all of that record gets thrown away. The prompt that set the
-  direction. The files the model read. The dead ends. The edits that survived.
-  The ones that got reverted. That is the record of how the software was actually
-  made, and it is where improvement happens now.</p>
+  <p>The source of value in our products is no longer just the software that runs.
+  It is also how that software was made to run. It is the trace of how the
+  software came to exist.</p>
+
+  <p>When was the last time you inspected your traces?</p>
+
+  <p>Almost all of that record gets thrown away, and hardly any of it is read
+  again. The prompt that set the direction. The files the model read. The dead
+  ends. The edits that survived. The ones that got reverted. All of it is
+  forgotten the moment you exit the session.</p>
+
+  <p>But that record is where improvement happens now.</p>
 
   <p>Git keeps the diff. The rest evaporates when the session ends.</p>
 
   <p><strong>opentraces</strong> is built to fill that gap: a local-first evidence
   layer for agent work. It captures what the agent saw, did, and changed into a
-  private bucket, anchors the changes to the Git history that accepted them, and
-  turns the evidence into search, lineage, resumable context, shareable bug
-  reports, evals, and training datasets.</p>
+  private bucket, anchors those changes to the Git history that accepted them,
+  and lets you turn that evidence into recall, attribution, resumable context,
+  shareable bug reports, evaluations, and training datasets.</p>
 
   <p>It works with Claude Code, Codex, and Pi today. Nothing leaves your machine
   until you approve it.</p>
 
-  <p>The project started as a reply to a call to action, and the question behind it
+  <p>The project started as a reply to a call to action. The question behind it
   still steers the work: can we, as a community, unlock the traces we already paid
   for, and use them to improve our own workflows and products?</p>
 
@@ -799,8 +808,9 @@
   <div class="rule-label">the problem</div>
   <h2>A trace alone is not enough</h2>
   <p>Let's start with a simple realization: traces alone are not enough.</p>
-  <p>They are just logs. And logs are not very useful as training data. Often they
-  are not even enough for evaluation or the downstream uses we care about.</p>
+  <p>They are just logs. And logs are not very useful beyond troubleshooting. If
+  you are looking for training data, evaluation data or most downstream uses we
+  care about, they are just not enough.</p>
   <p>The trace is the spine of something bigger. The useful signals live around
   it.</p>
   <p>To learn from a session, for evals, skills, and eventually training, you need
@@ -891,9 +901,6 @@
 
   <p>All three land in your private trace bucket, one self-sufficient unit per
   session: trace, trail, and context together.</p>
-
-  <p>The bucket is not a record. It is where the records live. It is the evidence
-  store you mine and combine into whatever projection you need.</p>
 
   <p>The shape to keep in mind is simpler than a log: every session has an input
   side, an action timeline, and an outcome side.</p>
@@ -1135,7 +1142,6 @@
 
   <div class="abox" style="margin:14px 0 12px">
     <div class="line"><span>/schedule daily 7am <span class="rb">/standup-traces-report</span></span></div>
-    <div class="line"><span>/loop 45m <span class="rb">/sync-dataset-usage</span></span></div>
     <div class="abox-foot">🤗 wakes up, reads your traces, leaves the report in your inbox</div>
   </div>
 
@@ -1306,51 +1312,55 @@
 <section>
   <div class="rule-label">the open bet</div>
   <h2>The open bet</h2>
-  <p>Traces are sensitive. They include prompts, code, context, edits, mistakes,
-  and sometimes secrets.</p>
-  <p>So was code when we wrote it ourselves. It was the direct manifestation of
-  our intent.</p>
-  <p>With AI, traces are becoming the new source code.</p>
-  <p>The code in Git is still the artifact that ships. But more and more, the real
-  record of how software gets made lives in the process around it: the prompt that
-  set the goal, the files the model read, the commands it ran, the edits it tried,
-  the tests that passed, the changes that survived, and the ones that were
-  reverted.</p>
-  <p>That process is where teams will learn. It is where better tools, evals,
-  workflows, datasets, and agents will come from.</p>
-  <p>So the raw evidence should be private by default. You should own your bucket.
-  You should decide what leaves it.</p>
-  <p>But the infrastructure around that evidence should be open. If traces become
-  the source of how software is produced, then open source needs open trace
-  infrastructure to keep up.</p>
-  <p>Not everything needs to be public. Most raw traces should not be.</p>
-  <p>What should be shared are the contracts, workflows, review gates, dataset
-  builders, and publishing paths that let people turn private traces into useful
-  artifacts when they choose to: a bug capsule, a PR explanation, a skill eval, a
-  sanitized dataset, a report.</p>
-  <p>That is the balance opentraces is trying to make practical:
-  <strong>private evidence, open learning loops.</strong></p>
-  <p>This matters because software engineering is moving toward harness
-  engineering. We are not only writing code anymore. We are shaping the systems
-  that produce code: prompts, context, tools, verifiers, evals, workflows, and
-  feedback loops.</p>
-  <p>To improve those systems, we need to keep the record of what happened.</p>
-  <p>Every session can become evidence. Every accepted or reverted change can
-  become signal. Every workflow change can become a step toward a better
-  process.</p>
-  <p>Training data is one possible output. It is not the only one.</p>
-  <p>The broader goal is to make the process of building software observable,
-  reviewable, and improvable.</p>
-  <p>If that process is captured only inside closed products, open source loses
-  access to the learning loops that will shape the next generation of tools.</p>
-  <p>If the infrastructure is open and composable, open source has a chance to
-  build on its own work again.</p>
-  <p>That is the bet behind opentraces: developers should own the record of how
-  their software gets made, and the ecosystem around that record should be open
-  enough for others to build on it.</p>
-  <p>The examples above all follow the same pattern: capture the evidence, filter
-  it with a workflow, review what leaves, and render it to a useful
-  destination.</p>
+  <p>We need to be more proactive about the evidence we capture.</p>
+  <p>Not as exhaust from a particular model, IDE, or harness, but as a durable
+  record of how work happened. The goal is not to preserve everything forever. The
+  goal is to capture the right evidence in a form that can improve our products and
+  processes, regardless of which model or agent produced it.</p>
+  <p>Otherwise, the learning loop either disappears with the session or gets
+  captured by someone else's stack.</p>
+  <p>Traces are sensitive. They contain prompts, code, context, commands, edits,
+  mistakes, and sometimes secrets. That is exactly why ownership matters.</p>
+  <p>The raw evidence should stay yours. Developers should own their buckets. Teams
+  should decide what is captured, what is retained, what is redacted, and what
+  leaves.</p>
+  <p>But privacy should not mean isolation.</p>
+  <p>The useful line is not public versus private. It is ownership versus
+  contribution.</p>
+  <p>Most raw traces should never leave the bucket. What should travel is the
+  output of a trusted workflow: a bounded artifact shaped for a purpose and checked
+  before it leaves.</p>
+  <p>A capsule that reproduces a bug. A row for an eval. A PR explanation. A
+  sanitized training example. A report on what worked and what did not.</p>
+  <p>Those artifacts can contribute to the common without asking developers or
+  companies to surrender the underlying evidence. They are not raw sessions handed
+  over wholesale. They are approved projections, produced through review gates,
+  redaction rules, and security contracts the owner trusts.</p>
+  <p>That is the incentive surface <strong>opentraces</strong> is trying to make
+  practical.</p>
+  <ul>
+    <li>An open-source project should be able to ask contributors for useful,
+    sanitized traces that help reproduce failures, improve evals, or build better
+    workflows.</li>
+    <li>A company should be able to learn from real internal usage without giving a
+    model provider the full record of how its software was made.</li>
+    <li>A toolmaker should be able to offer better products in exchange for approved
+    usage signal, without turning private sessions into a black-box data
+    pipeline.</li>
+    <li>The contribution should be explicit. The workflow should be inspectable. The
+    artifact should earn its way out.</li>
+  </ul>
+  <p>That is the balance: private evidence, open infrastructure, shared learning by
+  choice.</p>
+  <p>Software engineering is becoming harness engineering. We are shaping the
+  systems that produce code: prompts, context, tools, verifiers, evals, workflows,
+  and feedback loops.</p>
+  <p>Those systems only improve if we keep the record of what happened.</p>
+  <p>Locked inside closed products, that record is lost to open learning. Kept
+  open and composable, it lets developers build on their own work again, and useful
+  signal flows where it compounds.</p>
+  <p>That is the bet behind <strong>opentraces</strong>: the trace stays yours, and
+  the learning signal becomes reusable.</p>
 </section>
 </div>
 
