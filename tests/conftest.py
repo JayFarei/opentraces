@@ -34,6 +34,39 @@ from opentraces.core import paths as _paths  # noqa: E402
 from opentraces.core import config as _config  # noqa: E402
 
 
+_PATH_MARKERS = (
+    ("tests/integration/", "integration"),
+    ("tests/e2e/", "e2e"),
+    ("tests/otbox/", "otbox"),
+)
+
+_TIMING_SENSITIVE_NODEIDS = {
+    "tests/capture/test_on_tool_use_hook.py::TestHookRobustness::test_hook_runs_under_50ms_budget",
+    "tests/capture/test_watcher_daemon.py::test_quiet_tick_is_fast",
+    "tests/capture/test_watcher_bounded_65.py::test_child_killed_on_rss_budget",
+    "tests/cli/test_trail_track_batch.py::test_track_since_performance_under_5s_for_100_patches",
+    "tests/core/test_trace_index_cheap_sync.py::test_cheap_sync_steady_state_does_zero_refresh_work",
+    "tests/core/test_trails_sync_caching.py::test_warm_batch_under_5s_for_100_patches",
+}
+
+_TIMING_SENSITIVE_FILES = {
+    "tests/core/test_trace_index_perf.py",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    """Attach lane markers from stable paths and known wall-clock budgets."""
+    root = Path(str(config.rootpath))
+    for item in items:
+        relpath = Path(str(item.path)).resolve().relative_to(root).as_posix()
+        for prefix, marker_name in _PATH_MARKERS:
+            if relpath.startswith(prefix):
+                item.add_marker(getattr(pytest.mark, marker_name))
+                break
+        if relpath in _TIMING_SENSITIVE_FILES or item.nodeid in _TIMING_SENSITIVE_NODEIDS:
+            item.add_marker(pytest.mark.timing_sensitive)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _guard_real_home_enlistments():
     """Fail the run if tests leak enlistments into the REAL ~/.opentraces.

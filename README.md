@@ -442,7 +442,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e packages/opentraces-schema
 pip install -e ".[dev]"
-pytest tests/ -v
+make test-premerge          # fast xdist lane; excludes integration/e2e, otbox, perf
+make test-integration-shard # optional local shard; set SHARD_INDEX/SHARD_TOTAL
+pytest tests/ -v            # full local sweep
 ```
 
 ## License

@@ -1,5 +1,6 @@
 .PHONY: version-check dirty-check clean build-schema build-cli build \
-       test lint publish-schema publish-cli publish-test-schema publish-test-cli \
+       test test-premerge test-premerge-shard test-premerge-timing test-integration-shard \
+       lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
        otbox-matrix otbox-inventory otbox-gc otbox-agent-session otbox-live-hf release-gate \
        capture-refresh \
@@ -43,6 +44,33 @@ build: clean build-schema build-cli
 
 test:
 	python3 -m pytest tests/ -v
+
+PYTEST_CI_MARKS := not perf and not real_repl and not trail_real_repl and not user_smoke
+PYTEST_XDIST ?= auto
+SHARD_INDEX ?= 0
+SHARD_TOTAL ?= 1
+PYTEST_CI_DESELECTS := \
+	--deselect "tests/integration/test_bucket_dataset_remote_flow_uat.py::test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket" \
+	--deselect "tests/integration/test_bucket_remote_uat.py::test_installed_runtime_syncs_bucket_to_fake_remote_and_restores" \
+	--deselect "tests/integration/test_trace_trails_corpus.py::test_trace_trails_corpus_fixture_is_current"
+
+test-premerge: test-premerge-shard test-premerge-timing
+
+test-premerge-shard:
+	@files="$$(python3 scripts/ci_test_files.py --lane premerge --shard-index $(SHARD_INDEX) --shard-total $(SHARD_TOTAL))"; \
+	if [ -z "$$files" ]; then echo "No pre-merge test files for shard $(SHARD_INDEX)/$(SHARD_TOTAL)."; exit 0; fi; \
+	$(OTBOX_PY) -m pytest $$files -q -n $(PYTEST_XDIST) --dist loadfile \
+		-m "$(PYTEST_CI_MARKS) and not timing_sensitive"
+
+test-premerge-timing:
+	@files="$$(python3 scripts/ci_test_files.py --lane premerge)"; \
+	if [ -z "$$files" ]; then echo "No pre-merge timing files selected."; exit 0; fi; \
+	$(OTBOX_PY) -m pytest $$files -q -m "$(PYTEST_CI_MARKS) and timing_sensitive"
+
+test-integration-shard:
+	@files="$$(python3 scripts/ci_test_files.py --lane integration --shard-index $(SHARD_INDEX) --shard-total $(SHARD_TOTAL))"; \
+	if [ -z "$$files" ]; then echo "No integration/e2e test files for shard $(SHARD_INDEX)/$(SHARD_TOTAL)."; exit 0; fi; \
+	$(OTBOX_PY) -m pytest $$files -q -m "$(PYTEST_CI_MARKS)" $(PYTEST_CI_DESELECTS)
 
 lint:
 	python3 -m ruff check src/ packages/ tests/

@@ -27,7 +27,14 @@ import = ["datasets>=2.16.0"]
 # `claude` and `codex` CLIs (with subscription auth) are preferred and
 # have no extra install. Opt in with `pip install opentraces[llm-api]`.
 llm-api = ["anthropic>=0.40.0"]
-dev = ["pytest>=8.0", "pytest-cov", "ruff", "datasets>=2.16.0", "anthropic>=0.40.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "pytest-xdist>=3.6",
+    "ruff",
+    "datasets>=2.16.0",
+    "anthropic>=0.40.0",
+]
 release = ["build", "twine"]
 
 [project.scripts]
@@ -60,6 +67,10 @@ markers = [
     "real_repl: scenario drives a real claude REPL via tmux (opt-in via OT_REAL_REPL=1)",
     "trail_real_repl: scenario drives real Claude/tmux and asserts Trace Trails CLI JSON (also opt-in via OT_TRAIL_REAL_REPL=1)",
     "regression_gate: cherry-picked spike-regression scenarios (plan 043 no-regression gate)",
+    "integration: slower integration and UAT coverage outside the fast pre-merge lane",
+    "e2e: slower end-to-end coverage outside the fast pre-merge lane",
+    "otbox: snapshottable otbox environment coverage outside the pytest pre-merge lane",
     "perf: deterministic latency and memory performance harness",
+    "timing_sensitive: wall-clock budget assertion; run serially to avoid xdist/CI contention",
     "user_smoke: opt-in tmux/browser user smoke coverage",
 ]
