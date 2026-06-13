@@ -19,18 +19,13 @@ rc=0 with the scalar output equal to the codex world's landed
 commit (`{codex_anchor_commit}`, world-derived from the checkpoint
 audit), cross-checked against `ctx writes --with-trail-anchor`.
 
-QUARANTINED (baseline-red), evidence from the 2026-06-12 pre-step
-peek of the restored codex world's event log: all 9 ContextNodes
-carry a populated `trail_anchor_hint`, but the codex emitter's hint
-shape is `{source: parsed_trace_record, session_id, step_index}` —
-NO `commit_id` — so the scalar verb still exits rc=3 ("No
-trail_anchor_hint.commit_id"). Blocked on codex-world regen / the
-v1.1 anchor-hint commit_id wiring (claude path included). Do NOT
-weaken the assertions to make this green; the journey IS the
-contract that wiring must satisfy.
+Issue #72 wires `trail_anchor_hint.commit_id` into the codex/pi
+emitters, so this journey is no longer baseline-red. If a local
+restored artifact predates that wiring, refresh the codex capture
+artifact rather than weakening these assertions.
 """
 lane = "core"
-tier = 1  # quarantined: blocked on codex-world regen / v1.1 anchor commit_id wiring
+tier = 1
 tier_label = "silver"
 trajectories = ["context-tree-temporal-anchor"]
 persona = "agent"
