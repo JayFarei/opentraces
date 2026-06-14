@@ -20,7 +20,9 @@ pip install -e ".[release]"       # Build and publish tools (build, twine)
 ## Running Tests
 
 ```bash
-pytest tests/ -v
+make test-premerge          # fast xdist lane; excludes integration/e2e, otbox, perf
+make test-integration-shard # optional local shard; set SHARD_INDEX/SHARD_TOTAL
+pytest tests/ -v            # full local sweep
 ```
 
 Some tests require real Claude Code trace data and are skipped by default. To run them, set the env var pointing to your project's Claude Code sessions directory:

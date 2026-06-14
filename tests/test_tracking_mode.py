@@ -14,7 +14,6 @@ import pytest
 
 from opentraces.core import config as cfgmod
 from opentraces.core.config import (
-    CONFIG_PATH,
     Config,
     ProjectConfig,
     auto_enroll_if_global,
@@ -24,6 +23,13 @@ from opentraces.core.config import (
     project_is_opted_in,
     save_config,
 )
+
+# NOTE: do NOT `from ... import CONFIG_PATH`. The autouse
+# ``_isolate_opentraces_global_state`` fixture monkeypatches
+# ``cfgmod.CONFIG_PATH`` onto the tmp HOME at runtime; an import-time name
+# binding would capture the real-HOME path and escape isolation (writing to
+# the developer's real config, or FileNotFoundError on a fresh CI HOME).
+# Reference ``cfgmod.CONFIG_PATH`` so the patched value is always used.
 
 
 def _git_init(path: Path) -> None:
@@ -48,7 +54,7 @@ def test_default_tracking_mode_is_global():
 
 def test_old_config_without_key_loads_as_global():
     # Simulate a pre-plan-081 config: no capture block at all.
-    CONFIG_PATH.write_text(
+    cfgmod.CONFIG_PATH.write_text(
         json.dumps({"config_version": load_config().config_version})
     )
     assert load_config().capture.tracking_mode == "global"

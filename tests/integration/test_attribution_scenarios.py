@@ -96,12 +96,56 @@ def _build_params():
     return params
 
 
+def _real_repl_requested() -> bool:
+    """The opt-in real-claude path (set by OT_REAL_REPL / OT_TRAIL_REAL_REPL,
+    see module docstring + conftest) is the ONLY case that legitimately needs
+    the developer's real ``~/.claude/projects/`` and ``~/.opentraces``."""
+    return any(
+        os.environ.get(flag) == "1"
+        for flag in ("OT_REAL_REPL", "OT_TRAIL_REAL_REPL")
+    )
+
+
 @pytest.fixture(autouse=True)
-def _isolate_opentraces_global_state():
-    """Override the repo-wide HOME-redirect. The harness reads and writes
-    under the real ~/.claude/projects/ (Claude Code's own JSONL store),
-    and the spike subprocess it invokes inherits the env. Letting HOME
-    stay real keeps both views aligned."""
+def _isolate_opentraces_global_state(tmp_path_factory, monkeypatch):
+    """Override the repo-wide HOME-redirect.
+
+    The real-claude scenarios (``real_repl``, opt-in only) read and write
+    under the real ``~/.claude/projects/`` (Claude Code's own JSONL store),
+    and the spike subprocess they invoke inherits the env — so when those
+    are requested we leave HOME real to keep both views aligned.
+
+    For the default CI path only the deterministic scenarios run (``real_repl``
+    is deselected), and they do NOT need the real HOME. They register
+    ``/tmp/ot-h-*`` enlistments via the ``./otd`` subprocess, which inherits
+    ``os.environ`` — so without isolation those leak into the developer's real
+    ``~/.opentraces/projects/`` and trip the session-level enlistment guard
+    under the sharded integration lane (#70). Isolate HOME by default; the
+    subprocess inherits the isolated HOME and stays contained.
+    """
+    if _real_repl_requested():
+        yield
+        return
+
+    from opentraces.core import config as _config
+    from opentraces.core import paths as _paths
+
+    home = tmp_path_factory.mktemp("home_isolated_attribution")
+    monkeypatch.setenv("HOME", str(home))
+
+    opentraces_dir = home / ".opentraces"
+    projects_dir = opentraces_dir / "projects"
+    staging_dir = opentraces_dir / "staging"
+    projects_dir.mkdir(parents=True)
+    staging_dir.mkdir(parents=True)
+
+    for mod in (_paths, _config):
+        monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_dir)
+        monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_dir / "config.json")
+        monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_dir / "credentials")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
+        if hasattr(mod, "STAGING_DIR"):
+            monkeypatch.setattr(mod, "STAGING_DIR", staging_dir)
     yield
 
 
