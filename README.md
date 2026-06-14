@@ -14,9 +14,11 @@
   <strong>opentraces hub</strong> — <a href="https://x.com/jayfarei">reach out for early access</a>
 </p>
 
-Open schema + CLI for capturing agent traces into a private bucket, linking them to Git and context evidence, building workflow-projected datasets, and publishing reviewed dataset rows to Hugging Face Hub.
+**Traces are the new source code.** opentraces is a local-first evidence layer for agent work — an open schema + CLI that captures what the agent saw, did, and changed into a private bucket, anchors those changes to the Git history that accepted them, and lets you reuse that one record many ways: search, lineage, resumable context, shareable bug reports, evals, and datasets published to Hugging Face Hub.
 
-Every coding session leaves behind the data you actually want: prompts, tool calls, reasoning, edits, outcome signals, and eventually the code that shipped. opentraces captures that locally as raw bucket evidence, links each change to the Git history that accepted it, reconstructs what the agent saw at each step, and lets workflows turn selected evidence into datasets.
+Every coding session leaves behind the record you actually want: the prompt that set the direction, the files the model read, the dead ends, the edits that survived, the ones that got reverted. Git keeps the diff; the rest evaporates when the session ends. opentraces keeps that record locally, anchors each change to the commit that accepted it, reconstructs what the agent saw at each step, and lets workflows project selected evidence into datasets. It works with Claude Code, Codex, and Pi today; nothing leaves your machine until you approve it.
+
+Capture once, project many times: a bug report, a PR explanation, a resumable session, an eval row, and a dataset are all projections of the same kept record, not separate features.
 
 > Sharing traces can leak secrets, credentials, internal paths, or customer data. opentraces reduces that risk, but it does not remove it. Read the [security docs](https://opentraces.ai/docs/security/tiers) before you publish anything.
 
@@ -34,16 +36,16 @@ Every coding session leaves behind the data you actually want: prompts, tool cal
 
 ## Concepts
 
-opentraces is organized around a small set of subsystems. Knowing the boundaries makes the CLI predictable.
+opentraces splits every session into three linked records, each defined by the question it answers: **Trace** (what did the agent do?), **Trail** (what changed, and did it survive?), and **Ctx** (what did the model see?). Trace is the spine — every prompt, plan, read, command, and edit in order — and everything else joins back to a step on it. Each record is useful alone; the power is in the joins. The rest of the CLI is a small set of subsystems built on top of those records, and knowing the boundaries makes it predictable.
 
-| Subsystem | What it holds | Primary commands |
-|-----------|---------------|------------------|
+| Subsystem | What it answers / holds | Primary commands |
+|-----------|-------------------------|------------------|
 | **Capture** | Inbound boundary: agent hooks, the attribution watcher, optional OTLP receiver | `setup`, `init`, `capture-otlp` |
 | **Bucket** | Private, local-first store of raw captured evidence (one self-sufficient unit per trace) | `bucket`, `ctx list/info` |
-| **Trace** | Search, map, and slice projections over retained traces | `trace query/map/slice/get` |
+| **Trace** | What the agent did — the step-by-step spine, with search/map/slice projections | `trace query/map/slice/get` |
 | **Trace Intelligence** | Deterministic signals about how a run went: context waste, run signals, run compare | `trace --waste/--run-intel`, `trace compare` |
-| **Trail** | VCS-anchored lineage from a trace patch to the commit that accepted it | `trail blame/graph/track` |
-| **Context Tree** | What the LLM saw at each step (system, messages, tools, runtime state) | `ctx tree/show/reads/writes/...` |
+| **Trail** | What changed and whether it survived: VCS-anchored lineage from a patch to the commit that accepted it | `trail blame/graph/track` |
+| **Context Tree** | What the model saw at each step (system, messages, tools, runtime state) | `ctx tree/show/reads/writes/...` |
 | **Workflows + Datasets** | Workflow skills that project bucket traces into reviewable HF dataset rows | `workflow`, `dataset` |
 | **Security** | Per-record detectors, transformers, and judges run before publication | `security`, `setup <tool>` |
 
@@ -74,7 +76,7 @@ opentraces <capture> · what happened between an agent and its environment
   LLM   │ ingest/produce ─────────────────────────────────────►  $ in / $$ out
 ```
 
-Changes flow up to the Trail and are anchored to the commits that accepted them; observations flow down to the Context Tree as what the LLM actually saw.
+Every session has an input side, an action timeline, and an outcome side: **Ctx** captures the input side (what the model could see at each moment), **Trace** captures the action timeline (what it planned, read, ran, and edited), and **Trail** captures the outcome side (which edits were produced, which commits accepted them, and which survived). Changes flow up to the Trail and are anchored to the commits that accepted them; observations flow down to the Context Tree as what the model actually saw.
 
 ## Pipeline
 
@@ -310,57 +312,97 @@ The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OT
 Paste this into your coding agent:
 
 ~~~
-Set up opentraces in this project.
+Set up opentraces on this machine for agent trace collection.
 
-1. Check whether `opentraces --version` works.
-   If not, install with `pipx install opentraces`.
+Work through this as an interview: at each decision point below, ASK ME the question, show me the options, and WAIT for my answer before doing anything. If your interface has a structured way to ask multiple-choice questions, use it; otherwise just ask in chat. Do not assume defaults without confirming.
 
-2. Run the one-time machine setup:
-   `opentraces setup`
+Step 1 - Install or update:
+Check if `opentraces --version` works.
+If not installed, run: pipx install opentraces
+If already installed, run: opentraces setup upgrade
 
-   This walks each integration (capture hooks, attribution watcher,
-   HuggingFace login, optional TruffleHog, optional privacy-filter,
-   optional LLM review).
+Step 2 - Choose tracking mode:
+Ask: "How should opentraces track your projects?"
+- Global (recommended): auto-enroll Claude/Codex projects when capture fires.
+- Manual: only projects where I explicitly run `opentraces init` are tracked.
+Pi is extension-backed and still requires explicit per-project `opentraces init --agent pi` consent before sidecars are written.
+Apply with: `opentraces config tracking-mode global` or `opentraces config tracking-mode manual`
 
-3. Confirm authentication:
-   `opentraces auth whoami`
-   If unauthenticated, use browser login (`opentraces auth login`)
-   or token login (`opentraces auth login --token`).
+Step 3 - Install capture hooks:
+Ask which agents to connect.
+- Claude Code: `opentraces setup claude-code`
+- Codex CLI: `opentraces setup codex-cli`
+- Pi: first `pi install npm:opentraces-pi`, then `opentraces setup pi --dry-run --json` or use `/ot-setup` inside Pi.
+Also run `opentraces setup skill` so supported agents can drive the CLI, and `opentraces setup git` for post-commit Trace Trails.
+Before installing a selected agent hook, check that agent's own CLI is installed and authenticated enough to start a session:
+- Claude Code: `command -v claude`; if missing or logged out, tell me to run `claude login` outside this session.
+- Codex CLI: `command -v codex`; if missing or logged out, tell me to run `codex login` outside this session. This does not cover Codex Desktop.
+- Pi: `command -v pi`; if missing or logged out, tell me to run `pi /login` outside this session before using Pi capture.
+Codex hooks are observational; they must not approve or deny permission prompts. Pi setup manages package resources only; it does not silently install Python, start services, authenticate, or enable capture.
 
-4. Initialize the repo:
-   `opentraces init`
-   For Pi, first install `pi install npm:opentraces-pi`. Under global tracking
-   (the default) Pi auto-enrolls; `opentraces init --agent pi` or `/ot-setup`
-   enrolls a project explicitly. Dataset remotes and review policy live under
-   `opentraces dataset ...`.
+Step 4 - Authenticate:
+Run `opentraces --json auth whoami` and inspect the JSON.
+If already authenticated, continue.
+If unauthenticated, ask whether to connect HuggingFace now or skip. Auth is needed for bucket sync and dataset remotes; local capture works offline.
+- Browser/device flow: only run `opentraces auth login --device-timeout 180` if I can open the shown URL and enter the code while you wait. When the URL and code appear, clearly tell me: "Open the URL, enter the code, then come back here; this command is waiting." If it times out, stop and show the outside-session steps below.
+- Outside this session: tell me to run `opentraces auth login` in a normal terminal, or `opentraces auth login --token` for a personal token, or export `HF_TOKEN=hf_...`; then rerun `opentraces --json auth whoami`.
+- Skip for now: continue local-only and do not run `opentraces setup bucket --remote`.
+Do not ask me to paste an HF token into agent chat.
 
-5. After init, the daily workflow is:
-   - `opentraces status`
-   - `opentraces trace query ...`
-   - `opentraces trail track <trace-id>`
-   - `opentraces dataset run <name>`
-   - `opentraces dataset publish <name>`
+Step 5 - Initialize a project when needed:
+If tracking mode is global, the project auto-enrolls on first capture. To enroll explicitly:
+`opentraces init --agent claude-code --import-existing`
+`opentraces init --agent codex-cli`
+`opentraces init --agent pi`
+Codex and Pi capture start with future sessions after setup and init. `--import-existing` is a Claude Code backfill path, not a Codex/Pi backfill path.
 
-6. Optional hardening:
-   - `opentraces doctor`
-   - `opentraces setup trufflehog`
-   - `opentraces setup llm-review`
-   - `opentraces dataset publish <name> --check-only`
+Step 6 - Optional bucket sync:
+Ask whether to configure private bucket sync. If yes:
+`opentraces setup bucket`
+`opentraces bucket remote status`
+Only run this after `opentraces --json auth whoami` reports authenticated. If auth is still missing, clearly say: "Bucket sync needs HuggingFace auth; run `opentraces auth login` outside this session, then rerun setup."
 
-7. Attribution queries (run `opentraces setup git` once to install the post-commit correlator):
-   - `opentraces trail blame commit <sha>`
-   - `opentraces trail graph`
-   - `opentraces trail track <trace-id>`
+Step 7 - Optional security tools:
+Ask: "Enable any extra security tools? All per-record tools are optional and default off."
+- TruffleHog: `opentraces setup trufflehog`
+- Privacy-filter NER: `opentraces setup privacy-filter`
+- LLM review for dataset publication: `opentraces setup llm-review`
+For explicit workflow sanitization, use `opentraces security sanitize --tools regex,entropy,path_anonymizer` or `--use-config`.
+Then run `opentraces doctor` and `opentraces security tools list`.
 
-8. Private bucket sync (optional):
-   - `opentraces auth login` first; `setup bucket` requires authentication
-   - `opentraces setup bucket` to configure the remote-by-default private
-     bucket; it prompts for a bucket security policy (recommended / basic /
-     strict / off / custom) before configuring remote sync
-   - `opentraces bucket security --policy recommended` to set the policy later,
-     or `opentraces bucket security` to inspect the active policy and tools
-   - `opentraces bucket status` to inspect local bucket health
-   - `opentraces bucket remote push/pull` to sync with the configured remote
+Once set up, read the skill at .agents/skills/opentraces/SKILL.md for the full command reference and workflows.
+
+Working with retained traces:
+- `opentraces status` shows the project snapshot
+- `opentraces bucket status` inspects the private bucket
+- `opentraces bucket rebuild --json` refreshes derived bucket projections
+- `opentraces trace query` searches retained traces
+- `opentraces trace map <id> --bursts` renders deterministic edit/intent bursts
+- `opentraces trace slice <id> --template bursts` creates workflow packets
+- `opentraces trace get <id>` resolves a trace, unit, or ot:// resource
+
+Trace Trails:
+- `opentraces trail blame commit <sha>` resolves a commit to contributing traces
+- `opentraces trail blame commit <sha> <path> --lines` scopes blame to one file
+- `opentraces trail blame pr render` renders a PR body from branch lineage
+- `opentraces trail graph` renders commit + trace history
+- `opentraces trail track <trace-id>` walks a trace's lineage through Git
+
+Context Tree:
+- `opentraces ctx tree <trace-id>` prints what the agent saw across the trace
+- `opentraces ctx step <trace-id> <step-index>` resolves one step's context
+- `opentraces ctx resume <context-node-id>` creates a resume packet
+- `opentraces setup capture-otlp` enables higher-fidelity Claude Code context capture
+
+Dataset workflows and datasets:
+- `opentraces workflow templates` lists row-projection templates
+- `opentraces workflow create my-workflow --template skill-command-trajectory-eval-v1`
+- `opentraces dataset new my-set --workflow ./workflows/my-workflow/`
+- `opentraces dataset run my-set` fills it with workflow-projected rows
+- `opentraces dataset review my-set --json` lists rows
+- `opentraces dataset review approve my-set <row-id>` approves one row
+- `opentraces dataset remote create my-set <owner>/<repo> --private`
+- `opentraces dataset publish my-set` publishes approved rows only
 ~~~
 
 ## Docs
