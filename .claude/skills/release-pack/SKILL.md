@@ -162,7 +162,7 @@ Release pack plan:
   Proposed release:
     CLI:    v0.1.2 → v0.1.3  (patch — bug fixes and hardening)
     Schema: v0.1.1 → skipping (no schema source changes)
-    Site:   deploy after CLI tag
+    Site:   deploy last, after install verification (carries final version + docs)
 
   Bump reasoning: commits are all fixes and non-breaking improvements
 
@@ -171,13 +171,14 @@ Release pack plan:
     - web/site/src/lib/version.json  (0.1.2 → 0.1.3)
 
   Sequence:
-    1. Docs update (skill/SKILL.md is bundled in the wheel — must be correct before build)
-    2. Regenerate llms.txt
-    3. Release CLI → GitHub Release → PyPI + Homebrew  (v0.1.3)
-    4. Release Pi extension → npm  (opentraces-pi, only if changed)
-    5. Deploy site → Vercel
+    1. Bump version files first (CLI __init__.py, version.json, schema version.py)
+    2. docs-update ONCE (sees final version; skill/SKILL.md is bundled in the wheel) + regenerate llms.txt
+    3. Release schema → PyPI  (only if changed)
+    4. Release CLI → GitHub Release → PyPI + Homebrew  (v0.1.3)
+    5. Release Pi extension → npm  (opentraces-pi, only if changed)
     6. Wait ~120s for PyPI propagation
     7. Verify: pipx  pip  brew  npm
+    8. Deploy site → Vercel  (ONCE, last — carries final version + docs)
 
 Proceed? [Y/n]
 ```
@@ -186,18 +187,32 @@ Proceed? [Y/n]
 
 ---
 
-## Step 4: Docs update
+## Step 4: Bump versions, then run docs-update (once)
 
-**`skill/SKILL.md` is bundled inside the wheel** (`pyproject.toml` force-includes it). Any stale command references or missing flags ship to end users and agents. Run `/docs-update` now — before building — so the wheel contains correct docs.
+The target versions are already known from Step 3, so bump them **now**, before the single docs pass. This is what lets the whole release run one docs-update and one site deploy: the docs pass sees the final version, the wheel bundles correct docs, and the site (deployed once at the end) carries final version + docs. Do not defer the bump to the per-package release steps — those now only commit/tag/publish.
+
+### 4a. Bump version files
+
+| File | Field | Value |
+|---|---|---|
+| `src/opentraces/__init__.py` | `__version__` | new CLI version |
+| `web/site/src/lib/version.json` | `{"version": "..."}` | new CLI version |
+| `packages/opentraces-schema/src/opentraces_schema/version.py` | `SCHEMA_VERSION` | new schema version if releasing schema; otherwise the new CLI version |
+
+Do **not** commit yet. The per-package release steps below stage their own files into clean per-package commits (schema files → schema commit; everything else, including all docs/llms.txt changes → CLI commit).
+
+### 4b. Run docs-update once
+
+**`skill/SKILL.md` is bundled inside the wheel** (`pyproject.toml` force-includes it). Any stale command references or missing flags ship to end users and agents. Run `/docs-update` now — after the bump, before building — so it sees the final version and the wheel contains correct docs.
 
 After docs-update completes:
 
 ```bash
-# Regenerate llms.txt from updated docs source (never hand-edit it)
+# Regenerate llms.txt from updated docs source (never hand-edit it). Once — this is the only regen in the flow.
 bash web/site/scripts/generate-llms-txt.sh
 ```
 
-Commit any docs changes before proceeding to the build step.
+Leave all changes staged for the release-step commits below.
 
 ### Quick spot-check (if skipping full docs-update)
 
@@ -220,11 +235,9 @@ Flag any obvious staleness but don't block the release unless it's a broken refe
 
 ## Step 5: Release schema (if releasing)
 
-### 4a. Update version file
+Version was already bumped in Step 4a — do not re-edit `version.py` here.
 
-Edit `packages/opentraces-schema/src/opentraces_schema/version.py` with the new schema version.
-
-### 4b. Update CHANGELOG.md
+### 5a. Update CHANGELOG.md
 
 ```bash
 git log --oneline $(git tag -l 'schema-v*' --sort=-v:refname | head -1)..HEAD -- packages/opentraces-schema/
@@ -232,7 +245,7 @@ git log --oneline $(git tag -l 'schema-v*' --sort=-v:refname | head -1)..HEAD --
 
 Add a new version entry. Move [Unreleased] items under it.
 
-### 4c. Build and test
+### 5b. Build and test
 
 ```bash
 source .venv/bin/activate
@@ -242,7 +255,7 @@ pytest tests/ -q
 
 Stop if either fails.
 
-### 4d. Commit, tag, push
+### 5c. Commit, tag, push
 
 ```bash
 git add packages/opentraces-schema/
@@ -251,7 +264,7 @@ git tag -a schema-vSCHEMA_VERSION -m "opentraces-schema vSCHEMA_VERSION"
 git push origin main --tags
 ```
 
-### 4e. Publish schema via workflow dispatch
+### 5d. Publish schema via workflow dispatch
 
 ```bash
 gh workflow run publish.yml -f repository=pypi -f package=opentraces-schema
@@ -268,17 +281,9 @@ gh run list --workflow=publish.yml --limit 1 --json status,conclusion,databaseId
 
 ## Step 6: Release CLI
 
-### 5a. Update version files
+Version files were already bumped in Step 4a (`__init__.py`, `version.json`, and — if no separate schema release — `version.py` set to the CLI version). Do not re-edit them here.
 
-Edit all three files atomically:
-
-| File | Field |
-|---|---|
-| `src/opentraces/__init__.py` | `__version__ = "X.Y.Z"` |
-| `packages/opentraces-schema/src/opentraces_schema/version.py` | `SCHEMA_VERSION = "X.Y.Z"` (only if NOT doing a separate schema release) |
-| `web/site/src/lib/version.json` | `{"version":"X.Y.Z"}` |
-
-### 5b. Build and test
+### 6a. Build and test
 
 ```bash
 source .venv/bin/activate
@@ -286,16 +291,18 @@ pytest tests/ -q
 rm -rf dist && python -m build --wheel
 ```
 
-### 5c. Commit, tag, push
+### 6b. Commit, tag, push
+
+This commit also carries the Step 4b docs-update + llms.txt changes (everything not already committed with the schema release):
 
 ```bash
-git add src/opentraces/__init__.py web/site/src/lib/version.json
+git add -A
 git commit -m "release: opentraces vCLI_VERSION"
 git tag -a vCLI_VERSION -m "opentraces vCLI_VERSION"
 git push origin main --tags
 ```
 
-### 5d. Create GitHub Release
+### 6c. Create GitHub Release
 
 Generate changelog from git log since previous CLI tag:
 
@@ -326,17 +333,17 @@ EOF
 
 This triggers `publish.yml` (PyPI) and `update-homebrew.yml` (tap formula) automatically.
 
-### 5e. Monitor publish workflow
+### 6d. Monitor publish workflow
 
 ```bash
 gh run list --workflow=publish.yml --limit 2 --json status,conclusion,databaseId
 ```
 
-Tell the user both workflows are running. They can watch at the Actions tab. Continue to site deploy while PyPI publishes.
+Tell the user both workflows (`publish.yml` + `update-homebrew.yml`) are running; they can watch at the Actions tab. Continue to the Pi release while PyPI publishes — the site deploy is now the final step (Step 11).
 
 ---
 
-## Step 6b: Release Pi extension (npm)
+## Step 7: Release Pi extension (npm)
 
 The `opentraces-pi` Pi extension publishes to **npm**, not PyPI — it is the package `pi install npm:opentraces-pi` resolves. It is NOT covered by `publish.yml`; it has its own `publish-npm.yml` workflow. Skipping this step is what historically left `opentraces-pi` unpublished (a 404 on `pi install`).
 
@@ -388,22 +395,9 @@ npm view opentraces-pi version   # should equal $PI_VERSION
 
 ---
 
-## Step 7: Deploy site
-
-Build and deploy from the repo root (not `web/site/`):
-
-```bash
-cd web/site && npm run build && cd ../..
-npx vercel --prod
-```
-
-If the build fails, fix before deploying. The production URL is `https://opentraces.ai`.
-
----
-
 ## Step 8: Wait for PyPI propagation
 
-After site is deployed, pause before running install verification. PyPI typically propagates within 60-120 seconds, but can take longer during peak load.
+The site deploys last (Step 11), so there's nothing to wait on it for here. Pause before running install verification: PyPI typically propagates within 60-120 seconds, but can take longer during peak load.
 
 ```bash
 echo "Waiting 120s for PyPI to propagate..."
@@ -467,29 +461,36 @@ rm -rf /tmp/schema-verify
 
 ---
 
-## Step 10: Post-release docs update
+## Step 10: Post-release docs verification (no mutation)
 
-After verifications pass, run a docs-update pass to propagate the release changes across all documentation surfaces.
+Because docs-update ran in Step 4b *after* the version bump, the docs already carry the final version — there is no second docs-update pass and no second regeneration of `llms.txt`. This step is a read-only spot-check that the up-front pass didn't miss anything; only fix-and-recommit if it genuinely surfaces drift.
 
 ```bash
-# Regenerate llms.txt from updated docs (always do this — do not hand-edit llms.txt)
-bash web/site/scripts/generate-llms-txt.sh
+# Nothing should still reference the previous version
+git grep -n "PREVIOUS_CLI_VERSION" -- web/site src docs skill packages | head
+
+# llms.txt should already match its source from Step 4b (clean = good)
+bash web/site/scripts/generate-llms-txt.sh && git status --short web/site/public/llms.txt
 ```
 
-Then invoke the `/docs-update` skill to audit and fix any stale references introduced by the release (new commands, flags, version numbers, schema fields). This step catches drift that the pre-release docs check (Step 4) doesn't cover because it runs *before* the code is tagged.
-
-Key things that commonly go stale after a release:
-- `llms.txt` — regenerate from source, never hand-edit
-- `web/viewer/src/types/trace.ts` — TypeScript types must track schema model changes
-- `web/viewer/src/lib/sample-data.ts` — `schema_version` hardcoded string
-- `packages/opentraces-schema/CHANGELOG.md` — verify no version entry gaps
-- `CLAUDE.md` — parsers list, new directories in structure section
-
-Commit the docs-update changes before the final status report.
+If both come back clean (no old-version hits, no llms.txt diff), proceed straight to the deploy. If either surfaces real drift, fix it, commit, and note it — that commit then ships with the single deploy below. Other surfaces worth a glance if the release changed schema or CLI surface: `packages/opentraces-schema/CHANGELOG.md` (no version-entry gaps) and `CLAUDE.md` (parsers list, structure section).
 
 ---
 
-## Step 11: Final status report
+## Step 11: Deploy site (once)
+
+This is the only site deploy in the flow. It runs last, after the version bump (Step 4a), the single docs pass (Step 4b), and install verification (Step 9) — so it ships final version + final docs in one shot, and a failed/aborted release never advertises itself on the site.
+
+```bash
+cd web/site && npm run build && cd ../..
+npx vercel --prod
+```
+
+If the build fails, fix before deploying. The production URL is `https://opentraces.ai`.
+
+---
+
+## Step 12: Final status report
 
 After all verifications pass, print a concise summary:
 
@@ -509,7 +510,7 @@ Release pack complete:
   opentraces-pi vPI_VERSION  (or "skipped — no Pi changes")
     npm:    published (npm view opentraces-pi version == PI_VERSION)
 
-  Site:   https://opentraces.ai (deployed)
+  Site:   https://opentraces.ai (deployed once, last — final version + docs)
 
   Tags:   schema-vSCHEMA_VERSION  vCLI_VERSION  pi-vPI_VERSION
   GH:     https://github.com/JayFarei/opentraces/releases/tag/vCLI_VERSION
@@ -523,9 +524,9 @@ If any verification failed, show it clearly and suggest what to check.
 
 | Failure | Response |
 |---|---|
-| Tests fail (step 5c/6b) | Stop, fix, restart from that step |
+| Tests fail (step 5b/6a) | Stop, fix, restart from that step |
+| Site build fails after packages published | Packages are independent — fix Next.js errors and re-run the single deploy (Step 11); no need to re-release packages |
 | Schema publish fails | Fix and re-dispatch; do not continue to CLI release |
 | CLI GitHub Release fails | The tag is already pushed, just recreate the release (`gh release create`) |
 | PyPI already has this version | You must bump again; PyPI does not allow re-uploads |
 | brew not updated after 5 min | Check `update-homebrew.yml` workflow; may need HOMEBREW_TAP_TOKEN secret |
-| Site build fails | Fix Next.js errors before deploying |
