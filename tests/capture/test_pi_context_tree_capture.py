@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from opentraces_schema import Agent, Observation, Step, ToolCall, TraceRecord
+from opentraces_schema import Agent, Environment, Observation, Outcome, Step, ToolCall, TraceRecord, VCS
 
 from opentraces.capture.pi.context_tree_capture import (
     LIMITATION_TRANSCRIPT_FALLBACK,
@@ -45,6 +45,10 @@ def _record(*, provider_context: bool = True, compactions: list[dict] | None = N
         trace_id="trace-pi-context",
         session_id="pi-thread-123",
         agent=Agent(name="pi", version="1.0.0", model="anthropic/claude-sonnet-4"),
+        environment=Environment(
+            vcs=VCS(type="git", branch="main", base_commit="abc123")
+        ),
+        outcome=Outcome(commit_sha="def456"),
         steps=[
             Step(step_index=1, role="user", content="Fix bug", call_type="main"),
             Step(
@@ -74,6 +78,12 @@ def test_provider_context_builds_full_live_capture_layers_and_step_ids() -> None
     assert projection.layers[1].content["tree_events"][0]["old_leaf_id"] == "leaf-old"
     assert projection.drafts[-1].payload["orphan_branch_roots"] == ["leaf-old"]
     assert projection.drafts[-1].payload["pi_tree_events"][0]["new_leaf_id"] == "leaf-1"
+    node_events = [
+        draft.payload for draft in projection.drafts
+        if draft.event_type == CONTEXT_NODE_OBSERVED
+    ]
+    assert node_events[0]["trail_anchor_hint"]["commit_id"] == "def456"
+    assert node_events[1]["trail_anchor_hint"]["commit_id"] == "def456"
     assert record.steps[0].context_node_id is not None
     assert record.steps[1].context_node_id is not None
 

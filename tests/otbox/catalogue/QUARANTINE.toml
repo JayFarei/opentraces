@@ -7,14 +7,6 @@
 # green — quarantine records debt, it does not erase it.
 
 [[entries]]
-journeys = ["context-tree-temporal-anchor-precision"]
-rules = ["baseline-red"]
-reason = "blocked on codex-world regen / v1.1 trail_anchor_hint commit_id wiring: the journey is RETARGETED (operator decision 2026-06-12, never delete) to c-captured-codex-real-session asserting the shipped scalar ctx anchor-for-step contract, but the committed codex artifact's hints are {source, session_id, step_index} with NO commit_id (pre-step event-log peek: 9/9 hinted nodes, 0 with commit_id), so the verb exits rc=3; the claude-path rc=3 honest empty state is covered by context-tree-capture-fidelity. Do NOT weaken assertions."
-issue = "https://github.com/JayFarei/opentraces/issues/42"
-added = 2026-06-10
-expires = 2026-09-08
-
-[[entries]]
 journeys = ["pi-skill-detection-parity"]
 rules = ["baseline-red"]
 reason = "blocked-on-pi-skill-capture-content: the real pi-readonly-search artifact contains only an ot_capture_status call; assertions need a capture where pi reads .agents/skills/opentraces/SKILL.md and a project file — re-spec the scenario then OT_REAL_PI=1 make capture-refresh SCENARIO=pi-readonly-search and re-publish via the PR #35 supply chain; do NOT weaken assertions."

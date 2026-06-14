@@ -180,6 +180,7 @@ def _build_step_nodes(
 ) -> list[ContextNode]:
     nodes: list[ContextNode] = []
     parent_node_id: str | None = None
+    commit_id = _trace_commit_id(record)
     for index, step in enumerate(record.steps):
         branch_type = "root" if parent_node_id is None else "linear"
         step_index = step.step_index
@@ -198,11 +199,11 @@ def _build_step_nodes(
             messages_layer_id=layer_by_type["messages"].layer_id,
             tool_registry_layer_id=layer_by_type["tool_registry"].layer_id,
             runtime_state_layer_id=layer_by_type["runtime_state"].layer_id,
-            trail_anchor_hint={
-                "source": "parsed_trace_record",
-                "session_id": record.session_id,
-                "step_index": step_index,
-            },
+            trail_anchor_hint=_trail_anchor_hint(
+                record,
+                step_index=step_index,
+                commit_id=commit_id,
+            ),
             capture_completeness="approximated",
         )
         step.context_node_id = node.node_id
@@ -353,6 +354,45 @@ def _git_runtime(record: TraceRecord) -> dict[str, Any]:
         "branch": vcs.branch,
         "base_commit": vcs.base_commit,
     }
+
+
+def _trail_anchor_hint(
+    record: TraceRecord,
+    *,
+    step_index: int,
+    commit_id: str | None,
+) -> dict[str, Any]:
+    hint: dict[str, Any] = {
+        "source": "parsed_trace_record",
+        "session_id": record.session_id,
+        "step_index": step_index,
+    }
+    if commit_id:
+        hint["commit_id"] = commit_id
+    return hint
+
+
+def _trace_commit_id(record: TraceRecord) -> str | None:
+    outcome_sha = _clean_sha(getattr(record.outcome, "commit_sha", None))
+    if outcome_sha:
+        return outcome_sha
+
+    patches = getattr(record, "patches", None) or []
+    for patch in reversed(patches):
+        anchor = getattr(patch, "anchor", None)
+        anchor_sha = _clean_sha(getattr(anchor, "commit_sha", None))
+        if anchor_sha:
+            return anchor_sha
+
+    vcs = getattr(getattr(record, "environment", None), "vcs", None)
+    return _clean_sha(getattr(vcs, "base_commit", None))
+
+
+def _clean_sha(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
 
 
 def _step_transcript_uuid(record: TraceRecord, step_index: int) -> str:
