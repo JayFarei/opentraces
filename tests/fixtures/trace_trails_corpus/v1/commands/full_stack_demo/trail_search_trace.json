@@ -20,7 +20,7 @@
     "high_watermark": {
       "events_seen": 18,
       "last_event_id": "<trail-event:18>",
-      "projection_digest": "<content-hash:40>"
+      "projection_digest": "<projection-digest>"
     },
     "last_event_id": "<trail-event:18>",
     "limitation_details": [],
@@ -29,7 +29,7 @@
     "object_id_algorithm": "sha256",
     "object_ref_contract": "opentraces.object_ref.v1",
     "patch_count": 1,
-    "projection_digest": "<content-hash:40>",
+    "projection_digest": "<projection-digest>",
     "stale": false,
     "version": "v1"
   },

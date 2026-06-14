@@ -17,8 +17,12 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 from pathlib import Path
 
+import pytest
+from opentraces.publish.huggingface import upload as _upload
+from opentraces.publish.huggingface.upload import HFUploader, RemoteSchemaAheadError
 from opentraces_schema.migrations import (
     RECONSTRUCTED_CAPTURE_METHOD,
     migrate_record,
@@ -123,8 +127,6 @@ def test_noop_when_no_legacy_patch():
 
 # --- real frozen v0.3.3 world (R1 fixture) ------------------------------
 
-import pytest
-
 LEGACY_WORLD = Path(__file__).parent / "migration" / "fixtures" / "legacy_world_v033"
 
 
@@ -166,7 +168,7 @@ def test_u_trace_2_live_read_path_keeps_legacy_patch():
     from opentraces.cli.trace import _read_trace_record_from_path
 
     shard = _frozen_legacy_shard()
-    line = next(l for l in shard.read_text().splitlines() if l.strip())
+    line = next(candidate for candidate in shard.read_text().splitlines() if candidate.strip())
     raw = json.loads(line)
     assert raw["schema_version"] == "0.3.0"
     assert raw["outcome"]["patch"], "fixture must carry the at-risk field"
@@ -203,14 +205,32 @@ def test_diff_parser_handles_dev_null_creates_and_deletes():
 # default CI by pinning the local version to 0.3.0; Layer B drives the REAL
 # v0.3.3 client and SKIPs when its isolated venv is absent (CI-safe).
 
-import os
-import subprocess
-import sys
-
-from opentraces.publish.huggingface import upload as _upload
-from opentraces.publish.huggingface.upload import HFUploader, RemoteSchemaAheadError
-
 _V033_VENV_PYTHON = Path("/tmp/ot-v033-worktree/.venv-v033/bin/python")
+
+
+def _skip_if_v033_client_env_unavailable() -> None:
+    if not _V033_VENV_PYTHON.exists():
+        pytest.skip(f"real v0.3.3 venv absent at {_V033_VENV_PYTHON}")
+
+    probe = subprocess.run(
+        [
+            str(_V033_VENV_PYTHON),
+            "-c",
+            (
+                "from opentraces_schema.version import SCHEMA_VERSION\n"
+                "from opentraces.publish.huggingface import upload\n"
+                "assert SCHEMA_VERSION == '0.3.0', SCHEMA_VERSION\n"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if probe.returncode != 0:
+        pytest.skip(
+            "real v0.3.3 venv is not importable at "
+            f"{_V033_VENV_PYTHON}:\n{probe.stdout}{probe.stderr}"
+        )
 
 
 def _uploader_with_remote_version(monkeypatch, *, local: str, remote: str | None):
@@ -254,8 +274,7 @@ def test_s7_real_v033_client_refuses_0_6_0_remote():
     ``HFUploader`` in its isolated venv, points it at a 0.6.0 remote, and
     asserts the 0.3.3 code raises ``RemoteSchemaAheadError``. SKIPs when the
     ephemeral /tmp venv is absent (so default CI on other machines is safe)."""
-    if not _V033_VENV_PYTHON.exists():
-        pytest.skip(f"real v0.3.3 venv absent at {_V033_VENV_PYTHON}")
+    _skip_if_v033_client_env_unavailable()
     snippet = (
         "import sys\n"
         "from opentraces_schema.version import SCHEMA_VERSION\n"
