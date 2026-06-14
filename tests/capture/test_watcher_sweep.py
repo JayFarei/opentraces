@@ -12,12 +12,14 @@ backfill path — the sweep is best-effort.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 from opentraces.core.trails import TrailEventDraft, append_event_batch, read_events
+from opentraces.core.trails.event_log import read_events_scoped
 from opentraces.core.trails.models import sha256_text
 from opentraces.watcher import daemon as _wd
 
@@ -250,13 +252,12 @@ class TestWatcherSweep:
             f"(saw {rev_list_objects['count']} rev-list --objects calls)"
         )
 
-    def test_batched_maturation_one_rev_list_and_identical_dedup_keys(
+    def test_batched_maturation_two_streaming_passes_and_identical_dedup_keys(
         self, tmp_path, monkeypatch
     ) -> None:
-        """#23 step 1: ``mature_trails`` over N commits issues exactly ONE
-        ``rev-list --objects`` (the single batched anchor/search slice read) and
-        produces search summaries whose dedup keys are identical to the
-        per-commit path.
+        """``mature_trails`` over N commits issues exactly two bounded
+        ``rev-list --objects`` walks: one key scan, one patch-payload stream.
+        Search summaries keep the same dedup keys as the per-commit path.
         """
         from opentraces.core.trails.maturation import mature_trails
 
@@ -323,9 +324,11 @@ class TestWatcherSweep:
 
         summary = mature_trails(p, commit_refs=commit_shas)
         assert summary.errors == []
-        # Exactly ONE batched anchor/search slice read for the whole run.
-        assert rev_list_objects["count"] == 1, (
-            "batched maturation must issue exactly one rev-list --objects "
+        # Exactly two bounded streams for the whole run: anchor/search keys,
+        # then trace_patch payload chunks. The old one-pass path retained every
+        # patch payload at once, which is the live #65 allocator.
+        assert rev_list_objects["count"] == 2, (
+            "batched maturation must issue exactly two rev-list --objects "
             f"(saw {rev_list_objects['count']})"
         )
 
@@ -374,6 +377,113 @@ class TestWatcherSweep:
             for record in iter_search_records(event)
         }
         assert again_keys == batched_keys, "batched dedup must be stable"
+
+    def test_chunked_maturation_matches_whole_pass_oracle(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Forced one-patch chunks must emit the same anchors and per-patch
+        search records as the pre-chunk whole-pass algorithm."""
+        from opentraces.core.trails.anchors import reconcile_commit_anchors
+        from opentraces.core.trails.maturation import mature_trails
+        from opentraces.core.trails.models import ATTRIBUTION_VERSION
+        from opentraces.core.trails.search_records import iter_search_records
+
+        seed = _init_project(tmp_path / "seed")
+        commit_shas: list[str] = []
+        for i in range(3):
+            (seed / f"f{i}.py").write_text(f"VALUE_{i} = 'line {i}'\n")
+            _git("add", "-A", cwd=seed)
+            _git("commit", "-q", "-m", f"commit {i}", cwd=seed)
+            commit_shas.append(
+                subprocess.check_output(
+                    ["git", "-C", str(seed), "rev-parse", "HEAD"], text=True
+                ).strip()
+            )
+        for i in range(3):
+            authored = f"VALUE_{i} = 'line {i}'\n"
+            append_event_batch(
+                seed,
+                [
+                    TrailEventDraft(
+                        event_type="trace_patch_created",
+                        trace_id=f"tr-{i}",
+                        step_index=1,
+                        capture_method=["watcher_backstop"],
+                        payload={
+                            "trace_patch_id": f"equiv-patch-{i}",
+                            "file_path": f"f{i}.py",
+                            "affected_range": {"start_line": 1, "end_line": 1},
+                            "authored_text": authored,
+                            "raw_authored_hash": sha256_text(authored),
+                            "git_clean_hash": sha256_text(" ".join(authored.split())),
+                            "limitations": [],
+                        },
+                    )
+                ],
+                writer="test-fixture",
+            )
+
+        whole = tmp_path / "whole"
+        chunked = tmp_path / "chunked"
+        shutil.copytree(seed, whole)
+        shutil.copytree(seed, chunked)
+
+        patch_events = read_events_scoped(
+            whole, event_types={"trace_patch_created"}
+        )
+        anchor_keys: set[tuple] = set()
+        search_keys: set[tuple] = set()
+        for commit in commit_shas:
+            reconcile_commit_anchors(
+                whole,
+                commit,
+                writer="whole-pass-oracle",
+                capture_method=["trail_maturation"],
+                attribution_version=ATTRIBUTION_VERSION,
+                patch_events=patch_events,
+                anchor_keys=anchor_keys,
+                search_keys=search_keys,
+            )
+
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_EVENTS", "1")
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_BYTES", "1")
+        summary = mature_trails(chunked, commit_refs=commit_shas)
+        assert summary.errors == []
+        assert summary.truncated is False
+
+        def _search_records(repo: Path) -> list[tuple]:
+            records = [
+                record
+                for event in read_events(repo)
+                if event.event_type == "git_anchor_search_completed"
+                for record in iter_search_records(event)
+            ]
+            return sorted(
+                (
+                    record["trace_patch_id"],
+                    record["search_head_sha"],
+                    record["result"],
+                    tuple(record["created_anchor_ids"]),
+                )
+                for record in records
+            )
+
+        def _anchors(repo: Path) -> list[tuple]:
+            return sorted(
+                (
+                    event.payload.get("trace_patch_id"),
+                    (event.payload.get("commit_id") or {}).get("hex"),
+                    event.payload.get("path"),
+                    (event.payload.get("range") or {}).get("start_line"),
+                    (event.payload.get("range") or {}).get("end_line"),
+                    event.payload.get("evidence_tier"),
+                )
+                for event in read_events(repo)
+                if event.event_type == "git_anchor_created"
+            )
+
+        assert _search_records(chunked) == _search_records(whole)
+        assert _anchors(chunked) == _anchors(whole)
 
     def test_sweep_failure_does_not_break_the_tick(
         self, tmp_path, monkeypatch
@@ -519,15 +629,18 @@ class TestGateScopedRead:
         """Sentinel: with the full ``read_events`` made to explode, the gate must
         still compute the right answer off the scoped slice."""
         from opentraces.core.trails import maturation as _mat
+        from opentraces.core.trails import event_log as _event_log
 
         p = _init_project(tmp_path / "proj")
-        c1 = self._commit(p, "a.py", "a\n")
+        self._commit(p, "a.py", "a\n")
         self._emit_patch(p, "gate-patch-unsearched")
 
         def _boom(*a, **k):
             raise AssertionError("gate must not call full read_events (#45)")
 
-        monkeypatch.setattr(_mat, "read_events", _boom)
+        monkeypatch.setattr(_event_log, "read_events", _boom)
+        if hasattr(_mat, "read_events"):
+            monkeypatch.setattr(_mat, "read_events", _boom)
         # Patch exists, no search recorded -> unsearched -> True.
         assert _mat.has_unsearched_recent_patches(p) is True
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .anchors import reconcile_commit_anchors
-from .event_log import read_events, read_events_scoped
+from .event_log import read_events_scoped
 from .ids import id_from_payload
 from .models import ATTRIBUTION_VERSION
 from .search_records import iter_search_records
@@ -19,6 +19,12 @@ from .search_records import iter_search_records
 DEFAULT_RECENT_COMMITS = 50
 MATURATION_CAPTURE_METHOD = ["trail_maturation"]
 MATURATION_WRITER = "trail-maturation"
+DEFAULT_PATCH_CHUNK_MAX_EVENTS = 256
+DEFAULT_PATCH_CHUNK_MAX_AUTHORED_BYTES = 64 * 1024 * 1024
+
+
+class _MaturationBudgetExhausted(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -80,35 +86,28 @@ def mature_trails(
     if not commits:
         return MaturationSummary(errors=errors)
 
-    # #23 step 1: read the anchor/search/patch slice for ALL candidate commits in
-    # ONE whole-log pass (`commit_shas`), then hand each reconcile call the shared
-    # slice. This replaces N per-commit scoped reads (each a `rev-list --objects`
-    # over the whole log) with a single read — the quadratic git work that pinned
-    # a CPU core on mature repos.
+    # #23 step 1: read the anchor/search dedup keys for ALL candidate commits in
+    # ONE whole-log pass (`commit_shas`). This replaces N per-commit scoped reads
+    # (each a `rev-list --objects` over the whole log) with a single key scan,
+    # the quadratic git work that pinned a CPU core on mature repos.
     #
-    # #65: stream that pass through a sink that keeps ONLY patch events plus
-    # the dedup KEY tuples. Anchor events and (especially) the plan-090 search
-    # summary events are reduced to keys as they stream — a drained backlog's
-    # summaries carry results[] arrays for ~710K searches, and re-materialising
-    # them per tick was a multi-GB allocator in the live #65 capture.
-    shared_patches: list | None
-    shared_anchor_keys: set[tuple] | None
-    shared_search_keys: set[tuple] | None
+    # #65: keep only dedup KEY tuples here. Patch payloads are streamed in the
+    # second pass below and flushed in bounded chunks, because retaining every
+    # trace_patch_created authored_text payload at once was the remaining
+    # >1GB allocator on the live repo.
+    anchor_keys: set[tuple]
+    search_keys: set[tuple]
     try:
-        patches: list = []
-        anchor_keys: set[tuple] = set()
-        search_keys: set[tuple] = set()
+        anchor_keys = set()
+        search_keys = set()
 
-        def _maturation_sink(event) -> None:
-            etype = event.event_type
-            if etype == "trace_patch_created":
-                patches.append(event)
-            elif etype == "git_anchor_created":
+        def _key_sink(event) -> None:
+            if event.event_type == "git_anchor_created":
                 anchor_keys.add((
                     id_from_payload(event.payload, "trace_patch"),
                     (event.payload.get("commit_id") or {}).get("hex"),
                 ))
-            elif etype == "git_anchor_search_completed":
+            elif event.event_type == "git_anchor_search_completed":
                 for record in iter_search_records(event):
                     search_keys.add((
                         record["trace_patch_id"],
@@ -119,7 +118,6 @@ def mature_trails(
         read_events_scoped(
             repo,
             event_types={
-                "trace_patch_created",
                 "git_anchor_created",
                 "git_anchor_search_completed",
             },
@@ -128,15 +126,14 @@ def mature_trails(
                 "git_anchor_search_completed": "search_head",
             },
             commit_shas=set(commits),
-            sink=_maturation_sink,
+            sink=_key_sink,
         )
-        shared_patches = patches
-        shared_anchor_keys = anchor_keys
-        shared_search_keys = search_keys
-    except Exception:  # noqa: BLE001 — fall back to per-commit reads on error
-        shared_patches = None
-        shared_anchor_keys = None
-        shared_search_keys = None
+    except Exception as exc:  # noqa: BLE001
+        return MaturationSummary(
+            commits_considered=len(commits),
+            errors=errors + [f"dedup key scan failed: {type(exc).__name__}: {exc}"],
+            truncated=True,
+        )
 
     # #23 step 2: sum each reconcile's reported search count via ``summary_out``
     # instead of reading the whole log twice (before/after) just to diff the
@@ -152,6 +149,123 @@ def mature_trails(
     anchors_created = 0
     searches_completed = 0
     truncated = False
+    if deadline is not None and time.monotonic() >= deadline:
+        truncated = True
+    else:
+        patch_chunk: list = []
+        patch_chunk_authored_bytes = 0
+        max_patch_events, max_patch_bytes = _patch_chunk_limits()
+
+        def _flush_patch_chunk() -> None:
+            nonlocal anchors_created, searches_completed, truncated
+            nonlocal patch_chunk, patch_chunk_authored_bytes
+            if not patch_chunk or truncated:
+                return
+            chunk_result = _mature_patch_chunk(
+                repo,
+                commits=commits,
+                patch_events=patch_chunk,
+                anchor_keys=anchor_keys,
+                search_keys=search_keys,
+                attribution_version=effective_version,
+                writer=writer,
+                deadline=deadline,
+            )
+            anchors_created += chunk_result.anchors_created
+            searches_completed += chunk_result.searches_completed
+            errors.extend(chunk_result.errors)
+            truncated = truncated or chunk_result.truncated
+            patch_chunk = []
+            patch_chunk_authored_bytes = 0
+            if truncated:
+                raise _MaturationBudgetExhausted
+
+        def _patch_sink(event) -> None:
+            nonlocal patch_chunk_authored_bytes
+            patch_chunk.append(event)
+            patch_chunk_authored_bytes += _patch_event_authored_bytes(event)
+            if (
+                len(patch_chunk) >= max_patch_events
+                or patch_chunk_authored_bytes >= max_patch_bytes
+            ):
+                _flush_patch_chunk()
+
+        try:
+            read_events_scoped(
+                repo,
+                event_types={"trace_patch_created"},
+                sink=_patch_sink,
+            )
+            _flush_patch_chunk()
+        except _MaturationBudgetExhausted:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"patch stream failed: {type(exc).__name__}: {exc}")
+            truncated = True
+
+    # Only a full recent-commits sweep may stamp the watermark: an explicit
+    # commit_refs subset has not matured the rest of the recent window, and
+    # stamping would make the quiet-tick gate skip those commits until the
+    # event-log head or repo HEAD next changes. A deadline-truncated sweep
+    # must not stamp either (#65) — the unsearched remainder would hide
+    # behind the quiet-tick gate until the next head change.
+    if commit_refs is None and not truncated:
+        _stamp_maturation_watermark(repo, effective_version)
+    return MaturationSummary(
+        commits_considered=len(commits),
+        searches_completed=searches_completed,
+        anchors_created=anchors_created,
+        errors=errors,
+        truncated=truncated,
+    )
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _patch_chunk_limits() -> tuple[int, int]:
+    return (
+        _positive_int_env(
+            "OT_MATURATION_PATCH_CHUNK_MAX_EVENTS",
+            DEFAULT_PATCH_CHUNK_MAX_EVENTS,
+        ),
+        _positive_int_env(
+            "OT_MATURATION_PATCH_CHUNK_MAX_BYTES",
+            DEFAULT_PATCH_CHUNK_MAX_AUTHORED_BYTES,
+        ),
+    )
+
+
+def _patch_event_authored_bytes(event) -> int:
+    text = event.payload.get("authored_text") or ""
+    if isinstance(text, str):
+        return len(text.encode("utf-8", errors="ignore"))
+    return 0
+
+
+def _mature_patch_chunk(
+    repo: Path,
+    *,
+    commits: list[str],
+    patch_events: list,
+    anchor_keys: set[tuple],
+    search_keys: set[tuple],
+    attribution_version: str,
+    writer: str,
+    deadline: float | None,
+) -> MaturationSummary:
+    anchors_created = 0
+    searches_completed = 0
+    errors: list[str] = []
+    truncated = False
     for commit in commits:
         if deadline is not None and time.monotonic() >= deadline:
             truncated = True
@@ -164,10 +278,10 @@ def mature_trails(
                     commit,
                     writer=writer,
                     capture_method=MATURATION_CAPTURE_METHOD,
-                    attribution_version=effective_version,
-                    patch_events=shared_patches,
-                    anchor_keys=shared_anchor_keys,
-                    search_keys=shared_search_keys,
+                    attribution_version=attribution_version,
+                    patch_events=patch_events,
+                    anchor_keys=anchor_keys,
+                    search_keys=search_keys,
                     summary_out=per_commit_summary,
                     deadline=deadline,
                 )
@@ -177,17 +291,9 @@ def mature_trails(
             )
             if per_commit_summary.get("budget_exhausted"):
                 truncated = True
+                break
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{commit}: {type(exc).__name__}: {exc}")
-
-    # Only a full recent-commits sweep may stamp the watermark: an explicit
-    # commit_refs subset has not matured the rest of the recent window, and
-    # stamping would make the quiet-tick gate skip those commits until the
-    # event-log head or repo HEAD next changes. A deadline-truncated sweep
-    # must not stamp either (#65) — the unsearched remainder would hide
-    # behind the quiet-tick gate until the next head change.
-    if commit_refs is None and not truncated:
-        _stamp_maturation_watermark(repo, effective_version)
     return MaturationSummary(
         commits_considered=len(commits),
         searches_completed=searches_completed,

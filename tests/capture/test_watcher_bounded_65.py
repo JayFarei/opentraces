@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -171,8 +173,8 @@ def test_prune_quarantines_leaks_keeps_live(tmp_path, monkeypatch, _isolate_open
     tmp_target.mkdir()
 
     live = _make_enlistment(projects_dir, "live-aaaa", live_target, age_days=30)
-    leak_tmp = _make_enlistment(projects_dir, "ot-h-leak-bbbb", tmp_target, age_days=30)
-    leak_missing = _make_enlistment(
+    _make_enlistment(projects_dir, "ot-h-leak-bbbb", tmp_target, age_days=30)
+    _make_enlistment(
         projects_dir, "gone-cccc", tmp_path / "deleted-project", age_days=30
     )
     fresh_missing = _make_enlistment(
@@ -402,6 +404,90 @@ def test_maturation_deadline_pre_scan_bail(tmp_path):
     assert summary.commits_considered == 0
 
 
+def test_run_once_large_patch_payloads_stays_under_rss_ceiling(
+    tmp_path, _isolate_opentraces_global_state
+):
+    """Ungated #65 memory proof: a full watcher tick over large patch
+    payloads must stay bounded by chunking maturation's patch stream."""
+    from opentraces.core.config import get_project_state_path
+    from opentraces.core.state import StateManager
+    from opentraces.core.trails import TrailEventDraft, append_event_batch
+    from opentraces.core.trails.models import sha256_text
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    (repo / ".opentraces.json").write_text(json.dumps({
+        "project_id": uuid.uuid4().hex,
+        "policy": {},
+    }))
+    (repo / "seed.txt").write_text("seed\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    patch_count = 80
+    payload = "x" * (1024 * 1024)
+    drafts = []
+    for index in range(patch_count):
+        authored = f"missing-payload-{index}\n{payload}"
+        drafts.append(
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id=f"tr-rss-{index}",
+                step_index=1,
+                capture_method=["watcher_backstop"],
+                payload={
+                    "trace_patch_id": f"rss-patch-{index}",
+                    "file_path": f"missing-{index}.py",
+                    "affected_range": {"start_line": 1, "end_line": 1},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "limitations": [],
+                },
+            )
+        )
+    append_event_batch(repo, drafts, writer="test-fixture")
+
+    state = StateManager(state_path=get_project_state_path(repo))
+    state.set_last_backfilled_commit(head)
+    state.set_last_watcher_run_at()
+
+    driver = (
+        "import json, platform, resource, sys\n"
+        "from pathlib import Path\n"
+        "from opentraces.watcher import daemon as wd\n"
+        f"report = wd.run_once(Path({str(repo)!r}))\n"
+        "peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+        "mb = peak / (1024*1024) if platform.system() == 'Darwin' else peak / 1024\n"
+        "print(json.dumps({\n"
+        "    'peak_mb': mb,\n"
+        "    'error': report.error,\n"
+        "    'searches': report.trail_maturation_searches,\n"
+        "    'anchors': report.trail_maturation_anchors,\n"
+        "}))\n"
+        "sys.exit(1 if report.error else 0)\n"
+    )
+    env = dict(os.environ)
+    env["OT_MATURATION_PATCH_CHUNK_MAX_BYTES"] = str(4 * 1024 * 1024)
+    env["OT_MATURATION_PATCH_CHUNK_MAX_EVENTS"] = "4"
+    env["OT_MATURATION_TICK_BUDGET_S"] = "600"
+    out = subprocess.check_output([sys.executable, "-c", driver], env=env, text=True)
+    result = json.loads(out.strip().splitlines()[-1])
+
+    assert result["searches"] == patch_count
+    assert result["anchors"] == 0
+    assert result["peak_mb"] < 800, (
+        f"run_once peak RSS {result['peak_mb']:.0f}MB exceeded the 800MB "
+        "synthetic large-payload ceiling"
+    )
+
+
 def test_shim_verifies_candidate_supports_sweep_verb():
     """Codex P2 sentinel: the shim must probe each CLI candidate for the
     sweep verb before exec'ing it — an older CLI would otherwise be exec'd,
@@ -459,8 +545,10 @@ def test_killed_projects_rotate_to_back_not_front(tmp_path, monkeypatch, _isolat
     healthy projects behind it."""
     from opentraces.core import paths as _paths
 
-    bad = tmp_path / "bad"; bad.mkdir()
-    good = tmp_path / "good"; good.mkdir()
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    good = tmp_path / "good"
+    good.mkdir()
 
     # Enlist both so get_project_state_path resolves inside the isolated home.
     slug_dirs = {}
@@ -486,8 +574,10 @@ def test_killed_projects_rotate_to_back_not_front(tmp_path, monkeypatch, _isolat
     # so a fresh never-ticked project would sort ahead of it.
     bad_key = wd._last_tick_mtime(bad)
     assert bad_key > 0.0, "killed project must carry an attempt timestamp"
-    fresh = tmp_path / "fresh"; fresh.mkdir()
-    d = _paths.PROJECTS_DIR / "fresh-0000"; d.mkdir()
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    d = _paths.PROJECTS_DIR / "fresh-0000"
+    d.mkdir()
     (d / "project.json").write_text(json.dumps({"path": str(fresh)}))
     slug_dirs["fresh"] = d
     assert wd._last_tick_mtime(fresh) < bad_key, (
@@ -506,9 +596,11 @@ def test_attempt_marker_does_not_reset_prune_staleness(tmp_path, monkeypatch, _i
     import opentraces.watcher.prune as prune_mod
     from opentraces.core import paths as _paths
 
-    tmp_root = tmp_path / "tmproot"; tmp_root.mkdir()
+    tmp_root = tmp_path / "tmproot"
+    tmp_root.mkdir()
     monkeypatch.setattr(prune_mod, "_tmp_roots", lambda: [tmp_root.resolve()])
-    leak_target = tmp_root / "prerel-99"; leak_target.mkdir()
+    leak_target = tmp_root / "prerel-99"
+    leak_target.mkdir()
 
     d = _make_enlistment(_paths.PROJECTS_DIR, "prerel-99-0000", leak_target,
                          age_days=30)
@@ -527,12 +619,16 @@ def test_sweep_orders_real_projects_before_tmp_worlds(tmp_path, monkeypatch):
     sweep FIRST regardless of how stale the tmp worlds' rotation keys are."""
     import opentraces.watcher.prune as prune_mod
 
-    tmp_root = tmp_path / "tmproot"; tmp_root.mkdir()
+    tmp_root = tmp_path / "tmproot"
+    tmp_root.mkdir()
     monkeypatch.setattr(prune_mod, "_tmp_roots", lambda: [tmp_root.resolve()])
 
-    tmp_world = tmp_root / "prerel-1"; tmp_world.mkdir()
-    real_a = tmp_path / "real-a"; real_a.mkdir()
-    real_b = tmp_path / "real-b"; real_b.mkdir()
+    tmp_world = tmp_root / "prerel-1"
+    tmp_world.mkdir()
+    real_a = tmp_path / "real-a"
+    real_a.mkdir()
+    real_b = tmp_path / "real-b"
+    real_b.mkdir()
 
     # tmp world has the OLDEST rotation key (would win pure LRU).
     mtimes = {"prerel-1": 0.0, "real-a": 200.0, "real-b": 100.0}
