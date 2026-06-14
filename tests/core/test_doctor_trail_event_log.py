@@ -122,6 +122,26 @@ def test_trail_event_log_status_invalid_for_tampered_event_content(tmp_path: Pat
     assert exit_code({"trail_event_log": status}) == 3
 
 
+def test_trail_event_log_status_skips_large_logs_without_verification(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _init_repo(tmp_path)
+    _append_fixture_event(tmp_path)
+    _append_fixture_event(tmp_path)
+    monkeypatch.setenv("OPENTRACES_DOCTOR_EVENT_LOG_MAX_BATCHES", "1")
+
+    status = _trail_event_log_status(tmp_path)
+    audit = doctor._trail_capture_audit(tmp_path)
+
+    assert status["state"] == "unverified_large"
+    assert status["doctor_scan_skipped"] is True
+    assert status["batch_count"] == 2
+    assert status["event_count"] is None
+    assert exit_code({"trail_event_log": status}) == 0
+    assert audit["state"] == "skipped"
+
+
 def test_doctor_report_includes_trail_event_log_payload(tmp_path: Path, monkeypatch) -> None:
     _init_repo(tmp_path)
     marker = {"state": "missing", "ref": EVENT_LOG_REF}

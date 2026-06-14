@@ -22,7 +22,7 @@ for inner-loop iteration. Every one of them contains at least one
 from __future__ import annotations
 
 import importlib.util
-import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -109,6 +109,30 @@ def _isolate_opentraces_global_state():
 def harness():
     """Loaded harness module."""
     return _load_harness_module()
+
+
+def test_invoke_cli_can_isolate_home(tmp_path: Path, monkeypatch, harness):
+    """Scenario CLI subprocesses can opt into a scenario-local HOME."""
+    project = tmp_path / "project"
+    project.mkdir()
+    state = harness.RunState(project_dir=project)
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+    monkeypatch.setattr(harness.subprocess, "run", fake_run)
+
+    harness._step_invoke_cli(
+        state,
+        {"args": ["--json", "doctor"], "isolated_home": True},
+    )
+
+    expected_home = (project / ".opentraces-test-home").resolve()
+    assert captured["env"]["HOME"] == str(expected_home)
+    assert expected_home.is_dir()
 
 
 @pytest.mark.parametrize("scenario_path", _build_params())

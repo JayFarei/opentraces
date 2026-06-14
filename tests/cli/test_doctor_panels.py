@@ -8,8 +8,6 @@ import json
 from pathlib import Path
 from unittest import mock
 
-import pytest
-
 from opentraces.core import doctor
 
 
@@ -126,3 +124,44 @@ def test_report_counts_project_identity_sidecars(tmp_path: Path) -> None:
         rpt = doctor.report(cfg, tmp_path)
 
     assert str(project.resolve()) in rpt["opted_in_projects"]["paths"]
+
+
+def test_bucket_status_reads_persisted_manifest_without_regeneration(
+    monkeypatch,
+) -> None:
+    """doctor's bucket panel must not run the full bucket manifest scan."""
+    from opentraces.core import paths
+
+    manifest_path = paths.bucket_dir() / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "opentraces.bucket.manifest.v2",
+                "root": str(paths.bucket_dir()),
+                "digest": "sha256:persisted",
+                "bucket_digest": "sha256:persisted",
+                "trace_records": {"object_count": 7},
+                "trail": {"stale_count": 0},
+                "sync": {"eligible": True},
+                "context_trees": {
+                    "trace_count": 2,
+                    "unique_layer_blob_count": 5,
+                    "dangling_layer_refs_count": 0,
+                },
+            }
+        )
+    )
+
+    def fail_manifest(*args, **kwargs):
+        raise AssertionError("doctor must not regenerate bucket_manifest")
+
+    monkeypatch.setattr("opentraces.core.bucket_store.bucket_manifest", fail_manifest)
+
+    info = doctor._bucket_status()
+
+    assert info["state"] == "ok"
+    assert info["digest"] == "sha256:persisted"
+    assert info["trace_records"]["object_count"] == 7
+    assert info["context_tree"]["trace_count"] == 2
+    assert info["context_tree"]["layer_blob_count"] == 5
