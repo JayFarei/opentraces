@@ -1550,11 +1550,87 @@ def _run_upgrade_subprocess(cmd: list[str], method: str, timeout: int = 120) -> 
     sys.exit(4)
 
 
-def _upgrade_impl(skill_only: bool) -> None:
-    """Upgrade opentraces CLI and refresh the project skill file."""
+def _render_integration_repair_summary(summary: dict) -> None:
+    repaired = summary.get("repaired") or []
+    errors = summary.get("errors") or []
+    if repaired:
+        names = ", ".join(str(item.get("name")) for item in repaired)
+        human_echo(f"Re-rendered installed integrations: {names}.")
+    else:
+        human_echo("No installed integrations needed re-rendering.")
+    for item in errors:
+        human_echo(f"Warning: integration repair failed for {item.get('name')}: {item.get('error')}")
+
+
+def _run_fresh_upgrade_repair(*, refresh_project_skill: bool) -> dict:
+    """Run repair in a fresh CLI process after package-manager upgrade."""
+    binary = shutil.which("opentraces") or sys.argv[0]
+    mode = "--skill-only" if refresh_project_skill else "--integrations-only"
+    cmd = [binary, "setup", "upgrade", mode]
+    human_echo("Refreshing installed integrations with the upgraded CLI...")
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(Path.cwd()),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return {
+            "status": "error",
+            "delegated": True,
+            "command": cmd,
+            "error": str(exc),
+        }
+    if result.stdout.strip():
+        human_echo(result.stdout.strip())
+    if result.stderr.strip():
+        human_echo(result.stderr.strip())
+    combined = f"{result.stdout}\n{result.stderr}".lower()
+    already_latest = any(
+        phrase in combined
+        for phrase in (
+            "already up to date",
+            "already up-to-date",
+            "already at latest",
+            "already installed opentraces",
+            "already installed",
+        )
+    )
+    if result.returncode != 0 and not already_latest:
+        return {
+            "status": "error",
+            "delegated": True,
+            "command": cmd,
+            "returncode": result.returncode,
+        }
+    return {
+        "status": "delegated",
+        "delegated": True,
+        "command": cmd,
+        "returncode": result.returncode,
+    }
+
+
+def _upgrade_impl(skill_only: bool, *, integrations_only: bool = False) -> None:
+    """Upgrade opentraces CLI and refresh installed integration glue."""
     current_version = __version__
 
-    if not skill_only:
+    if skill_only and integrations_only:
+        human_echo("Choose either --skill-only or --integrations-only, not both.")
+        emit_json(error_response(
+            "INVALID_UPGRADE_MODE",
+            "upgrade",
+            "--skill-only and --integrations-only are mutually exclusive",
+        ))
+        sys.exit(2)
+
+    delegated_repair: dict | None = None
+    if not skill_only and not integrations_only:
+        from ..core.config import project_is_opted_in as _upgrade_project_is_opted_in
+
+        refresh_project_skill = _upgrade_project_is_opted_in(Path.cwd())
         method = _detect_install_method()
         human_echo(f"Current version: {current_version}")
         human_echo(f"Install method:  {method}")
@@ -1565,19 +1641,67 @@ def _upgrade_impl(skill_only: bool) -> None:
         elif method == "brew":
             human_echo("Upgrading via brew...")
             _run_upgrade_subprocess(["brew", "upgrade", "opentraces"], "brew")
+            delegated_repair = _run_fresh_upgrade_repair(
+                refresh_project_skill=refresh_project_skill,
+            )
         elif method == "pipx":
             human_echo("Upgrading via pipx...")
             _run_upgrade_subprocess(["pipx", "upgrade", "opentraces"], "pipx")
+            delegated_repair = _run_fresh_upgrade_repair(
+                refresh_project_skill=refresh_project_skill,
+            )
         else:
             human_echo("Upgrading via pip...")
             _run_upgrade_subprocess(
                 [sys.executable, "-m", "pip", "install", "--upgrade", "opentraces"], "pip"
             )
+            delegated_repair = _run_fresh_upgrade_repair(
+                refresh_project_skill=refresh_project_skill,
+            )
+
+        if delegated_repair and delegated_repair.get("status") == "error":
+            emit_json(error_response(
+                "INTEGRATION_REPAIR_FAILED",
+                "upgrade",
+                "CLI upgraded, but post-upgrade integration repair failed",
+                "Run: opentraces setup upgrade --integrations-only",
+            ))
+            sys.exit(5)
+        if delegated_repair:
+            emit_json({
+                "status": "ok",
+                "cli_upgraded": True,
+                "skill_refreshed": refresh_project_skill,
+                "hook_refreshed": refresh_project_skill,
+                "integration_repair": delegated_repair,
+                "next_steps": ["Run 'opentraces doctor' to verify deployed integration versions"],
+                "next_command": "opentraces doctor",
+            })
+            return
+
+    from ..core.integration_repair import repair_installed_integrations
+
+    project_dir = Path.cwd()
+    if delegated_repair is None:
+        integration_repair = repair_installed_integrations(project_dir)
+        _render_integration_repair_summary(integration_repair)
+    else:
+        integration_repair = delegated_repair
+
+    if integrations_only:
+        emit_json({
+            "status": "ok",
+            "cli_upgraded": False,
+            "skill_refreshed": False,
+            "hook_refreshed": False,
+            "integration_repair": integration_repair,
+            "next_steps": ["Run 'opentraces doctor' to verify deployed integration versions"],
+            "next_command": "opentraces doctor",
+        })
+        return
 
     # Refresh skill and hook in current project
     from ..core.config import project_is_opted_in
-
-    project_dir = Path.cwd()
 
     if not project_is_opted_in(project_dir):
         if skill_only:
@@ -1588,6 +1712,7 @@ def _upgrade_impl(skill_only: bool) -> None:
             "status": "ok",
             "cli_upgraded": not skill_only,
             "skill_refreshed": False,
+            "integration_repair": integration_repair,
             "next_steps": ["Run 'opentraces init' in your project to set up"],
             "next_command": "opentraces init",
         })
@@ -1617,6 +1742,7 @@ def _upgrade_impl(skill_only: bool) -> None:
         "cli_upgraded": not skill_only,
         "skill_refreshed": skill_refreshed,
         "hook_refreshed": hook_refreshed,
+        "integration_repair": integration_repair,
         "next_steps": ["Run 'opentraces context' to check project state"],
         "next_command": "opentraces context",
     })

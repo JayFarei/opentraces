@@ -29,6 +29,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ...core.integration_versions import (
+    current_cli_version,
+    read_version_stamp,
+    stamp_script,
+    version_drift,
+)
 from .._base import HookInstallError, HookInstallResult, HookInstaller  # noqa: F401
 
 HOOK_SCRIPTS_DIR = Path(__file__).parent / "hooks"
@@ -188,7 +194,7 @@ def install(
 
     result = InstallResult(settings_file=ts, plan=plan)
     for p in plan:
-        p.dest.write_text(p.source.read_text())
+        p.dest.write_text(stamp_script(p.source.read_text()))
         mode = p.dest.stat().st_mode
         p.dest.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         result.installed[p.event] = str(p.dest)
@@ -274,8 +280,11 @@ def status(
     """Report current install state for `opentraces doctor`."""
     th, ts = _resolve_paths(hooks_dir, settings_file)
     scripts_present: dict[str, bool] = {}
+    script_versions: dict[str, str | None] = {}
     for event, name in EVENT_SCRIPTS.items():
-        scripts_present[event] = (th / f"opentraces_{name}").exists()
+        dest = th / f"opentraces_{name}"
+        scripts_present[event] = dest.exists()
+        script_versions[event] = read_version_stamp(dest) if dest.exists() else None
 
     registered: dict[str, bool] = {e: False for e in EVENT_SCRIPTS}
     if ts.exists():
@@ -297,10 +306,22 @@ def status(
                     break
 
     installed = all(scripts_present.values()) and all(registered.values())
+    deployed_versions = sorted({v for v in script_versions.values() if v})
+    deployed_version = deployed_versions[0] if len(deployed_versions) == 1 else None
+    drift: list[str] = []
+    if installed:
+        if any(script_versions.get(event) is None for event in EVENT_SCRIPTS):
+            drift.append("version-missing")
+        if any(version_drift(version) == ["version-drift"] for version in script_versions.values() if version):
+            drift.append("version-drift")
     return {
         "installer": "claude-code",
         "installed": installed,
         "scripts_present": scripts_present,
+        "script_versions": script_versions,
+        "deployed_version": deployed_version,
+        "cli_version": current_cli_version(),
+        "drift": drift,
         "registered": registered,
         "hooks_dir": str(th),
         "settings_file": str(ts),

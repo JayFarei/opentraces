@@ -15,6 +15,12 @@ from typing import Any
 
 from ..capture import get_hook_installers
 from ..core.config import ProjectConfig, load_project_config, project_is_opted_in
+from ..core.integration_repair import integration_version_report
+from ..core.integration_versions import (
+    current_cli_version,
+    extract_version_stamp,
+    version_status,
+)
 from ..core.processors import probe_processors
 from ..enrichment.entities import EntityRunner
 from ..enrichment.entities.installer import _safe_platform
@@ -600,17 +606,14 @@ def _watcher_provenance() -> dict[str, Any]:
         if "run-sweep" not in shim_text and "setup watcher sweep" not in shim_text:
             drift.append("shim-legacy-verb")
 
-    cli_version: str | None = None
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-
-        try:
-            cli_version = version("opentraces")
-        except PackageNotFoundError:
-            cli_version = None
-    except Exception:  # noqa: BLE001
-        cli_version = None
+    cli_version = current_cli_version()
     out["cli_version"] = cli_version
+    out["shim_version"] = extract_version_stamp(shim_text)
+    if shim_text is not None:
+        if not out["shim_version"]:
+            drift.append("shim-version-missing")
+        elif out["shim_version"] != cli_version:
+            drift.append("shim-version-drift")
 
     status_path = _paths.OPENTRACES_DIR / "watcher.status.json"
     out["status_file"] = str(status_path)
@@ -1062,8 +1065,12 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     review_policy = _project_review_policy(cwd)
 
     opted_in = _registered_project_paths(cfg, cwd)
+    cli_status = version_status()
+    watcher = _watcher_status()
+    hooks = _hook_installers()
 
     return {
+        "cli": cli_status,
         "security_version": SECURITY_VERSION,
         "schema_version": _schema_version(),
         "tracking_mode": getattr(
@@ -1086,8 +1093,9 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "post_processors": _post_processors(cwd),
         "entity_parser": _entity_parser_status(),
         "attribution": _attribution_status(cwd),
-        "watcher": _watcher_status(),
-        "hooks": _hook_installers(),
+        "watcher": watcher,
+        "hooks": hooks,
+        "integrations": integration_version_report(watcher=watcher, hooks=hooks),
         "bucket": _bucket_status(),
         "trace_index": _trace_index_status(),
         "trail_event_log": _trail_event_log_status(cwd),
@@ -1261,6 +1269,11 @@ def exit_code(report_data: dict[str, Any]) -> int:
             h.get("drift") or h.get("broken_harnesses")
         ):
             return 3
+        if h.get("installed") and h.get("drift"):
+            return 3
+    watcher = report_data.get("watcher") or {}
+    if (watcher.get("provenance") or {}).get("drift"):
+        return 3
     if (report_data.get("trail_event_log") or {}).get("state") in ("invalid", "error"):
         return 3
     return 0

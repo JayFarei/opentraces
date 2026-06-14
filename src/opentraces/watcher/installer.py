@@ -22,8 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ..core.paths import OPENTRACES_DIR
-
+from ..core.integration_versions import stamp_script
 LAUNCHD_LABEL = "ai.opentraces.watcher"
 SYSTEMD_UNIT_NAME = "opentraces-watcher"
 
@@ -152,7 +151,7 @@ def _render_shim() -> str:
     memory across sweeps, so the supervisor IS the service loop.
     """
     py = sys.executable or "python3"
-    return (
+    return stamp_script(
         "#!/bin/sh\n"
         "# opentraces watcher shim — one-shot sweep under launchd/systemd\n"
         "# supervision. Resolves the CLI at RUN time (#65): an interpreter\n"

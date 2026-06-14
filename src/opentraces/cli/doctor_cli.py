@@ -368,14 +368,24 @@ def _claude_code_row(h: dict) -> None:
     if not h.get("installed"):
         _row("off", "claude-code", "not installed", detail="run 'opentraces setup claude-code'")
         return
-    _row("ok", "claude-code", "installed")
+    drift = h.get("drift") or []
+    detail = (
+        f"drift: {', '.join(drift)}; run 'opentraces setup upgrade --integrations-only'"
+        if drift else h.get("deployed_version")
+    )
+    _row("warn" if drift else "ok", "claude-code", "installed", detail=detail)
 
 
 def _codex_cli_row(h: dict) -> None:
     if not h.get("installed"):
         _row("off", "codex-cli", "not installed", detail="run 'opentraces setup codex-cli'")
         return
-    _row("ok", "codex-cli", "installed")
+    drift = h.get("drift") or []
+    detail = (
+        f"drift: {', '.join(drift)}; run 'opentraces setup upgrade --integrations-only'"
+        if drift else h.get("deployed_version")
+    )
+    _row("warn" if drift else "ok", "codex-cli", "installed", detail=detail)
 
 
 def _git_row(h: dict) -> None:
@@ -383,7 +393,12 @@ def _git_row(h: dict) -> None:
         reason = h.get("reason") or "not installed"
         _row("off", "git", reason, detail="run 'opentraces setup git'")
         return
-    _row("ok", "git", "post-commit hook active")
+    drift = h.get("drift") or []
+    detail = (
+        f"drift: {', '.join(drift)}; run 'opentraces setup upgrade --integrations-only'"
+        if drift else h.get("deployed_version")
+    )
+    _row("warn" if drift else "ok", "git", "post-commit hook active", detail=detail)
 
 
 def _opted_in_section(info: dict) -> None:
@@ -403,6 +418,18 @@ def _opted_in_section(info: dict) -> None:
 
 def _versions_section(report: dict) -> None:
     _section("Versions")
+    cli = report.get("cli") or {}
+    installed = cli.get("installed_version")
+    latest = cli.get("latest_version")
+    if installed:
+        detail = None
+        if cli.get("upgrade_available") and latest:
+            detail = f"v{latest} available; run 'opentraces setup upgrade'"
+        elif latest:
+            detail = f"latest: {latest} ({cli.get('check_state')})"
+        elif cli.get("check_state"):
+            detail = f"latest check: {cli.get('check_state')}"
+        _row("warn" if cli.get("upgrade_available") else "ok", "opentraces", installed, detail=detail)
     _row("ok", "security", report["security_version"])
     if report.get("schema_version"):
         _row("ok", "schema", report["schema_version"])
