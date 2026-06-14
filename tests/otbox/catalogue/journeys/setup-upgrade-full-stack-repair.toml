@@ -1,0 +1,162 @@
+name = "setup-upgrade-full-stack-repair"
+description = """
+Issue #78 / PR #81 — primary deliverable. Proves the FULL-STACK integration
+update process end-to-end, deterministically and fully offline (no network,
+no real launchctl/systemd, side-effect-safe under HOME isolation).
+
+The world seed installs the git post-commit hook at
+<project>/.git/hooks/opentraces-post-commit, stamped with a
+`# opentraces-version: <current>` line. This journey:
+
+  1. Stales that stamp to 0.0.1 with a portable python3 re.sub lever, inducing
+     genuine version drift in deployed integration glue.
+  2. Runs `doctor --json` and asserts it EXITS 3 (broken integration), that the
+     git hook itself reports drift == ["version-drift"] under doctor.hooks, and
+     that the git integration is listed under doctor.integrations.drift. This is
+     the drift-DETECTION half of the capability.
+  3. Runs `setup upgrade --integrations-only --json` and asserts it re-renders
+     the FULL installed integration stack: status == "ok",
+     next_command == "opentraces doctor", integration_repair.repaired contains
+     git (the only INSTALLED glue in the box), and integration_repair.skipped
+     enumerates the remaining stack (watcher, claude-code, codex-cli,
+     capture-otlp-settings, capture-otlp-autostart) with reason "not-installed".
+     The repaired+skipped union over the whole stack is what proves the command
+     operates over the FULL integration surface, not just the git hook — a
+     missing integration in the repair surface fails this journey loudly. The
+     command also re-stamps the hook back to the current version.
+  4. Re-runs `doctor --json` and asserts it EXITS 0 — drift is cured.
+
+Honest + deterministic: the only mutation is a local file-stamp edit and an
+idempotent re-render of installed glue; no network, no daemons, no privileged
+installers. `setup watcher install` is deliberately NOT exercised (it would
+call real launchctl/systemd outside HOME isolation); watcher coverage is proven
+via the repair report's skipped enumeration instead.
+"""
+lane = "core"
+tier = 0
+persona = "agent"
+seed = "world"
+requires = ["cli", "git"]
+
+# --- 1. induce version drift in the deployed git post-commit hook ---------
+[[steps]]
+type = "shell"
+id = "stale-git-hook"
+argv = [
+  "python3",
+  "-c",
+  "import re;p='.git/hooks/opentraces-post-commit';t=open(p).read();open(p,'w').write(re.sub(r'opentraces-version: \\S+','opentraces-version: 0.0.1',t))",
+]
+
+# --- 2. doctor detects the drift and exits 3 ------------------------------
+[[steps]]
+type = "cli"
+id = "doctor-drift"
+argv = ["--json", "doctor"]
+expect_returncode = 3
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-drift"
+equals = 3
+
+# The git hook entry under doctor.hooks carries its own drift marker.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor-drift"
+path = "doctor.hooks"
+value = "version-drift"
+
+# The git integration appears in the integration-version drift list.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor-drift"
+path = "doctor.integrations.drift"
+value = "git"
+
+# --- 3. integrations-only upgrade re-renders the FULL installed stack -----
+[[steps]]
+type = "cli"
+id = "upgrade-integrations-only"
+argv = ["--json", "setup", "upgrade", "--integrations-only"]
+
+[[assertions]]
+kind = "returncode"
+step = "upgrade-integrations-only"
+equals = 0
+
+# Upgrade payload is at the TOP LEVEL (not under a "doctor" key).
+[[assertions]]
+kind = "stdout_json"
+step = "upgrade-integrations-only"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "upgrade-integrations-only"
+path = "next_command"
+equals = "opentraces doctor"
+
+# git was the only INSTALLED glue -> it is the one that got repaired/re-stamped.
+# Name-precise (not a substring on the array dump, which also contains ".git/hooks").
+[[assertions]]
+kind = "stdout_json"
+step = "upgrade-integrations-only"
+path = "integration_repair.repaired.0.name"
+equals = "git"
+
+# FULL-STACK proof: every remaining integration is enumerated as skipped
+# (not-installed). Separate assertions so a dropped integration fails loudly.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "upgrade-integrations-only"
+path = "integration_repair.skipped"
+value = "watcher"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "upgrade-integrations-only"
+path = "integration_repair.skipped"
+value = "claude-code"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "upgrade-integrations-only"
+path = "integration_repair.skipped"
+value = "codex-cli"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "upgrade-integrations-only"
+path = "integration_repair.skipped"
+value = "capture-otlp-settings"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "upgrade-integrations-only"
+path = "integration_repair.skipped"
+value = "capture-otlp-autostart"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "upgrade-integrations-only"
+path = "integration_repair.skipped"
+value = "pi"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "upgrade-integrations-only"
+path = "integration_repair.skipped"
+value = "skill"
+
+# --- 4. doctor is clean again — drift cured -------------------------------
+[[steps]]
+type = "cli"
+id = "doctor-clean"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-clean"
+equals = 0

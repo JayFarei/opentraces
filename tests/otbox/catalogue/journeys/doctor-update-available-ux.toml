@@ -1,0 +1,124 @@
+name = "doctor-update-available-ux"
+description = """
+Human/UX coverage for the cached, offline-safe latest-version signal in
+`opentraces doctor` (PR#81 / issue #78). The journey is deterministic and
+network-free: it seeds the version-check cache (~/.opentraces/version-check.json)
+with a far-future checked_at so doctor reads the cache and never touches PyPI.
+
+It proves all three states of the "simulated update available" UX:
+  1. With a cached latest of 999.0.0 (> installed), the human Versions row warns
+     with "v999.0.0 available; run 'opentraces setup upgrade'" — the exact prompt
+     a real out-of-date install would surface.
+  2. With a cached latest of 0.0.1 (<= installed), there is NO false upgrade prompt:
+     the warn phrase "available; run" is absent and the row instead reports the
+     benign up-to-date form "latest: 0.0.1 (cached)".
+  3. With OPENTRACES_DISABLE_VERSION_CHECK=1, the row reports "latest check: disabled"
+     and never surfaces an upgrade prompt (mirrors the agent journey's disabled case
+     on the human surface).
+
+Honest/deterministic because the latest version is supplied by the seeded cache
+(not the live PyPI feed) and the far-future checked_at guarantees the cache is
+treated as fresh-enough to use without any network call.
+
+Note on the negative sentinel: bare "available" cannot be used because
+`opentraces doctor` always appends its structured JSON block (after the
+---OPENTRACES_JSON--- marker) which contains the key "upgrade_available", and
+the journey runner matches stdout_contains/stdout_not_contains against the RAW
+stdout (the marker is only stripped for JSON-path assertions). The version-
+specific warn phrase "available; run" appears only in the human warn detail
+("v<latest> available; run 'opentraces setup upgrade'") and never in the JSON
+block or the up-to-date row, so it is the correct unambiguous no-false-prompt
+sentinel.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+persona = "human"
+
+# 1. Seed the version-check cache with a far-future latest (offline, never expires).
+[[steps]]
+type = "shell"
+id = "seed-cache-update-available"
+argv = ["sh", "-c", "mkdir -p \"$HOME/.opentraces\" && printf '%s' '{\"latest_version\":\"999.0.0\",\"checked_at\":9999999999,\"source\":\"pypi\"}' > \"$HOME/.opentraces/version-check.json\""]
+
+[[assertions]]
+kind = "returncode"
+step = "seed-cache-update-available"
+equals = 0
+
+# 2. Human doctor surfaces the update-available prompt.
+[[steps]]
+type = "cli"
+id = "doctor-update-available"
+argv = ["doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-update-available"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-update-available"
+value = "v999.0.0 available"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-update-available"
+value = "opentraces setup upgrade"
+
+# 3. Overwrite the cache with an older latest (<= installed).
+[[steps]]
+type = "shell"
+id = "seed-cache-up-to-date"
+argv = ["sh", "-c", "mkdir -p \"$HOME/.opentraces\" && printf '%s' '{\"latest_version\":\"0.0.1\",\"checked_at\":9999999999,\"source\":\"pypi\"}' > \"$HOME/.opentraces/version-check.json\""]
+
+[[assertions]]
+kind = "returncode"
+step = "seed-cache-up-to-date"
+equals = 0
+
+# 4. Human doctor shows the benign up-to-date row, with no false upgrade prompt.
+[[steps]]
+type = "cli"
+id = "doctor-up-to-date"
+argv = ["doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-up-to-date"
+equals = 0
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor-up-to-date"
+value = "available; run"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-up-to-date"
+value = "latest: 0.0.1 (cached)"
+
+# 5. With the check disabled, the human row reports the disabled state and never
+#    surfaces an upgrade prompt (third UX case study, mirrors the agent journey).
+[[steps]]
+type = "cli"
+id = "doctor-check-disabled"
+argv = ["doctor"]
+env = { OPENTRACES_DISABLE_VERSION_CHECK = "1" }
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-check-disabled"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-check-disabled"
+value = "latest check: disabled"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor-check-disabled"
+value = "available; run"
