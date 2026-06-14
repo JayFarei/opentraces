@@ -126,6 +126,12 @@ def _temporary_opentraces_home(home: Path) -> Iterator[None]:
 def _init_demo_repo(repo: Path) -> None:
     repo.mkdir(parents=True, exist_ok=True)
     _git(repo, "init", "-q")
+    # Pin the initial branch deterministically. ``git init`` honors the ambient
+    # ``init.defaultBranch`` config, which varies per machine (``main`` vs
+    # ``master``); that leaked the branch name into the corpus and broke
+    # portability. ``symbolic-ref`` before any commit works on all git versions
+    # (unlike ``git init -b``, which needs git >= 2.28).
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/main")
     _git(repo, "config", "user.email", "opentraces-demo@example.invalid")
     _git(repo, "config", "user.name", "OpenTraces Demo")
     _git(repo, "config", "commit.gpgsign", "false")

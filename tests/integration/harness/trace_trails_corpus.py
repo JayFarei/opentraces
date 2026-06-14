@@ -100,6 +100,18 @@ class StableNormalizer:
             return self._normalize_string(value, key=key)
         if isinstance(value, int | float) and key == "total_duration_s":
             return 0.0
+        if isinstance(value, int) and not isinstance(value, bool) and key == "transcript_offset":
+            # ``transcript_offset`` is a raw byte offset into the captured
+            # Claude Code transcript file (context_tree_capture: rec.offset).
+            # The demo transcript embeds environment-sensitive content (the
+            # runtime ``allowlisted_env`` block carries HOME / PATH / USER /
+            # etc.), so the byte length of earlier records — and therefore this
+            # offset — differs per machine/HOME. Pin it to a stable sentinel so
+            # normalized output is byte-identical across environments. Node
+            # ordering and relationships remain pinned via step_index, the
+            # content-hash slots, and the event sequence, so this does not
+            # weaken regression detection.
+            return "<transcript-offset>"
         return value
 
     def _slot(self, kind: str, value: str) -> str:
@@ -126,6 +138,19 @@ class StableNormalizer:
 
         if key in {"event_id", "previous_event_id"}:
             return self._slot("trail-event", text)
+        if key == "projection_digest":
+            # ``projection_digest`` is a sha256 over content-addressed event_ids
+            # (see core/trails/contract.py::projection_digest). The event_id
+            # material is machine/run-root-sensitive, so the digest's hash bytes
+            # differ per machine. Slotting it positionally (content-hash:NN by
+            # first-seen order) makes the slot index drift across machines.
+            # Pin it to a single stable, field-keyed sentinel so normalized
+            # output is byte-identical regardless of the underlying hash value
+            # or discovery order. We still assert the digest is PRESENT and
+            # well-shaped below, so a missing/absent watermark is still caught.
+            if text in {"", "None"}:
+                return text
+            return "<projection-digest>"
         if key == "content_hash":
             return self._slot("content-hash", text)
         if key == "batch_id":
