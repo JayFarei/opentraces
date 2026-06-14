@@ -15,13 +15,22 @@ CLI_UPLOAD = "python3 -m twine upload dist/*"
 
 def _make_dry_run(*targets: str) -> list[str]:
     result = subprocess.run(
-        ["make", "-n", *targets],
+        # --no-print-directory keeps recursive sub-makes from emitting
+        # "Entering/Leaving directory" lines, which CI's make 4.x enables via
+        # MAKEFLAGS=w whenever make runs nested inside another make recipe
+        # (e.g. make -> pytest -> this `make -n` grandchild under the sharded
+        # test lane). Without it those lines leak into the recipe assertions.
+        ["make", "--no-print-directory", "-n", *targets],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip() and not line.startswith("make[")
+    ]
 
 
 def test_release_cleans_once_before_builds_and_uploads_built_artifacts() -> None:
