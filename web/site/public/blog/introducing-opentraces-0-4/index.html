@@ -744,17 +744,13 @@
 <div class="wrap">
 <section>
   <p>There is an irony in today's tools. We spend our days steering ever longer
-  agent sessions, supervised and unsupervised, then reviewing what they produce.
-  Yet we still treat only the software they produce as the unit of work worth
-  keeping.</p>
+  agent sessions, yet we still treat only the software they produce as the unit
+  of work worth keeping.</p>
 
   <p>Our value has moved up a layer. It now lives in how we orchestrate the
-  context, the verifiers, and the rails agents run within. But that work is still
-  treated as ephemeral.</p>
-
-  <p>The source of value in our products is no longer just the software that runs.
-  It is also how that software was made to run. It is the trace of how the
-  software came to exist.</p>
+  context, the verifiers, and the rails agents run within: not just the software
+  that runs, but how it was made to run, the trace of how it came to exist. That
+  work is still treated as ephemeral.</p>
 
   <p>When was the last time you inspected your traces?</p>
 
@@ -763,41 +759,17 @@
   ends. The edits that survived. The ones that got reverted. All of it is
   forgotten the moment you exit the session.</p>
 
-  <p>But that record is where improvement happens now.</p>
-
-  <p>Git keeps the diff. The rest evaporates when the session ends.</p>
+  <p>Git keeps the diff. The rest evaporates when the session ends, yet that
+  record is where improvement happens now.</p>
 
   <p><strong>opentraces</strong> is built to fill that gap: a local-first evidence
   layer for agent work. It captures what the agent saw, did, and changed into a
   private bucket, anchors those changes to the Git history that accepted them,
-  and lets you turn that evidence into recall, attribution, resumable context,
-  shareable bug reports, evaluations, and training datasets.</p>
+  and lets you reuse that one record many ways: search, attribution, resumable
+  context, shareable bug reports, evals, and training data.</p>
 
   <p>It works with Claude Code, Codex, and Pi today. Nothing leaves your machine
   until you approve it.</p>
-
-  <p>The project started as a reply to a call to action. The question behind it
-  still steers the work: can we, as a community, unlock the traces we already paid
-  for, and use them to improve our own workflows and products?</p>
-
-  <div class="x-card">
-    <div class="x-post">
-      <div class="x-head"><b>clem 🤗</b> @ClementDelangue · mar 27</div>
-      <div class="x-body">We need more open agent traces datasets. Who can help?</div>
-    </div>
-    <div class="x-post reply">
-      <div class="x-head"><b>Gabriele Farei</b> @jayfarei · mar 27</div>
-      <div class="x-body">could you just create a wee community plugin to share traces to
-      improve open source community on CC? [...] happy to build a little poc for you as well.</div>
-    </div>
-    <div class="x-post reply">
-      <div class="x-head"><b>clem 🤗</b> @ClementDelangue · mar 27</div>
-      <div class="x-body">would be awesome, happy to amplify and support if you build it!</div>
-    </div>
-    <div class="x-foot">the origin of this work · opentraces is that wee plugin, ten weeks later ·
-      <a href="https://x.com/ClementDelangue/status/2037530125638455610">thread</a> ·
-      <a href="https://x.com/jayfarei/status/2037541210781335554">reply</a></div>
-  </div>
 
   <p>A few months in, this post shares what I have learned from working with
   traces: why this project came about, what it can do for you, how it works
@@ -807,28 +779,38 @@
 <section>
   <div class="rule-label">the problem</div>
   <h2>A trace alone is not enough</h2>
-  <p>Let's start with a simple realization: traces alone are not enough.</p>
   <p>They are just logs. And logs are not very useful beyond troubleshooting. If
   you are looking for training data, evaluation data or most downstream uses we
   care about, they are just not enough.</p>
   <p>The trace is the spine of something bigger. The useful signals live around
   it.</p>
-  <p>To learn from a session, for evals, skills, and eventually training, you need
-  three things raw capture does not give you:
-  <strong>replayable environments</strong>, <strong>captured intent</strong>, and
-  <strong>grounded outcomes</strong>, from which rewards can be derived.</p>
-  <p>AI labs already get those signals. They own the harness and the model, so
-  every session feeds their learning loops. The rest of us simply consume the
-  resulting model.</p>
-  <p>For open source, we have to be explicit about the evidence we collect and how
-  we use it. But we already have the ingredients.</p>
-  <p>The version control system gives us the outcome layer for free: commits,
-  merges, reverts, passing tests, all verifiable.</p>
-  <p>Every commit is a replayable environment when the source is open. Snapshot
-  the tree at session start, rerun the agent, compare trajectories.</p>
-  <p>Intent is already there too: prompts, commit messages, tests, PR
-  descriptions. Quality varies, and joining the signals is the hard part.</p>
-  <p>opentraces is the plumbing that joins those pieces.</p>
+  <p>To learn from a session, for evals, skills, and eventually training, you
+  need three things raw capture does not give you. They are the three inputs any
+  reward is computed from, and for open source each one is already lying around,
+  only unjoined:</p>
+  <ul>
+    <li>A <strong>replayable environment</strong>: a world you can drop an agent
+    back into and let it act again. One recording tells you what happened once;
+    learning needs the counterfactual, what a different model, prompt, or tool
+    would have done from the same starting point. When the source is open, every
+    commit is that environment for free. Snapshot the tree at session start,
+    rerun, compare trajectories.</li>
+    <li><strong>Captured intent</strong>: what the session was actually for.
+    Actions with no goal attached cannot be judged, so intent is the rubric that
+    decides what success even means. It already exists, scattered across prompts,
+    commit messages, tests, and PR descriptions; the quality varies and joining
+    it is the hard part.</li>
+    <li>A <strong>grounded outcome</strong>: a result checked by something
+    outside the model. "I fixed it" is not an outcome; a test that passes, a
+    commit that merges, a change that survives in main is. Version control hands
+    these over for free, commits, merges, reverts, all verifiable, so a model
+    never grades its own reward.</li>
+  </ul>
+  <p>AI labs already get these signals. They own the harness and the model, so
+  every session feeds their learning loops, while the rest of us just consume the
+  resulting model. We have to be explicit about what we collect and how we use
+  it, but the ingredients are already here. opentraces is the plumbing that joins
+  them.</p>
 </section>
 </div>
 
@@ -850,15 +832,18 @@
   command, and edit, in order. Everything else joins back to a step on this
   spine.</p>
 
-  <p><strong style="color:var(--c-git)">Trail</strong> is the change layer.
+  <p><strong style="color:var(--c-git)">Trail</strong> is the
+  change-and-outcome record: what changed and what survived.
   opentraces snapshots your working tree into a parallel Git ref namespace that
   never touches your branches. Every step can produce a <em>patch</em>: a hunk of
   change between one snapshot and the next.</p>
 
   <p>That attributes a session's changes to the individual step that produced
   them, before anything is committed. Work that never lands is itself signal. When
-  work does land, the patch anchors to the commit and carries a <em>survival
-  state</em>: alive, transformed, reverted, or lost.</p>
+  work does land, the patch anchors to the commit that accepted it. Git records
+  the surviving artifact; the Trail is what connects that artifact back to the
+  step and the session that produced it, and carries a <em>survival state</em>:
+  alive, transformed, reverted, or lost.</p>
 </section>
 </div>
 
@@ -899,9 +884,6 @@
   <p>Take the step you care about and bring over just the context that produced
   it. Inspect it. Resume from it. Reuse it.</p>
 
-  <p>All three land in your private trace bucket, one self-sufficient unit per
-  session: trace, trail, and context together.</p>
-
   <p>The shape to keep in mind is simpler than a log: every session has an input
   side, an action timeline, and an outcome side.</p>
 
@@ -917,7 +899,16 @@
   of the work: what shaped the agent's behavior, what the agent did, and what
   became part of the codebase.</p>
 
-  <p>Training data eventually needs all three.</p>
+  <p>Each record is useful alone, but the power is in the joins. Trace plus Trail
+  tells you which actions produced which surviving changes. Trace plus Ctx lets you
+  resume or re-pose a decision from the exact step it was made. Trail plus Ctx tells
+  you whether a change that landed was made from the right evidence. All three
+  together are the reconstruction surface for almost any downstream use, training
+  data included.</p>
+
+  <p>Capture once, preserve the evidence, project it many times: a bug report, a
+  PR explanation, a resumable session, an eval row, a dataset are all different
+  projections of the same kept record, not separate features.</p>
 
 </section>
 </div>
@@ -974,6 +965,22 @@
   <p>The three records flow through one pipeline.</p>
   <p>It starts inside the agent harness. Every session is captured as what the
   agent sees, what it does, what it changes, and, through Git, what lasts.</p>
+  <p>Capture is a small local stack, three sources so no single blind spot loses
+  the session:</p>
+  <ul>
+    <li><strong>Harness hooks</strong> record the session live, every prompt,
+    tool call, and edit down to the lines it changed, for Claude Code, Codex, and
+    Pi. They fail open, so capture never blocks the agent.</li>
+    <li>An <strong>OpenTelemetry receiver</strong> on localhost ingests the
+    harness's own telemetry for a byte-exact view of the wire: the assembled
+    system prompt, tool schemas, and sampling parameters the hooks never see. It
+    is bypass-safe, if it is down the agent's traffic is untouched.</li>
+    <li>A <strong>file watcher</strong> diffs the working tree between polls and
+    attributes each change to the step that made it, but only when it falls
+    cleanly inside one tool's write window; the ambiguous is left unattributed,
+    not guessed. A post-commit Git hook then anchors changes to the commit that
+    accepted them.</li>
+  </ul>
   <p>From the harness down, the pipeline reads like this:</p>
 </section>
 </div>
@@ -1062,9 +1069,10 @@
   row.</p>
   <p>It is inspectable and runs anywhere an agent that supports skills runs. And
   it is built to fail forward by escalating to you instead of failing silently.</p>
-  <p>Portable means you can run someone else's workflow over your own bucket and
-  contribute rows to a common dataset without sharing any other private bucket
-  data.</p>
+  <p>Portable means you can run someone else's workflow over your own bucket,
+  under your own security pipeline, and contribute rows to a common dataset
+  without sharing any other private bucket data. The workflow is the author's,
+  but the redaction and security rules that run are yours.</p>
   <p>Imagine a workflow that collects every episode around a new library. Or one
   that projects traces into the exact format you want to train on.</p>
   <p>The meta-loop this enables is the bigger point:</p>
@@ -1114,7 +1122,7 @@
     <div class="abox"><div class="line"><span>summarize the <span class="rb">intent</span> of this pull request</span></div></div>
 
     <div class="duo-q">ship a dataset</div>
-    <div class="cbox"><div class="line"><span><span class="f">ot</span> dataset run <span class="o">&&</span> <span class="f">ot</span> dataset publish</span></div></div>
+    <div class="cbox"><div class="line"><span><span class="f">ot</span> dataset run <span class="v">checkout-evals</span> <span class="o">&&</span> <span class="f">ot</span> dataset publish <span class="v">checkout-evals</span></span></div></div>
     <div class="abox"><div class="line"><span>assemble a <span class="rb">dataset</span> from this month's traces and publish the approved rows</span></div></div>
   </div>
 
@@ -1124,7 +1132,7 @@
 
   <div class="abox" style="margin:14px 0 12px">
     <div class="line"><span>create me a <span class="rb">dataset</span> of every time you wrote the marketing newsletter with opus 4.8</span></div>
-    <div class="line"><span>use the newsletter dataset with opus as the <span class="rb">label</span> and see how gpt 5.5 <span class="rb">scores</span> against it</span></div>
+    <div class="line"><span>use the newsletter dataset with opus as the <span class="rb">label</span> and see how DeepSeek V4 Flash <span class="rb">scores</span> against it</span></div>
     <div class="abox-foot">🤗 distillation + evals from your own usage data · expensive tokens buying cheaper ones</div>
   </div>
 
@@ -1154,8 +1162,9 @@
   <div class="rule-label">beyond training</div>
   <h2>What you can build on traces</h2>
   <p>This is the part that justifies the plumbing.</p>
-  <p>Once capture exists, a consumer is cheap: a workflow that filters and projects
-  retained evidence, plus a renderer that sends it somewhere useful.</p>
+  <p>Once capture exists, a consumer is cheap: a workflow that selects some permutation
+  of the three planes from retained evidence, plus a renderer that sends that
+  projection somewhere useful.</p>
   <p>Not a new subsystem. Here are three examples.</p>
 
   <div class="case">
@@ -1164,7 +1173,8 @@
     <p class="note" style="margin:0 0 10px">before: you write up the bug and hope the
     maintainer can reproduce it · after: you send the failing session itself</p>
     <p>During a session, my agent hit a bug in a small open-source library. Instead
-    of writing a summary, I sealed the episode. This is what travels inside a
+    of writing a summary, I sealed the episode: what the model saw (Ctx), what it did
+    (Trace), and the snapshot it ran against (Trail). This is what travels inside a
     capsule:</p>
     <div class="hub-panel">
       <div class="hub-panel-bar">
@@ -1334,8 +1344,10 @@
   sanitized training example. A report on what worked and what did not.</p>
   <p>Those artifacts can contribute to the common without asking developers or
   companies to surrender the underlying evidence. They are not raw sessions handed
-  over wholesale. They are approved projections, produced through review gates,
-  redaction rules, and security contracts the owner trusts.</p>
+  over wholesale. They are approved projections, and the path out is structural:
+  a private bucket, evidence that stays local, a workflow you can inspect, and an
+  artifact that clears review gates, redaction rules, and security contracts the
+  owner trusts before it leaves.</p>
   <p>That is the incentive surface <strong>opentraces</strong> is trying to make
   practical.</p>
   <ul>
@@ -1350,8 +1362,6 @@
     <li>The contribution should be explicit. The workflow should be inspectable. The
     artifact should earn its way out.</li>
   </ul>
-  <p>That is the balance: private evidence, open infrastructure, shared learning by
-  choice.</p>
   <p>Software engineering is becoming harness engineering. We are shaping the
   systems that produce code: prompts, context, tools, verifiers, evals, workflows,
   and feedback loops.</p>
