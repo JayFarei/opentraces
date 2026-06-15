@@ -1028,7 +1028,11 @@ def _setup_capture_otlp_impl(
             "keys_added": keys_added,
             "keys_skipped": keys_skipped,
         },
-        "autostart_installed": autostart_result is not None and autostart_error is None,
+        "autostart_installed": (
+            autostart_result is not None
+            and autostart_error is None
+            and autostart_result.ok
+        ),
         "autostart": None if autostart_result is None else {
             "ok": autostart_result.ok,
             "platform": autostart_result.platform,
@@ -1043,7 +1047,11 @@ def _setup_capture_otlp_impl(
         ],
         "next_command": (
             None
-            if autostart_result is not None and autostart_error is None
+            if (
+                autostart_result is not None
+                and autostart_error is None
+                and autostart_result.ok
+            )
             else "opentraces capture-otlp start"
         ),
     }
@@ -1063,11 +1071,18 @@ def _setup_capture_otlp_impl(
     elif autostart_error:
         click.echo(f"  autostart:         FAILED ({autostart_error})")
         click.echo("    hint: run 'opentraces capture-otlp start' manually.")
+    elif autostart_result is not None and not autostart_result.ok:
+        # install_autostart returned gracefully but did NOT install the unit
+        # (e.g. an unsigned binary on macOS Ventura+, or launchctl/systemctl
+        # unavailable). Report it honestly instead of claiming success.
+        reason = autostart_result.reason or "not-installed"
+        click.echo(f"  autostart:         not installed ({reason})")
+        if autostart_result.details:
+            click.echo(f"    {autostart_result.details}")
+        click.echo("    hint: run 'opentraces capture-otlp start' manually.")
     else:
-        unit_path = (
-            autostart_result.get("unit_path") if isinstance(autostart_result, dict) else None
-        )
-        click.echo(f"  autostart:         installed ({unit_path or 'OK'})")
+        path = autostart_result.path if autostart_result is not None else None
+        click.echo(f"  autostart:         installed ({path or 'OK'})")
 
 
 @click.command(

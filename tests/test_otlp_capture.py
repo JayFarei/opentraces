@@ -641,3 +641,46 @@ def test_install_autostart_threads_port_bind_raw_dir(tmp_path, monkeypatch):
     body2 = plist.read_text()
     assert "--foreground" in body2
     assert "--port" not in body2 and "--bind" not in body2
+
+
+def test_setup_capture_otlp_reports_autostart_failure_honestly(tmp_path, monkeypatch, capsys):
+    """0.4.5 fix: when install_autostart returns gracefully with ok=False (e.g.
+    an unsigned binary on macOS Ventura+), ``setup capture-otlp`` must NOT report
+    'installed (OK)'. Before this fix, success was inferred from "no exception",
+    so a skipped autostart was misreported as installed.
+    """
+    import json as _json
+    from types import SimpleNamespace
+
+    from opentraces.cli import capture_otlp as C
+    from opentraces.capture.otlp import lifecycle as L
+    from opentraces.capture.otlp import settings_patcher as S
+
+    monkeypatch.setattr(
+        L, "install_autostart",
+        lambda **kw: L.InstallResult(
+            ok=False, platform="darwin",
+            reason="unsigned-binary-on-ventura-plus",
+            details="macOS Ventura+ requires signed binaries for LaunchAgents.",
+        ),
+    )
+    monkeypatch.setattr(
+        S, "install_otel_env",
+        lambda **kw: SimpleNamespace(
+            ok=True,
+            settings_path=tmp_path / "settings.json",
+            backup_path=tmp_path / "settings.json.opentraces-backup",
+            keys_added=["CLAUDE_CODE_ENABLE_TELEMETRY"],
+            keys_skipped=[],
+        ),
+    )
+
+    C._setup_capture_otlp_impl(
+        raw_bodies_dir=tmp_path / "raw", no_autostart=False, as_json=True
+    )
+    out = capsys.readouterr().out
+    payload = _json.loads(out[out.find("{"):])
+    assert payload["autostart_installed"] is False
+    assert payload["autostart"]["ok"] is False
+    assert payload["autostart"]["reason"] == "unsigned-binary-on-ventura-plus"
+    assert payload["next_command"] == "opentraces capture-otlp start"
