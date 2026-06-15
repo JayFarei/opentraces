@@ -34,7 +34,7 @@ export default function GetStarted({ agentPrompt }: { agentPrompt: string }) {
           </div>
           <p className="gs-option-desc">
             Paste the setup prompt into Claude, Codex, or Pi. It installs the CLI,
-            authenticates, and turns on capture for you.
+            shared skill, hooks, auth, and capture with your confirmation.
           </p>
           <div className="gs-option-action">
             <CopyPromptButton prompt={agentPrompt} />

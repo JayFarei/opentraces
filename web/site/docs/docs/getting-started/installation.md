@@ -28,7 +28,7 @@ Paste this into your coding agent (Claude Code, Codex CLI, or Pi):
 {{AGENT_PROMPT}}
 ```
 
-The agent runs this as an interview: it asks you how to configure opentraces, one decision at a time, and waits for your answer before applying it. You choose the tracking mode (global auto-enroll vs manual per-project opt-in), whether to authenticate with Hugging Face now, and any optional security passes. The prompt is tool-agnostic, so agents with a structured question UI render it as choices while others simply ask in chat. After setup the agent uses the skill file for everything else.
+The agent runs this as an interview: it asks you how to configure opentraces, one decision at a time, and waits for your answer before applying it. You choose the tracking mode (global auto-enroll vs manual per-project opt-in), which capture hooks to install, whether to install the shared skill, whether to authenticate with Hugging Face now, and any optional security passes. The prompt is tool-agnostic, so agents with a structured question UI render it as choices while others simply ask in chat. After hook or skill installation, start a fresh agent session before expecting the new capture hooks or skill to be available.
 
 ## From Source
 

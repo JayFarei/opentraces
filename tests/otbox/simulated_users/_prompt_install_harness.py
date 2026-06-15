@@ -21,7 +21,9 @@ REQUIRED_PROMPT_STRINGS = [
     "opentraces setup claude-code",
     "opentraces setup codex-cli",
     "opentraces setup pi --dry-run --json",
+    "Install the shared opentraces skill",
     "opentraces setup skill",
+    "start a new Claude Code, Codex CLI, or Pi session",
     "opentraces setup git",
 ]
 
@@ -117,6 +119,7 @@ def _verify_install_flow() -> None:
     _assert_path(home / ".codex" / "hooks.json")
     _assert_path(home / ".pi" / "agent" / "settings.json")
     _assert_path(home / ".agents" / "skills" / "opentraces" / "SKILL.md")
+    _assert_path(home / ".claude" / "skills" / "opentraces" / "SKILL.md")
     _assert_path(project / ".git" / "hooks" / "opentraces-post-commit")
 
 

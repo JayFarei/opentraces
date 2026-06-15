@@ -328,17 +328,21 @@ Ask: "How should opentraces track your projects?"
 Pi is extension-backed and still requires explicit per-project `opentraces init --agent pi` consent before sidecars are written.
 Apply with: `opentraces config tracking-mode global` or `opentraces config tracking-mode manual`
 
-Step 3 - Install capture hooks:
-Ask which agents to connect.
+Step 3 - Install capture hooks and the shared skill:
+Ask which agents to connect for capture hooks.
 - Claude Code: `opentraces setup claude-code`
 - Codex CLI: `opentraces setup codex-cli`
 - Pi: first `pi install npm:opentraces-pi`, then `opentraces setup pi --dry-run --json` or use `/ot-setup` inside Pi.
-Also run `opentraces setup skill` so supported agents can drive the CLI, and `opentraces setup git` for post-commit Trace Trails.
+Then ask: "Install the shared opentraces skill so supported agents can drive the CLI?"
+- Yes, recommended: run `opentraces setup skill`. Use `--harness claude-code`, `--harness codex-cli`, or `--harness pi` only if I want to limit the skill to one harness.
+- No: skip the skill install; capture hooks can still run, but agents may not see the opentraces command reference automatically.
+Also run `opentraces setup git` for post-commit Trace Trails.
 Before installing a selected agent hook, check that agent's own CLI is installed and authenticated enough to start a session:
 - Claude Code: `command -v claude`; if missing or logged out, tell me to run `claude login` outside this session.
 - Codex CLI: `command -v codex`; if missing or logged out, tell me to run `codex login` outside this session. This does not cover Codex Desktop.
 - Pi: `command -v pi`; if missing or logged out, tell me to run `pi /login` outside this session before using Pi capture.
 Codex hooks are observational; they must not approve or deny permission prompts. Pi setup manages package resources only; it does not silently install Python, start services, authenticate, or enable capture.
+After installing hooks or the shared skill, tell me to start a new Claude Code, Codex CLI, or Pi session before expecting capture hooks or the opentraces skill to be available in that agent. Do not ask for a machine reboot; a fresh agent session is enough.
 
 Step 4 - Authenticate:
 Run `opentraces --json auth whoami` and inspect the JSON.
@@ -370,7 +374,7 @@ Ask: "Enable any extra security tools? All per-record tools are optional and def
 For explicit workflow sanitization, use `opentraces security sanitize --tools regex,entropy,path_anonymizer` or `--use-config`.
 Then run `opentraces doctor` and `opentraces security tools list`.
 
-Once set up, read the skill at .agents/skills/opentraces/SKILL.md for the full command reference and workflows.
+Once set up, read the skill at `~/.agents/skills/opentraces/SKILL.md` (or `.agents/skills/opentraces/SKILL.md` inside an initialized project) for the full command reference and workflows.
 
 Working with retained traces:
 - `opentraces status` shows the project snapshot

@@ -41,7 +41,9 @@ required = [
     'opentraces setup claude-code',
     'opentraces setup codex-cli',
     'opentraces setup pi --dry-run --json',
+    'Install the shared opentraces skill',
     'opentraces setup skill',
+    'start a new Claude Code, Codex CLI, or Pi session',
     'opentraces setup git',
 ]
 missing = [item for item in required if item not in prompt]
