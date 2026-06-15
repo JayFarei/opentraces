@@ -66,7 +66,7 @@ From inside an initialized project, the preferred path is:
 opentraces setup upgrade
 ```
 
-This detects whether you installed via `pipx`, Homebrew, pip, or source, upgrades the CLI, and refreshes the project skill or capture hook files.
+This detects whether you installed via `pipx`, Homebrew, pip, or source, upgrades the CLI, re-renders every installed integration glue file (watcher shim, git post-commit hook, Claude Code and Codex CLI hooks, OTLP settings and autostart) re-stamped to the new version, and refreshes the project skill and hook. Use `opentraces setup upgrade --integrations-only` to re-render the installed glue without a CLI bump, or `--skill-only` to refresh just the skill and hook.
 
 Outside a project context, upgrade with the package manager you originally used:
 

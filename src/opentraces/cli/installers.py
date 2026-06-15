@@ -2148,7 +2148,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
 )
 @click.pass_context
 def setup_upgrade(ctx: click.Context, skill_only: bool, integrations_only: bool) -> None:
-    """Upgrade opentraces CLI and refresh the project skill file."""
+    """Upgrade the CLI, re-render installed integration glue, and refresh the project skill file."""
     # Lazy import to avoid circular imports at module load time.
     from . import _upgrade_impl
     _upgrade_impl(skill_only, integrations_only=integrations_only)
