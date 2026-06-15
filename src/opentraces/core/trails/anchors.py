@@ -182,6 +182,7 @@ def reconcile_commit_anchors(
     patch_events: list[TrailEvent] | None = None,
     anchor_keys: set[tuple] | None = None,
     search_keys: set[tuple] | None = None,
+    append_events: bool = True,
 ) -> list[dict[str, Any]]:
     """Search existing Trace Patches against a commit and append anchor events.
 
@@ -203,6 +204,11 @@ def reconcile_commit_anchors(
     search_head_sha, attribution_version)`` — both already filtered (or
     over-inclusive: keys for OTHER commits are harmless because every
     membership test below includes this commit's sha).
+
+    ``append_events=False`` is the side-effect-free maturation mode: the caller
+    receives this chunk's ``search_results`` and ``anchor_drafts`` in
+    ``summary_out`` and decides when to append them. Default callers keep the
+    original append-on-return behavior.
     """
     repo = repo.resolve()
     effective_capture_method = (
@@ -445,29 +451,30 @@ def reconcile_commit_anchors(
             created.append(anchor_payload)
 
     drafts: list[TrailEventDraft] = []
-    if search_results:
-        # One summary event per (commit, reconcile-run): trace_id/step_index are
-        # None because it spans the searched patches (per-patch trace_id /
-        # step_index live inside results[]).
-        drafts.append(
-            TrailEventDraft(
-                event_type="git_anchor_search_completed",
-                trace_id=None,
-                step_index=None,
-                capture_method=effective_capture_method,
-                ATTRIBUTION_VERSION=effective_attribution_version,
-                payload=build_anchor_search_summary_payload(
-                    schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
-                    search_head=commit_id,
-                    algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
-                    results=search_results,
-                ),
+    if append_events:
+        if search_results:
+            # One summary event per (commit, reconcile-run): trace_id/step_index are
+            # None because it spans the searched patches (per-patch trace_id /
+            # step_index live inside results[]).
+            drafts.append(
+                TrailEventDraft(
+                    event_type="git_anchor_search_completed",
+                    trace_id=None,
+                    step_index=None,
+                    capture_method=effective_capture_method,
+                    ATTRIBUTION_VERSION=effective_attribution_version,
+                    payload=build_anchor_search_summary_payload(
+                        schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
+                        search_head=commit_id,
+                        algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
+                        results=search_results,
+                    ),
+                )
             )
-        )
-    drafts.extend(anchor_drafts)
+        drafts.extend(anchor_drafts)
 
-    if drafts:
-        append_event_batch(repo, drafts, writer=writer)
+        if drafts:
+            append_event_batch(repo, drafts, writer=writer)
     if summary_out is not None:
         # #23: surface the per-patch search count to the caller so maturation can
         # sum these instead of re-reading the whole log twice (before/after) just
@@ -483,4 +490,7 @@ def reconcile_commit_anchors(
         summary_out["budget_exhausted"] = budget_exhausted
         summary_out["patches_searched"] = patches_searched
         summary_out["patches_remaining"] = patches_total - patches_searched
+        if not append_events:
+            summary_out["search_results"] = search_results
+            summary_out["anchor_drafts"] = anchor_drafts
     return created

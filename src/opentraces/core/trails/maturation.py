@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -10,11 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .anchors import reconcile_commit_anchors
-from .event_log import read_events_scoped
+from .anchors import ANCHOR_ALGORITHMS_PHASE5, reconcile_commit_anchors
+from .contract import ANCHOR_SEARCH_SCHEMA_VERSION
+from .event_log import append_event_batch, read_events_scoped
 from .ids import id_from_payload
-from .models import ATTRIBUTION_VERSION
-from .search_records import iter_search_records
+from .models import ATTRIBUTION_VERSION, TrailEventDraft
+from .search_records import build_anchor_search_summary_payload, iter_search_records
 
 DEFAULT_RECENT_COMMITS = 50
 MATURATION_CAPTURE_METHOD = ["trail_maturation"]
@@ -60,13 +62,11 @@ def mature_trails(
     ``(trace_patch_id, commit, attribution_version)`` because it records
     ``git_anchor_search_completed`` events, including ``unknown`` results.
 
-    ``deadline`` (``time.monotonic`` absolute, #65) bounds one call's work:
-    the per-patch loop inside ``reconcile_commit_anchors`` already supports it
-    (#44 Phase 2, durable: searched subsets are recorded), and the commit loop
-    here stops starting new commits once it expires. A truncated sweep does
-    NOT stamp the maturation watermark, so the next tick resumes the backlog
-    where this one stopped — a cold backlog (710,875 searches / 14.4GB peak in
-    ONE tick observed live) amortises across ticks instead.
+    ``deadline`` (``time.monotonic`` absolute, #65) bounds one call's work. To
+    preserve plan-090's one-summary-per-commit shape, maturation appends search
+    summaries and anchors only after a complete non-truncated pass. A truncated
+    sweep does NOT stamp the maturation watermark, so the next tick retries the
+    backlog against the bounded working set rather than hiding unsearched pairs.
     """
     repo = Path(repo).resolve()
     commit_refs = tuple(commit_refs) if commit_refs is not None else None
@@ -86,122 +86,94 @@ def mature_trails(
     if not commits:
         return MaturationSummary(errors=errors)
 
-    # #23 step 1: read the anchor/search dedup keys for ALL candidate commits in
-    # ONE whole-log pass (`commit_shas`). This replaces N per-commit scoped reads
-    # (each a `rev-list --objects` over the whole log) with a single key scan,
-    # the quadratic git work that pinned a CPU core on mature repos.
-    #
-    # #65: keep only dedup KEY tuples here. Patch payloads are streamed in the
-    # second pass below and flushed in bounded chunks, because retaining every
-    # trace_patch_created authored_text payload at once was the remaining
-    # >1GB allocator on the live repo.
-    anchor_keys: set[tuple]
-    search_keys: set[tuple]
-    try:
-        anchor_keys = set()
-        search_keys = set()
-
-        def _key_sink(event) -> None:
-            if event.event_type == "git_anchor_created":
-                anchor_keys.add((
-                    id_from_payload(event.payload, "trace_patch"),
-                    (event.payload.get("commit_id") or {}).get("hex"),
-                ))
-            elif event.event_type == "git_anchor_search_completed":
-                for record in iter_search_records(event):
-                    search_keys.add((
-                        record["trace_patch_id"],
-                        record["search_head_sha"],
-                        record["attribution_version"],
-                    ))
-
-        read_events_scoped(
-            repo,
-            event_types={
-                "git_anchor_created",
-                "git_anchor_search_completed",
-            },
-            commit_filter={
-                "git_anchor_created": "commit_id",
-                "git_anchor_search_completed": "search_head",
-            },
-            commit_shas=set(commits),
-            sink=_key_sink,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return MaturationSummary(
-            commits_considered=len(commits),
-            errors=errors + [f"dedup key scan failed: {type(exc).__name__}: {exc}"],
-            truncated=True,
-        )
-
-    # #23 step 2: sum each reconcile's reported search count via ``summary_out``
-    # instead of reading the whole log twice (before/after) just to diff the
-    # search-record delta.
-    # #65 (codex P2): the shared scan above is atomic by design — aborting it
-    # mid-stream would hand the commit loop PARTIAL dedup keys, and a missing
-    # search key re-emits an already-recorded search (violating the plan-090
-    # R5 invariant). So the budget brackets the scan instead of preempting it:
-    # checked before (above) and after (here). A scan that itself overruns the
-    # budget yields a truncated no-op tick — the watermark stays unstamped,
-    # the next tick retries, and the child's wall-clock budget remains the
-    # hard bound on total tick time.
     anchors_created = 0
     searches_completed = 0
+    pending_anchors_created = 0
+    pending_searches_completed = 0
     truncated = False
-    if deadline is not None and time.monotonic() >= deadline:
-        truncated = True
-    else:
-        patch_chunk: list = []
-        patch_chunk_authored_bytes = 0
-        max_patch_events, max_patch_bytes = _patch_chunk_limits()
-
-        def _flush_patch_chunk() -> None:
-            nonlocal anchors_created, searches_completed, truncated
-            nonlocal patch_chunk, patch_chunk_authored_bytes
-            if not patch_chunk or truncated:
-                return
-            chunk_result = _mature_patch_chunk(
-                repo,
-                commits=commits,
-                patch_events=patch_chunk,
-                anchor_keys=anchor_keys,
-                search_keys=search_keys,
-                attribution_version=effective_version,
-                writer=writer,
-                deadline=deadline,
-            )
-            anchors_created += chunk_result.anchors_created
-            searches_completed += chunk_result.searches_completed
-            errors.extend(chunk_result.errors)
-            truncated = truncated or chunk_result.truncated
-            patch_chunk = []
-            patch_chunk_authored_bytes = 0
-            if truncated:
-                raise _MaturationBudgetExhausted
-
-        def _patch_sink(event) -> None:
-            nonlocal patch_chunk_authored_bytes
-            patch_chunk.append(event)
-            patch_chunk_authored_bytes += _patch_event_authored_bytes(event)
-            if (
-                len(patch_chunk) >= max_patch_events
-                or patch_chunk_authored_bytes >= max_patch_bytes
-            ):
-                _flush_patch_chunk()
-
+    with tempfile.TemporaryDirectory(prefix="opentraces-maturation-") as scratch_dir:
+        scratch = _open_maturation_scratch(Path(scratch_dir) / "maturation.sqlite3")
         try:
-            read_events_scoped(
-                repo,
-                event_types={"trace_patch_created"},
-                sink=_patch_sink,
-            )
-            _flush_patch_chunk()
-        except _MaturationBudgetExhausted:
-            pass
+            # #65 cure: retain dedup keys in a disk-backed scratch index, not in
+            # Python sets for the whole tick. Per-chunk queries below materialize
+            # only O(chunk_size * candidate_commits) keys in memory.
+            _build_dedup_index(repo, scratch, commits)
+
+            # The shared scan is atomic by design. If it overruns the caller's
+            # budget, do not use a partial dedup view; return a truncated no-op
+            # tick and leave the watermark unstamped.
+            if deadline is not None and time.monotonic() >= deadline:
+                truncated = True
+            else:
+                patch_chunk: list = []
+                patch_chunk_authored_bytes = 0
+                max_patch_events, max_patch_bytes = _patch_chunk_limits()
+
+                def _flush_patch_chunk() -> None:
+                    nonlocal pending_anchors_created, pending_searches_completed
+                    nonlocal truncated, patch_chunk, patch_chunk_authored_bytes
+                    if not patch_chunk or truncated:
+                        return
+                    chunk_result = _mature_patch_chunk(
+                        repo,
+                        commits=commits,
+                        patch_events=patch_chunk,
+                        scratch=scratch,
+                        attribution_version=effective_version,
+                        writer=writer,
+                        deadline=deadline,
+                    )
+                    pending_anchors_created += chunk_result.anchors_created
+                    pending_searches_completed += chunk_result.searches_completed
+                    errors.extend(chunk_result.errors)
+                    truncated = truncated or chunk_result.truncated
+                    patch_chunk = []
+                    patch_chunk_authored_bytes = 0
+                    if truncated:
+                        raise _MaturationBudgetExhausted
+
+                def _patch_sink(event) -> None:
+                    nonlocal patch_chunk_authored_bytes
+                    patch_chunk.append(event)
+                    patch_chunk_authored_bytes += _patch_event_authored_bytes(event)
+                    if (
+                        len(patch_chunk) >= max_patch_events
+                        or patch_chunk_authored_bytes >= max_patch_bytes
+                    ):
+                        _flush_patch_chunk()
+
+                try:
+                    read_events_scoped(
+                        repo,
+                        event_types={"trace_patch_created"},
+                        sink=_patch_sink,
+                    )
+                    _flush_patch_chunk()
+                except _MaturationBudgetExhausted:
+                    pass
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"patch stream failed: {type(exc).__name__}: {exc}")
+                    truncated = True
+
+            if not truncated:
+                try:
+                    _flush_maturation_scratch(
+                        repo,
+                        scratch,
+                        commits=commits,
+                        attribution_version=effective_version,
+                        writer=writer,
+                    )
+                    anchors_created = pending_anchors_created
+                    searches_completed = pending_searches_completed
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"maturation flush failed: {type(exc).__name__}: {exc}")
+                    truncated = True
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"patch stream failed: {type(exc).__name__}: {exc}")
+            errors.append(f"dedup scratch failed: {type(exc).__name__}: {exc}")
             truncated = True
+        finally:
+            scratch.close()
 
     # Only a full recent-commits sweep may stamp the watermark: an explicit
     # commit_refs subset has not matured the rest of the recent window, and
@@ -251,13 +223,268 @@ def _patch_event_authored_bytes(event) -> int:
     return 0
 
 
+def _open_maturation_scratch(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=OFF")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA temp_store=FILE")
+    conn.executescript(
+        """
+        CREATE TABLE anchor_keys (
+            patch_id TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            PRIMARY KEY (patch_id, commit_sha)
+        );
+        CREATE TABLE search_keys (
+            patch_id TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            attribution_version TEXT NOT NULL,
+            PRIMARY KEY (patch_id, commit_sha, attribution_version)
+        );
+        CREATE TABLE search_results (
+            commit_sha TEXT NOT NULL,
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            result_json TEXT NOT NULL
+        );
+        CREATE INDEX search_results_commit_seq
+            ON search_results(commit_sha, seq);
+        CREATE TABLE anchor_drafts (
+            commit_sha TEXT NOT NULL,
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            draft_json TEXT NOT NULL
+        );
+        CREATE INDEX anchor_drafts_commit_seq
+            ON anchor_drafts(commit_sha, seq);
+        CREATE TABLE patch_ids (
+            patch_id TEXT PRIMARY KEY
+        );
+        CREATE TEMP TABLE candidate_commits (
+            commit_sha TEXT PRIMARY KEY
+        );
+        CREATE TEMP TABLE chunk_patch_ids (
+            patch_id TEXT PRIMARY KEY
+        );
+        """
+    )
+    return conn
+
+
+def _store_candidate_commits(
+    scratch: sqlite3.Connection,
+    commits: list[str],
+) -> None:
+    scratch.execute("DELETE FROM candidate_commits")
+    scratch.executemany(
+        "INSERT OR IGNORE INTO candidate_commits(commit_sha) VALUES (?)",
+        [(commit,) for commit in commits],
+    )
+
+
+def _build_dedup_index(
+    repo: Path,
+    scratch: sqlite3.Connection,
+    commits: list[str],
+) -> None:
+    commit_set = set(commits)
+    anchor_rows: list[tuple[str, str]] = []
+    search_rows: list[tuple[str, str, str]] = []
+
+    def _flush() -> None:
+        nonlocal anchor_rows, search_rows
+        if anchor_rows:
+            scratch.executemany(
+                "INSERT OR IGNORE INTO anchor_keys(patch_id, commit_sha) "
+                "VALUES (?, ?)",
+                anchor_rows,
+            )
+            anchor_rows = []
+        if search_rows:
+            scratch.executemany(
+                "INSERT OR IGNORE INTO search_keys"
+                "(patch_id, commit_sha, attribution_version) VALUES (?, ?, ?)",
+                search_rows,
+            )
+            search_rows = []
+
+    def _key_sink(event) -> None:
+        if event.event_type == "git_anchor_created":
+            patch_id = id_from_payload(event.payload, "trace_patch")
+            commit = (event.payload.get("commit_id") or {}).get("hex")
+            if patch_id and commit in commit_set:
+                anchor_rows.append((patch_id, commit))
+        elif event.event_type == "git_anchor_search_completed":
+            for record in iter_search_records(event):
+                patch_id = record.get("trace_patch_id")
+                commit = record.get("search_head_sha")
+                version = record.get("attribution_version")
+                if patch_id and commit in commit_set and version:
+                    search_rows.append((patch_id, commit, version))
+        if len(anchor_rows) + len(search_rows) >= 4096:
+            _flush()
+
+    read_events_scoped(
+        repo,
+        event_types={
+            "git_anchor_created",
+            "git_anchor_search_completed",
+        },
+        commit_filter={
+            "git_anchor_created": "commit_id",
+            "git_anchor_search_completed": "search_head",
+        },
+        commit_shas=commit_set,
+        sink=_key_sink,
+    )
+    _flush()
+    scratch.commit()
+
+
+def _patch_ids_for_chunk(patch_events: list) -> list[str]:
+    patch_ids: list[str] = []
+    seen: set[str] = set()
+    for event in patch_events:
+        patch_id = id_from_payload(event.payload, "trace_patch")
+        if patch_id and patch_id not in seen:
+            patch_ids.append(patch_id)
+            seen.add(patch_id)
+    return patch_ids
+
+
+def _dedup_keys_for_chunk(
+    scratch: sqlite3.Connection,
+    patch_ids: list[str],
+) -> tuple[set[tuple], set[tuple]]:
+    scratch.execute("DELETE FROM chunk_patch_ids")
+    if not patch_ids:
+        return set(), set()
+    scratch.executemany(
+        "INSERT OR IGNORE INTO chunk_patch_ids(patch_id) VALUES (?)",
+        [(patch_id,) for patch_id in patch_ids],
+    )
+    anchor_keys = {
+        (patch_id, commit_sha)
+        for patch_id, commit_sha in scratch.execute(
+            "SELECT a.patch_id, a.commit_sha "
+            "FROM anchor_keys a "
+            "JOIN chunk_patch_ids c ON c.patch_id = a.patch_id"
+        )
+    }
+    search_keys = {
+        (patch_id, commit_sha, attribution_version)
+        for patch_id, commit_sha, attribution_version in scratch.execute(
+            "SELECT s.patch_id, s.commit_sha, s.attribution_version "
+            "FROM search_keys s "
+            "JOIN chunk_patch_ids c ON c.patch_id = s.patch_id"
+        )
+    }
+    return anchor_keys, search_keys
+
+
+def _store_chunk_outputs(
+    scratch: sqlite3.Connection,
+    commit: str,
+    *,
+    search_results: list[dict],
+    anchor_drafts: list[TrailEventDraft],
+    attribution_version: str,
+) -> None:
+    if search_results:
+        scratch.executemany(
+            "INSERT INTO search_results(commit_sha, result_json) VALUES (?, ?)",
+            [
+                (commit, json.dumps(result, sort_keys=True, separators=(",", ":")))
+                for result in search_results
+            ],
+        )
+        scratch.executemany(
+            "INSERT OR IGNORE INTO search_keys"
+            "(patch_id, commit_sha, attribution_version) VALUES (?, ?, ?)",
+            [
+                (str(result["trace_patch_id"]), commit, attribution_version)
+                for result in search_results
+                if result.get("trace_patch_id")
+            ],
+        )
+    if anchor_drafts:
+        scratch.executemany(
+            "INSERT INTO anchor_drafts(commit_sha, draft_json) VALUES (?, ?)",
+            [
+                (
+                    commit,
+                    json.dumps(
+                        draft.model_dump(mode="json"),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+                for draft in anchor_drafts
+            ],
+        )
+        scratch.executemany(
+            "INSERT OR IGNORE INTO anchor_keys(patch_id, commit_sha) VALUES (?, ?)",
+            [
+                (str(draft.payload["trace_patch_id"]), commit)
+                for draft in anchor_drafts
+                if draft.payload.get("trace_patch_id")
+            ],
+        )
+    scratch.commit()
+
+
+def _flush_maturation_scratch(
+    repo: Path,
+    scratch: sqlite3.Connection,
+    *,
+    commits: list[str],
+    attribution_version: str,
+    writer: str,
+) -> None:
+    for commit in commits:
+        results = [
+            json.loads(row[0])
+            for row in scratch.execute(
+                "SELECT result_json FROM search_results "
+                "WHERE commit_sha = ? ORDER BY seq",
+                (commit,),
+            )
+        ]
+        anchor_drafts = [
+            TrailEventDraft.model_validate(json.loads(row[0]))
+            for row in scratch.execute(
+                "SELECT draft_json FROM anchor_drafts "
+                "WHERE commit_sha = ? ORDER BY seq",
+                (commit,),
+            )
+        ]
+        if not results and not anchor_drafts:
+            continue
+        drafts: list[TrailEventDraft] = []
+        if results:
+            drafts.append(
+                TrailEventDraft(
+                    event_type="git_anchor_search_completed",
+                    trace_id=None,
+                    step_index=None,
+                    capture_method=MATURATION_CAPTURE_METHOD,
+                    ATTRIBUTION_VERSION=attribution_version,
+                    payload=build_anchor_search_summary_payload(
+                        schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
+                        search_head={"algo": "sha1", "hex": commit},
+                        algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
+                        results=results,
+                    ),
+                )
+            )
+        drafts.extend(anchor_drafts)
+        append_event_batch(repo, drafts, writer=writer)
+
+
 def _mature_patch_chunk(
     repo: Path,
     *,
     commits: list[str],
     patch_events: list,
-    anchor_keys: set[tuple],
-    search_keys: set[tuple],
+    scratch: sqlite3.Connection,
     attribution_version: str,
     writer: str,
     deadline: float | None,
@@ -266,6 +493,10 @@ def _mature_patch_chunk(
     searches_completed = 0
     errors: list[str] = []
     truncated = False
+    anchor_keys, search_keys = _dedup_keys_for_chunk(
+        scratch,
+        _patch_ids_for_chunk(patch_events),
+    )
     for commit in commits:
         if deadline is not None and time.monotonic() >= deadline:
             truncated = True
@@ -284,7 +515,17 @@ def _mature_patch_chunk(
                     search_keys=search_keys,
                     summary_out=per_commit_summary,
                     deadline=deadline,
+                    append_events=False,
                 )
+            )
+            search_results = list(per_commit_summary.get("search_results") or [])
+            anchor_drafts = list(per_commit_summary.get("anchor_drafts") or [])
+            _store_chunk_outputs(
+                scratch,
+                commit,
+                search_results=search_results,
+                anchor_drafts=anchor_drafts,
+                attribution_version=attribution_version,
             )
             searches_completed += int(
                 per_commit_summary.get("searches_recorded", 0) or 0
@@ -331,80 +572,108 @@ def has_unsearched_recent_patches(
         if state is not None:
             _save_maturation_watermark(repo, state)
         return False
-    # #45: scope the gate's whole-log read to exactly the slice mature_trails
-    # reads (:72-84). The gate never inspects any other event type, and the
-    # watcher daemon calls it on every quiet tick that misses the watermark, so
-    # a full-log materialisation here is the same unbounded per-tick RSS cost
-    # Bug B closed on the hook path. ``trace_patch_created`` carries no
-    # commit_filter (kept in full for the patch_ids set); the two anchor/search
-    # types are commit-keyed to the candidate commits, mirroring mature_trails.
-    #
-    # #65 (codex P1): stream the read down to the three KEY SETS the gate
-    # actually consults — never retain the events. On a truncated-backlog repo
-    # the maturation watermark is deliberately unstamped, so EVERY quiet tick
-    # passes through this gate before the budgeted mature_trails call; a
-    # materialised slice here (fat trace_patch_created authored_text + the
-    # plan-090 summary results[] arrays) re-opens the multi-GB path the sink
-    # closed in mature_trails, and the child gets RSS-killed before the
-    # budgeted worker can make progress — defeating amortisation entirely.
-    patch_ids: set[str] = set()
-    searched: set[tuple] = set()
-    anchored: set[tuple] = set()
+    # #65: the gate is on the quiet-tick path before mature_trails. It must not
+    # retain whole-history patch/search/anchor key sets either, so it streams the
+    # scoped slice into the same disk-backed scratch shape and asks SQLite for a
+    # single missing (patch, commit) pair.
+    with tempfile.TemporaryDirectory(prefix="opentraces-maturation-gate-") as scratch_dir:
+        scratch = _open_maturation_scratch(Path(scratch_dir) / "gate.sqlite3")
+        try:
+            _store_candidate_commits(scratch, commits)
+            patch_rows: list[tuple[str]] = []
+            anchor_rows: list[tuple[str, str]] = []
+            search_rows: list[tuple[str, str, str]] = []
 
-    def _gate_sink(event) -> None:
-        etype = event.event_type
-        if etype == "trace_patch_created":
-            trace_patch_id = id_from_payload(event.payload, "trace_patch")
-            if trace_patch_id:
-                patch_ids.add(trace_patch_id)
-        elif etype == "git_anchor_search_completed":
-            for record in iter_search_records(event):
-                searched.add((
-                    record["trace_patch_id"],
-                    record["search_head_sha"],
-                    record["attribution_version"],
-                ))
-        elif etype == "git_anchor_created":
-            # #23 step 4: close the gate/worker asymmetry. The worker
-            # (reconcile_commit_anchors) skips a (patch, commit) pair when
-            # EITHER a search record OR an anchor already exists for it. The
-            # gate must mirror that, else a pair with an
-            # anchor-but-no-search-record (possible across attribution
-            # versions / legacy logs) reads as "unsearched" forever -> the
-            # worker is invoked every tick, does nothing, never records a new
-            # search -> livelock.
-            anchored.add((
-                id_from_payload(event.payload, "trace_patch"),
-                (event.payload.get("commit_id") or {}).get("hex"),
-            ))
+            def _flush_gate_rows() -> None:
+                nonlocal patch_rows, anchor_rows, search_rows
+                if patch_rows:
+                    scratch.executemany(
+                        "INSERT OR IGNORE INTO patch_ids(patch_id) VALUES (?)",
+                        patch_rows,
+                    )
+                    patch_rows = []
+                if anchor_rows:
+                    scratch.executemany(
+                        "INSERT OR IGNORE INTO anchor_keys(patch_id, commit_sha) "
+                        "VALUES (?, ?)",
+                        anchor_rows,
+                    )
+                    anchor_rows = []
+                if search_rows:
+                    scratch.executemany(
+                        "INSERT OR IGNORE INTO search_keys"
+                        "(patch_id, commit_sha, attribution_version) "
+                        "VALUES (?, ?, ?)",
+                        search_rows,
+                    )
+                    search_rows = []
 
-    try:
-        read_events_scoped(
-            repo,
-            event_types={
-                "trace_patch_created",
-                "git_anchor_created",
-                "git_anchor_search_completed",
-            },
-            commit_filter={
-                "git_anchor_created": "commit_id",
-                "git_anchor_search_completed": "search_head",
-            },
-            commit_shas=set(commits),
-            sink=_gate_sink,
-        )
-    except Exception:
-        return False
-    if not patch_ids:
-        if state is not None:
-            _save_maturation_watermark(repo, state)
-        return False
-    has_unsearched = any(
-        (trace_patch_id, commit, effective_version) not in searched
-        and (trace_patch_id, commit) not in anchored
-        for trace_patch_id in patch_ids
-        for commit in commits
-    )
+            def _gate_sink(event) -> None:
+                etype = event.event_type
+                if etype == "trace_patch_created":
+                    trace_patch_id = id_from_payload(event.payload, "trace_patch")
+                    if trace_patch_id:
+                        patch_rows.append((trace_patch_id,))
+                elif etype == "git_anchor_search_completed":
+                    for record in iter_search_records(event):
+                        patch_id = record.get("trace_patch_id")
+                        commit = record.get("search_head_sha")
+                        version = record.get("attribution_version")
+                        if patch_id and commit and version:
+                            search_rows.append((patch_id, commit, version))
+                elif etype == "git_anchor_created":
+                    # #23 step 4: close the gate/worker asymmetry. The worker
+                    # skips a pair when EITHER a search record OR an anchor exists.
+                    patch_id = id_from_payload(event.payload, "trace_patch")
+                    commit = (event.payload.get("commit_id") or {}).get("hex")
+                    if patch_id and commit:
+                        anchor_rows.append((patch_id, commit))
+                if len(patch_rows) + len(anchor_rows) + len(search_rows) >= 4096:
+                    _flush_gate_rows()
+
+            read_events_scoped(
+                repo,
+                event_types={
+                    "trace_patch_created",
+                    "git_anchor_created",
+                    "git_anchor_search_completed",
+                },
+                commit_filter={
+                    "git_anchor_created": "commit_id",
+                    "git_anchor_search_completed": "search_head",
+                },
+                commit_shas=set(commits),
+                sink=_gate_sink,
+            )
+            _flush_gate_rows()
+            scratch.commit()
+
+            if scratch.execute("SELECT 1 FROM patch_ids LIMIT 1").fetchone() is None:
+                if state is not None:
+                    _save_maturation_watermark(repo, state)
+                return False
+            has_unsearched = scratch.execute(
+                """
+                SELECT 1
+                FROM patch_ids p
+                CROSS JOIN candidate_commits c
+                LEFT JOIN search_keys s
+                  ON s.patch_id = p.patch_id
+                 AND s.commit_sha = c.commit_sha
+                 AND s.attribution_version = ?
+                LEFT JOIN anchor_keys a
+                  ON a.patch_id = p.patch_id
+                 AND a.commit_sha = c.commit_sha
+                WHERE s.patch_id IS NULL
+                  AND a.patch_id IS NULL
+                LIMIT 1
+                """,
+                (effective_version,),
+            ).fetchone() is not None
+        except Exception:
+            return False
+        finally:
+            scratch.close()
     if not has_unsearched and state is not None:
         # Everything in range is satisfied — stamp so the next quiet tick is free.
         _save_maturation_watermark(repo, state)

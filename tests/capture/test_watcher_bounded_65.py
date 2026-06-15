@@ -405,7 +405,7 @@ def test_maturation_deadline_pre_scan_bail(tmp_path):
 
 
 def test_run_once_large_patch_payloads_stays_under_rss_ceiling(
-    tmp_path, _isolate_opentraces_global_state
+    tmp_path, monkeypatch, _isolate_opentraces_global_state
 ):
     """Ungated #65 memory proof: a full watcher tick over large patch
     payloads must stay bounded by chunking maturation's patch stream."""
@@ -453,11 +453,33 @@ def test_run_once_large_patch_payloads_stays_under_rss_ceiling(
             )
         )
     append_event_batch(repo, drafts, writer="test-fixture")
+    legacy_search_count = 120
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="git_anchor_search_completed",
+                trace_id=f"old-tr-{index}",
+                step_index=1,
+                capture_method=["legacy_fixture"],
+                payload={
+                    "trace_patch_id": f"old-rss-patch-{index}",
+                    "search_head": {"algo": "sha1", "hex": head},
+                    "algorithms_attempted": ["exact_range_hash"],
+                    "result": "unknown",
+                    "created_anchor_ids": [],
+                },
+            )
+            for index in range(legacy_search_count)
+        ],
+        writer="legacy-fixture",
+    )
 
     state = StateManager(state_path=get_project_state_path(repo))
     state.set_last_backfilled_commit(head)
     state.set_last_watcher_run_at()
 
+    result_path = tmp_path / "run_once_result.json"
     driver = (
         "import json, platform, resource, sys\n"
         "from pathlib import Path\n"
@@ -465,7 +487,7 @@ def test_run_once_large_patch_payloads_stays_under_rss_ceiling(
         f"report = wd.run_once(Path({str(repo)!r}))\n"
         "peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
         "mb = peak / (1024*1024) if platform.system() == 'Darwin' else peak / 1024\n"
-        "print(json.dumps({\n"
+        f"Path({str(result_path)!r}).write_text(json.dumps({{\n"
         "    'peak_mb': mb,\n"
         "    'error': report.error,\n"
         "    'searches': report.trail_maturation_searches,\n"
@@ -473,12 +495,17 @@ def test_run_once_large_patch_payloads_stays_under_rss_ceiling(
         "}))\n"
         "sys.exit(1 if report.error else 0)\n"
     )
-    env = dict(os.environ)
-    env["OT_MATURATION_PATCH_CHUNK_MAX_BYTES"] = str(4 * 1024 * 1024)
-    env["OT_MATURATION_PATCH_CHUNK_MAX_EVENTS"] = "4"
-    env["OT_MATURATION_TICK_BUDGET_S"] = "600"
-    out = subprocess.check_output([sys.executable, "-c", driver], env=env, text=True)
-    result = json.loads(out.strip().splitlines()[-1])
+    monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_BYTES", str(4 * 1024 * 1024))
+    monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_EVENTS", "4")
+    monkeypatch.setenv("OT_MATURATION_TICK_BUDGET_S", "600")
+    verdict = wd._tick_in_child(
+        repo,
+        budget_mb=800,
+        timeout_s=120,
+        _argv=[sys.executable, "-c", driver],
+    )
+    assert verdict == "ok", "healthy #65 tick must not need the RSS child kill"
+    result = json.loads(result_path.read_text())
 
     assert result["searches"] == patch_count
     assert result["anchors"] == 0

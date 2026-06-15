@@ -19,7 +19,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from opentraces.core.trails import TrailEventDraft, append_event_batch, read_events
-from opentraces.core.trails.event_log import read_events_scoped
 from opentraces.core.trails.models import sha256_text
 from opentraces.watcher import daemon as _wd
 
@@ -255,9 +254,9 @@ class TestWatcherSweep:
     def test_batched_maturation_two_streaming_passes_and_identical_dedup_keys(
         self, tmp_path, monkeypatch
     ) -> None:
-        """``mature_trails`` over N commits issues exactly two bounded
-        ``rev-list --objects`` walks: one key scan, one patch-payload stream.
-        Search summaries keep the same dedup keys as the per-commit path.
+        """``mature_trails`` over N commits uses bounded whole-log walks, not
+        per-commit or per-chunk object enumeration. Search summaries keep the
+        same dedup keys as the per-commit path.
         """
         from opentraces.core.trails.maturation import mature_trails
 
@@ -324,11 +323,10 @@ class TestWatcherSweep:
 
         summary = mature_trails(p, commit_refs=commit_shas)
         assert summary.errors == []
-        # Exactly two bounded streams for the whole run: anchor/search keys,
-        # then trace_patch payload chunks. The old one-pass path retained every
-        # patch payload at once, which is the live #65 allocator.
-        assert rev_list_objects["count"] == 2, (
-            "batched maturation must issue exactly two rev-list --objects "
+        # The implementation may collapse these further, but it must not regress
+        # to one object walk per commit or per patch chunk.
+        assert rev_list_objects["count"] <= 2, (
+            "batched maturation must issue bounded rev-list --objects walks "
             f"(saw {rev_list_objects['count']})"
         )
 
@@ -378,14 +376,227 @@ class TestWatcherSweep:
         }
         assert again_keys == batched_keys, "batched dedup must be stable"
 
+    def test_maturation_dedup_keys_are_chunk_scoped(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Historical search records for unrelated patches must not be retained
+        and passed into every chunk reconcile. This fails on #80's residual
+        whole-tick ``search_keys`` set, where the first reconcile sees all
+        historical keys for the candidate commits.
+        """
+        from opentraces.core.trails import anchors as anchors_mod
+        from opentraces.core.trails import maturation as mat_mod
+
+        p = _init_project(tmp_path / "proj")
+        commit_shas: list[str] = []
+        for i in range(3):
+            (p / f"f{i}.py").write_text(f"VALUE_{i} = 'line {i}'\n")
+            _git("add", "-A", cwd=p)
+            _git("commit", "-q", "-m", f"commit {i}", cwd=p)
+            commit_shas.append(
+                subprocess.check_output(
+                    ["git", "-C", str(p), "rev-parse", "HEAD"], text=True
+                ).strip()
+            )
+
+        historical_patch_count = 80
+        for commit_sha in commit_shas:
+            append_event_batch(
+                p,
+                [
+                    TrailEventDraft(
+                        event_type="git_anchor_search_completed",
+                        trace_id=f"old-tr-{i}",
+                        step_index=1,
+                        capture_method=["legacy_fixture"],
+                        payload={
+                            "trace_patch_id": f"old-patch-{i}",
+                            "search_head": {"algo": "sha1", "hex": commit_sha},
+                            "algorithms_attempted": ["exact_range_hash"],
+                            "result": "unknown",
+                            "created_anchor_ids": [],
+                        },
+                    )
+                    for i in range(historical_patch_count)
+                ],
+                writer="legacy-fixture",
+            )
+
+        for i in range(4):
+            authored = f"new missing {i}\n"
+            append_event_batch(
+                p,
+                [
+                    TrailEventDraft(
+                        event_type="trace_patch_created",
+                        trace_id=f"new-tr-{i}",
+                        step_index=1,
+                        capture_method=["watcher_backstop"],
+                        payload={
+                            "trace_patch_id": f"new-patch-{i}",
+                            "file_path": f"missing-{i}.py",
+                            "affected_range": {"start_line": 1, "end_line": 1},
+                            "authored_text": authored,
+                            "raw_authored_hash": sha256_text(authored),
+                            "git_clean_hash": sha256_text(" ".join(authored.split())),
+                            "limitations": [],
+                        },
+                    )
+                ],
+                writer="test-fixture",
+            )
+
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_EVENTS", "2")
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_BYTES", "1")
+        real_reconcile = anchors_mod.reconcile_commit_anchors
+        seen_search_key_counts: list[int] = []
+
+        def _spy_reconcile(*args, **kwargs):
+            patch_events = list(kwargs.get("patch_events") or [])
+            search_keys = set(kwargs.get("search_keys") or set())
+            seen_search_key_counts.append(len(search_keys))
+            assert len(search_keys) <= len(patch_events) * len(commit_shas)
+            return real_reconcile(*args, **kwargs)
+
+        monkeypatch.setattr(mat_mod, "reconcile_commit_anchors", _spy_reconcile)
+        summary = mat_mod.mature_trails(p, commit_refs=commit_shas)
+        assert summary.errors == []
+        assert summary.searches_completed == 4 * len(commit_shas)
+        assert seen_search_key_counts
+        assert max(seen_search_key_counts) < historical_patch_count, (
+            "chunk reconcile saw unrelated historical search keys; dedup is not "
+            "bounded by the current patch chunk"
+        )
+
+    def test_chunked_maturation_dedups_duplicate_patch_across_chunks(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A duplicate patch id split across chunks is searched once per commit,
+        and a patch whose authored text appears in two commits anchors to both
+        commits without reintroducing C x chunk search-summary fan-out.
+        """
+        from opentraces.core.trails.maturation import mature_trails
+        from opentraces.core.trails.search_records import iter_search_records
+
+        p = _init_project(tmp_path / "proj")
+        commit_shas: list[str] = []
+        (p / "shared.py").write_text("DUP = 'x'\n")
+        _git("add", "-A", cwd=p)
+        _git("commit", "-q", "-m", "add shared", cwd=p)
+        commit_shas.append(
+            subprocess.check_output(
+                ["git", "-C", str(p), "rev-parse", "HEAD"], text=True
+            ).strip()
+        )
+        (p / "shared.py").write_text("")
+        _git("add", "-A", cwd=p)
+        _git("commit", "-q", "-m", "remove shared", cwd=p)
+        commit_shas.append(
+            subprocess.check_output(
+                ["git", "-C", str(p), "rev-parse", "HEAD"], text=True
+            ).strip()
+        )
+        (p / "shared.py").write_text("DUP = 'x'\n")
+        _git("add", "-A", cwd=p)
+        _git("commit", "-q", "-m", "readd shared", cwd=p)
+        commit_shas.append(
+            subprocess.check_output(
+                ["git", "-C", str(p), "rev-parse", "HEAD"], text=True
+            ).strip()
+        )
+
+        collision = "DUP = 'x'\n"
+        missing = "not in any commit\n"
+        append_event_batch(
+            p,
+            [
+                TrailEventDraft(
+                    event_type="trace_patch_created",
+                    trace_id="tr-collision",
+                    step_index=1,
+                    capture_method=["watcher_backstop"],
+                    payload={
+                        "trace_patch_id": "collision-patch",
+                        "file_path": "shared.py",
+                        "affected_range": {"start_line": 1, "end_line": 1},
+                        "authored_text": collision,
+                        "raw_authored_hash": sha256_text(collision),
+                        "git_clean_hash": sha256_text(" ".join(collision.split())),
+                        "limitations": [],
+                    },
+                ),
+                TrailEventDraft(
+                    event_type="trace_patch_created",
+                    trace_id="tr-collision-dup",
+                    step_index=2,
+                    capture_method=["watcher_backstop"],
+                    payload={
+                        "trace_patch_id": "collision-patch",
+                        "file_path": "shared.py",
+                        "affected_range": {"start_line": 1, "end_line": 1},
+                        "authored_text": collision,
+                        "raw_authored_hash": sha256_text(collision),
+                        "git_clean_hash": sha256_text(" ".join(collision.split())),
+                        "limitations": [],
+                    },
+                ),
+                TrailEventDraft(
+                    event_type="trace_patch_created",
+                    trace_id="tr-missing",
+                    step_index=3,
+                    capture_method=["watcher_backstop"],
+                    payload={
+                        "trace_patch_id": "missing-patch",
+                        "file_path": "missing.py",
+                        "affected_range": {"start_line": 1, "end_line": 1},
+                        "authored_text": missing,
+                        "raw_authored_hash": sha256_text(missing),
+                        "git_clean_hash": sha256_text(" ".join(missing.split())),
+                        "limitations": [],
+                    },
+                ),
+            ],
+            writer="test-fixture",
+        )
+
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_EVENTS", "1")
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_BYTES", "1")
+        summary = mature_trails(p, commit_refs=commit_shas)
+        assert summary.errors == []
+        assert summary.truncated is False
+        assert summary.searches_completed == 2 * len(commit_shas)
+
+        events = read_events(p)
+        search_events = [
+            event for event in events
+            if event.event_type == "git_anchor_search_completed"
+        ]
+        assert len(search_events) == len(commit_shas)
+        assert {event.payload["searched"] for event in search_events} == {2}
+        records = [
+            record
+            for event in search_events
+            for record in iter_search_records(event)
+        ]
+        keys = {
+            (record["trace_patch_id"], record["search_head_sha"])
+            for record in records
+        }
+        assert len(records) == len(keys) == 2 * len(commit_shas)
+        anchored_commits = {
+            record["search_head_sha"]
+            for record in records
+            if record["trace_patch_id"] == "collision-patch"
+            and record["result"] == "anchored"
+        }
+        assert anchored_commits == {commit_shas[0], commit_shas[2]}
+
     def test_chunked_maturation_matches_whole_pass_oracle(
         self, tmp_path, monkeypatch
     ) -> None:
         """Forced one-patch chunks must emit the same anchors and per-patch
-        search records as the pre-chunk whole-pass algorithm."""
-        from opentraces.core.trails.anchors import reconcile_commit_anchors
+        search records as a real ``mature_trails`` run with one whole chunk."""
         from opentraces.core.trails.maturation import mature_trails
-        from opentraces.core.trails.models import ATTRIBUTION_VERSION
         from opentraces.core.trails.search_records import iter_search_records
 
         seed = _init_project(tmp_path / "seed")
@@ -428,22 +639,11 @@ class TestWatcherSweep:
         shutil.copytree(seed, whole)
         shutil.copytree(seed, chunked)
 
-        patch_events = read_events_scoped(
-            whole, event_types={"trace_patch_created"}
-        )
-        anchor_keys: set[tuple] = set()
-        search_keys: set[tuple] = set()
-        for commit in commit_shas:
-            reconcile_commit_anchors(
-                whole,
-                commit,
-                writer="whole-pass-oracle",
-                capture_method=["trail_maturation"],
-                attribution_version=ATTRIBUTION_VERSION,
-                patch_events=patch_events,
-                anchor_keys=anchor_keys,
-                search_keys=search_keys,
-            )
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_EVENTS", "999")
+        monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_BYTES", str(1024 * 1024))
+        whole_summary = mature_trails(whole, commit_refs=commit_shas)
+        assert whole_summary.errors == []
+        assert whole_summary.truncated is False
 
         monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_EVENTS", "1")
         monkeypatch.setenv("OT_MATURATION_PATCH_CHUNK_MAX_BYTES", "1")
