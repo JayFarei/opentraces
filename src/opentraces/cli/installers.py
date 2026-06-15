@@ -2140,12 +2140,18 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
     default=False,
     help="Only update the skill file and hook, skip CLI upgrade",
 )
+@click.option(
+    "--integrations-only",
+    is_flag=True,
+    default=False,
+    help="Only re-render installed integration glue, skip CLI upgrade",
+)
 @click.pass_context
-def setup_upgrade(ctx: click.Context, skill_only: bool) -> None:
+def setup_upgrade(ctx: click.Context, skill_only: bool, integrations_only: bool) -> None:
     """Upgrade opentraces CLI and refresh the project skill file."""
     # Lazy import to avoid circular imports at module load time.
     from . import _upgrade_impl
-    _upgrade_impl(skill_only)
+    _upgrade_impl(skill_only, integrations_only=integrations_only)
 
 
 # ---------------------------------------------------------------------------

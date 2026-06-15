@@ -59,11 +59,48 @@ def doctor_cmd(security_only: bool) -> None:
         _cli.emit_json({"status": "ok", "doctor": trimmed})
     else:
         _render_doctor_human(report)
-        _cli.emit_json({"status": "ok", "doctor": report})
+        # Agent-consumer affordance: agents drive off the top-level
+        # next_command / next_steps contract, not buried doctor.cli fields.
+        # When a newer CLI is available (or deployed glue has drifted), make
+        # the action the agent should take explicit and machine-readable.
+        envelope = {"status": "ok", "doctor": report, **_upgrade_directive(report)}
+        _cli.emit_json(envelope)
 
     code = doctor.exit_code(report)
     if code:
         sys.exit(code)
+
+
+def _upgrade_directive(report: dict) -> dict:
+    """Top-level agent directive when the CLI/integrations need an upgrade.
+
+    Agents are told (in SKILL.md) to act on ``next_command`` / ``next_steps``.
+    A bare ``doctor.cli.upgrade_available: true`` is data, not an instruction,
+    so surface the action explicitly. A full ``setup upgrade`` also re-renders
+    integration glue, so a pending CLI upgrade takes priority over drift-only.
+    """
+    cli = report.get("cli") or {}
+    latest = cli.get("latest_version")
+    if cli.get("upgrade_available") and latest:
+        return {
+            "next_steps": [
+                f"A newer opentraces (v{latest}) is available (installed "
+                f"{cli.get('installed_version')}). Run 'opentraces setup upgrade' "
+                "to upgrade the CLI and re-render installed integrations."
+            ],
+            "next_command": "opentraces setup upgrade",
+        }
+    drift = (report.get("integrations") or {}).get("drift") or []
+    if drift:
+        names = ", ".join(str(item.get("name")) for item in drift)
+        return {
+            "next_steps": [
+                f"Deployed integration glue is out of date ({names}). Run "
+                "'opentraces setup upgrade --integrations-only' to re-render it."
+            ],
+            "next_command": "opentraces setup upgrade --integrations-only",
+        }
+    return {}
 
 
 # Marker glyphs. click.echo strips ANSI on non-TTY and respects NO_COLOR, so
@@ -368,14 +405,24 @@ def _claude_code_row(h: dict) -> None:
     if not h.get("installed"):
         _row("off", "claude-code", "not installed", detail="run 'opentraces setup claude-code'")
         return
-    _row("ok", "claude-code", "installed")
+    drift = h.get("drift") or []
+    detail = (
+        f"drift: {', '.join(drift)}; run 'opentraces setup upgrade --integrations-only'"
+        if drift else h.get("deployed_version")
+    )
+    _row("warn" if drift else "ok", "claude-code", "installed", detail=detail)
 
 
 def _codex_cli_row(h: dict) -> None:
     if not h.get("installed"):
         _row("off", "codex-cli", "not installed", detail="run 'opentraces setup codex-cli'")
         return
-    _row("ok", "codex-cli", "installed")
+    drift = h.get("drift") or []
+    detail = (
+        f"drift: {', '.join(drift)}; run 'opentraces setup upgrade --integrations-only'"
+        if drift else h.get("deployed_version")
+    )
+    _row("warn" if drift else "ok", "codex-cli", "installed", detail=detail)
 
 
 def _git_row(h: dict) -> None:
@@ -383,7 +430,12 @@ def _git_row(h: dict) -> None:
         reason = h.get("reason") or "not installed"
         _row("off", "git", reason, detail="run 'opentraces setup git'")
         return
-    _row("ok", "git", "post-commit hook active")
+    drift = h.get("drift") or []
+    detail = (
+        f"drift: {', '.join(drift)}; run 'opentraces setup upgrade --integrations-only'"
+        if drift else h.get("deployed_version")
+    )
+    _row("warn" if drift else "ok", "git", "post-commit hook active", detail=detail)
 
 
 def _opted_in_section(info: dict) -> None:
@@ -403,6 +455,18 @@ def _opted_in_section(info: dict) -> None:
 
 def _versions_section(report: dict) -> None:
     _section("Versions")
+    cli = report.get("cli") or {}
+    installed = cli.get("installed_version")
+    latest = cli.get("latest_version")
+    if installed:
+        detail = None
+        if cli.get("upgrade_available") and latest:
+            detail = f"v{latest} available; run 'opentraces setup upgrade'"
+        elif latest:
+            detail = f"latest: {latest} ({cli.get('check_state')})"
+        elif cli.get("check_state"):
+            detail = f"latest check: {cli.get('check_state')}"
+        _row("warn" if cli.get("upgrade_available") else "ok", "opentraces", installed, detail=detail)
     _row("ok", "security", report["security_version"])
     if report.get("schema_version"):
         _row("ok", "schema", report["schema_version"])
