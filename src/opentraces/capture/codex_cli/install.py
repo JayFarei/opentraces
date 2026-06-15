@@ -10,6 +10,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ...core.integration_versions import (
+    current_cli_version,
+    read_version_stamp,
+    stamp_script,
+    version_drift,
+)
 from .._base import HookInstallError, HookInstallResult
 from .sessions import codex_home
 
@@ -193,7 +199,7 @@ def install(
 
     result = InstallResult(hooks_file=target_hooks_file, plan=plan)
     for item in plan:
-        item.dest.write_text(item.source.read_text())
+        item.dest.write_text(stamp_script(item.source.read_text()))
         mode = item.dest.stat().st_mode
         item.dest.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         result.installed[item.event] = str(item.dest)
@@ -304,6 +310,12 @@ def status(
         event: (target_hooks_dir / name).exists()
         for event, name in EVENT_SCRIPTS.items()
     }
+    script_versions = {
+        event: read_version_stamp(target_hooks_dir / name)
+        if (target_hooks_dir / name).exists()
+        else None
+        for event, name in EVENT_SCRIPTS.items()
+    }
     registered: dict[str, bool] = {}
     try:
         config = _load_hooks_file(target_hooks_file)
@@ -316,10 +328,22 @@ def status(
         entries = hooks_cfg.get(event) or []
         registered[event] = isinstance(entries, list) and _module_registered(entries, Path(name).stem)
     installed = all(scripts_present.values()) and all(registered.values())
+    deployed_versions = sorted({v for v in script_versions.values() if v})
+    deployed_version = deployed_versions[0] if len(deployed_versions) == 1 else None
+    drift: list[str] = []
+    if installed:
+        if any(script_versions.get(event) is None for event in EVENT_SCRIPTS):
+            drift.append("version-missing")
+        if any(version_drift(version) == ["version-drift"] for version in script_versions.values() if version):
+            drift.append("version-drift")
     return {
         "installer": "codex-cli",
         "installed": installed,
         "scripts_present": scripts_present,
+        "script_versions": script_versions,
+        "deployed_version": deployed_version,
+        "cli_version": current_cli_version(),
+        "drift": drift,
         "registered": registered,
         "hooks_dir": str(target_hooks_dir),
         "hooks_file": str(target_hooks_file),

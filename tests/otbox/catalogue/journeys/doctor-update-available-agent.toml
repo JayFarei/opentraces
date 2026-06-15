@@ -1,0 +1,139 @@
+name = "doctor-update-available-agent"
+description = """
+Agent/JSON coverage for the cached/offline-safe latest-version check that
+PR #81 (issue #78) adds to `opentraces doctor` (doctor.cli). Proves all three
+states of the "update available" signal deterministically and WITHOUT touching
+the network, by seeding ~/.opentraces/version-check.json with a far-future
+checked_at so the cache never expires (read straight from disk, never hits PyPI):
+
+  1. latest "999.0.0"  -> upgrade_available == true,  check_state == "cached"
+     (and installed_version is reported). Upgrade-available is NOT integration
+     drift, so doctor still exits 0.
+  2. latest "0.0.1"    -> upgrade_available == false, check_state == "cached"
+     (older-than-installed latest is correctly not flagged as an upgrade).
+  3. OPENTRACES_DISABLE_VERSION_CHECK=1 -> check_state == "disabled",
+     upgrade_available == false (latest_version is JSON null, so we assert the
+     state, not absence of the key).
+
+Honest + deterministic: the cache file is the single lever, no real release
+exists, no network is reached, and each state is asserted on the structured
+doctor.cli payload rather than human prose.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+persona = "agent"
+
+# State 1: simulate a newer release available (far-future checked_at => never
+# expires, never hits the network).
+[[steps]]
+type = "shell"
+id = "seed-cache-newer"
+argv = ["sh", "-c", "mkdir -p \"$HOME/.opentraces\" && printf '%s' '{\"latest_version\":\"999.0.0\",\"checked_at\":9999999999,\"source\":\"pypi\"}' > \"$HOME/.opentraces/version-check.json\""]
+
+[[steps]]
+type = "cli"
+id = "doctor-newer"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-newer"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-newer"
+path = "doctor.cli.upgrade_available"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-newer"
+path = "doctor.cli.latest_version"
+equals = "999.0.0"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-newer"
+path = "doctor.cli.check_state"
+equals = "cached"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-newer"
+path = "doctor.cli.installed_version"
+
+# Agent-actionable directive: an agent consumer drives off the top-level
+# next_command / next_steps contract (not the buried doctor.cli flag), so an
+# available upgrade must surface an explicit instruction to perform it.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-newer"
+path = "next_command"
+equals = "opentraces setup upgrade"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor-newer"
+path = "next_steps"
+value = "setup upgrade"
+
+# State 2: an older "latest" must NOT register as an upgrade.
+[[steps]]
+type = "shell"
+id = "seed-cache-older"
+argv = ["sh", "-c", "mkdir -p \"$HOME/.opentraces\" && printf '%s' '{\"latest_version\":\"0.0.1\",\"checked_at\":9999999999,\"source\":\"pypi\"}' > \"$HOME/.opentraces/version-check.json\""]
+
+[[steps]]
+type = "cli"
+id = "doctor-older"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-older"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-older"
+path = "doctor.cli.upgrade_available"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-older"
+path = "doctor.cli.check_state"
+equals = "cached"
+
+# ...and no false upgrade directive is emitted when up to date.
+[[assertions]]
+kind = "stdout_json_path_absent"
+step = "doctor-older"
+path = "next_command"
+
+# State 3: explicit opt-out disables the check entirely.
+[[steps]]
+type = "cli"
+id = "doctor-disabled"
+argv = ["--json", "doctor"]
+env = { OPENTRACES_DISABLE_VERSION_CHECK = "1" }
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-disabled"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-disabled"
+path = "doctor.cli.check_state"
+equals = "disabled"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-disabled"
+path = "doctor.cli.upgrade_available"
+equals = false

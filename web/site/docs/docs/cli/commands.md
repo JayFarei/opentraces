@@ -128,6 +128,18 @@ opentraces setup skill --harness pi
 Omit `--harness` to refresh every supported harness link. Use
 `opentraces doctor` to verify the canonical skill copy and per-harness symlinks.
 
+A bare `opentraces setup upgrade` does the full stack: it upgrades the CLI via
+the detected install method (`pipx`, Homebrew, or pip; a `source`/editable
+install skips the package upgrade), re-renders every installed integration glue
+file (watcher shim, git post-commit hook, Claude Code and Codex CLI hooks, OTLP
+settings and autostart) re-stamped to the new version, and refreshes the project
+skill and hook if opted in. Two mutually exclusive flags narrow that scope:
+
+| Flag | Meaning |
+|------|---------|
+| `--integrations-only` | Re-render only already-installed integration glue to the current CLI version, with no CLI bump and without enabling new integrations |
+| `--skill-only` | Refresh only the skill file and hook, skip the CLI upgrade |
+
 ## Project Commands
 
 ```bash
@@ -141,6 +153,22 @@ opentraces doctor --security
 opentraces remove
 opentraces remove --all
 ```
+
+`opentraces doctor` also reports CLI freshness and integration version drift.
+Under `--json`, `doctor.cli` carries `installed_version`, `latest_version`,
+`upgrade_available`, `check_state` (`fresh`, `cached`, `stale-cache`,
+`unavailable`, `disabled`, or `unknown`), `source`, and `cache_path`. The
+latest-version lookup is an offline-safe, 24h-cached PyPI check; set
+`OPENTRACES_DISABLE_VERSION_CHECK=1` to disable it. `doctor.integrations`
+(`cli_version`, `items`, `drift`) reports each deployed integration glue file
+against the running CLI. Doctor emits a top-level `next_command` / `next_steps`
+directive for agents: `opentraces setup upgrade` when a newer CLI is available,
+or `opentraces setup upgrade --integrations-only` when only deployed glue has
+drifted. An available upgrade alone stays exit 0, but `doctor` exits 3 when an
+installed integration has version drift (alongside the existing broken-hook and
+invalid-trail exit-3 conditions). The human view shows a warn row
+"v\<latest\> available; run 'opentraces setup upgrade'" and per-integration
+"drift: ...; run 'opentraces setup upgrade --integrations-only'".
 
 `init --agent` accepts `claude`, `claude-code`, `codex`, `codex-cli`, or `pi`.
 `--import-existing` currently imports existing Claude Code traces for the

@@ -760,7 +760,7 @@
   forgotten the moment you exit the session.</p>
 
   <p>Git keeps the diff. The rest evaporates when the session ends, yet that
-  record is where improvement happens now.</p>
+  record is where improvement happens today.</p>
 
   <p><strong>opentraces</strong> is built to fill that gap: a local-first evidence
   layer for agent work. It captures what the agent saw, did, and changed into a
@@ -970,11 +970,10 @@
   <ul>
     <li><strong>Harness hooks</strong> record the session live, every prompt,
     tool call, and edit down to the lines it changed, for Claude Code, Codex, and
-    Pi. They fail open, so capture never blocks the agent.</li>
+    Pi.</li>
     <li>An <strong>OpenTelemetry receiver</strong> on localhost ingests the
     harness's own telemetry for a byte-exact view of the wire: the assembled
-    system prompt, tool schemas, and sampling parameters the hooks never see. It
-    is bypass-safe, if it is down the agent's traffic is untouched.</li>
+    system prompt, tool schemas, and sampling parameters the hooks never see.</li>
     <li>A <strong>file watcher</strong> diffs the working tree between polls and
     attributes each change to the step that made it, but only when it falls
     cleanly inside one tool's write window; the ambiguous is left unattributed,
@@ -1059,8 +1058,15 @@
 </div>
 
 <div class="wrap">
-  <p>Security tools run at two gates: once on capture into the bucket, and again
-  as rows are built for a dataset.</p>
+  <p>Security tools can run at two gates: before a trace is persisted to your
+  bucket, and again as part of a workflow when you build a dataset. They fall into
+  three categories: detectors that find and redact secrets and PII (regex, entropy,
+  TruffleHog, a local PII model), transformers that rewrite records like usernames
+  and paths, and a judge that scores risk, each pointed at the fields that matter.
+  All of them are designed to stop secrets and PII from leaking without flattening
+  the signal. Anonymizing a path, for example, maps it to the same stable token
+  everywhere it appears, so the structure and repetition a model can learn from
+  survive even when the literal value does not.</p>
   <p>The remote half (a private bucket mirror, dataset repos, compute for training
   runs) is standard Hugging Face infrastructure. opentraces ships the local half
   and the contracts.</p>
@@ -1069,10 +1075,10 @@
   row.</p>
   <p>It is inspectable and runs anywhere an agent that supports skills runs. And
   it is built to fail forward by escalating to you instead of failing silently.</p>
-  <p>Portable means you can run someone else's workflow over your own bucket,
-  under your own security pipeline, and contribute rows to a common dataset
+  <blockquote>Portable means you can run someone else's workflow over your own
+  bucket, under your own security pipeline, and contribute rows to a common dataset
   without sharing any other private bucket data. The workflow is the author's,
-  but the redaction and security rules that run are yours.</p>
+  but the redaction and security rules that run are yours.</blockquote>
   <p>Imagine a workflow that collects every episode around a new library. Or one
   that projects traces into the exact format you want to train on.</p>
   <p>The meta-loop this enables is the bigger point:</p>
@@ -1089,9 +1095,10 @@
 <section>
   <div class="rule-label">in practice</div>
   <h2>Practically: what does this do for me?</h2>
-  <p>Once sessions are captured and anchored, the questions you already ask in
-  standups, code review, and post-mortems stop being memory exercises.</p>
-  <p>Each one becomes a command at the terminal, or a sentence to your agent. The
+  <p>Once sessions are captured and anchored, they become your own personal
+  evidence store to create useful data projections.</p>
+  <p>The questions you already ask in standups, code review, and post-mortems each
+  become a command at the terminal, or a sentence to your agent. The
   entities and verbs are the interface: say <span class="rb">traces</span>,
   <span class="rb">intent</span>, <span class="rb">resume</span>,
   <span class="rb">dataset</span> and the agent reaches for the right command on
@@ -1133,7 +1140,7 @@
   <div class="abox" style="margin:14px 0 12px">
     <div class="line"><span>create me a <span class="rb">dataset</span> of every time you wrote the marketing newsletter with opus 4.8</span></div>
     <div class="line"><span>use the newsletter dataset with opus as the <span class="rb">label</span> and see how DeepSeek V4 Flash <span class="rb">scores</span> against it</span></div>
-    <div class="abox-foot">🤗 distillation + evals from your own usage data · expensive tokens buying cheaper ones</div>
+    <div class="abox-foot">🤗 evaluation from your own usage data can be run directly by the agent</div>
   </div>
 
   <p style="margin-top:20px">Creating one of those commands is a markdown file, not
@@ -1165,7 +1172,7 @@
   <p>Once capture exists, a consumer is cheap: a workflow that selects some permutation
   of the three planes from retained evidence, plus a renderer that sends that
   projection somewhere useful.</p>
-  <p>Not a new subsystem. Here are three examples.</p>
+  <p>Here are three examples.</p>
 
   <div class="case">
     <div class="case-kicker">consumer · trace capsule</div>
@@ -1286,9 +1293,12 @@
     after: runs scored against a calibrated rubric</p>
     <p>Take the newsletter example from earlier. Your team has a
     <span class="rb">/newsletter</span> skill and keeps tweaking it. Did this
-    month's changes make the agent better at the job? The verifier mines past runs
-    into a per-skill rubric, calibrates it against labels it can trust, and answers
-    with one scored line:</p>
+    month's changes make the agent better at the job?</p>
+    <p>The labels worth trusting here are concrete: the newsletter's own open and
+    click-through rates, a quality rubric (clear subject line, accurate summaries,
+    on-brand voice), and a blind read where a colleague ranks two versions without
+    knowing which is the new one. The verifier mines past runs into a per-skill
+    rubric, calibrates it against those labels, and answers with one scored line:</p>
     <div class="hub-panel">
       <div class="hub-panel-bar">skill intelligence · verifier<span class="hp-id">ot skill-verifier score newsletter</span></div>
       <div class="hub-panel-body">

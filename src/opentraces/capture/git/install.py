@@ -10,7 +10,6 @@ Plan 041 R21.
 
 from __future__ import annotations
 
-import os
 import shutil
 import stat
 import subprocess
@@ -18,6 +17,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from ...core.integration_versions import (
+    current_cli_version,
+    extract_version_stamp,
+    version_drift,
+)
 from ...enrichment.git.notes_store import NOTES_REF
 from .._base import HookInstallResult
 
@@ -34,6 +38,7 @@ NOTES_REFSPEC = f"+{NOTES_REF}:{NOTES_REF}"
 OWNED_HOOK_TEMPLATE = """\
 #!/usr/bin/env sh
 # Installed by opentraces. Plan 041. Safe to delete.
+# opentraces-version: {version}
 # Runs the post-commit correlator and appends notes on refs/notes/opentraces.
 # Never blocks git commit: any failure exits 0.
 set +e
@@ -47,7 +52,7 @@ exit 0
 def _owned_hook_content() -> str:
     """Render the shim with the current Python interpreter path baked in."""
     python = sys.executable or shutil.which("python3") or "python3"
-    return OWNED_HOOK_TEMPLATE.format(python=python)
+    return OWNED_HOOK_TEMPLATE.format(python=python, version=current_cli_version())
 
 
 # Back-compat for any caller that imported the constant directly.
@@ -182,13 +187,24 @@ def status(repo: Path) -> dict:
     owned = hooks_dir / HOOK_FILENAME
     pc = hooks_dir / "post-commit"
     has_owned = owned.exists()
+    hook_text = ""
+    if has_owned:
+        try:
+            hook_text = owned.read_text()
+        except OSError:
+            hook_text = ""
     has_chain = pc.exists() and CHAIN_BEGIN in pc.read_text()
+    deployed_version = extract_version_stamp(hook_text)
+    drift = version_drift(deployed_version) if has_owned and has_chain else []
     return {
         "installer": "git",
         "installed": has_owned and has_chain,
         "owned_hook_present": has_owned,
         "chain_present": has_chain,
         "hook_dir": str(hooks_dir),
+        "deployed_version": deployed_version,
+        "cli_version": current_cli_version(),
+        "drift": drift,
     }
 
 

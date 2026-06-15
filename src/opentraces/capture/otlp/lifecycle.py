@@ -20,6 +20,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ... import __version__
+from ...core.integration_versions import read_version_stamp, stamp_xml
 from ...core.paths import OPENTRACES_DIR
 
 logger = logging.getLogger("opentraces.otlp.lifecycle")
@@ -34,6 +36,7 @@ _PLIST = """\
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!-- opentraces-version: {version} -->
 <dict>
     <key>Label</key><string>com.opentraces.otlp-receiver</string>
     <key>ProgramArguments</key>
@@ -53,6 +56,7 @@ _PLIST = """\
 
 _UNIT = """\
 [Unit]
+# opentraces-version: {version}
 Description=opentraces OTLP receiver
 After=network.target
 
@@ -156,7 +160,11 @@ def install_autostart(
                 ),
             )
         LAUNCHD_PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        LAUNCHD_PLIST_PATH.write_text(_PLIST.format(bin=str(binary), log_dir=str(ld)))
+        LAUNCHD_PLIST_PATH.write_text(stamp_xml(_PLIST.format(
+            bin=str(binary),
+            log_dir=str(ld),
+            version=__version__,
+        )))
         rc, err = _run(["launchctl", "load", "-w", str(LAUNCHD_PLIST_PATH)])
         if rc == 0:
             return InstallResult(ok=True, platform="darwin", path=LAUNCHD_PLIST_PATH)
@@ -168,7 +176,11 @@ def install_autostart(
 
     # linux
     SYSTEMD_UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SYSTEMD_UNIT_PATH.write_text(_UNIT.format(bin=str(binary), log_dir=str(ld)))
+    SYSTEMD_UNIT_PATH.write_text(_UNIT.format(
+        bin=str(binary),
+        log_dir=str(ld),
+        version=__version__,
+    ))
     rc, err = _run(["systemctl", "--user", "daemon-reload"])
     if rc != 0:
         return InstallResult(
@@ -224,6 +236,20 @@ def is_installed() -> bool:
     if plat == "linux":
         return SYSTEMD_UNIT_PATH.exists()
     return False
+
+
+def autostart_path() -> Path | None:
+    plat = _plat()
+    if plat == "darwin":
+        return LAUNCHD_PLIST_PATH
+    if plat == "linux":
+        return SYSTEMD_UNIT_PATH
+    return None
+
+
+def autostart_version() -> str | None:
+    path = autostart_path()
+    return read_version_stamp(path) if path else None
 
 
 def _pid_from_file() -> int | None:

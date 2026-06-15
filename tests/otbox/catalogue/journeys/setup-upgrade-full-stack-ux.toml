@@ -1,0 +1,103 @@
+name = "setup-upgrade-full-stack-ux"
+description = """
+Issue #78 (PR #81) HUMAN/UX arc for integration version-drift repair. This is
+the human-readable sibling of the JSON drift journey: it proves the operator-
+facing surface of the full-stack update flow, end to end, on a real world.
+
+The world seed installs the git post-commit hook stamped with a
+`# opentraces-version: <current>` line. The arc:
+
+  1. Stale that stamp to 0.0.1 (portable in-place rewrite) to induce
+     deterministic version-drift with zero network access.
+  2. `opentraces doctor` then EXITS 3 and the git row renders the warn
+     detail `drift: version-drift; run 'opentraces setup upgrade
+     --integrations-only'` — we assert both the `drift` signal and the
+     exact remediation hint a human would read off the screen.
+  3. `opentraces setup upgrade --integrations-only` re-renders the installed
+     stack and prints `Re-rendered installed integrations: git.` (git was
+     the only INSTALLED glue) — we assert the human confirmation line names
+     `git`.
+  4. `opentraces doctor` exits 0 and the `drift:` detail is GONE — the git
+     row falls back to its plain deployed-version detail, proving the warn
+     cleared.
+
+Honest + deterministic: drift is induced by an in-place file edit (no clock,
+no network); the latest-version check never runs (no cache seeded, default
+offline behavior), so the only warn surfaced is the integration drift we
+caused. `drift:` (with the colon) is the chosen post-repair sentinel because
+it appears verbatim in the pre-repair warn detail and cannot appear in the
+healthy `ok` row. Confirmed against `cli/doctor_cli.py::_git_row` and
+`cli/__init__.py::_render_integration_repair_summary` on this branch.
+"""
+lane = "core"
+tier = 0
+persona = "human"
+seed = "world"
+requires = ["cli", "git"]
+
+# --- 1. induce version-drift on the installed git hook --------------------
+[[steps]]
+type = "shell"
+id = "stale-git-hook"
+argv = ["python3", "-c", "import re;p='.git/hooks/opentraces-post-commit';t=open(p).read();open(p,'w').write(re.sub(r'opentraces-version: \\S+','opentraces-version: 0.0.1',t))"]
+
+# --- 2. human doctor under drift: exits 3, warns, names remediation -------
+[[steps]]
+type = "cli"
+id = "doctor-drift"
+argv = ["doctor"]
+expect_returncode = 3
+
+# --- 3. re-render the full installed integration stack --------------------
+[[steps]]
+type = "cli"
+id = "upgrade-integrations"
+argv = ["setup", "upgrade", "--integrations-only"]
+
+# --- 4. human doctor after repair: exits 0, warn is gone ------------------
+[[steps]]
+type = "cli"
+id = "doctor-clean"
+argv = ["doctor"]
+
+# === assertions ===========================================================
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-drift"
+equals = 3
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-drift"
+value = "drift"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-drift"
+value = "setup upgrade --integrations-only"
+
+[[assertions]]
+kind = "returncode"
+step = "upgrade-integrations"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "upgrade-integrations"
+value = "Re-rendered installed integrations"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "upgrade-integrations"
+value = "git"
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-clean"
+equals = 0
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor-clean"
+value = "drift:"

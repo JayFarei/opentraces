@@ -1682,7 +1682,12 @@ def render_transcript(
         # (venv shims / OT_CLI_BIN wrappers would leak absolute paths
         # into the committed artifact). Shell steps keep their argv.
         if step.type == "cli" and isinstance(step.detail, dict) and step.detail.get("argv"):
-            return _redact("opentraces " + " ".join(str(a) for a in step.detail["argv"]))
+            tokens = [str(a) for a in step.detail["argv"]]
+            # The stored cli argv may already carry the driver's
+            # `opentraces` prefix; strip it so we render exactly one.
+            if tokens and tokens[0] == "opentraces":
+                tokens = tokens[1:]
+            return _redact("opentraces " + " ".join(tokens))
         if step.result and step.result.argv:
             return _redact(" ".join(step.result.argv))
         return step.step_id
