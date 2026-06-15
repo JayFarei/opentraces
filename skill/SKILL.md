@@ -60,7 +60,10 @@ opentraces doctor
 `doctor.cli`: `{installed_version, latest_version, upgrade_available}`. When
 `upgrade_available` is true, run `opentraces setup upgrade`; when doctor reports
 integration drift, run `opentraces setup upgrade --integrations-only` to
-re-render already-installed glue without enabling new integrations.
+re-render already-installed glue without enabling new integrations. You do not
+need to inspect `doctor.cli` yourself: when an upgrade or repair is warranted,
+`doctor --json` also surfaces the action at the top-level `next_command` /
+`next_steps` fields (the standard agent contract) — run that `next_command`.
 
 `setup` is machine-global: tracking mode, hooks, auth, watcher, TruffleHog,
 LLM review, and supporting binaries. Tracking mode (`opentraces config

@@ -149,3 +149,89 @@ def test_doctor_surfaces_upgrade_available_for_user_and_agent(
     assert cli["installed_version"] == __version__
     assert cli["latest_version"] == "999.0.0"
     assert cli["upgrade_available"] is True
+
+
+def test_doctor_emits_agent_next_command_when_upgrade_available(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Agent consumers drive off top-level next_command / next_steps, not the
+    buried doctor.cli.upgrade_available flag. An available upgrade must surface
+    an explicit, machine-actionable directive to run the upgrade."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "opentraces.core.integration_versions._fetch_latest_pypi_version",
+        lambda: "999.0.0",
+    )
+
+    result = CliRunner().invoke(main, ["--json", "doctor"])
+
+    assert result.exit_code == 0, result.output
+    payload = _parse_last_json(result.output)
+    assert payload["next_command"] == "opentraces setup upgrade"
+    assert payload["next_steps"]
+    assert "999.0.0" in payload["next_steps"][0]
+    assert "setup upgrade" in payload["next_steps"][0]
+
+
+def test_doctor_next_command_is_integrations_only_on_drift_without_upgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """With no newer CLI but drifted glue, the agent directive points at the
+    integrations-only repair (not a full CLI upgrade)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "opentraces.core.integration_versions._fetch_latest_pypi_version",
+        lambda: __version__,
+    )
+    _init_git_repo(tmp_path)
+    _install_then_stale_git_hook(tmp_path)
+
+    result = CliRunner().invoke(main, ["--json", "doctor"])
+
+    assert result.exit_code == 3, result.output
+    payload = _parse_last_json(result.output)
+    assert payload["next_command"] == "opentraces setup upgrade --integrations-only"
+    assert "git" in payload["next_steps"][0]
+
+
+def test_doctor_directive_prefers_full_upgrade_over_drift_repair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """When BOTH a newer CLI and drifted glue exist, the agent directive points
+    at the full `setup upgrade` (which also re-renders glue), even though the
+    exit code stays 3 because of the drift."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "opentraces.core.integration_versions._fetch_latest_pypi_version",
+        lambda: "999.0.0",
+    )
+    _init_git_repo(tmp_path)
+    _install_then_stale_git_hook(tmp_path)
+
+    result = CliRunner().invoke(main, ["--json", "doctor"])
+
+    assert result.exit_code == 3, result.output
+    payload = _parse_last_json(result.output)
+    assert payload["next_command"] == "opentraces setup upgrade"
+
+
+def test_doctor_emits_no_directive_when_healthy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A healthy, up-to-date install emits no upgrade directive."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "opentraces.core.integration_versions._fetch_latest_pypi_version",
+        lambda: __version__,
+    )
+
+    result = CliRunner().invoke(main, ["--json", "doctor"])
+
+    assert result.exit_code == 0, result.output
+    payload = _parse_last_json(result.output)
+    assert "next_command" not in payload
+    assert "next_steps" not in payload

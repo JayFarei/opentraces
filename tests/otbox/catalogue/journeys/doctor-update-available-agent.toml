@@ -65,6 +65,21 @@ kind = "stdout_json"
 step = "doctor-newer"
 path = "doctor.cli.installed_version"
 
+# Agent-actionable directive: an agent consumer drives off the top-level
+# next_command / next_steps contract (not the buried doctor.cli flag), so an
+# available upgrade must surface an explicit instruction to perform it.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-newer"
+path = "next_command"
+equals = "opentraces setup upgrade"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor-newer"
+path = "next_steps"
+value = "setup upgrade"
+
 # State 2: an older "latest" must NOT register as an upgrade.
 [[steps]]
 type = "shell"
@@ -92,6 +107,12 @@ kind = "stdout_json"
 step = "doctor-older"
 path = "doctor.cli.check_state"
 equals = "cached"
+
+# ...and no false upgrade directive is emitted when up to date.
+[[assertions]]
+kind = "stdout_json_path_absent"
+step = "doctor-older"
+path = "next_command"
 
 # State 3: explicit opt-out disables the check entirely.
 [[steps]]

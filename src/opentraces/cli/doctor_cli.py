@@ -59,11 +59,48 @@ def doctor_cmd(security_only: bool) -> None:
         _cli.emit_json({"status": "ok", "doctor": trimmed})
     else:
         _render_doctor_human(report)
-        _cli.emit_json({"status": "ok", "doctor": report})
+        # Agent-consumer affordance: agents drive off the top-level
+        # next_command / next_steps contract, not buried doctor.cli fields.
+        # When a newer CLI is available (or deployed glue has drifted), make
+        # the action the agent should take explicit and machine-readable.
+        envelope = {"status": "ok", "doctor": report, **_upgrade_directive(report)}
+        _cli.emit_json(envelope)
 
     code = doctor.exit_code(report)
     if code:
         sys.exit(code)
+
+
+def _upgrade_directive(report: dict) -> dict:
+    """Top-level agent directive when the CLI/integrations need an upgrade.
+
+    Agents are told (in SKILL.md) to act on ``next_command`` / ``next_steps``.
+    A bare ``doctor.cli.upgrade_available: true`` is data, not an instruction,
+    so surface the action explicitly. A full ``setup upgrade`` also re-renders
+    integration glue, so a pending CLI upgrade takes priority over drift-only.
+    """
+    cli = report.get("cli") or {}
+    latest = cli.get("latest_version")
+    if cli.get("upgrade_available") and latest:
+        return {
+            "next_steps": [
+                f"A newer opentraces (v{latest}) is available (installed "
+                f"{cli.get('installed_version')}). Run 'opentraces setup upgrade' "
+                "to upgrade the CLI and re-render installed integrations."
+            ],
+            "next_command": "opentraces setup upgrade",
+        }
+    drift = (report.get("integrations") or {}).get("drift") or []
+    if drift:
+        names = ", ".join(str(item.get("name")) for item in drift)
+        return {
+            "next_steps": [
+                f"Deployed integration glue is out of date ({names}). Run "
+                "'opentraces setup upgrade --integrations-only' to re-render it."
+            ],
+            "next_command": "opentraces setup upgrade --integrations-only",
+        }
+    return {}
 
 
 # Marker glyphs. click.echo strips ANSI on non-TTY and respects NO_COLOR, so
