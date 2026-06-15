@@ -7,6 +7,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-06-15
+
+### Added
+
+- **`opentraces trace skills`** ranks the skills observed across a project's
+  captured traces by snapshot-backed invocation usage (`--skill` for an exact
+  match, `--cwd` to scope to the current opted-in project, `--json` for the
+  structured packet). Reads the existing trace snapshot — no reindex, no remote
+  pull. A companion skill-usage dataset workflow projects that signal into
+  HF-shaped rows.
+
 ### Changed
 
 - **opentraces moved to its own Homebrew tap.** `brew install
@@ -18,6 +29,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one left pointing at the old repo after the move — by re-pointing it at the
   dedicated repo before upgrading. The installed binary is unaffected; the
   install command is unchanged.
+
+### Fixed
+
+- **Baked agent/git hook commands now resolve a stable interpreter across a
+  `brew upgrade` (#86).** A Homebrew upgrade deletes the versioned Cellar path
+  baked into the Claude Code, Codex, and git post-commit hook commands, which
+  made hooks fail with exit 127. The installers now pin the brew `opt/<formula>`
+  handle (realpath'd at the directory level so a venv python symlink chain
+  doesn't defeat it) so hooks survive version bumps.
 
 ## [0.4.5] - 2026-06-15
 
