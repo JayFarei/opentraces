@@ -244,7 +244,11 @@ _CORPUS_SCRIPT = textwrap.dedent("""
     from opentraces.core.trails import reconcile_watcher_observations
     repo = Path(sys.argv[1])
     summary = reconcile_watcher_observations(repo)
-    peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+    # ru_maxrss units are platform-dependent: kilobytes on Linux, bytes on
+    # macOS/BSD. Normalize to MB per platform — dividing by 1024**2 on Linux
+    # underreports by 1024x and collapses every peak to 0MB (CI false red).
+    _maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    peak_mb = _maxrss / 1024 if sys.platform.startswith("linux") else _maxrss / (1024 * 1024)
     print(f"{peak_mb:.0f} {summary['attributed']}")
 """)
 
