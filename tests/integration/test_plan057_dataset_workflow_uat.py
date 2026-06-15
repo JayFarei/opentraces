@@ -215,8 +215,16 @@ def test_dataset_run_packet_carries_query_source_provenance():
     assert run_packet["source_provenance"]["schema_version"] == (
         "opentraces.dataset.source_provenance.v1"
     )
-    assert run_packet["source_provenance"]["bucket_snapshot"]["capture_mode"] == "deferred"
-    assert run_packet["source_provenance"]["bucket_manifest"]["capture_mode"] == "deferred"
+    # `dataset new` defers the bucket snapshot for fast creation, but `dataset
+    # run` is the moment the bucket is projected into rows, so the run packet
+    # carries the real captured bucket snapshot (digest), not the deferred
+    # placeholder.
+    assert run_packet["source_provenance"]["bucket_snapshot"]["digest"].startswith(
+        "sha256:"
+    )
+    assert run_packet["source_provenance"]["bucket_manifest"]["digest"].startswith(
+        "sha256:"
+    )
     assert run_packet["source_provenance"]["query_fingerprint"]
 
 

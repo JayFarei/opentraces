@@ -322,7 +322,8 @@
    "keep_warm",
    "legacy_index",
    "search_snapshot",
-   "status"
+   "status",
+   "telemetry"
   ]
  },
  "trace index refresh": {
@@ -341,6 +342,21 @@
    "db_sizes",
    "search_snapshot",
    "status"
+  ]
+ },
+ "trace skills": {
+  "schema_version": null,
+  "top_level_keys": [
+   "has_more",
+   "limit",
+   "next_page_token",
+   "search_diagnostics",
+   "skills",
+   "source",
+   "status",
+   "telemetry",
+   "total_invocations",
+   "total_skills"
   ]
  },
  "trail graph": {

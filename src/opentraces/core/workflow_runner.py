@@ -42,6 +42,8 @@ from .datasets import (
     read_json,
     read_source_provenance,
     save_manifest,
+    source_provenance_for_query,
+    write_source_provenance,
 )
 from .workflows import WorkflowPackage, load_workflow, resolve_workflow_reference
 
@@ -66,6 +68,48 @@ class DatasetRunResult:
     run_record: DatasetRunRecord
     append_summary: AppendSummary
     cursor_advanced: bool
+
+
+def _is_deferred_provenance(provenance: dict[str, Any] | None) -> bool:
+    """A dataset created via the fast ``dataset new`` path defers the bucket
+    snapshot (``capture_mode == "deferred"``). The run is the moment the bucket
+    is actually projected into rows, so the run-time provenance must reflect the
+    real bucket state at that point."""
+    if not isinstance(provenance, dict):
+        return True
+    manifest = provenance.get("bucket_manifest")
+    if not isinstance(manifest, dict):
+        return True
+    if manifest.get("capture_mode") == "deferred":
+        return True
+    return "digest" not in manifest
+
+
+def _ensure_run_source_provenance(
+    dataset, *, dry_run: bool
+) -> dict[str, Any] | None:
+    """Return the source provenance for this run, capturing the real bucket
+    snapshot if the stored provenance was deferred at ``dataset new`` time.
+
+    On a real (non-dry) run the captured provenance is persisted to
+    ``source_provenance.json`` so downstream ``_build_row_provenance`` (which
+    re-reads it from disk per row) records the same real bucket lineage.
+    """
+    stored = read_source_provenance(dataset.path)
+    if not _is_deferred_provenance(stored):
+        return stored
+    candidate_query = dataset.manifest.candidate_query
+    if candidate_query is None:
+        return stored
+    refreshed = source_provenance_for_query(
+        candidate_query,
+        include_bucket_snapshot=True,
+    )
+    if refreshed is None:
+        return stored
+    if not dry_run:
+        write_source_provenance(dataset.path, refreshed)
+    return refreshed
 
 
 def run_dataset_workflow(
@@ -93,7 +137,7 @@ def run_dataset_workflow(
     schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
     schema_digest = dataset.manifest.schema_ref.digest or digest_payload(schema)
     workflow_digest = dataset.manifest.workflow.digest
-    source_provenance = read_source_provenance(dataset.path)
+    source_provenance = _ensure_run_source_provenance(dataset, dry_run=dry_run)
     trail_freshness = _trail_freshness_for_dataset(dataset, scope or {"scope": "all-projects"})
     trail_warnings = [
         item for item in trail_freshness if item.get("severity") == "warning"
