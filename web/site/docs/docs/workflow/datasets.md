@@ -10,6 +10,14 @@ opentraces workflow create my-workflow --template default
 opentraces dataset new my-dataset --workflow ./workflows/my-workflow/
 ```
 
+Skill-episode datasets can start from observed skill usage without writing a
+custom workflow:
+
+```bash
+opentraces trace skills --json
+opentraces dataset new opentraces-episodes --from-skill opentraces
+```
+
 Ad-hoc row seeding is available when you already have JSONL:
 
 ```bash
@@ -21,13 +29,16 @@ opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 ```bash
 opentraces dataset run my-dataset --dry-run --limit 5 --json
 opentraces dataset run my-dataset
+opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset run my-dataset --scope trace --trace <trace-id>
 opentraces dataset run my-dataset --since-last-run
 ```
 
 `dataset run` invokes the workflow and appends rows locally. It can read from
-Trace Index candidates, a project scope, the current working directory, or a
-specific trace.
+Trace Index candidates, a project scope, the current working directory, a
+specific trace, or the saved skill query from `dataset new --from-skill`.
+The `script` executor runs the workflow package's deterministic
+`scripts/build_rows.py` without a live agent.
 
 ## Dataset Security Policy
 

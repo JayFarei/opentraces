@@ -274,6 +274,41 @@ def test_trace_query_map_get_json_cli_round_trip(tmp_path):
     assert get_payload["trace"]["steps"][0]["content"].startswith("Use grill-me")
 
 
+def test_trace_skills_json_lists_usage_from_snapshot(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    primary = _trace()
+    primary.steps[1].tool_calls.append(
+        ToolCall(
+            tool_call_id="tc-skill-second",
+            tool_name="Skill",
+            input={"name": "grill-me"},
+        )
+    )
+    _write_project_trace(project, primary)
+
+    other = _trace().model_copy(deep=True)
+    other.trace_id = "trace-plan056-cli-opentraces"
+    other.session_id = "session-plan056-cli-opentraces"
+    other.task.description = "Use opentraces to inspect skill traces"
+    other.steps[1].tool_calls[0].input["name"] = "opentraces"
+    _write_project_trace(project, other)
+
+    result = CliRunner().invoke(main, ["trace", "skills", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["source"] == "snapshot"
+    assert payload["total_skills"] == 2
+    assert payload["total_invocations"] == 3
+    assert payload["skills"][0]["skill_name"] == "grill-me"
+    assert payload["skills"][0]["invocation_count"] == 2
+    assert payload["skills"][0]["trace_count"] == 1
+    assert payload["search_diagnostics"]["raw_trace_scan"] is False
+    assert payload["telemetry"]["duration_ms"] >= 0
+
+
 def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")

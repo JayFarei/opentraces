@@ -21,8 +21,10 @@ The bridge is intentionally additive:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import datasets as _datasets
@@ -40,6 +42,7 @@ DEFAULT_INBOX_DESCRIPTION = (
 
 DEFAULT_INBOX_WORKFLOW_SKILL = "default-inbox-bridge"
 DEFAULT_INBOX_WORKFLOW_DIGEST = "sha256:default-inbox-bridge-v1"
+DEFAULT_INBOX_BRIDGE_SCHEMA = "opentraces.default_inbox_bridge.v1"
 
 
 # Map TraceStatus → publication-state status. Anything outside this map is
@@ -119,6 +122,15 @@ def migrate_project_inbox_state(project_dir: Path | None = None) -> BridgeResult
             skipped_existing=False,
         )
 
+    project_id = _config._project_id_for(project_dir)
+    run_id = f"default-inbox-bridge:{project_id}"
+    if _bridge_already_migrated(project_dir, run_id):
+        return BridgeResult(
+            created=_datasets.dataset_path(DEFAULT_INBOX_NAME).exists(),
+            migrated_row_count=0,
+            skipped_existing=True,
+        )
+
     state_path = _config.get_project_state_path(project_dir)
     if not state_path.exists():
         return BridgeResult(
@@ -149,7 +161,6 @@ def migrate_project_inbox_state(project_dir: Path | None = None) -> BridgeResult
     # Build placeholder rows — the schema is the default (source_trace_id,
     # source_unit_id, summary). We use a stable run_id keyed off the
     # project so re-runs dedupe instead of appending duplicates.
-    run_id = f"default-inbox-bridge:{_config._project_id_for(project_dir)}"
     rows = [
         {
             "source_trace_id": trace_id,
@@ -188,12 +199,76 @@ def migrate_project_inbox_state(project_dir: Path | None = None) -> BridgeResult
     # ``evaluate_publication_state`` for the appended ids, which puts
     # them in ``needs_review`` under the default ``review: required``
     # policy.
+    _write_bridge_marker(project_dir, run_id, migrated_row_count=summary.appended_count)
 
     return BridgeResult(
         created=dataset.path.exists(),
         migrated_row_count=summary.appended_count,
         skipped_existing=False,
     )
+
+
+def _bridge_marker_path(project_dir: Path) -> Path:
+    from . import config as _config
+
+    return _config.get_project_dir(project_dir) / "default_inbox_bridge_v1.json"
+
+
+def _bridge_already_migrated(project_dir: Path, run_id: str) -> bool:
+    marker_path = _bridge_marker_path(project_dir)
+    if marker_path.exists():
+        return True
+    if _legacy_row_provenance_has_run(run_id):
+        _write_bridge_marker(
+            project_dir,
+            run_id,
+            migrated_row_count=0,
+            source="row_provenance",
+        )
+        return True
+    return False
+
+
+def _legacy_row_provenance_has_run(run_id: str) -> bool:
+    path = _datasets.row_provenance_path(DEFAULT_INBOX_NAME)
+    if not path.exists():
+        return False
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                if run_id not in line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and payload.get("run_id") == run_id:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _write_bridge_marker(
+    project_dir: Path,
+    run_id: str,
+    *,
+    migrated_row_count: int,
+    source: str = "migration",
+) -> None:
+    marker_path = _bridge_marker_path(project_dir)
+    payload = {
+        "schema_version": DEFAULT_INBOX_BRIDGE_SCHEMA,
+        "run_id": run_id,
+        "source": source,
+        "migrated_row_count": migrated_row_count,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        logger.debug("default-inbox bridge marker write failed: %s", marker_path)
 
 
 def run_bridge_once(project_dir: Path | None = None) -> BridgeResult:

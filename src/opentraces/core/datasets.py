@@ -338,12 +338,18 @@ def apply_dataset_security_edit(
     return new_policy, changes
 
 
-def _source_provenance_for_query(
-    query: DatasetCandidateQuery | None,
+def source_provenance_for_query(
+    query: DatasetCandidateQuery | dict[str, Any] | None,
+    *,
+    include_bucket_snapshot: bool = True,
 ) -> dict[str, Any] | None:
     if query is None:
         return None
-    from .bucket_store import bucket_manifest, trace_record_snapshot
+    query_model = (
+        query
+        if isinstance(query, DatasetCandidateQuery)
+        else DatasetCandidateQuery.model_validate(query)
+    )
 
     projection: dict[str, Any] | None = None
     try:
@@ -361,21 +367,41 @@ def _source_provenance_for_query(
             }
     except Exception:
         projection = None
-    manifest_snapshot = bucket_manifest(write=False, include_objects=False)
-    return {
+
+    payload: dict[str, Any] = {
         "schema_version": SOURCE_PROVENANCE_SCHEMA,
-        "bucket_snapshot": trace_record_snapshot(include_objects=False),
-        "bucket_manifest": {
+        "projection": projection,
+        "query_fingerprint": digest_payload(query_model.model_dump(mode="json")),
+    }
+    if include_bucket_snapshot:
+        from .bucket_store import bucket_manifest, trace_record_snapshot
+
+        manifest_snapshot = bucket_manifest(write=False, include_objects=False)
+        payload["bucket_snapshot"] = trace_record_snapshot(include_objects=False)
+        payload["bucket_manifest"] = {
             "digest": manifest_snapshot.get("digest"),
             "updated_at": manifest_snapshot.get("updated_at"),
             "trace_records": manifest_snapshot.get("trace_records"),
             "raw_sources": manifest_snapshot.get("raw_sources"),
             "trail_events": manifest_snapshot.get("trail_events"),
             "sync": manifest_snapshot.get("sync"),
-        },
-        "projection": projection,
-        "query_fingerprint": digest_payload(query.model_dump(mode="json")),
-    }
+        }
+    else:
+        payload["bucket_snapshot"] = {
+            "capture_mode": "deferred",
+            "reason": "fast_query_dataset_create",
+        }
+        payload["bucket_manifest"] = {
+            "capture_mode": "deferred",
+            "reason": "fast_query_dataset_create",
+        }
+    return payload
+
+
+def _source_provenance_for_query(
+    query: DatasetCandidateQuery | None,
+) -> dict[str, Any] | None:
+    return source_provenance_for_query(query)
 
 
 def source_provenance_path(root: Path | str) -> Path:
@@ -736,7 +762,9 @@ def _build_row_provenance(
     bucket_snapshot = dataset_source.get("bucket_snapshot") or {}
     bucket_manifest_snapshot = dataset_source.get("bucket_manifest") or {}
     trail_events = bucket_manifest_snapshot.get("trail_events") or {}
-    trace_record_ref = _bucket_record_ref(source_refs.get("trace_id"))
+    trace_record_ref = None
+    if bucket_snapshot.get("capture_mode") != "deferred":
+        trace_record_ref = _bucket_record_ref(source_refs.get("trace_id"))
     return {
         "schema_version": "opentraces.dataset.row_provenance.v1",
         "row_id": row_id,
@@ -2023,5 +2051,3 @@ def _append_lock(root: Path, *, timeout: float = 30.0):
 
 def _canonical_json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-

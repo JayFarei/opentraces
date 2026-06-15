@@ -304,12 +304,29 @@ def build_episode_rows(
 ) -> list[dict[str, Any]]:
     """Project Trace Index skill units into ``skill-episodes-v1`` rows."""
 
-    records = _records_by_trace_id(project)
-    rows = [
-        _episode_row_from_unit(unit, records.get(unit.trace_id))
-        for unit in _refresh_skill_units(project=project, index_path=index_path)
-        if _unit_skill(unit) == selected_skill
-    ]
+    if index_path is None:
+        try:
+            from ...core.trace_search_snapshot import list_skill_invocation_units
+
+            units = list_skill_invocation_units(
+                skill=selected_skill,
+                project=project,
+            )
+            rows = [_episode_row_from_unit(unit, None) for unit in units]
+        except Exception:
+            records = _records_by_trace_id(project)
+            rows = [
+                _episode_row_from_unit(unit, records.get(unit.trace_id))
+                for unit in _refresh_skill_units(project=project, index_path=index_path)
+                if _unit_skill(unit) == selected_skill
+            ]
+    else:
+        records = _records_by_trace_id(project)
+        rows = [
+            _episode_row_from_unit(unit, records.get(unit.trace_id))
+            for unit in _refresh_skill_units(project=project, index_path=index_path)
+            if _unit_skill(unit) == selected_skill
+        ]
     rows.sort(key=lambda row: (row["source_trace_id"], row["source_unit_id"]))
     if len(rows) < min_rows:
         rows.extend(_seed_episode_rows(selected_skill, start=len(rows), count=min_rows - len(rows)))

@@ -215,7 +215,8 @@ def test_dataset_run_packet_carries_query_source_provenance():
     assert run_packet["source_provenance"]["schema_version"] == (
         "opentraces.dataset.source_provenance.v1"
     )
-    assert run_packet["source_provenance"]["bucket_snapshot"]["object_count"] == 0
+    assert run_packet["source_provenance"]["bucket_snapshot"]["capture_mode"] == "deferred"
+    assert run_packet["source_provenance"]["bucket_manifest"]["capture_mode"] == "deferred"
     assert run_packet["source_provenance"]["query_fingerprint"]
 
 

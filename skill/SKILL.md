@@ -16,7 +16,7 @@ publishes reviewed dataset rows to HuggingFace remotes.
 
 - Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
-- Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
+- Trace retrieval and search: `opentraces trace query`, `opentraces trace skills`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
 - Trace Intelligence: `opentraces trace map|get --waste`, `opentraces trace map|get --run-intel`, `opentraces trace compare`
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
@@ -116,7 +116,9 @@ transcripts.
 opentraces trace query --lex "bug fix failing test" --json
 opentraces trace query --cwd --json  # remote traces: opentraces bucket remote pull first
 opentraces trace query --skill grill-me --json
-opentraces trace index rebuild --json
+opentraces trace skills --json
+opentraces trace skills --skill grill-me --json
+opentraces trace index --json
 opentraces trace map <trace_id> --candidate <unit_id> --json
 opentraces trace slice <trace_id> --template bursts --json
 opentraces trace get <trace_id> --json
@@ -128,7 +130,9 @@ opentraces trace teleport export <trace_id> --output <dir>
 ```
 
 `trace query` returns bounded candidate packets over the local BM25 +
-semantic Trace Index. `trace index` rebuilds and inspects that projection.
+semantic Trace Index. `trace skills` lists observed skills ranked by
+snapshot-backed invocation usage. `trace index --json` refreshes and reports
+the local search snapshot with stage telemetry.
 `trace map` returns a workflow-neutral evidence map or candidate slice.
 `trace slice` materialises deterministic Trace Slice packets for dataset
 workflows. `trace get` is the explicit full retrieval step. `trace
@@ -320,10 +324,14 @@ opentraces workflow list --json
 opentraces workflow remove <name> --yes
 opentraces dataset new <name> --workflow ./workflows/<workflow>/WORKFLOW.md
 opentraces dataset new <name> --workflow ./workflows/<workflow>/
+opentraces dataset new <name> --from-skill <skill>
+opentraces dataset run <name> --executor script --json
 ```
 
 The bundled `skill-command-trajectory-eval-v1` template materialises a ready
-workflow that emits command-trajectory evaluation rows.
+workflow that emits command-trajectory evaluation rows. `--from-skill` binds
+the built-in `skill-episodes-v1` workflow to a snapshot-backed skill query so
+agents can turn a ranked skill from `trace skills` into reviewable episode rows.
 
 ## Skill Verifier
 
@@ -361,9 +369,11 @@ review/security gates pass.
 ```bash
 opentraces dataset list --json
 opentraces dataset new <name> --workflow <workflow.md-or-package-dir>
+opentraces dataset new <name> --from-skill <skill>
 opentraces dataset status <name> --json
 opentraces dataset run <name> --dry-run --limit 5 --verbose
 opentraces dataset run <name>
+opentraces dataset run <name> --executor script --json
 opentraces dataset run <name> --approve-new --publish-check-only
 opentraces dataset run <name> --approve-new --publish
 opentraces dataset review <name>
@@ -442,6 +452,7 @@ Prefer `--json` for agent automation:
 ```bash
 opentraces --json status
 opentraces --json trace query --skill grill-me
+opentraces --json trace skills --limit 20
 opentraces --json trace map <trace_id>
 opentraces --json trail track <trace_id>
 opentraces --json bucket status

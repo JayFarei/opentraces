@@ -67,6 +67,7 @@ Working with retained traces:
 - `opentraces bucket status` inspects the private bucket
 - `opentraces bucket rebuild --json` refreshes derived bucket projections
 - `opentraces trace query` searches retained traces
+- `opentraces trace skills --json` ranks observed skills by invocation usage
 - `opentraces trace map <id> --bursts` renders deterministic edit/intent bursts
 - `opentraces trace slice <id> --template bursts` creates workflow packets
 - `opentraces trace get <id>` resolves a trace, unit, or ot:// resource
@@ -92,6 +93,8 @@ Dataset workflows and datasets:
 - `opentraces workflow create my-workflow --template skill-command-trajectory-eval-v1`
 - `opentraces dataset new my-set --workflow ./workflows/my-workflow/`
 - `opentraces dataset run my-set` fills it with workflow-projected rows
+- `opentraces dataset new my-skill-set --from-skill opentraces`
+- `opentraces dataset run my-skill-set --executor script --json`
 - `opentraces dataset review my-set --json` lists rows
 - `opentraces dataset review approve my-set <row-id>` approves one row
 - `opentraces dataset remote create my-set <owner>/<repo> --private`

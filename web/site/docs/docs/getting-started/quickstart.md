@@ -100,6 +100,7 @@ opentraces bucket remote status
 
 ```bash
 opentraces trace query --since 7d --cwd
+opentraces trace skills --json
 opentraces trace map <trace-id> --bursts
 opentraces trace slice <trace-id> --template bursts
 opentraces trace get <trace-id>
@@ -143,6 +144,7 @@ custom workflow package.
 opentraces workflow templates
 opentraces workflow create my-workflow --template skill-command-trajectory-eval-v1
 opentraces dataset new my-dataset --workflow ./workflows/my-workflow/
+opentraces dataset new opentraces-episodes --from-skill opentraces
 ```
 
 Ad-hoc seeding is also available:
@@ -156,6 +158,7 @@ opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 ```bash
 opentraces dataset run my-dataset --dry-run --limit 5
 opentraces dataset run my-dataset
+opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset status my-dataset
 opentraces dataset review my-dataset --json
 opentraces dataset review approve my-dataset <row-id>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3 as _sqlite3
 from pathlib import Path
 
 from opentraces.core import paths
@@ -9,6 +10,8 @@ from opentraces.core.trace_search_snapshot import (
     SearchSnapshotNeedsRebuild,
     build_trace_search_snapshot,
     default_snapshot_path,
+    list_skill_invocation_units,
+    list_skill_usage,
     search_traces,
     snapshot_status,
 )
@@ -110,6 +113,51 @@ def test_snapshot_builds_trace_level_docs_and_searches_read_only() -> None:
         "rebuilt_index": False,
         "python_full_corpus_sort": False,
     }
+
+
+def test_skill_usage_lists_invocations_from_snapshot() -> None:
+    review_a = _trace("trace-review-a", description="Review the search path")
+    review_a.steps[1].tool_calls.insert(
+        1,
+        ToolCall(
+            tool_call_id="trace-review-a-skill-second",
+            tool_name="Skill",
+            input={"name": "review"},
+        ),
+    )
+    _write_trace("demo-project", review_a)
+    _write_trace(
+        "demo-project",
+        _trace("trace-review-b", description="Review the API path", skill="review"),
+    )
+    _write_trace(
+        "demo-project",
+        _trace("trace-opentraces", description="Use the opentraces skill", skill="opentraces"),
+    )
+
+    build_trace_search_snapshot()
+    page = list_skill_usage(SearchFilters(project="demo-project"), limit=10)
+
+    assert page.total_skills == 2
+    assert page.total_invocations == 4
+    assert [(skill.skill_name, skill.invocation_count, skill.trace_count) for skill in page.skills] == [
+        ("review", 3, 2),
+        ("opentraces", 1, 1),
+    ]
+    assert page.skills[0].agents == {"pi": 3}
+    assert page.skills[0].sources == {"tool_call": 3}
+    assert page.skills[0].projects == {"demo-project": 3}
+    assert page.diagnostics.raw_trace_scan is False
+    assert page.diagnostics.wrote_to_index is False
+
+    units = list_skill_invocation_units(skill="review", project="demo-project")
+    assert len(units) == 3
+    assert {unit.unit_type for unit in units} == {"skill_invocation"}
+    assert {unit.metadata["snapshot_source"] for unit in units} == {
+        "trace_search_snapshot.skill_invocations"
+    }
+    assert {unit.metadata["source"] for unit in units} == {"tool_call"}
+    assert {unit.facets[0].name for unit in units} == {"agent.name"}
 
 
 def test_snapshot_db_does_not_store_full_trace_payload() -> None:
@@ -705,12 +753,12 @@ def test_include_superseded_surfaces_equal_title_older_generation() -> None:
 # --------------------------------------------------------------------------- #
 # issue #27: a schema version bump auto-rebuilds existing snapshots once
 # --------------------------------------------------------------------------- #
-def test_schema_version_is_v4_for_corrected_documents() -> None:
+def test_schema_version_is_v5_for_skill_invocation_rows() -> None:
     from opentraces.core.trace_search_snapshot import SNAPSHOT_SCHEMA_VERSION
 
     _write_trace("demo-project", _trace("trace-v", description="Schema bump check"))
     summary = build_trace_search_snapshot()
-    assert summary.schema_version == SNAPSHOT_SCHEMA_VERSION == "opentraces.trace_search_snapshot.v4"
+    assert summary.schema_version == SNAPSHOT_SCHEMA_VERSION == "opentraces.trace_search_snapshot.v5"
 
 
 def test_old_schema_snapshot_auto_rebuilds_exactly_once() -> None:
@@ -770,10 +818,6 @@ def test_notify_rebuilding_writes_to_stderr_not_stdout(capsys, monkeypatch) -> N
 # lockstep with the content table across a long interleaved refresh sequence,
 # matches a from-scratch rebuild exactly, and that skipping the bookkeeping is
 # detectable by the FTS5 ``'integrity-check'`` command (the real guard).
-# --------------------------------------------------------------------------- #
-import sqlite3 as _sqlite3
-
-
 def _fts_integrity_ok(snapshot_path: Path) -> bool:
     """Run the FTS5 ``integrity-check`` against a snapshot DB.
 

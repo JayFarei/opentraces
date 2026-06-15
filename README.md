@@ -42,7 +42,7 @@ opentraces splits every session into three linked records, each defined by the q
 |-----------|-------------------------|------------------|
 | **Capture** | Inbound boundary: agent hooks, the attribution watcher, optional OTLP receiver | `setup`, `init`, `capture-otlp` |
 | **Bucket** | Private, local-first store of raw captured evidence (one self-sufficient unit per trace) | `bucket`, `ctx list/info` |
-| **Trace** | What the agent did — the step-by-step spine, with search/map/slice projections | `trace query/map/slice/get` |
+| **Trace** | What the agent did — the step-by-step spine, with search/skill inventory/map/slice projections | `trace query/skills/map/slice/get` |
 | **Trace Intelligence** | Deterministic signals about how a run went: context waste, run signals, run compare | `trace --waste/--run-intel`, `trace compare` |
 | **Trail** | What changed and whether it survived: VCS-anchored lineage from a patch to the commit that accepted it | `trail blame/graph/track` |
 | **Context Tree** | What the model saw at each step (system, messages, tools, runtime state) | `ctx tree/show/reads/writes/...` |
@@ -177,6 +177,7 @@ opentraces init
 
 # search retained trace evidence
 opentraces trace query --lex "bug fix failing test"
+opentraces trace skills --json
 
 # extract bounded trace slices for dataset rows
 opentraces trace slice <trace-id> --template bursts --json
@@ -191,6 +192,10 @@ opentraces bucket remote push
 # create and run a workflow-backed local dataset
 opentraces dataset new bug-fixes --workflow ./workflows/bug-fix-curator/WORKFLOW.md
 opentraces dataset run bug-fixes --dry-run --limit 5
+
+# or create a skill-episode dataset from observed skill usage
+opentraces dataset new opentraces-episodes --from-skill opentraces
+opentraces dataset run opentraces-episodes --executor script --json
 
 # publish reviewed dataset rows when a remote is bound
 opentraces dataset publish bug-fixes --check-only
@@ -217,9 +222,9 @@ opentraces dataset publish bug-fixes --check-only
 
 The trace surface returns bounded projections over a local BM25 + semantic Trace Index, so you can search and slice without loading full transcripts.
 
-- `trace query` returns bounded candidate packets; `trace map` returns a deterministic Trace Map; `trace get` resolves a trace, trace unit, map node, or `ot://` Trail resource.
+- `trace query` returns bounded candidate packets; `trace skills` lists observed skills ranked by snapshot-backed invocation usage; `trace map` returns a deterministic Trace Map; `trace get` resolves a trace, trace unit, map node, or `ot://` Trail resource.
 - `trace slice <trace-id> --template bursts` materializes one deterministic slice per detected change burst. Manual `--from-step/--to-step`, `--around-step`, and `--around-patch` windows are available when a workflow needs an explicit range. A Trace Slice is context for audit and later dataset projection, not a training datum by itself.
-- `trace index rebuild` rebuilds the local Trace Index after capture changes; `trace teleport` moves a trace and its retained Git evidence between workspaces.
+- `trace index --json` refreshes and reports the local search snapshot with stage telemetry; `trace teleport` moves a trace and its retained Git evidence between workspaces.
 
 A *trace patch* is one Edit/Write tool call (roughly one hunk on one file). A *change burst* clusters nearby patches by step proximity.
 
@@ -267,7 +272,7 @@ Every captured trace lands in a local-first private bucket under `~/.opentraces/
 A dataset is a workflow-driven row projection over one or more bucket traces.
 
 - `workflow create/list/templates/remove` manages local dataset workflow skill packages. The bundled `skill-command-trajectory-eval-v1` template is materialized with `workflow create <workflow-name> --template skill-command-trajectory-eval-v1`.
-- `dataset new <name> --workflow <path>` creates the manifest; `dataset run` executes the workflow (dry-run, current-agent, or headless); `dataset review/approve/reject` controls per-row publication state; `dataset remote create` binds a HuggingFace dataset remote; `dataset publish` ships approved rows; `dataset schedule` controls recurring runs; `dataset status/list/remove` round out the surface.
+- `dataset new <name> --workflow <path>` creates the manifest; `dataset new <name> --from-skill <skill>` binds the built-in `skill-episodes-v1` workflow to a snapshot-backed skill query; `dataset run` executes the workflow (dry-run, current-agent, script, or headless); `dataset review/approve/reject` controls per-row publication state; `dataset remote create` binds a HuggingFace dataset remote; `dataset publish` ships approved rows; `dataset schedule` controls recurring runs; `dataset status/list/remove` round out the surface.
 - `workflow optimize` runs the SkillOpt skill optimizer (arXiv 2605.23904): the bundled `skill-opt-v1` workflow projects captured traces into scored-rollout rows (a real outcome reward from `outcome.success`/`committed`/Trail survival), then a propose-and-rank loop applies bounded `add/delete/replace` edits to a skill, accepting only edits that strictly improve a held-out gate (`--proposer default|llm`, `--budget`, `--schedule`, `--epochs`). It writes `best_skill.md` + an `edit_apply_report.json` audit; without `--dry-run` it promotes the winning skill to a versioned managed location and records skill-version lineage. The held-out gate can re-roll a candidate skill on a live agent (the consumer's re-rollout runner); the offline default scores against the reward-weighted failure modes of captured traces.
 - `skill-verifier status/autoverify/align/score` is the trace-grounded reward that SkillOpt optimizes against. `workflow skill-intelligence` mines bucket traces into per-skill episodes; `skill-verifier` builds a weighted-criteria **rubric** over that evidence (each criterion judged `deterministic` / `agent` / `human`) and calibrates it. The trust ladder is mechanical, never author-set: `blocked_<reason>` → `provisional_weak_only` → `calibrated`, where self-judged signal can never exceed provisional and `calibrated` always requires real human gold. On the current near-one-class bucket every seed skill correctly returns `blocked_*` — that is the honest answer, not an unfinished feature; the bottleneck is trustworthy labels, not the framework. The public verifier candidate workflow template lives in `src/opentraces/workflow_templates/skill-verifier-candidates-v1/`.
 
@@ -381,6 +386,7 @@ Working with retained traces:
 - `opentraces bucket status` inspects the private bucket
 - `opentraces bucket rebuild --json` refreshes derived bucket projections
 - `opentraces trace query` searches retained traces
+- `opentraces trace skills --json` ranks observed skills by invocation usage
 - `opentraces trace map <id> --bursts` renders deterministic edit/intent bursts
 - `opentraces trace slice <id> --template bursts` creates workflow packets
 - `opentraces trace get <id>` resolves a trace, unit, or ot:// resource
@@ -403,6 +409,8 @@ Dataset workflows and datasets:
 - `opentraces workflow create my-workflow --template skill-command-trajectory-eval-v1`
 - `opentraces dataset new my-set --workflow ./workflows/my-workflow/`
 - `opentraces dataset run my-set` fills it with workflow-projected rows
+- `opentraces dataset new my-skill-set --from-skill opentraces`
+- `opentraces dataset run my-skill-set --executor script --json`
 - `opentraces dataset review my-set --json` lists rows
 - `opentraces dataset review approve my-set <row-id>` approves one row
 - `opentraces dataset remote create my-set <owner>/<repo> --private`

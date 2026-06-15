@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from opentraces_schema import CandidatePacket, TraceFacet, TraceMap, TraceSignal
+from opentraces_schema import CandidatePacket, TraceFacet, TraceMap, TraceSignal, TraceUnit
 
 from . import paths
 from .boilerplate import headline_from_summary, intent_text_for_record, summary_for_record
@@ -45,7 +45,7 @@ from .trace_map import build_trace_map, slice_trace_map_for_candidate
 from .trace_search_state import clear_dirty_marker_if_unchanged, current_dirty_token
 
 
-SNAPSHOT_SCHEMA_VERSION = "opentraces.trace_search_snapshot.v4"
+SNAPSHOT_SCHEMA_VERSION = "opentraces.trace_search_snapshot.v5"
 SNAPSHOT_DB_NAME = "search.sqlite"
 DEFAULT_LIMIT = 20
 VISIBLE_FILE_LIMIT = 8
@@ -152,6 +152,37 @@ class SearchPage:
 
 
 @dataclass(frozen=True)
+class SkillUsage:
+    skill_name: str
+    invocation_count: int
+    trace_count: int
+    agents: dict[str, int]
+    sources: dict[str, int]
+    projects: dict[str, int]
+    latest_invocation_at: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "skill_name": self.skill_name,
+            "invocation_count": self.invocation_count,
+            "trace_count": self.trace_count,
+            "agents": self.agents,
+            "sources": self.sources,
+            "projects": self.projects,
+            "latest_invocation_at": self.latest_invocation_at,
+        }
+
+
+@dataclass(frozen=True)
+class SkillUsagePage:
+    skills: list[SkillUsage]
+    next_page_token: str | None
+    total_skills: int
+    total_invocations: int
+    diagnostics: SearchDiagnostics
+
+
+@dataclass(frozen=True)
 class SearchFilters:
     project: str | None = None
     since: str | None = None
@@ -216,6 +247,7 @@ class _SearchDocument:
     files: list[str]
     skills: list[str]
     tools: list[str]
+    skill_invocations: list[dict[str, Any]]
     facets: list[TraceFacet]
     signals: list[TraceSignal]
     provenance: dict[str, Any]
@@ -390,6 +422,7 @@ def _delete_trace_rows(conn: sqlite3.Connection, trace_id: str) -> None:
         "trace_files",
         "trace_tools",
         "trace_skills",
+        "skill_invocations",
         "trace_signals",
         "trace_concepts",
     ):
@@ -637,6 +670,109 @@ def search_traces(
         total=total,
         diagnostics=diagnostics,
     )
+
+
+def list_skill_usage(
+    filters: SearchFilters | None = None,
+    *,
+    limit: int = 50,
+    cursor: str | None = None,
+    path: Path | None = None,
+    auto_rebuild: bool = True,
+) -> SkillUsagePage:
+    """Return skill invocation counts from the compact search snapshot."""
+
+    snapshot_path = path or default_snapshot_path()
+    rebuilt = False
+    if not snapshot_path.exists():
+        if not auto_rebuild:
+            raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        _notify_rebuilding()
+        build_trace_search_snapshot(path=snapshot_path)
+        rebuilt = True
+        if not snapshot_path.exists():
+            raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+    filters = filters or SearchFilters()
+    offset = _page_offset(cursor)
+    page_size = max(1, int(limit or 50))
+
+    def _read() -> tuple[list[SkillUsage], int, int]:
+        with _connect_readonly(snapshot_path) as conn:
+            _verify_snapshot(conn, snapshot_path)
+            return _query_skill_usage(
+                conn,
+                filters=filters,
+                limit=page_size + 1,
+                offset=offset,
+            )
+
+    try:
+        skills, total_skills, total_invocations = _read()
+    except SearchSnapshotNeedsRebuild:
+        if not auto_rebuild or rebuilt:
+            raise
+        _notify_rebuilding()
+        build_trace_search_snapshot(path=snapshot_path)
+        rebuilt = True
+        skills, total_skills, total_invocations = _read()
+
+    has_more = len(skills) > page_size
+    selected = skills[:page_size]
+    diagnostics = SearchDiagnostics(
+        rows_examined=total_invocations,
+        hits_returned=len(selected),
+        rebuilt_index=rebuilt,
+        wrote_to_index=rebuilt,
+    )
+    next_page_token = f"offset:{offset + page_size}" if has_more else None
+    return SkillUsagePage(
+        skills=selected,
+        next_page_token=next_page_token,
+        total_skills=total_skills,
+        total_invocations=total_invocations,
+        diagnostics=diagnostics,
+    )
+
+
+def list_skill_invocation_units(
+    *,
+    skill: str,
+    project: str | None = None,
+    limit: int | None = None,
+    path: Path | None = None,
+    auto_rebuild: bool = True,
+) -> list[TraceUnit]:
+    """Return lightweight ``skill_invocation`` units from the search snapshot."""
+
+    snapshot_path = path or default_snapshot_path()
+    rebuilt = False
+    if not snapshot_path.exists():
+        if not auto_rebuild:
+            raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        _notify_rebuilding()
+        build_trace_search_snapshot(path=snapshot_path)
+        rebuilt = True
+        if not snapshot_path.exists():
+            raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+
+    def _read() -> list[TraceUnit]:
+        with _connect_readonly(snapshot_path) as conn:
+            _verify_snapshot(conn, snapshot_path)
+            return _query_skill_invocation_units(
+                conn,
+                skill=skill,
+                project=project,
+                limit=limit,
+            )
+
+    try:
+        return _read()
+    except SearchSnapshotNeedsRebuild:
+        if not auto_rebuild or rebuilt:
+            raise
+        _notify_rebuilding()
+        build_trace_search_snapshot(path=snapshot_path)
+        return _read()
 
 
 def candidate_packet_for_hit(
@@ -889,11 +1025,68 @@ def _doc_from_record(
         files=files,
         skills=skills,
         tools=tools,
+        skill_invocations=_skill_invocation_docs(
+            record,
+            project_slug=project_slug,
+            title=ti._index_text(headline or record.task.description or ti._first_user_text(record) or record.trace_id),
+            trace_facets=facets,
+            timestamp_start=_normalize_ts(record.timestamp_start),
+            timestamp_end=_normalize_ts(record.timestamp_end),
+        ),
         facets=facets,
         signals=signals,
         provenance=provenance,
         candidate_kind=_candidate_kind_from_signals(signals),
     )
+
+
+def _skill_invocation_docs(
+    record: Any,
+    *,
+    project_slug: str,
+    title: str,
+    trace_facets: list[TraceFacet],
+    timestamp_start: str | None,
+    timestamp_end: str | None,
+) -> list[dict[str, Any]]:
+    """Compact per-invocation rows used by the fast skill inventory query."""
+
+    del project_slug, title, trace_facets
+    from .skill_detection import detect_skill_invocations
+
+    docs: list[dict[str, Any]] = []
+    seen_invocations: set[tuple[str, str | None, int | None, str]] = set()
+    agent_name = str(getattr(getattr(record, "agent", None), "name", None) or "unknown")
+    for invocation in detect_skill_invocations(record):
+        dedupe_key = (
+            invocation.skill_name,
+            invocation.tool_call_id,
+            invocation.metadata_index,
+            invocation.args,
+        )
+        if dedupe_key in seen_invocations:
+            continue
+        seen_invocations.add(dedupe_key)
+        if invocation.tool_call_id:
+            unit_id = f"tu:{record.trace_id}:skill:{invocation.tool_call_id}"
+        else:
+            idx = invocation.metadata_index if invocation.metadata_index is not None else 0
+            unit_id = f"tu:{record.trace_id}:skill:metadata:{idx}"
+        docs.append(
+            {
+                "unit_id": unit_id,
+                "skill_name": invocation.skill_name,
+                "agent_name": agent_name,
+                "source": invocation.source,
+                "confidence": "high",
+                "timestamp_start": timestamp_start,
+                "timestamp_end": timestamp_end,
+                "step_index": invocation.step_index,
+                "tool_call_id": invocation.tool_call_id,
+                "command_name": invocation.command_name or f"/{invocation.skill_name}",
+            }
+        )
+    return docs
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -959,6 +1152,20 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             trace_id text not null,
             skill_name text not null
         );
+        create table skill_invocations (
+            trace_id text not null,
+            unit_id text not null,
+            skill_name text not null,
+            project_slug text not null,
+            agent_name text not null,
+            source text not null,
+            confidence text not null,
+            timestamp_start text,
+            timestamp_end text,
+            step_index integer,
+            tool_call_id text,
+            command_name text
+        );
         create table trace_signals (
             trace_id text not null,
             signal_name text not null
@@ -976,6 +1183,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         create index idx_trace_files_ext on trace_files(ext, trace_id);
         create index idx_trace_tools_name on trace_tools(tool_name, trace_id);
         create index idx_trace_skills_name on trace_skills(skill_name, trace_id);
+        create index idx_skill_invocations_skill on skill_invocations(skill_name, trace_id);
+        create index idx_skill_invocations_project_time on skill_invocations(project_slug, timestamp_end);
         create index idx_trace_signals_name on trace_signals(signal_name, trace_id);
         create index idx_trace_concepts_id on trace_concepts(concept_id, trace_id);
         """
@@ -1088,6 +1297,30 @@ def _insert_doc(conn: sqlite3.Connection, doc: _SearchDocument) -> None:
         conn.execute(
             "insert into trace_skills(trace_id, skill_name) values (?, ?)",
             (doc.trace_id, skill),
+        )
+    for invocation in doc.skill_invocations:
+        conn.execute(
+            """
+            insert into skill_invocations(
+                trace_id, unit_id, skill_name, project_slug, agent_name, source,
+                confidence, timestamp_start, timestamp_end, step_index,
+                tool_call_id, command_name
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                doc.trace_id,
+                invocation.get("unit_id") or "",
+                invocation.get("skill_name") or "",
+                doc.project_slug,
+                invocation.get("agent_name") or "unknown",
+                invocation.get("source") or "unknown",
+                invocation.get("confidence") or "medium",
+                invocation.get("timestamp_start"),
+                invocation.get("timestamp_end"),
+                invocation.get("step_index"),
+                invocation.get("tool_call_id"),
+                invocation.get("command_name"),
+            ),
         )
     for signal in doc.signals:
         if signal.value:
@@ -1272,6 +1505,219 @@ def _query_rows(
     return list(conn.execute(sql, row_params)), total
 
 
+def _query_skill_usage(
+    conn: sqlite3.Connection,
+    *,
+    filters: SearchFilters,
+    limit: int,
+    offset: int,
+) -> tuple[list[SkillUsage], int, int]:
+    params: list[Any] = []
+    where: list[str] = []
+    if filters.latest_generation:
+        where.append("traces.latest_generation = 1")
+    if filters.project:
+        where.append("traces.project_slug = ?")
+        params.append(filters.project)
+    if filters.since:
+        where.append(
+            "coalesce(si.timestamp_end, si.timestamp_start, "
+            "traces.timestamp_end, traces.timestamp_start, '') >= ?"
+        )
+        params.append(_since_iso(filters.since))
+    if filters.skill:
+        where.append("si.skill_name = ?")
+        params.append(filters.skill)
+    where_sql = " and ".join(where) if where else "1"
+    from_sql = "skill_invocations si join traces on traces.trace_id = si.trace_id"
+
+    totals = conn.execute(
+        f"""
+        select count(distinct si.skill_name) as total_skills,
+               count(*) as total_invocations
+        from {from_sql}
+        where {where_sql}
+        """,
+        params,
+    ).fetchone()
+    total_skills = int(totals["total_skills"] or 0)
+    total_invocations = int(totals["total_invocations"] or 0)
+
+    rows = list(
+        conn.execute(
+            f"""
+            select
+                si.skill_name,
+                count(*) as invocation_count,
+                count(distinct si.trace_id) as trace_count,
+                nullif(
+                    max(coalesce(si.timestamp_end, si.timestamp_start,
+                                 traces.timestamp_end, traces.timestamp_start, '')),
+                    ''
+                ) as latest_invocation_at
+            from {from_sql}
+            where {where_sql}
+            group by si.skill_name
+            order by invocation_count desc, trace_count desc, si.skill_name asc
+            limit ? offset ?
+            """,
+            [*params, limit, offset],
+        )
+    )
+    skill_names = [str(row["skill_name"]) for row in rows]
+    agents = _skill_usage_breakdown(conn, "agent_name", where_sql, params, skill_names)
+    sources = _skill_usage_breakdown(conn, "source", where_sql, params, skill_names)
+    projects = _skill_usage_breakdown(conn, "project_slug", where_sql, params, skill_names)
+    skills = [
+        SkillUsage(
+            skill_name=str(row["skill_name"]),
+            invocation_count=int(row["invocation_count"] or 0),
+            trace_count=int(row["trace_count"] or 0),
+            agents=agents.get(str(row["skill_name"]), {}),
+            sources=sources.get(str(row["skill_name"]), {}),
+            projects=projects.get(str(row["skill_name"]), {}),
+            latest_invocation_at=row["latest_invocation_at"],
+        )
+        for row in rows
+    ]
+    return skills, total_skills, total_invocations
+
+
+def _skill_usage_breakdown(
+    conn: sqlite3.Connection,
+    column: str,
+    where_sql: str,
+    params: list[Any],
+    skill_names: list[str],
+) -> dict[str, dict[str, int]]:
+    if not skill_names:
+        return {}
+    if column not in {"agent_name", "source", "project_slug"}:
+        raise ValueError(f"unsupported skill usage column: {column}")
+    placeholders = ",".join("?" for _ in skill_names)
+    from_sql = "skill_invocations si join traces on traces.trace_id = si.trace_id"
+    rows = conn.execute(
+        f"""
+        select si.skill_name, si.{column} as value, count(*) as n
+        from {from_sql}
+        where {where_sql} and si.skill_name in ({placeholders})
+        group by si.skill_name, si.{column}
+        order by si.skill_name asc, n desc, value asc
+        """,
+        [*params, *skill_names],
+    )
+    out: dict[str, dict[str, int]] = {}
+    for row in rows:
+        skill_name = str(row["skill_name"])
+        value = str(row["value"] or "unknown")
+        out.setdefault(skill_name, {})[value] = int(row["n"] or 0)
+    return out
+
+
+def _query_skill_invocation_units(
+    conn: sqlite3.Connection,
+    *,
+    skill: str,
+    project: str | None,
+    limit: int | None,
+) -> list[TraceUnit]:
+    where = ["si.skill_name = ?", "traces.latest_generation = 1"]
+    params: list[Any] = [skill]
+    if project:
+        where.append("si.project_slug = ?")
+        params.append(project)
+    limit_sql = ""
+    if limit is not None and int(limit) > 0:
+        limit_sql = "limit ?"
+        params.append(int(limit))
+    rows = conn.execute(
+        f"""
+        select
+            si.trace_id,
+            si.unit_id,
+            si.skill_name,
+            si.project_slug,
+            si.agent_name,
+            si.source,
+            si.confidence,
+            si.timestamp_start,
+            si.timestamp_end,
+            si.step_index,
+            si.tool_call_id,
+            si.command_name,
+            traces.title,
+            traces.summary,
+            traces.files_json
+        from skill_invocations si
+        join traces on traces.trace_id = si.trace_id
+        where {" and ".join(where)}
+        order by
+            coalesce(si.timestamp_end, si.timestamp_start,
+                     traces.timestamp_end, traces.timestamp_start, '') desc,
+            si.trace_id asc,
+            si.unit_id asc
+        {limit_sql}
+        """,
+        params,
+    )
+    return [_skill_invocation_unit_from_row(row) for row in rows]
+
+
+def _skill_invocation_unit_from_row(row: sqlite3.Row) -> TraceUnit:
+    confidence = str(row["confidence"] or "medium")
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "medium"
+    step_index = row["step_index"]
+    metadata: dict[str, Any] = {
+        "skill_name": row["skill_name"],
+        "source": row["source"] or "unknown",
+        "snapshot_source": "trace_search_snapshot.skill_invocations",
+    }
+    if isinstance(step_index, int):
+        metadata["step_index"] = step_index
+    if row["tool_call_id"]:
+        metadata["tool_call_id"] = row["tool_call_id"]
+    if row["command_name"]:
+        metadata["command_name"] = row["command_name"]
+    agent_name = str(row["agent_name"] or "unknown")
+    skill_name = str(row["skill_name"] or "")
+    trace_id = str(row["trace_id"])
+    title = str(row["title"] or trace_id)
+    return TraceUnit(
+        unit_id=str(row["unit_id"] or f"tu:{trace_id}:skill:{skill_name}"),
+        unit_type="skill_invocation",
+        trace_id=trace_id,
+        project_slug=str(row["project_slug"] or "unknown"),
+        files=[str(item) for item in _json_list(row["files_json"])],
+        skills=[skill_name] if skill_name else [],
+        title_text=f"{skill_name} invocation in {title}" if skill_name else title,
+        intent_text=str(row["summary"] or title),
+        action_text=str(row["source"] or "skill_invocation"),
+        evidence_text=str(row["command_name"] or row["tool_call_id"] or ""),
+        facets=[
+            TraceFacet(
+                name="agent.name",
+                value=agent_name,
+                source="exact_schema",
+                confidence="high",
+            )
+        ],
+        signals=[
+            TraceSignal(
+                name="skill_invoked",
+                value=True,
+                confidence=confidence,  # type: ignore[arg-type]
+                metadata={
+                    "source": row["source"] or "unknown",
+                    "command_name": row["command_name"],
+                    "tool_call_id": row["tool_call_id"],
+                },
+            )
+        ],
+        metadata=metadata,
+    )
+
+
 def _hit_from_row(row: sqlite3.Row, terms: list[str]) -> SearchHit:
     facets = [
         TraceFacet.model_validate(item)
@@ -1311,11 +1757,11 @@ def _matched_fields(row: sqlite3.Row, terms: list[str]) -> dict[str, list[str]]:
     if not terms:
         return {}
     out: dict[str, list[str]] = {}
-    for field in ("title", "summary", "intent_text", "action_text", "file_text", "skill_text", "facet_text"):
-        field_terms = set(_terms(str(row[field] or "")))
+    for column_name in ("title", "summary", "intent_text", "action_text", "file_text", "skill_text", "facet_text"):
+        field_terms = set(_terms(str(row[column_name] or "")))
         hits = [term for term in terms if term in field_terms]
         if hits:
-            out[field] = hits
+            out[column_name] = hits
     return out
 
 

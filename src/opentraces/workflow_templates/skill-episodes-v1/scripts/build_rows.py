@@ -16,7 +16,26 @@ def _env_scope() -> tuple[dict, Path] | None:
     if not packet or not output:
         return None
     payload = json.loads(Path(packet).read_text(encoding="utf-8"))
-    return dict(payload.get("scope") or {}), Path(output)
+    scope = dict(payload.get("scope") or {})
+    candidate_query = payload.get("candidate_query")
+    query_args = (
+        candidate_query.get("args") if isinstance(candidate_query, dict) else None
+    )
+    if isinstance(query_args, dict):
+        selected_skill = (
+            query_args.get("skill")
+            or query_args.get("selected_skill")
+            or query_args.get("skill_id")
+        )
+        if selected_skill and not (
+            scope.get("selected_skill") or scope.get("skill_id")
+        ):
+            scope["selected_skill"] = selected_skill
+        if query_args.get("project") and not (
+            scope.get("project_slug") or scope.get("project")
+        ):
+            scope["project_slug"] = query_args["project"]
+    return scope, Path(output)
 
 
 def _write(path: Path, rows: list[dict]) -> None:

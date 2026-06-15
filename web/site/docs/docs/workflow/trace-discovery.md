@@ -6,8 +6,7 @@ lets workflows find the right trace evidence without loading full transcripts.
 ## Trace Index
 
 ```bash
-opentraces trace index rebuild
-opentraces trace index status
+opentraces trace index --json
 ```
 
 The Trace Index projects retained traces into bounded search documents with
@@ -34,6 +33,20 @@ Hugging Face, MongoDB, OpenAI) and joins on concept ids when the query matches
 one. Anything else degrades to lexical full-text search where every token must
 match, so paraphrased queries can return zero hits even when related traces
 exist. Prefer query terms that actually appear in the trace.
+
+## Skill Usage
+
+```bash
+opentraces trace skills --json
+opentraces trace skills --skill opentraces --json
+opentraces dataset new opentraces-episodes --from-skill opentraces
+opentraces dataset run opentraces-episodes --executor script --json
+```
+
+`trace skills` reads the compact search snapshot's `skill_invocations` table and
+returns skills ranked by invocation count, with agent/source/project breakdowns
+and telemetry. Use `dataset new --from-skill <skill>` when the next step is a
+reviewable `skill-episodes-v1` dataset for one observed skill.
 
 ## Map
 

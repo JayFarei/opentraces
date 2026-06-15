@@ -40,6 +40,7 @@ opentraces init                           # enroll a repo explicitly (optional u
 opentraces init --agent pi                # enroll Pi explicitly (optional; auto under global tracking)
 opentraces bucket status                  # inspect private retained trace evidence
 opentraces trace query --since 7d         # search retained traces
+opentraces trace skills --json            # rank observed skills by usage
 opentraces trace map <trace-id> --bursts  # deterministic edit/intent map
 opentraces trace get <trace-id> --run-intel    # resteer/recovery/loop signals
 opentraces trace slice <trace-id> --template bursts
@@ -48,6 +49,8 @@ opentraces ctx tree <trace-id>            # what the agent saw across the trace
 opentraces workflow templates             # choose a row projection template
 opentraces dataset new my-dataset --workflow my-workflow
 opentraces dataset run my-dataset         # synthesize dataset rows from retained traces
+opentraces dataset new skill-episodes --from-skill opentraces
+opentraces dataset run skill-episodes --executor script --json
 opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset     # upload reviewed rows to the active remote
 ```
@@ -79,7 +82,7 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Quick Start](/docs/getting-started/quickstart)** | Capture into a bucket, search traces, build and publish a dataset |
 | **[Commands](/docs/cli/commands)** | Current `opentraces` command reference |
 | **[Portable Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
-| **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace map`, `trace slice`, `trace get`, `trace index`, plus `--waste` / `--run-intel` and `trace compare` |
+| **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace skills`, `trace map`, `trace slice`, `trace get`, `trace index`, plus `--waste` / `--run-intel` and `trace compare` |
 | **[Trace Trails](/docs/workflow/blame)** | Git anchors, survival states, blame, graph, PR body generation |
 | **[Context Tree](/docs/workflow/context-tree)** | `ctx` commands and OTLP capture for what the agent saw |
 | **[Dataset Workflows](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |
@@ -123,7 +126,7 @@ Paste this into your coding agent (Claude Code, Codex CLI, or Pi):
 {{AGENT_PROMPT}}
 ```
 
-The agent runs this as an interview: it asks you how to configure opentraces, one decision at a time, and waits for your answer before applying it. You choose the tracking mode (global auto-enroll vs manual per-project opt-in), whether to authenticate with Hugging Face now, and any optional security passes. The prompt is tool-agnostic, so agents with a structured question UI render it as choices while others simply ask in chat. After setup the agent uses the skill file for everything else.
+The agent runs this as an interview: it asks you how to configure opentraces, one decision at a time, and waits for your answer before applying it. You choose the tracking mode (global auto-enroll vs manual per-project opt-in), which capture hooks to install, whether to install the shared skill, whether to authenticate with Hugging Face now, and any optional security passes. The prompt is tool-agnostic, so agents with a structured question UI render it as choices while others simply ask in chat. After hook or skill installation, start a fresh agent session before expecting the new capture hooks or skill to be available.
 
 ## From Source
 
@@ -364,6 +367,7 @@ opentraces bucket remote status
 
 ```bash
 opentraces trace query --since 7d --cwd
+opentraces trace skills --json
 opentraces trace map <trace-id> --bursts
 opentraces trace slice <trace-id> --template bursts
 opentraces trace get <trace-id>
@@ -407,6 +411,7 @@ custom workflow package.
 opentraces workflow templates
 opentraces workflow create my-workflow --template skill-command-trajectory-eval-v1
 opentraces dataset new my-dataset --workflow ./workflows/my-workflow/
+opentraces dataset new opentraces-episodes --from-skill opentraces
 ```
 
 Ad-hoc seeding is also available:
@@ -420,6 +425,7 @@ opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 ```bash
 opentraces dataset run my-dataset --dry-run --limit 5
 opentraces dataset run my-dataset
+opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset status my-dataset
 opentraces dataset review my-dataset --json
 opentraces dataset review approve my-dataset <row-id>
@@ -490,7 +496,8 @@ opentraces [--json] <command> ...
 | Command | What it does |
 |---------|---------------|
 | `trace query` | Search retained traces and return bounded candidate packets |
-| `trace index` | Rebuild and inspect local search projections |
+| `trace skills` | Rank observed skills by snapshot-backed invocation usage |
+| `trace index` | Refresh and inspect local search projections |
 | `trace map` | Show a deterministic Trace Map or burst projection |
 | `trace slice` | Extract bounded Trace Slices for workflows |
 | `trace get` | Resolve a trace, trace unit, map node, or `ot://` resource |
@@ -639,8 +646,9 @@ explicit consent gate even when tracking mode is global.
 ```bash
 opentraces trace query --lex "bug fix failing test" --cwd --limit 20 --json
 opentraces trace query --skill opentraces --include-slice intent
-opentraces trace index rebuild
-opentraces trace index status
+opentraces trace skills --json
+opentraces trace skills --skill opentraces --json
+opentraces trace index --json
 opentraces trace map <trace-id> --bursts --json
 opentraces trace slice <trace-id> --template bursts --json
 opentraces trace get <trace-id> --bursts --json
@@ -652,9 +660,12 @@ opentraces trace teleport export <trace-id> --output <dir>
 Common `trace query` filters include `--lex`, `--semantic`, `--skill`,
 `--tool`, `--files`, `--signal`, `--survival`, `--since`, `--candidate-kind`,
 `--project`, and `--cwd`. `trace query` is read-only against the local search
-snapshot: it neither rebuilds the index nor pulls remote data. To search remote
-traces, first `opentraces bucket remote pull` and then rebuild the snapshot with
-`opentraces trace index rebuild`. (`trace get --remote-bucket` / `--remote
+snapshot: it neither rebuilds the index nor pulls remote data. `trace skills`
+uses the same compact snapshot's `skill_invocations` table and emits
+`telemetry.duration_ms` plus `search_diagnostics` so agents can tell whether a
+raw scan happened. To search remote traces, first `opentraces bucket remote
+pull` and then refresh the snapshot with `opentraces trace index --json`.
+(`trace get --remote-bucket` / `--remote
 owner/repo` remain the per-trace remote-read path.)
 
 `--semantic` expands a small static dictionary of service/library concepts
@@ -783,8 +794,10 @@ project bucket traces into dataset rows.
 ```bash
 opentraces dataset list --json
 opentraces dataset new my-dataset --workflow ./workflows/my-workflow/
+opentraces dataset new opentraces-episodes --from-skill opentraces
 opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 opentraces dataset run my-dataset --dry-run --limit 5 --json
+opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset run my-dataset --scope trace --trace <trace-id>
 opentraces dataset status my-dataset --json
 opentraces dataset security my-dataset --json
@@ -811,6 +824,11 @@ accepted but return decommission notices.
 compatibility field for dataset row envelopes. It is not the security tool
 selection mechanism; use `opentraces security sanitize --tools ...` or
 `--use-config` in a workflow when explicit sanitization is required.
+
+`dataset new --from-skill <skill>` creates a `skill-episodes-v1` dataset and
+stores the selected skill in the dataset's `candidate_query`. Pair it with
+`dataset run <name> --executor script --json` for deterministic local row
+materialization from the snapshot-backed skill invocation surface.
 
 `dataset security <name>` inspects or edits that dataset's resolved security
 policy, which is seeded from the workflow's front-matter security contract at
@@ -1207,8 +1225,8 @@ When capture hooks fire, opentraces:
 3. extracts tool calls, observations, steps, metrics, and environment data;
 4. records Trace Patch and Context Tree events where available;
 5. writes the trace envelope and companion files into the private bucket;
-6. updates search projections used by `trace query`, `trace map`, and
-   `trace slice`.
+6. updates search projections used by `trace query`, `trace skills`,
+   `trace map`, and `trace slice`.
 
 The raw bucket is local-only unless you run `opentraces setup bucket` and sync
 with `opentraces bucket remote push`.
@@ -1473,8 +1491,7 @@ lets workflows find the right trace evidence without loading full transcripts.
 ## Trace Index
 
 ```bash
-opentraces trace index rebuild
-opentraces trace index status
+opentraces trace index --json
 ```
 
 The Trace Index projects retained traces into bounded search documents with
@@ -1501,6 +1518,20 @@ Hugging Face, MongoDB, OpenAI) and joins on concept ids when the query matches
 one. Anything else degrades to lexical full-text search where every token must
 match, so paraphrased queries can return zero hits even when related traces
 exist. Prefer query terms that actually appear in the trace.
+
+## Skill Usage
+
+```bash
+opentraces trace skills --json
+opentraces trace skills --skill opentraces --json
+opentraces dataset new opentraces-episodes --from-skill opentraces
+opentraces dataset run opentraces-episodes --executor script --json
+```
+
+`trace skills` reads the compact search snapshot's `skill_invocations` table and
+returns skills ranked by invocation count, with agent/source/project breakdowns
+and telemetry. Use `dataset new --from-skill <skill>` when the next step is a
+reviewable `skill-episodes-v1` dataset for one observed skill.
 
 ## Map
 
@@ -1829,6 +1860,15 @@ opentraces dataset run my-dataset --dry-run --limit 5
 opentraces dataset run my-dataset
 ```
 
+For a dataset around one observed skill, use the built-in skill episodes
+workflow directly:
+
+```bash
+opentraces trace skills --json
+opentraces dataset new opentraces-episodes --from-skill opentraces
+opentraces dataset run opentraces-episodes --executor script --json
+```
+
 ## Runtime Contract
 
 The script executor runs:
@@ -1870,6 +1910,7 @@ only when the row schema needs it.
 | Template | Purpose |
 |----------|---------|
 | `default` | Minimal scaffold for custom row builders |
+| `skill-episodes-v1` | Skill episode rows for one observed skill, normally created with `dataset new --from-skill <skill>` |
 | `skill-command-trajectory-eval-v1` | Compact eval rows for command/skill trajectory attribution |
 | `pr-intent-summary-v1` | Branch-context rows consumed by `opentraces trail blame pr render/create/update` |
 
@@ -1956,6 +1997,14 @@ opentraces workflow create my-workflow --template default
 opentraces dataset new my-dataset --workflow ./workflows/my-workflow/
 ```
 
+Skill-episode datasets can start from observed skill usage without writing a
+custom workflow:
+
+```bash
+opentraces trace skills --json
+opentraces dataset new opentraces-episodes --from-skill opentraces
+```
+
 Ad-hoc row seeding is available when you already have JSONL:
 
 ```bash
@@ -1967,13 +2016,16 @@ opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 ```bash
 opentraces dataset run my-dataset --dry-run --limit 5 --json
 opentraces dataset run my-dataset
+opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset run my-dataset --scope trace --trace <trace-id>
 opentraces dataset run my-dataset --since-last-run
 ```
 
 `dataset run` invokes the workflow and appends rows locally. It can read from
-Trace Index candidates, a project scope, the current working directory, or a
-specific trace.
+Trace Index candidates, a project scope, the current working directory, a
+specific trace, or the saved skill query from `dataset new --from-skill`.
+The `script` executor runs the workflow package's deterministic
+`scripts/build_rows.py` without a live agent.
 
 ## Dataset Security Policy
 

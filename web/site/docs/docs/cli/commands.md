@@ -32,7 +32,8 @@ opentraces [--json] <command> ...
 | Command | What it does |
 |---------|---------------|
 | `trace query` | Search retained traces and return bounded candidate packets |
-| `trace index` | Rebuild and inspect local search projections |
+| `trace skills` | Rank observed skills by snapshot-backed invocation usage |
+| `trace index` | Refresh and inspect local search projections |
 | `trace map` | Show a deterministic Trace Map or burst projection |
 | `trace slice` | Extract bounded Trace Slices for workflows |
 | `trace get` | Resolve a trace, trace unit, map node, or `ot://` resource |
@@ -181,8 +182,9 @@ explicit consent gate even when tracking mode is global.
 ```bash
 opentraces trace query --lex "bug fix failing test" --cwd --limit 20 --json
 opentraces trace query --skill opentraces --include-slice intent
-opentraces trace index rebuild
-opentraces trace index status
+opentraces trace skills --json
+opentraces trace skills --skill opentraces --json
+opentraces trace index --json
 opentraces trace map <trace-id> --bursts --json
 opentraces trace slice <trace-id> --template bursts --json
 opentraces trace get <trace-id> --bursts --json
@@ -194,9 +196,12 @@ opentraces trace teleport export <trace-id> --output <dir>
 Common `trace query` filters include `--lex`, `--semantic`, `--skill`,
 `--tool`, `--files`, `--signal`, `--survival`, `--since`, `--candidate-kind`,
 `--project`, and `--cwd`. `trace query` is read-only against the local search
-snapshot: it neither rebuilds the index nor pulls remote data. To search remote
-traces, first `opentraces bucket remote pull` and then rebuild the snapshot with
-`opentraces trace index rebuild`. (`trace get --remote-bucket` / `--remote
+snapshot: it neither rebuilds the index nor pulls remote data. `trace skills`
+uses the same compact snapshot's `skill_invocations` table and emits
+`telemetry.duration_ms` plus `search_diagnostics` so agents can tell whether a
+raw scan happened. To search remote traces, first `opentraces bucket remote
+pull` and then refresh the snapshot with `opentraces trace index --json`.
+(`trace get --remote-bucket` / `--remote
 owner/repo` remain the per-trace remote-read path.)
 
 `--semantic` expands a small static dictionary of service/library concepts
@@ -325,8 +330,10 @@ project bucket traces into dataset rows.
 ```bash
 opentraces dataset list --json
 opentraces dataset new my-dataset --workflow ./workflows/my-workflow/
+opentraces dataset new opentraces-episodes --from-skill opentraces
 opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 opentraces dataset run my-dataset --dry-run --limit 5 --json
+opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset run my-dataset --scope trace --trace <trace-id>
 opentraces dataset status my-dataset --json
 opentraces dataset security my-dataset --json
@@ -353,6 +360,11 @@ accepted but return decommission notices.
 compatibility field for dataset row envelopes. It is not the security tool
 selection mechanism; use `opentraces security sanitize --tools ...` or
 `--use-config` in a workflow when explicit sanitization is required.
+
+`dataset new --from-skill <skill>` creates a `skill-episodes-v1` dataset and
+stores the selected skill in the dataset's `candidate_query`. Pair it with
+`dataset run <name> --executor script --json` for deterministic local row
+materialization from the snapshot-backed skill invocation surface.
 
 `dataset security <name>` inspects or edits that dataset's resolved security
 policy, which is seeded from the workflow's front-matter security contract at

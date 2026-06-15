@@ -279,6 +279,8 @@ def test_trace_index_command_rebuilds_search_snapshot() -> None:
     payload = json.loads(result.stdout)
     assert payload["search_snapshot"]["trace_count"] == 1
     assert Path(payload["search_snapshot"]["path"]).exists()
+    assert payload["telemetry"]["duration_ms"] >= 0
+    assert payload["telemetry"]["snapshot_build_duration_ms"] >= 0
 
 
 def test_trace_index_command_does_not_rebuild_existing_legacy_trace_index(monkeypatch) -> None:

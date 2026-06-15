@@ -6,6 +6,8 @@ import json
 import os
 import shutil
 import sys
+import time
+from importlib import resources
 from pathlib import Path
 
 import click
@@ -42,13 +44,14 @@ from ..core.datasets import (
     save_manifest,
     set_dataset_remote_visibility,
     set_publication_review_status,
+    source_provenance_for_query,
 )
 from ..core.workflow_runner import (
     DatasetRunLockError,
     ExecutorUnavailableError,
     run_dataset_workflow,
 )
-from ..core.workflows import load_workflow, resolve_workflow_reference
+from ..core.workflows import create_workflow, load_workflow, resolve_workflow_reference
 from ..core.schedules import (
     add_schedule,
     list_schedules,
@@ -588,6 +591,7 @@ def dataset_status(name: str, as_json: bool) -> None:
 @click.argument("name")
 @click.option("--description", default=None, help="Dataset description.")
 @click.option("--workflow", default=None, help="Workflow skill name or path to a Markdown workflow file/package.")
+@click.option("--from-skill", "from_skill", default=None, help="Create a skill-episodes dataset for this skill.")
 @click.option("--workflow-digest", default="sha256:unconfigured", help="Workflow digest for legacy skill-name workflows.")
 @click.option("--query-name", default=None, help="Remembered trace query name for workflow runs.")
 @click.option(
@@ -633,6 +637,7 @@ def dataset_new(
     name: str,
     description: str | None,
     workflow: str | None,
+    from_skill: str | None,
     workflow_digest: str,
     query_name: str | None,
     query_scope: str,
@@ -648,15 +653,25 @@ def dataset_new(
 ) -> None:
     """Create a local HF-shaped dataset with an OpenTraces sidecar.
 
-    Two modes:
+    \b
+    Modes:
 
-    * Workflow mode (default): synthesizes a workflow-driven dataset
-      that is filled by ``opentraces dataset run``. Use ``--schema`` to
-      define the workflow's row contract.
-    * Ad-hoc mode (``--rows-file`` + ``--schema``): seeds a manual
-      dataset directly from a JSONL file. ``dataset run`` is a no-op
-      for manual datasets; review/approve/publish work as usual.
+    Workflow mode: default; fill rows later with ``dataset run``.
+
+    Skill mode: pass ``--from-skill <skill>`` for skill-episodes rows.
+
+    Ad-hoc mode: pass ``--rows-file`` and ``--schema`` for manual rows.
     """
+    started = time.monotonic()
+    if from_skill and workflow:
+        click.echo("Use either --from-skill or --workflow, not both.", err=True)
+        sys.exit(2)
+    if from_skill and schema_file:
+        click.echo("--from-skill uses the skill-episodes schema; omit --schema.", err=True)
+        sys.exit(2)
+    if from_skill and rows_file:
+        click.echo("Use either --from-skill or --rows-file, not both.", err=True)
+        sys.exit(2)
     if rows_file:
         if not schema_file:
             click.echo(
@@ -676,6 +691,18 @@ def dataset_new(
 
     try:
         schema_payload = _load_schema_file(schema_file) if schema_file else None
+        if from_skill:
+            skill_workflow = _ensure_skill_episodes_workflow()
+            workflow = skill_workflow.name
+            workflow_digest = skill_workflow.digest
+            schema_payload = _load_builtin_workflow_schema("skill-episodes-v1")
+            description = description or f"Skill episodes for {from_skill}."
+            query_name = query_name or f"{name}-{from_skill}-query"
+            query_args = (
+                *query_args,
+                f"skill={from_skill}",
+                "candidate_kind=skill_invocation",
+            )
         (
             workflow_skill,
             resolved_digest,
@@ -685,6 +712,25 @@ def dataset_new(
             workflow,
             workflow_digest,
         )
+        candidate_query = _candidate_query_for_dataset(
+            dataset_name=name,
+            query_name=query_name,
+            query_scope=query_scope,
+            query_lex=query_lex,
+            query_semantic=query_semantic,
+            query_source=query_source,
+            query_project=query_project,
+            query_candidate_kind=query_candidate_kind,
+            query_args=query_args,
+        )
+        source_provenance = (
+            source_provenance_for_query(
+                candidate_query,
+                include_bucket_snapshot=False,
+            )
+            if candidate_query is not None
+            else None
+        )
         dataset = create_dataset(
             name,
             description=description,
@@ -693,22 +739,19 @@ def dataset_new(
             workflow_config=workflow_config,
             security=workflow_security,
             row_schema=schema_payload,
-            candidate_query=_candidate_query_for_dataset(
-                dataset_name=name,
-                query_name=query_name,
-                query_scope=query_scope,
-                query_lex=query_lex,
-                query_semantic=query_semantic,
-                query_source=query_source,
-                query_project=query_project,
-                query_candidate_kind=query_candidate_kind,
-                query_args=query_args,
-            ),
+            candidate_query=candidate_query,
+            source_provenance=source_provenance,
         )
     except (FileExistsError, FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
-    payload = {"status": "ok", "dataset": _dataset_payload(dataset)}
+    payload = {
+        "status": "ok",
+        "dataset": _dataset_payload(dataset),
+        "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},
+    }
+    if from_skill:
+        payload["next_command"] = f"opentraces dataset run {name} --executor script --json"
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -725,6 +768,28 @@ def _load_schema_file(schema_file: str) -> dict[str, object]:
     if not isinstance(schema_payload, dict):
         raise ValueError("--schema must point to a JSON object schema")
     return schema_payload
+
+
+def _ensure_skill_episodes_workflow():
+    try:
+        return load_workflow("skill-episodes-v1")
+    except FileNotFoundError:
+        return create_workflow("skill-episodes-v1", template="skill-episodes-v1")
+
+
+def _load_builtin_workflow_schema(template: str) -> dict[str, object]:
+    try:
+        schema_text = (
+            resources.files("opentraces.workflow_templates")
+            .joinpath(template, "schemas", "row.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        payload = json.loads(schema_text)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise ValueError(f"failed to load built-in workflow schema {template}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"built-in workflow schema {template} is not a JSON object")
+    return payload
 
 
 def _candidate_query_for_dataset(
@@ -934,7 +999,7 @@ def _create_manual_dataset(
 @click.option("--dry-run", is_flag=True, help="Execute without appending rows or advancing cursors.")
 @click.option(
     "--executor",
-    type=click.Choice(["current-agent", "claude-code-headless"]),
+    type=click.Choice(["current-agent", "claude-code-headless", "script"]),
     default=None,
     help="Workflow executor.",
 )
@@ -1004,6 +1069,7 @@ def dataset_run(
     as_json: bool,
 ) -> None:
     """Run the dataset workflow in dry-run, current-agent, or headless mode."""
+    started = time.monotonic()
     if resume:
         click.echo("--resume is reserved for future interrupted-run recovery.", err=True)
         sys.exit(10)
@@ -1031,6 +1097,7 @@ def dataset_run(
                 "manual datasets are seeded by `dataset new --rows-file`; "
                 "use review/approve/publish for the lifecycle"
             ),
+            "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},
         }
         if as_json:
             click.echo(_dump_json(payload))
@@ -1069,6 +1136,7 @@ def dataset_run(
             "would_append_count": result.append_summary.would_append_count,
         },
         "cursor_advanced": result.cursor_advanced,
+        "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},
     }
     if approve_new and result.append_summary.row_ids:
         review_state = set_publication_review_status(

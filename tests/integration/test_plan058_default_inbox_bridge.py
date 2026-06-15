@@ -83,6 +83,27 @@ def test_default_inbox_bootstrap_is_idempotent():
     assert second.exit_code == 0, second.output
 
 
+def test_default_inbox_bridge_marker_skips_state_reload(tmp_path, monkeypatch):
+    """After migration, dataset commands should not reload historical state."""
+    from opentraces.core.default_inbox import migrate_project_inbox_state
+    import opentraces.core.state as state_module
+
+    project_dir = _make_project_with_inbox_state(tmp_path)
+
+    first = migrate_project_inbox_state(project_dir)
+    assert first.migrated_row_count == 3
+
+    class FailingStateManager:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("StateManager should not be loaded after marker")
+
+    monkeypatch.setattr(state_module, "StateManager", FailingStateManager)
+
+    second = migrate_project_inbox_state(project_dir)
+    assert second.skipped_existing is True
+    assert second.migrated_row_count == 0
+
+
 # ---------------------------------------------------------------------------
 # Inbox decision migration: pre-existing per-project staged/rejected/pending
 # trace entries should land as default-inbox publication-state rows.

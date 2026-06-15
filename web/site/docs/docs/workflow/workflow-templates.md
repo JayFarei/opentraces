@@ -37,6 +37,15 @@ opentraces dataset run my-dataset --dry-run --limit 5
 opentraces dataset run my-dataset
 ```
 
+For a dataset around one observed skill, use the built-in skill episodes
+workflow directly:
+
+```bash
+opentraces trace skills --json
+opentraces dataset new opentraces-episodes --from-skill opentraces
+opentraces dataset run opentraces-episodes --executor script --json
+```
+
 ## Runtime Contract
 
 The script executor runs:
@@ -78,6 +87,7 @@ only when the row schema needs it.
 | Template | Purpose |
 |----------|---------|
 | `default` | Minimal scaffold for custom row builders |
+| `skill-episodes-v1` | Skill episode rows for one observed skill, normally created with `dataset new --from-skill <skill>` |
 | `skill-command-trajectory-eval-v1` | Compact eval rows for command/skill trajectory attribution |
 | `pr-intent-summary-v1` | Branch-context rows consumed by `opentraces trail blame pr render/create/update` |
 

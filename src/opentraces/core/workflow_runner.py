@@ -43,7 +43,7 @@ from .datasets import (
     read_source_provenance,
     save_manifest,
 )
-from .workflows import WorkflowPackage, load_workflow
+from .workflows import WorkflowPackage, load_workflow, resolve_workflow_reference
 
 
 class ExecutorUnavailableError(RuntimeError):
@@ -83,7 +83,7 @@ def run_dataset_workflow(
     selected_executor = executor or (
         dataset.manifest.executor.development if dry_run else dataset.manifest.executor.default
     )
-    if selected_executor not in {"current-agent", "claude-code-headless"}:
+    if selected_executor not in {"current-agent", "claude-code-headless", "script"}:
         raise ValueError(f"unsupported executor: {selected_executor}")
 
     run_id = _new_run_id()
@@ -167,7 +167,16 @@ def run_dataset_workflow(
         )
 
     try:
-        _execute_claude_code_headless(run_packet, output_path)
+        if selected_executor == "script":
+            output_path.write_text("", encoding="utf-8")
+            _execute_script(
+                _workflow_package_for_dataset(dataset),
+                run_dir,
+                output_path,
+                run_packet,
+            )
+        else:
+            _execute_claude_code_headless(run_packet, output_path)
         rows = _read_output_rows(output_path)
         with _dataset_lock(lock_path, run_id):
             append_summary = append_rows(
@@ -234,6 +243,13 @@ def run_dataset_workflow(
         append_summary=append_summary,
         cursor_advanced=cursor_advanced,
     )
+
+
+def _workflow_package_for_dataset(dataset) -> WorkflowPackage:
+    source = (dataset.manifest.workflow.config or {}).get("source")
+    if isinstance(source, str) and source:
+        return resolve_workflow_reference(source)
+    return load_workflow(dataset.manifest.workflow.skill)
 
 
 def _execute_claude_code_headless(run_packet: dict[str, Any], output_path: Path) -> None:

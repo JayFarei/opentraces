@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -700,6 +701,119 @@ def trace_query(
         click.echo(f"{packet.trace_id}  {packet.title}")
 
 
+@trace_group.command("skills", cls=OpentracesCommand)
+@click.option("--skill", default=None, help="Show one exact skill name.")
+@click.option("--project", default=None, help="Project slug to search.")
+@click.option("--cwd", "current_cwd", is_flag=True, help="Search only the current opted-in project.")
+@click.option("--since", default=None, help="ISO date/time or duration such as 7d.")
+@click.option("--limit", type=int, default=50, show_default=True, help="Maximum skills.")
+@click.option("--page-token", default=None, help="Cursor token returned by the previous page.")
+@click.option("--latest-generation/--include-superseded", default=True, help="Suppress older generations by default.")
+@click.option("--force-rebuild", is_flag=True, help="Rejected: search commands are read-only.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_skills(
+    skill: str | None,
+    project: str | None,
+    current_cwd: bool,
+    since: str | None,
+    limit: int,
+    page_token: str | None,
+    latest_generation: bool,
+    force_rebuild: bool,
+    as_json: bool,
+) -> None:
+    """List skills observed in retained traces, ranked by usage."""
+    from ..core.trace_search_snapshot import (
+        SearchFilters,
+        SearchSnapshotNeedsRebuild,
+        list_skill_usage,
+    )
+
+    if current_cwd and project:
+        click.echo("Use either --cwd or --project, not both.", err=True)
+        sys.exit(2)
+    if current_cwd:
+        from ..core.config import get_project_dir, project_is_opted_in
+
+        cwd = Path.cwd()
+        if not project_is_opted_in(cwd):
+            click.echo("Not an opentraces project. Run 'opentraces init' first.", err=True)
+            sys.exit(3)
+        project = get_project_dir(cwd).name
+    if force_rebuild:
+        click.echo(
+            "Search commands are read-only. Run 'opentraces trace index' to rebuild the search snapshot.",
+            err=True,
+        )
+        sys.exit(2)
+
+    started = time.monotonic()
+    try:
+        page = list_skill_usage(
+            SearchFilters(
+                skill=skill,
+                project=project,
+                since=since,
+                latest_generation=latest_generation,
+            ),
+            limit=limit,
+            cursor=page_token,
+        )
+    except SearchSnapshotNeedsRebuild as exc:
+        payload = {
+            "status": "maintenance_needed",
+            "reason": exc.reason,
+            "advice": "opentraces trace index",
+            "search_diagnostics": {
+                "used_search_snapshot": False,
+                "used_fts": False,
+                "rows_examined": 0,
+                "hits_returned": 0,
+                "hydrated_count": 0,
+                "raw_trace_scan": False,
+                "wrote_to_index": False,
+                "rebuilt_index": False,
+                "python_full_corpus_sort": False,
+            },
+        }
+        if exc.path is not None:
+            payload["path"] = str(exc.path)
+        if as_json:
+            click.echo(_dump_json(payload))
+            sys.exit(3)
+        click.echo(
+            f"Trace search snapshot automatic rebuild failed ({exc.reason}). "
+            "Run 'opentraces trace index'.",
+            err=True,
+        )
+        sys.exit(3)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+
+    payload = {
+        "status": "ok",
+        "source": "snapshot",
+        "total_skills": page.total_skills,
+        "total_invocations": page.total_invocations,
+        "limit": limit,
+        "next_page_token": page.next_page_token,
+        "has_more": page.next_page_token is not None,
+        "skills": [item.as_dict() for item in page.skills],
+        "search_diagnostics": page.diagnostics.as_dict(),
+        "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},
+    }
+    if as_json:
+        click.echo(_dump_json(payload))
+        return
+
+    if not page.skills:
+        click.echo("No skill invocations found.")
+        return
+    for item in page.skills:
+        click.echo(f"{item.skill_name}\t{item.invocation_count}\t{item.trace_count}")
+
+
 @trace_group.group("index", cls=OpentracesGroup, invoke_without_command=True)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @click.pass_context
@@ -726,12 +840,12 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
     afterwards ingests every layer the dirty marker can be set for and a
     rebuild always converges to clean.
     """
-    import time
-
     from ..core.trace_index import default_index_path, keep_index_warm, refresh_index
     from ..core.trace_search_snapshot import build_trace_search_snapshot
 
+    started = time.monotonic()
     healed_legacy_index = False
+    legacy_bootstrap_duration_ms = None
     if not default_index_path().exists():
         # One-time bootstrap: ``trace map/get/slice`` hydrate from the legacy
         # Trace Index, and nothing else recreates it after the operator
@@ -755,6 +869,10 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
         )
         _bootstrap_started = time.monotonic()
         refresh_index()
+        legacy_bootstrap_duration_ms = round(
+            (time.monotonic() - _bootstrap_started) * 1000,
+            2,
+        )
         click.echo(
             f"Legacy Trace Index bootstrap done in "
             f"{time.monotonic() - _bootstrap_started:.1f}s "
@@ -762,8 +880,12 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
             err=True,
         )
         healed_legacy_index = True
+    keep_warm_started = time.monotonic()
     warm_result = keep_index_warm(query_sources=("index", "projection"))
+    keep_warm_duration_ms = round((time.monotonic() - keep_warm_started) * 1000, 2)
+    snapshot_started = time.monotonic()
     search_summary = build_trace_search_snapshot()
+    snapshot_build_duration_ms = round((time.monotonic() - snapshot_started) * 1000, 2)
     payload = {
         "status": "ok",
         "search_snapshot": search_summary.as_dict(),
@@ -776,6 +898,12 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
         "legacy_index": {
             "path": str(default_index_path()),
             "healed": healed_legacy_index,
+        },
+        "telemetry": {
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
+            "keep_warm_duration_ms": keep_warm_duration_ms,
+            "snapshot_build_duration_ms": snapshot_build_duration_ms,
+            "legacy_bootstrap_duration_ms": legacy_bootstrap_duration_ms,
         },
     }
     if as_json:

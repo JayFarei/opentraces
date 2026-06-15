@@ -1,0 +1,243 @@
+name = "skill-usage-to-dataset"
+description = """
+Fast skill inventory to executable dataset happy path.
+
+This journey covers the common operator flow:
+
+  1. rebuild the compact trace search snapshot,
+  2. list all observed skills ranked by invocation usage,
+  3. create a dataset for the top skill,
+  4. run the built-in skill-episodes workflow with the deterministic script executor,
+  5. confirm rows landed in the dataset.
+
+The journey seeds three compact skill-bearing bucket traces first:
+skill-alpha is used twice and skill-beta once, which makes the ranking
+assertion meaningful without relying on live agent output.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+trajectories = ["build-publishable-dataset", "skill-intelligence"]
+persona = "agent"
+requires = ["cli", "git"]
+status = "synthetic-or-artifact-backed"
+from_checkpoints = ["c-installed-source"]
+
+[[steps]]
+type = "write_file"
+id = "write-skill-trace-seed"
+path = "seed_skill_traces.py"
+content = """
+import json
+
+from opentraces.core.bucket_store import write_trace_record
+from opentraces_schema import Agent, Step, ToolCall, TraceRecord
+
+
+def make_trace(trace_id, skill, index):
+    stamp = f"2026-06-15T12:0{index}:00Z"
+    return TraceRecord(
+        trace_id=trace_id,
+        session_id=f"session-{trace_id}",
+        agent=Agent(name="codex-cli", model="gpt-5"),
+        task={"description": f"Use {skill} to build dataset row {index}."},
+        timestamp_start=stamp,
+        timestamp_end=stamp,
+        steps=[
+            Step(step_index=1, role="user", content=f"Use {skill}."),
+            Step(
+                step_index=2,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id=f"{trace_id}-skill",
+                        tool_name="Skill",
+                        input={"name": skill},
+                    )
+                ],
+            ),
+        ],
+        outcome={"success": True, "committed": False},
+    )
+
+
+for index, skill in enumerate(["skill-alpha", "skill-beta", "skill-alpha"]):
+    write_trace_record(
+        make_trace(f"trace-skill-{index}", skill, index),
+        project_slug="otbox-skills",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+
+print(json.dumps({"status": "ok", "seeded": 3}))
+"""
+
+[[steps]]
+type = "shell"
+id = "seed-skill-traces"
+argv = [".testvenv/bin/python", "seed_skill_traces.py"]
+
+[[assertions]]
+kind = "returncode"
+step = "seed-skill-traces"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "seed-skill-traces"
+path = "seeded"
+equals = 3
+
+[[steps]]
+type = "cli"
+id = "trace-index"
+argv = ["trace", "index", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-index"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-index"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "trace-index"
+path = "telemetry.duration_ms"
+min = 0
+
+[[steps]]
+type = "cli"
+id = "trace-skills"
+argv = ["trace", "skills", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-skills"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-skills"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-skills"
+path = "skills.0.skill_name"
+equals = "skill-alpha"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "trace-skills"
+path = "skills.0.invocation_count"
+min = 2
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "trace-skills"
+path = "total_skills"
+min = 2
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "trace-skills"
+path = "telemetry.duration_ms"
+min = 0
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = [
+    "dataset", "new", "skill-alpha-episodes",
+    "--from-skill", "skill-alpha",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-new"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-new"
+path = "dataset.manifest.workflow.skill"
+equals = "skill-episodes-v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-new"
+path = "dataset.manifest.candidate_query.args.skill"
+equals = "skill-alpha"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "dataset-new"
+path = "telemetry.duration_ms"
+min = 0
+
+[[steps]]
+type = "cli"
+id = "dataset-run"
+argv = [
+    "dataset", "run", "skill-alpha-episodes",
+    "--executor", "script",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-run"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-run"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "dataset-run"
+path = "run.emitted_count"
+min = 2
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "dataset-run"
+path = "run.appended_count"
+min = 2
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "dataset-run"
+path = "telemetry.duration_ms"
+min = 0
+
+[[steps]]
+type = "cli"
+id = "dataset-status"
+argv = ["dataset", "status", "skill-alpha-episodes", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "dataset-status"
+path = "row_count"
+min = 2

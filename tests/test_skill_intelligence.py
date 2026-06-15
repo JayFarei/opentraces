@@ -191,6 +191,60 @@ def test_skill_intelligence_workflow_chain_and_schemas(tmp_path) -> None:
         assert validate_row(rows[0], schema) == []
 
 
+def test_dataset_new_from_skill_runs_skill_episode_workflow() -> None:
+    from opentraces.cli import main
+    from opentraces.core.datasets import read_source_provenance
+
+    _seed_skill_bucket()
+    runner = CliRunner()
+
+    created = runner.invoke(
+        main,
+        ["dataset", "new", "opentraces-episodes", "--from-skill", "opentraces", "--json"],
+    )
+
+    assert created.exit_code == 0, created.output
+    created_payload = json.loads(created.output)
+    manifest = created_payload["dataset"]["manifest"]
+    assert manifest["workflow"]["skill"] == "skill-episodes-v1"
+    assert manifest["candidate_query"]["args"]["skill"] == "opentraces"
+    assert manifest["candidate_query"]["args"]["candidate_kind"] == "skill_invocation"
+    schema = json.loads(
+        (
+            Path(created_payload["dataset"]["path"])
+            / manifest["schema"]["path"]
+        ).read_text(encoding="utf-8")
+    )
+    assert "episode_id" in schema["required"]
+    assert created_payload["next_command"] == (
+        "opentraces dataset run opentraces-episodes --executor script --json"
+    )
+    assert created_payload["telemetry"]["duration_ms"] >= 0
+    provenance = read_source_provenance(Path(created_payload["dataset"]["path"]))
+    assert provenance is not None
+    assert provenance["schema_version"] == "opentraces.dataset.source_provenance.v1"
+    assert provenance["bucket_snapshot"]["capture_mode"] == "deferred"
+    assert provenance["bucket_manifest"]["capture_mode"] == "deferred"
+    assert provenance["query_fingerprint"]
+
+    run = runner.invoke(
+        main,
+        ["dataset", "run", "opentraces-episodes", "--executor", "script", "--json"],
+    )
+
+    assert run.exit_code == 0, run.output
+    run_payload = json.loads(run.output)
+    assert run_payload["status"] == "ok"
+    assert run_payload["run"]["executor"] == "script"
+    assert run_payload["run"]["emitted_count"] == 2
+    assert run_payload["run"]["appended_count"] == 2
+    assert run_payload["telemetry"]["duration_ms"] >= 0
+
+    status = runner.invoke(main, ["dataset", "status", "opentraces-episodes", "--json"])
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["row_count"] == 2
+
+
 def test_workflow_skill_intelligence_dry_run_writes_report_and_case_study(tmp_path) -> None:
     from opentraces.cli import main
     from opentraces.core.datasets import validate_row
