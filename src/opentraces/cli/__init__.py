@@ -1550,6 +1550,78 @@ def _run_upgrade_subprocess(cmd: list[str], method: str, timeout: int = 120) -> 
     sys.exit(4)
 
 
+def _heal_brew_tap() -> str | None:
+    """Ensure the canonical opentraces Homebrew tap is correctly wired before a
+    brew upgrade. Best-effort; never raises.
+
+    opentraces moved to a dedicated tap (``jayfarei/opentraces`` ->
+    ``JayFarei/homebrew-opentraces``). Installs from before the move have a tap
+    clone that still points at the old generic ``homebrew-tap`` (a historical
+    GitHub redirect), which no longer carries the opentraces formula — so
+    ``brew upgrade jayfarei/opentraces/opentraces`` would fail to find it.
+    Repoint a stale clone in place (or tap fresh) so the upgrade resolves.
+    Returns a short status string if it healed anything, else None.
+    """
+    import shutil
+    import subprocess
+
+    brew = shutil.which("brew")
+    if brew is None:
+        return None
+    canon_tap = "jayfarei/opentraces"
+    canon_remote = "https://github.com/JayFarei/homebrew-opentraces.git"
+
+    def _b(args, timeout=60):
+        try:
+            return subprocess.run(
+                [brew, *args], capture_output=True, text=True, timeout=timeout
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _git(args, timeout=60):
+        try:
+            return subprocess.run(
+                ["git", *args], capture_output=True, text=True, timeout=timeout
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    try:
+        rp = _b(["--repository", canon_tap])
+        tap_dir = (
+            Path(rp.stdout.strip())
+            if rp is not None and rp.returncode == 0 and rp.stdout.strip()
+            else None
+        )
+        healed: str | None = None
+        if tap_dir is not None and tap_dir.is_dir():
+            remote = ""
+            r = _git(["-C", str(tap_dir), "remote", "get-url", "origin"], timeout=20)
+            if r is not None and r.returncode == 0:
+                remote = (r.stdout or "").strip()
+            has_formula = (tap_dir / "Formula" / "opentraces.rb").exists() or (
+                tap_dir / "opentraces.rb"
+            ).exists()
+            if "homebrew-opentraces" not in remote or not has_formula:
+                # Stale clone (still points at the old homebrew-tap). Repoint +
+                # hard-reset in place — avoids the `brew tap` "remote mismatch".
+                _git(["-C", str(tap_dir), "remote", "set-url", "origin", canon_remote], timeout=20)
+                if (_git(["-C", str(tap_dir), "fetch", "--quiet", "origin"], timeout=90) is not None):
+                    _git(["-C", str(tap_dir), "reset", "--hard", "FETCH_HEAD"], timeout=20)
+                    healed = "repointed stale tap to the dedicated homebrew-opentraces repo"
+        else:
+            res = _b(["tap", canon_tap, canon_remote])
+            if res is not None and res.returncode == 0:
+                healed = "tapped jayfarei/opentraces"
+        # Homebrew 6.x requires third-party taps to be trusted; on older brew
+        # `trust` is an unknown subcommand and the call is a harmless no-op.
+        _b(["trust", canon_tap])
+        return healed
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _render_integration_repair_summary(summary: dict) -> None:
     repaired = summary.get("repaired") or []
     errors = summary.get("errors") or []
@@ -1640,6 +1712,12 @@ def _upgrade_impl(skill_only: bool, *, integrations_only: bool = False) -> None:
             human_echo("Skipping CLI upgrade, updating skill and hook only.")
         elif method == "brew":
             human_echo("Upgrading via brew...")
+            # Self-heal the tap first: opentraces moved to its own tap, and
+            # pre-move installs may have a stale clone pointing at the old
+            # generic homebrew-tap (which no longer carries the formula).
+            healed = _heal_brew_tap()
+            if healed:
+                human_echo(f"  ({healed})")
             # Use the fully-qualified tap formula: a bare ``opentraces`` is
             # ambiguous when more than one tap defines it (e.g. a legacy
             # ``jayfarei/tap`` alongside the canonical ``jayfarei/opentraces``),

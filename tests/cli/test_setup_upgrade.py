@@ -39,3 +39,32 @@ class TestSetupUpgradeRegistered:
         # at the Click parsing layer.
         result = runner.invoke(main, ["setup", "upgrade", "--skill-only", "--help"])
         assert result.exit_code == 0
+
+
+class TestHealBrewTap:
+    """0.4.5 follow-up: setup upgrade self-heals a stale opentraces tap (a clone
+    still pointing at the old generic homebrew-tap after opentraces moved to its
+    own dedicated tap). Best-effort: never raises."""
+
+    def test_returns_none_when_brew_absent(self, monkeypatch):
+        import shutil
+
+        import opentraces.cli as cli
+
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        assert cli._heal_brew_tap() is None
+
+    def test_best_effort_never_raises_on_subprocess_failure(self, monkeypatch):
+        import shutil
+        import subprocess
+
+        import opentraces.cli as cli
+
+        monkeypatch.setattr(shutil, "which", lambda name: "/opt/homebrew/bin/brew")
+
+        def _boom(*a, **k):
+            raise RuntimeError("subprocess exploded")
+
+        monkeypatch.setattr(subprocess, "run", _boom)
+        # All brew/git calls are wrapped; the helper must swallow and return None.
+        assert cli._heal_brew_tap() is None

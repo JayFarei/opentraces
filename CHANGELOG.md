@@ -7,6 +7,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **opentraces moved to its own Homebrew tap.** `brew install
+  JayFarei/opentraces/opentraces` now resolves to a dedicated
+  `JayFarei/homebrew-opentraces` repo instead of a redirect alias of the generic
+  personal tap (which keeps unrelated formulae like `lazymem`). Existing installs
+  migrate automatically: a `tap_migrations.json` in the old tap points `brew` at
+  the new one, and `opentraces setup upgrade` now self-heals a stale tap clone —
+  one left pointing at the old repo after the move — by re-pointing it at the
+  dedicated repo before upgrading. The installed binary is unaffected; the
+  install command is unchanged.
+
 ## [0.4.5] - 2026-06-15
 
 ### Changed
