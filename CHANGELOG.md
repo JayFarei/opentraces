@@ -7,6 +7,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-15
+
 ### Changed
 
 - **`ctx prune --to-session <stem>` now uses the stem verbatim (#42).**
@@ -22,6 +24,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   labels were JSON-only).
 
 ### Fixed
+
+- **Watcher maturation livelock cured (#65, follow-up to the RSS bounding).** A
+  maturation tick that hit its wall-clock budget discarded every commit it had
+  already searched — `_flush_maturation_scratch` was gated on a non-truncated
+  tick — and the per-commit loop re-walked already-searched commits each tick,
+  so a cold backlog made zero forward progress and recomputed the same prefix
+  indefinitely. Truncated ticks now flush the work they completed (the appended
+  per-`(patch, commit)` search/anchor events dedup-skip on the next tick, so the
+  backlog drains monotonically; the watermark still only stamps on a full,
+  untruncated sweep), `_mature_patch_chunk` skips commits whose every chunk
+  patch is already searched/anchored before re-running `git show`, and
+  `reconcile_commit_anchors` checks the deadline AFTER the cheap dedup-skips so
+  an already-searched prefix can't consume the budget and starve a partially
+  searched commit's unsearched tail. Pinned by two tests that each fail without
+  their corresponding fix.
 
 - **Context Tree projection dropped every trace after the first on
   multi-session projects (#42).** `build_context_tree_projection` rebound its
