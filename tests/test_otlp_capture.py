@@ -602,3 +602,42 @@ def test_full_chain_layers_have_full_completeness(
         assert by_type["runtime_state"]["completeness"] == "full"
     finally:
         watcher.shutdown()
+
+
+def test_install_autostart_threads_port_bind_raw_dir(tmp_path, monkeypatch):
+    """#78 follow-up (0.4.4): ``setup capture-otlp`` passes port/bind/
+    raw_bodies_dir to ``install_autostart``; before 0.4.4 the signature did not
+    accept them and autostart crashed with ``unexpected keyword argument
+    'port'``. The knobs must be threaded into the unit's argv so a non-default
+    receiver is honored at boot, and the no-knob path must stay byte-identical.
+    """
+    from opentraces.capture.otlp import lifecycle as L
+
+    plist = tmp_path / "rec.plist"
+    monkeypatch.setattr(L, "LAUNCHD_PLIST_PATH", plist)
+    monkeypatch.setattr(L, "_plat", lambda: "darwin")
+    monkeypatch.setattr(L, "_ventura_plus", lambda: False)
+    monkeypatch.setattr(L, "_run", lambda cmd, timeout=10: (0, ""))
+    binp = tmp_path / "opentraces"
+    binp.write_text("#!/bin/sh\n")
+    binp.chmod(0o755)
+
+    res = L.install_autostart(
+        opentraces_binary=binp,
+        log_dir=tmp_path / "logs",
+        port=4319,
+        bind="0.0.0.0",
+        raw_bodies_dir=tmp_path / "raw",
+    )
+    assert res.ok, res
+    body = plist.read_text()
+    assert "--port" in body and "4319" in body
+    assert "--bind" in body and "0.0.0.0" in body
+    assert "--raw-bodies-dir" in body and str(tmp_path / "raw") in body
+
+    # No-knob install (the integration-repair caller) stays default + clean.
+    res2 = L.install_autostart(opentraces_binary=binp, log_dir=tmp_path / "logs")
+    assert res2.ok, res2
+    body2 = plist.read_text()
+    assert "--foreground" in body2
+    assert "--port" not in body2 and "--bind" not in body2

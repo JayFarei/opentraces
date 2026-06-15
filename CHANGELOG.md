@@ -7,6 +7,24 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-06-15
+
+### Fixed
+
+- **`opentraces setup capture-otlp` autostart crashed (`unexpected keyword
+  argument 'port'`).** `install_autostart()` had drifted from its caller, which
+  passes `port` / `bind` / `raw_bodies_dir`; the launchd/systemd unit install
+  raised a `TypeError` and fell back to "run it manually". The signature now
+  accepts those (keyword-only, optional) and threads them into the unit's argv
+  so a non-default receiver is honored at boot; the no-knob path
+  (integration-repair) is byte-identical to before. Found dogfooding the 0.4.3
+  release on a real machine.
+- **`opentraces setup upgrade` failed under Homebrew when more than one tap
+  defines `opentraces`.** It ran a bare `brew upgrade opentraces`, which brew
+  refuses ("Formulae found in multiple taps") when a legacy `jayfarei/tap` sits
+  alongside the canonical `jayfarei/opentraces`. It now upgrades the
+  fully-qualified `jayfarei/opentraces/opentraces`.
+
 ## [0.4.3] - 2026-06-15
 
 ### Changed

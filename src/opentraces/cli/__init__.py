@@ -1640,7 +1640,13 @@ def _upgrade_impl(skill_only: bool, *, integrations_only: bool = False) -> None:
             human_echo("Skipping CLI upgrade, updating skill and hook only.")
         elif method == "brew":
             human_echo("Upgrading via brew...")
-            _run_upgrade_subprocess(["brew", "upgrade", "opentraces"], "brew")
+            # Use the fully-qualified tap formula: a bare ``opentraces`` is
+            # ambiguous when more than one tap defines it (e.g. a legacy
+            # ``jayfarei/tap`` alongside the canonical ``jayfarei/opentraces``),
+            # and brew refuses to upgrade rather than guess.
+            _run_upgrade_subprocess(
+                ["brew", "upgrade", "jayfarei/opentraces/opentraces"], "brew"
+            )
             delegated_repair = _run_fresh_upgrade_repair(
                 refresh_project_skill=refresh_project_skill,
             )

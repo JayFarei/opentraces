@@ -19,6 +19,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 from ... import __version__
 from ...core.integration_versions import read_version_stamp, stamp_xml
@@ -41,10 +42,7 @@ _PLIST = """\
     <key>Label</key><string>com.opentraces.otlp-receiver</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{bin}</string>
-        <string>capture-otlp</string>
-        <string>start</string>
-        <string>--foreground</string>
+{program_args_xml}
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
@@ -62,7 +60,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={bin} capture-otlp start --foreground
+ExecStart={exec_start}
 Restart=always
 RestartSec=5
 StandardOutput=append:{log_dir}/otlp-receiver.log
@@ -121,6 +119,34 @@ def _signed(binary: Path) -> bool:
     return True if rc == -1 else rc == 0  # no codesign tool => assume okay
 
 
+def _receiver_args(
+    binary: Path,
+    *,
+    foreground: bool,
+    port: int | None = None,
+    bind: str | None = None,
+    raw_bodies_dir: Path | None = None,
+) -> list[str]:
+    """Build the ``capture-otlp start`` argv the unit should exec.
+
+    Optional knobs are appended only when set, so the auto-start unit reflects
+    the same port/bind/raw-bodies-dir the user passed to ``setup capture-otlp``;
+    when unset, the receiver falls back to its own defaults (4318 / loopback /
+    ~/.opentraces/raw-bodies). Keeps the no-arg caller (integration repair)
+    byte-identical to the previous default unit.
+    """
+    args = [str(binary), "capture-otlp", "start"]
+    if foreground:
+        args.append("--foreground")
+    if port is not None:
+        args += ["--port", str(port)]
+    if bind is not None:
+        args += ["--bind", str(bind)]
+    if raw_bodies_dir is not None:
+        args += ["--raw-bodies-dir", str(raw_bodies_dir)]
+    return args
+
+
 def _fallback(binary: Path) -> list[str]:
     return [str(binary), "capture-otlp", "start"]
 
@@ -128,8 +154,17 @@ def _fallback(binary: Path) -> list[str]:
 def install_autostart(
     opentraces_binary: Path | None = None,
     log_dir: Path | None = None,
+    *,
+    port: int | None = None,
+    bind: str | None = None,
+    raw_bodies_dir: Path | None = None,
 ) -> InstallResult:
-    """Install an OS-level auto-start unit for the OTLP receiver."""
+    """Install an OS-level auto-start unit for the OTLP receiver.
+
+    ``port`` / ``bind`` / ``raw_bodies_dir`` are baked into the unit's argv when
+    provided (so a non-default ``setup capture-otlp`` is honored at boot); all
+    are optional and default to the receiver's own defaults when omitted.
+    """
     plat = _plat()
     binary = _bin(opentraces_binary)
     ld = log_dir or (OPENTRACES_DIR / "logs")
@@ -144,6 +179,13 @@ def install_autostart(
             details="No opentraces binary on PATH; pass opentraces_binary=Path(...) explicitly.",
         )
     ld.mkdir(parents=True, exist_ok=True)
+    args = _receiver_args(
+        binary, foreground=True, port=port, bind=bind, raw_bodies_dir=raw_bodies_dir
+    )
+    program_args_xml = "\n".join(
+        f"        <string>{_xml_escape(a)}</string>" for a in args
+    )
+    exec_start = " ".join(args)
 
     if plat == "darwin":
         if _ventura_plus() and not _signed(binary):
@@ -161,7 +203,7 @@ def install_autostart(
             )
         LAUNCHD_PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
         LAUNCHD_PLIST_PATH.write_text(stamp_xml(_PLIST.format(
-            bin=str(binary),
+            program_args_xml=program_args_xml,
             log_dir=str(ld),
             version=__version__,
         )))
@@ -177,7 +219,7 @@ def install_autostart(
     # linux
     SYSTEMD_UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
     SYSTEMD_UNIT_PATH.write_text(_UNIT.format(
-        bin=str(binary),
+        exec_start=exec_start,
         log_dir=str(ld),
         version=__version__,
     ))
