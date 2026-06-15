@@ -351,6 +351,30 @@ def _post_commit_hook_section(info: dict) -> None:
         _row("ok", "trail anchors", str(count if count is not None else 0))
 
 
+def _interpreter_health_section(info: dict) -> None:
+    """Render flagged hook interpreters (issue #86).
+
+    Only renders when there are findings; a clean report stays silent to keep
+    doctor compact, consistent with the surrounding panels.
+    """
+    findings = info.get("findings") or []
+    if not findings:
+        return
+    _section("Hook interpreters")
+    for f in findings:
+        integration = f.get("integration") or "?"
+        event = f.get("event") or "?"
+        interpreter = f.get("interpreter") or "?"
+        _row(
+            "warn",
+            f"{integration}/{event}",
+            f.get("reason") or "unstable interpreter",
+            detail=interpreter,
+        )
+    remedy = findings[0].get("remedy") or "Run: opentraces setup upgrade --integrations-only"
+    _cli.human_echo(f"    {_cli._dim(remedy)}")
+
+
 def _trace_index_section(info: dict) -> None:
     _section("Trace Index")
     state = info.get("state") or "missing"
@@ -503,6 +527,7 @@ def _render_doctor_human(report: dict) -> None:
     _trace_index_section(report.get("trace_index") or {})
     _hooks_section(report["hooks"])
     _post_commit_hook_section(report.get("post_commit_hook") or {})
+    _interpreter_health_section(report.get("interpreter_health") or {})
     _trail_event_log_section(report.get("trail_event_log") or {})
     _cli.human_echo("")
 

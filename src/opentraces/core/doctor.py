@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -477,6 +479,184 @@ def _post_commit_hook_status(cwd: Path) -> dict[str, Any]:
         "last_trail_anchors_created": last_trail_anchors_created,
         "last_trail_anchor_error": last_trail_anchor_error,
         "notes_ref_reachable": notes_reachable,
+    }
+
+
+# --- baked-interpreter health panel (issue #86) ---------------------------
+
+# A Homebrew Cellar interpreter path is an upgrade time-bomb: the
+# ``/Cellar/<formula>/<version>/`` segment is deleted on ``brew upgrade`` even
+# though it resolves fine right now. ``stable_interpreter`` remaps these at
+# install time, but hooks baked by an older opentraces (before that remap) can
+# still carry the pinned path. Flag them so the user re-renders the glue.
+_CELLAR_PIN_RE = re.compile(r"/Cellar/[^/]+/[^/]+/")
+
+_INTERPRETER_REMEDY = "Run: opentraces setup upgrade --integrations-only"
+
+
+def _interpreter_token(command: str) -> str | None:
+    """Extract the interpreter (first executable token) from a hook command.
+
+    Hook commands bake the interpreter as the leading token, e.g.
+    ``'/path/python' -m opentraces ...`` (shlex-quoted for Claude/Codex) or
+    ``"/path/python" -m opentraces ...`` (double-quoted in the Git shim). Parse
+    with ``shlex`` and return the first token; on any failure return ``None``.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    return tokens[0] if tokens else None
+
+
+def _is_opentraces_hook_command(command: object) -> bool:
+    """True if ``command`` is an opentraces-owned hook command."""
+    return isinstance(command, str) and "opentraces" in command
+
+
+def _interpreter_finding(
+    interpreter: str | None,
+    *,
+    integration: str,
+    event: str,
+) -> dict[str, Any] | None:
+    """Return a finding dict if ``interpreter`` is unstable, else ``None``.
+
+    Flags an interpreter when EITHER it does not exist on disk OR it matches a
+    version-pinned Homebrew Cellar path. Never raises.
+    """
+    if not interpreter:
+        return None
+    reason: str | None = None
+    try:
+        exists = os.path.exists(interpreter)
+    except OSError:
+        exists = False
+    if not exists:
+        reason = "interpreter path does not exist on disk"
+    elif _CELLAR_PIN_RE.search(interpreter):
+        reason = "version-pinned Homebrew Cellar path (breaks on brew upgrade)"
+    if reason is None:
+        return None
+    return {
+        "integration": integration,
+        "event": event,
+        "interpreter": interpreter,
+        "reason": reason,
+        "remedy": _INTERPRETER_REMEDY,
+    }
+
+
+def _scan_json_hook_config(
+    path: Path, integration: str, findings: list[dict[str, Any]]
+) -> None:
+    """Scan a Codex/Claude ``hooks[event][].hooks[].command`` config tree.
+
+    Both Codex (``~/.codex/hooks.json``) and Claude
+    (``~/.claude/settings.json``, under the ``hooks`` key) share this shape.
+    Missing or corrupt files are silently skipped (never raise).
+    """
+    try:
+        if not path.is_file():
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    hooks_root = data.get("hooks")
+    if not isinstance(hooks_root, dict):
+        return
+    for event, entries in hooks_root.items():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            inner = entry.get("hooks")
+            if not isinstance(inner, list):
+                continue
+            for hook in inner:
+                if not isinstance(hook, dict):
+                    continue
+                command = hook.get("command")
+                if not _is_opentraces_hook_command(command):
+                    continue
+                finding = _interpreter_finding(
+                    _interpreter_token(command),
+                    integration=integration,
+                    event=str(event),
+                )
+                if finding is not None:
+                    findings.append(finding)
+
+
+def _scan_git_hook(cwd: Path, findings: list[dict[str, Any]]) -> None:
+    """Scan the repo's ``.git/hooks/opentraces-post-commit`` shim content.
+
+    The shim bakes the interpreter as ``"<python>" -m opentraces ...``; pull
+    that token off the line carrying ``-m opentraces``. Missing/corrupt files
+    are skipped silently.
+    """
+    hook_file = cwd / ".git" / "hooks" / "opentraces-post-commit"
+    try:
+        if not hook_file.is_file():
+            return
+        content = hook_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    for line in content.splitlines():
+        if "-m opentraces" not in line:
+            continue
+        interpreter = _interpreter_token(line)
+        finding = _interpreter_finding(
+            interpreter,
+            integration="git",
+            event="post-commit",
+        )
+        if finding is not None:
+            findings.append(finding)
+
+
+def _interpreter_health(cwd: Path) -> dict[str, Any]:
+    """Flag hook commands whose baked interpreter is an upgrade time-bomb.
+
+    Inspects the installed Codex / Claude / Git hook configs for
+    opentraces-owned commands and flags any whose interpreter (a) does not
+    exist on disk, or (b) is a version-pinned Homebrew Cellar path. Returns a
+    structured sub-report; missing or corrupt config files yield an empty,
+    ``ok`` report. Never raises.
+    """
+    findings: list[dict[str, Any]] = []
+
+    try:
+        from ..capture.codex_cli.sessions import codex_home
+
+        codex_dir = codex_home()
+    except Exception:
+        codex_dir = Path.home() / ".codex"
+    try:
+        _scan_json_hook_config(codex_dir / "hooks.json", "codex", findings)
+    except Exception:  # noqa: BLE001 — doctor must never crash.
+        pass
+
+    try:
+        _scan_json_hook_config(
+            Path.home() / ".claude" / "settings.json", "claude", findings
+        )
+    except Exception:  # noqa: BLE001 — doctor must never crash.
+        pass
+
+    try:
+        _scan_git_hook(cwd, findings)
+    except Exception:  # noqa: BLE001 — doctor must never crash.
+        pass
+
+    return {
+        "status": "warn" if findings else "ok",
+        "findings": findings,
     }
 
 
@@ -1100,6 +1280,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "trace_index": _trace_index_status(),
         "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),
+        "interpreter_health": _interpreter_health(cwd),
         "trail_capture_audit": _trail_capture_audit(cwd),
         "context_tree": _context_tree_status(cwd),
     }

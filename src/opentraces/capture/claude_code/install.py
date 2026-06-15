@@ -25,7 +25,6 @@ import json
 import os
 import shlex
 import stat
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +35,7 @@ from ...core.integration_versions import (
     version_drift,
 )
 from .._base import HookInstallError, HookInstallResult, HookInstaller  # noqa: F401
+from .._interpreter import stable_interpreter
 
 HOOK_SCRIPTS_DIR = Path(__file__).parent / "hooks"
 
@@ -134,7 +134,8 @@ def _already_registered(event_hooks: list, command: str) -> bool:
 
 
 def _hook_command(script: str) -> str:
-    return f"{shlex.quote(sys.executable)} {shlex.quote(script)}"
+    py = stable_interpreter()
+    return f"{shlex.quote(py)} {shlex.quote(script)}"
 
 
 def _prune_stale_opentraces_hooks(event_hooks: list, command: str) -> list:

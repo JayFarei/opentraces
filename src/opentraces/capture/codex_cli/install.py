@@ -17,6 +17,7 @@ from ...core.integration_versions import (
     version_drift,
 )
 from .._base import HookInstallError, HookInstallResult
+from .._interpreter import stable_interpreter
 from .sessions import codex_home
 
 HOOK_SCRIPTS_DIR = Path(__file__).parent / "hooks"
@@ -104,7 +105,8 @@ def _load_hooks_file(path: Path) -> dict:
 
 def _hook_command(module_name: str) -> str:
     module = f"opentraces.capture.codex_cli.hooks.{module_name}"
-    return f"{shlex.quote(sys.executable)} -m {shlex.quote(module)}"
+    py = stable_interpreter()
+    return f"{shlex.quote(py)} -m {shlex.quote(module)}"
 
 
 def _is_opentraces_command(command: object) -> bool:

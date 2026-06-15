@@ -24,6 +24,7 @@ from ...core.integration_versions import (
 )
 from ...enrichment.git.notes_store import NOTES_REF
 from .._base import HookInstallResult
+from .._interpreter import stable_interpreter
 
 HOOK_FILENAME = "opentraces-post-commit"
 CHAIN_BEGIN = "# >>> opentraces post-commit chain >>>"
@@ -51,7 +52,7 @@ exit 0
 
 def _owned_hook_content() -> str:
     """Render the shim with the current Python interpreter path baked in."""
-    python = sys.executable or shutil.which("python3") or "python3"
+    python = stable_interpreter(sys.executable or shutil.which("python3") or "python3")
     return OWNED_HOOK_TEMPLATE.format(python=python, version=current_cli_version())
 
 

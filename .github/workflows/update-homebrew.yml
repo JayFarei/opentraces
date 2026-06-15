@@ -64,6 +64,13 @@ jobs:
               bin.install_symlink libexec/"bin/ot"
             end
 
+            def post_install
+              # Re-render installed hook glue so upgrades don't leave stale
+              # version-pinned Cellar interpreter paths behind. Best-effort:
+              # never fail the install if integrations aren't set up. (#86)
+              system bin/"opentraces", "setup", "upgrade", "--integrations-only" rescue nil
+            end
+
             test do
               assert_match version.to_s, shell_output("#{bin}/opentraces --version")
               assert_match version.to_s, shell_output("#{bin}/ot --version")
