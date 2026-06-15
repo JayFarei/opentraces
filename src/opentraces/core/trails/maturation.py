@@ -155,20 +155,26 @@ def mature_trails(
                     errors.append(f"patch stream failed: {type(exc).__name__}: {exc}")
                     truncated = True
 
-            if not truncated:
-                try:
-                    _flush_maturation_scratch(
-                        repo,
-                        scratch,
-                        commits=commits,
-                        attribution_version=effective_version,
-                        writer=writer,
-                    )
-                    anchors_created = pending_anchors_created
-                    searches_completed = pending_searches_completed
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"maturation flush failed: {type(exc).__name__}: {exc}")
-                    truncated = True
+            # #65 cure: flush the work this tick COMPLETED even when it truncated,
+            # so a cold backlog drains across ticks instead of recomputing and
+            # discarding the same prefix forever (the livelock). The appended
+            # per-(patch, commit) search/anchor events make those pairs dedup-skip
+            # on the next tick, which is what makes progress monotonic. The
+            # watermark is still only stamped on a full, untruncated sweep (below),
+            # so the quiet-tick gate keeps re-entering until the remainder is done.
+            try:
+                _flush_maturation_scratch(
+                    repo,
+                    scratch,
+                    commits=commits,
+                    attribution_version=effective_version,
+                    writer=writer,
+                )
+                anchors_created = pending_anchors_created
+                searches_completed = pending_searches_completed
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"maturation flush failed: {type(exc).__name__}: {exc}")
+                truncated = True
         except Exception as exc:  # noqa: BLE001
             errors.append(f"dedup scratch failed: {type(exc).__name__}: {exc}")
             truncated = True
@@ -493,11 +499,26 @@ def _mature_patch_chunk(
     searches_completed = 0
     errors: list[str] = []
     truncated = False
-    anchor_keys, search_keys = _dedup_keys_for_chunk(
-        scratch,
-        _patch_ids_for_chunk(patch_events),
-    )
-    for commit in commits:
+    chunk_patch_ids = _patch_ids_for_chunk(patch_events)
+    anchor_keys, search_keys = _dedup_keys_for_chunk(scratch, chunk_patch_ids)
+    # #65 cure: skip commits whose every chunk patch is ALREADY searched or
+    # anchored, BEFORE the per-commit loop. reconcile_commit_anchors otherwise
+    # re-pays a full `git show` + diff parse + per-patch dedup walk on every
+    # already-covered commit each tick (NEW-DEDUPED-GITSHOW) — under a bounded
+    # deadline that re-walk consumes the budget before any NEW commit is reached,
+    # so a partially-drained backlog would still never advance. Filtering here
+    # means each bounded tick spends its budget on OUTSTANDING work, which (with
+    # the truncation flush above) makes the backlog drain monotonically.
+    outstanding = [
+        commit
+        for commit in commits
+        if not all(
+            (patch_id, commit) in anchor_keys
+            or (patch_id, commit, attribution_version) in search_keys
+            for patch_id in chunk_patch_ids
+        )
+    ]
+    for commit in outstanding:
         if deadline is not None and time.monotonic() >= deadline:
             truncated = True
             break

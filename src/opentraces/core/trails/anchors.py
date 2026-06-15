@@ -337,10 +337,6 @@ def reconcile_commit_anchors(
     patches_searched = 0
     patches_total = len(patch_events)
     for patch_event in patch_events:
-        if deadline is not None and time.monotonic() >= deadline:
-            budget_exhausted = True
-            break
-        patches_searched += 1
         patch = patch_event.payload
         trace_patch_id = id_from_payload(patch, "trace_patch")
         if not trace_patch_id:
@@ -353,6 +349,15 @@ def reconcile_commit_anchors(
             # duplicate. Newer attribution versions are allowed to append a new
             # search so periodic re-search remains possible.
             continue
+        # #65: gate the wall-clock budget AFTER the cheap dedup-skips above, never
+        # before. An already-searched/anchored prefix must not consume the
+        # deadline — otherwise a commit with a large covered prefix burns the whole
+        # budget replaying skips and never reaches its unsearched tail, so a
+        # partially searched commit could never finish across ticks (the livelock).
+        if deadline is not None and time.monotonic() >= deadline:
+            budget_exhausted = True
+            break
+        patches_searched += 1
         match = _find_exact_anchor(patch, hunks)
         evidence_tier = "exact_range_hash"
         evidence_firmness = "firm"

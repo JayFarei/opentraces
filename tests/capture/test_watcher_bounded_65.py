@@ -404,6 +404,206 @@ def test_maturation_deadline_pre_scan_bail(tmp_path):
     assert summary.commits_considered == 0
 
 
+def test_cold_backlog_drains_across_truncated_ticks(tmp_path, monkeypatch):
+    """#65 honest cure sentinel — the LIVELOCK discriminator.
+
+    A maturation backlog that cannot finish inside a single tick's deadline must
+    make FORWARD PROGRESS across ticks (drain), not discard every commit it
+    computed on truncation and re-do the same work forever. That all-or-nothing
+    discard (``_flush_maturation_scratch`` gated on ``not truncated`` + a per-tick
+    re-walk of already-searched commits) is the exact >16GB / pegged-core #65
+    recurrence shape.
+
+    Deterministic by construction: ``time.monotonic`` is replaced in both the
+    maturation and anchors modules with a fake clock that advances a fixed step
+    per call, so truncation fires at the same point on every machine regardless
+    of real speed. The bounded per-tick window only ever covers a few commits, so
+    the 8-commit backlog MUST span several ticks.
+
+    FAILS on the pre-fix code (the backlog never drains — every tick recomputes
+    and throws away the same prefix). PASSES once truncated ticks flush their
+    completed work AND already-covered commits are skipped before the loop.
+    """
+    import subprocess as sp
+
+    from opentraces.core.trails import TrailEventDraft, append_event_batch
+    from opentraces.core.trails import anchors as anchors_mod
+    from opentraces.core.trails import maturation as mat
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sp.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    sp.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    sp.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    n_commits = 8
+    for i in range(n_commits):
+        (repo / "f.txt").write_text(f"line {i}\nbody {i}\n")
+        sp.run(["git", "add", "-A"], cwd=repo, check=True)
+        sp.run(["git", "commit", "-q", "-m", f"c{i}"], cwd=repo, check=True)
+
+    # A small, constant backlog of unsearched patches — tick-WORK is held fixed;
+    # the only thing that forces multiple ticks is the bounded deadline window.
+    drafts = [
+        TrailEventDraft(
+            event_type="trace_patch_created",
+            trace_id=f"tr-{j}",
+            step_index=1,
+            capture_method=["hook_posttooluse"],
+            payload={
+                "trace_patch_id": f"tracepatch-sha256:p{j}",
+                "file_path": "f.txt",
+                "authored_text": f"line {j}\n",
+            },
+        )
+        for j in range(2)
+    ]
+    append_event_batch(repo, drafts, writer="test-fixture")
+
+    # Fake monotonic clock: +1.0 per call, delegating every other time attr to the
+    # real module. Deadline is recomputed per tick as (now + WINDOW); WINDOW is
+    # wide enough to search >=1 commit but far too narrow to drain all 8, so every
+    # early tick truncates.
+    import time as real_time
+
+    class _FakeClock:
+        def __init__(self) -> None:
+            self.t = 0.0
+
+        def monotonic(self) -> float:
+            self.t += 1.0
+            return self.t
+
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+    clock = _FakeClock()
+    monkeypatch.setattr(mat, "time", clock)
+    monkeypatch.setattr(anchors_mod, "time", clock)
+
+    window = 10.0
+    max_ticks = 40
+    ticks = 0
+    first_truncated = None
+    while mat.has_unsearched_recent_patches(repo) and ticks < max_ticks:
+        summary = mat.mature_trails(repo, deadline=clock.t + window)
+        if first_truncated is None:
+            first_truncated = summary.truncated
+        ticks += 1
+
+    assert first_truncated is True, (
+        "test misconfigured: the first tick completed the whole backlog, so it "
+        "never exercised the truncation/flush path"
+    )
+    assert not mat.has_unsearched_recent_patches(repo), (
+        f"backlog never drained in {max_ticks} truncated ticks — completed work is "
+        "discarded on truncation and recomputed forever (#65 livelock)"
+    )
+
+
+def test_covered_prefix_does_not_consume_budget(tmp_path, monkeypatch):
+    """#65 codex follow-up — the PARTIAL-COMMIT livelock.
+
+    A commit with a large already-searched prefix must not let that prefix
+    consume the wall-clock budget: reconcile checks the deadline only for patches
+    that still need real work, so the unsearched tail is reached even under a
+    tight budget. Pre-fix (deadline checked BEFORE the dedup-skips) the covered
+    prefix burns the budget and the tail is never searched — a single commit could
+    never finish across ticks even though commit-level skipping wouldn't fire.
+    """
+    import subprocess as sp
+
+    from opentraces.core.trails import TrailEventDraft, append_event_batch
+    from opentraces.core.trails import anchors as anchors_mod
+    from opentraces.core.trails.anchors import reconcile_commit_anchors
+    from opentraces.core.trails.event_log import read_events_scoped
+    from opentraces.core.trails.ids import id_from_payload
+    from opentraces.core.trails.models import ATTRIBUTION_VERSION
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sp.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    sp.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    sp.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    (repo / "f.txt").write_text("line\nbody\n")
+    sp.run(["git", "add", "-A"], cwd=repo, check=True)
+    sp.run(["git", "commit", "-q", "-m", "c"], cwd=repo, check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    n_total, n_covered = 12, 10
+    drafts = [
+        TrailEventDraft(
+            event_type="trace_patch_created",
+            trace_id=f"tr{j}",
+            step_index=1,
+            capture_method=["hook_posttooluse"],
+            payload={
+                "trace_patch_id": f"tracepatch-sha256:p{j}",
+                "file_path": "f.txt",
+                "authored_text": f"line {j}\n",
+            },
+        )
+        for j in range(n_total)
+    ]
+    append_event_batch(repo, drafts, writer="test")
+
+    patch_events = list(
+        read_events_scoped(repo, event_types={"trace_patch_created"})
+    )
+    assert len(patch_events) == n_total
+    # Force the covered patches to be a contiguous PREFIX regardless of read
+    # order, so the budget would be spent on them first under the old ordering.
+    # Keys are the NORMALISED ids reconcile computes (id_from_payload strips the
+    # "tracepatch-sha256:" prefix), not the raw payload strings.
+    covered_raw = {f"tracepatch-sha256:p{j}" for j in range(n_covered)}
+    covered_events = [e for e in patch_events if e.payload["trace_patch_id"] in covered_raw]
+    uncovered_events = [e for e in patch_events if e.payload["trace_patch_id"] not in covered_raw]
+    assert len(covered_events) == n_covered
+    assert len(uncovered_events) == n_total - n_covered
+    patch_events = covered_events + uncovered_events  # covered prefix first
+    version = ATTRIBUTION_VERSION
+    search_keys = {(id_from_payload(e.payload, "trace_patch"), head, version) for e in covered_events}
+    expected_tail = {id_from_payload(e.payload, "trace_patch") for e in uncovered_events}
+    anchor_keys: set = set()
+
+    import time as real_time
+
+    class _FakeClock:
+        def __init__(self) -> None:
+            self.t = 0.0
+
+        def monotonic(self) -> float:
+            self.t += 1.0
+            return self.t
+
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+    clock = _FakeClock()
+    monkeypatch.setattr(anchors_mod, "time", clock)
+
+    # Budget far smaller than the covered prefix (10) but enough for the 2-patch
+    # tail. Pre-fix this expires inside the prefix; post-fix the prefix is free.
+    summary: dict = {}
+    reconcile_commit_anchors(
+        repo,
+        head,
+        patch_events=patch_events,
+        anchor_keys=anchor_keys,
+        search_keys=search_keys,
+        attribution_version=version,
+        deadline=clock.t + 4.0,
+        append_events=False,
+        summary_out=summary,
+    )
+    searched = {r["trace_patch_id"] for r in summary.get("search_results", [])}
+    assert searched == expected_tail, (
+        "the unsearched tail must be reached despite the long covered prefix; "
+        f"got {sorted(searched)}, expected {sorted(expected_tail)}"
+    )
+
+
 def test_run_once_large_patch_payloads_stays_under_rss_ceiling(
     tmp_path, monkeypatch, _isolate_opentraces_global_state
 ):
