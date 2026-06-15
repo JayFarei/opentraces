@@ -32,7 +32,10 @@ jobs:
       - name: Checkout tap
         uses: actions/checkout@v4
         with:
-          repository: JayFarei/homebrew-tap
+          # Dedicated opentraces tap (brew install JayFarei/opentraces/opentraces).
+          # The legacy generic JayFarei/homebrew-tap no longer carries opentraces;
+          # it keeps unrelated formulae (e.g. lazymem).
+          repository: JayFarei/homebrew-opentraces
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Update formula
@@ -76,7 +79,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/JayFarei/homebrew-tap.git
+          git remote set-url origin https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/JayFarei/homebrew-opentraces.git
           git add Formula/opentraces.rb
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Update opentraces to ${{ steps.sha.outputs.version }}"
