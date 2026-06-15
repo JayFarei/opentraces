@@ -873,3 +873,32 @@ def test_sweep_orders_real_projects_before_tmp_worlds(tmp_path, monkeypatch):
     assert ticked == ["real-b", "real-a", "prerel-1"], (
         "real projects (LRU within group) must precede tmp-rooted worlds"
     )
+
+
+def test_ensure_git_hook_auto_installs_for_opted_in_repo(tmp_path):
+    """0.4.5: the watcher tick auto-attaches the per-repo correlator to an
+    opted-in repo, so a global opt-in installs it everywhere (new or existing)
+    without a manual `setup git`. Idempotent + best-effort."""
+    import subprocess as sp
+
+    from opentraces.capture.git import install as gi
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sp.run(["git", "init", "-q"], cwd=repo, check=True)
+    hook = repo / ".git" / "hooks" / gi.HOOK_FILENAME
+    assert not hook.exists()
+
+    wd._ensure_git_hook(repo)
+    assert hook.exists(), "watcher tick must auto-install the post-commit hook"
+
+    # Idempotent: a second call (stat fast-path) doesn't error or duplicate.
+    before = hook.read_text()
+    wd._ensure_git_hook(repo)
+    assert hook.read_text() == before
+
+
+def test_ensure_git_hook_is_noop_on_non_git_dir(tmp_path):
+    """A non-git enlisted dir must not raise (best-effort)."""
+    wd._ensure_git_hook(tmp_path)  # no .git → install returns False, no raise
+    assert not (tmp_path / ".git").exists()

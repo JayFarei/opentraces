@@ -11,10 +11,10 @@ is_running, InstallResult dataclass. Plan 078 R9.
 
 from __future__ import annotations
 
-import logging
 import os
-import platform as _platmod
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -24,8 +24,6 @@ from xml.sax.saxutils import escape as _xml_escape
 from ... import __version__
 from ...core.integration_versions import read_version_stamp, stamp_xml
 from ...core.paths import OPENTRACES_DIR
-
-logger = logging.getLogger("opentraces.otlp.lifecycle")
 
 LAUNCHD_LABEL = "com.opentraces.otlp-receiver"
 LAUNCHD_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
@@ -106,49 +104,87 @@ def _run(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
         return -1, f"{cmd[0]} not found on PATH"
 
 
-def _ventura_plus() -> bool:
-    try:
-        ver = _platmod.mac_ver()[0]
-        return bool(ver) and int(ver.split(".", 1)[0]) >= 13
-    except Exception:
-        return False
+SHIM_PATH = OPENTRACES_DIR / "bin" / "ot-otlp-receiver"
 
 
-def _signed(binary: Path) -> bool:
-    rc, _ = _run(["codesign", "-dv", str(binary)], timeout=5)
-    return True if rc == -1 else rc == 0  # no codesign tool => assume okay
-
-
-def _receiver_args(
-    binary: Path,
+def _receiver_flags(
     *,
     foreground: bool,
     port: int | None = None,
     bind: str | None = None,
     raw_bodies_dir: Path | None = None,
 ) -> list[str]:
-    """Build the ``capture-otlp start`` argv the unit should exec.
-
-    Optional knobs are appended only when set, so the auto-start unit reflects
-    the same port/bind/raw-bodies-dir the user passed to ``setup capture-otlp``;
-    when unset, the receiver falls back to its own defaults (4318 / loopback /
-    ~/.opentraces/raw-bodies). Keeps the no-arg caller (integration repair)
-    byte-identical to the previous default unit.
-    """
-    args = [str(binary), "capture-otlp", "start"]
+    """``capture-otlp start`` flags. Each knob is added only when set, so an
+    unset port/bind/raw-bodies-dir falls back to the receiver's own defaults
+    (4318 / loopback / ~/.opentraces/raw-bodies)."""
+    flags: list[str] = []
     if foreground:
-        args.append("--foreground")
+        flags.append("--foreground")
     if port is not None:
-        args += ["--port", str(port)]
+        flags += ["--port", str(port)]
     if bind is not None:
-        args += ["--bind", str(bind)]
+        flags += ["--bind", str(bind)]
     if raw_bodies_dir is not None:
-        args += ["--raw-bodies-dir", str(raw_bodies_dir)]
-    return args
+        flags += ["--raw-bodies-dir", str(raw_bodies_dir)]
+    return flags
+
+
+def _render_receiver_shim(
+    *,
+    port: int | None = None,
+    bind: str | None = None,
+    raw_bodies_dir: Path | None = None,
+) -> str:
+    """Render the receiver shim.
+
+    The launchd/systemd unit points at THIS shim, not the binary — so the unit's
+    program is the signed system shell (``/bin/sh``) running a script, which
+    macOS Ventura+ loads even though the opentraces binary itself is unsigned
+    (the watcher shim works the same way). The shim resolves the CLI at RUN time
+    (probing well-known bins under the minimal launchd PATH, verifying the verb),
+    so it also survives a ``brew upgrade`` that replaces the binary.
+    """
+    py = sys.executable or "python3"
+    flags = " ".join(
+        shlex.quote(f)
+        for f in _receiver_flags(
+            foreground=True, port=port, bind=bind, raw_bodies_dir=raw_bodies_dir
+        )
+    )
+    return (
+        "#!/bin/sh\n"
+        f"# opentraces-version: {__version__}\n"
+        "# opentraces OTLP receiver shim. Installed by 'setup capture-otlp'.\n"
+        "# Resolves the CLI at RUN time and verifies the verb before exec.\n"
+        "for c in /opt/homebrew/bin/opentraces /usr/local/bin/opentraces \\\n"
+        '         "$HOME/.local/bin/opentraces" "$(command -v opentraces 2>/dev/null)"; do\n'
+        '  if [ -n "$c" ] && [ -x "$c" ] \\\n'
+        '     && "$c" capture-otlp start --help >/dev/null 2>&1; then\n'
+        f'    exec "$c" capture-otlp start {flags} "$@"\n'
+        "  fi\n"
+        "done\n"
+        "# Fallback: interpreter recorded at install time (same release as this).\n"
+        f'exec "{py}" -m opentraces capture-otlp start {flags} "$@"\n'
+    )
+
+
+def _write_receiver_shim(
+    *,
+    port: int | None = None,
+    bind: str | None = None,
+    raw_bodies_dir: Path | None = None,
+) -> Path:
+    SHIM_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SHIM_PATH.write_text(
+        _render_receiver_shim(port=port, bind=bind, raw_bodies_dir=raw_bodies_dir)
+    )
+    mode = SHIM_PATH.stat().st_mode
+    SHIM_PATH.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return SHIM_PATH
 
 
 def _fallback(binary: Path) -> list[str]:
-    return [str(binary), "capture-otlp", "start"]
+    return [str(SHIM_PATH)]
 
 
 def install_autostart(
@@ -179,28 +215,15 @@ def install_autostart(
             details="No opentraces binary on PATH; pass opentraces_binary=Path(...) explicitly.",
         )
     ld.mkdir(parents=True, exist_ok=True)
-    args = _receiver_args(
-        binary, foreground=True, port=port, bind=bind, raw_bodies_dir=raw_bodies_dir
-    )
-    program_args_xml = "\n".join(
-        f"        <string>{_xml_escape(a)}</string>" for a in args
-    )
-    exec_start = " ".join(args)
+    # Point the unit at a shim, not the binary: launchd/systemd then run the
+    # signed system shell executing a script, so an UNSIGNED opentraces binary
+    # loads on macOS Ventura+ (the watcher already works this way) and survives
+    # a brew upgrade that replaces the binary. No code-signing gate needed.
+    shim = _write_receiver_shim(port=port, bind=bind, raw_bodies_dir=raw_bodies_dir)
+    program_args_xml = f"        <string>{_xml_escape(str(shim))}</string>"
+    exec_start = shlex.quote(str(shim))
 
     if plat == "darwin":
-        if _ventura_plus() and not _signed(binary):
-            logger.warning("opentraces binary at %s is unsigned on Ventura+", binary)
-            return InstallResult(
-                ok=False, platform="darwin", path=LAUNCHD_PLIST_PATH,
-                reason="unsigned-binary-on-ventura-plus",
-                fallback_command=_fallback(binary),
-                details=(
-                    "macOS Ventura+ requires signed binaries for LaunchAgents. "
-                    "Run `opentraces capture-otlp start` manually, or sign the "
-                    "opentraces binary with `codesign --force --sign - <path>` "
-                    "for ad-hoc signing."
-                ),
-            )
         LAUNCHD_PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
         LAUNCHD_PLIST_PATH.write_text(stamp_xml(_PLIST.format(
             program_args_xml=program_args_xml,

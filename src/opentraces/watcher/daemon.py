@@ -522,6 +522,26 @@ def _run_bucket_remote_sync(report: TickReport) -> None:
 
 # --- public API ------------------------------------------------------------
 
+def _ensure_git_hook(project_cwd: Path) -> None:
+    """Auto-attach the per-repo post-commit correlator to an opted-in repo.
+
+    This is what makes 'global opt-in => the correlator is installed in every
+    repo (new or existing) automatically' true: the watcher already ticks each
+    enlisted project, so we lazily install the proven per-repo hook here instead
+    of maintaining a global git hook multiplexer. Idempotent + best-effort
+    (never breaks the tick). Steady state is a single filesystem stat — no
+    subprocess — so quiet ticks stay fork-free once the hook is present.
+    """
+    try:
+        from ..capture.git import install as _git_install
+
+        if (project_cwd / ".git" / "hooks" / _git_install.HOOK_FILENAME).exists():
+            return
+        _git_install.install(project_cwd)
+    except Exception:
+        pass
+
+
 def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
     """One tick against one project. Never raises; errors go on the report."""
     _configure_logging()
@@ -538,6 +558,10 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
             report.duration_ms = (time.monotonic() - t0) * 1000.0
             return report
         state = StateManager(state_path=state_path)
+
+        # Opted-in repo (it's enlisted): make sure the post-commit correlator is
+        # attached. Idempotent stat-only fast path once installed.
+        _ensure_git_hook(project_cwd)
 
         last_sha = state.get_last_backfilled_commit()
         last_run = state.get_last_watcher_run_at()

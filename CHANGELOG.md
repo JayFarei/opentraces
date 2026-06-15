@@ -7,6 +7,37 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-06-15
+
+### Changed
+
+- **OTLP receiver auto-start now works with an unsigned binary (e.g. a Homebrew
+  install on macOS Ventura+).** The launchd plist / systemd unit now points at a
+  shim (`~/.opentraces/bin/ot-otlp-receiver`) that resolves the CLI at run time,
+  instead of pointing directly at the unsigned binary — so the unit's program is
+  the signed system shell running a script, which macOS loads (the watcher
+  already works this way), and it survives a `brew upgrade` that replaces the
+  binary. The over-cautious unsigned-binary refusal is removed; the shim bakes in
+  the configured `--port` / `--bind` / `--raw-bodies-dir`. No code signing
+  needed (ad-hoc signing adds no real trust and is wiped by every brew upgrade).
+- **The git commit→trace correlator now auto-attaches to every opted-in repo.**
+  The watcher tick installs the per-repo post-commit hook (idempotent,
+  best-effort) for any enlisted repo, so a global opt-in attaches the correlator
+  to new and existing repos automatically — no per-repo `opentraces setup git`.
+  Steady state is a single filesystem stat (no subprocess), so quiet ticks stay
+  fork-free. The proven per-repo installer is reused (it chains to existing
+  `.git/hooks` and never blocks the commit); no global `core.hooksPath` rewrite.
+
+### Fixed
+
+- **`opentraces setup capture-otlp` reported autostart success when it had
+  actually skipped.** Success was inferred from "no exception raised", so a
+  graceful `install_autostart()` `ok=False` was misreported as "installed (OK)"
+  with `autostart_installed: true`. The human render now shows
+  `not installed (<reason>)` plus the manual-start hint, the `--json` payload
+  sets `autostart_installed: false`, and `next_command` points at
+  `opentraces capture-otlp start`.
+
 ## [0.4.4] - 2026-06-15
 
 ### Fixed

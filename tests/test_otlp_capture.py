@@ -604,19 +604,19 @@ def test_full_chain_layers_have_full_completeness(
         watcher.shutdown()
 
 
-def test_install_autostart_threads_port_bind_raw_dir(tmp_path, monkeypatch):
-    """#78 follow-up (0.4.4): ``setup capture-otlp`` passes port/bind/
-    raw_bodies_dir to ``install_autostart``; before 0.4.4 the signature did not
-    accept them and autostart crashed with ``unexpected keyword argument
-    'port'``. The knobs must be threaded into the unit's argv so a non-default
-    receiver is honored at boot, and the no-knob path must stay byte-identical.
+def test_install_autostart_uses_shim_and_threads_flags(tmp_path, monkeypatch):
+    """0.4.5: the launchd/systemd unit points at a SHIM (not the binary), so an
+    unsigned binary loads on Ventura+ with NO signing gate; port/bind/raw-dir are
+    baked into the shim. Also pins the 0.4.4 regression — passing port= must not
+    raise (the old signature didn't accept it).
     """
     from opentraces.capture.otlp import lifecycle as L
 
     plist = tmp_path / "rec.plist"
+    shim = tmp_path / "bin" / "ot-otlp-receiver"
     monkeypatch.setattr(L, "LAUNCHD_PLIST_PATH", plist)
+    monkeypatch.setattr(L, "SHIM_PATH", shim)
     monkeypatch.setattr(L, "_plat", lambda: "darwin")
-    monkeypatch.setattr(L, "_ventura_plus", lambda: False)
     monkeypatch.setattr(L, "_run", lambda cmd, timeout=10: (0, ""))
     binp = tmp_path / "opentraces"
     binp.write_text("#!/bin/sh\n")
@@ -630,17 +630,25 @@ def test_install_autostart_threads_port_bind_raw_dir(tmp_path, monkeypatch):
         raw_bodies_dir=tmp_path / "raw",
     )
     assert res.ok, res
-    body = plist.read_text()
-    assert "--port" in body and "4319" in body
-    assert "--bind" in body and "0.0.0.0" in body
-    assert "--raw-bodies-dir" in body and str(tmp_path / "raw") in body
+    # The unit programs the SHIM, not the binary (so launchd runs /bin/sh, signed).
+    plist_body = plist.read_text()
+    assert str(shim) in plist_body
+    assert "ProgramArguments" in plist_body
+    import os
+    assert shim.exists() and os.access(shim, os.X_OK)
+    # The shim carries the knobs and resolves the CLI at run time.
+    shim_body = shim.read_text()
+    assert "--port 4319" in shim_body
+    assert "--bind 0.0.0.0" in shim_body
+    assert "--raw-bodies-dir" in shim_body and str(tmp_path / "raw") in shim_body
+    assert "capture-otlp start --help" in shim_body  # verb verification
 
     # No-knob install (the integration-repair caller) stays default + clean.
     res2 = L.install_autostart(opentraces_binary=binp, log_dir=tmp_path / "logs")
     assert res2.ok, res2
-    body2 = plist.read_text()
-    assert "--foreground" in body2
-    assert "--port" not in body2 and "--bind" not in body2
+    shim_body2 = shim.read_text()
+    assert "--foreground" in shim_body2
+    assert "--port" not in shim_body2 and "--bind" not in shim_body2
 
 
 def test_setup_capture_otlp_reports_autostart_failure_honestly(tmp_path, monkeypatch, capsys):
