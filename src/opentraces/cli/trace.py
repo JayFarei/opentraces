@@ -398,10 +398,7 @@ def trace_discover(
 @click.option(
     "--remote-bucket",
     is_flag=True,
-    help=(
-        "Not supported for query (read-only). Run 'opentraces bucket remote pull' "
-        "then 'opentraces trace index', then query the local snapshot."
-    ),
+    help="Pull the configured private bucket remote and rebuild the search snapshot before querying.",
 )
 @click.option(
     "--force-remote-bucket",
@@ -550,14 +547,7 @@ def trace_query(
         )
         sys.exit(3)
     remote_bucket_payload = None
-    if remote_bucket:
-        click.echo(
-            "Remote bucket search must be synced explicitly before querying. "
-            "Run 'opentraces bucket remote pull' and then 'opentraces trace index'.",
-            err=True,
-        )
-        sys.exit(2)
-    if force_remote_bucket:
+    if force_remote_bucket and not remote_bucket:
         click.echo("--force-remote-bucket requires --remote-bucket.", err=True)
         sys.exit(2)
     if force_rebuild:
@@ -593,6 +583,16 @@ def trace_query(
             err=True,
         )
         sys.exit(2)
+    if remote_bucket:
+        try:
+            from ._remote_bucket import pull_remote_bucket_for_trace
+
+            remote_bucket_payload = pull_remote_bucket_for_trace(
+                force=force_remote_bucket,
+            )
+        except Exception as exc:
+            click.echo(f"Unable to read remote bucket: {exc}", err=True)
+            sys.exit(3)
 
     try:
         page = search_traces(

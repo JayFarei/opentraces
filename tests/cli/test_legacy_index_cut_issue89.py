@@ -10,11 +10,13 @@ records when configured.
 from __future__ import annotations
 
 import json
+import shutil
 
 from click.testing import CliRunner
 from opentraces_schema import Agent, Observation, Step, ToolCall, Patch, TraceRecord
 
 from opentraces.cli import main
+from opentraces.core import paths
 from opentraces.core.bucket_store import write_trace_record
 from opentraces.core.trace_index import (
     default_index_path,
@@ -165,6 +167,44 @@ def test_trace_query_uses_snapshot_not_legacy():
     assert diag["used_search_snapshot"] is True
     assert diag["rebuilt_index"] is False
     assert diag["wrote_to_index"] is False
+    assert not default_index_path().exists()
+
+
+def test_trace_query_remote_bucket_pulls_snapshot_without_legacy_index(monkeypatch, tmp_path):
+    trace_id = "45454545-4545-4545-8545-454545454545"
+    _seed(trace_id)
+    remote_root = tmp_path / "remote-bucket"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+    runner = CliRunner()
+
+    pushed = runner.invoke(main, ["bucket", "remote", "push", "--json"])
+    assert pushed.exit_code == 0, pushed.output
+    assert json.loads(pushed.output)["remote"]["state"] == "pushed"
+
+    shutil.rmtree(paths.bucket_dir())
+    shutil.rmtree(paths.OPENTRACES_DIR / "index", ignore_errors=True)
+    assert not default_index_path().exists()
+
+    result = runner.invoke(
+        main,
+        [
+            "trace",
+            "query",
+            "--lex",
+            "retry",
+            "--remote-bucket",
+            "--force-remote-bucket",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["remote_bucket"]["remote"]["state"] == "pulled"
+    assert payload["remote_bucket"]["search_snapshot"]["trace_count"] >= 1
+    assert any(candidate["trace_id"] == trace_id for candidate in payload["candidates"])
+    assert payload["search_diagnostics"]["used_search_snapshot"] is True
+    assert (paths.OPENTRACES_DIR / "index" / "search.sqlite").exists()
     assert not default_index_path().exists()
 
 
