@@ -398,7 +398,7 @@ def trace_discover(
 @click.option(
     "--remote-bucket",
     is_flag=True,
-    help="Pull the configured private bucket remote before querying.",
+    help="Pull the configured private bucket remote and rebuild the search snapshot before querying.",
 )
 @click.option(
     "--force-remote-bucket",
@@ -547,14 +547,7 @@ def trace_query(
         )
         sys.exit(3)
     remote_bucket_payload = None
-    if remote_bucket:
-        click.echo(
-            "Remote bucket search must be synced explicitly before querying. "
-            "Run 'opentraces bucket remote pull' and then 'opentraces trace index'.",
-            err=True,
-        )
-        sys.exit(2)
-    if force_remote_bucket:
+    if force_remote_bucket and not remote_bucket:
         click.echo("--force-remote-bucket requires --remote-bucket.", err=True)
         sys.exit(2)
     if force_rebuild:
@@ -590,6 +583,16 @@ def trace_query(
             err=True,
         )
         sys.exit(2)
+    if remote_bucket:
+        try:
+            from ._remote_bucket import pull_remote_bucket_for_trace
+
+            remote_bucket_payload = pull_remote_bucket_for_trace(
+                force=force_remote_bucket,
+            )
+        except Exception as exc:
+            click.echo(f"Unable to read remote bucket: {exc}", err=True)
+            sys.exit(3)
 
     try:
         page = search_traces(
@@ -825,64 +828,70 @@ def trace_index_group(ctx: click.Context, as_json: bool) -> None:
 
 @trace_index_group.command("rebuild", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def trace_index_rebuild_cmd(as_json: bool) -> None:
+@click.option(
+    "--legacy",
+    "rebuild_legacy",
+    is_flag=True,
+    help="Also rebuild the optional legacy Trace Index (trail-enriched map/get/slice); the default path already serves map/get/slice from the bucket.",
+)
+def trace_index_rebuild_cmd(as_json: bool, rebuild_legacy: bool) -> None:
     """Rebuild the local read-only trace search snapshot."""
-    _trace_index_rebuild_impl(as_json)
+    _trace_index_rebuild_impl(as_json, rebuild_legacy=rebuild_legacy)
 
 
-def _trace_index_rebuild_impl(as_json: bool) -> None:
-    """Rebuild the read-only search snapshot and converge the warm surfaces.
+def _trace_index_rebuild_impl(
+    as_json: bool,
+    *,
+    rebuild_legacy: bool = False,
+) -> None:
+    """Rebuild the read-only search snapshot.
 
-    Order matters: the bounded keep-warm sync first runs the staging→bucket
-    bridge and incrementally heals the legacy Trace Index + projection that
-    ``trace map/get/slice`` hydrate from (never a full legacy rebuild — that
-    is the multi-GB writer issue #22 is about), so the snapshot built
-    afterwards ingests every layer the dirty marker can be set for and a
-    rebuild always converges to clean.
+    The default path is intentionally snapshot-only: it reads retained bucket /
+    legacy trace records directly and never tries to converge the legacy Trace
+    Index cache first. map/get/slice serve from the bucket, so the legacy Trace
+    Index is optional; building it via ``--legacy`` is an explicit operator
+    action for trail-enriched legacy consumers only, because it can be multi-GB
+    and minutes-long on an upgraded dev box.
     """
-    from ..core.trace_index import default_index_path, keep_index_warm, refresh_index
+    from ..core.trace_index import (
+        default_index_path,
+        rebuild_index,
+    )
     from ..core.trace_search_snapshot import build_trace_search_snapshot
 
     started = time.monotonic()
     healed_legacy_index = False
+    legacy_rebuild_forced = False
+    legacy_index_missing = not default_index_path().exists()
     legacy_bootstrap_duration_ms = None
-    if not default_index_path().exists():
-        # One-time bootstrap: ``trace map/get/slice`` hydrate from the legacy
-        # Trace Index, and nothing else recreates it after the operator
-        # deletes a runaway DB (the issue-#22 recovery move). This is the only
-        # path where the explicit verb pays a full legacy rebuild — which can
-        # run ~tens of minutes on a long-bloated machine (issue #27 item M).
-        # The per-trace ingest loop lives inside core.trace_index (not this
-        # file), so we cannot thread a per-trace progressbar without crossing
-        # module ownership. Instead we signpost the long silent operation:
-        # cheap up-front trace count + elapsed-time line. Both lines go to
-        # stderr UNCONDITIONALLY (even under --json) — a human watching the
-        # terminal/CI log should never face a ~tens-of-minutes silent hang
-        # just because a script is consuming stdout. The --json *stdout*
-        # contract is unchanged because the signpost never touches stdout.
+    legacy_rebuild_summary = None
+    if rebuild_legacy:
         total_traces = _approx_bootstrap_trace_count()
         click.echo(
-            "Bootstrapping legacy Trace Index from scratch "
+            "Rebuilding legacy Trace Index explicitly "
             f"(~{total_traces} traces). This can take several minutes on a "
             "large bucket; no output until it completes.",
             err=True,
         )
         _bootstrap_started = time.monotonic()
-        refresh_index()
+        summary = rebuild_index(default_index_path())
         legacy_bootstrap_duration_ms = round(
             (time.monotonic() - _bootstrap_started) * 1000,
             2,
         )
         click.echo(
-            f"Legacy Trace Index bootstrap done in "
+            f"Legacy Trace Index rebuild done in "
             f"{time.monotonic() - _bootstrap_started:.1f}s "
             f"(~{total_traces} traces).",
             err=True,
         )
         healed_legacy_index = True
-    keep_warm_started = time.monotonic()
-    warm_result = keep_index_warm(query_sources=("index", "projection"))
-    keep_warm_duration_ms = round((time.monotonic() - keep_warm_started) * 1000, 2)
+        legacy_rebuild_forced = True
+        legacy_rebuild_summary = {
+            "trace_count": summary.trace_count,
+            "unit_count": summary.unit_count,
+            "map_node_count": summary.map_node_count,
+        }
     snapshot_started = time.monotonic()
     search_summary = build_trace_search_snapshot()
     snapshot_build_duration_ms = round((time.monotonic() - snapshot_started) * 1000, 2)
@@ -890,18 +899,29 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
         "status": "ok",
         "search_snapshot": search_summary.as_dict(),
         "keep_warm": {
-            "ok": warm_result.ok,
-            "synced": warm_result.synced,
-            "changed": len(warm_result.changed_trace_ids),
-            "deleted": len(warm_result.deleted_trace_ids),
+            "ok": True,
+            "synced": False,
+            "changed": 0,
+            "deleted": 0,
+            "maintenance_required": [],
+            "skipped": True,
+            "reason": "snapshot_rebuild_reads_trace_records_directly",
         },
         "legacy_index": {
             "path": str(default_index_path()),
             "healed": healed_legacy_index,
+            "forced": legacy_rebuild_forced,
+            "missing": legacy_index_missing,
+            "summary": legacy_rebuild_summary,
+            "advice": (
+                "opentraces trace index rebuild --legacy"
+                if legacy_index_missing and not rebuild_legacy
+                else None
+            ),
         },
         "telemetry": {
             "duration_ms": round((time.monotonic() - started) * 1000, 2),
-            "keep_warm_duration_ms": keep_warm_duration_ms,
+            "keep_warm_duration_ms": 0,
             "snapshot_build_duration_ms": snapshot_build_duration_ms,
             "legacy_bootstrap_duration_ms": legacy_bootstrap_duration_ms,
         },
@@ -912,11 +932,12 @@ def _trace_index_rebuild_impl(as_json: bool) -> None:
 
     click.echo(f"Search snapshot rebuilt: {search_summary.path}")
     click.echo(f"  traces:    {search_summary.trace_count}")
-    if warm_result.synced:
+    if legacy_index_missing and not rebuild_legacy:
         click.echo(
-            "Warm caches synced: "
-            f"{len(warm_result.changed_trace_ids)} changed, "
-            f"{len(warm_result.deleted_trace_ids)} deleted"
+            "Legacy Trace Index is not built. map/get/slice serve from the bucket "
+            "and do not need it; build it with `opentraces trace index rebuild "
+            "--legacy` only for the optional trail-enriched legacy index.",
+            err=True,
         )
 
 
@@ -942,22 +963,38 @@ def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
 
     sources = ("index", "projection") if query_source == "both" else (query_source,)
     result = keep_index_warm(query_sources=sources)
+    status = "ok" if result.ok else "error"
+    if result.maintenance_required:
+        status = "maintenance_required"
     payload = {
-        "status": "ok" if result.ok else "error",
+        "status": status,
         "synced": result.synced,
         "changed_trace_ids": result.changed_trace_ids,
         "deleted_trace_ids": result.deleted_trace_ids,
         "sources": list(sources),
     }
+    if result.maintenance_required:
+        payload["maintenance_required"] = result.maintenance_required
+        payload["refused_full_rebuild"] = True
+        payload["advice"] = "opentraces trace index rebuild --legacy"
     if result.error:
         payload["error"] = result.error
     if as_json:
         click.echo(_dump_json(payload))
+        if result.maintenance_required:
+            sys.exit(2)
         return
 
     if not result.ok:
         click.echo(f"Keep-warm failed (best-effort): {result.error}")
         return
+    if result.maintenance_required:
+        click.echo(
+            "Search caches need explicit Trace Index maintenance; "
+            "refresh refused to run a full rebuild implicitly."
+        )
+        click.echo("  next: opentraces trace index rebuild --legacy")
+        sys.exit(2)
     if result.synced:
         click.echo("Search caches refreshed (incremental sync):")
         click.echo(f"  changed: {len(result.changed_trace_ids)}")

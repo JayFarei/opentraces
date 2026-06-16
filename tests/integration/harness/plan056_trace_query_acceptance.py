@@ -12,7 +12,6 @@ import contextlib
 import hashlib
 import json
 import os
-import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -211,26 +210,30 @@ def _invoke(runner: CliRunner, argv: list[str]) -> tuple[dict[str, Any], dict[st
     return transcript, payload
 
 
-def _index_digest(index_path: Path) -> str:
-    with sqlite3.connect(index_path) as conn:
-        rows = {
-            "units": list(
-                conn.execute(
-                    "select unit_id, unit_type, trace_id, title_text from units order by unit_id"
-                )
-            ),
-            "nodes": list(
-                conn.execute(
-                    "select node_id, trace_id, ordinal from trace_map_nodes order by node_id"
-                )
-            ),
-        }
-    encoded = json.dumps(rows, sort_keys=True, default=list).encode()
-    return hashlib.sha256(encoded).hexdigest()
+def _snapshot_digest() -> str:
+    """Deterministic content digest of the read-only search snapshot.
+
+    Post issue #89 the snapshot (``search.sqlite``), not the legacy
+    ``index.db``, is the read model that ``trace query/map/get`` serve from, so
+    rebuild idempotence is asserted over the snapshot's content signal. Volatile
+    build metadata (``built_at`` / ``size_bytes``) is excluded; ``source_hash``
+    is the snapshot's own deterministic function of the indexed source set.
+    """
+
+    from opentraces.core.trace_search_snapshot import snapshot_status
+
+    status = snapshot_status()
+    payload = {
+        "state": status.get("state"),
+        "schema_version": status.get("schema_version"),
+        "trace_count": status.get("trace_count"),
+        "source_hash": status.get("source_hash"),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def run_local() -> dict[str, Any]:
-    from opentraces.core.trace_index import default_index_path, rebuild_index
+    from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
 
     with tempfile.TemporaryDirectory(prefix="opentraces-plan056-") as tmp:
         root = Path(tmp)
@@ -241,8 +244,10 @@ def run_local() -> dict[str, Any]:
             _write_project_trace(project)
             runner = CliRunner()
 
-            # Search is read-only: build the snapshot (and heal the legacy
-            # index) once, the way an operator would, before any query.
+            # Search is read-only: build the compact search snapshot once, the
+            # way an operator would, before any query. `trace index` is
+            # snapshot-only by default (issue #89); the legacy index.db is not
+            # built or required for query/map/get.
             from opentraces.cli import main
 
             index_result = runner.invoke(main, ["trace", "index"])
@@ -312,9 +317,11 @@ def run_local() -> dict[str, Any]:
             packet_bytes = len(json.dumps(packet, sort_keys=True).encode())
             slice_bytes = len(json.dumps(map_payload["map"], sort_keys=True).encode())
             full_trace_bytes = len(json.dumps(get_payload["trace"], sort_keys=True).encode())
-            first_digest = _index_digest(default_index_path())
-            rebuild_index()
-            second_digest = _index_digest(default_index_path())
+            # Rebuild idempotence is over the read model that serves queries:
+            # the search snapshot, rebuilt from the same corpus, is identical.
+            first_digest = _snapshot_digest()
+            build_trace_search_snapshot()
+            second_digest = _snapshot_digest()
 
             summary_text = json.dumps(
                 {
@@ -352,7 +359,7 @@ def run_local() -> dict[str, Any]:
                     "full_to_packet": round(full_trace_bytes / max(packet_bytes, 1), 3),
                     "full_to_slice": round(full_trace_bytes / max(slice_bytes, 1), 3),
                 },
-                "index_rebuild_digests": {
+                "snapshot_rebuild_digests": {
                     "first": first_digest,
                     "second": second_digest,
                     "equivalent": first_digest == second_digest,

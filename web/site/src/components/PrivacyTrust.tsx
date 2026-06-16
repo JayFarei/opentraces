@@ -138,7 +138,7 @@ const GROUPS: { kind: Kind; label: string; note: string; color: string }[] = [
   { kind: "judge", label: "Judge", note: "verdict, no mutation", color: JUDGE },
 ];
 
-// Named bucket-egress policies (opentraces bucket security --policy <name>).
+// Named bucket-egress policies (opentraces bucket security policy --policy <name>).
 // Mirrors the CLI: each preset enables a curated tool set; advanced tools
 // (llm_pii, capsule_scope) stay custom-only.
 const POLICIES: { id: string; tools: string[] }[] = [
@@ -159,7 +159,7 @@ const STAGES = [
     n: "1",
     title: "Bucket entry",
     when: "Every capture, before it lands in your private bucket.",
-    cmd: (t: string) => `ot bucket security --tool ${t} --enable`,
+    cmd: (t: string) => `ot bucket security policy --tool ${t} --enable`,
     effect: "guards raw captured traces before any remote sync",
   },
   {

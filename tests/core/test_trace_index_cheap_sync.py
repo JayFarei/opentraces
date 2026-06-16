@@ -118,6 +118,7 @@ def test_cheap_sync_reflects_new_trace_without_full_rebuild(tmp_path, monkeypatc
 
     rebuild_calls = {"n": 0}
     refresh_calls = {"n": 0}
+    refresh_kwargs: list[dict] = []
     real_rebuild = ti.rebuild_index
     real_refresh = ti.refresh_index
 
@@ -127,6 +128,7 @@ def test_cheap_sync_reflects_new_trace_without_full_rebuild(tmp_path, monkeypatc
 
     def spy_refresh(*args, **kwargs):
         refresh_calls["n"] += 1
+        refresh_kwargs.append(dict(kwargs))
         return real_refresh(*args, **kwargs)
 
     monkeypatch.setattr(ti, "rebuild_index", spy_rebuild)
@@ -138,6 +140,8 @@ def test_cheap_sync_reflects_new_trace_without_full_rebuild(tmp_path, monkeypatc
     assert "trace-gamma" in set(result.changed_trace_ids)
     assert rebuild_calls["n"] == 0, "cheap sync must not full-rebuild the index"
     assert refresh_calls["n"] == 1, "cheap sync should incrementally refresh once"
+    assert refresh_kwargs[0].get("allow_rebuild") is False
+    assert refresh_kwargs[0].get("refresh_trails") is False
 
     # The query now reflects the new trace.
     page = ti.query_index_page(lex="gamma")
@@ -296,7 +300,7 @@ def test_cheap_sync_steady_state_does_zero_heavy_corpus_scan(tmp_path, monkeypat
 
 def test_cheap_sync_touch_flips_cheap_signal_into_delta_path(tmp_path, monkeypatch):
     """F1 — bumping a trace file's mtime flips the cheap signal so the delta
-    path engages (the heavy sync runs), where steady state would not."""
+    path engages without running the legacy bucket mirror."""
     project = tmp_path / "demo"
     _enroll_project(project, "1234567890abcdef1234567890abcdef")
     _write_project_trace(project, _trace_with("trace-alpha", "alpha"))
@@ -306,24 +310,65 @@ def test_cheap_sync_touch_flips_cheap_signal_into_delta_path(tmp_path, monkeypat
 
     # Steady state first: cheap signal matches -> no heavy work.
     sync_calls = {"n": 0}
+    refresh_calls = {"n": 0}
+    refresh_kwargs: list[dict] = []
     real_sync = ti.sync_trace_records_from_local_stores
+    real_refresh = ti.refresh_index
 
     def spy_sync(*args, **kwargs):
         sync_calls["n"] += 1
         return real_sync(*args, **kwargs)
 
+    def spy_refresh(*args, **kwargs):
+        refresh_calls["n"] += 1
+        refresh_kwargs.append(dict(kwargs))
+        return real_refresh(*args, **kwargs)
+
     monkeypatch.setattr(ti, "sync_trace_records_from_local_stores", spy_sync)
+    monkeypatch.setattr(ti, "refresh_index", spy_refresh)
 
     ti.cheap_sync_query_state(query_source="index")
     assert sync_calls["n"] == 0, "steady-state must not sync"
+    assert refresh_calls["n"] == 0, "steady-state must not refresh"
 
     # Touch the trace file (bump mtime + grow it) -> cheap signal changes.
     trace_file = get_project_traces_dir(project) / "trace-alpha.jsonl"
     bumped = time.time() + 10
     os.utime(trace_file, (bumped, bumped))
 
-    ti.cheap_sync_query_state(query_source="index")
-    assert sync_calls["n"] == 1, "changed cheap signal must engage the delta sync"
+    result = ti.cheap_sync_query_state(query_source="index")
+    assert result.synced is True
+    assert sync_calls["n"] == 0, "delta path must not run the legacy bucket mirror"
+    assert refresh_calls["n"] == 1, "changed cheap signal must refresh the index"
+    assert refresh_kwargs[0].get("allow_rebuild") is False
+    assert refresh_kwargs[0].get("refresh_trails") is False
+
+
+def test_cheap_sync_large_delta_refuses_before_refresh(tmp_path, monkeypatch):
+    """A large legacy delta is explicit maintenance, not a surprise long repair."""
+    from opentraces.core import trace_index_sync as tis
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(project, _trace_with("trace-alpha", "alpha"))
+    _warm(project)
+
+    _write_project_trace(project, _trace_with("trace-gamma", "gamma"))
+
+    refresh_calls = {"n": 0}
+
+    def fail_refresh(*args, **kwargs):
+        refresh_calls["n"] += 1
+        raise AssertionError("large deltas must not enter refresh_index")
+
+    monkeypatch.setattr(tis, "MAX_INCREMENTAL_TRACE_DELTA", 0)
+    monkeypatch.setattr(ti, "refresh_index", fail_refresh)
+
+    result = ti.cheap_sync_query_state(query_source="index")
+
+    assert result.synced is False
+    assert result.maintenance_required == "index:large_delta:1:max:0"
+    assert refresh_calls["n"] == 0
 
 
 def test_cheap_sync_unchanged_digest_records_post_sync_signal(tmp_path, monkeypatch):

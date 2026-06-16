@@ -49,6 +49,8 @@ from .boilerplate import (
 from .bucket_store import (
     bucket_manifest,
     iter_trace_record_objects,
+    iter_trace_record_pointers,
+    read_bucket_record_for_trace,
     read_trace_record_object,
     sync_trace_records_from_local_stores,
 )
@@ -107,6 +109,18 @@ from .trace_index_sync import (
 from .trace_index_sqlite import _meta_get, _meta_set
 
 logger = logging.getLogger(__name__)
+
+
+class TraceIndexRefreshRequiresRebuild(RuntimeError):
+    """Raised when incremental refresh would need to run a full rebuild."""
+
+    def __init__(self, index_path: Path, reason: str) -> None:
+        self.index_path = Path(index_path)
+        self.reason = reason
+        super().__init__(
+            "Trace Index refresh requires explicit rebuild: "
+            f"{reason} ({self.index_path})"
+        )
 
 
 def _heal_corrupt_index(db_path: Path) -> None:
@@ -203,23 +217,19 @@ def _current_bucket_trace_digests() -> tuple[str | None, dict[str, str]]:
     """
 
     try:
-        sync_trace_records_from_local_stores()
-    except Exception:
-        pass
-    try:
         per_trace = {
-            obj.trace_id: str(obj.record_hash)
-            for obj in iter_trace_record_objects()
-            if obj.trace_id
+            str(source.trace_id): str(source.source_digest)
+            for source in _iter_trace_sources()
+            if source.trace_id and source.source_digest
         }
     except Exception:
         per_trace = {}
-    try:
-        manifest = bucket_manifest(write=False, include_objects=False)
-        top = manifest.get("bucket_digest") or manifest.get("digest")
-    except Exception:
-        top = None
-    return (str(top) if top is not None else None), per_trace
+    if not per_trace:
+        return None, {}
+    import hashlib
+
+    material = json.dumps(per_trace, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(material.encode('utf-8')).hexdigest()}", per_trace
 
 
 _M1_UNIT_TYPES = {
@@ -378,20 +388,25 @@ def refresh_index(
     *,
     refresh_trails: bool = True,
     trail_project_slugs: set[str] | None = None,
+    allow_rebuild: bool = True,
 ) -> RebuildSummary:
     """Refresh changed trace-store sources without replacing the cache file.
 
     ``refresh_trails`` (default True) preserves the historical bare-call
-    contract: the per-project trail projection is re-synced. Pass
-    ``refresh_trails=False`` to skip the entire project-home trail loop (a
-    no-op refresh then does zero per-home ref reads). ``trail_project_slugs``
-    restricts the trail loop to the named project homes (capture/watcher hooks
-    refresh only the changed project); the stale-trail-project sweep is also
-    skipped when a scoped set is given so other projects' projections survive.
+    contract: changed trace maps are enriched from Trail and the per-project
+    trail projection is re-synced. Pass ``refresh_trails=False`` for the cheap
+    trace-record maintenance path: changed traces are indexed without loading
+    per-project Trail projections, and the project-home trail loop is skipped.
+    ``trail_project_slugs`` restricts the trail loop to the named project homes
+    (capture/watcher hooks refresh only the changed project); the
+    stale-trail-project sweep is also skipped when a scoped set is given so
+    other projects' projections survive.
     """
 
     db_path = index_path or default_index_path()
     if not db_path.exists():
+        if not allow_rebuild:
+            raise TraceIndexRefreshRequiresRebuild(db_path, "missing_index")
         return rebuild_index(db_path)
 
     summary = _retry_on_lock(
@@ -399,12 +414,25 @@ def refresh_index(
             db_path,
             refresh_trails=refresh_trails,
             trail_project_slugs=trail_project_slugs,
+            allow_rebuild=allow_rebuild,
         )
     )
     # Issue #40 (A1): see rebuild_index — refreshed traces invalidate the
     # memoized trace-level hydration fields.
     _trace_level_fields.cache_clear()
     return summary
+
+
+def refresh_index_rebuild_reason(index_path: Path | None = None) -> str | None:
+    """Return why incremental refresh would require a rebuild, if any."""
+
+    db_path = index_path or default_index_path()
+    if not db_path.exists():
+        return "missing_index"
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        _migrate_refreshable_index_schema(conn)
+        return _refresh_rebuild_reason(conn)
 
 
 @dataclass(frozen=True)
@@ -594,10 +622,15 @@ def _refresh_index_locked(
     *,
     refresh_trails: bool = True,
     trail_project_slugs: set[str] | None = None,
+    allow_rebuild: bool = True,
 ) -> RebuildSummary:
     with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        if not _schema_supports_refresh(conn):
+        _migrate_refreshable_index_schema(conn)
+        rebuild_reason = _refresh_rebuild_reason(conn)
+        if rebuild_reason is not None:
+            if not allow_rebuild:
+                raise TraceIndexRefreshRequiresRebuild(db_path, rebuild_reason)
             return rebuild_index(db_path)
 
         project_sources = _project_sources_by_slug()
@@ -636,14 +669,19 @@ def _refresh_index_locked(
                 conn,
                 [*old_trace_ids, *[record.trace_id for record in records]],
             )
+            trail_projection = (
+                _trail_projection_for_project(
+                    project_slug,
+                    project_sources,
+                    trail_projection_cache,
+                )
+                if refresh_trails
+                else None
+            )
             for record in records:
                 trace_map = build_trace_map(
                     record,
-                    trail_projection=_trail_projection_for_project(
-                        project_slug,
-                        project_sources,
-                        trail_projection_cache,
-                    ),
+                    trail_projection=trail_projection,
                 )
                 _insert_trace(conn, record, project_slug, trace_path, trace_map)
                 for unit in _build_units(record, trace_map, project_slug, layer=layer):
@@ -1213,7 +1251,78 @@ def _apply_lazy_survival(db_path: Path, units: list[TraceUnit]) -> None:
             unit.facets = new_facets
 
 
+# -- Issue #89: bucket-derived hydration for trace map/get/slice --------------
+#
+# The legacy Trace Index (``index.db``) is a deprecated, often-stale cache. The
+# durable read model is the private bucket trace record, from which a TraceMap
+# is a deterministic projection (``build_trace_map``). map/get/slice resolve
+# from the bucket first; the legacy index is a fallback only when a caller
+# passes an explicit ``index_path`` (the hot projection/discovery paths, which
+# must stay fast) or the trace is absent from the bucket.
+#
+# We intentionally do NOT load a Trail projection at hydration time: rebuilding
+# it per call is infeasible on large event logs (a single repo's projection can
+# take minutes), and the Git-survival enrichment it adds is owned by the Trail
+# substrate (``trail blame/graph/track``), not the trace-map read path.
+
+
+def _bucket_trace_id_from_ref(ref: str) -> str | None:
+    """Extract the embedded trace_id from a ``tu:``/``tmn:``/``tme:`` id.
+
+    Unit/node/edge ids are minted as ``tu:<trace_id>:...`` /
+    ``tmn:<trace_id>:<ordinal>`` and trace ids are UUIDs (no ``:``), so the
+    owning trace is the second colon-separated field.
+    """
+
+    if not ref:
+        return None
+    parts = ref.split(":")
+    if len(parts) >= 3 and parts[0] in {"tu", "tmn", "tme"}:
+        return parts[1]
+    return None
+
+
+def _bucket_trace_map(trace_id: str) -> TraceMap | None:
+    obj = read_bucket_record_for_trace(trace_id)
+    if obj is None:
+        return None
+    return build_trace_map(obj.record)
+
+
+def _bucket_unit(unit_id: str) -> TraceUnit | None:
+    trace_id = _bucket_trace_id_from_ref(unit_id)
+    if trace_id is None:
+        return None
+    obj = read_bucket_record_for_trace(trace_id)
+    if obj is None:
+        return None
+    trace_map = build_trace_map(obj.record)
+    for unit in _build_units(
+        obj.record, trace_map, obj.project_slug, layer=obj.source_layer
+    ):
+        if unit.unit_id == unit_id:
+            return unit
+    return None
+
+
+def _bucket_map_node(node_id: str) -> TraceMapNode | None:
+    trace_id = _bucket_trace_id_from_ref(node_id)
+    if trace_id is None:
+        return None
+    trace_map = _bucket_trace_map(trace_id)
+    if trace_map is None:
+        return None
+    for node in trace_map.nodes:
+        if node.node_id == node_id:
+            return node
+    return None
+
+
 def get_trace_map(trace_id: str, *, index_path: Path | None = None) -> TraceMap | None:
+    if index_path is None:
+        bucket_map = _bucket_trace_map(trace_id)
+        if bucket_map is not None:
+            return bucket_map
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
@@ -1246,6 +1355,10 @@ def get_trace_map(trace_id: str, *, index_path: Path | None = None) -> TraceMap 
 
 
 def get_unit(unit_id: str, *, index_path: Path | None = None) -> TraceUnit | None:
+    if index_path is None:
+        bucket_unit = _bucket_unit(unit_id)
+        if bucket_unit is not None:
+            return bucket_unit
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
@@ -1369,6 +1482,10 @@ def candidate_packet_for_unit(
 
 
 def get_map_node(node_id: str, *, index_path: Path | None = None) -> TraceMapNode | None:
+    if index_path is None:
+        bucket_node = _bucket_map_node(node_id)
+        if bucket_node is not None:
+            return bucket_node
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
@@ -1381,6 +1498,10 @@ def get_map_node(node_id: str, *, index_path: Path | None = None) -> TraceMapNod
 
 
 def get_trace_path(trace_id: str, *, index_path: Path | None = None) -> Path | None:
+    if index_path is None:
+        obj = read_bucket_record_for_trace(trace_id)
+        if obj is not None:
+            return obj.path
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
@@ -1487,45 +1608,93 @@ def _iter_project_homes() -> list[Path]:
     return sorted(path for path in paths.PROJECTS_DIR.iterdir() if path.is_dir())
 
 
-STAGING_PROJECT_SLUG = "_staging"
-
-
 @dataclass(frozen=True)
 class TraceSource:
     layer: str            # "canonical" | "staging"
     project_slug: str
     trace_path: Path
+    trace_id: str | None = None
+    source_digest: str | None = None
 
 
 def _iter_trace_sources() -> list[TraceSource]:
-    """Yield every TraceRecord object the index should ingest, tagged by layer.
+    """Yield one TraceSource per trace the index should ingest, tagged by layer.
 
-    Bundle C / Bug #1: projects/<slug>/traces/*.jsonl is the canonical layer
-    (per-project, opted-in) and the new top-level staging/*.jsonl is the
-    Plan 58 default-inbox staging layer. Both must be indexed so query callers
-    do not silently miss staged-but-unmoved traces.
+    One winner per ``trace_id``, chosen by the canonical :mod:`trace_corpus`
+    resolver (issue #89), so the legacy index refresh shares the exact union and
+    precedence used by the search-snapshot rebuild and single-trace map/get/slice
+    hydration — bucket objects, the plan-079 legacy mirror, per-project
+    ``projects/<slug>/traces/*.jsonl`` (canonical), and top-level
+    ``staging/*.jsonl`` (Plan 58 default inbox). Sorted by source path for a
+    deterministic ingest order.
     """
-    sync_trace_records_from_local_stores()
-    bucket_sources = [
-        TraceSource(obj.source_layer, obj.project_slug, obj.path)
-        for obj in iter_trace_record_objects()
-    ]
-    if bucket_sources:
-        return sorted(bucket_sources, key=lambda source: str(source.trace_path))
+    from . import trace_corpus
 
-    sources: list[TraceSource] = []
-    for project_home in _iter_project_homes():
-        slug = project_home.name
-        for trace_path in _iter_trace_paths(project_home):
-            sources.append(TraceSource("canonical", slug, trace_path))
-    staging_root = getattr(paths, "STAGING_DIR", None)
-    if staging_root and staging_root.exists() and staging_root.is_dir():
-        for trace_path in sorted(staging_root.glob("*.jsonl")):
-            sources.append(TraceSource("staging", STAGING_PROJECT_SLUG, trace_path))
-    return sources
+    sources = [
+        TraceSource(
+            source.source_layer,
+            source.project_slug,
+            source.path,
+            trace_id=source.trace_id,
+            source_digest=source.cheap_digest,
+        )
+        for source in trace_corpus.iter_sources()
+    ]
+    return sorted(sources, key=lambda source: str(source.trace_path))
 
 
 def _schema_supports_refresh(conn: sqlite3.Connection) -> bool:
+    return _refresh_rebuild_reason(conn) is None
+
+
+def _migrate_refreshable_index_schema(conn: sqlite3.Connection) -> bool:
+    """Apply cheap in-place migrations that make refresh safe.
+
+    ``plan056-m1-v9`` only widened ``trail_sources`` with the
+    ``limitations_json`` column. Rebuilding a multi-GB legacy index for that
+    additive column is the wrong recovery path; migrate it in place and let the
+    normal incremental refresh handle freshness.
+    """
+
+    try:
+        version = conn.execute(
+            "select value from meta where key = 'index_version'"
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    current = version[0] if version else None
+    if current != "plan056-m1-v8":
+        return False
+
+    try:
+        sources = conn.execute(
+            "select name from sqlite_master where type = 'table' and name = 'sources'"
+        ).fetchone()
+        trail_sources = conn.execute(
+            "select name from sqlite_master where type = 'table' and name = 'trail_sources'"
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    if not sources or not trail_sources:
+        return False
+
+    try:
+        columns = {
+            str(row["name"] if isinstance(row, sqlite3.Row) else row[1])
+            for row in conn.execute("pragma table_info(trail_sources)")
+        }
+        if "limitations_json" not in columns:
+            conn.execute(
+                "alter table trail_sources "
+                "add column limitations_json text not null default '[]'"
+            )
+        _meta_set(conn, "index_version", INDEX_VERSION)
+    except sqlite3.Error:
+        return False
+    return True
+
+
+def _refresh_rebuild_reason(conn: sqlite3.Connection) -> str | None:
     try:
         version = conn.execute(
             "select value from meta where key = 'index_version'"
@@ -1536,9 +1705,17 @@ def _schema_supports_refresh(conn: sqlite3.Connection) -> bool:
         trail_sources = conn.execute(
             "select name from sqlite_master where type = 'table' and name = 'trail_sources'"
         ).fetchone()
-    except sqlite3.Error:
-        return False
-    return bool(version and version[0] == INDEX_VERSION and sources and trail_sources)
+    except sqlite3.Error as exc:
+        return f"schema_probe_failed:{type(exc).__name__}"
+    if not version:
+        return "missing_index_version"
+    if version[0] != INDEX_VERSION:
+        return f"unsupported_index_version:{version[0]}:{INDEX_VERSION}"
+    if not sources:
+        return "missing_sources_table"
+    if not trail_sources:
+        return "missing_trail_sources_table"
+    return None
 
 
 def _index_totals(conn: sqlite3.Connection, db_path: Path) -> RebuildSummary:

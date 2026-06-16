@@ -12,11 +12,23 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
 import opentraces.cli as _cli
 from . import main
+
+
+def _doctor_json_only() -> bool:
+    """True when doctor must emit JSON only, suppressing the human render.
+
+    Mirrors ``emit_json``'s own gate (``--json`` set, or stdout not a TTY) so
+    the two never both fire — the issue-#89 fix for JSON diagnostics leaking
+    into human output. Factored out as a single seam so tests can force the
+    human path under Click's non-TTY test runner.
+    """
+    return bool(_cli._json_mode) or not sys.stdout.isatty()
 
 
 @main.command(
@@ -46,8 +58,16 @@ def doctor_cmd(security_only: bool) -> None:
     cfg = _cli.load_config()
     report = doctor.report(cfg, Path.cwd())
 
+    # Human XOR JSON: ``emit_json`` writes the ``---OPENTRACES_JSON---`` block
+    # whenever ``--json`` is set OR stdout is not a TTY (piped / captured). In
+    # exactly those cases the human render is noise that leaks the JSON
+    # diagnostics into "human" output, so suppress it and emit JSON only. A real
+    # interactive terminal (TTY, no ``--json``) still gets clean human output.
+    json_only = _doctor_json_only()
+
     if security_only:
-        _render_doctor_security(report)
+        if not json_only:
+            _render_doctor_security(report)
         # Exit-code signal still needs the full tier data, but trim the
         # JSON payload so piping consumers don't get stuff they asked to
         # hide.
@@ -58,7 +78,8 @@ def doctor_cmd(security_only: bool) -> None:
         }
         _cli.emit_json({"status": "ok", "doctor": trimmed})
     else:
-        _render_doctor_human(report)
+        if not json_only:
+            _render_doctor_human(report)
         # Agent-consumer affordance: agents drive off the top-level
         # next_command / next_steps contract, not buried doctor.cli fields.
         # When a newer CLI is available (or deployed glue has drifted), make
@@ -376,17 +397,45 @@ def _interpreter_health_section(info: dict) -> None:
 
 
 def _trace_index_section(info: dict) -> None:
-    _section("Trace Index")
+    """Search read model vs legacy compat cache, split by concern (issue #89).
+
+    The compact read-only ``search.sqlite`` snapshot is the query-serving read
+    model and is reported first. The legacy ``index.db`` is a deprecated
+    compatibility cache that does NOT serve search — a missing or stale legacy
+    cache never means normal search is broken when the snapshot is healthy.
+    """
+    _section("Trace search")
+
+    snap = info.get("search_snapshot") or {}
+    snap_state = snap.get("state") or "missing"
+    snap_kind = {"ok": "ok", "stale": "warn", "missing": "warn", "error": "err"}.get(
+        snap_state, "warn"
+    )
+    _row(snap_kind, "search snapshot", snap_state, detail=snap.get("path"))
+    _row("ok", "indexed traces", str(snap.get("trace_count") or 0))
+    if snap.get("dirty"):
+        _row(
+            "warn",
+            "  ↳ refresh",
+            info.get("search_snapshot_advice") or "opentraces trace index rebuild",
+        )
+
     state = info.get("state") or "missing"
-    kind = {"ok": "ok", "stale": "warn", "missing": "off", "error": "err"}.get(state, "warn")
-    _row(kind, "status", state, detail=info.get("index_path"))
-    _row("ok", "traces", str(info.get("trace_count") or 0))
-    _row("ok", "units", str(info.get("unit_count") or 0))
-    _row("ok", "map nodes", str(info.get("map_node_count") or 0))
-    if info.get("legacy_warning"):
-        _row("warn", "legacy cache", "ignored", detail="canonical cache is ~/.opentraces/index/index.db")
+    legacy_kind = {"ok": "ok", "stale": "off", "missing": "off", "error": "warn"}.get(
+        state, "off"
+    )
+    _row(
+        legacy_kind,
+        "legacy index.db",
+        state,
+        detail="deprecated compat cache; map/get/slice serve from the bucket",
+    )
     if state != "ok":
-        _row("warn", "rebuild", info.get("rebuild_advice") or "opentraces trace index rebuild")
+        _row(
+            "off",
+            "  ↳ optional",
+            info.get("legacy_rebuild_advice") or "opentraces trace index rebuild --legacy",
+        )
 
 
 def _skill_row(h: dict) -> None:
@@ -546,8 +595,14 @@ def _bucket_section(info: dict) -> None:
     _row("ok", "trace records", str(trace_records.get("object_count") or 0))
     stale_sec = int(trace_records.get("security_stale_count") or 0)
     unfiltered = int(trace_records.get("unfiltered_count") or 0)
+    remediation = info.get("security_remediation") or {}
     _row("ok" if stale_sec == 0 else "warn", "stale security", str(stale_sec))
-    _row("ok" if unfiltered == 0 else "warn", "unfiltered", str(unfiltered))
+    _row(
+        "ok" if unfiltered == 0 else "warn",
+        "unfiltered",
+        str(unfiltered),
+        detail=remediation.get("command") if unfiltered else None,
+    )
     trail_stale = int(trail.get("stale_count") or 0)
     _row("ok" if trail_stale == 0 else "warn", "stale trails", str(trail_stale))
     last_sync = trail.get("last_projection_sync_at")
@@ -559,6 +614,11 @@ def _bucket_section(info: dict) -> None:
         "yes" if sync.get("eligible") else "no",
         detail=", ".join(sync.get("blocked_reasons") or []) or None,
     )
+    # Issue #89: a blocked bucket is not "broken" — it just needs the security
+    # filter applied. Name the exact remediation instead of a bare reason code.
+    if remediation:
+        _row("off", "  ↳ fix", remediation.get("reason") or "")
+        _row("off", "  ↳ next", remediation.get("command") or "")
 
 
 def _attribution_section(info: dict) -> None:
@@ -622,18 +682,38 @@ def _trail_event_log_section(info: dict) -> None:
         _row("off", "event log", "missing", detail=ref)
         return
 
-    kind = "ok" if state == "ok" else "err"
-    detail = ref
+    # Verification is skipped (not failed) when the event-log snapshot is too
+    # large for doctor to scan. In that case the booleans are JSON ``null``, NOT
+    # ``false`` — render them as unverified/skipped, not invalid. Only an actual
+    # ``false`` boolean means the integrity check ran and failed.
     head = info.get("head")
-    if head:
-        detail = f"{ref} @ {head[:12]}"
+    detail = f"{ref} @ {head[:12]}" if head else ref
+    unverified = bool(info.get("doctor_scan_skipped")) or state == "unverified_large"
+
+    if unverified:
+        _row("warn", "event log", state, detail=detail)
+        skip = info.get("skip_reason") or "event log too large for doctor scan"
+        _row("off", "verification", "skipped", detail=skip)
+        advice = info.get("advice") or "run 'opentraces trail status' for full verification"
+        _row("off", "  ↳ next", advice)
+        _row("ok", "batches", str(info.get("batch_count") or 0))
+        return
+
+    kind = "ok" if state == "ok" else "err"
     _row(kind, "event log", state, detail=detail)
-    parents_ok = bool(info.get("batch_parents_linear"))
-    hashes_ok = bool(info.get("content_hashes_valid"))
-    chain_ok = bool(info.get("event_chain_valid"))
-    _row("ok" if parents_ok else "err", "batch parents", "linear" if parents_ok else "invalid")
-    _row("ok" if hashes_ok else "err", "content hashes", "valid" if hashes_ok else "invalid")
-    _row("ok" if chain_ok else "err", "event chain", "valid" if chain_ok else "invalid")
+
+    def _verify_row(label: str, value: Any, ok_text: str) -> None:
+        # ``None`` => not checked (skipped); ``False`` => checked and failed.
+        if value is None:
+            _row("off", label, "skipped")
+        elif value:
+            _row("ok", label, ok_text)
+        else:
+            _row("err", label, "invalid")
+
+    _verify_row("batch parents", info.get("batch_parents_linear"), "linear")
+    _verify_row("content hashes", info.get("content_hashes_valid"), "valid")
+    _verify_row("event chain", info.get("event_chain_valid"), "valid")
     _row("ok", "batches", str(info.get("batch_count") or 0))
     _row("ok", "events", str(info.get("event_count") or 0))
 

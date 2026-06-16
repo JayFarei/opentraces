@@ -187,7 +187,9 @@ def test_bucket_security_command_sets_policy_and_tools():
 
     runner = CliRunner()
 
-    policy = runner.invoke(main, ["bucket", "security", "--policy", "basic", "--json"])
+    policy = runner.invoke(
+        main, ["bucket", "security", "policy", "--policy", "basic", "--json"]
+    )
     assert policy.exit_code == 0, policy.output
     payload = json.loads(policy.output)
     assert payload["security"]["scope"] == "bucket"
@@ -196,7 +198,7 @@ def test_bucket_security_command_sets_policy_and_tools():
 
     disable = runner.invoke(
         main,
-        ["bucket", "security", "--tool", "entropy", "--disable", "--json"],
+        ["bucket", "security", "policy", "--tool", "entropy", "--disable", "--json"],
     )
     assert disable.exit_code == 0, disable.output
     payload = json.loads(disable.output)
@@ -209,10 +211,10 @@ def test_bucket_security_command_sets_policy_and_tools():
     assert cfg.security.entropy.enabled is False
 
 
-def test_bucket_security_reads_state_without_mutation():
-    """Bare `bucket security` is a read-only inspector (no flags)."""
+def test_bucket_security_policy_reads_state_without_mutation():
+    """Bare `bucket security policy` is a read-only inspector (no flags)."""
     runner = CliRunner()
-    result = runner.invoke(main, ["bucket", "security", "--json"])
+    result = runner.invoke(main, ["bucket", "security", "policy", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["security"]["scope"] == "bucket"
@@ -225,11 +227,11 @@ def test_bucket_security_guard_errors_exit_2():
     """Mutually-exclusive / malformed flag combinations exit 2."""
     runner = CliRunner()
     bad_combos = [
-        ["bucket", "security", "--enable", "--disable", "--tool", "regex"],
-        ["bucket", "security", "--policy", "basic", "--tool", "regex", "--enable"],
-        ["bucket", "security", "--policy", "basic", "--enable"],
-        ["bucket", "security", "--tool", "regex"],
-        ["bucket", "security", "--enable"],
+        ["bucket", "security", "policy", "--enable", "--disable", "--tool", "regex"],
+        ["bucket", "security", "policy", "--policy", "basic", "--tool", "regex", "--enable"],
+        ["bucket", "security", "policy", "--policy", "basic", "--enable"],
+        ["bucket", "security", "policy", "--tool", "regex"],
+        ["bucket", "security", "policy", "--enable"],
     ]
     for argv in bad_combos:
         result = runner.invoke(main, argv)

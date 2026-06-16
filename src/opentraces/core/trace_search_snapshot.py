@@ -430,47 +430,31 @@ def _delete_trace_rows(conn: sqlite3.Connection, trace_id: str) -> None:
 
 
 def _load_doc_for_trace_id(trace_id: str) -> _SearchDocument | None:
-    """Bounded single-trace doc load: bucket pointer first, then legacy stores."""
+    """Bounded single-trace doc load via the canonical corpus resolver.
 
-    from .bucket_store import read_trace_record_object, trace_records_root
+    Incremental refresh (``keep_index_warm`` / capture hooks) must pick exactly
+    the same source — same union, same precedence — as the full rebuild
+    (:func:`_iter_documents`) and single-trace map/get/slice hydration. Routing
+    this through :mod:`trace_corpus` removes the fourth ad-hoc union that used to
+    live here (bucket-always-wins, no legacy mirror), so an incremental refresh
+    can never index a staler generation than a full rebuild or drop a
+    mirror-only trace (issue #89).
+    """
 
-    root = trace_records_root()
-    if root.exists():
-        for pointer_path in sorted(root.glob(f"*/{trace_id}/current.json")):
-            obj = read_trace_record_object(pointer_path)
-            if obj is None:
-                continue
-            return _doc_from_record(
-                obj.record,
-                project_slug=obj.project_slug,
-                source_layer=obj.source_layer,
-                trace_path=obj.path,
-            )
-    from . import trace_index as ti
+    from . import trace_corpus
 
-    projects_root = paths.PROJECTS_DIR
-    if projects_root.exists():
-        for trace_path in sorted(projects_root.glob(f"*/traces/{trace_id}.jsonl")):
-            for record in ti._iter_trace_file_records(trace_path):
-                if record.trace_id == trace_id:
-                    return _doc_from_record(
-                        record,
-                        project_slug=trace_path.parent.parent.name,
-                        source_layer="canonical",
-                        trace_path=trace_path,
-                    )
-    staging_root = getattr(paths, "STAGING_DIR", None)
-    if staging_root and staging_root.exists():
-        for trace_path in sorted(staging_root.glob(f"{trace_id}.jsonl")):
-            for record in ti._iter_trace_file_records(trace_path):
-                if record.trace_id == trace_id:
-                    return _doc_from_record(
-                        record,
-                        project_slug="_staging",
-                        source_layer="staging",
-                        trace_path=trace_path,
-                    )
-    return None
+    source = trace_corpus.resolve(trace_id)
+    if source is None:
+        return None
+    loaded = trace_corpus.load_record(source)
+    if loaded is None:
+        return None
+    return _doc_from_record(
+        loaded.record,
+        project_slug=loaded.project_slug,
+        source_layer=loaded.source_layer,
+        trace_path=loaded.path,
+    )
 
 
 def refresh_trace_search_snapshot(
@@ -902,63 +886,23 @@ def get_trace_source_path(trace_id: str, path: Path | None = None) -> Path | Non
 
 
 def _iter_documents():
-    # Union of the bucket layer and the legacy project/staging stores, deduped
-    # by trace_id with the bucket winning. A bucket-only early-return would
-    # make legacy-store traces invisible until a keep-warm sync mirrors them,
-    # so an explicit rebuild must read both layers itself.
-    seen: set[str] = set()
-    for record, project_slug, source_layer, trace_path in _iter_bucket_trace_records():
-        if record.trace_id in seen:
+    # Canonical corpus enumeration (issue #89): the single source-of-truth union
+    # + precedence shared with single-trace hydration (read_bucket_record_for_trace)
+    # and the legacy index refresh (_iter_trace_sources). A source whose full
+    # record will not validate is skipped — it has no searchable document — so the
+    # snapshot may hold fewer rows than the index, which keeps cheap pointers.
+    from . import trace_corpus
+
+    for source in trace_corpus.iter_sources():
+        loaded = trace_corpus.load_record(source)
+        if loaded is None:
             continue
-        seen.add(record.trace_id)
         yield _doc_from_record(
-            record,
-            project_slug=project_slug,
-            source_layer=source_layer,
-            trace_path=trace_path,
+            loaded.record,
+            project_slug=loaded.project_slug,
+            source_layer=loaded.source_layer,
+            trace_path=loaded.path,
         )
-    for record, project_slug, source_layer, trace_path in _iter_legacy_trace_records():
-        if record.trace_id in seen:
-            continue
-        seen.add(record.trace_id)
-        yield _doc_from_record(
-            record,
-            project_slug=project_slug,
-            source_layer=source_layer,
-            trace_path=trace_path,
-        )
-
-
-def _iter_bucket_trace_records():
-    from .bucket_store import read_trace_record_object, trace_records_root
-
-    root = trace_records_root()
-    if not root.exists():
-        return
-    for pointer_path in sorted(root.glob("*/*/current.json")):
-        obj = read_trace_record_object(pointer_path)
-        if obj is None:
-            continue
-        yield obj.record, obj.project_slug, obj.source_layer, obj.path
-
-
-def _iter_legacy_trace_records():
-    from . import trace_index as ti
-
-    projects_root = paths.PROJECTS_DIR
-    if projects_root.exists():
-        for project_home in sorted(path for path in projects_root.iterdir() if path.is_dir()):
-            traces_dir = project_home / "traces"
-            if not traces_dir.exists():
-                continue
-            for trace_path in sorted(traces_dir.glob("*.jsonl")):
-                for record in ti._iter_trace_file_records(trace_path):
-                    yield record, project_home.name, "canonical", trace_path
-    staging_root = getattr(paths, "STAGING_DIR", None)
-    if staging_root and staging_root.exists() and staging_root.is_dir():
-        for trace_path in sorted(staging_root.glob("*.jsonl")):
-            for record in ti._iter_trace_file_records(trace_path):
-                yield record, "_staging", "staging", trace_path
 
 
 def _collect_documents() -> list[_SearchDocument]:

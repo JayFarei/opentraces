@@ -51,10 +51,17 @@
    "status"
   ]
  },
- "bucket security": {
+ "bucket security policy": {
   "schema_version": null,
   "top_level_keys": [
    "changes",
+   "security",
+   "status"
+  ]
+ },
+ "bucket security status": {
+  "schema_version": null,
+  "top_level_keys": [
    "security",
    "status"
   ]

@@ -1,9 +1,9 @@
 name = "bucket-security-fresh-off"
 description = """
-Bucket security default state (plan 092 R2, Track 1): on a fresh box with no
-security tools opted in, `bucket security --json` reports the bucket scope, an
-`off` policy, and an empty enabled-tools list. This is the read-only inspection
-surface (no config mutation).
+Bucket security default state (plan 092 R2, Track 1; issue #89 group form): on a
+fresh box with no security tools opted in, `bucket security policy --json` reports
+the bucket scope, an `off` policy, and an empty enabled-tools list. This is the
+read-only inspection surface (no config mutation).
 """
 lane = "core"
 tier = 0
@@ -15,7 +15,7 @@ requires = ["cli"]
 [[steps]]
 type = "cli"
 id = "bucket-security"
-argv = ["bucket", "security", "--json"]
+argv = ["bucket", "security", "policy", "--json"]
 
 [[assertions]]
 kind = "returncode"

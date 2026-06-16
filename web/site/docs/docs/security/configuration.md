@@ -84,18 +84,20 @@ applying a policy flips those same flags, scoped to the bucket, so the raw
 captured evidence is protected before `bucket remote push`.
 
 ```bash
-opentraces bucket security
-opentraces bucket security --policy recommended
-opentraces bucket security --tool regex --enable
-opentraces bucket security --tool entropy --disable
-opentraces bucket security --json
+opentraces bucket security status
+opentraces bucket security policy --policy recommended
+opentraces bucket security policy --tool regex --enable
+opentraces bucket security policy --tool entropy --disable
+opentraces bucket security status --json
 ```
 
-`bucket security` with no flags is a read-only inspector. `--policy` applies an
-exact bundle and accepts only `off|basic|recommended|strict`. `--tool ...
---enable` / `--tool ... --disable` (repeatable) edits one tool at a time. The
-`setup bucket` wizard also offers a `custom` walkthrough that toggles each tool
-individually; `custom` is not a `--policy` value.
+`bucket security status` is a read-only inspector. `bucket security policy
+--policy` applies an exact bundle and accepts only `off|basic|recommended|strict`.
+`bucket security policy --tool ... --enable` / `--tool ... --disable` (repeatable)
+edits one tool at a time, and `bucket security run [--all | --trace <id>]` applies
+the configured filter to existing records. The `setup bucket` wizard also offers a
+`custom` walkthrough that toggles each tool individually; `custom` is not a
+`--policy` value.
 
 | Policy | Tools |
 |--------|-------|

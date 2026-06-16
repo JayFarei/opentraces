@@ -139,7 +139,7 @@ def test_bucket_trace_records_are_versioned_and_current_points_to_latest():
 
 
 def test_trace_index_prefers_bucket_and_tracks_legacy_updates(tmp_path):
-    from opentraces.core.bucket_store import iter_trace_record_objects
+    from opentraces.core.bucket_store import read_bucket_record_for_trace
     from opentraces.core.trace_index import query_index, rebuild_index, refresh_index
 
     project = tmp_path / "demo"
@@ -147,10 +147,20 @@ def test_trace_index_prefers_bucket_and_tracks_legacy_updates(tmp_path):
     _write_project_trace(project, _trace("trace-bucket-query", "Patch parser logic"))
 
     rebuild_index()
-    assert [obj.trace_id for obj in iter_trace_record_objects()] == ["trace-bucket-query"]
+    # Issue #89: a legacy project-store trace is resolvable through the durable
+    # read union (bucket objects + project/staging stores). rebuild_index no
+    # longer physically mirrors project stores into the bucket (that is
+    # capture's job); the single-trace resolver serves it directly.
+    resolved = read_bucket_record_for_trace("trace-bucket-query")
+    assert resolved is not None
+    assert resolved.record.task.description == "Patch parser logic"
     assert [packet.trace_id for packet in query_index(lex="parser")] == ["trace-bucket-query"]
 
     _write_project_trace(project, _trace("trace-bucket-query", "Patch renderer logic"))
+    # The resolver tracks the rewritten generation (latest record in the shard).
+    assert read_bucket_record_for_trace("trace-bucket-query").record.task.description == (
+        "Patch renderer logic"
+    )
     # Plan 087 U1: query_index no longer auto-refreshes; an explicit refresh
     # drives incremental tracking of the rewritten legacy trace.
     refresh_index()

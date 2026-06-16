@@ -65,7 +65,9 @@ def test_installed_runtime_syncs_bucket_to_fake_remote_and_restores(tmp_path: Pa
         assert pulled["remote"]["state"] == "pulled"
 
         rebuilt = _run_cli(["trace", "index", "rebuild", "--json"])
-        assert rebuilt["index"]["trace_count"] >= 1
+        # `trace index rebuild` is snapshot-only by default (issue #89); the
+        # read-model trace count lives under `search_snapshot`, not `index`.
+        assert rebuilt["search_snapshot"]["trace_count"] >= 1
 
         restored = _run_cli(
             ["trace", "get", trace_id, "--json"],

@@ -150,7 +150,8 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
         )
         assert restored["trace"]["trace_id"] == trace_id
         assert restored["remote_bucket"]["remote"]["state"] == "pulled"
-        assert restored["remote_bucket"]["index"]["trace_count"] >= 1
+        # Remote pull now rebuilds the search snapshot, not legacy index.db (#89).
+        assert restored["remote_bucket"]["search_snapshot"]["trace_count"] >= 1
 
         query = _run_cli(
             [
@@ -166,7 +167,7 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
             cwd=repo,
         )
         assert query["remote_bucket"]["remote"]["state"] == "pulled"
-        assert query["remote_bucket"]["index"]["trace_count"] >= 1
+        assert query["remote_bucket"]["search_snapshot"]["trace_count"] >= 1
         assert any(candidate["trace_id"] == trace_id for candidate in query["candidates"])
 
         trail = _run_cli(

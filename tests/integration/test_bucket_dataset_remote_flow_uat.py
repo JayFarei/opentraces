@@ -124,7 +124,8 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
         )
         assert restored["trace"]["trace_id"] == trace_id
         assert restored["remote_bucket"]["remote"]["state"] == "pulled"
-        assert restored["remote_bucket"]["index"]["trace_count"] >= 1
+        # Remote pull now rebuilds the search snapshot, not legacy index.db (#89).
+        assert restored["remote_bucket"]["search_snapshot"]["trace_count"] >= 1
 
         query = _run_cli(
             [
@@ -140,7 +141,7 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
             cwd=repo,
         )
         assert query["remote_bucket"]["remote"]["state"] == "pulled"
-        assert query["remote_bucket"]["index"]["trace_count"] >= 1
+        assert query["remote_bucket"]["search_snapshot"]["trace_count"] >= 1
         assert any(candidate["trace_id"] == trace_id for candidate in query["candidates"])
 
         trail = _run_cli(

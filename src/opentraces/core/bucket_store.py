@@ -171,6 +171,15 @@ class BucketTraceRecord:
 
 
 @dataclass(frozen=True)
+class BucketTraceRecordPointer:
+    path: Path
+    project_slug: str
+    source_layer: str
+    trace_id: str
+    record_hash: str
+
+
+@dataclass(frozen=True)
 class BucketSyncSummary:
     root: Path
     written: int = 0
@@ -386,6 +395,140 @@ def iter_trace_record_objects(
             if obj is None or (obj.project_slug, obj.trace_id) in seen:
                 continue
             out.append(obj)
+    return out
+
+
+def read_bucket_record_for_trace(trace_id: str) -> BucketTraceRecord | None:
+    """Resolve one trace by trace_id from the durable read sources, or ``None``.
+
+    Single-trace hydration path that ``trace map/get/slice`` use instead of the
+    deprecated legacy Trace Index (issue #89). Delegates to the canonical
+    :mod:`trace_corpus` resolver so it reads exactly the same union, and applies
+    the same precedence, as the search-snapshot rebuild and the legacy index
+    refresh — no second copy of the union logic lives here.
+    """
+
+    if not trace_id:
+        return None
+    from .trace_corpus import load_record, resolve
+
+    source = resolve(trace_id)
+    if source is None:
+        return None
+    return load_record(source)
+
+
+def project_store_record_from_path(
+    path: Path,
+    *,
+    trace_id: str,
+    project_slug: str,
+    source_layer: str,
+) -> BucketTraceRecord | None:
+    """Hydrate the latest record matching ``trace_id`` from one JSONL shard.
+
+    Serves traces that live only in ``projects/<slug>/traces/<id>.jsonl`` (or
+    staging) and have not been mirrored into the bucket. The last matching
+    record in a shard is the latest generation. The canonical
+    :mod:`trace_corpus` resolver calls this for its project/staging layers.
+    """
+
+    records = [r for r in _read_jsonl_trace_records(path) if r.trace_id == trace_id]
+    if not records:
+        return None
+    return _project_store_bucket_record(records[-1], path, project_slug, source_layer)
+
+
+def _project_store_bucket_record(
+    record: TraceRecord,
+    path: Path,
+    project_slug: str,
+    source_layer: str,
+) -> BucketTraceRecord:
+    normalized = _normalized_record(record)
+    record_hash = _digest_payload(normalized.model_dump(mode="json"))
+    return BucketTraceRecord(
+        path=path,
+        project_slug=project_slug,
+        source_layer=source_layer,
+        trace_id=record.trace_id,
+        record_hash=record_hash,
+        record=record,
+        envelope={"legacy_mirror": False, "security": bucket_security_state(record)},
+    )
+
+
+def iter_trace_record_pointers(
+    project_slug: str | None = None,
+) -> list[BucketTraceRecordPointer]:
+    """Return TraceRecord bucket pointers without validating full records."""
+
+    out: list[BucketTraceRecordPointer] = []
+    seen: set[tuple[str, str]] = set()
+    root = trace_records_root()
+    glob_prefix = f"{_path_part(project_slug)}/*" if project_slug else "*/*"
+    if root.exists():
+        for path in sorted(root.glob(f"{glob_prefix}/current.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if raw.get("schema_version") != TRACE_RECORD_POINTER_SCHEMA:
+                continue
+            object_path = raw.get("object_path")
+            trace_id = str(raw.get("trace_id") or "")
+            project = str(raw.get("project_slug") or "")
+            source_layer = str(raw.get("source_layer") or "")
+            record_hash = str(raw.get("record_hash") or "")
+            if (
+                not isinstance(object_path, str)
+                or not object_path
+                or not trace_id
+                or not project
+                or not source_layer
+                or not record_hash
+            ):
+                continue
+            resolved = paths.bucket_dir() / object_path
+            if not resolved.exists():
+                continue
+            seen.add((project, trace_id))
+            out.append(
+                BucketTraceRecordPointer(
+                    path=resolved,
+                    project_slug=project,
+                    source_layer=source_layer,
+                    trace_id=trace_id,
+                    record_hash=record_hash,
+                )
+            )
+
+    legacy_root = legacy_trace_records_root()
+    if legacy_root.exists():
+        for path in sorted(legacy_root.glob(f"{glob_prefix}.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if raw.get("schema_version") != TRACE_RECORD_BUCKET_SCHEMA:
+                continue
+            trace_id = str(raw.get("trace_id") or "")
+            project = str(raw.get("project_slug") or "")
+            source_layer = str(raw.get("source_layer") or "")
+            record_hash = str(raw.get("record_hash") or "")
+            if not trace_id or not project or not source_layer or not record_hash:
+                continue
+            if (project, trace_id) in seen:
+                continue
+            out.append(
+                BucketTraceRecordPointer(
+                    path=path,
+                    project_slug=project,
+                    source_layer=source_layer,
+                    trace_id=trace_id,
+                    record_hash=record_hash,
+                )
+            )
     return out
 
 
