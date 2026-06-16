@@ -35,6 +35,6 @@ def test_plan056_trace_query_acceptance_harness_local_json():
     assert payload["selected_ids"]["trace_id"] == "trace-plan056-acceptance"
     assert payload["byte_ratios"]["full_to_packet"] > 10
     assert payload["byte_ratios"]["full_to_slice"] > 10
-    assert payload["index_rebuild_digests"]["equivalent"] is True
+    assert payload["snapshot_rebuild_digests"]["equivalent"] is True
     assert payload["no_transcript_text"] is True
     assert all(command["exit_code"] == 0 for command in payload["command_transcripts"])
