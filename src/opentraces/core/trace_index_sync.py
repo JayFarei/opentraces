@@ -36,6 +36,7 @@ _SYNCED_TRACE_DIGESTS_KEY = "synced_trace_digests"
 # A stat-only fingerprint over the trace-source roots; when it is unchanged the
 # steady-state probe short-circuits WITHOUT any corpus scan / manifest recompute.
 _SYNCED_CHEAP_SIGNAL_KEY = "synced_cheap_signal"
+MAX_INCREMENTAL_TRACE_DELTA = 100
 
 
 def _synced_digest_key(query_source: str) -> str:
@@ -61,6 +62,7 @@ class CheapSyncResult:
     changed_trace_ids: list[str] = dataclass_field(default_factory=list)
     deleted_trace_ids: list[str] = dataclass_field(default_factory=list)
     bucket_digest: str | None = None
+    maintenance_required: str | None = None
 
 
 def _meta_get_safe(db_path: Path, key: str) -> str | None:
@@ -273,6 +275,58 @@ def _cheap_signal_matches(prev_cheap_signal: str | None, current_cheap_signal: s
     )
 
 
+def _refresh_index_incremental_only(
+    db_path: Path,
+    *,
+    query_source: str,
+    bucket_digest: str | None,
+) -> CheapSyncResult | None:
+    try:
+        from .trace_index import TraceIndexRefreshRequiresRebuild, refresh_index
+
+        refresh_index(db_path, allow_rebuild=False, refresh_trails=False)
+    except TraceIndexRefreshRequiresRebuild as exc:
+        return CheapSyncResult(
+            synced=False,
+            query_source=query_source,
+            bucket_digest=bucket_digest,
+            maintenance_required=f"{query_source}:{exc.reason}",
+        )
+    except Exception:
+        return CheapSyncResult(
+            synced=False,
+            query_source=query_source,
+            bucket_digest=bucket_digest,
+        )
+    return None
+
+
+def _refresh_index_incremental_preflight(
+    db_path: Path,
+    *,
+    query_source: str,
+    bucket_digest: str | None,
+) -> CheapSyncResult | None:
+    try:
+        from .trace_index import refresh_index_rebuild_reason
+
+        reason = refresh_index_rebuild_reason(db_path)
+    except Exception:
+        return CheapSyncResult(
+            synced=False,
+            query_source=query_source,
+            bucket_digest=bucket_digest,
+        )
+    if reason is not None:
+        return CheapSyncResult(
+            synced=False,
+            query_source=query_source,
+            bucket_digest=bucket_digest,
+            maintenance_required=f"{query_source}:{reason}",
+        )
+    return None
+
+
 def _cheap_sync_query_state_locked(
     *,
     db_path: Path,
@@ -305,11 +359,13 @@ def _cheap_sync_query_state_locked(
             )
 
     if trace_id is not None:
-        try:
-            from .trace_index import refresh_index
-            refresh_index(db_path)
-        except Exception:
-            return CheapSyncResult(synced=False, query_source=query_source)
+        refresh_error = _refresh_index_incremental_only(
+            db_path,
+            query_source=query_source,
+            bucket_digest=prev_digest,
+        )
+        if refresh_error is not None:
+            return refresh_error
         if query_source == "projection":
             try:
                 from .search_projection import refresh_search_projection
@@ -345,6 +401,14 @@ def _cheap_sync_query_state_locked(
             bucket_digest=prev_digest,
         )
 
+    preflight_error = _refresh_index_incremental_preflight(
+        db_path,
+        query_source=query_source,
+        bucket_digest=prev_digest,
+    )
+    if preflight_error is not None:
+        return preflight_error
+
     try:
         top_digest, current_per_trace = _current_bucket_trace_digests()
     except Exception:
@@ -373,16 +437,25 @@ def _cheap_sync_query_state_locked(
         previous_per_trace = {}
 
     changed, deleted = _compute_trace_delta(current_per_trace, previous_per_trace)
-
-    try:
-        from .trace_index import refresh_index
-        refresh_index(db_path)
-    except Exception:
+    delta_count = len(changed) + len(deleted)
+    if delta_count > MAX_INCREMENTAL_TRACE_DELTA:
         return CheapSyncResult(
             synced=False,
             query_source=query_source,
             bucket_digest=top_digest,
+            maintenance_required=(
+                f"{query_source}:large_delta:{delta_count}:"
+                f"max:{MAX_INCREMENTAL_TRACE_DELTA}"
+            ),
         )
+
+    refresh_error = _refresh_index_incremental_only(
+        db_path,
+        query_source=query_source,
+        bucket_digest=top_digest,
+    )
+    if refresh_error is not None:
+        return refresh_error
 
     if query_source == "projection":
         try:
@@ -445,6 +518,7 @@ class KeepWarmResult:
     changed_trace_ids: list[str] = dataclass_field(default_factory=list)
     deleted_trace_ids: list[str] = dataclass_field(default_factory=list)
     snapshot_refreshed: bool = False
+    maintenance_required: list[str] = dataclass_field(default_factory=list)
     error: str | None = None
 
 
@@ -485,6 +559,7 @@ def keep_index_warm(
         synced = False
         changed: list[str] = []
         deleted: list[str] = []
+        maintenance_required: list[str] = []
         for query_source in query_sources:
             result = cheap_sync_query_state(
                 query_source=query_source,
@@ -492,6 +567,11 @@ def keep_index_warm(
                 cheap_signal=shared_signal,
                 trace_id=trace_id,
             )
+            if (
+                result.maintenance_required
+                and result.maintenance_required not in maintenance_required
+            ):
+                maintenance_required.append(result.maintenance_required)
             if result.synced:
                 synced = True
                 for tid in result.changed_trace_ids:
@@ -523,6 +603,7 @@ def keep_index_warm(
             changed_trace_ids=changed,
             deleted_trace_ids=deleted,
             snapshot_refreshed=snapshot_refreshed,
+            maintenance_required=maintenance_required,
         )
     except Exception as exc:  # noqa: BLE001 — keep-warm must never raise.
         logger.warning("keep_index_warm failed (best-effort, ignored)", exc_info=True)

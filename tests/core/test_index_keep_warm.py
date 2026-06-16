@@ -169,6 +169,53 @@ def test_keep_index_warm_swallows_failure(tmp_path, monkeypatch):
     assert result.error is not None
 
 
+def test_keep_index_warm_reports_maintenance_when_refresh_would_rebuild(
+    tmp_path, monkeypatch
+):
+    """Unsupported legacy schemas are maintenance, not a hidden rebuild.
+
+    This pins the long-lived-dev-box failure mode: ``keep_index_warm`` is allowed
+    to say "explicit rebuild needed", but it must not turn a cheap capture/query
+    path into a surprise multi-GB full rebuild.
+    """
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(project, _trace_with("trace-alpha", "alpha"))
+    _warm(project)
+
+    _write_project_trace(project, _trace_with("trace-gamma", "gamma"))
+
+    monkeypatch.setattr(
+        ti,
+        "_refresh_rebuild_reason",
+        lambda conn: "unsupported_index_version:legacy:test",
+    )
+    rebuild_calls = {"n": 0}
+
+    def fail_rebuild(*args, **kwargs):
+        rebuild_calls["n"] += 1
+        raise AssertionError("keep-warm must not full-rebuild")
+
+    monkeypatch.setattr(ti, "rebuild_index", fail_rebuild)
+    digest_calls = {"n": 0}
+
+    def fail_digest_scan(*args, **kwargs):
+        digest_calls["n"] += 1
+        raise AssertionError("legacy maintenance must not scan the bucket")
+
+    monkeypatch.setattr(ti, "_current_bucket_trace_digests", fail_digest_scan)
+
+    result = ti.keep_index_warm(query_sources=("index",))
+
+    assert result.ok is True
+    assert result.synced is False
+    assert result.maintenance_required == [
+        "index:unsupported_index_version:legacy:test"
+    ]
+    assert rebuild_calls["n"] == 0
+    assert digest_calls["n"] == 0
+
+
 def test_keep_index_warm_steady_state_is_noop(tmp_path, monkeypatch):
     """When nothing changed since the last sync, keep_index_warm does no
     refresh work (steady-state short-circuit)."""

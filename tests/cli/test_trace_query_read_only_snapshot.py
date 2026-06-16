@@ -284,24 +284,22 @@ def test_trace_index_command_rebuilds_search_snapshot() -> None:
 
 
 def test_trace_index_command_does_not_rebuild_existing_legacy_trace_index(monkeypatch) -> None:
-    """With a legacy index present, ``trace index`` must never full-rebuild it.
-
-    The one exception is bootstrap: when the legacy DB is missing entirely
-    (the issue-#22 operator recovery deletes it), the verb heals it once so
-    ``trace map/get/slice`` keep working — hence the explicit seed below
-    before full rebuilds are forbidden.
-    """
+    """The default ``trace index`` path is snapshot-only."""
     _write_trace("demo-project", _trace("trace-site", "Fix site search"))
     from opentraces.core import trace_index as ti
 
     ti.refresh_index()  # seed the legacy index (missing-db bootstrap path)
 
-    def forbidden(*_args, **_kwargs):
+    def forbidden_rebuild(*_args, **_kwargs):
         raise AssertionError(
             "trace index must not full-rebuild an existing legacy Trace Index"
         )
 
-    monkeypatch.setattr(ti, "rebuild_index", forbidden)
+    def forbidden_keep_warm(*_args, **_kwargs):
+        raise AssertionError("trace index must not run legacy keep-warm by default")
+
+    monkeypatch.setattr(ti, "rebuild_index", forbidden_rebuild)
+    monkeypatch.setattr(ti, "keep_index_warm", forbidden_keep_warm)
     runner = CliRunner()
 
     result = runner.invoke(main, ["trace", "index", "--json"])
@@ -311,6 +309,7 @@ def test_trace_index_command_does_not_rebuild_existing_legacy_trace_index(monkey
     assert payload["search_snapshot"]["trace_count"] == 1
     assert "index" not in payload
     assert payload["legacy_index"]["healed"] is False
+    assert payload["keep_warm"]["skipped"] is True
 
 
 def test_trace_index_status_is_snapshot_first_without_legacy_inspection(monkeypatch) -> None:
@@ -520,10 +519,9 @@ def test_trace_index_status_db_sizes_degrade_when_dbstat_unavailable(monkeypatch
     assert "dbstat" in verbose_entry["tables_error"]
 
 
-def test_trace_index_bootstrap_signposts_progress_on_stderr() -> None:
-    # Issue #27 item M: the legacy-index bootstrap (missing index.db) can run
-    # many silent minutes. The human (non --json) path must signpost it on
-    # stderr with a trace count so the operator knows a long op is underway.
+def test_trace_index_missing_legacy_human_path_reports_explicit_repair() -> None:
+    # The human path is snapshot-only too: missing legacy map/get/slice cache is
+    # advice, not an implicit long-running bootstrap.
     from opentraces.core.trace_index import default_index_path
 
     _write_trace("demo-project", _trace("trace-site", "Fix site search"))
@@ -533,16 +531,16 @@ def test_trace_index_bootstrap_signposts_progress_on_stderr() -> None:
     result = runner.invoke(main, ["trace", "index"])
 
     assert result.exit_code == 0, result.output
-    # Bootstrap notice + completion line land on stderr only.
-    assert "Bootstrapping legacy Trace Index" in result.stderr
-    assert "bootstrap done" in result.stderr
-    # The legacy index now exists (bootstrap ran).
-    assert default_index_path().exists()
+    assert "Search snapshot rebuilt" in result.output
+    assert "Legacy Trace Index is missing" in result.stderr
+    assert "rebuild --legacy" in result.stderr
+    assert not default_index_path().exists()
 
 
-def test_trace_index_bootstrap_keeps_json_stdout_clean() -> None:
-    # Issue #27 item M: the stderr signpost must NOT leak into the --json
-    # stdout contract — stdout stays a single parseable JSON document.
+def test_trace_index_missing_legacy_reports_explicit_repair_without_bootstrap() -> None:
+    # Default trace index rebuild is snapshot-only. Missing legacy map/get/slice
+    # cache is reported with explicit repair advice, not bootstrapped
+    # implicitly.
     from opentraces.core.trace_index import default_index_path
 
     _write_trace("demo-project", _trace("trace-site", "Fix site search"))
@@ -554,11 +552,9 @@ def test_trace_index_bootstrap_keeps_json_stdout_clean() -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)  # parseable: no stderr leak
     assert payload["status"] == "ok"
-    assert payload["legacy_index"]["healed"] is True
-    # No bootstrap notice on stdout when --json.
+    assert payload["legacy_index"]["healed"] is False
+    assert payload["legacy_index"]["missing"] is True
+    assert payload["legacy_index"]["advice"] == "opentraces trace index rebuild --legacy"
+    assert not default_index_path().exists()
     assert "Bootstrapping" not in result.stdout
-    # But the operator still sees the long-op signpost on stderr even under
-    # --json — a human watching a CI log should never face a multi-minute
-    # silent hang just because a script is consuming stdout.
-    assert "Bootstrapping legacy Trace Index" in result.stderr
-    assert "bootstrap done" in result.stderr
+    assert "Bootstrapping" not in result.stderr

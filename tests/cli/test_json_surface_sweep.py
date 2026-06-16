@@ -104,6 +104,8 @@ EXEC_DENYLIST = {
     "init": "interactive project scan prompt flow; covered in tests/cli/test_cli_init.py",
     "remove": "interactive confirmation flow; covered by dedicated tests",
     "dataset publish": "real HF publish path; covered by the otbox live-hf lane",
+    "bucket security run": "mutates real bucket trace records (re-sanitizes + "
+                           "rewrites envelopes); covered in tests/cli/test_bucket_cli.py",
 }
 
 

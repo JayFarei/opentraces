@@ -357,8 +357,8 @@ def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tm
         ],
         writer="test-fixture",
     )
-    # The legacy index rebuild (old `--force-rebuild` side effect, now owned
-    # by maintenance/keep-warm) is what folds the trail projection into the map.
+    # The legacy index rebuild folds the trail projection (Git-survival
+    # verification) into the stored map.
     _rebuild_legacy_index()
 
     runner = CliRunner()
@@ -367,11 +367,26 @@ def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tm
         ["trace", "query", "--lex", "generate", "--json"],
     )
     assert query.exit_code == 0, query.output
-    trace_map = runner.invoke(main, ["trace", "map", record.trace_id, "--json"])
-    assert trace_map.exit_code == 0, trace_map.output
-    payload = json.loads(trace_map.output)
-    bash_node = next(node for node in payload["map"]["nodes"] if node.get("tool_name") == "Bash")
 
+    # Issue #89: the default `trace map` accessor derives from the durable
+    # bucket/project record and is intentionally NOT trail-enriched — the
+    # Bash write stays an unverified tool_call. Git-survival / patch-verification
+    # evidence now lives in the Trail substrate (`trail blame/graph/track`), and
+    # the trail-enriched map remains reachable only through the explicit legacy
+    # index path.
+    from opentraces.core.trace_index import default_index_path, get_trace_map
+
+    cli_map = json.loads(
+        runner.invoke(main, ["trace", "map", record.trace_id, "--json"]).output
+    )
+    cli_bash = next(n for n in cli_map["map"]["nodes"] if n.get("tool_name") == "Bash")
+    assert cli_bash["metadata"].get("write_verified") is not True
+
+    legacy_map = get_trace_map(record.trace_id, index_path=default_index_path())
+    bash_node = next(
+        node for node in legacy_map.model_dump(mode="json")["nodes"]
+        if node.get("tool_name") == "Bash"
+    )
     assert bash_node["action_type"] == "file_edit"
     assert bash_node["files_modified"] == ["generated.txt"]
     assert bash_node["metadata"]["classification_source"] == "trail_projection"
@@ -1000,6 +1015,10 @@ def test_doctor_reports_trace_index_status(tmp_path, monkeypatch):
     assert trace_index["unit_count"] > 1
     assert trace_index["map_node_count"] > 1
     assert trace_index["rebuild_advice"] == "opentraces trace index rebuild"
+    assert (
+        trace_index["legacy_rebuild_advice"]
+        == "opentraces trace index rebuild --legacy"
+    )
     assert trace_index["legacy_warning"] is True
     assert {
         item["path"].rsplit("/", 1)[-1]

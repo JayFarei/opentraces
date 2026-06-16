@@ -737,10 +737,15 @@ def test_get_accessors_do_not_silently_rebuild_missing_index(tmp_path):
     index_path = default_index_path()
     assert not index_path.exists()
 
-    assert get_unit("tu:trace-plan056-missing-index:trace") is None
-    assert get_trace_map("trace-plan056-missing-index") is None
-    assert get_map_node("tmn:trace-plan056-missing-index:1") is None
-    assert get_trace_path("trace-plan056-missing-index") is None
+    # Issue #89: the default accessors serve from the durable bucket/project
+    # store union and must NEVER silently rebuild the legacy index. The trace
+    # lives in the project store, so each accessor resolves it WITHOUT creating
+    # index.db — that no-silent-rebuild invariant is the point of this test.
+    trace_map = get_trace_map("trace-plan056-missing-index")
+    assert trace_map is not None
+    assert get_unit("tu:trace-plan056-missing-index:trace") is not None
+    assert get_map_node(trace_map.nodes[0].node_id) is not None
+    assert get_trace_path("trace-plan056-missing-index") is not None
     assert not index_path.exists()
 
 
@@ -924,8 +929,16 @@ def test_rebuild_index_preserves_existing_cache_when_rebuild_fails(tmp_path, mon
         trace_index.rebuild_index()
 
     assert summary.index_path.exists()
-    assert trace_index.get_unit("tu:trace-plan056-first:trace") is not None
-    assert trace_index.get_unit("tu:trace-plan056-second:trace") is None
+    # Atomicity of the LEGACY cache: a failed rebuild leaves the prior index.db
+    # intact (first present, second never committed). Issue #89 routes the
+    # default accessors through the bucket/project union, so read the legacy
+    # layer explicitly via index_path to assert cache atomicity. (The default
+    # accessors DO resolve the second trace — from the project store — which is
+    # the durable read model, not the legacy cache.)
+    legacy = summary.index_path
+    assert trace_index.get_unit("tu:trace-plan056-first:trace", index_path=legacy) is not None
+    assert trace_index.get_unit("tu:trace-plan056-second:trace", index_path=legacy) is None
+    assert trace_index.get_unit("tu:trace-plan056-second:trace") is not None
 
 
 def test_rebuild_index_adds_trail_patch_and_git_anchor_units_without_authored_text(tmp_path):

@@ -24,7 +24,93 @@ def bucket_group() -> None:
     """Inspect and troubleshoot the local trace bucket."""
 
 
-@bucket_group.command("security", cls=OpentracesCommand)
+@bucket_group.group("security", cls=OpentracesGroup)
+def bucket_security_group() -> None:
+    """Inspect, configure, and apply the private bucket security filter.
+
+    The filter must run on a record before it is remote-sync eligible:
+    ``status`` inspects posture, ``run`` applies the configured filter to
+    existing records, and ``policy`` configures which tools are enabled.
+    """
+
+
+@bucket_security_group.command("status", cls=OpentracesCommand)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def bucket_security_status_cmd(as_json: bool) -> None:
+    """Show bucket security posture and the exact remediation, if any."""
+    from ..core.bucket_store import bucket_security_overview
+
+    cfg = load_config()
+    overview = bucket_security_overview(cfg)
+    policy = security_tool_change_payload(
+        cfg, scope="bucket", changes={"enabled": [], "disabled": []}
+    )["security"]
+    payload = {"status": "ok", "security": {**overview, "policy": policy.get("policy")}}
+    if as_json:
+        click.echo(_dump_json(payload))
+        return
+
+    click.echo(f"Bucket security policy: {policy.get('policy', 'custom')}")
+    enabled_tools = policy.get("enabled") or []
+    click.echo("  configured tools: " + (", ".join(enabled_tools) if enabled_tools else "none"))
+    click.echo(f"  total records:    {overview['total']}")
+    click.echo(f"  filtered:         {overview['filtered']}")
+    click.echo(f"  unfiltered:       {overview['unfiltered']}")
+    click.echo(f"  version stale:    {overview['stale']}")
+    remediation = overview.get("remediation")
+    if remediation:
+        click.echo(f"  remediation:      {remediation['reason']}")
+        for step in remediation.get("next_steps") or []:
+            click.echo(f"    next: {step}")
+    else:
+        click.echo("  remote-sync eligible: yes")
+
+
+@bucket_security_group.command("run", cls=OpentracesCommand)
+@click.option("--all", "run_all", is_flag=True, help="Filter every bucket record.")
+@click.option("--trace", "trace_id", default=None, help="Filter one trace by id.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def bucket_security_run_cmd(run_all: bool, trace_id: str | None, as_json: bool) -> None:
+    """Apply the configured bucket security filter to existing records."""
+    from ..core.bucket_store import run_bucket_security_filter
+
+    if bool(run_all) == bool(trace_id):
+        click.echo("Use exactly one of --all or --trace <id>.", err=True)
+        sys.exit(2)
+
+    cfg = load_config()
+    summary = run_bucket_security_filter(trace_id=trace_id, cfg=cfg)
+    payload = {"status": summary.get("status", "ok"), "security_run": summary}
+    if as_json:
+        click.echo(_dump_json(payload))
+        if summary.get("status") in {"not_found", "not_configured"}:
+            sys.exit(2)
+        return
+
+    status = summary.get("status")
+    if status == "not_found":
+        click.echo(f"Trace not found in bucket: {trace_id}", err=True)
+        sys.exit(2)
+    if status == "not_configured":
+        click.echo("Bucket security filter is not configured; nothing applied.")
+        for step in (summary.get("remediation") or {}).get("next_steps") or []:
+            click.echo(f"  next: {step}")
+        sys.exit(2)
+    click.echo("Bucket security filter applied:")
+    click.echo(f"  scanned:          {summary['total']}")
+    click.echo(f"  newly filtered:   {summary['filtered']}")
+    click.echo(f"  already filtered: {summary['already_filtered']}")
+    click.echo(f"  still blocked:    {summary['still_blocked']}")
+    click.echo(f"  failed:           {summary['failed']}")
+    if summary["still_blocked"]:
+        click.echo(
+            "  note: still-blocked records ran the filter but remain ineligible "
+            "(e.g. privacy tier 'off'); inspect with 'opentraces security tools list'.",
+            err=True,
+        )
+
+
+@bucket_security_group.command("policy", cls=OpentracesCommand)
 @click.option(
     "--policy",
     type=click.Choice(tuple(BUCKET_SECURITY_POLICIES)),
@@ -41,14 +127,14 @@ def bucket_group() -> None:
 @click.option("--enable", is_flag=True, help="Enable every --tool.")
 @click.option("--disable", is_flag=True, help="Disable every --tool.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_security_cmd(
+def bucket_security_policy_cmd(
     policy: str | None,
     tools: tuple[str, ...],
     enable: bool,
     disable: bool,
     as_json: bool,
 ) -> None:
-    """Inspect or change the private bucket security policy."""
+    """Inspect or change which security tools the bucket filter uses."""
     cfg = load_config()
     try:
         if enable and disable:
@@ -95,7 +181,7 @@ def bucket_security_cmd(
         # sanitization), so a policy can turn off tools enabled for other uses.
         click.echo(
             "  warning: these tools are now OFF machine-wide (bucket security "
-            "shares global config); re-enable with 'bucket security --tool "
+            "shares global config); re-enable with 'bucket security policy --tool "
             "<name> --enable' if other workflows need them.",
             err=True,
         )

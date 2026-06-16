@@ -46,7 +46,8 @@ def _trace_index_status() -> dict[str, Any]:
     from .trace_index import INDEX_VERSION, default_index_path
 
     index_path = default_index_path()
-    rebuild_advice = "opentraces trace index rebuild"
+    search_snapshot_advice = "opentraces trace index rebuild"
+    legacy_rebuild_advice = "opentraces trace index rebuild --legacy"
     legacy_artifacts = _legacy_trace_index_artifacts()
     # Plan 087 U5: report search-projection freshness cheaply (no heavy repair).
     # ``search_projection_freshness`` is a read-only digest comparison; the
@@ -72,7 +73,9 @@ def _trace_index_status() -> dict[str, Any]:
         "expected_version": INDEX_VERSION,
         "source_trace_files": len(source_files),
         "source_latest_mtime": source_latest_mtime,
-        "rebuild_advice": rebuild_advice,
+        "rebuild_advice": search_snapshot_advice,
+        "search_snapshot_advice": search_snapshot_advice,
+        "legacy_rebuild_advice": legacy_rebuild_advice,
         "legacy_artifacts": legacy_artifacts,
         "legacy_warning": bool(legacy_artifacts),
         "search_projection_freshness": search_freshness,
@@ -82,6 +85,7 @@ def _trace_index_status() -> dict[str, Any]:
         return {
             **base,
             "state": "missing",
+            "rebuild_advice": legacy_rebuild_advice,
             "trace_count": 0,
             "unit_count": 0,
             "map_node_count": 0,
@@ -99,6 +103,7 @@ def _trace_index_status() -> dict[str, Any]:
         return {
             **base,
             "state": "error",
+            "rebuild_advice": legacy_rebuild_advice,
             "error": str(exc),
             "trace_count": 0,
             "unit_count": 0,
@@ -109,9 +114,11 @@ def _trace_index_status() -> dict[str, Any]:
     version = version_row[0] if version_row else None
     stale = bool(source_latest_mtime is not None and source_latest_mtime > index_mtime)
     state = "stale" if stale or version != INDEX_VERSION else "ok"
+    rebuild_advice = legacy_rebuild_advice if state != "ok" else search_snapshot_advice
     return {
         **base,
         "state": state,
+        "rebuild_advice": rebuild_advice,
         "index_version": version,
         "index_mtime": index_mtime,
         "trace_count": trace_count,
@@ -174,17 +181,47 @@ def _bucket_status() -> dict[str, Any]:
             ),
         }
 
+    trace_records = manifest.get("trace_records") or {}
     return {
         **base,
         "state": "ok",
         "root": manifest.get("root") or str(paths.bucket_dir()),
         "digest": manifest.get("digest") or manifest.get("bucket_digest"),
-        "trace_records": manifest.get("trace_records") or {},
+        "trace_records": trace_records,
         "trail": manifest.get("trail") or {},
         "sync": manifest.get("sync") or {},
+        "security_remediation": _bucket_security_remediation_for_doctor(trace_records),
         "manifest_bytes": manifest_bytes,
         "context_tree": _bucket_context_tree_section(manifest),
     }
+
+
+def _bucket_security_remediation_for_doctor(
+    trace_records: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Actionable next step when bucket records are not remote-sync eligible.
+
+    Cheap: counts come from the already-loaded manifest and ``configured`` is a
+    config read — no bucket scan. Distinguishes ``not_configured`` (filter off)
+    from ``pending`` (filter configured but not yet applied) so doctor can name
+    the exact command (issue #89).
+    """
+
+    unfiltered = int(trace_records.get("unfiltered_count") or 0)
+    stale = int(trace_records.get("security_stale_count") or 0)
+    if unfiltered == 0 and stale == 0:
+        return None
+    try:
+        from .bucket_store import _bucket_security_remediation
+        from .config import load_config
+        from .pipeline import _resolved_tool_names
+
+        configured = bool(_resolved_tool_names(load_config(), skip_trufflehog=False))
+    except Exception:
+        return None
+    return _bucket_security_remediation(
+        unfiltered=unfiltered, stale=stale, filtering_configured=configured
+    )
 
 
 def _doctor_bucket_manifest_max_bytes() -> int:

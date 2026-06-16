@@ -139,11 +139,22 @@ def test_doctor_surfaces_upgrade_available_for_user_and_agent(
         lambda: "999.0.0",
     )
 
-    result = CliRunner().invoke(main, ["doctor"])
+    # Issue #89: doctor emits human XOR JSON. The human upgrade hint only
+    # renders on an interactive TTY (otherwise piped output is JSON-only, with
+    # no leaked diagnostics). Click's test runner is non-TTY, so force the human
+    # path through the single decision seam.
+    monkeypatch.setattr(
+        "opentraces.cli.doctor_cli._doctor_json_only", lambda: False
+    )
+    human = CliRunner().invoke(main, ["doctor"])
+    assert human.exit_code == 0, human.output
+    assert "v999.0.0 available" in human.output
+    assert "opentraces setup upgrade" in human.output
 
+    # The agent/JSON surface comes through the root --json mode (or any piped,
+    # non-TTY run).
+    result = CliRunner().invoke(main, ["--json", "doctor"])
     assert result.exit_code == 0, result.output
-    assert "v999.0.0 available" in result.output
-    assert "opentraces setup upgrade" in result.output
     payload = _parse_last_json(result.output)
     cli = payload["doctor"]["cli"]
     assert cli["installed_version"] == __version__
