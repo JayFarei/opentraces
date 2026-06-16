@@ -398,7 +398,10 @@ def trace_discover(
 @click.option(
     "--remote-bucket",
     is_flag=True,
-    help="Pull the configured private bucket remote before querying.",
+    help=(
+        "Not supported for query (read-only). Run 'opentraces bucket remote pull' "
+        "then 'opentraces trace index', then query the local snapshot."
+    ),
 )
 @click.option(
     "--force-remote-bucket",

@@ -183,18 +183,27 @@ def _bucket_source_from_pointer_file(pointer_path: Path, trace_id: str) -> Corpu
     object_path = raw.get("object_path")
     if not isinstance(object_path, str) or not object_path:
         return None
+    # Apply the SAME required-field validation as the bulk enumerator
+    # (bucket_store.iter_trace_record_pointers): a record missing project_slug /
+    # source_layer / record_hash is skipped by the bulk path, so resolve() must
+    # skip it too or the two would disagree on corrupt bucket metadata.
+    project_slug = str(raw.get("project_slug") or "")
+    source_layer = str(raw.get("source_layer") or "")
+    record_hash = str(raw.get("record_hash") or "")
+    if not project_slug or not source_layer or not record_hash:
+        return None
     resolved = paths.bucket_dir() / object_path
     mtime = _safe_mtime_ns(resolved)
     if mtime is None:
         return None
     return CorpusSource(
-        project_slug=str(raw.get("project_slug") or ""),
+        project_slug=project_slug,
         trace_id=trace_id,
         layer=LAYER_BUCKET,
-        source_layer=str(raw.get("source_layer") or ""),
+        source_layer=source_layer,
         path=resolved,
         mtime_ns=mtime,
-        cheap_digest=str(raw.get("record_hash") or ""),
+        cheap_digest=record_hash,
     )
 
 
@@ -209,17 +218,23 @@ def _bucket_source_from_object_file(object_path: Path, trace_id: str) -> CorpusS
         return None
     if str(raw.get("trace_id") or "") != trace_id:
         return None
+    # Same required-field validation as the bulk legacy-mirror enumerator.
+    project_slug = str(raw.get("project_slug") or "")
+    source_layer = str(raw.get("source_layer") or "")
+    record_hash = str(raw.get("record_hash") or "")
+    if not project_slug or not source_layer or not record_hash:
+        return None
     mtime = _safe_mtime_ns(object_path)
     if mtime is None:
         return None
     return CorpusSource(
-        project_slug=str(raw.get("project_slug") or ""),
+        project_slug=project_slug,
         trace_id=trace_id,
         layer=LAYER_BUCKET,
-        source_layer=str(raw.get("source_layer") or ""),
+        source_layer=source_layer,
         path=object_path,
         mtime_ns=mtime,
-        cheap_digest=str(raw.get("record_hash") or ""),
+        cheap_digest=record_hash,
     )
 
 

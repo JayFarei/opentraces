@@ -6,34 +6,29 @@ from pathlib import Path
 from typing import Any
 
 
-def pull_remote_bucket_for_trace(
-    *,
-    force: bool = False,
-    build_projection: bool = False,
-) -> dict[str, Any]:
-    """Pull the configured remote bucket and rebuild local trace projections."""
+def pull_remote_bucket_for_trace(*, force: bool = False) -> dict[str, Any]:
+    """Pull the configured remote bucket and rebuild the local read model.
+
+    Builds the compact search snapshot (the read model that ``trace
+    query/map/get`` serve from), not the deprecated legacy ``index.db`` (issue
+    #89). ``trace get --remote-bucket`` itself resolves through the bucket union,
+    so this snapshot rebuild is what lets a subsequent local ``trace query`` see
+    the freshly pulled traces.
+    """
 
     from ..core.bucket_remote import remote_pull
-    from ..core.trace_index import rebuild_index
+    from ..core.trace_search_snapshot import build_trace_search_snapshot
 
     remote = remote_pull(force=force)
-    index = rebuild_index()
-    payload: dict[str, Any] = {
+    snapshot = build_trace_search_snapshot()
+    return {
         "state": "pulled",
         "remote": remote,
-        "index": {
-            "path": str(index.index_path),
-            "trace_count": index.trace_count,
-            "unit_count": index.unit_count,
-            "map_node_count": index.map_node_count,
+        "search_snapshot": {
+            "path": str(snapshot.path),
+            "trace_count": snapshot.trace_count,
         },
     }
-    if build_projection:
-        from ..core.search_projection import build_search_projection
-
-        projection = build_search_projection(index_path=index.index_path)
-        payload["search_projection"] = projection.as_dict()
-    return payload
 
 
 def pull_remote_bucket_for_trail(

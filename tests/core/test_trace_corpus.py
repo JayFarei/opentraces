@@ -158,6 +158,38 @@ def test_resolve_matches_iter_sources_object_beats_newer_mirror(tmp_path, monkey
     assert single.cheap_digest == bulk[tid].cheap_digest  # consumers agree
 
 
+def test_incremental_refresh_loader_delegates_to_resolver(monkeypatch) -> None:
+    # Regression for the codex-found defect: the incremental search-snapshot
+    # refresh (_load_doc_for_trace_id) must pick the SAME source as the resolver,
+    # not its own ad-hoc bucket-first/no-mirror union. Proven by delegation: it
+    # routes the resolver's winning source's fields into _doc_from_record.
+    from types import SimpleNamespace
+
+    from opentraces.core import trace_search_snapshot as tss
+
+    winner = _src("t", tc.LAYER_PROJECT, mtime=999)
+    loaded = SimpleNamespace(
+        record=SimpleNamespace(trace_id="t"),
+        project_slug="proj-from-resolver",
+        source_layer="canonical",
+        path=Path("/resolved/t.jsonl"),
+    )
+    monkeypatch.setattr(tc, "resolve", lambda tid: winner if tid == "t" else None)
+    monkeypatch.setattr(tc, "load_record", lambda s: loaded if s is winner else None)
+    monkeypatch.setattr(
+        tss, "_doc_from_record", lambda record, **kw: {"record": record, **kw}
+    )
+
+    doc = tss._load_doc_for_trace_id("t")
+    assert doc == {
+        "record": loaded.record,
+        "project_slug": "proj-from-resolver",
+        "source_layer": "canonical",
+        "trace_path": Path("/resolved/t.jsonl"),
+    }
+    assert tss._load_doc_for_trace_id("absent") is None
+
+
 def test_resolve_picks_freshest_single_trace(monkeypatch) -> None:
     monkeypatch.setattr(
         tc, "_bucket_candidates_for", lambda tid: [_src(tid, tc.LAYER_BUCKET, mtime=100)]

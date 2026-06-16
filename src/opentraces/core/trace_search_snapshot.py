@@ -430,47 +430,31 @@ def _delete_trace_rows(conn: sqlite3.Connection, trace_id: str) -> None:
 
 
 def _load_doc_for_trace_id(trace_id: str) -> _SearchDocument | None:
-    """Bounded single-trace doc load: bucket pointer first, then legacy stores."""
+    """Bounded single-trace doc load via the canonical corpus resolver.
 
-    from .bucket_store import read_trace_record_object, trace_records_root
+    Incremental refresh (``keep_index_warm`` / capture hooks) must pick exactly
+    the same source — same union, same precedence — as the full rebuild
+    (:func:`_iter_documents`) and single-trace map/get/slice hydration. Routing
+    this through :mod:`trace_corpus` removes the fourth ad-hoc union that used to
+    live here (bucket-always-wins, no legacy mirror), so an incremental refresh
+    can never index a staler generation than a full rebuild or drop a
+    mirror-only trace (issue #89).
+    """
 
-    root = trace_records_root()
-    if root.exists():
-        for pointer_path in sorted(root.glob(f"*/{trace_id}/current.json")):
-            obj = read_trace_record_object(pointer_path)
-            if obj is None:
-                continue
-            return _doc_from_record(
-                obj.record,
-                project_slug=obj.project_slug,
-                source_layer=obj.source_layer,
-                trace_path=obj.path,
-            )
-    from . import trace_index as ti
+    from . import trace_corpus
 
-    projects_root = paths.PROJECTS_DIR
-    if projects_root.exists():
-        for trace_path in sorted(projects_root.glob(f"*/traces/{trace_id}.jsonl")):
-            for record in ti._iter_trace_file_records(trace_path):
-                if record.trace_id == trace_id:
-                    return _doc_from_record(
-                        record,
-                        project_slug=trace_path.parent.parent.name,
-                        source_layer="canonical",
-                        trace_path=trace_path,
-                    )
-    staging_root = getattr(paths, "STAGING_DIR", None)
-    if staging_root and staging_root.exists():
-        for trace_path in sorted(staging_root.glob(f"{trace_id}.jsonl")):
-            for record in ti._iter_trace_file_records(trace_path):
-                if record.trace_id == trace_id:
-                    return _doc_from_record(
-                        record,
-                        project_slug="_staging",
-                        source_layer="staging",
-                        trace_path=trace_path,
-                    )
-    return None
+    source = trace_corpus.resolve(trace_id)
+    if source is None:
+        return None
+    loaded = trace_corpus.load_record(source)
+    if loaded is None:
+        return None
+    return _doc_from_record(
+        loaded.record,
+        project_slug=loaded.project_slug,
+        source_layer=loaded.source_layer,
+        trace_path=loaded.path,
+    )
 
 
 def refresh_trace_search_snapshot(
