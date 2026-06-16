@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { selectStore } from "@/lib/waitlist-store";
+import { notifyWaitlistSignup } from "@/lib/slack-notify";
 
 // Early-access waitlist endpoint.
 //
@@ -85,6 +86,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const { alreadyOnList } = await store.add(email, Date.now());
+    // Notify Slack only on a genuinely new signup (dupes/bots already returned
+    // above). Best-effort: a Slack failure never affects the stored result.
+    if (!alreadyOnList) {
+      let count: number | undefined;
+      try {
+        ({ count } = await store.recent(1));
+      } catch {
+        /* count is decorative; skip it if the read fails */
+      }
+      await notifyWaitlistSignup(email, { count, ip });
+    }
     return NextResponse.json({ ok: true, alreadyOnList });
   } catch {
     return NextResponse.json(
