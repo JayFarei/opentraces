@@ -1608,9 +1608,6 @@ def _iter_project_homes() -> list[Path]:
     return sorted(path for path in paths.PROJECTS_DIR.iterdir() if path.is_dir())
 
 
-STAGING_PROJECT_SLUG = "_staging"
-
-
 @dataclass(frozen=True)
 class TraceSource:
     layer: str            # "canonical" | "staging"
@@ -1621,79 +1618,29 @@ class TraceSource:
 
 
 def _iter_trace_sources() -> list[TraceSource]:
-    """Yield every TraceRecord object the index should ingest, tagged by layer.
+    """Yield one TraceSource per trace the index should ingest, tagged by layer.
 
-    Bundle C / Bug #1: projects/<slug>/traces/*.jsonl is the canonical layer
-    (per-project, opted-in) and the new top-level staging/*.jsonl is the
-    Plan 58 default-inbox staging layer. Both must be indexed so query callers
-    do not silently miss staged-but-unmoved traces.
+    One winner per ``trace_id``, chosen by the canonical :mod:`trace_corpus`
+    resolver (issue #89), so the legacy index refresh shares the exact union and
+    precedence used by the search-snapshot rebuild and single-trace map/get/slice
+    hydration — bucket objects, the plan-079 legacy mirror, per-project
+    ``projects/<slug>/traces/*.jsonl`` (canonical), and top-level
+    ``staging/*.jsonl`` (Plan 58 default inbox). Sorted by source path for a
+    deterministic ingest order.
     """
-    bucket_pointers = iter_trace_record_pointers()
-    bucket_sources = [
+    from . import trace_corpus
+
+    sources = [
         TraceSource(
-            pointer.source_layer,
-            pointer.project_slug,
-            pointer.path,
-            trace_id=pointer.trace_id,
-            source_digest=pointer.record_hash,
+            source.source_layer,
+            source.project_slug,
+            source.path,
+            trace_id=source.trace_id,
+            source_digest=source.cheap_digest,
         )
-        for pointer in bucket_pointers
+        for source in trace_corpus.iter_sources()
     ]
-    bucket_by_pair: dict[tuple[str, str], Path] = {
-        (pointer.project_slug, pointer.trace_id): pointer.path
-        for pointer in bucket_pointers
-    }
-
-    sources: list[TraceSource] = []
-    for project_home in _iter_project_homes():
-        slug = project_home.name
-        for trace_path in _iter_trace_paths(project_home):
-            trace_id = trace_path.stem
-            bucket_path = bucket_by_pair.get((slug, trace_id))
-            if bucket_path is not None:
-                try:
-                    if trace_path.stat().st_mtime_ns <= bucket_path.stat().st_mtime_ns:
-                        continue
-                except OSError:
-                    continue
-            sources.append(
-                TraceSource(
-                    "canonical",
-                    slug,
-                    trace_path,
-                    trace_id=trace_id,
-                    source_digest=_file_stat_digest(trace_path),
-                )
-            )
-    staging_root = getattr(paths, "STAGING_DIR", None)
-    if staging_root and staging_root.exists() and staging_root.is_dir():
-        for trace_path in sorted(staging_root.glob("*.jsonl")):
-            trace_id = trace_path.stem
-            bucket_path = bucket_by_pair.get((STAGING_PROJECT_SLUG, trace_id))
-            if bucket_path is not None:
-                try:
-                    if trace_path.stat().st_mtime_ns <= bucket_path.stat().st_mtime_ns:
-                        continue
-                except OSError:
-                    continue
-            sources.append(
-                TraceSource(
-                    "staging",
-                    STAGING_PROJECT_SLUG,
-                    trace_path,
-                    trace_id=trace_id,
-                    source_digest=_file_stat_digest(trace_path),
-                )
-            )
-    return sorted([*bucket_sources, *sources], key=lambda source: str(source.trace_path))
-
-
-def _file_stat_digest(path: Path) -> str:
-    try:
-        stat = path.stat()
-    except OSError:
-        return ""
-    return f"stat:{stat.st_mtime_ns}:{stat.st_size}"
+    return sorted(sources, key=lambda source: str(source.trace_path))
 
 
 def _schema_supports_refresh(conn: sqlite3.Connection) -> bool:

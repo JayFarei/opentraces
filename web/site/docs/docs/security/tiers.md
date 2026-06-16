@@ -104,10 +104,10 @@ into a few named policies for the private bucket. `security tools list|info` and
 applies a named bundle of the same `cfg.security.<tool>.enabled` flags.
 
 ```bash
-opentraces bucket security
-opentraces bucket security --policy recommended
-opentraces bucket security --tool regex --enable
-opentraces bucket security --tool entropy --disable
+opentraces bucket security status
+opentraces bucket security policy --policy recommended
+opentraces bucket security policy --tool regex --enable
+opentraces bucket security policy --tool entropy --disable
 ```
 
 | Policy | Tools |
@@ -117,9 +117,10 @@ opentraces bucket security --tool entropy --disable
 | `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
 | `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
 
-`bucket security` with no flags inspects the active policy and tools. `--policy`
-accepts only `off|basic|recommended|strict`. This bucket policy vocabulary is
-unrelated to the `dataset run --privacy-tier off|low|medium|high` field.
+`bucket security status` inspects the active policy and tools. `bucket security
+policy --policy` accepts only `off|basic|recommended|strict`. This bucket policy
+vocabulary is unrelated to the `dataset run --privacy-tier off|low|medium|high`
+field.
 
 ## Review And Publication
 

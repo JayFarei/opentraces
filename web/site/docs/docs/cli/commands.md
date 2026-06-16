@@ -288,18 +288,21 @@ opentraces bucket remote diff --json
 opentraces bucket remote push --json
 opentraces bucket remote pull --json
 opentraces bucket replay --repo /path/to/git-clone --json
-opentraces bucket security
-opentraces bucket security --policy recommended
-opentraces bucket security --tool regex --enable
-opentraces bucket security --tool entropy --disable
-opentraces bucket security --json
+opentraces bucket security status
+opentraces bucket security policy --policy recommended
+opentraces bucket security policy --tool regex --enable
+opentraces bucket security policy --tool entropy --disable
+opentraces bucket security status --json
 ```
 
-`bucket security` is the scoped bucket policy front-end. With no flags it is a
-read-only inspector. `--policy` applies a named bundle and accepts only
-`off|basic|recommended|strict`. `--tool ... --enable` / `--tool ... --disable`
-edits one tool at a time. It flips the same `cfg.security.<tool>.enabled` flags
-as `security tools` and `config set`, scoped to the bucket.
+`bucket security` is a command group, the scoped bucket policy front-end.
+`bucket security status` is a read-only posture inspector. `bucket security policy
+--policy` applies a named bundle and accepts only `off|basic|recommended|strict`.
+`bucket security policy --tool ... --enable` / `--tool ... --disable` edits one
+tool at a time. `bucket security run [--all | --trace <id>]` applies the configured
+filter to existing records so they become remote-sync eligible. The policy
+commands flip the same `cfg.security.<tool>.enabled` flags as `security tools` and
+`config set`, scoped to the bucket.
 
 `bucket status` and `bucket manifest` are side-effect-free reads: they never
 write under the bucket. Self-heal (materializing the top-level manifest from the

@@ -519,9 +519,10 @@ def test_trace_index_status_db_sizes_degrade_when_dbstat_unavailable(monkeypatch
     assert "dbstat" in verbose_entry["tables_error"]
 
 
-def test_trace_index_missing_legacy_human_path_reports_explicit_repair() -> None:
-    # The human path is snapshot-only too: missing legacy map/get/slice cache is
-    # advice, not an implicit long-running bootstrap.
+def test_trace_index_missing_legacy_human_path_reports_optional_legacy() -> None:
+    # The human path is snapshot-only too: an unbuilt legacy index is framed as
+    # OPTIONAL (map/get/slice serve from the bucket), not as repairing a broken
+    # read path, and never as an implicit long-running bootstrap (issue #89).
     from opentraces.core.trace_index import default_index_path
 
     _write_trace("demo-project", _trace("trace-site", "Fix site search"))
@@ -532,8 +533,11 @@ def test_trace_index_missing_legacy_human_path_reports_explicit_repair() -> None
 
     assert result.exit_code == 0, result.output
     assert "Search snapshot rebuilt" in result.output
-    assert "Legacy Trace Index is missing" in result.stderr
+    assert "Legacy Trace Index is not built" in result.stderr
+    assert "serve from the bucket" in result.stderr
     assert "rebuild --legacy" in result.stderr
+    # Must NOT frame the bucket-served read path as broken / needing repair.
+    assert "repair map/get/slice" not in result.stderr
     assert not default_index_path().exists()
 
 

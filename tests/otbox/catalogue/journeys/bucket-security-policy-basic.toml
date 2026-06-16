@@ -1,8 +1,9 @@
 name = "bucket-security-policy-basic"
 description = """
-Bucket security named policy (plan 092 R2, Track 1): `bucket security --policy
-basic --json` sets exactly the `regex` + `entropy` bucket tool bundle and reports
-the `basic` policy. The change delta lists both tools as newly enabled.
+Bucket security named policy (plan 092 R2, Track 1; issue #89 group form): `bucket
+security policy --policy basic --json` sets exactly the `regex` + `entropy` bucket
+tool bundle and reports the `basic` policy. The change delta lists both tools as
+newly enabled.
 """
 lane = "core"
 tier = 0
@@ -14,7 +15,7 @@ requires = ["cli"]
 [[steps]]
 type = "cli"
 id = "policy-basic"
-argv = ["bucket", "security", "--policy", "basic", "--json"]
+argv = ["bucket", "security", "policy", "--policy", "basic", "--json"]
 
 [[assertions]]
 kind = "returncode"

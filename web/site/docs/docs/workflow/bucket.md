@@ -111,18 +111,20 @@ bucket.
 ```bash
 opentraces auth login
 opentraces setup bucket
-opentraces bucket security
-opentraces bucket security --policy recommended
-opentraces bucket security --tool regex --enable
-opentraces bucket security --tool entropy --disable
-opentraces bucket security --json
+opentraces bucket security status
+opentraces bucket security policy --policy recommended
+opentraces bucket security policy --tool regex --enable
+opentraces bucket security policy --tool entropy --disable
+opentraces bucket security status --json
 ```
 
-`bucket security` with no flags is a read-only inspector: it prints the active
-policy and enabled tools without writing config. `--policy` applies an exact
-bundle and accepts only `off|basic|recommended|strict`. `--tool ... --enable` or
-`--tool ... --disable` (repeatable, needs exactly one of enable/disable) edits
-one tool at a time. `--json` emits
+`bucket security status` is a read-only inspector: it prints the active policy and
+enabled tools without writing config. `bucket security policy --policy` applies an
+exact bundle and accepts only `off|basic|recommended|strict`. `bucket security
+policy --tool ... --enable` or `--tool ... --disable` (repeatable, needs exactly
+one of enable/disable) edits one tool at a time. `bucket security run [--all |
+--trace <id>]` applies the configured filter to existing records. `bucket security
+policy --json` emits
 `{status, security:{enabled, tools, scope:"bucket", policy, available_policies}, changes:{enabled,disabled}}`.
 
 Policy bundles:

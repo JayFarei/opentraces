@@ -212,14 +212,14 @@ def _bucket_security_remediation_for_doctor(
     if unfiltered == 0 and stale == 0:
         return None
     try:
-        from .bucket_store import _bucket_security_remediation
+        from .bucket_security import bucket_security_remediation
         from .config import load_config
         from .pipeline import _resolved_tool_names
 
         configured = bool(_resolved_tool_names(load_config(), skip_trufflehog=False))
     except Exception:
         return None
-    return _bucket_security_remediation(
+    return bucket_security_remediation(
         unfiltered=unfiltered, stale=stale, filtering_configured=configured
     )
 

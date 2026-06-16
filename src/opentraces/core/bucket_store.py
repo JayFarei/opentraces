@@ -401,62 +401,42 @@ def iter_trace_record_objects(
 def read_bucket_record_for_trace(trace_id: str) -> BucketTraceRecord | None:
     """Resolve one trace by trace_id from the durable read sources, or ``None``.
 
-    Reads the SAME union the search snapshot reads (``_iter_documents``): the
-    v2 bucket objects, the legacy bucket-mirror layout, and the legacy
-    project/staging JSONL stores — bucket winning on conflict. This is the
-    single-trace hydration path that ``trace map/get/slice`` use instead of the
-    deprecated legacy Trace Index (issue #89). Direct-globs by trace id so a
-    lookup is O(projects), not O(all traces).
+    Single-trace hydration path that ``trace map/get/slice`` use instead of the
+    deprecated legacy Trace Index (issue #89). Delegates to the canonical
+    :mod:`trace_corpus` resolver so it reads exactly the same union, and applies
+    the same precedence, as the search-snapshot rebuild and the legacy index
+    refresh — no second copy of the union logic lives here.
     """
 
     if not trace_id:
         return None
-    part = _path_part(trace_id)
-    root = trace_records_root()
-    if root.exists():
-        for path in sorted(root.glob(f"*/{part}/current.json")):
-            obj = read_trace_record_object(path)
-            if obj is not None and obj.trace_id == trace_id:
-                return obj
-    legacy_root = legacy_trace_records_root()
-    if legacy_root.exists():
-        for path in sorted(legacy_root.glob(f"*/{part}.json")):
-            obj = read_trace_record_object(path)
-            if obj is not None and obj.trace_id == trace_id:
-                return obj
-    return _read_project_store_record_for_trace(trace_id)
+    from .trace_corpus import load_record, resolve
+
+    source = resolve(trace_id)
+    if source is None:
+        return None
+    return load_record(source)
 
 
-def _read_project_store_record_for_trace(trace_id: str) -> BucketTraceRecord | None:
-    """Resolve a trace from the legacy project/staging JSONL stores.
+def project_store_record_from_path(
+    path: Path,
+    *,
+    trace_id: str,
+    project_slug: str,
+    source_layer: str,
+) -> BucketTraceRecord | None:
+    """Hydrate the latest record matching ``trace_id`` from one JSONL shard.
 
-    The migration bridge still serves traces that live only in
-    ``projects/<slug>/traces/<id>.jsonl`` (or staging) and have not yet been
-    mirrored into the bucket, so map/get/slice see exactly what the snapshot
-    indexes. The last matching record in a shard is the latest generation.
+    Serves traces that live only in ``projects/<slug>/traces/<id>.jsonl`` (or
+    staging) and have not been mirrored into the bucket. The last matching
+    record in a shard is the latest generation. The canonical
+    :mod:`trace_corpus` resolver calls this for its project/staging layers.
     """
 
-    def _latest(path: Path) -> TraceRecord | None:
-        records = [r for r in _read_jsonl_trace_records(path) if r.trace_id == trace_id]
-        return records[-1] if records else None
-
-    projects_root = paths.PROJECTS_DIR
-    if projects_root.exists():
-        for path in sorted(projects_root.glob(f"*/traces/{trace_id}.jsonl")):
-            record = _latest(path)
-            if record is not None:
-                return _project_store_bucket_record(
-                    record, path, path.parent.parent.name, "canonical"
-                )
-    staging_root = getattr(paths, "STAGING_DIR", None)
-    if staging_root and staging_root.exists():
-        for path in sorted(staging_root.glob(f"{trace_id}.jsonl")):
-            record = _latest(path)
-            if record is not None:
-                return _project_store_bucket_record(
-                    record, path, TRACE_RECORD_PROJECT_STAGING, "staging"
-                )
-    return None
+    records = [r for r in _read_jsonl_trace_records(path) if r.trace_id == trace_id]
+    if not records:
+        return None
+    return _project_store_bucket_record(records[-1], path, project_slug, source_layer)
 
 
 def _project_store_bucket_record(
@@ -2925,211 +2905,6 @@ def sync_trace_records_from_local_stores(
         removed=removed,
         skipped=skipped,
     )
-
-
-def bucket_security_overview(cfg: Any = None) -> dict[str, Any]:
-    """Read-only bucket security posture used by ``bucket security status``.
-
-    Reports how many bucket records are remote-sync eligible (filtered),
-    pending (unfiltered), or version-stale, plus whether the security filter is
-    configured at all — so doctor / the CLI can give the exact remediation.
-    """
-
-    from .pipeline import _resolved_tool_names
-
-    if cfg is None:
-        from .config import load_config
-
-        cfg = load_config()
-    configured = list(_resolved_tool_names(cfg, skip_trufflehog=False))
-    objects = iter_trace_record_objects()
-    states = [bucket_security_state(obj.record) for obj in objects]
-    filtered = sum(1 for s in states if s.get("syncable") is True)
-    unfiltered = sum(1 for s in states if not s.get("syncable"))
-    stale = sum(1 for s in states if s.get("stale") is True)
-    return {
-        "total": len(objects),
-        "filtered": filtered,
-        "unfiltered": unfiltered,
-        "stale": stale,
-        "configured_tools": configured,
-        "filtering_configured": bool(configured),
-        "security_version": SECURITY_VERSION,
-        "remediation": _bucket_security_remediation(
-            unfiltered=unfiltered,
-            stale=stale,
-            filtering_configured=bool(configured),
-        ),
-    }
-
-
-def _bucket_security_remediation(
-    *,
-    unfiltered: int,
-    stale: int,
-    filtering_configured: bool,
-) -> dict[str, Any] | None:
-    """Map bucket security posture to a single actionable next step."""
-
-    if unfiltered == 0 and stale == 0:
-        return None
-    if not filtering_configured:
-        return {
-            "state": "not_configured",
-            "reason": (
-                "bucket security filter is not configured, so records cannot be "
-                "marked remote-sync eligible"
-            ),
-            "command": "opentraces bucket security policy --policy basic",
-            "next_steps": [
-                "Run 'opentraces bucket security policy --policy basic' (or "
-                "'opentraces setup privacy-filter' / 'opentraces setup trufflehog' "
-                "for stronger tools) to enable the filter.",
-                "Then run 'opentraces bucket security run --all' to apply it.",
-                "Inspect configured tools with 'opentraces security tools list'.",
-            ],
-        }
-    if stale and not unfiltered:
-        return {
-            "state": "version_stale",
-            "reason": (
-                f"records were filtered by an older security version (current "
-                f"{SECURITY_VERSION})"
-            ),
-            "command": "opentraces bucket security run --all",
-            "next_steps": [
-                "Run 'opentraces bucket security run --all' to re-apply the "
-                "current security filter.",
-            ],
-        }
-    return {
-        "state": "pending",
-        "reason": (
-            "records have not had the configured bucket security filter applied "
-            "or recorded yet"
-        ),
-        "command": "opentraces bucket security run --all",
-        "next_steps": [
-            "Run 'opentraces bucket security run --all' to apply the configured "
-            "bucket security filter before remote sync.",
-        ],
-    }
-
-
-def run_bucket_security_filter(
-    *,
-    trace_id: str | None = None,
-    cfg: Any = None,
-) -> dict[str, Any]:
-    """Apply the configured security filter to existing bucket records.
-
-    The remediation behind ``bucket security run``. For each unfiltered /
-    version-stale record it re-runs the import security pipeline and rewrites
-    the bucket envelope so the record becomes remote-sync eligible. Idempotent:
-    already-filtered records are skipped. Distinguishes four outcomes so callers
-    can report precisely: filtered (now eligible), already_filtered,
-    still_blocked (ran but not eligible — e.g. privacy tier ``off``), failed.
-    """
-
-    from .pipeline import _resolved_tool_names, process_imported_trace
-
-    if cfg is None:
-        from .config import load_config
-
-        cfg = load_config()
-    configured = list(_resolved_tool_names(cfg, skip_trufflehog=False))
-
-    if trace_id is not None:
-        obj = read_bucket_record_for_trace(trace_id)
-        objects = [obj] if obj is not None else []
-        if not objects:
-            return {
-                "status": "not_found",
-                "trace_id": trace_id,
-                "configured_tools": configured,
-                "filtering_configured": bool(configured),
-                "total": 0,
-                "filtered": 0,
-                "already_filtered": 0,
-                "still_blocked": 0,
-                "failed": 0,
-                "trace_ids": [],
-            }
-    else:
-        objects = iter_trace_record_objects()
-
-    if not configured:
-        unfiltered = sum(
-            1 for obj in objects if not bucket_security_state(obj.record).get("syncable")
-        )
-        return {
-            "status": "not_configured",
-            "configured_tools": [],
-            "filtering_configured": False,
-            "total": len(objects),
-            "filtered": 0,
-            "already_filtered": len(objects) - unfiltered,
-            "still_blocked": unfiltered,
-            "failed": 0,
-            "trace_ids": [],
-            "remediation": _bucket_security_remediation(
-                unfiltered=unfiltered, stale=0, filtering_configured=False
-            ),
-        }
-
-    filtered = 0
-    already_filtered = 0
-    still_blocked = 0
-    failed = 0
-    changed_ids: list[str] = []
-    for obj in objects:
-        state = bucket_security_state(obj.record)
-        if state.get("syncable") is True:
-            already_filtered += 1
-            continue
-        explicit_tier = record_privacy_tier(obj.record)
-        try:
-            new_record = process_imported_trace(obj.record, cfg).record
-        except Exception:
-            failed += 1
-            continue
-        new_state = bucket_security_state(new_record, privacy_tier=explicit_tier)
-        try:
-            write_trace_record(
-                new_record,
-                project_slug=obj.project_slug,
-                source_layer=obj.source_layer,
-                legacy_mirror=bool(obj.envelope.get("legacy_mirror", True)),
-                privacy_tier=explicit_tier,
-            )
-        except OSError:
-            failed += 1
-            continue
-        if new_state.get("syncable") is True:
-            filtered += 1
-            changed_ids.append(obj.trace_id)
-        else:
-            still_blocked += 1
-
-    if filtered or still_blocked:
-        try:
-            from .trace_search_state import mark_search_snapshot_dirty
-
-            mark_search_snapshot_dirty("bucket_security_run")
-        except Exception:
-            pass
-
-    return {
-        "status": "ok",
-        "configured_tools": configured,
-        "filtering_configured": True,
-        "total": len(objects),
-        "filtered": filtered,
-        "already_filtered": already_filtered,
-        "still_blocked": still_blocked,
-        "failed": failed,
-        "trace_ids": changed_ids,
-    }
 
 
 def _iter_legacy_trace_records() -> list[tuple[TraceRecord, str, str]]:

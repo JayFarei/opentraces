@@ -38,7 +38,7 @@ def bucket_security_group() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def bucket_security_status_cmd(as_json: bool) -> None:
     """Show bucket security posture and the exact remediation, if any."""
-    from ..core.bucket_store import bucket_security_overview
+    from ..core.bucket_security import bucket_security_overview
 
     cfg = load_config()
     overview = bucket_security_overview(cfg)
@@ -72,14 +72,14 @@ def bucket_security_status_cmd(as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def bucket_security_run_cmd(run_all: bool, trace_id: str | None, as_json: bool) -> None:
     """Apply the configured bucket security filter to existing records."""
-    from ..core.bucket_store import run_bucket_security_filter
+    from ..core.bucket_security import apply_bucket_security_filter
 
     if bool(run_all) == bool(trace_id):
         click.echo("Use exactly one of --all or --trace <id>.", err=True)
         sys.exit(2)
 
     cfg = load_config()
-    summary = run_bucket_security_filter(trace_id=trace_id, cfg=cfg)
+    summary = apply_bucket_security_filter(trace_id=trace_id, cfg=cfg)
     payload = {"status": summary.get("status", "ok"), "security_run": summary}
     if as_json:
         click.echo(_dump_json(payload))

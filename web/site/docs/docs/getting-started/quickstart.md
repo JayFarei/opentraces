@@ -91,7 +91,7 @@ a bucket security policy that protects raw captured evidence before remote sync:
 ```bash
 opentraces auth login
 opentraces setup bucket
-opentraces bucket security --policy recommended
+opentraces bucket security policy --policy recommended
 opentraces bucket remote push
 opentraces bucket remote status
 ```

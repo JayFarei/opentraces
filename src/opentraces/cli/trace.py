@@ -829,7 +829,7 @@ def trace_index_group(ctx: click.Context, as_json: bool) -> None:
     "--legacy",
     "rebuild_legacy",
     is_flag=True,
-    help="Also rebuild the legacy Trace Index cache used by map/get/slice.",
+    help="Also rebuild the optional legacy Trace Index (trail-enriched map/get/slice); the default path already serves map/get/slice from the bucket.",
 )
 def trace_index_rebuild_cmd(as_json: bool, rebuild_legacy: bool) -> None:
     """Rebuild the local read-only trace search snapshot."""
@@ -845,9 +845,10 @@ def _trace_index_rebuild_impl(
 
     The default path is intentionally snapshot-only: it reads retained bucket /
     legacy trace records directly and never tries to converge the legacy Trace
-    Index cache first. Legacy map/get/slice repair is an explicit operator
-    action via ``--legacy`` because it can be multi-GB and minutes-long on an
-    upgraded dev box.
+    Index cache first. map/get/slice serve from the bucket, so the legacy Trace
+    Index is optional; building it via ``--legacy`` is an explicit operator
+    action for trail-enriched legacy consumers only, because it can be multi-GB
+    and minutes-long on an upgraded dev box.
     """
     from ..core.trace_index import (
         default_index_path,
@@ -930,8 +931,9 @@ def _trace_index_rebuild_impl(
     click.echo(f"  traces:    {search_summary.trace_count}")
     if legacy_index_missing and not rebuild_legacy:
         click.echo(
-            "Legacy Trace Index is missing; run "
-            "`opentraces trace index rebuild --legacy` to repair map/get/slice.",
+            "Legacy Trace Index is not built. map/get/slice serve from the bucket "
+            "and do not need it; build it with `opentraces trace index rebuild "
+            "--legacy` only for the optional trail-enriched legacy index.",
             err=True,
         )
 
