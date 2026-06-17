@@ -46,25 +46,140 @@ class BucketRemoteError(RuntimeError):
 
 
 def remote_status(*, fake_root: Path | None = None) -> dict[str, Any]:
-    """Return provider-aware private bucket remote status."""
+    """Return provider-aware private bucket remote status.
+
+    Every branch carries an additive ``security_gate`` block (issue #94) so the
+    sync-diagnostic surface explains the security posture that actually gates a
+    push — not only the digest relation. The gate is sourced from the shared
+    :func:`bucket_security.bucket_sync_security_gate` reading the PERSISTED
+    manifest, so doctor and this surface converge on counts + remediation.
+    """
 
     if fake_root is not None:
-        return _fake_payload(fake_remote_status(fake_root))
+        return _with_security_gate(
+            _fake_payload(fake_remote_status(fake_root)), remote_configured=True
+        )
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
         fake = _ambient_fake_status()
         if fake is not None:
-            return fake
-        return {
-            "schema_version": REMOTE_SCHEMA,
-            "state": "unconfigured",
-            "provider": remote.provider,
-            "advice": "run opentraces setup bucket",
-        }
+            return _with_security_gate(fake, remote_configured=True)
+        return _with_security_gate(
+            {
+                "schema_version": REMOTE_SCHEMA,
+                "state": "unconfigured",
+                "provider": remote.provider,
+                "advice": "run opentraces setup bucket",
+            },
+            remote_configured=False,
+        )
     if remote.provider == "fake":
-        return _fake_payload(fake_remote_status())
-    return _hf_status(remote.url, cfg.hf_token)
+        return _with_security_gate(
+            _fake_payload(fake_remote_status()), remote_configured=True
+        )
+    return _with_security_gate(
+        _hf_status(remote.url, cfg.hf_token), remote_configured=True
+    )
+
+
+def _with_security_gate(
+    payload: dict[str, Any], *, remote_configured: bool
+) -> dict[str, Any]:
+    """Attach the additive ``security_gate`` block to a remote-status payload.
+
+    Additive only: the flat ``state`` / ``provider`` / ``advice`` keys current
+    consumers read are preserved untouched. ``REMOTE_SCHEMA`` is the nested
+    contract; ``security_gate`` is an additive field on it (no version break).
+    """
+
+    payload["security_gate"] = _security_gate(remote_configured=remote_configured)
+    return payload
+
+
+def _security_gate(*, remote_configured: bool) -> dict[str, Any]:
+    """Build the bucket-sync security gate for ``bucket remote status``.
+
+    Reads the PERSISTED ``bucket/manifest.json`` counts the cheap way doctor
+    does (``_load_manifest`` — NEVER ``bucket_manifest`` / ``bucket_security_
+    overview``, both of which SCAN). A missing manifest yields ``state ==
+    "unknown"`` rather than triggering a scan (codex finding #1). ``eligible``
+    composes the security axis (remediation is None) with the remote-configured
+    axis; ``blocking_reasons`` and ``advice`` list the remote-unconfigured step
+    first, then the security remediation (codex finding #3 / issue contract).
+    """
+
+    from .bucket_security import bucket_sync_security_gate
+    from .bucket_store import _load_manifest
+
+    manifest: dict[str, Any] | None = None
+    unknown_reason: str | None = None
+    try:
+        manifest = _load_manifest()
+    except Exception:
+        manifest = None
+        unknown_reason = "manifest_unreadable"
+    if manifest is None:
+        if unknown_reason is None:
+            unknown_reason = "manifest_absent"
+        return {
+            "state": "unknown",
+            "reason": unknown_reason,
+            "configured": None,
+            "unfiltered_count": None,
+            "security_stale_count": None,
+            "eligible": False,
+            "blocking_reasons": (
+                ["remote_unconfigured"] if not remote_configured else []
+            ),
+            "remediation": None,
+            "advice": (
+                ["opentraces setup bucket"] if not remote_configured else []
+            ),
+        }
+
+    trace_records = manifest.get("trace_records") or {}
+    unfiltered = int(trace_records.get("unfiltered_count") or 0)
+    stale = int(trace_records.get("security_stale_count") or 0)
+    gate = bucket_sync_security_gate(unfiltered=unfiltered, stale=stale)
+
+    blocking_reasons: list[str] = []
+    if not remote_configured:
+        blocking_reasons.append("remote_unconfigured")
+    blocking_reasons.extend(gate["blocking_reasons"])
+
+    return {
+        "state": "ok",
+        "configured": gate["configured"],
+        "unfiltered_count": gate["unfiltered_count"],
+        "security_stale_count": gate["security_stale_count"],
+        "eligible": remote_configured and gate["remediation"] is None,
+        "blocking_reasons": blocking_reasons,
+        "remediation": gate["remediation"],
+        "advice": _security_advice_chain(
+            remote_configured=remote_configured, remediation=gate["remediation"]
+        ),
+    }
+
+
+def _security_advice_chain(
+    *, remote_configured: bool, remediation: dict[str, Any] | None
+) -> list[str]:
+    """Ordered, copy-pasteable remediation commands for the security gate.
+
+    ``setup bucket`` first when the remote is unconfigured, then the security
+    chain: ``policy --policy basic`` -> ``run --all`` when the filter is not
+    configured, else just ``run --all``.
+    """
+
+    chain: list[str] = []
+    if not remote_configured:
+        chain.append("opentraces setup bucket")
+    if remediation:
+        if remediation.get("state") == "not_configured":
+            chain.append("opentraces bucket security policy --policy basic")
+        chain.append("opentraces bucket security run --all")
+    return chain
 
 
 def remote_diff(*, fake_root: Path | None = None) -> dict[str, Any]:

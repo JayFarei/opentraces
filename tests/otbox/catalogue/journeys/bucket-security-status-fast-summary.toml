@@ -1,0 +1,126 @@
+name = "bucket-security-status-fast-summary"
+description = """
+Issue #94 — `bucket security status --json` returns the bounded posture summary
+(total / filtered / unfiltered / stale + remediation), and those counts +
+remediation AGREE with `bucket remote status`'s security_gate AND doctor's
+bucket panel. This is the convergence assertion: all three sync-facing surfaces
+read the same posture through the shared remediation helper.
+
+NOTE (honest scope): the O(N)-avoidance / heartbeat half of AC2 is carved out
+to #97 (bucket-status perf fast path) + #88 (heartbeat contract). This journey
+asserts CONVERGENCE, not a perf budget. `bucket security status` runs a live
+scan today (its counts converge with the persisted manifest only momentarily);
+the count it reports here matches the freshly-healed manifest the other two
+surfaces read.
+
+Flow: a blocked push (rc=3) syncs the seeded records into the bucket as
+unfiltered; `bucket manifest --heal` persists the manifest; then the three
+surfaces are compared via cross-step equals_var.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+# Sync the seeded records into the bucket as unfiltered (blocked push, rc=3).
+[[steps]]
+type = "cli"
+id = "blocked-push"
+argv = ["bucket", "remote", "push", "--root", "{fake_remote}/bucket-94", "--json"]
+expect_returncode = 3
+
+# Persist the manifest remote-status + doctor read identical counts from.
+[[steps]]
+type = "cli"
+id = "heal"
+argv = ["bucket", "manifest", "--heal"]
+
+[[assertions]]
+kind = "returncode"
+step = "heal"
+equals = 0
+
+# The bounded posture summary.
+[[steps]]
+type = "cli"
+id = "sec-status"
+argv = ["bucket", "security", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "sec-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "sec-status"
+path = "security.total"
+
+[[assertions]]
+kind = "stdout_json"
+step = "sec-status"
+path = "security.filtered"
+
+[[assertions]]
+kind = "stdout_json"
+step = "sec-status"
+path = "security.unfiltered"
+
+[[assertions]]
+kind = "stdout_json"
+step = "sec-status"
+path = "security.stale"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "sec-status"
+path = "security.unfiltered"
+min = 1
+
+[[assertions]]
+kind = "stdout_json"
+step = "sec-status"
+path = "security.remediation.command"
+
+# The remote status gate.
+[[steps]]
+type = "cli"
+id = "remote-status"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "remote-status"
+equals = 0
+
+# Convergence #1 — unfiltered count agrees (security status live scan ==
+# remote gate persisted-manifest count for the same record set).
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "remote-status"
+path = "remote.security_gate.unfiltered_count"
+equals_var = "sec-status:security.unfiltered"
+
+# Convergence #2 — remediation command agrees (shared remediation helper).
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "remote-status"
+path = "remote.security_gate.remediation.command"
+equals_var = "sec-status:security.remediation.command"
+
+# Convergence #3 — doctor's bucket panel agrees on the same remediation command.
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "doctor"
+path = "doctor.bucket.security_remediation.command"
+equals_var = "sec-status:security.remediation.command"

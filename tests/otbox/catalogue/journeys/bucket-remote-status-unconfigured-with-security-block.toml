@@ -1,0 +1,141 @@
+name = "bucket-remote-status-unconfigured-with-security-block"
+description = """
+Issue #94 — `bucket remote status --json` explains the security gating that
+actually blocks a push, not only the digest relation. The seeded bucket records
+are unfiltered (no security filter configured) and the remote is genuinely
+unconfigured, so the additive `security_gate` block reports BOTH blockers and
+the ordered remediation chain: `setup bucket` -> `bucket security policy
+--policy basic` -> `bucket security run --all`.
+
+Flow: an eager push at a fake root is BLOCKED (rc=3) because the records are
+unfiltered — but that push syncs the project records into the bucket as
+unfiltered first. `bucket manifest --heal` persists the manifest the gate reads
+its counts from (codex finding #1: persisted counts, never a scan). The final
+status runs the GENUINELY-unconfigured branch (codex finding #3): it must NOT
+pass `--root` (that hits the explicit fake-root branch).
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+# A blocked push (rc=3) — unfiltered records are not eligible — but it syncs the
+# seeded project records into the bucket as unfiltered.
+[[steps]]
+type = "cli"
+id = "blocked-push"
+argv = ["bucket", "remote", "push", "--root", "{fake_remote}/bucket-94", "--json"]
+expect_returncode = 3
+
+# Persist the manifest the gate reads its counts from.
+[[steps]]
+type = "cli"
+id = "heal"
+argv = ["bucket", "manifest", "--heal"]
+
+[[assertions]]
+kind = "returncode"
+step = "heal"
+equals = 0
+
+[[assertions]]
+kind = "path_exists"
+path = "{opentraces_dir}/bucket/manifest.json"
+
+# The genuinely-unconfigured branch (no --root).
+[[steps]]
+type = "cli"
+id = "remote-status"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "remote-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.state"
+equals = "unconfigured"
+
+# The additive security_gate block is present and computed from the manifest.
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.state"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.configured"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.eligible"
+equals = false
+
+# Unfiltered records block eligibility.
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "remote-status"
+path = "remote.security_gate.unfiltered_count"
+min = 1
+
+# Both blockers surface, remote-unconfigured first.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "remote-status"
+path = "remote.security_gate.blocking_reasons"
+equals = ["remote_unconfigured", "unfiltered_records"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.blocking_reasons.0"
+equals = "remote_unconfigured"
+
+# Remediation names the policy step (filter not configured).
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.remediation.state"
+equals = "not_configured"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "remote-status"
+path = "remote.security_gate.remediation.command"
+value = "bucket security policy --policy basic"
+
+# The ordered advice chain: setup bucket -> policy -> run.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "remote-status"
+path = "remote.security_gate.advice"
+equals = [
+  "opentraces setup bucket",
+  "opentraces bucket security policy --policy basic",
+  "opentraces bucket security run --all",
+]
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.advice.0"
+equals = "opentraces setup bucket"
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.advice.1"
+equals = "opentraces bucket security policy --policy basic"
+
+[[assertions]]
+kind = "stdout_json"
+step = "remote-status"
+path = "remote.security_gate.advice.2"
+equals = "opentraces bucket security run --all"
