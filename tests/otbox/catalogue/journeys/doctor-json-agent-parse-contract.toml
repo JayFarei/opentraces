@@ -1,0 +1,35 @@
+name = "doctor-json-agent-parse-contract"
+description = """
+Issue #96 — doctor JSON is an agent-facing contract, and the command-local
+`opentraces doctor --json` form is the new supported surface this issue adds.
+This journey runs that form and asserts the otbox JSON-assertion path parses the
+emitted envelope (sentinel-prefixed JSON), and that the split fields are present
+and machine-readable: `trace_index.state == "ok"` plus the new
+`trace_index.legacy_index_state` carrying the legacy concern separately.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "doctor-json"
+argv = ["doctor", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-json"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-json"
+path = "doctor.trace_index.state"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-json"
+path = "doctor.trace_index.legacy_index_state"
+equals = "missing"

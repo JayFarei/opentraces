@@ -40,6 +40,20 @@ _DOCTOR_EVENT_LOG_MAX_BATCHES = 1_000
 # --- Trace Trails event-log panel (plan 054 phase 1) ----------------------
 
 
+# Issue #96: map the live ``search_snapshot`` state onto the top-level
+# ``trace_index.state`` machine contract. ``wrong_schema`` is a recoverable
+# stale-shaped condition (rebuild fixes it); ``unreadable``/anything unexpected
+# is a hard error.
+_SNAPSHOT_TO_TRACE_INDEX_STATE = {
+    "ok": "ok",
+    "stale": "stale",
+    "missing": "missing",
+    "wrong_schema": "stale",
+    "unreadable": "error",
+    "error": "error",
+}
+
+
 def _trace_index_status() -> dict[str, Any]:
     """Report local Trace Index cache status for Plan 56."""
     from . import paths
@@ -68,11 +82,21 @@ def _trace_index_status() -> dict[str, Any]:
         search_snapshot = snapshot_status()
     except Exception as exc:  # noqa: BLE001 — doctor must never crash.
         search_snapshot = {"state": "error", "error": str(exc)}
+    # Issue #96: the top-level ``state``/``rebuild_advice`` are the machine
+    # contract an agent reads, and they MUST describe the live snapshot that
+    # ``trace query`` actually serves — not the deprecated ``index.db``.
+    # ``legacy_index_state`` carries the old legacy-driven concern, so the
+    # absence of the legacy cache (the normal post-#89 state) never reads as a
+    # current failure when search is healthy.
+    snapshot_state = (search_snapshot or {}).get("state", "missing")
+    top_state = _SNAPSHOT_TO_TRACE_INDEX_STATE.get(snapshot_state, "error")
     base = {
         "index_path": str(index_path),
         "expected_version": INDEX_VERSION,
         "source_trace_files": len(source_files),
         "source_latest_mtime": source_latest_mtime,
+        # Authoritative top-level state/advice = the live search snapshot.
+        "state": top_state,
         "rebuild_advice": search_snapshot_advice,
         "search_snapshot_advice": search_snapshot_advice,
         "legacy_rebuild_advice": legacy_rebuild_advice,
@@ -84,8 +108,7 @@ def _trace_index_status() -> dict[str, Any]:
     if not index_path.exists():
         return {
             **base,
-            "state": "missing",
-            "rebuild_advice": legacy_rebuild_advice,
+            "legacy_index_state": "missing",
             "trace_count": 0,
             "unit_count": 0,
             "map_node_count": 0,
@@ -102,8 +125,7 @@ def _trace_index_status() -> dict[str, Any]:
     except Exception as exc:
         return {
             **base,
-            "state": "error",
-            "rebuild_advice": legacy_rebuild_advice,
+            "legacy_index_state": "error",
             "error": str(exc),
             "trace_count": 0,
             "unit_count": 0,
@@ -113,12 +135,10 @@ def _trace_index_status() -> dict[str, Any]:
     index_mtime = index_path.stat().st_mtime
     version = version_row[0] if version_row else None
     stale = bool(source_latest_mtime is not None and source_latest_mtime > index_mtime)
-    state = "stale" if stale or version != INDEX_VERSION else "ok"
-    rebuild_advice = legacy_rebuild_advice if state != "ok" else search_snapshot_advice
+    legacy_index_state = "stale" if stale or version != INDEX_VERSION else "ok"
     return {
         **base,
-        "state": state,
-        "rebuild_advice": rebuild_advice,
+        "legacy_index_state": legacy_index_state,
         "index_version": version,
         "index_mtime": index_mtime,
         "trace_count": trace_count,
