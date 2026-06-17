@@ -7,8 +7,9 @@ description: >
   multi-agent investigation of the real cause (flagging any "landmine" — a cited
   function or file:line that does not exist) and the blast radius, a plan whose
   test must go RED BEFORE GREEN, two adversarial gates on that plan (a self/ethos
-  checklist + a pure codex adversarial pass), sequential implementation in an
-  isolated worktree, a green suite + docs sync, a PR that `Closes #<n>`, and a
+  checklist + a pure codex adversarial pass), implementation expressed as a
+  forged `/goal` (via goal-forge) whose verify loop runs the otbox acceptance
+  journey, a green suite + docs sync, a PR that `Closes #<n>`, and a
   FINAL codex adversarial review of the diff. Honesty, not theater: it reports
   unmet acceptance criteria and invalid issues rather than faking a fix. The
   human merges. Everything happens in a per-issue git worktree; multiple issues
@@ -48,7 +49,7 @@ State the leitwort, then catch yourself in its opposite:
 - **Scope bloom** — a refactor the issue never asked for. → *the simplest change that closes the issue.*
 - **Unit-test-only acceptance** — proving the mechanism in a unit test but never showing a user or agent experience the change end-to-end. → *acceptance is an otbox journey.*
 
-This skill is the **main-loop spine**: it owns judgment, the worktree/PR lifecycle, the codex MCP calls, the human gate, and multi-issue orchestration. It delegates only the **bounded, read-only parallel fan-out** to the Workflow tool (Stage 1). Implementation is **sequential in one worktree** — a deliberate v1 choice: parallel file-editing across worktrees is conflict-prone and rarely pays off for a typical issue, so parallelism is confined to the phases where it is free and safe (investigation + multi-lens review).
+This skill is the **main-loop spine**: it owns judgment, the worktree/PR lifecycle, the codex MCP calls, the human gate, and multi-issue orchestration. It delegates the **bounded, read-only parallel fan-out** to the Workflow tool (Stage 1), and expresses the implementation as a **forged `/goal`** (Stage 4) whose verify loop runs the otbox acceptance journey — so the implement↔verify and otbox-verify loops are one. Implementation is **sequential in one worktree** — a deliberate v1 choice: parallel file-editing across worktrees is conflict-prone and rarely pays off for a typical issue, so parallelism is confined to the phases where it is free and safe (investigation + multi-lens review).
 
 ## Effort policy
 
@@ -139,12 +140,24 @@ Write `kb/plans/<nnn>-issue-<n>.md` (kb/ is gitignored; follow the existing numb
 
 Fold both passes into the plan. Convergence between 3a and 3b on the same defect is the strongest signal. Re-run a pass only if a blocker materially reshaped the plan.
 
-### Stage 4 — Implement (sequential, in the issue worktree) · effort: xhigh
+### Stage 4 — Implement as a forged `/goal`, with otbox verify *inside* the goal loop · effort: xhigh
 
-- Work the hardened plan top-to-bottom in the worktree. Match surrounding code (comment density, naming, idioms). Reuse existing reversers/registries/patterns the investigation surfaced.
-- Write the mechanism tests from the Stage-2 plan and **run the test-completeness proof**: capture the red-before-green output (or apply+revert the reintroduce-the-bug patch) and confirm the new test actually fails for the verified cause. Record that evidence — it goes in the PR.
-- **Author the otbox acceptance journey(s)** the plan named (acceptance is an otbox journey). Add the `.toml` under `tests/otbox/catalogue/journeys/` (it is auto-discovered — no registry to edit), then run it: tier-0 via the slice runner (`pytest tests/otbox/test_otbox_slice.py -k "<name>"`), tier-1 via the matrix with `OT_OTBOX_TIER1=1`. Watch the gotchas the #85 run surfaced: `path_exists` does not expand `~` (use `{opentraces_dir}` / `{project}` template vars); `stdout_json_contains` is a substring check (use `stdout_json` for exact, `stdout_json_set_contains` for arrays); a `shell` step expected to exit non-zero needs `expect_returncode = N`; and run the catalogue lint.
-- Iterate to a green suite. Run the focused suites first, then the broad regression (`pytest tests/cli tests/core tests/capture` or the issue-relevant dirs) — a new public CLI command, schema field, or envelope will trip the surface-sweep / snapshot tests; updating those (e.g. `GLOBAL_JSON_ONLY` + regenerating `json_envelope_shapes.json`) is part of the work, not optional.
+Implementation is not ad-hoc coding — it is a **persistent goal whose verification surface includes the otbox acceptance journey**, so the implement↔verify loop and the otbox verify loop are the *same* loop. The goal is not DONE until the journeys are green. (goal-forge's rule: the evaluator judges only what lands in the transcript — so the verification surface must be *commands that run and report*, which is precisely what folds the otbox run into the goal's completion check.)
+
+**4a — Forge the implementer goal** with `/goal-forge --claude --fast`. Supply the six slots from the hardened plan so goal-forge drafts without interviewing (template in `references/stage-contracts.md`):
+- **Outcome** — the plan at `kb/plans/<nnn>-issue-<n>.md` is implemented in the worktree; the mechanism tests AND the named otbox acceptance journey(s) are GREEN; the red-before-green proof is captured.
+- **Verification surface** (each must emit its summary line into the transcript): `pytest <focused mechanism tests> -q` → then the acceptance journey `pytest tests/otbox/test_otbox_slice.py -k "<journey>"` (tier-0) / the matrix under `OT_OTBOX_TIER1=1` (tier-1) → then the broad regression `pytest tests/cli tests/core tests/capture -q`.
+- **Constraints** — don't regress the suite; preserve frozen `opentraces.*.v1` envelopes + the schema; data-safe; honesty, not theater.
+- **Boundaries** — only the files in the plan's ownership, inside the worktree `<path>`; never merge; don't touch unrelated modules.
+- **Iteration logging** — `<worktree>/runs/issue-<n>/log.md`; per attempt record the diff, the test/journey output observed, and the decision.
+- **Blocked stop condition** — append a `BLOCKED:` entry with attempted paths + the input that would unlock; stop after the same failure survives ~3 attempts rather than thrash.
+
+**4b — The goal contract (the loop):**
+- **DONE** when: the plan is implemented, the mechanism tests pass, the otbox acceptance journey(s) pass (tier-0 in CI / tier-1 hand-verified), and the broad regression is green — every claim backed by command output in the transcript.
+- **NOT DONE** (loop again) when: any of those is red. Triage, fix in source, **re-run the same verification surface — including the otbox journey — every iteration**. A green unit suite with a red journey is NOT done; *acceptance is an otbox journey*.
+- **BLOCKED** (stop + report) when: a fix needs a decision you don't have, the same failure survives ~3 attempts, or a new landmine invalidates the plan. Log `BLOCKED:` and surface it — don't loop forever.
+
+**4c — Run it.** Run the forged Goal as the session `/goal` (Claude Code `/goal`, v2.1.139+ — needs workspace trust + hooks enabled; see goal-forge's harness notes) and work it to DONE; or, when the session's single goal slot is needed elsewhere or issues run in parallel, hand the forged prompt to an implementer subagent for an isolated run. If `/goal` is unavailable (no trust / hooks disabled), run the SAME forged contract by hand — the DONE / NOT-DONE / BLOCKED conditions + the run log still drive the loop; only the Stop-hook evaluator is missing. Either way the loop is the same: implement → run mechanism tests + the otbox journey(s) → triage → repeat. Match surrounding code; reuse the reversers/registries the investigation surfaced. otbox authoring gotchas (#85): `path_exists` doesn't expand `~` (use `{opentraces_dir}` / `{project}`); `stdout_json_contains` is substring (use `stdout_json` exact / `stdout_json_set_contains` for arrays); a `shell` step expected to exit non-zero needs `expect_returncode = N`; run the catalogue lint; a new CLI verb/flag/envelope trips the surface-sweep / snapshot tests (update `GLOBAL_JSON_ONLY` + regenerate `json_envelope_shapes.json` — part of the work).
 
 ### Stage 5 — Tests green + docs + PR
 

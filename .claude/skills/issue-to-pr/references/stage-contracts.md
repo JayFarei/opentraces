@@ -63,6 +63,28 @@ buggy code is not evidence.
 - 3b codex Plan Reviewer: <APPROVE/REJECT + how each finding was folded in>
 ```
 
+## Stage 4 — forged implementer Goal (via `/goal-forge --claude --fast`)
+
+goal-forge assembles the six slots into ≤4000 chars of flowing prose. The otbox acceptance journey is *in the verification surface*, so the goal loop and the otbox verify loop are one loop. Canonical shape:
+
+```
+/goal Implement the plan at kb/plans/<nnn>-issue-<n>.md in the worktree <path> so that
+the fix for issue #<n> is complete, verified by: `pytest <focused mechanism tests> -q`
+green, the acceptance journey `pytest tests/otbox/test_otbox_slice.py -k "<journey>"`
+green (tier-0; tier-1 via the matrix under OT_OTBOX_TIER1=1, hand-verified), and the
+regression `pytest tests/cli tests/core tests/capture -q` green — each reporting its
+summary line into the transcript; and the new test proven red-before-green. Preserve the
+existing suite, the frozen opentraces.*.v1 envelopes + schema, data-safety, and honest
+reporting. Touch only the files the plan owns, inside <path>; never merge; don't modify
+unrelated modules. Log each attempt to <path>/runs/issue-<n>/log.md with the diff, the
+test/journey output observed, and the next-step rationale. On block — a needed decision,
+the same failure surviving ~3 attempts, or a new landmine that invalidates the plan —
+append a BLOCKED entry to that log with attempted paths, evidence, the blocker, and the
+input that would unlock progress.
+```
+
+Run to **DONE** (mechanism + **otbox journey** + regression all green in the transcript) or **BLOCKED**. A green unit suite with a red journey is NOT done — acceptance is an otbox journey. Run on the session `/goal`, or hand this prose to an implementer subagent for an isolated run.
+
 ## Stage 3b — codex Plan Reviewer call (shape)
 
 ```
