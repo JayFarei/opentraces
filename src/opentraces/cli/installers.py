@@ -68,6 +68,10 @@ def setup_group(ctx: click.Context) -> None:
                     optional local/HF NER PII detector (transformers + torch).
       llm-review    optional dataset-row reviewer used by publication gates,
                     separate from per-record sanitize tools.
+      uninstall     the symmetric inverse of ``setup``: reverse every
+                    install-time patch + daemon (``--integrations-only``,
+                    preserves captured data) or also delete captured data +
+                    git refs (``--purge``).
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
     integration, or call a subcommand to target one directly.
@@ -2152,6 +2156,120 @@ def setup_upgrade(ctx: click.Context, skill_only: bool, integrations_only: bool)
     # Lazy import to avoid circular imports at module load time.
     from . import _upgrade_impl
     _upgrade_impl(skill_only, integrations_only=integrations_only)
+
+
+@setup_group.command(
+    "uninstall",
+    examples=[
+        "opentraces setup uninstall --dry-run",
+        "opentraces setup uninstall",
+        "opentraces setup uninstall --purge --yes",
+        "opentraces setup uninstall --project . --purge",
+    ],
+    see_also=[
+        ("opentraces setup", "re-install integrations"),
+        ("opentraces doctor", "verify nothing remains wired"),
+    ],
+)
+@click.option("--integrations-only", "integrations_only", is_flag=True, default=False,
+              help="Reverse install-time patches + daemons; PRESERVE all captured data (default).")
+@click.option("--purge", "purge", is_flag=True, default=False,
+              help="Also DELETE captured data + git refs (unrecoverable). Requires confirmation.")
+@click.option("--project", "project", type=click.Path(file_okay=False, path_type=Path),
+              default=None, help="Scope per-repo reversal to one repository (default: all registered).")
+@click.option("--prune-unflushed", "prune_unflushed", is_flag=True, default=False,
+              help="Also delete un-flushed raw bodies + OTel staging (default tier; destructive).")
+@click.option("--dry-run", "dry_run", is_flag=True, default=False,
+              help="Resolve and print the plan; change nothing. Recommended first run.")
+@click.option("--yes", "-y", "assume_yes", is_flag=True, default=False,
+              help="Skip the --purge confirmation (required for --purge in non-interactive use).")
+def setup_uninstall(integrations_only: bool, purge: bool, project: Path | None,
+                    prune_unflushed: bool, dry_run: bool, assume_yes: bool) -> None:
+    """Reverse the opentraces install — the symmetric inverse of ``setup``.
+
+    \b
+    Default (``--integrations-only``) reverses every install-time patch and
+    daemon (hooks, OTLP env + receiver, watcher, skill, completions, per-repo
+    git hooks, security flags) and PRESERVES every captured trace, dataset,
+    bucket, and Git ref. After it, no opentraces process runs and no shared
+    file references opentraces, but your data survives.
+
+    ``--purge`` additionally deletes the captured corpus (bucket, datasets,
+    projects, staging) and the ``refs/opentraces/*`` + ``refs/notes/opentraces``
+    Git refs. This is UNRECOVERABLE — the canonical Trail event log and its
+    only local replay source (the bucket) both die. It requires a typed
+    confirmation (or ``--yes``).
+
+    The opentraces package itself is never self-uninstalled; the correct
+    manual command is printed.
+    """
+    if integrations_only and purge:
+        _cli.human_echo("Choose either --integrations-only or --purge, not both.")
+        _cli.emit_json(_cli.error_response(
+            "INVALID_UNINSTALL_MODE", "setup-uninstall",
+            "--integrations-only and --purge are mutually exclusive",
+        ))
+        sys.exit(2)
+
+    from ..core import uninstall as _uninstall
+
+    tier = "purge" if purge else "integrations"
+
+    # --purge confirmation (a typed confirmation; --yes / --dry-run bypass it).
+    if purge and not dry_run and not assume_yes:
+        from ..core.config import load_config as _load_config
+        config = _load_config()
+        repos = _uninstall._target_repos(config, project)
+        summary = _uninstall.summarize_purge_targets(config, repos)
+        if not sys.stdout.isatty():
+            _cli.emit_json(_cli.error_response(
+                "PURGE_NEEDS_CONFIRMATION", "setup-uninstall",
+                "--purge is destructive; pass --yes for non-interactive use",
+            ))
+            sys.exit(2)
+        mb = summary["bucket_bytes"] / (1024 * 1024)
+        click.echo(_cli._warn("This --purge is UNRECOVERABLE."))
+        click.echo(f"  bucket:              {mb:.1f} MiB")
+        click.echo(f"  datasets:            {summary['dataset_count']}")
+        click.echo(f"  registered projects: {summary['registered_projects']}")
+        click.echo(f"  repos w/ git refs:   {summary['repos_with_refs']}")
+        click.echo("  Deletes the canonical Trail event log (refs/opentraces/local/events/v1)")
+        click.echo("  AND its only local replay source (the bucket). There is no undo.")
+        if summary["remote_bucket_enabled"]:
+            click.echo(_cli._warn(
+                f"  NOTE: remote bucket at {summary['remote_bucket_url'] or '<configured>'} "
+                "will SURVIVE (local-only teardown)."))
+        click.echo("  refs/notes/opentraces may include collaborators' annotations — also deleted.")
+        typed = click.prompt('Type "purge" to confirm', default="", show_default=False)
+        if typed.strip().lower() != "purge":
+            click.echo("Aborted.")
+            sys.exit(1)
+
+    envelope = _uninstall.run_uninstall(
+        tier=tier,
+        project=project,
+        prune_unflushed=prune_unflushed,
+        dry_run=dry_run,
+    )
+
+    # Human surface.
+    verb = "Would remove" if dry_run else "Removed"
+    if envelope["removed_names"]:
+        _cli.human_echo(f"{verb}: {', '.join(envelope['removed_names'])}")
+    if envelope["skipped_names"]:
+        _cli.human_echo(f"Skipped (not installed): {', '.join(envelope['skipped_names'])}")
+    if envelope["error_names"]:
+        _cli.human_echo(f"{_cli._err('Errors')}: {', '.join(envelope['error_names'])}")
+    if tier == "purge" and envelope["refs_purged"]:
+        _cli.human_echo(f"Purged {len(envelope['refs_purged'])} git ref(s).")
+    elif tier == "integrations" and envelope["refs_preserved"]:
+        _cli.human_echo(f"Preserved {len(envelope['refs_preserved'])} git ref(s) and all captured data.")
+    _cli.human_echo(f"To remove the package itself: {envelope['package_uninstall_command']}")
+    if dry_run:
+        _cli.human_echo("(dry-run — nothing was changed.)")
+
+    _cli.emit_json(envelope)
+    sys.exit(0 if envelope["ok"] else 5)
 
 
 # ---------------------------------------------------------------------------

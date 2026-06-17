@@ -1,9 +1,9 @@
 """Idempotent patcher for ``~/.claude/settings.json`` (plan 078 R10).
 
 Enables Claude Code's native OTel emission targeting the local OTLP
-receiver by setting 7 env keys under the top-level ``env`` block.
+receiver by setting 12 env keys under the top-level ``env`` block.
 Deep-merges so user-set keys outside ``env`` and unrelated keys inside
-``env`` are preserved. User-modified values for our 7 keys are NEVER
+``env`` are preserved. User-modified values for our 12 keys are NEVER
 clobbered; they are reported under ``keys_skipped`` with reason
 ``user-modified``.
 
@@ -16,15 +16,17 @@ Backup contract: the first install copies settings.json to
 ``settings.json.opentraces-backup``. Subsequent installs DO NOT overwrite
 the backup, so re-running install is safe even if the user has since
 modified settings.json post-install. ``uninstall_otel_env`` either
-restores the backup atomically (``restore_backup=True``) or surgically
-removes just our 7 keys (preserving user's other ``env`` entries).
+restores the backup atomically (``restore_backup=True``), pops all 12 of
+our keys (default), or — for ``ownership_safe=True`` — strips only the
+keys opentraces actually wrote (preserving user's other ``env`` entries
+and any OTEL key the user owned pre-install).
 
 Atomic write: every settings.json mutation goes via ``<path>.tmp`` +
 ``os.replace`` after a JSON round-trip validation; ``0644`` perms on the
 file, ``0700`` on the parent ``~/.claude/`` directory if we have to
 create it (matches Anthropic's convention).
 
-User-modified detection: we compare each of our 7 keys by exact string
+User-modified detection: we compare each of our 12 keys by exact string
 equality against what we WOULD set. Any deviation (different scheme,
 different path, different value) is treated as user-modified and
 preserved. There is no partial-match heuristic.
@@ -175,10 +177,50 @@ def install_otel_env(
     )
 
 
+def _backup_env(backup: Path) -> dict | None:
+    """Return the pre-install ``env`` dict from the write-once backup.
+
+    ``None`` means "no usable snapshot" (no backup, or unreadable/malformed)
+    — the ownership-safe path then falls back to value-match only.
+    """
+    if not backup.exists():
+        return None
+    try:
+        data = json.loads(backup.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("env"), dict):
+        return data["env"]
+    return {}
+
+
 def uninstall_otel_env(
     settings_path: Path | None = None,
     restore_backup: bool = False,
+    ownership_safe: bool = False,
+    delete_backup: bool = False,
 ) -> PatchResult:
+    """Reverse :func:`install_otel_env`.
+
+    Three mutually-exclusive modes, in precedence order:
+
+    - ``restore_backup=True``: blind ``os.replace`` of the write-once backup
+      over settings.json (the legacy ``setup capture-otlp --uninstall`` /
+      plan-078 R10 "restore byte-identical" contract). Unchanged.
+    - ``ownership_safe=True``: surgical removal that only strips keys
+      opentraces actually *wrote* — a key is removed iff its current value
+      equals what we would install AND it was not already present in the
+      pre-install backup snapshot. User-set / user-modified OTEL keys are
+      preserved. Used by ``opentraces setup uninstall``. With
+      ``delete_backup=True`` the leaked write-once backup is removed after a
+      clean strip. When no backup snapshot exists, falls back to value-match
+      only (and the caller should warn — provenance is unknown).
+    - default (``ownership_safe=False``): pop ALL present ``OTEL_ENV_KEYS``
+      unconditionally. Unchanged legacy behavior for existing callers.
+
+    Removed keys are reported in ``keys_skipped`` (the same dataclass shape as
+    :func:`install_otel_env`; the CLI re-aliases it to ``keys_removed``).
+    """
     target = Path(settings_path) if settings_path else DEFAULT_SETTINGS_PATH
     backup = target.with_name(target.name + DEFAULT_BACKUP_SUFFIX)
 
@@ -197,6 +239,48 @@ def uninstall_otel_env(
         return PatchResult(ok=False, settings_path=target, reason=err)
     env = data.get("env", {})
     removed: list[str] = []
+
+    if ownership_safe:
+        expected = _expected_env(DEFAULT_OTLP_ENDPOINT, DEFAULT_RAW_BODIES_DIR)
+        backup_env = _backup_env(backup)
+        preserved: list[str] = []
+        for key in OTEL_ENV_KEYS:
+            if key not in env:
+                continue
+            if env.get(key) != expected.get(key):
+                preserved.append(key)  # user-modified value — never ours
+                continue
+            if backup_env is not None and key in backup_env:
+                preserved.append(key)  # user pre-owned the key — preserve
+                continue
+            env.pop(key)
+            removed.append(key)
+        _atomic_write_json(target, data)
+        if backup_env is None and backup.exists():
+            reason = "keys-removed-ownership-safe-backup-unreadable"
+        elif not backup.exists():
+            reason = "keys-removed-ownership-safe-no-backup"
+        else:
+            reason = "keys-removed-ownership-safe"
+        backup_path = backup if backup.exists() else None
+        if delete_backup and backup.exists() and not preserved:
+            # Only drop the leaked backup after a *clean* strip — if we left
+            # user keys behind, keep the snapshot so a later full restore is
+            # still possible.
+            try:
+                backup.unlink()
+                backup_path = None
+            except OSError:
+                pass
+        return PatchResult(
+            ok=True,
+            settings_path=target,
+            backup_path=backup_path,
+            keys_added=[],
+            keys_skipped=removed,
+            reason=reason,
+        )
+
     for key in OTEL_ENV_KEYS:
         if key in env:
             env.pop(key)
@@ -213,7 +297,7 @@ def uninstall_otel_env(
 
 
 def is_installed(settings_path: Path | None = None) -> bool:
-    """True iff all 7 env keys match what install_otel_env would set with default args."""
+    """True iff all 12 env keys match what install_otel_env would set with default args."""
     target = Path(settings_path) if settings_path else DEFAULT_SETTINGS_PATH
     if not target.exists():
         return False

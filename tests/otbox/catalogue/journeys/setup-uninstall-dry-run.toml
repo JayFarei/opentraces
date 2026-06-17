@@ -1,0 +1,46 @@
+name = "setup-uninstall-dry-run"
+description = """
+Issue #85 — `setup uninstall --dry-run` resolves the full teardown plan and
+mutates NOTHING. The world seed installs the real git post-commit hook, so the
+plan must list git under removed_names (would-remove) while the hook file is
+still on disk after the dry run. --dry-run is the recommended first invocation.
+"""
+lane = "extended"
+tier = 0
+persona = "both"
+seed = "world"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-dry"
+argv = ["--json", "setup", "uninstall", "--dry-run"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-dry"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-dry"
+path = "dry_run"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-dry"
+path = "ok"
+equals = true
+
+# The plan would remove git...
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "uninstall-dry"
+path = "removed_names"
+equals = ["git"]
+
+# ...but the hook file is UNTOUCHED on disk.
+[[assertions]]
+kind = "path_exists"
+path = "{project}/.git/hooks/opentraces-post-commit"

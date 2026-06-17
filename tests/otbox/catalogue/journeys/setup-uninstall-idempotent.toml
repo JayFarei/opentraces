@@ -1,0 +1,47 @@
+name = "setup-uninstall-idempotent"
+description = """
+Issue #85 — running `setup uninstall` twice is safe. The first run reverses the
+world-seed git hook; the second run finds every surface already gone and must
+exit 0 with an EMPTY removed_names (every surface skipped(not-installed)). This
+is the regression guard for reversers that return ok=True even when they did
+nothing (git remove() returns True on a clean repo) — removed-vs-skipped is
+derived from a pre-call status() gate, not the return value.
+"""
+lane = "extended"
+tier = 0
+persona = "both"
+seed = "world"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-first"
+argv = ["--json", "setup", "uninstall"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-first"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "uninstall-second"
+argv = ["--json", "setup", "uninstall"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-second"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-second"
+path = "ok"
+equals = true
+
+# Second run reverses nothing: every surface already not-installed.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "uninstall-second"
+path = "removed_names"
+equals = 0
