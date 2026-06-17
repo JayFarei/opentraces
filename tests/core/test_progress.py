@@ -164,3 +164,48 @@ def test_context_manager_stops_heartbeat_on_exception():
             raise RuntimeError("boom")
     # Even on exception, the heartbeat thread is joined.
     assert not reporter.heartbeat_alive()
+
+
+def test_build_exception_cleans_tmp_and_stops_heartbeat(tmp_path, monkeypatch):
+    """A raising build (real heartbeat active) cleans its per-pid tmp DB AND
+    the heartbeat thread is stopped/joined — both invariants pinned together.
+
+    The build's ``except`` block unlinks the tmp snapshot + sidecars; the
+    reporter context manager's ``__exit__`` joins the daemon thread on the way
+    out. This is the honest backstop for the 'interrupt reports cleanup state'
+    AC: the temp artifact is gone and no thread is left dangling.
+    """
+
+    from opentraces.core import trace_search_snapshot as tss
+
+    def _boom():
+        raise RuntimeError("kaboom in the doc loop")
+
+    monkeypatch.setattr(tss, "_iter_documents", _boom)
+
+    snapshot_path = tmp_path / "index" / "search.sqlite"
+    events: list[dict] = []
+    guard = threading.Lock()
+
+    def emit(ev: dict) -> None:
+        with guard:
+            events.append(ev)
+
+    reporter = ProgressReporter(
+        "trace index rebuild",
+        emit=emit,
+        heartbeat_interval=0.02,
+        enable_heartbeat=True,
+    )
+
+    with pytest.raises(RuntimeError):
+        with reporter:
+            tss.build_trace_search_snapshot(path=snapshot_path, progress=reporter)
+
+    # (i) the per-pid tmp DB (+ sidecars) is gone — no leftover artifacts.
+    leftovers = sorted((tmp_path / "index").glob("search.sqlite.*tmp*"))
+    assert leftovers == [], f"leftover tmp artifacts: {leftovers}"
+    assert not snapshot_path.exists()
+
+    # (ii) the background heartbeat thread is stopped + joined.
+    assert not reporter.heartbeat_alive()

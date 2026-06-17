@@ -872,45 +872,49 @@ def _trace_index_rebuild_impl(
     legacy_index_missing = not default_index_path().exists()
     legacy_bootstrap_duration_ms = None
     legacy_rebuild_summary = None
-    if rebuild_legacy:
-        total_traces = _approx_bootstrap_trace_count()
-        click.echo(
-            "Rebuilding legacy Trace Index explicitly "
-            f"(~{total_traces} traces). This can take several minutes on a "
-            "large bucket; no output until it completes.",
-            err=True,
-        )
-        _bootstrap_started = time.monotonic()
-        summary = rebuild_index(default_index_path())
-        legacy_bootstrap_duration_ms = round(
-            (time.monotonic() - _bootstrap_started) * 1000,
-            2,
-        )
-        click.echo(
-            f"Legacy Trace Index rebuild done in "
-            f"{time.monotonic() - _bootstrap_started:.1f}s "
-            f"(~{total_traces} traces).",
-            err=True,
-        )
-        healed_legacy_index = True
-        legacy_rebuild_forced = True
-        legacy_rebuild_summary = {
-            "trace_count": summary.trace_count,
-            "unit_count": summary.unit_count,
-            "map_node_count": summary.map_node_count,
-        }
-    snapshot_started = time.monotonic()
-    # Shared progress/heartbeat contract (issue #88). The reporter's sink is
-    # stderr-only (click.echo(err=True)), so the stdout --json payload below
-    # stays a single clean object. traces_total is seeded CLI-side; core
-    # reports only traces_seen.
+    # Shared progress/heartbeat contract (issue #88). The reporter is built at
+    # the TOP — BEFORE the --legacy branch — so its background heartbeat covers
+    # the command's slowest mode (the blocking legacy ``rebuild_index()``), not
+    # just the snapshot build. The sink is stderr-only (click.echo(err=True)),
+    # so the stdout --json payload below stays a single clean object.
+    # traces_total is seeded CLI-side; core reports only traces_seen.
+    total_traces = _approx_bootstrap_trace_count()
     reporter = build_cli_progress("trace index rebuild", progress_mode)
-    reporter.set_total(traces_total=_approx_bootstrap_trace_count())
+    reporter.set_total(traces_total=total_traces)
     try:
+        if rebuild_legacy:
+            click.echo(
+                "Rebuilding legacy Trace Index explicitly "
+                f"(~{total_traces} traces). This can take several minutes on a "
+                "large bucket; no output until it completes.",
+                err=True,
+            )
+            _bootstrap_started = time.monotonic()
+            # Beat the heartbeat through the long blocking legacy rebuild too.
+            reporter.stage("rebuilding_legacy_index", traces_total=total_traces)
+            summary = rebuild_index(default_index_path())
+            legacy_bootstrap_duration_ms = round(
+                (time.monotonic() - _bootstrap_started) * 1000,
+                2,
+            )
+            click.echo(
+                f"Legacy Trace Index rebuild done in "
+                f"{time.monotonic() - _bootstrap_started:.1f}s "
+                f"(~{total_traces} traces).",
+                err=True,
+            )
+            healed_legacy_index = True
+            legacy_rebuild_forced = True
+            legacy_rebuild_summary = {
+                "trace_count": summary.trace_count,
+                "unit_count": summary.unit_count,
+                "map_node_count": summary.map_node_count,
+            }
+        snapshot_started = time.monotonic()
         search_summary = build_trace_search_snapshot(progress=reporter)
+        snapshot_build_duration_ms = round((time.monotonic() - snapshot_started) * 1000, 2)
     finally:
         reporter.done()
-    snapshot_build_duration_ms = round((time.monotonic() - snapshot_started) * 1000, 2)
     payload = {
         "status": "ok",
         "search_snapshot": search_summary.as_dict(),
