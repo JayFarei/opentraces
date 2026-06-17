@@ -210,7 +210,13 @@ opentraces trace teleport export <trace-id> --output <dir>
 Common `trace query` filters include `--lex`, `--semantic`, `--skill`,
 `--tool`, `--files`, `--signal`, `--survival`, `--since`, `--candidate-kind`,
 `--project`, and `--cwd`. `trace query` is read-only against the local search
-snapshot: it neither rebuilds the index nor pulls remote data. `trace skills`
+snapshot: it neither rebuilds the index nor pulls remote data. Under active
+capture the snapshot can be marked stale by a concurrent write; rather than
+dead-ending with `maintenance_needed`, the default query serves the
+last-known-good snapshot and attaches a `freshness` object (`stale`,
+`stale_reason`, `built_at`, `source_hash`, `rebuild_recommended`). Pass
+`--fresh` for strict freshness: it returns `maintenance_needed` instead of
+serving a stale snapshot when freshness cannot be proven. `trace skills`
 uses the same compact snapshot's `skill_invocations` table and emits
 `telemetry.duration_ms` plus `search_diagnostics` so agents can tell whether a
 raw scan happened. To search remote traces, first `opentraces bucket remote
