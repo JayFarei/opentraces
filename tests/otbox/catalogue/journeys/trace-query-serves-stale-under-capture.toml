@@ -1,0 +1,104 @@
+name = "trace-query-serves-stale-under-capture"
+description = """
+Issue #91: under active capture the search-snapshot dirty marker is set
+faster than a self-heal rebuild can clear it. `trace query` must still
+serve last-known-good results with a freshness warning (status=ok,
+freshness.stale=true) instead of dead-ending at maintenance_needed.
+`trace query --fresh` keeps the strict contract: when freshness cannot
+be proven it returns maintenance_needed (exit 3).
+
+The persistent-dirty condition is reproduced deterministically by making
+the dirty marker unreadable (chmod 000): current_dirty_token() then
+returns its sentinel and the rebuild's clear cannot remove it, exactly
+mirroring the active-capture race the issue describes.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+seed = "smoke"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "query-fresh-baseline"
+argv = ["trace", "query", "greet", "--json"]
+
+[[steps]]
+type = "shell"
+id = "mark-dirty-persistent"
+argv = [
+  "{py_bin}",
+  "-c",
+  "import os; from opentraces.core.trace_search_state import mark_search_snapshot_dirty, dirty_marker_path; mark_search_snapshot_dirty('otbox-active-capture'); os.chmod(dirty_marker_path(), 0)",
+]
+
+[[steps]]
+type = "cli"
+id = "query-serves-stale"
+argv = ["trace", "query", "greet", "--json"]
+
+[[steps]]
+type = "cli"
+id = "query-fresh-strict"
+argv = ["trace", "query", "greet", "--fresh", "--json"]
+expect_returncode = 3
+
+# Baseline: a clean snapshot serves fresh.
+[[assertions]]
+kind = "stdout_json"
+step = "query-fresh-baseline"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "query-fresh-baseline"
+path = "freshness.stale"
+equals = false
+
+# Persistent-dirty default: serve last-known-good with a freshness warning.
+[[assertions]]
+kind = "returncode"
+step = "query-serves-stale"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "query-serves-stale"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "query-serves-stale"
+path = "freshness.stale"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "query-serves-stale"
+path = "freshness.rebuild_recommended"
+equals = true
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "query-serves-stale"
+path = "total_returned"
+min = 1
+
+# Strict --fresh: maintenance_needed when freshness cannot be proven.
+[[assertions]]
+kind = "returncode"
+step = "query-fresh-strict"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "query-fresh-strict"
+path = "status"
+equals = "maintenance_needed"

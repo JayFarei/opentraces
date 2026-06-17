@@ -247,6 +247,10 @@ def test_search_missing_snapshot_raises_when_auto_rebuild_disabled() -> None:
 
 
 def test_rebuild_does_not_clear_dirty_marker_created_during_build(monkeypatch) -> None:
+    # Branched for issue #91: the dirty-marker-not-cleared contract is
+    # preserved, but the default read now SERVES the last-known-good snapshot
+    # instead of dead-ending. STRICT callers (strict_freshness=True or
+    # auto_rebuild=False) keep the original raise-on-stale contract.
     from opentraces.core import trace_search_snapshot as snapshot
 
     _write_trace(
@@ -265,12 +269,145 @@ def test_rebuild_does_not_clear_dirty_marker_created_during_build(monkeypatch) -
     build_trace_search_snapshot()
 
     assert current_dirty_token() is not None
+
+    # STRICT-CONTRACT (preserved): auto_rebuild=False raises on the persistent
+    # dirty marker — the snapshot is never silently mutated.
     try:
-        search_traces("marketing", SearchFilters(project="demo-project"))
+        search_traces(
+            "marketing", SearchFilters(project="demo-project"), auto_rebuild=False
+        )
     except SearchSnapshotNeedsRebuild as exc:
         assert exc.reason == "stale"
     else:  # pragma: no cover - assertion clarity
-        raise AssertionError("concurrent dirty marker should keep snapshot stale")
+        raise AssertionError("auto_rebuild=False should raise on persistent dirty marker")
+
+    # STRICT-CONTRACT (preserved): --fresh (strict_freshness=True) rebuilds once
+    # to try for fresh, but a marker that survives the rebuild still raises.
+    try:
+        search_traces(
+            "marketing",
+            SearchFilters(project="demo-project"),
+            strict_freshness=True,
+        )
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "stale"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("strict_freshness=True should raise when freshness unprovable")
+
+    # NEW (issue #91): the DEFAULT read serves last-known-good results with a
+    # freshness warning instead of maintenance_needed.
+    page = search_traces("marketing", SearchFilters(project="demo-project"))
+    assert [hit.trace_id for hit in page.hits] == ["trace-site"]
+    assert page.freshness is not None
+    assert page.freshness["stale"] is True
+    assert page.freshness["rebuild_recommended"] is True
+
+
+def test_default_serves_last_known_good_on_persistent_dirty(monkeypatch) -> None:
+    # Issue #91: under active capture the dirty marker is re-set during the
+    # one self-heal rebuild, so the retry stays stale. The default read must
+    # serve the existing valid snapshot (last-known-good) + a freshness object,
+    # never maintenance_needed, and never touch the legacy index.db.
+    from opentraces.core import trace_search_snapshot as snapshot
+    from opentraces.core.trace_index import default_index_path
+
+    _write_trace(
+        "demo-project",
+        _trace("trace-site", description="Fix the marketing site search hang"),
+    )
+    real_iter_documents = snapshot._iter_documents
+
+    def dirty_during_build():
+        for doc in real_iter_documents():
+            mark_search_snapshot_dirty("during-build", trace_id=doc.trace_id)
+            yield doc
+
+    monkeypatch.setattr(snapshot, "_iter_documents", dirty_during_build)
+    build_trace_search_snapshot()
+    assert current_dirty_token() is not None
+
+    page = search_traces("marketing", SearchFilters(project="demo-project"))
+
+    assert [hit.trace_id for hit in page.hits] == ["trace-site"]
+    assert page.total == 1
+    assert page.freshness is not None
+    assert page.freshness["stale"] is True
+    assert page.freshness["stale_reason"] == "stale"
+    assert page.freshness["rebuild_recommended"] is True
+    assert page.freshness["dirty_token"] is not None
+    assert "built_at" in page.freshness
+    assert "source_hash" in page.freshness
+    # Serve-stale must NOT reintroduce the #22 legacy index trap.
+    assert not default_index_path().exists()
+
+
+def test_freshness_object_when_fresh() -> None:
+    # Issue #91: a clean (non-stale) snapshot reports freshness.stale=False
+    # with built_at / source_hash provenance.
+    _write_trace(
+        "demo-project",
+        _trace("trace-site", description="Fix the marketing site search hang"),
+    )
+    build_trace_search_snapshot()
+    assert current_dirty_token() is None
+
+    page = search_traces("marketing", SearchFilters(project="demo-project"))
+
+    assert [hit.trace_id for hit in page.hits] == ["trace-site"]
+    assert page.freshness is not None
+    assert page.freshness["stale"] is False
+    assert page.freshness.get("built_at")
+    assert page.freshness.get("source_hash")
+
+
+def test_allow_stale_still_raises_unservable(tmp_path) -> None:
+    # Issue #91 (codex finding #4): allow_stale must bypass ONLY the dirty
+    # marker check — a corrupt/missing/wrong-schema snapshot still raises.
+    from opentraces.core import trace_search_snapshot as snapshot
+
+    def _ro(db_path):
+        conn = _sqlite3.connect(db_path)
+        conn.row_factory = _sqlite3.Row  # production uses _connect_readonly (Row)
+        return conn
+
+    # unreadable: a DB with no snapshot_meta table at all.
+    unreadable = tmp_path / "unreadable.db"
+    with _sqlite3.connect(unreadable) as conn:
+        conn.execute("create table other(x)")
+    with _ro(unreadable) as conn:
+        try:
+            snapshot._verify_snapshot(conn, unreadable, allow_stale=True)
+        except SearchSnapshotNeedsRebuild as exc:
+            assert exc.reason == "unreadable"
+        else:  # pragma: no cover
+            raise AssertionError("allow_stale must still raise for unreadable")
+
+    # missing_schema: snapshot_meta exists but has no schema_version row.
+    missing = tmp_path / "missing_schema.db"
+    with _sqlite3.connect(missing) as conn:
+        conn.execute("create table snapshot_meta(key text primary key, value text)")
+    with _ro(missing) as conn:
+        try:
+            snapshot._verify_snapshot(conn, missing, allow_stale=True)
+        except SearchSnapshotNeedsRebuild as exc:
+            assert exc.reason == "missing_schema"
+        else:  # pragma: no cover
+            raise AssertionError("allow_stale must still raise for missing_schema")
+
+    # wrong_schema: a schema_version that is not the current one.
+    wrong = tmp_path / "wrong_schema.db"
+    with _sqlite3.connect(wrong) as conn:
+        conn.execute("create table snapshot_meta(key text primary key, value text)")
+        conn.execute(
+            "insert into snapshot_meta(key, value) values ('schema_version', '0.0.0-not-real')"
+        )
+    with _ro(wrong) as conn:
+        try:
+            snapshot._verify_snapshot(conn, wrong, allow_stale=True)
+        except SearchSnapshotNeedsRebuild as exc:
+            assert exc.reason == "wrong_schema"
+        else:  # pragma: no cover
+            raise AssertionError("allow_stale must still raise for wrong_schema")
 
 
 def test_semantic_query_without_lexicon_concept_returns_empty_not_maintenance() -> None:

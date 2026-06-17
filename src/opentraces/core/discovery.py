@@ -59,6 +59,10 @@ class DiscoveryPacket(BaseModel):
     total_candidates: int
     total_cards: int
     search_diagnostics: dict[str, Any] = Field(default_factory=dict)
+    # Issue #91: forward the served snapshot's freshness telemetry so a
+    # stale-served discovery is never silent (honesty). ``None`` only when the
+    # underlying page carried no freshness object.
+    freshness: dict[str, Any] | None = None
     groups: list[DiscoveryGroup] = Field(default_factory=list)
     refs: dict[str, str] = Field(default_factory=dict)
     limitations: list[str] = Field(default_factory=list)
@@ -124,6 +128,7 @@ def discover(
         total_candidates=len(candidates),
         total_cards=len(cards),
         search_diagnostics=diagnostics,
+        freshness=getattr(page, "freshness", None),
         groups=groups,
         refs={
             "query": f"ot://trace-search/lex/{_ref_escape(topic)}",

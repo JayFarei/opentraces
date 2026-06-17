@@ -415,6 +415,14 @@ def trace_discover(
 )
 @click.option("--vec", default=None, help="Reserved vector query mode.")
 @click.option("--hyde", default=None, help="Reserved HyDE query mode.")
+@click.option(
+    "--fresh",
+    is_flag=True,
+    help=(
+        "Strict freshness: fail with maintenance_needed if a fully up-to-date "
+        "snapshot cannot be proven (no serve-stale fallback)."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_query(
     lex_terms: tuple[str, ...],
@@ -459,6 +467,7 @@ def trace_query(
     query_source: str,
     vec: str | None,
     hyde: str | None,
+    fresh: bool,
     as_json: bool,
 ) -> None:
     """Search local retained traces and return bounded candidate packets."""
@@ -627,6 +636,7 @@ def trace_query(
             limit=limit,
             cursor=page_token,
             semantic=semantic,
+            strict_freshness=fresh,
         )
     except SearchSnapshotNeedsRebuild as exc:
         # search_traces auto-rebuilds the compact snapshot once before raising
@@ -688,11 +698,15 @@ def trace_query(
     }
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
-    # NOTE: SearchPage.warnings has zero writers in the read-only snapshot kernel
-    # (PR #34 routed Trace Trail freshness through SearchDiagnostics.rebuilt_index
-    # instead). The dead ``trail_freshness``/``warnings`` emission that used to live
-    # here was dropped (issue #27 item I) — re-add a real freshness surface only when
-    # the kernel actually populates page.warnings again.
+    # Issue #91: surface the served snapshot's freshness telemetry. On an
+    # actively-capturing box a stale-but-servable snapshot now returns
+    # status=ok + results + freshness.stale=true (serve last-known-good)
+    # instead of dead-ending at maintenance_needed; a clean read reports
+    # freshness.stale=false with build provenance. (This is the real writer
+    # the old dead ``warnings`` block always wanted — keyed ``freshness``, not
+    # the legacy ``trail_freshness``/``warnings`` names.)
+    if page.freshness is not None:
+        payload["freshness"] = page.freshness
     if semantic:
         from ..core.semantic import expand_semantic_query
 

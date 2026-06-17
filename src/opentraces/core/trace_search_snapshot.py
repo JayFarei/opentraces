@@ -149,6 +149,12 @@ class SearchPage:
     total: int
     diagnostics: SearchDiagnostics
     warnings: list[dict[str, Any]] = field(default_factory=list)
+    # Issue #91: freshness telemetry for the served result. ``stale=False``
+    # carries last-built provenance; ``stale=True`` additionally carries the
+    # stale reason, dirty token, and a rebuild recommendation when the snapshot
+    # was served last-known-good under active capture. ``None`` only when the
+    # caller never populated it (kept for backwards-compat default).
+    freshness: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -562,6 +568,27 @@ def _refresh_snapshot_locked(
     )
 
 
+def _snapshot_provenance(snapshot_path: Path) -> dict[str, Any]:
+    """Cheaply read ``built_at`` / ``source_hash`` from ``snapshot_meta``.
+
+    Reads the same two rows ``snapshot_status`` surfaces, without counting
+    traces or stat-ing the file — used to stamp freshness telemetry on a
+    served page. Returns an empty dict when the snapshot is missing or
+    unreadable (the served result still carries an honest, if sparse, object).
+    """
+    if not snapshot_path.exists():
+        return {}
+    try:
+        with _connect_readonly(snapshot_path) as conn:
+            rows = conn.execute(
+                "select key, value from snapshot_meta "
+                "where key in ('built_at', 'source_hash')"
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return {}
+    return {str(row["key"]): str(row["value"]) for row in rows}
+
+
 def search_traces(
     text: str | None,
     filters: SearchFilters | None = None,
@@ -571,6 +598,7 @@ def search_traces(
     semantic: str | None = None,
     path: Path | None = None,
     auto_rebuild: bool = True,
+    strict_freshness: bool = False,
 ) -> SearchPage:
     """Search the immutable snapshot and return compact trace hits.
 
@@ -582,10 +610,19 @@ def search_traces(
     serialized + atomic-swap + dirty-marker clearing) and serves the result. It
     is NOT a raw scan and it never calls the heavy legacy index rebuild, so the
     #22 perf trap is not reintroduced; the steady-state read path stays
-    untouched once a servable snapshot exists. If the snapshot is still missing
-    after the build, or the build itself fails, the ``SearchSnapshotNeedsRebuild``
-    propagates and the CLI surfaces ``maintenance_needed`` / exit 3. Pass
-    ``auto_rebuild=False`` to keep the strict raise-on-missing behavior.
+    untouched once a servable snapshot exists.
+
+    Serve-stale (issue #91): on an actively-capturing box the dirty marker can
+    be re-set DURING the one self-heal rebuild, so the retry stays ``stale``.
+    Rather than dead-ending at ``maintenance_needed`` over a schema-valid
+    snapshot, the default path serves last-known-good results from the existing
+    snapshot and stamps a ``freshness`` object (``stale=True`` + reason + dirty
+    token + ``rebuild_recommended``). A genuinely unservable snapshot
+    (``unreadable`` / ``missing_schema`` / ``wrong_schema`` / ``missing``)
+    still raises ``SearchSnapshotNeedsRebuild`` (CLI → ``maintenance_needed`` /
+    exit 3). Pass ``strict_freshness=True`` (``trace query --fresh``) or
+    ``auto_rebuild=False`` to keep the strict raise-on-any-needs-rebuild
+    behavior — "fail if freshness cannot be proven".
     """
 
     snapshot_path = path or default_snapshot_path()
@@ -612,9 +649,9 @@ def search_traces(
     offset = _page_offset(cursor)
     page_size = max(1, int(limit or DEFAULT_LIMIT))
 
-    def _read() -> tuple[list[sqlite3.Row], int]:
+    def _read(*, allow_stale: bool = False) -> tuple[list[sqlite3.Row], int]:
         with _connect_readonly(snapshot_path) as conn:
-            _verify_snapshot(conn, snapshot_path)
+            _verify_snapshot(conn, snapshot_path, allow_stale=allow_stale)
             return _query_rows(
                 conn,
                 terms=terms,
@@ -624,18 +661,39 @@ def search_traces(
                 offset=offset,
             )
 
+    stale_reason: str | None = None
+
+    def _serve_or_raise(
+        exc: SearchSnapshotNeedsRebuild,
+    ) -> tuple[list[sqlite3.Row], int]:
+        # Reached after the one self-heal rebuild has been exhausted. A dirty
+        # marker on a schema-valid snapshot (``stale``) is servable
+        # last-known-good UNLESS the caller demanded provable freshness
+        # (``strict_freshness`` / ``auto_rebuild=False``). Anything genuinely
+        # unservable (unreadable / missing_schema / wrong_schema / missing)
+        # always raises.
+        nonlocal stale_reason
+        if (not strict_freshness) and auto_rebuild and exc.reason == "stale":
+            stale_reason = exc.reason
+            return _read(allow_stale=True)
+        raise exc
+
     try:
         rows, total = _read()
-    except SearchSnapshotNeedsRebuild:
+    except SearchSnapshotNeedsRebuild as exc:
         # A stale dirty marker (or an otherwise unservable snapshot) converges
         # with exactly one build + one retry. If the rebuild already ran above,
-        # or auto_rebuild is off, re-raise so the CLI reports maintenance_needed.
+        # or auto_rebuild is off, decide between serve-stale and raise.
         if not auto_rebuild or rebuilt:
-            raise
-        _notify_rebuilding()
-        build_trace_search_snapshot(path=snapshot_path)
-        rebuilt = True
-        rows, total = _read()
+            rows, total = _serve_or_raise(exc)
+        else:
+            _notify_rebuilding()
+            build_trace_search_snapshot(path=snapshot_path)
+            rebuilt = True
+            try:
+                rows, total = _read()
+            except SearchSnapshotNeedsRebuild as exc2:
+                rows, total = _serve_or_raise(exc2)
 
     has_more = len(rows) > page_size
     selected = rows[:page_size]
@@ -647,12 +705,29 @@ def search_traces(
         rebuilt_index=rebuilt,
         wrote_to_index=rebuilt,
     )
+    provenance = _snapshot_provenance(snapshot_path)
+    if stale_reason is not None:
+        freshness: dict[str, Any] = {
+            "stale": True,
+            "stale_reason": stale_reason,
+            "dirty_token": current_dirty_token(),
+            "built_at": provenance.get("built_at"),
+            "source_hash": provenance.get("source_hash"),
+            "rebuild_recommended": True,
+        }
+    else:
+        freshness = {
+            "stale": False,
+            "built_at": provenance.get("built_at"),
+            "source_hash": provenance.get("source_hash"),
+        }
     next_page_token = f"offset:{offset + page_size}" if has_more else None
     return SearchPage(
         hits=hits,
         next_page_token=next_page_token,
         total=total,
         diagnostics=diagnostics,
+        freshness=freshness,
     )
 
 
@@ -1286,7 +1361,18 @@ def _connect_readonly(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _verify_snapshot(conn: sqlite3.Connection, path: Path) -> None:
+def _verify_snapshot(
+    conn: sqlite3.Connection, path: Path, *, allow_stale: bool = False
+) -> None:
+    """Verify a snapshot connection is servable.
+
+    ``unreadable`` / ``missing_schema`` / ``wrong_schema`` ALWAYS raise — a
+    corrupt or wrong-schema snapshot can never be served. The ``stale`` check
+    (a dirty marker on an otherwise schema-valid snapshot) is bypassed when
+    ``allow_stale`` is set (issue #91): a dirty marker means "results may be
+    behind the corpus", not "results are garbage", so a schema-valid snapshot
+    is still last-known-good servable.
+    """
     try:
         row = conn.execute(
             "select value from snapshot_meta where key = 'schema_version'"
@@ -1297,7 +1383,7 @@ def _verify_snapshot(conn: sqlite3.Connection, path: Path) -> None:
         raise SearchSnapshotNeedsRebuild("missing_schema", path=path)
     if str(row["value"]) != SNAPSHOT_SCHEMA_VERSION:
         raise SearchSnapshotNeedsRebuild("wrong_schema", path=path)
-    if current_dirty_token() is not None:
+    if not allow_stale and current_dirty_token() is not None:
         raise SearchSnapshotNeedsRebuild("stale", path=path)
 
 
