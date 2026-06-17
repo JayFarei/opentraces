@@ -185,6 +185,14 @@ invalid-trail exit-3 conditions). The human view shows a warn row
 "v\<latest\> available; run 'opentraces setup upgrade'" and per-integration
 "drift: ...; run 'opentraces setup upgrade --integrations-only'".
 
+Under `--json`, `doctor.trace_index.state` and `rebuild_advice` describe the
+**live search snapshot** that `trace query` actually serves (`state` is `ok` /
+`stale` / `missing`; `rebuild_advice` is always `opentraces trace index
+rebuild`). The deprecated legacy `index.db` compatibility cache is reported
+separately as `doctor.trace_index.legacy_index_state`, so its absence is not a
+current failure when the snapshot is healthy. Both `opentraces --json doctor`
+and the command-local `opentraces doctor --json` emit this payload.
+
 `init --agent` accepts `claude`, `claude-code`, `codex`, `codex-cli`, or `pi`.
 `--import-existing` currently imports existing Claude Code traces for the
 current repo. Codex CLI and Pi capture start with future sessions after their
