@@ -64,38 +64,81 @@ step = "doctor"
 path = "doctor.runtime_provenance.discovered_installs"
 value = "brew"
 
-# every configured runner is enumerated and diverges from the current runtime.
+# exactly the four configured runners are enumerated (codex/claude/git/watcher).
 [[assertions]]
-kind = "stdout_json_contains"
+kind = "stdout_json_length_equals"
 step = "doctor"
 path = "doctor.runtime_provenance.integration_runners"
-value = "codex-cli"
+equals = 4
+
+# STRUCTURAL per-runner assertions (codex recommendation): every expected
+# runner is present at its deterministic position AND each `matches_current`
+# is the boolean false — proving divergence per-runner, not via a substring
+# that could match any single entry. Order: codex-cli, claude-code, git,
+# watcher (hook-config order, then the appended watcher unit).
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.0.name"
+equals = "codex-cli"
 
 [[assertions]]
-kind = "stdout_json_contains"
+kind = "stdout_json"
 step = "doctor"
-path = "doctor.runtime_provenance.integration_runners"
-value = "claude-code"
+path = "doctor.runtime_provenance.integration_runners.0.matches_current"
+equals = false
 
 [[assertions]]
-kind = "stdout_json_contains"
+kind = "stdout_json"
 step = "doctor"
-path = "doctor.runtime_provenance.integration_runners"
-value = "git"
+path = "doctor.runtime_provenance.integration_runners.1.name"
+equals = "claude-code"
 
 [[assertions]]
-kind = "stdout_json_contains"
+kind = "stdout_json"
 step = "doctor"
-path = "doctor.runtime_provenance.integration_runners"
-value = "watcher"
+path = "doctor.runtime_provenance.integration_runners.1.matches_current"
+equals = false
 
-# no runner matches the current install — and none claims to.
 [[assertions]]
-kind = "stdout_json_contains"
+kind = "stdout_json"
 step = "doctor"
-path = "doctor.runtime_provenance.integration_runners"
-value = "\"matches_current\": false"
+path = "doctor.runtime_provenance.integration_runners.2.name"
+equals = "git"
 
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.2.matches_current"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.3.name"
+equals = "watcher"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.3.matches_current"
+equals = false
+
+# every runner was reached via the TRUSTED probe path (genuine `<python> -m
+# opentraces` shape) — not skipped as untrusted/budget-exceeded.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.0.probe"
+equals = "probed"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.3.probe"
+equals = "probed"
+
+# defence-in-depth: no runner anywhere claims to match the current install.
 [[assertions]]
 kind = "stdout_not_contains"
 step = "doctor"

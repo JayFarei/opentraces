@@ -359,3 +359,238 @@ def test_report_includes_runtime_provenance_key(
     # The additive key must not perturb existing consumers or the exit gate.
     assert "interpreter_health" in report
     assert doctor.exit_code(report) in (0, 3)
+
+
+# --------------------------------------------------------------------------
+# codex finding #1 — SECURITY: never execute an arbitrary hook binary.
+#
+# RED-BEFORE-GREEN: on the pre-fix code `_probe_interpreter` executes the first
+# shlex token of ANY opentraces-substring hook command. A malicious
+# `"/tmp/payload" opentraces ...` command therefore makes `doctor` run
+# /tmp/payload. This test wires a REAL executable payload that drops a sentinel
+# file and asserts (a) the probe never runs it (sentinel absent) and (b) the
+# runner is recorded as honest `unknown` / `skipped_untrusted`. Pre-fix the
+# sentinel WOULD appear; post-fix it must not.
+# --------------------------------------------------------------------------
+def test_untrusted_hook_command_is_never_executed(
+    fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = tmp_path / "PWNED"
+    payload = tmp_path / "payload"
+    # A real executable that, if ever run, proves arbitrary code execution.
+    payload.write_text(
+        "#!/bin/sh\n"
+        f"echo touched > {shlex.quote(str(sentinel))}\n"
+        # Also print a perfectly-shaped probe output so output-shape validation
+        # alone would NOT save us — only refusing to execute does.
+        "echo /spoofed/opentraces/__init__.py\n"
+        "echo 9.9.9\n",
+        encoding="utf-8",
+    )
+    payload.chmod(0o755)
+
+    # Command looks opentraces-owned (substring) AND carries `-m opentraces`,
+    # but the executable is an arbitrary binary, not a python interpreter.
+    malicious = f'"{payload}" -m opentraces.capture.codex_cli.hooks.on_tool_use'
+    _write_codex_hooks(fake_home, malicious)
+
+    monkeypatch.setattr(
+        doctor,
+        "_current_runtime",
+        lambda: {
+            "argv0": "opentraces",
+            "python": "/root/cur/bin/python",
+            "module_file": "/root/cur/src/opentraces/__init__.py",
+            "dist_version": "0.4.6",
+            "source_kind": "source",
+            "git_root": None,
+            "git_commit": None,
+        },
+    )
+    monkeypatch.setattr(doctor, "_watcher_runner_interpreter", lambda: None)
+    monkeypatch.setattr(doctor, "_otlp_runner_interpreter", lambda: None)
+
+    # NOTE: _probe_interpreter is intentionally NOT mocked — the real subprocess
+    # path is exercised so the sentinel is the genuine execution proof.
+    prov = doctor._runtime_provenance(tmp_path / "repo")
+
+    assert not sentinel.exists(), (
+        "SECURITY: doctor executed an arbitrary hook binary — sentinel dropped"
+    )
+
+    runner = next(
+        r for r in prov["integration_runners"] if r["name"] == "codex-cli"
+    )
+    assert runner["probe"] == "skipped_untrusted"
+    assert runner["matches_current"] is False
+    assert runner["matches_install"] in (None, "unknown")
+    # The discovered install for the untrusted interpreter is honest unknown.
+    assert any(
+        i.get("source_kind") == "unknown" and i.get("module_file") is None
+        for i in prov["discovered_installs"]
+    )
+
+
+def test_console_script_runner_is_untrusted_not_probed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A console-script runner (`opentraces`/`ot`, NOT `python -m`) cannot run
+    # the import snippet, so the trust gate refuses it: honest unknown, no exec.
+    cur_python = "/root/cur/bin/python"
+    cur_module = "/root/cur/src/opentraces/__init__.py"
+    console = "/usr/local/bin/opentraces"
+
+    monkeypatch.setattr(
+        doctor,
+        "_current_runtime",
+        lambda: {
+            "argv0": "opentraces", "python": cur_python, "module_file": cur_module,
+            "dist_version": "0.4.6", "source_kind": "source",
+            "git_root": None, "git_commit": None,
+        },
+    )
+    monkeypatch.setattr(
+        doctor,
+        "_opentraces_hook_runners",
+        lambda cwd: [
+            {
+                "name": "codex-cli", "integration": "codex", "event": "PostToolUse",
+                "command": f'"{console}" trace get', "interpreter": console,
+            }
+        ],
+    )
+    monkeypatch.setattr(doctor, "_watcher_runner_interpreter", lambda: None)
+    monkeypatch.setattr(doctor, "_otlp_runner_interpreter", lambda: None)
+
+    def _no_probe(python: str):
+        raise AssertionError(f"console-script runner {python!r} must NOT be probed")
+
+    monkeypatch.setattr(doctor, "_probe_interpreter", _no_probe)
+
+    prov = doctor._runtime_provenance(Path("/tmp/repo"))
+    runner = prov["integration_runners"][0]
+    assert runner["probe"] == "skipped_untrusted"
+    assert runner["matches_install"] in (None, "unknown")
+
+
+# --------------------------------------------------------------------------
+# codex finding #1 (layer 2) — validate the probe OUTPUT shape; spoofed stdout
+# from a trusted-but-broken interpreter is treated as unknown, never trusted.
+# --------------------------------------------------------------------------
+def test_probe_rejects_spoofed_output_shape(tmp_path: Path) -> None:
+    # A python-basename interpreter (so the trust gate lets it run) whose stdout
+    # is NOT the `<.../opentraces/__init__.py>\n<version>` shape → (None, None).
+    bad = tmp_path / "python"
+    bad.write_text(
+        "#!/bin/sh\necho not-a-module-path\necho \n", encoding="utf-8"
+    )
+    bad.chmod(0o755)
+    assert doctor._probe_interpreter(str(bad)) == (None, None)
+
+    # And a well-shaped interpreter probe IS trusted.
+    good = tmp_path / "python3"
+    good.write_text(
+        "#!/bin/sh\n"
+        "echo /fake/site-packages/opentraces/__init__.py\n"
+        "echo 1.2.3\n",
+        encoding="utf-8",
+    )
+    good.chmod(0o755)
+    module_file, version = doctor._probe_interpreter(str(good))
+    assert module_file is not None and module_file.endswith("opentraces/__init__.py")
+    assert version == "1.2.3"
+
+
+# --------------------------------------------------------------------------
+# codex finding #2 — aggregate probe budget caps distinct interpreters probed.
+# --------------------------------------------------------------------------
+def test_probe_budget_caps_distinct_interpreters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cur_python = "/root/cur/bin/python"
+    cur_module = "/root/cur/src/opentraces/__init__.py"
+    n = doctor.MAX_PROBE_INTERPRETERS + 4
+    interps = [f"/fake/v{i}/bin/python" for i in range(n)]
+
+    monkeypatch.setattr(
+        doctor,
+        "_current_runtime",
+        lambda: {
+            "argv0": "opentraces", "python": cur_python, "module_file": cur_module,
+            "dist_version": "0.4.6", "source_kind": "source",
+            "git_root": None, "git_commit": None,
+        },
+    )
+    monkeypatch.setattr(
+        doctor,
+        "_opentraces_hook_runners",
+        lambda cwd: [
+            _runner(f"codex-cli-{i}", "codex", "PostToolUse", interp)
+            for i, interp in enumerate(interps)
+        ],
+    )
+    monkeypatch.setattr(doctor, "_watcher_runner_interpreter", lambda: None)
+    monkeypatch.setattr(doctor, "_otlp_runner_interpreter", lambda: None)
+
+    probed: list[str] = []
+
+    def counting_probe(python: str):
+        probed.append(python)
+        return (
+            "/fake/pipx/venvs/opentraces/lib/python3.12/site-packages/"
+            "opentraces/__init__.py",
+            "0.4.6",
+        )
+
+    monkeypatch.setattr(doctor, "_probe_interpreter", counting_probe)
+
+    prov = doctor._runtime_provenance(Path("/tmp/repo"))
+
+    # Never probed more than the cap, regardless of how many distinct runners.
+    assert len(probed) <= doctor.MAX_PROBE_INTERPRETERS
+    # The excess interpreters are recorded as honest budget-skipped unknowns.
+    skipped = [
+        r for r in prov["integration_runners"]
+        if r["probe"] == "skipped_probe_budget_exceeded"
+    ]
+    assert len(skipped) == n - doctor.MAX_PROBE_INTERPRETERS
+    for r in skipped:
+        assert r["matches_install"] in (None, "unknown")
+
+
+# --------------------------------------------------------------------------
+# codex finding #3 — classifier no longer false-positives `brew` on any path
+# that merely contains a homebrew-looking parent.
+# --------------------------------------------------------------------------
+def test_classify_does_not_false_positive_brew_for_project_venv() -> None:
+    c = doctor._classify_source_kind
+    # A project venv whose ABSOLUTE path lives under a /opt/homebrew/-looking
+    # parent, but is plainly a `.venv` site-packages install — NOT a brew
+    # formula. Pre-fix the bare `/homebrew/` substring mislabeled it `brew`.
+    venv_under_brew_parent = (
+        "/opt/homebrew/work/myproject/.venv/lib/python3.12/"
+        "site-packages/opentraces/__init__.py"
+    )
+    assert c(venv_under_brew_parent) != "brew"
+    assert c(venv_under_brew_parent) in ("pip", "pipx", "source")
+
+    # A `/libexec/` that is not the opentraces formula libexec must not be brew.
+    foreign_libexec = (
+        "/opt/some-tool/libexec/lib/python3.12/"
+        "site-packages/opentraces/__init__.py"
+    )
+    assert c(foreign_libexec) != "brew"
+
+    # Canonical brew formula layouts STILL classify as brew (no regression).
+    assert c(
+        "/opt/homebrew/Cellar/opentraces/0.4.6/libexec/lib/python3.12/"
+        "site-packages/opentraces/__init__.py"
+    ) == "brew"
+    assert c(
+        "/opt/homebrew/opt/opentraces/libexec/lib/python3.12/"
+        "site-packages/opentraces/__init__.py"
+    ) == "brew"
+    assert c(
+        "/opt/opentraces/libexec/lib/python3.12/"
+        "site-packages/opentraces/__init__.py"
+    ) == "brew"

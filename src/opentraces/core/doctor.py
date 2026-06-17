@@ -748,6 +748,46 @@ _PROVENANCE_PROBE_CODE = (
     "print(m.version('opentraces'))"
 )
 
+# Trust gate (codex finding #1 — SECURITY). doctor must NEVER execute an
+# arbitrary binary lifted from a hook config. A runner interpreter is only
+# probed when it is a genuine ``<python> -m opentraces...`` shape: the
+# interpreter token is a plausible CPython basename AND the command invokes the
+# opentraces module. Console-scripts / arbitrary binaries become honest
+# ``unknown`` (``probe: "skipped_untrusted"``).
+_PY_BASENAME_RE = re.compile(r"^python(?:3(?:\.\d+)?)?(?:\.exe)?$", re.IGNORECASE)
+
+# Aggregate probe budget (codex finding #2). A bounded per-probe timeout does
+# not cap the NUMBER of distinct interpreters, so N opentraces-looking hook
+# commands cost N×timeout. Cap the distinct interpreters actually executed;
+# excess become ``probe: "skipped_probe_budget_exceeded"`` honest unknowns.
+MAX_PROBE_INTERPRETERS = 8
+
+
+def _is_plausible_python(interpreter: str | None) -> bool:
+    """True iff ``interpreter`` basename looks like a CPython executable.
+
+    ``python`` / ``python3`` / ``python3.12`` (optional ``.exe``). Used as the
+    trust gate before executing a runner — an arbitrary first token (e.g.
+    ``/tmp/payload``) is rejected.
+    """
+    if not interpreter or not isinstance(interpreter, str):
+        return False
+    return bool(_PY_BASENAME_RE.match(os.path.basename(interpreter)))
+
+
+def _is_trusted_probe_command(command: object, interpreter: str | None) -> bool:
+    """True iff this runner is safe to PROBE (codex finding #1).
+
+    Requires BOTH a plausible-python interpreter token AND a ``-m opentraces``
+    module invocation in the command. Anything else — an arbitrary binary, a
+    console-script (``opentraces``/``ot``) — is refused and never executed.
+    """
+    if not _is_plausible_python(interpreter):
+        return False
+    if not isinstance(command, str):
+        return False
+    return "-m opentraces" in command
+
 
 def _realpath(p: str | None) -> str | None:
     if not p:
@@ -769,9 +809,16 @@ def _classify_source_kind(module_file: str | None) -> str:
     if not module_file:
         return "unknown"
     low = module_file.lower()
-    if "/cellar/" in low or "/homebrew/" in low or "/linuxbrew/" in low or "/libexec/" in low:
+    # brew ONLY for canonical formula layouts — a Cellar/opentraces/<ver> root,
+    # or the opt/...opentraces/libexec symlink. A bare "/homebrew/" or
+    # "/libexec/" substring is NOT enough: a project venv living under a
+    # Homebrew-looking parent (or a foreign tool's libexec) must not be
+    # mislabeled brew (codex finding #3).
+    if "/cellar/opentraces/" in low or re.search(
+        r"/opt/(?:[^/]+/)*opentraces/libexec/", low
+    ):
         return "brew"
-    if "/pipx/venvs/" in low or "pipx" in low:
+    if "/pipx/venvs/" in low or "/pipx/" in low:
         return "pipx"
     # Editable / source install: not in site-packages.
     if "site-packages" not in module_file:
@@ -803,8 +850,16 @@ def _probe_interpreter(python: str) -> tuple[str | None, str | None]:
     lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
     if len(lines) < 2:
         return None, None
-    module_file = _realpath(lines[0]) or None
-    dist_version = lines[1] or None
+    # Validate the probe OUTPUT shape before trusting it (codex finding #1,
+    # layer 2): a real probe prints the opentraces ``__init__.py`` path then a
+    # version string. Spoofed/garbage stdout from a trusted-but-broken
+    # interpreter is treated as an honest unknown, never trusted.
+    raw_module, dist_version = lines[0], lines[1]
+    if not raw_module.endswith("opentraces/__init__.py"):
+        return None, None
+    if not dist_version:
+        return None, None
+    module_file = _realpath(raw_module) or None
     return module_file, dist_version
 
 
@@ -934,10 +989,17 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
     # and OTLP runners, which live outside the hook configs. Dedup by
     # (name, interpreter) so the same integration configured across several
     # hook events collapses to ONE provenance row (plan: one entry per runner).
+    # Each spec carries a ``trusted`` flag (codex finding #1): only a genuine
+    # ``<python> -m opentraces...`` runner is ever executed. Hook runners derive
+    # trust from their command; the watcher/OTLP units are our own rendered
+    # shims, so they only require a plausible-python interpreter.
     raw_specs: list[dict[str, Any]] = [
         {
             "name": r.get("name") or r.get("integration"),
             "interpreter": _realpath(r.get("interpreter")),
+            "trusted": _is_trusted_probe_command(
+                r.get("command"), _realpath(r.get("interpreter"))
+            ),
         }
         for r in runners
     ]
@@ -946,24 +1008,30 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         watcher_interp = None
     if watcher_interp is not None:
+        _wi = _realpath(watcher_interp)
         raw_specs.append(
-            {"name": "watcher", "interpreter": _realpath(watcher_interp)}
+            {"name": "watcher", "interpreter": _wi, "trusted": _is_plausible_python(_wi)}
         )
     try:
         otlp_interp = _otlp_runner_interpreter()
     except Exception:  # noqa: BLE001
         otlp_interp = None
     if otlp_interp is not None:
+        _oi = _realpath(otlp_interp)
         raw_specs.append(
-            {"name": "otlp", "interpreter": _realpath(otlp_interp)}
+            {"name": "otlp", "interpreter": _oi, "trusted": _is_plausible_python(_oi)}
         )
     runner_specs: list[dict[str, Any]] = []
-    _spec_seen: set[tuple[Any, Any]] = set()
+    _spec_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
     for spec in raw_specs:
         key = (spec.get("name"), spec.get("interpreter"))
-        if key in _spec_seen:
+        if key in _spec_by_key:
+            # A duplicate runner (same name+interpreter across hook events) is
+            # trusted if ANY occurrence is a genuine module invocation.
+            if spec.get("trusted"):
+                _spec_by_key[key]["trusted"] = True
             continue
-        _spec_seen.add(key)
+        _spec_by_key[key] = spec
         runner_specs.append(spec)
 
     # Probe each DISTINCT runner interpreter that is not already the current
@@ -971,15 +1039,33 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
     interp_module: dict[str, str | None] = {}
     interp_kind: dict[str, str] = {}
     interp_version: dict[str, str | None] = {}
+    interp_probe: dict[str, str] = {}
     if cur_python:
         interp_module[cur_python] = cur_module
         interp_kind[cur_python] = current.get("source_kind") or "unknown"
         interp_version[cur_python] = current.get("dist_version")
+        interp_probe[cur_python] = "current"
 
+    probed_count = 0
     for spec in runner_specs:
         interp = spec.get("interpreter")
         if not interp or interp in interp_module:
             continue
+        # SECURITY (finding #1): an untrusted runner is NEVER executed.
+        if not spec.get("trusted"):
+            interp_module[interp] = None
+            interp_kind[interp] = "unknown"
+            interp_version[interp] = None
+            interp_probe[interp] = "skipped_untrusted"
+            continue
+        # Budget (finding #2): cap distinct interpreters actually probed.
+        if probed_count >= MAX_PROBE_INTERPRETERS:
+            interp_module[interp] = None
+            interp_kind[interp] = "unknown"
+            interp_version[interp] = None
+            interp_probe[interp] = "skipped_probe_budget_exceeded"
+            continue
+        probed_count += 1
         try:
             module_file, dist_version = _probe_interpreter(interp)
         except Exception:  # noqa: BLE001
@@ -987,6 +1073,7 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
         interp_module[interp] = module_file
         interp_kind[interp] = _classify_source_kind(module_file)
         interp_version[interp] = dist_version
+        interp_probe[interp] = "probed"
 
     # discovered_installs: one entry per distinct resolved module_file, plus a
     # distinct unknown per un-resolvable interpreter (honest, never fabricated).
@@ -1000,6 +1087,7 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
             "dist_version": current.get("dist_version"),
             "source_kind": current.get("source_kind") or "unknown",
             "interpreter": cur_python,
+            "probe": interp_probe.get(cur_python, "current"),
         }
     )
     seen_keys.add(cur_key)
@@ -1016,6 +1104,7 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
                 "dist_version": interp_version.get(interp),
                 "source_kind": interp_kind.get(interp, "unknown"),
                 "interpreter": interp,
+                "probe": interp_probe.get(interp, "unknown"),
             }
         )
 
@@ -1036,6 +1125,7 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
                 "python": interp,
                 "matches_current": matches_current,
                 "matches_install": interp_kind.get(interp) if interp else None,
+                "probe": interp_probe.get(interp) if interp else None,
             }
         )
 
