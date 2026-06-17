@@ -268,6 +268,12 @@ def test_uninstall_completions_fish_ownership_guard(monkeypatch):
     assert completions_mod.uninstall_completions("fish")["removed"] == []
     assert rc.exists()
 
+    # Foreign file that merely MENTIONS opentraces (but lacks our generated
+    # header) -> still preserved (a loose substring check would wrongly delete).
+    rc.write_text("# my own ot wrapper around opentraces\ncomplete -c ot\n")
+    assert completions_mod.uninstall_completions("fish")["removed"] == []
+    assert rc.exists()
+
     # opentraces-written file -> removed.
     rc.write_text(completions_mod.FISH_SCRIPT)
     assert completions_mod.uninstall_completions("fish")["removed"]

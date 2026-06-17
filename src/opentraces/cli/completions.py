@@ -335,8 +335,12 @@ def uninstall_completions(shell: str) -> dict:
         # keep their own `ot.fish`, and `setup uninstall` fans out across every
         # shell, so a blind unlink would clobber an unrelated file.
         if rc.exists():
+            # Ownership signature: the exact header line opentraces generates.
+            # A loose "opentraces" substring would also match a user's own
+            # ot.fish that merely mentions opentraces.
+            signature = FISH_SCRIPT.splitlines()[0]
             try:
-                owned = "opentraces" in rc.read_text()
+                owned = signature in rc.read_text()
             except OSError:
                 owned = False
             if owned:
