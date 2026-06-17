@@ -305,12 +305,13 @@ def _pid_is_receiver(pid: int) -> bool:
         ).stdout.lower()
     except (OSError, subprocess.SubprocessError):
         return False
-    # Match the receiver START shape specifically — the shim (``ot-otlp-receiver``)
-    # or ``capture-otlp start`` — NOT bare ``capture-otlp`` (which would also
-    # match transient ``capture-otlp flush/status/restart`` invocations that may
-    # be sitting on a recycled PID).
-    return any(sig in out for sig in (
-        "ot-otlp-receiver", "capture-otlp start", "otlp.receiver", "otlp_receiver"))
+    # The receiver only ever runs one of two ways (capture/otlp/lifecycle.py +
+    # cli/capture_otlp.py::_spawn_daemon "exec the same binary in --foreground
+    # mode"): the ``ot-otlp-receiver`` shim, or ``capture-otlp start`` (foreground
+    # daemon). Match those exact START shapes only — NOT bare ``capture-otlp``,
+    # which would also match transient ``capture-otlp flush/status/restart``
+    # invocations that may be sitting on a recycled PID.
+    return "ot-otlp-receiver" in out or "capture-otlp start" in out
 
 
 def _kill_pid(pid: int) -> None:
