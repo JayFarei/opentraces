@@ -1,0 +1,65 @@
+name = "setup-uninstall-full-stack"
+description = """
+Issue #85 — full-stack default uninstall over a richly-installed captured world
+(PR-branch capture: git hook + bucket + refs + index). The default tier reverses
+every installed integration (git appears under removed_names), preserves the
+canonical Trail event ref (verified on disk), and prints the package-uninstall
+command. The fan-out is honest: surfaces not installed are skipped, not errors.
+
+Tier 1 (opt-in via OT_OTBOX_TIER1=1): depends on the c-captured-with-pr-branch
+checkpoint having a live bucket + git hook + events ref in the box.
+"""
+lane = "core"
+tier = 1
+tier_label = "gold"
+persona = "agent"
+seed = "world"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-with-pr-branch"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-full"
+argv = ["--json", "setup", "uninstall"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-full"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-full"
+path = "ok"
+equals = true
+
+# The installed git hook is reversed.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "uninstall-full"
+path = "removed_names"
+equals = ["git"]
+
+# Captured data + canonical ref preserved by the default tier.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "uninstall-full"
+path = "refs_preserved"
+equals = ["refs/opentraces/local/events/v1"]
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "uninstall-full"
+path = "package_uninstall_command"
+value = "uninstall opentraces"
+
+# Ground truth: the canonical event ref survives.
+[[steps]]
+type = "shell"
+id = "events-ref-alive-fs"
+argv = ["git", "-C", "{project}", "show-ref", "--verify", "refs/opentraces/local/events/v1"]
+
+[[assertions]]
+kind = "returncode"
+step = "events-ref-alive-fs"
+equals = 0

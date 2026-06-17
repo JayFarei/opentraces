@@ -307,30 +307,49 @@ def install_cmd(ctx: click.Context, shell: str | None, aliases: tuple[str, ...],
         click.echo(f"Restart your shell or run: source {rc}")
 
 
-@completions.command("uninstall")
-@click.argument("shell", required=False, type=click.Choice(list(SUPPORTED_SHELLS), case_sensitive=False))
-@click.option("-q", "--quiet", is_flag=True, help="Suppress progress output.")
-@click.pass_context
-def uninstall_cmd(ctx: click.Context, shell: str | None, quiet: bool) -> None:
-    """Remove completions for SHELL (auto-detects if omitted)."""
-    resolved = _resolve_shell(shell)
+def uninstall_completions(shell: str) -> dict:
+    """Remove the completion script + rc source line for one shell.
 
-    script_path = _script_path(resolved)
+    Non-Click reusable core of ``opentraces completions uninstall`` (so
+    ``opentraces setup uninstall`` can fan out over ``SUPPORTED_SHELLS``
+    without invoking Click). ``shell`` must be one of ``SUPPORTED_SHELLS``;
+    raises ``ValueError`` (not ``click.UsageError``) otherwise. Idempotent:
+    a shell with nothing installed returns ``removed=[]``. Returns
+    ``{"shell", "removed": [paths...]}``.
+    """
+    if shell not in SUPPORTED_SHELLS:
+        raise ValueError(
+            f"Unsupported shell: {shell!r}. Supported: {', '.join(SUPPORTED_SHELLS)}"
+        )
+    removed: list[str] = []
+
+    script_path = _script_path(shell)
     if script_path.exists():
         script_path.unlink()
-        if not quiet:
-            click.echo(f"Removed {script_path}")
+        removed.append(str(script_path))
 
-    rc = _rc_path(resolved)
-    if resolved == "fish":
+    rc = _rc_path(shell)
+    if shell == "fish":
+        # The fish completion lives in its own file (no rc source line to
+        # strip). Only remove it if opentraces actually wrote it — a user may
+        # keep their own `ot.fish`, and `setup uninstall` fans out across every
+        # shell, so a blind unlink would clobber an unrelated file.
         if rc.exists():
-            rc.unlink()
-            if not quiet:
-                click.echo(f"Removed {rc}")
-        return
+            # Ownership signature: the exact header line opentraces generates.
+            # A loose "opentraces" substring would also match a user's own
+            # ot.fish that merely mentions opentraces.
+            signature = FISH_SCRIPT.splitlines()[0]
+            try:
+                owned = signature in rc.read_text()
+            except OSError:
+                owned = False
+            if owned:
+                rc.unlink()
+                removed.append(str(rc))
+        return {"shell": shell, "removed": removed}
 
     if rc.exists():
-        line = _source_line(resolved, script_path)
+        line = _source_line(shell, script_path)
         text = rc.read_text()
         new_lines = [ln for ln in text.splitlines() if ln.strip() != line.strip()]
         new_text = "\n".join(new_lines)
@@ -338,5 +357,20 @@ def uninstall_cmd(ctx: click.Context, shell: str | None, quiet: bool) -> None:
             new_text += "\n"
         if new_text != text:
             rc.write_text(new_text)
-            if not quiet:
-                click.echo(f"Removed source line from {rc}")
+            removed.append(f"{rc} (source line)")
+    return {"shell": shell, "removed": removed}
+
+
+@completions.command("uninstall")
+@click.argument("shell", required=False, type=click.Choice(list(SUPPORTED_SHELLS), case_sensitive=False))
+@click.option("-q", "--quiet", is_flag=True, help="Suppress progress output.")
+@click.pass_context
+def uninstall_cmd(ctx: click.Context, shell: str | None, quiet: bool) -> None:
+    """Remove completions for SHELL (auto-detects if omitted)."""
+    resolved = _resolve_shell(shell)
+    result = uninstall_completions(resolved)
+    if not quiet:
+        for item in result["removed"]:
+            click.echo(f"Removed {item}")
+        if not result["removed"]:
+            click.echo(f"No {resolved} completions installed")

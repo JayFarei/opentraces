@@ -271,23 +271,41 @@ def _unlink(p: Path) -> None:
 
 
 def uninstall_autostart() -> InstallResult:
-    """Remove the OS-level auto-start unit. Idempotent."""
+    """Remove the OS-level auto-start unit. Idempotent.
+
+    On a *failed* unload/disable of an EXISTING unit, return ``ok=False`` with
+    a ``reason`` and leave the unit file in place. Removing the file while the
+    supervisor still has the job loaded (``KeepAlive``/``Restart=always``)
+    would orphan a live daemon AND lose the file needed to retry the
+    teardown, so ``setup uninstall`` must be able to see this as an error
+    rather than a silent success. The absent-unit path stays ``ok=True``
+    (nothing to do); callers gate on :func:`is_installed` to map that to a
+    not-installed skip.
+    """
     plat = _plat()
     if plat == "darwin":
-        details = None
         if LAUNCHD_PLIST_PATH.exists():
             rc, err = _run(["launchctl", "unload", "-w", str(LAUNCHD_PLIST_PATH)])
             if rc != 0:
-                details = err or None
+                # Leave the plist for retry; the job may still be loaded.
+                return InstallResult(
+                    ok=False, platform="darwin", path=LAUNCHD_PLIST_PATH,
+                    reason="launchctl-unload-failed", details=err or None,
+                )
             _unlink(LAUNCHD_PLIST_PATH)
-        return InstallResult(ok=True, platform="darwin", path=LAUNCHD_PLIST_PATH, details=details)
+        return InstallResult(ok=True, platform="darwin", path=LAUNCHD_PLIST_PATH)
     if plat == "linux":
-        rc, err = _run(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT_NAME])
-        details = err if rc != 0 else None
         if SYSTEMD_UNIT_PATH.exists():
+            rc, err = _run(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT_NAME])
+            if rc != 0:
+                # Leave the unit for retry; the service may still be active.
+                return InstallResult(
+                    ok=False, platform="linux", path=SYSTEMD_UNIT_PATH,
+                    reason="systemctl-disable-failed", details=err or None,
+                )
             _unlink(SYSTEMD_UNIT_PATH)
             _run(["systemctl", "--user", "daemon-reload"])
-        return InstallResult(ok=True, platform="linux", path=SYSTEMD_UNIT_PATH, details=details)
+        return InstallResult(ok=True, platform="linux", path=SYSTEMD_UNIT_PATH)
     return InstallResult(
         ok=False, platform="unsupported", reason="unsupported-platform",
         details=f"sys.platform={sys.platform!r}",

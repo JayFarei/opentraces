@@ -1,0 +1,42 @@
+name = "setup-uninstall-noop-clean"
+description = """
+Issue #85 — `setup uninstall` on a box with NO integration glue installed.
+The smoke seed runs `opentraces init` only (no git hook, no watcher, no OTLP,
+no completions), so every integration surface must report
+skipped(reason="not-installed") and the aggregate stays ok. The reverse-of-
+install is honest about a clean box: it reverses nothing and succeeds.
+"""
+lane = "extended"
+tier = 0
+persona = "both"
+seed = "smoke"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-clean"
+argv = ["--json", "setup", "uninstall", "--integrations-only"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-clean"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-clean"
+path = "ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-clean"
+path = "schema_version"
+equals = "opentraces.setup_uninstall.v1"
+
+# Every integration surface is not-installed -> all reported under skipped.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "uninstall-clean"
+path = "skipped_names"
+equals = ["git", "claude-code", "codex-cli", "watcher", "skill"]

@@ -1121,7 +1121,7 @@ def _setup_capture_otlp_impl(
 )
 @click.option(
     "--uninstall", "uninstall", is_flag=True,
-    help="Remove the 7 OTel env keys (preserves other user env entries).",
+    help="Remove the 12 OTel env keys (preserves other user env entries).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def setup_capture_otlp_cmd(
@@ -1139,10 +1139,11 @@ def setup_capture_otlp_cmd(
 
     Flags:
       --status      Report patch state without modifying anything.
-      --uninstall   Remove our 7 OTel env keys.
+      --uninstall   Remove our 12 OTel env keys.
     """
     from ..capture.otlp.settings_patcher import (
         DEFAULT_SETTINGS_PATH,
+        OTEL_ENV_KEYS,
         is_installed,
         uninstall_otel_env,
     )
@@ -1157,15 +1158,7 @@ def setup_capture_otlp_cmd(
             "installed": installed,
             "settings_path": str(settings_path),
             "backup_exists": backup_path.exists(),
-            "env_keys": [
-                "CLAUDE_CODE_ENABLE_TELEMETRY",
-                "OTEL_EXPORTER_OTLP_ENDPOINT",
-                "OTEL_EXPORTER_OTLP_PROTOCOL",
-                "OTEL_LOG_USER_PROMPTS",
-                "OTEL_LOG_TOOL_DETAILS",
-                "OTEL_LOG_TOOL_CONTENT",
-                "OTEL_LOG_RAW_API_BODIES",
-            ],
+            "env_keys": list(OTEL_ENV_KEYS),
         }
         if as_json:
             _emit(payload)

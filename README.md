@@ -163,6 +163,26 @@ pip install -e ".[dev]"
 
 Use plain `pip install opentraces` only in CI or disposable environments.
 
+### Uninstalling
+
+`opentraces setup uninstall` is the symmetric inverse of `setup` — one command that reverses the whole multi-surface install (capture hooks for Claude Code / Codex / Pi, the OTLP receiver + its `~/.claude/settings.json` env keys, the watcher daemon, the skill, shell completions, per-repo git post-commit hooks, and security-tool flags) and stops every opentraces process. It is **data-safe by default**:
+
+```bash
+opentraces setup uninstall --dry-run   # recommended first run: prints the plan, changes nothing
+opentraces setup uninstall             # default: reverse every install-time patch + daemon, PRESERVE all captured data
+```
+
+The default (`--integrations-only`) tier preserves every captured trace, dataset, bucket, and Git ref (`refs/opentraces/*`, `refs/notes/opentraces`). After it, no opentraces process runs and no shared file references opentraces, but your data survives — you can re-`setup` later and pick up where you left off.
+
+```bash
+opentraces setup uninstall --purge     # ALSO delete captured data + git refs (UNRECOVERABLE; typed confirmation)
+opentraces setup uninstall --project . --purge   # scope per-repo reversal/ref-purge to one repo
+```
+
+`--purge` additionally deletes the captured corpus (bucket, datasets, projects, staging) and the opentraces Git refs. This is **unrecoverable** — it deletes both the canonical Trail event log (`refs/opentraces/local/events/v1`) and its only local replay source (the bucket) — so it requires a typed confirmation (`--yes` to skip, required for non-interactive use). A configured remote bucket is local-only teardown's blind spot: it is **not** deleted and is reported in the residue summary.
+
+The opentraces package itself is never self-uninstalled; the correct command for your install method (`pipx uninstall opentraces`, `brew uninstall jayfarei/opentraces/opentraces`, or `pip uninstall opentraces`) is printed. Your HuggingFace login (`~/.cache/huggingface/token`) is never touched.
+
 ## Quick Start
 
 opentraces has a two-phase bootstrap: `setup` wires the machine once, `init` wires each repo.

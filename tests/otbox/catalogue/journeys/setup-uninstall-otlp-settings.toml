@@ -1,0 +1,79 @@
+name = "setup-uninstall-otlp-settings"
+description = """
+Issue #85 — `setup uninstall` strips the 12 OTLP env keys from
+~/.claude/settings.json (ownership-safe) and reports them under keys_removed.
+The journey installs the settings patch via `setup capture-otlp --no-autostart`
+(no launchd/systemd unit, so it is tier-0 safe), then reverses it. daemon and
+unit are both absent in a tier-0 box, so daemon_stopped/unit_unloaded are
+false. On-disk verification: settings.json no longer contains the OTLP keys.
+
+(User-owned OTEL_* key preservation is covered precisely by the unit test
+tests/core/test_uninstall.py::test_ownership_safe_* — kept out of the journey
+to avoid JSON-brace fragility in template-expanded step argv.)
+"""
+lane = "extended"
+tier = 0
+persona = "both"
+seed = "world"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "install-otlp-settings"
+argv = ["setup", "capture-otlp", "--no-autostart", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "install-otlp-settings"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "uninstall-otlp"
+argv = ["--json", "setup", "uninstall"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-otlp"
+equals = 0
+
+# All 12 OTLP env keys removed.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "uninstall-otlp"
+path = "keys_removed"
+equals = 12
+
+# No daemon ran and no OS unit was installed in a tier-0 box.
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-otlp"
+path = "daemon_stopped"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-otlp"
+path = "unit_unloaded"
+equals = false
+
+# Ground truth: the OTLP keys are gone from settings.json on disk.
+[[steps]]
+type = "shell"
+id = "cat-settings"
+argv = ["cat", "{home}/.claude/settings.json"]
+
+[[assertions]]
+kind = "returncode"
+step = "cat-settings"
+equals = 0
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "cat-settings"
+value = "OTEL_EXPORTER_OTLP_ENDPOINT"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "cat-settings"
+value = "OTEL_LOG_USER_PROMPTS"

@@ -268,6 +268,29 @@
    "trufflehog_version"
   ]
  },
+ "setup uninstall": {
+  "schema_version": "opentraces.setup_uninstall.v1",
+  "top_level_keys": [
+   "daemon_stopped",
+   "dry_run",
+   "error_names",
+   "keys_removed",
+   "ok",
+   "package_uninstall_command",
+   "prune_unflushed",
+   "refs_preserved",
+   "refs_purged",
+   "removed_names",
+   "repos",
+   "residue",
+   "schema_version",
+   "skipped_names",
+   "surfaces",
+   "tier",
+   "tracking_mode_reset",
+   "unit_unloaded"
+  ]
+ },
  "setup watcher install": {
   "schema_version": null,
   "top_level_keys": [

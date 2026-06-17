@@ -74,6 +74,7 @@ opentraces setup privacy-filter
 opentraces setup llm-review
 opentraces setup skill
 opentraces setup upgrade
+opentraces setup uninstall
 ```
 
 Security setup commands only enable the tools you choose. Regex, entropy,
@@ -140,6 +141,19 @@ skill and hook if opted in. Two mutually exclusive flags narrow that scope:
 |------|---------|
 | `--integrations-only` | Re-render only already-installed integration glue to the current CLI version, with no CLI bump and without enabling new integrations |
 | `--skill-only` | Refresh only the skill file and hook, skip the CLI upgrade |
+
+`opentraces setup uninstall` is the symmetric inverse of `setup`: one command that reverses the whole multi-surface install (Claude Code / Codex / Pi capture hooks, the OTLP receiver + its `~/.claude/settings.json` env keys, the watcher daemon, the skill, shell completions, per-repo git post-commit hooks, security-tool flags) and stops every opentraces process. It is **data-safe by default** and emits the frozen `opentraces.setup_uninstall.v1` JSON envelope (`removed_names`, `skipped_names`, `keys_removed`, `refs_preserved`, `refs_purged`, `daemon_stopped`, `unit_unloaded`, `package_uninstall_command`, `residue`).
+
+| Flag | Meaning |
+|------|---------|
+| `--integrations-only` | Default. Reverse every install-time patch + daemon; PRESERVE all captured data (bucket, datasets, projects, staging, and every `refs/opentraces/*` + `refs/notes/opentraces`) |
+| `--purge` | Also DELETE the captured corpus + opentraces git refs. UNRECOVERABLE (the canonical Trail event log and its only local replay source, the bucket, both die); requires a typed confirmation |
+| `--project PATH` | Scope per-repo reversal (and, under `--purge`, ref-purge) to one repository instead of every registered repo |
+| `--prune-unflushed` | Also delete un-flushed raw bodies + OTel staging (`raw-bodies/`, `staging/otel/`); destructive opt-in under the default tier |
+| `--dry-run` | Resolve and print the plan; change nothing. The recommended first run |
+| `--yes` | Skip the `--purge` confirmation (required for `--purge` in non-interactive use); does not bypass `--dry-run` |
+
+It quiesces first (sets each repo's `excluded` marker, resets `tracking_mode` to `manual`, stops the daemons) so a mid-uninstall agent touch cannot re-enroll the repo, then reverses the surfaces, reusing every existing per-surface reverser. The package itself is never self-uninstalled; the correct command for the detected install method is printed, and `~/.cache/huggingface/token` is never deleted. A configured remote bucket survives a local `--purge` and is named in `residue`. Unlike `opentraces remove` (one cwd repo), `setup uninstall` fans out across every registered repo.
 
 ## Project Commands
 

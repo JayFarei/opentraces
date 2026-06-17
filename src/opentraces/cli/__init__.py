@@ -1389,43 +1389,18 @@ def remove(purge_all: bool) -> None:
 
     purged_refs: list[str] = []
     if purge_all:
-        # Best-effort purge; we're inside a git repo because the marker
-        # check above didn't reject us. Missing refs are a no-op.
-        import subprocess
-        try:
-            audit_refs = subprocess.run(
-                ["git", "for-each-ref", "--format=%(refname)",
-                 "refs/opentraces/"],
-                capture_output=True, text=True, check=False,
-                cwd=str(project_dir),
-            ).stdout.splitlines()
-            notes_refs = subprocess.run(
-                ["git", "for-each-ref", "--format=%(refname)",
-                 "refs/notes/opentraces"],
-                capture_output=True, text=True, check=False,
-                cwd=str(project_dir),
-            ).stdout.splitlines()
-            for ref in audit_refs + notes_refs:
-                ref = ref.strip()
-                if not ref:
-                    continue
-                rc = subprocess.run(
-                    ["git", "update-ref", "-d", ref],
-                    capture_output=True, text=True, check=False,
-                    cwd=str(project_dir),
-                ).returncode
-                if rc == 0:
-                    purged_refs.append(ref)
-            if purged_refs:
-                click.echo(
-                    f"Purged {len(purged_refs)} git ref(s): "
-                    f"{', '.join(purged_refs)}"
-                )
-            elif audit_refs or notes_refs:
-                click.echo("No audit or notes refs found to purge.")
-        except FileNotFoundError:
-            # git not on PATH — silently skip
-            pass
+        # Best-effort purge via the shared path-parameterized helper (also
+        # used by ``setup uninstall --purge``). Missing refs are a no-op.
+        from ..core.uninstall import purge_git_refs
+        result = purge_git_refs(project_dir)
+        purged_refs = result["purged_refs"]
+        if purged_refs:
+            click.echo(
+                f"Purged {len(purged_refs)} git ref(s): "
+                f"{', '.join(purged_refs)}"
+            )
+        elif not result["git_not_found"]:
+            click.echo("No audit or notes refs found to purge.")
 
     click.echo("Remote datasets were not changed.")
     emit_json({

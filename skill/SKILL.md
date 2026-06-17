@@ -47,6 +47,7 @@ opentraces setup skill --harness codex-cli
 opentraces setup skill --harness pi
 opentraces setup upgrade         # upgrade CLI + re-render installed integration glue + refresh project skill file
 opentraces setup upgrade --integrations-only  # re-render installed hooks/watchers without a CLI bump
+opentraces setup uninstall --dry-run  # reverse-of-install plan (recommended first); --integrations-only preserves data, --purge deletes it
 opentraces config tracking-mode  # show; pass global|manual to set
 opentraces auth whoami
 opentraces init

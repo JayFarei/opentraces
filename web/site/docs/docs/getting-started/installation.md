@@ -80,16 +80,29 @@ pip install --upgrade opentraces
 
 ## Uninstalling
 
+`opentraces setup uninstall` is the symmetric inverse of `setup` — one command that reverses the whole multi-surface install (capture hooks, the OTLP receiver + its `~/.claude/settings.json` env keys, the watcher daemon, the skill, shell completions, per-repo git post-commit hooks, security-tool flags) and stops every opentraces process. It is data-safe by default — prefer it over `rm -rf ~/.opentraces`, which leaves hooks, daemons, git refs, and completions behind.
+
+```bash
+opentraces setup uninstall --dry-run   # recommended first run: prints the plan, changes nothing
+opentraces setup uninstall             # default: reverse every install-time patch + daemon, PRESERVE all captured data
+```
+
+The default (`--integrations-only`) tier preserves every captured trace, dataset, bucket, and Git ref (`refs/opentraces/*`, `refs/notes/opentraces`); you can re-`setup` later and pick up where you left off. To also delete the captured data:
+
+```bash
+opentraces setup uninstall --purge     # ALSO delete captured data + git refs — UNRECOVERABLE (typed confirmation, or --yes)
+```
+
+`--purge` deletes the captured corpus (bucket, datasets, projects, staging) and the opentraces Git refs in one shot — both the canonical Trail event log and its only local replay source (the bucket) — so it requires a typed confirmation. A configured remote bucket is not deleted (local-only teardown) and is reported in the residue summary.
+
+Finally, remove the package itself with the command for your install method (printed by `setup uninstall`):
+
 ```bash
 pipx uninstall opentraces
 # or
-brew uninstall opentraces
+brew uninstall jayfarei/opentraces/opentraces
 # or
 pip uninstall opentraces
 ```
 
-To also remove local data and credentials:
-
-```bash
-rm -rf ~/.opentraces
-```
+Your HuggingFace login (`~/.cache/huggingface/token`) is never touched by uninstall.

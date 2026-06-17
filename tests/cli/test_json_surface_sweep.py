@@ -75,6 +75,7 @@ GLOBAL_JSON_ONLY = {
     "setup privacy-filter",
     "setup skill",
     "setup trufflehog",
+    "setup uninstall",
     "setup upgrade",
     "setup watcher install",
     "setup watcher restart",

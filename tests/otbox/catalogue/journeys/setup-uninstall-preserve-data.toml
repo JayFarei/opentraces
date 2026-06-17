@@ -1,0 +1,58 @@
+name = "setup-uninstall-preserve-data"
+description = """
+Issue #85 — the default (integrations) tier PRESERVES all captured data. Starting
+from a real captured session (bucket + canonical Trail event ref present), a
+default `setup uninstall` must leave ~/.opentraces/bucket and every
+refs/opentraces/* + refs/notes/opentraces Git ref intact. Verified against
+ground truth with a real `git show-ref --verify` step, not just the envelope
+self-report.
+
+Tier 1 (opt-in via OT_OTBOX_TIER1=1): depends on the c-captured-real-session
+checkpoint having a live bucket + events ref in the box.
+"""
+lane = "core"
+tier = 1
+tier_label = "gold"
+persona = "agent"
+seed = "world"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-default"
+argv = ["--json", "setup", "uninstall"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-default"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "uninstall-default"
+path = "ok"
+equals = true
+
+# Envelope self-report: the canonical event ref is preserved.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "uninstall-default"
+path = "refs_preserved"
+equals = ["refs/opentraces/local/events/v1"]
+
+# Captured data survives on disk.
+[[assertions]]
+kind = "path_exists"
+path = "{opentraces_dir}/bucket"
+
+# Ground truth: the canonical Trail event ref still resolves.
+[[steps]]
+type = "shell"
+id = "events-ref-alive"
+argv = ["git", "-C", "{project}", "show-ref", "--verify", "refs/opentraces/local/events/v1"]
+
+[[assertions]]
+kind = "returncode"
+step = "events-ref-alive"
+equals = 0

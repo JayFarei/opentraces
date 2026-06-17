@@ -1,0 +1,60 @@
+name = "setup-uninstall-purge"
+description = """
+Issue #85 — `setup uninstall --purge --yes` is the destructive tier: it deletes
+the captured corpus (bucket, datasets, projects, staging) AND the
+refs/opentraces/* + refs/notes/opentraces Git refs, and the in-repo
+.opentraces.json marker. Starting from a real captured session, after the purge
+the bucket is gone, the canonical event ref no longer resolves, and the marker
+is deleted. --yes bypasses the typed confirmation for non-interactive use.
+
+Tier 1 (opt-in via OT_OTBOX_TIER1=1): depends on the c-captured-real-session
+checkpoint having a live bucket + events ref in the box.
+"""
+lane = "core"
+tier = 1
+tier_label = "gold"
+persona = "agent"
+seed = "world"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-purge"
+argv = ["--json", "setup", "uninstall", "--purge", "--yes"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-purge"
+equals = 0
+
+# Envelope self-report: the canonical event ref was purged.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "uninstall-purge"
+path = "refs_purged"
+equals = ["refs/opentraces/local/events/v1"]
+
+# Captured data is gone on disk.
+[[assertions]]
+kind = "path_not_exists"
+path = "{opentraces_dir}/bucket"
+
+# The in-repo marker is deleted under --purge.
+[[assertions]]
+kind = "path_not_exists"
+path = "{project}/.opentraces.json"
+
+# Ground truth: the canonical Trail event ref no longer resolves. The step is
+# EXPECTED to exit 128 (git's "not a valid ref" code), so declare it — else the
+# runner would flag the non-zero step itself as a failure.
+[[steps]]
+type = "shell"
+id = "events-ref-dead"
+argv = ["git", "-C", "{project}", "show-ref", "--verify", "refs/opentraces/local/events/v1"]
+expect_returncode = 128
+
+[[assertions]]
+kind = "returncode"
+step = "events-ref-dead"
+equals = 128

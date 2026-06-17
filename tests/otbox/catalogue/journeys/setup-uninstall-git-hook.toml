@@ -1,0 +1,40 @@
+name = "setup-uninstall-git-hook"
+description = """
+Issue #85 — the default `setup uninstall` removes the per-repo git post-commit
+hook (owned hook file + chain block + notes refspec) and reports git under
+removed_names. The world seed installs the real hook via `setup git`. Ground
+truth (the hook file is gone) is checked on disk, not just self-reported.
+"""
+lane = "extended"
+tier = 0
+persona = "both"
+seed = "world"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-git"
+argv = ["--json", "setup", "uninstall"]
+
+[[assertions]]
+kind = "returncode"
+step = "uninstall-git"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "uninstall-git"
+path = "removed_names"
+equals = ["git"]
+
+# Ground truth: the owned hook is gone from the repo's .git/hooks.
+[[assertions]]
+kind = "path_not_exists"
+path = "{project}/.git/hooks/opentraces-post-commit"
+
+# Default tier preserves captured data + reports the package-uninstall command.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "uninstall-git"
+path = "package_uninstall_command"
+value = "uninstall opentraces"
