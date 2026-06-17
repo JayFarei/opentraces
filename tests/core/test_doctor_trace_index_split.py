@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from click.testing import CliRunner
 
 from opentraces.cli import main
@@ -66,6 +67,39 @@ def test_snapshot_dirty_advises_snapshot_rebuild() -> None:
     assert info["rebuild_advice"] == "opentraces trace index rebuild"
     assert "--legacy" not in info["rebuild_advice"]
     assert info["search_snapshot"]["state"] == "stale"
+
+
+@pytest.mark.parametrize(
+    ("snapshot_state", "expected_state"),
+    [
+        ("ok", "ok"),
+        ("stale", "stale"),
+        ("missing", "missing"),
+        ("wrong_schema", "stale"),
+        ("unreadable", "error"),
+        ("error", "error"),
+    ],
+)
+def test_snapshot_state_maps_to_trace_index_state(
+    monkeypatch, snapshot_state: str, expected_state: str
+) -> None:
+    """Every snapshot_status() state maps onto the documented top-level
+    ``trace_index.state``, and the advice is always the snapshot rebuild (never
+    ``--legacy``) in non-ok cases. Cheap: monkeypatch the status fn (no real
+    snapshot). ``_trace_index_status`` imports ``snapshot_status`` from
+    ``trace_search_snapshot`` at call time, so patch it at that source module."""
+    monkeypatch.setattr(
+        "opentraces.core.trace_search_snapshot.snapshot_status",
+        lambda *a, **k: {"state": snapshot_state, "path": "/tmp/snap"},
+    )
+
+    info = _trace_index_status()
+
+    assert info["state"] == expected_state
+    assert info["search_snapshot"]["state"] == snapshot_state
+    if expected_state != "ok":
+        assert info["rebuild_advice"] == "opentraces trace index rebuild"
+        assert "--legacy" not in info["rebuild_advice"]
 
 
 def test_command_local_doctor_json() -> None:

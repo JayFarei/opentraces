@@ -187,8 +187,9 @@ invalid-trail exit-3 conditions). The human view shows a warn row
 
 Under `--json`, `doctor.trace_index.state` and `rebuild_advice` describe the
 **live search snapshot** that `trace query` actually serves (`state` is `ok` /
-`stale` / `missing`; `rebuild_advice` is always `opentraces trace index
-rebuild`). The deprecated legacy `index.db` compatibility cache is reported
+`stale` / `missing` / `error`, mapped from the snapshot state: ok→ok, stale→stale,
+missing→missing, wrong_schema→stale, unreadable/error/unknown→error;
+`rebuild_advice` is always `opentraces trace index rebuild`). The deprecated legacy `index.db` compatibility cache is reported
 separately as `doctor.trace_index.legacy_index_state`, so its absence is not a
 current failure when the snapshot is healthy. Both `opentraces --json doctor`
 and the command-local `opentraces doctor --json` emit this payload.
