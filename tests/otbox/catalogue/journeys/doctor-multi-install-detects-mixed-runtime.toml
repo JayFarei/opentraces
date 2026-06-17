@@ -1,0 +1,114 @@
+name = "doctor-multi-install-detects-mixed-runtime"
+description = """
+Issue #93 — the load-bearing acceptance journey. Against the
+`c-multi-install-mixed-runtime` checkpoint (the editable foreground CLI with the
+codex/claude hooks pointed at a fake pipx install, the git post-commit shim and
+the watcher worker shim pointed at a fake homebrew install — all inside the box
+HOME), `doctor --json` from the editable `.testvenv` CLI must DETECT the split:
+
+  * `runtime_provenance.state == "mixed_runtimes"`, severity `warning`
+  * ≥2 discovered installs of distinct `source_kind` / `module_file` (source +
+    pipx + brew)
+  * the codex-cli / claude-code / git / watcher runners all `matches_current ==
+    false`
+  * informational remediation text exists and never says "purge data"
+    (detection-only; remediation/selection is sibling #99)
+
+The mixed box deliberately diverges the install roots; the watcher shim is kept
+clean so the existing watcher/hook-drift exit gates stay quiet and doctor exits
+0 here (the assertions read the JSON body; `expect_returncode` pins the observed
+exit). Tier 1 (opt-in) — needs the new checkpoint.
+"""
+lane = "core"
+tier = 1
+from_checkpoints = ["c-multi-install-mixed-runtime"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+[[steps]]
+type = "shell"
+id = "doctor"
+argv = [".testvenv/bin/opentraces", "--json", "doctor"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.state"
+equals = "mixed_runtimes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.severity"
+equals = "warning"
+
+# ≥2 distinct installs discovered (source + pipx + brew on this checkpoint).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "doctor"
+path = "doctor.runtime_provenance.discovered_installs"
+equals = 3
+
+# distinct source_kind / module_file roots are present.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.discovered_installs"
+value = "pipx"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.discovered_installs"
+value = "brew"
+
+# every configured runner is enumerated and diverges from the current runtime.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners"
+value = "codex-cli"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners"
+value = "claude-code"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners"
+value = "git"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners"
+value = "watcher"
+
+# no runner matches the current install — and none claims to.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners"
+value = "\"matches_current\": false"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor"
+value = "\"matches_current\": true"
+
+# remediation text exists and is data-safe (detection only).
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.advice"
+value = "No data is touched"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor"
+value = "purge data"

@@ -1,0 +1,42 @@
+name = "doctor-single-install-clean-runtime"
+description = """
+Issue #93 — the happy path for the runtime-provenance section. Against a
+`c-installed-source` checkpoint (one editable opentraces install, no divergent
+integration runners), the freshly-installed CLI's `doctor --json` must report
+`runtime_provenance.state == "single_runtime"` with severity `ok` and no
+mixed-runtime warning. Proves the detection surface stays quiet when every
+integration resolves to the current install root.
+"""
+lane = "core"
+tier = 0
+from_checkpoints = ["c-installed-source"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+[[steps]]
+type = "shell"
+id = "doctor"
+argv = [".testvenv/bin/opentraces", "--json", "doctor"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.state"
+equals = "single_runtime"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.severity"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.current.source_kind"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor"
+value = "mixed_runtimes"

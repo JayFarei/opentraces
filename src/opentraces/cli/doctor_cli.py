@@ -396,6 +396,56 @@ def _interpreter_health_section(info: dict) -> None:
     _cli.human_echo(f"    {_cli._dim(remedy)}")
 
 
+def _runtime_provenance_section(info: dict) -> None:
+    """Render the install-provenance / mixed-runtime panel (issue #93).
+
+    Always renders the current install root + per-runner provenance so an agent
+    can see WHICH code root each integration executes. A ``mixed_runtimes``
+    state adds a single warning + advice line — detection only, no auto-fix.
+    """
+    if not info:
+        return
+    _section("Runtime provenance")
+    current = info.get("current") or {}
+    state = info.get("state") or "single_runtime"
+
+    kind = current.get("source_kind") or "unknown"
+    module_file = current.get("module_file") or "?"
+    version = current.get("dist_version") or "?"
+    _row("ok", "current", f"{kind} · {version}", detail=module_file)
+    if current.get("python"):
+        _row("info", "python", current["python"])
+    if current.get("git_commit") or current.get("git_root"):
+        git = " ".join(
+            x for x in (current.get("git_root"), current.get("git_commit")) if x
+        )
+        _row("info", "git", git)
+
+    for r in info.get("integration_runners") or []:
+        name = r.get("name") or "?"
+        py = r.get("python") or "?"
+        ok = r.get("matches_current")
+        _row(
+            "ok" if ok else "warn",
+            name,
+            "matches current" if ok else f"different runtime ({r.get('matches_install') or 'unknown'})",
+            detail=py,
+        )
+
+    installs = info.get("discovered_installs") or []
+    if len(installs) > 1:
+        roots = ", ".join(
+            i.get("source_kind") or "unknown" for i in installs
+        )
+        _row("info", "installs", f"{len(installs)} distinct ({roots})")
+
+    if state == "mixed_runtimes":
+        _row("warn", "state", "mixed runtimes")
+        advice = info.get("advice")
+        if advice:
+            _cli.human_echo(f"    {_cli._dim(advice)}")
+
+
 def _trace_index_section(info: dict) -> None:
     """Search read model vs legacy compat cache, split by concern (issue #89).
 
@@ -577,6 +627,7 @@ def _render_doctor_human(report: dict) -> None:
     _hooks_section(report["hooks"])
     _post_commit_hook_section(report.get("post_commit_hook") or {})
     _interpreter_health_section(report.get("interpreter_health") or {})
+    _runtime_provenance_section(report.get("runtime_provenance") or {})
     _trail_event_log_section(report.get("trail_event_log") or {})
     _cli.human_echo("")
 
