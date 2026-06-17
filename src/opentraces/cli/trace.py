@@ -18,6 +18,7 @@ import click
 from opentraces import cli as _cli
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
+from ._progress import progress_option
 from ..core.trace_meta import short_trace_id
 from ..core.trace_stage import resolve_visible_stage
 
@@ -819,11 +820,12 @@ def trace_skills(
 
 @trace_group.group("index", cls=OpentracesGroup, invoke_without_command=True)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@progress_option
 @click.pass_context
-def trace_index_group(ctx: click.Context, as_json: bool) -> None:
+def trace_index_group(ctx: click.Context, as_json: bool, progress_mode: str) -> None:
     """Rebuild and inspect the local trace search snapshot."""
     if ctx.invoked_subcommand is None:
-        _trace_index_rebuild_impl(as_json)
+        _trace_index_rebuild_impl(as_json, progress_mode=progress_mode)
 
 
 @trace_index_group.command("rebuild", cls=OpentracesCommand)
@@ -834,15 +836,19 @@ def trace_index_group(ctx: click.Context, as_json: bool) -> None:
     is_flag=True,
     help="Also rebuild the optional legacy Trace Index (trail-enriched map/get/slice); the default path already serves map/get/slice from the bucket.",
 )
-def trace_index_rebuild_cmd(as_json: bool, rebuild_legacy: bool) -> None:
+@progress_option
+def trace_index_rebuild_cmd(as_json: bool, rebuild_legacy: bool, progress_mode: str) -> None:
     """Rebuild the local read-only trace search snapshot."""
-    _trace_index_rebuild_impl(as_json, rebuild_legacy=rebuild_legacy)
+    _trace_index_rebuild_impl(
+        as_json, rebuild_legacy=rebuild_legacy, progress_mode=progress_mode
+    )
 
 
 def _trace_index_rebuild_impl(
     as_json: bool,
     *,
     rebuild_legacy: bool = False,
+    progress_mode: str = "auto",
 ) -> None:
     """Rebuild the read-only search snapshot.
 
@@ -858,6 +864,7 @@ def _trace_index_rebuild_impl(
         rebuild_index,
     )
     from ..core.trace_search_snapshot import build_trace_search_snapshot
+    from ._progress import build_cli_progress
 
     started = time.monotonic()
     healed_legacy_index = False
@@ -893,7 +900,16 @@ def _trace_index_rebuild_impl(
             "map_node_count": summary.map_node_count,
         }
     snapshot_started = time.monotonic()
-    search_summary = build_trace_search_snapshot()
+    # Shared progress/heartbeat contract (issue #88). The reporter's sink is
+    # stderr-only (click.echo(err=True)), so the stdout --json payload below
+    # stays a single clean object. traces_total is seeded CLI-side; core
+    # reports only traces_seen.
+    reporter = build_cli_progress("trace index rebuild", progress_mode)
+    reporter.set_total(traces_total=_approx_bootstrap_trace_count())
+    try:
+        search_summary = build_trace_search_snapshot(progress=reporter)
+    finally:
+        reporter.done()
     snapshot_build_duration_ms = round((time.monotonic() - snapshot_started) * 1000, 2)
     payload = {
         "status": "ok",
@@ -924,6 +940,10 @@ def _trace_index_rebuild_impl(
             "keep_warm_duration_ms": 0,
             "snapshot_build_duration_ms": snapshot_build_duration_ms,
             "legacy_bootstrap_duration_ms": legacy_bootstrap_duration_ms,
+            # Additive per-stage progress telemetry (issue #88). Nested under the
+            # existing top-level "telemetry" key, so the json-surface sweep
+            # (top-level-keys-only) is unaffected.
+            "stages": reporter.telemetry(),
         },
     }
     if as_json:

@@ -30,10 +30,13 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from opentraces_schema import CandidatePacket, TraceFacet, TraceMap, TraceSignal, TraceUnit
+
+if TYPE_CHECKING:
+    from .progress import ProgressLike
 
 from . import paths
 from .boilerplate import headline_from_summary, intent_text_for_record, summary_for_record
@@ -280,16 +283,39 @@ def _build_lock(snapshot_path: Path):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def build_trace_search_snapshot(path: Path | None = None) -> SnapshotSummary:
-    """Build a fresh compact snapshot and atomically replace the serving DB."""
+def build_trace_search_snapshot(
+    path: Path | None = None,
+    *,
+    progress: "ProgressLike | None" = None,
+) -> SnapshotSummary:
+    """Build a fresh compact snapshot and atomically replace the serving DB.
 
+    ``progress`` is an optional, keyword-only :class:`~opentraces.core.progress.
+    ProgressLike` reporter (issue #88). When omitted it coalesces to a no-op,
+    so every existing caller is byte-identical. The reporter only observes work
+    (``traces_seen``); totals like ``traces_total`` are seeded CLI-side.
+    """
+
+    from .progress import NullProgress
+
+    reporter: "ProgressLike" = progress if progress is not None else NullProgress()
     snapshot_path = path or default_snapshot_path()
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    # Emit BEFORE the flock so the background heartbeat covers the lock wait
+    # (a single blocking syscall) — codex finding #2.
+    reporter.stage("acquiring_lock")
     with _build_lock(snapshot_path):
-        return _build_trace_search_snapshot_locked(snapshot_path)
+        return _build_trace_search_snapshot_locked(snapshot_path, progress=reporter)
 
 
-def _build_trace_search_snapshot_locked(snapshot_path: Path) -> SnapshotSummary:
+def _build_trace_search_snapshot_locked(
+    snapshot_path: Path,
+    *,
+    progress: "ProgressLike | None" = None,
+) -> SnapshotSummary:
+    from .progress import NullProgress
+
+    reporter: "ProgressLike" = progress if progress is not None else NullProgress()
     # Per-process tmp name: a crashed or concurrent build's leftover tmp can
     # never be adopted or published by another build.
     tmp_path = snapshot_path.with_name(f"{snapshot_path.name}.{os.getpid()}.tmp")
@@ -310,6 +336,7 @@ def _build_trace_search_snapshot_locked(snapshot_path: Path) -> SnapshotSummary:
         with sqlite3.connect(tmp_path) as conn:
             conn.execute("pragma journal_mode=DELETE")
             _create_schema(conn)
+            reporter.stage("building_snapshot")
             for doc in _iter_documents():
                 if doc.trace_id in seen_trace_ids:
                     continue
@@ -317,25 +344,32 @@ def _build_trace_search_snapshot_locked(snapshot_path: Path) -> SnapshotSummary:
                 _insert_doc(conn, doc)
                 superseded_by_inverse.update(doc.superseded_trace_ids)
                 trace_count += 1
+                # Throttled inside the reporter; the running count is the work
+                # observed so far (core reports traces_seen only).
+                reporter.advance(traces_seen=trace_count)
             # Second pass (issue #27 D): any trace named in another trace's
             # ``superseded_trace_ids`` inverse pointer is a prior generation, so
             # demote it from latest. Deferred until every doc is inserted because
             # the pointer-holder may be processed before the trace it names.
+            reporter.stage("inverse_supersession", traces_seen=trace_count)
             _apply_inverse_supersession(conn, superseded_by_inverse)
             # Order-independent corpus hash over the per-trace content hashes
             # already stored on each row, so an incremental refresh and a full
             # rebuild of identical content converge to the same value.
             source_hash = _meta_hash_from_db(conn)
             _write_meta(conn, source_hash, trace_count)
+            reporter.stage("finalize_fts", traces_seen=trace_count)
             try:
                 conn.execute("insert into trace_fts(trace_fts) values('optimize')")
             except sqlite3.DatabaseError:
                 pass
             conn.commit()
+            reporter.stage("vacuum", traces_seen=trace_count)
             try:
                 conn.execute("vacuum")
             except sqlite3.DatabaseError:
                 pass
+        reporter.stage("swap", traces_seen=trace_count)
         tmp_path.replace(snapshot_path)
         _unlink_sidecars(snapshot_path)
         clear_dirty_marker_if_unchanged(dirty_token_before_build)

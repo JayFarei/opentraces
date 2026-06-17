@@ -1,0 +1,72 @@
+name = "trace-index-rebuild-progress"
+description = """
+Issue #88 acceptance journey (tier 0) — the shared `--progress` /
+heartbeat contract on `trace index rebuild` is agent-observable.
+
+Against a smoke seed (a real project + 3 replayed traces + an already
+built index), the rebuild must accept the new `--progress` option and
+keep its `--json` stdout payload clean:
+
+  (a) `trace index rebuild --progress json --json` returns rc=0 with a
+      single JSON object whose status is "ok" and which carries the
+      additive `telemetry.stages` block (the per-stage progress
+      telemetry) — proving the flag is wired and the contract surface
+      is present on stdout WITHOUT polluting it;
+  (b) `trace index rebuild --progress never --json` also returns rc=0 —
+      proving every mode of the option is accepted (quiet path).
+
+Fine-grained stderr-JSONL shape + heartbeat-timing assertions live in
+the mechanism unit tests (`tests/core/test_progress.py`,
+`tests/cli/test_trace_index_progress.py`); otbox asserts the
+agent-facing stdout/rc contract.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["trace-index-rebuild-progress"]
+persona = "agent"
+requires = ["cli"]
+
+# ---------------------------------------------------------------------
+# Step 1 — rebuild with JSONL progress on stderr; stdout stays clean.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "rebuild-json"
+argv = ["trace", "index", "rebuild", "--progress", "json", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "rebuild-json"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "rebuild-json"
+path = "status"
+equals = "ok"
+
+# The additive per-stage progress telemetry block is present on stdout.
+[[assertions]]
+kind = "stdout_json"
+step = "rebuild-json"
+path = "telemetry.stages"
+
+# ---------------------------------------------------------------------
+# Step 2 — the 'never' mode is also an accepted option (quiet path).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "rebuild-never"
+argv = ["trace", "index", "rebuild", "--progress", "never", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "rebuild-never"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "rebuild-never"
+path = "status"
+equals = "ok"
