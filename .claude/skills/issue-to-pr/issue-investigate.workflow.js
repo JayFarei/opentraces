@@ -34,10 +34,18 @@ if (typeof A === 'string') {
   try { A = JSON.parse(A) } catch (_e) { A = {} }
 }
 A = A || {}
-const issue = A.issue || 'unknown'
+// Fail fast: a missing issue/repoRoot would silently "investigate" an empty
+// unknown issue and return a plausible-but-meaningless report. Refuse instead.
+if (!A.issue || !A.repoRoot) {
+  throw new Error(
+    `issue-investigate.workflow: missing required args (issue=${A.issue ?? '<missing>'}, ` +
+    `repoRoot=${A.repoRoot ?? '<missing>'}). Pass {issue, title, body, repoRoot} as a JSON object.`
+  )
+}
+const issue = A.issue
 const title = A.title || ''
 const body = A.body || ''
-const repoRoot = A.repoRoot || '.'
+const repoRoot = A.repoRoot
 
 const CLAIM_SCHEMA = {
   type: 'object',

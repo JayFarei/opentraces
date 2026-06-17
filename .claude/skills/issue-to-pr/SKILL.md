@@ -92,9 +92,11 @@ Apply it through whatever lever the phase uses:
    - `gh auth status` succeeds (else: "gh not authenticated — run `gh auth login`").
    - The base branch (`main`) is clean enough to branch from (uncommitted changes on the base are fine; you branch off the committed base).
    - No branch/worktree collision: if `fix/issue-<n>-*` or the target worktree path already exists, reuse it only if it's clearly a prior run of THIS issue; otherwise pick a suffixed name and say so.
-3. **Create the worktree** off the up-to-date base:
+3. **Create the worktree off a FRESH base** — fetch first, branch off the remote-tracking ref, so the fix never starts from a stale local `main`:
    ```bash
-   git worktree add -b fix/issue-<n>-<slug> ../<repo>-issue-<n> <base>
+   base=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)   # usually main
+   git fetch origin "$base"
+   git worktree add -b fix/issue-<n>-<slug> ../<repo>-issue-<n> "origin/$base"
    ```
    (`feat/…` if the issue is labeled `feature`/`enhancement`.) Build/reuse a venv inside it (`python3 -m venv .venv` + `pip install -e packages/opentraces-schema` + `pip install -e ".[dev]"`) — run it in the background while you investigate. **The #85 lesson:** in-process tests can't isolate import-bound `$HOME` paths, so the worktree + a fresh venv + `$HOME`-isolated / subprocess tests are the reliable substrate.
 4. All file work for this issue happens in that worktree from here on.
@@ -118,7 +120,7 @@ Read the consolidated report. If investigation shows the issue is **invalid / al
 
 ### Stage 2 — Plan · effort: max
 
-Write `kb/plans/<nnn>-issue-<n>.md` (kb/ is gitignored; follow the existing numbering). It MUST contain (template in `references/stage-contracts.md`):
+Create the plan at **`<worktree>/kb/plans/issue-<n>.md`** (`mkdir -p <worktree>/kb/plans` first — `kb/` is gitignored, so a fresh worktree has no `kb/`; the plan is a working doc that won't be committed, which is correct). Use the absolute worktree path everywhere downstream (the forged goal references it). It MUST contain (template in `references/stage-contracts.md`):
 - **Root cause** — from Stage 1, with file:line.
 - **Fix approach** — **the simplest change that closes the issue**, grounded in verified (never landmine) file:line and *existing patterns* (extend a registry/verb, additive + reversible schema evolution, data-safe by default, honesty not theater). Prefer modifying what exists over siloing something new; leave no scope bloom.
 - **Test plan — two layers, both named explicitly:**
@@ -133,10 +135,10 @@ Write `kb/plans/<nnn>-issue-<n>.md` (kb/ is gitignored; follow the existing numb
 
 **3a — Self / ethos (main-loop checklist).** Score the plan against `references/ethos-checklist.md` (the product-direction rubric derived from CLAUDE.md "Key Decisions"). Resolve every ❌. This is your own adversarial pass — be harsh.
 
-**3b — Codex pure adversarial (Plan Reviewer).** Read the expert prompt and delegate read-only:
-- Read `${CLAUDE_PLUGIN_ROOT}/prompts/plan-reviewer.md` (or `~/.claude/.../prompts/plan-reviewer.md`) and inject it as `developer-instructions`.
+**3b — Codex pure adversarial (Plan Reviewer).** Delegate read-only to a *different* model:
+- Locate the reviewer prompt (do not assume `$CLAUDE_PLUGIN_ROOT` is set — it usually isn't): `p=$(find ~/.claude -path '*/prompts/plan-reviewer.md' 2>/dev/null | head -1)` (it lives under the delegator plugin). Inject its contents as `developer-instructions`. If `find` returns nothing, write an equivalent inline instruction: *"You are a ruthless plan reviewer; APPROVE/REJECT with file:line evidence; reject any plan that relies on a function/API that doesn't exist."*
 - Call `mcp__codex__codex` with `sandbox: "read-only"`, `cwd: "<worktree path>"`, `config: {model_reasoning_effort: "high"}`, and a 7-section prompt that points codex at the plan file + the real source and tells it to BREAK the plan (missed surfaces, wrong API shapes, fictional refs, data-loss, test gaps).
-- **Codex-unavailable fallback:** if the MCP tool is absent (headless/cron), run a second Workflow red-team pass as the external adversary instead, and note in the plan that the codex gate was substituted.
+- **Codex-unavailable fallback** (MCP tool absent — headless/cron): run the bundled red-team workflow as the external adversary — `Workflow({scriptPath: ".claude/skills/issue-to-pr/redteam.workflow.js", args: {kind: "plan", target: "<abs plan path>", repoRoot: "<worktree>"}})` — and note in the plan that the codex gate was substituted.
 
 Fold both passes into the plan. Convergence between 3a and 3b on the same defect is the strongest signal. Re-run a pass only if a blocker materially reshaped the plan.
 
@@ -145,8 +147,8 @@ Fold both passes into the plan. Convergence between 3a and 3b on the same defect
 Implementation is not ad-hoc coding — it is a **persistent goal whose verification surface includes the otbox acceptance journey**, so the implement↔verify loop and the otbox verify loop are the *same* loop. The goal is not DONE until the journeys are green. (goal-forge's rule: the evaluator judges only what lands in the transcript — so the verification surface must be *commands that run and report*, which is precisely what folds the otbox run into the goal's completion check.)
 
 **4a — Forge the implementer goal** with `/goal-forge --claude --fast`. Supply the six slots from the hardened plan so goal-forge drafts without interviewing (template in `references/stage-contracts.md`):
-- **Outcome** — the plan at `kb/plans/<nnn>-issue-<n>.md` is implemented in the worktree; the mechanism tests AND the named otbox acceptance journey(s) are GREEN; the red-before-green proof is captured.
-- **Verification surface** (each must emit its summary line into the transcript): `pytest <focused mechanism tests> -q` → then the acceptance journey `pytest tests/otbox/test_otbox_slice.py -k "<journey>"` (tier-0) / the matrix under `OT_OTBOX_TIER1=1` (tier-1) → then the broad regression `pytest tests/cli tests/core tests/capture -q`.
+- **Outcome** — the plan at `<worktree>/kb/plans/issue-<n>.md` is implemented in the worktree; the mechanism tests AND the named otbox acceptance journey(s) are GREEN; the red-before-green proof is captured.
+- **Verification surface** (each must emit its summary line into the transcript): `.venv/bin/python -m pytest <focused mechanism tests> -q` → then the acceptance journey: tier-0 `.venv/bin/python -m pytest tests/otbox/test_otbox_slice.py -k "<journey>"`, or tier-1 `OT_OTBOX_TIER1=1 ./otbox matrix --journey '<journey>'` → then the broad regression `.venv/bin/python -m pytest tests/cli tests/core tests/capture -q`.
 - **Constraints** — don't regress the suite; preserve frozen `opentraces.*.v1` envelopes + the schema; data-safe; honesty, not theater.
 - **Boundaries** — only the files in the plan's ownership, inside the worktree `<path>`; never merge; don't touch unrelated modules.
 - **Iteration logging** — `<worktree>/runs/issue-<n>/log.md`; per attempt record the diff, the test/journey output observed, and the decision.
@@ -161,8 +163,8 @@ Implementation is not ad-hoc coding — it is a **persistent goal whose verifica
 
 ### Stage 5 — Tests green + docs + PR
 
-1. Confirm the relevant suite is green in the worktree.
-2. **`/docs-update`** — always a step (standing directive). It self-scopes: if the change touches no doc surface it's a clean no-op; if it adds/changes a CLI verb, flag, schema field, or install/uninstall flow, it syncs README / installation / commands / SKILL.md / llms.txt. Never hand-edit `llms.txt` — regenerate it.
+1. **`/docs-update`** FIRST — always a step (standing directive). It self-scopes: if the change touches no doc surface it's a clean no-op; if it adds/changes a CLI verb, flag, schema field, or install/uninstall flow, it syncs README / installation / commands / SKILL.md / llms.txt. Never hand-edit `llms.txt` — regenerate it.
+2. **Then re-confirm the relevant suite + the acceptance journey are green** — docs-update may have mutated tracked files (llms.txt, docs), so verify *after* it, not before, or you commit an unverified state.
 3. Commit (conventional-commit subject; end the message with the `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer).
 4. Push the branch; open the PR:
    ```bash
@@ -172,10 +174,10 @@ Implementation is not ad-hoc coding — it is a **persistent goal whose verifica
 
 ### Stage 6 — Final codex adversarial pass at the PR · effort: max (codex: high)
 
-- Read `${CLAUDE_PLUGIN_ROOT}/prompts/code-reviewer.md`, inject it as `developer-instructions`, and call `mcp__codex__codex` (`sandbox: "read-only"`, `cwd: "<worktree>"`, high effort) on `git diff <base>...HEAD`. Tell it to hunt correctness / data-safety / regression holes and to try to BREAK the change, not nitpick.
+- Locate the reviewer prompt (`p=$(find ~/.claude -path '*/prompts/code-reviewer.md' 2>/dev/null | head -1)`; inline an equivalent if absent), inject it as `developer-instructions`, and call `mcp__codex__codex` (`sandbox: "read-only"`, `cwd: "<worktree>"`, `config: {model_reasoning_effort: "high"}`) on `git diff <base>...HEAD`. Tell it to hunt correctness / data-safety / regression holes and to try to BREAK the change, not nitpick.
 - **Incorporate the feedback:** apply judgment (codex can be wrong), fix the real findings (each with a regression test), re-run tests, push. Run a focused **confirm round** on any PARTIAL findings — the #85 loop converged in three rounds.
 - Post a PR comment documenting the adversarial loop (findings → resolution) so the human reviewer sees the gate closed.
-- Codex-unavailable fallback: substitute a Workflow code-review red-team and say so in the PR comment.
+- **Codex-unavailable fallback:** run the bundled red-team on the diff — `Workflow({scriptPath: ".claude/skills/issue-to-pr/redteam.workflow.js", args: {kind: "diff", target: "git diff <base>...HEAD", repoRoot: "<worktree>", base: "<base>"}})` — and say so in the PR comment.
 
 ### Stage 7 — Present (human gate — never merge)
 

@@ -17,10 +17,10 @@ The typed shapes that flow between stages, and the templates each stage fills. K
 - **refuted** findings are landmines → the plan must not rely on them.
 - The report's "Readiness verdict" section drives whether to proceed to Stage 2 or terminate the issue as `issue-invalid`.
 
-## Stage 2 — plan doc template (`kb/plans/<nnn>-issue-<n>.md`)
+## Stage 2 — plan doc template (`<worktree>/kb/plans/issue-<n>.md`; `mkdir -p` first — kb/ is gitignored, not in a fresh worktree)
 
 ```markdown
-# Plan <nnn> — issue #<n>: <title>
+# Plan — issue #<n>: <title>
 
 ## Root cause
 <verified mechanism, file:line — from Stage 1, NOT the issue's assertion>
@@ -68,10 +68,11 @@ buggy code is not evidence.
 goal-forge assembles the six slots into ≤4000 chars of flowing prose. The otbox acceptance journey is *in the verification surface*, so the goal loop and the otbox verify loop are one loop. Canonical shape:
 
 ```
-/goal Implement the plan at kb/plans/<nnn>-issue-<n>.md in the worktree <path> so that
-the fix for issue #<n> is complete, verified by: `pytest <focused mechanism tests> -q`
-green, the acceptance journey `pytest tests/otbox/test_otbox_slice.py -k "<journey>"`
-green (tier-0; tier-1 via the matrix under OT_OTBOX_TIER1=1, hand-verified), and the
+/goal Implement the plan at <worktree>/kb/plans/issue-<n>.md in the worktree <path> so that
+the fix for issue #<n> is complete, verified by: `.venv/bin/python -m pytest <focused mechanism
+tests> -q` green, the acceptance journey `.venv/bin/python -m pytest tests/otbox/test_otbox_slice.py
+-k "<journey>"` green (tier-0; tier-1 via `OT_OTBOX_TIER1=1 ./otbox matrix --journey '<journey>'`,
+hand-verified), and the
 regression `pytest tests/cli tests/core tests/capture -q` green — each reporting its
 summary line into the transcript; and the new test proven red-before-green. Preserve the
 existing suite, the frozen opentraces.*.v1 envelopes + schema, data-safety, and honest
