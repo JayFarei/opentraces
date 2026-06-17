@@ -410,6 +410,88 @@ def test_allow_stale_still_raises_unservable(tmp_path) -> None:
             raise AssertionError("allow_stale must still raise for wrong_schema")
 
 
+def test_search_traces_never_serves_corrupt_snapshot_at_public_boundary() -> None:
+    # Issue #91 (codex rec #1): end-to-end NEGATIVE coverage through the PUBLIC
+    # search_traces(path=...) API — not just _verify_snapshot. A corrupt
+    # snapshot (wrong_schema / missing_schema) must NEVER be served via the
+    # serve-stale path; auto_rebuild=False raises so the CLI surfaces
+    # maintenance_needed. This locks that allow_stale only bypasses the dirty
+    # marker, never schema/readability, at the public boundary.
+    from opentraces.core.trace_search_snapshot import default_snapshot_path
+
+    _write_trace(
+        "demo-project",
+        _trace("trace-site", description="Fix the marketing site search hang"),
+    )
+    build_trace_search_snapshot()
+    snap = default_snapshot_path()
+
+    # wrong_schema: corrupt the recorded schema version on a built snapshot.
+    with _sqlite3.connect(snap) as conn:
+        conn.execute(
+            "update snapshot_meta set value = '0.0.0-bad' where key = 'schema_version'"
+        )
+        conn.commit()
+    try:
+        search_traces(
+            "marketing", SearchFilters(project="demo-project"), auto_rebuild=False
+        )
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "wrong_schema"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("serve-stale must never serve a wrong_schema snapshot")
+
+    # missing_schema: drop the schema_version row entirely.
+    with _sqlite3.connect(snap) as conn:
+        conn.execute("delete from snapshot_meta where key = 'schema_version'")
+        conn.commit()
+    try:
+        search_traces(
+            "marketing", SearchFilters(project="demo-project"), auto_rebuild=False
+        )
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "missing_schema"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("serve-stale must never serve a missing_schema snapshot")
+
+
+def test_search_traces_corrupt_with_dirty_marker_never_serves_stale(monkeypatch) -> None:
+    # Issue #91 (codex rec #1): the strongest e2e negative — a DIRTY marker is
+    # present (serve-stale would be ELIGIBLE if the reason were "stale") AND
+    # auto_rebuild is on, but the snapshot is corrupt and the (no-op) rebuild
+    # cannot fix it. The persistent needs-rebuild then has reason="wrong_schema",
+    # so search_traces RAISES rather than serving the corrupt snapshot. Proves
+    # the serve-stale branch keys strictly on reason=="stale", never on the mere
+    # presence of a dirty marker.
+    from opentraces.core import trace_search_snapshot as snapshot
+    from opentraces.core.trace_search_snapshot import default_snapshot_path
+
+    _write_trace(
+        "demo-project",
+        _trace("trace-site", description="Fix the marketing site search hang"),
+    )
+    build_trace_search_snapshot()
+    snap = default_snapshot_path()
+    with _sqlite3.connect(snap) as conn:
+        conn.execute(
+            "update snapshot_meta set value = '0.0.0-bad' where key = 'schema_version'"
+        )
+        conn.commit()
+    mark_search_snapshot_dirty("active-capture", trace_id="trace-site")
+    assert current_dirty_token() is not None
+    # No-op rebuild so the corruption persists through the one self-heal build.
+    monkeypatch.setattr(snapshot, "build_trace_search_snapshot", lambda *a, **k: None)
+
+    try:
+        search_traces("marketing", SearchFilters(project="demo-project"))
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "wrong_schema"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError(
+            "a dirty marker must not let a corrupt snapshot be served stale"
+        )
+
+
 def test_semantic_query_without_lexicon_concept_returns_empty_not_maintenance() -> None:
     """An unmatched semantic term is an empty result, never a rebuild loop.
 

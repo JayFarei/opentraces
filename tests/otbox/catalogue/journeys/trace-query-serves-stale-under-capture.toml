@@ -11,6 +11,18 @@ The persistent-dirty condition is reproduced deterministically by making
 the dirty marker unreadable (chmod 000): current_dirty_token() then
 returns its sentinel and the rebuild's clear cannot remove it, exactly
 mirroring the active-capture race the issue describes.
+
+LEVER NOTE (codex rec #2): the real condition is inherently concurrent — a
+capture writer re-dirties the marker DURING the one self-heal rebuild, so the
+clear (which only removes the marker when its token is unchanged) is a no-op.
+A sequential black-box journey cannot interleave a re-mark between the build
+and the read inside a single `trace query` process, so there is no
+token-based, root-safe lever available here. chmod 000 is the deterministic
+proxy. It is NOT root-safe: a privileged runner (CAP_DAC_OVERRIDE) can read a
+000 file, so the rebuild WOULD clear the marker and the query would serve
+fresh — but that surfaces as a LOUD assertion failure (freshness.stale=true
+fails), never a false green. CI and local dev run as non-root, where the
+lever is fully deterministic.
 """
 lane = "core"
 tier = 0
@@ -28,6 +40,10 @@ type = "cli"
 id = "query-fresh-baseline"
 argv = ["trace", "query", "greet", "--json"]
 
+# Make the dirty marker survive the query's one self-heal rebuild (the
+# active-capture race). chmod 000 -> current_dirty_token() returns its
+# "__unreadable__" sentinel and clear_dirty_marker_if_unchanged cannot read
+# it to clear it. Non-root only (see LEVER NOTE above); fails loud under root.
 [[steps]]
 type = "shell"
 id = "mark-dirty-persistent"
