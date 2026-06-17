@@ -33,10 +33,18 @@ The typed shapes that flow between stages, and the templates each stage fills. K
 <grounded in verified file:line + existing patterns. Reuse existing
 reversers/registries; additive + reversible; data-safe; honest.>
 
-## Test plan
-| Test | Layer (unit / subprocess-e2e / otbox journey) | Asserts |
-|------|----------------------------------------------|---------|
-| ...  | ...                                          | ...     |
+## Test plan (two layers — name both)
+### Mechanism (unit / $HOME-isolated subprocess e2e)
+| Test | Layer | Asserts |
+|------|-------|---------|
+| ...  | ...   | ...     |
+
+### Acceptance — the otbox journey (REQUIRED for user/agent-observable change)
+| Journey TOML | tier (0=CI / 1=opt-in) | seed/checkpoint | steps → assertion kinds |
+|---|---|---|---|
+| `tests/otbox/catalogue/journeys/<name>.toml` | 0 | smoke/world/`c-…` | … |
+
+> If the change is NOT user/agent-observable (pure internal refactor, perf, docs-only), write: "No otbox journey — <reason>." Do not leave this section blank. Acceptance is an otbox journey.
 
 ## Test-completeness proof (executable — not aspirational)
 How we PROVE the test exercises the fix:
@@ -76,6 +84,7 @@ Same shape, but `developer-instructions` = `prompts/code-reviewer.md`, and the p
 - `Closes #<n>` (auto-closes the issue on merge).
 - Cause → fix → tests narrative.
 - The **test-completeness evidence** (the red-before-green output or reintroduce-the-bug result).
+- The **otbox acceptance journey(s)** added/extended + their tier and CI status (acceptance is an otbox journey) — or the justified "no journey" reason.
 - Any **unmet ACs** stated honestly.
 
 ## Per-issue terminal status (reported at the end)

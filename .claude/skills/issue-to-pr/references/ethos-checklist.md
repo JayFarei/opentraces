@@ -19,6 +19,7 @@ Score the **plan** against each rule below: ✓ (aligned), ❌ (violates — mus
 7. **Honesty, not theater.** Does the change report what it did/didn't do truthfully — skips with reasons, residue left behind, partial failures as errors (not silent success)? The two-class skip taxonomy (`not-installed` is OK; `error`/`unsupported` fails the aggregate) and "report residue, don't hide it" are house style. A reverser that returns ok=True without doing anything is a **silent no-op** — a bug.
 8. **No silent caps / no fabricated success.** If the plan bounds coverage (top-N, sampling, no-retry) does it log what was dropped? Does it refuse to claim an unmet AC is met, or to fix an invalid issue?
 9. **Red before green.** Does the test-completeness proof demonstrate the test FAILS on the buggy code (red-before-green / reintroduce-the-bug)? A test that passes on the pre-fix code is **green theater** — it proves nothing.
+10. **Acceptance is an otbox journey.** For any user/agent-observable change, does the plan add or extend an otbox journey (`tests/otbox/catalogue/journeys/*.toml`) that drives the real CLI/agent and asserts on real state — not just a unit test? Tier-0 journeys run in default CI; tier-1 are documented as opt-in. If no journey applies (pure-internal change), is that stated and justified rather than skipped silently?
 
 ## Process & safety rails
 

@@ -30,6 +30,7 @@ A handful of leading words carry this skill. **Use them by name** — in your pl
 - **Landmine** *(the refuted claim)* — a cited file:line / function / API that does not exist or is wrong. Name landmines out loud and route around them; **never build on a landmine** (#85 cited two functions that did not exist).
 - **Blast radius** *(incident response)* — everything a fix could disturb: callers, tests, frozen `opentraces.*.v1` contracts, the schema, docs. Map the blast radius before you touch code.
 - **Red before green** *(TDD)* — the new test must FAIL on the buggy code before it passes on the fix. A test that has never been red is **theater**, not evidence.
+- **Acceptance is an otbox journey** *(opentraces' own UAT substrate)* — unit and subprocess tests prove the *mechanism*; a user- or agent-observable change is not *accepted* until an **otbox journey** drives the real CLI/agent in an isolated box and asserts on real state (the way #85 shipped with 8 journeys). Unit-test-only is not acceptance. If a fix is genuinely not user/agent-observable, **say so and justify it** — never skip the journey silently.
 - **Two adversaries, then commit** *(red-teaming)* — the self/ethos pass AND codex each try to BREAK the plan; when two independent adversaries converge on the same defect, believe it. Adversarial *before* commit, not after.
 - **Honesty, not theater** *(the house rule)* — report residue, partial failures as errors, unmet acceptance criteria, and invalid issues. A green checkmark that proves nothing is theater.
 - **The simplest change that closes the issue** *(pragmatic minimalism)* — extend what exists; resist the speculative refactor riding along.
@@ -45,6 +46,7 @@ State the leitwort, then catch yourself in its opposite:
 - **One-reviewer confidence** — shipping a plan a single pass approved. → *two adversaries, then commit.*
 - **The interview spiral** — stalling on questions the PR could answer. → *assume forward; the human merges.*
 - **Scope bloom** — a refactor the issue never asked for. → *the simplest change that closes the issue.*
+- **Unit-test-only acceptance** — proving the mechanism in a unit test but never showing a user or agent experience the change end-to-end. → *acceptance is an otbox journey.*
 
 This skill is the **main-loop spine**: it owns judgment, the worktree/PR lifecycle, the codex MCP calls, the human gate, and multi-issue orchestration. It delegates only the **bounded, read-only parallel fan-out** to the Workflow tool (Stage 1). Implementation is **sequential in one worktree** — a deliberate v1 choice: parallel file-editing across worktrees is conflict-prone and rarely pays off for a typical issue, so parallelism is confined to the phases where it is free and safe (investigation + multi-lens review).
 
@@ -118,8 +120,10 @@ Read the consolidated report. If investigation shows the issue is **invalid / al
 Write `kb/plans/<nnn>-issue-<n>.md` (kb/ is gitignored; follow the existing numbering). It MUST contain (template in `references/stage-contracts.md`):
 - **Root cause** — from Stage 1, with file:line.
 - **Fix approach** — **the simplest change that closes the issue**, grounded in verified (never landmine) file:line and *existing patterns* (extend a registry/verb, additive + reversible schema evolution, data-safe by default, honesty not theater). Prefer modifying what exists over siloing something new; leave no scope bloom.
-- **Test plan** — which tests at which layer (unit / `$HOME`-isolated subprocess e2e / otbox journey), and the exact assertions.
-- **Test-completeness proof (executable, not aspirational)** — exactly how you will PROVE the test exercises the fix: a captured **red-before-green** output (the new test fails on the pre-fix code) OR a temporary reintroduce-the-bug patch that makes the new test fail for the *specific verified cause*. A test that passes on the buggy code is not evidence and does not count.
+- **Test plan — two layers, both named explicitly:**
+  - *Mechanism* (unit / `$HOME`-isolated subprocess e2e): proves the fix works at the code level; carries the red-before-green proof below.
+  - *Acceptance — the otbox journey* (**required for any user/agent-observable change**): which new or extended `tests/otbox/catalogue/journeys/<name>.toml` drives the real CLI/agent in an isolated box and asserts on real state, its tier (0 = runs in default CI; 1 = opt-in, needs captured-session checkpoints / real daemons), the seed/checkpoint, the `[[steps]]`, and the exact assertion kinds. **Acceptance is an otbox journey** — name the journey here. If the change is genuinely *not* user/agent-observable (pure internal refactor with no behavior change, a perf budget, docs-only), state that explicitly and justify why no journey applies — do not skip silently.
+- **Test-completeness proof (executable, not aspirational)** — exactly how you will PROVE the test exercises the fix: a captured **red-before-green** output (the new test fails on the pre-fix code) OR a temporary reintroduce-the-bug patch that makes the new test fail for the *specific verified cause*. A test that passes on the buggy code is not evidence and does not count. The otbox acceptance journey must likewise *fail on the unfixed code and pass on the fix* (or, for tier-1 journeys that don't run in default CI, be runnable on demand and verified by hand).
 - **Acceptance map** — map to the issue's ACs; call out any AC that **cannot** be met (e.g. it depends on a refuted/fictional surface) rather than papering over it.
 
 ### Stage 3 — Dual adversarial gate on the plan · effort: max
@@ -138,7 +142,8 @@ Fold both passes into the plan. Convergence between 3a and 3b on the same defect
 ### Stage 4 — Implement (sequential, in the issue worktree) · effort: xhigh
 
 - Work the hardened plan top-to-bottom in the worktree. Match surrounding code (comment density, naming, idioms). Reuse existing reversers/registries/patterns the investigation surfaced.
-- Write the tests from the Stage-2 plan and **run the test-completeness proof**: capture the red-before-green output (or apply+revert the reintroduce-the-bug patch) and confirm the new test actually fails for the verified cause. Record that evidence — it goes in the PR.
+- Write the mechanism tests from the Stage-2 plan and **run the test-completeness proof**: capture the red-before-green output (or apply+revert the reintroduce-the-bug patch) and confirm the new test actually fails for the verified cause. Record that evidence — it goes in the PR.
+- **Author the otbox acceptance journey(s)** the plan named (acceptance is an otbox journey). Add the `.toml` under `tests/otbox/catalogue/journeys/` (it is auto-discovered — no registry to edit), then run it: tier-0 via the slice runner (`pytest tests/otbox/test_otbox_slice.py -k "<name>"`), tier-1 via the matrix with `OT_OTBOX_TIER1=1`. Watch the gotchas the #85 run surfaced: `path_exists` does not expand `~` (use `{opentraces_dir}` / `{project}` template vars); `stdout_json_contains` is a substring check (use `stdout_json` for exact, `stdout_json_set_contains` for arrays); a `shell` step expected to exit non-zero needs `expect_returncode = N`; and run the catalogue lint.
 - Iterate to a green suite. Run the focused suites first, then the broad regression (`pytest tests/cli tests/core tests/capture` or the issue-relevant dirs) — a new public CLI command, schema field, or envelope will trip the surface-sweep / snapshot tests; updating those (e.g. `GLOBAL_JSON_ONLY` + regenerating `json_envelope_shapes.json`) is part of the work, not optional.
 
 ### Stage 5 — Tests green + docs + PR
@@ -150,7 +155,7 @@ Fold both passes into the plan. Convergence between 3a and 3b on the same defect
    ```bash
    gh pr create --base <base> --head fix/issue-<n>-<slug> --title "..." --body-file <body>
    ```
-   The body MUST contain **`Closes #<n>`** (so the merge auto-closes the issue), a cause→fix→tests narrative, the **test-completeness evidence**, and any **unmet ACs** (honesty). If `gh pr create` fails (no remote / perms), report the pushed branch + the exact command for the user to run.
+   The body MUST contain **`Closes #<n>`** (so the merge auto-closes the issue), a cause→fix→tests narrative, the **test-completeness evidence**, the **otbox acceptance journey(s)** added + their tier and CI status (acceptance is an otbox journey), and any **unmet ACs** (honesty). If `gh pr create` fails (no remote / perms), report the pushed branch + the exact command for the user to run.
 
 ### Stage 6 — Final codex adversarial pass at the PR · effort: max (codex: high)
 
