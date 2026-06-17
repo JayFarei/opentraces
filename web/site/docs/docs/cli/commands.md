@@ -218,6 +218,15 @@ pull` and then refresh the snapshot with `opentraces trace index --json`.
 (`trace get --remote-bucket` / `--remote
 owner/repo` remain the per-trace remote-read path.)
 
+Explicit maintenance commands that can run for minutes accept a shared
+`--progress auto|plain|json|never` flag (starting with `opentraces trace index
+rebuild`). Progress and heartbeat events go to **stderr** so the final `--json`
+payload on stdout stays clean; `--progress json` emits a stable JSONL event
+stream (`{"event":"progress","command":...,"stage":...,"elapsed_ms":...}`) that
+lets an agent tell "working" from "hung". Default is `auto` (quiet on a
+non-TTY/CI, human-readable on a terminal); read commands like `trace query`
+stay quiet and never gain hidden rebuild/progress behavior.
+
 `--semantic` expands a small static dictionary of service/library concepts
 observed in trace evidence (for example Hugging Face or MongoDB); it is not an
 embedding search. A query that matches no concept falls back to lexical
