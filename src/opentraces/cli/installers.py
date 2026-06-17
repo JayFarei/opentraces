@@ -2227,14 +2227,23 @@ def setup_uninstall(integrations_only: bool, purge: bool, project: Path | None,
                 "--purge is destructive; pass --yes for non-interactive use",
             ))
             sys.exit(2)
-        mb = summary["bucket_bytes"] / (1024 * 1024)
         click.echo(_cli._warn("This --purge is UNRECOVERABLE."))
-        click.echo(f"  bucket:              {mb:.1f} MiB")
-        click.echo(f"  datasets:            {summary['dataset_count']}")
-        click.echo(f"  registered projects: {summary['registered_projects']}")
-        click.echo(f"  repos w/ git refs:   {summary['repos_with_refs']}")
-        click.echo("  Deletes the canonical Trail event log (refs/opentraces/local/events/v1)")
-        click.echo("  AND its only local replay source (the bucket). There is no undo.")
+        if project is not None:
+            # --project scopes purge to one repo: only its refs + marker die;
+            # the cross-repo captured corpus is preserved (see core.uninstall).
+            click.echo(f"  scope:               {project} (one repository)")
+            click.echo(f"  repos w/ git refs:   {summary['repos_with_refs']}")
+            click.echo("  Deletes that repo's refs/opentraces/* + refs/notes/opentraces and its")
+            click.echo("  .opentraces.json marker. Global captured data (bucket, datasets,")
+            click.echo("  projects, staging) is PRESERVED — run without --project to purge it.")
+        else:
+            mb = summary["bucket_bytes"] / (1024 * 1024)
+            click.echo(f"  bucket:              {mb:.1f} MiB")
+            click.echo(f"  datasets:            {summary['dataset_count']}")
+            click.echo(f"  registered projects: {summary['registered_projects']}")
+            click.echo(f"  repos w/ git refs:   {summary['repos_with_refs']}")
+            click.echo("  Deletes the canonical Trail event log (refs/opentraces/local/events/v1)")
+            click.echo("  AND its only local replay source (the bucket). There is no undo.")
         if summary["remote_bucket_enabled"]:
             click.echo(_cli._warn(
                 f"  NOTE: remote bucket at {summary['remote_bucket_url'] or '<configured>'} "

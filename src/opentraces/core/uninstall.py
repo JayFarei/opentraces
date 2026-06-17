@@ -167,8 +167,11 @@ def _phase0(config, repos: list[Path], *, purge: bool, dry_run: bool,
 
     # (a) excluded markers FIRST — the load-bearing re-enroll gate. Even under
     #     --purge (where the marker is deleted later) this is harmless and
-    #     closes the race during the teardown window.
+    #     closes the race during the teardown window. A FAILED marker write is
+    #     an error (it leaves the repo able to re-enroll mid-teardown), so it
+    #     fails the aggregate — but it does NOT abort the rest of the teardown.
     excluded: list[str] = []
+    failed_excludes: list[str] = []
     for repo in repos:
         marker = repo / paths.MARKER_FILENAME
         if not marker.exists():
@@ -180,13 +183,20 @@ def _phase0(config, repos: list[Path], *, purge: bool, dry_run: bool,
                 save_project_config(repo, data)
             excluded.append(str(repo))
         except Exception as exc:  # noqa: BLE001
+            failed_excludes.append(str(repo))
             residue.append(f"could not set excluded marker for {repo}: {exc}")
-    surfaces.append(Surface(
-        "project-opt-out",
-        "excluded" if excluded else "skipped",
-        None if excluded else "no-projects",
-        {"repos": excluded},
-    ))
+    if failed_excludes:
+        surfaces.append(Surface(
+            "project-opt-out", "error", "marker-write-failed",
+            {"failed": failed_excludes, "excluded": excluded},
+        ))
+    else:
+        surfaces.append(Surface(
+            "project-opt-out",
+            "excluded" if excluded else "skipped",
+            None if excluded else "no-projects",
+            {"repos": excluded},
+        ))
 
     # (b) tracking_mode -> manual (closes the settings.json re-patch arm).
     try:
@@ -258,11 +268,19 @@ def _otlp_daemon_surfaces(*, dry_run: bool, surfaces: list[Surface], flags: dict
         surfaces.append(Surface("otlp-autostart", "error", str(exc)))
 
     # 2. Reap any *bare* foreground PID the unit never managed (is_running()
-    #    checks the PID file even when no unit is installed).
+    #    checks the PID file even when no unit is installed). Verify the PID is
+    #    actually our receiver first: the PID-file fallback can name a recycled
+    #    PID, and SIGKILLing an arbitrary same-user process would be a footgun.
     try:
         running, pid = lifecycle.is_running()
         if not running or not pid:
             surfaces.append(Surface("otlp-daemon", "skipped", "not-running"))
+        elif not _pid_is_receiver(pid):
+            # Stale/recycled PID — never signal it; drop the stale file.
+            if not dry_run:
+                _unlink(paths.otlp_receiver_pid_path())
+            surfaces.append(Surface("otlp-daemon", "skipped", "stale-pid",
+                                    {"pid": pid}))
         elif dry_run:
             surfaces.append(Surface("otlp-daemon", "removed", detail={"pid": pid, "dry_run": True}))
             flags["daemon_stopped"] = True
@@ -272,6 +290,22 @@ def _otlp_daemon_surfaces(*, dry_run: bool, surfaces: list[Surface], flags: dict
             surfaces.append(Surface("otlp-daemon", "removed", detail={"pid": pid}))
     except Exception as exc:  # noqa: BLE001
         surfaces.append(Surface("otlp-daemon", "error", str(exc)))
+
+
+def _pid_is_receiver(pid: int) -> bool:
+    """True iff ``pid`` looks like an opentraces OTLP receiver.
+
+    Guards the PID-file fallback path against killing a recycled PID: only a
+    process whose command line names the receiver is a safe SIGTERM target.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, check=False, timeout=5,
+        ).stdout.lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(sig in out for sig in ("capture-otlp", "ot-otlp-receiver", "otlp.receiver", "otlp_receiver"))
 
 
 def _kill_pid(pid: int) -> None:
@@ -474,15 +508,29 @@ def _purge_user_data(*, dry_run: bool, surfaces: list[Surface]) -> None:
         ("raw-bodies", paths.raw_bodies_dir()),
     ]
     removed: list[str] = []
+    failed: list[str] = []
     for label, path in targets:
-        if path.exists():
-            if not dry_run:
-                _rmtree(path)
+        if not path.exists():
+            continue
+        if dry_run:
             removed.append(label)
-    surfaces.append(Surface(
-        "user-data", "purged" if removed else "skipped",
-        None if removed else "nothing-to-purge", {"removed": removed},
-    ))
+            continue
+        # Destructive: do NOT swallow errors, and verify the path is actually
+        # gone before reporting it purged (silent under-delete on a "wipe" is
+        # worse than a loud failure).
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            pass
+        (removed if not path.exists() else failed).append(label)
+    if failed:
+        surfaces.append(Surface("user-data", "error", "partial-delete",
+                                {"removed": removed, "failed": failed}))
+    else:
+        surfaces.append(Surface(
+            "user-data", "purged" if removed else "skipped",
+            None if removed else "nothing-to-purge", {"removed": removed},
+        ))
 
 
 def _purge_git_refs_surface(repos: list[Path], *, dry_run: bool, surfaces: list[Surface],
@@ -500,10 +548,14 @@ def _purge_git_refs_surface(repos: list[Path], *, dry_run: bool, surfaces: list[
             refs_purged.extend(result["purged_refs"])
             # Delete the in-repo marker under purge.
             _unlink(repo / paths.MARKER_FILENAME)
-            action = "purged" if result["purged_refs"] else "skipped"
-            reason = None if result["purged_refs"] else (
-                "git-not-found" if result["git_not_found"] else "no-refs"
-            )
+            if result["failed_refs"]:
+                # A ref we tried to delete survived — never report success.
+                action, reason = "error", "ref-delete-failed"
+            elif result["purged_refs"]:
+                action, reason = "purged", None
+            else:
+                action = "skipped"
+                reason = "git-not-found" if result["git_not_found"] else "no-refs"
             surfaces.append(Surface("git-refs", action, reason, {
                 "repo": str(repo),
                 "purged": result["purged_refs"],
@@ -648,11 +700,19 @@ def run_uninstall(*, tier: str = "integrations", project: Path | None = None,
         surfaces.append(Surface("prune-unflushed", "purged" if pruned else "skipped",
                                 None if pruned else "nothing-to-prune", {"removed": pruned}))
 
-    # Phase 2 — purge (destructive).
+    # Phase 2 — purge (destructive). Global captured data (bucket/datasets/
+    # workflows/staging — all cross-repo) is deleted ONLY for a whole-machine
+    # purge. With --project, scope the destruction to that repo's git refs +
+    # marker and leave the cross-repo corpus + config.json intact.
     if purge:
-        _purge_user_data(dry_run=dry_run, surfaces=surfaces)
+        if project is None:
+            _purge_user_data(dry_run=dry_run, surfaces=surfaces)
+        else:
+            surfaces.append(Surface("user-data", "skipped", "project-scoped-purge",
+                                    {"note": "global captured data preserved; run without --project to purge it"}))
         _purge_git_refs_surface(repos, dry_run=dry_run, surfaces=surfaces, refs_purged=refs_purged)
-        _purge_config_surface(dry_run=dry_run, surfaces=surfaces, residue=residue)
+        if project is None:
+            _purge_config_surface(dry_run=dry_run, surfaces=surfaces, residue=residue)
 
     # Refs preserved (default tier): the full opentraces ref set we did NOT touch.
     refs_preserved: list[str] = []

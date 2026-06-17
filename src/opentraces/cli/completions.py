@@ -330,9 +330,18 @@ def uninstall_completions(shell: str) -> dict:
 
     rc = _rc_path(shell)
     if shell == "fish":
+        # The fish completion lives in its own file (no rc source line to
+        # strip). Only remove it if opentraces actually wrote it — a user may
+        # keep their own `ot.fish`, and `setup uninstall` fans out across every
+        # shell, so a blind unlink would clobber an unrelated file.
         if rc.exists():
-            rc.unlink()
-            removed.append(str(rc))
+            try:
+                owned = "opentraces" in rc.read_text()
+            except OSError:
+                owned = False
+            if owned:
+                rc.unlink()
+                removed.append(str(rc))
         return {"shell": shell, "removed": removed}
 
     if rc.exists():

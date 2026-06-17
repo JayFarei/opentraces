@@ -247,14 +247,36 @@ def uninstall_otel_env(
         for key in OTEL_ENV_KEYS:
             if key not in env:
                 continue
-            if env.get(key) != expected.get(key):
-                preserved.append(key)  # user-modified value — never ours
+            if backup_env is not None:
+                # We have a pre-install snapshot, so ownership is exact: a key
+                # is ours iff opentraces ADDED it (absent pre-install) —
+                # value-agnostic, so a custom ``--raw-bodies-dir`` value we
+                # wrote is still removed. A key already present pre-install is
+                # user-owned and preserved.
+                if key in backup_env:
+                    preserved.append(key)
+                else:
+                    env.pop(key)
+                    removed.append(key)
                 continue
-            if backup_env is not None and key in backup_env:
-                preserved.append(key)  # user pre-owned the key — preserve
-                continue
-            env.pop(key)
-            removed.append(key)
+            # No snapshot (settings.json didn't exist at install, or the
+            # backup was deleted): conservatively remove only keys that look
+            # like ours — a fixed value matching what we install, or the
+            # raw-body sink carrying our ``file:`` scheme (opentraces always
+            # writes ``file:<dir>``; a user independently setting a file:
+            # raw-body sink is implausible). This avoids stripping a user's
+            # own OTEL_* key while still removing a custom raw-bodies install.
+            cur = env.get(key)
+            ours = cur == expected.get(key) or (
+                key == "OTEL_LOG_RAW_API_BODIES"
+                and isinstance(cur, str)
+                and cur.startswith("file:")
+            )
+            if ours:
+                env.pop(key)
+                removed.append(key)
+            else:
+                preserved.append(key)
         _atomic_write_json(target, data)
         if backup_env is None and backup.exists():
             reason = "keys-removed-ownership-safe-backup-unreadable"

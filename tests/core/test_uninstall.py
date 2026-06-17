@@ -148,6 +148,39 @@ def test_default_uninstall_still_pops_all_twelve(tmp_path, patched_raw_dir):
     assert after == {"OTEL_RESOURCE_ATTRIBUTES": "x"}
 
 
+def test_ownership_safe_removes_custom_raw_bodies_install(tmp_path, patched_raw_dir):
+    """A custom --raw-bodies-dir value we wrote must still be removed (codex #2).
+
+    With a pre-install backup, ownership is "we added it" (absent pre-install),
+    value-agnostic — so a non-default OTEL_LOG_RAW_API_BODIES we installed is
+    removed, not preserved as 'user-modified'.
+    """
+    settings = tmp_path / "settings.json"
+    # settings.json pre-exists with a user key -> install writes a backup.
+    _write_settings(settings, {"EDITOR": "vim"})
+    custom = tmp_path / "custom-raw"
+    settings_patcher.install_otel_env(settings_path=settings, raw_bodies_dir=custom)
+    installed = json.loads(settings.read_text())["env"]
+    assert installed["OTEL_LOG_RAW_API_BODIES"] == f"file:{custom.resolve()}"
+
+    res = settings_patcher.uninstall_otel_env(settings_path=settings, ownership_safe=True)
+
+    assert "OTEL_LOG_RAW_API_BODIES" in res.keys_skipped  # removed despite custom value
+    after = json.loads(settings.read_text())["env"]
+    assert "OTEL_LOG_RAW_API_BODIES" not in after
+    assert after.get("EDITOR") == "vim"  # user key preserved
+
+
+def test_ownership_safe_no_backup_removes_file_scheme_raw_bodies(tmp_path, patched_raw_dir):
+    """No backup + a custom file: raw-body sink -> still recognized as ours."""
+    settings = tmp_path / "settings.json"
+    env = dict(_expected())
+    env["OTEL_LOG_RAW_API_BODIES"] = "file:/some/other/dir"  # custom, no backup
+    _write_settings(settings, env)
+    res = settings_patcher.uninstall_otel_env(settings_path=settings, ownership_safe=True)
+    assert "OTEL_LOG_RAW_API_BODIES" in res.keys_skipped
+
+
 def test_ownership_safe_delete_backup_only_after_clean_strip(tmp_path, patched_raw_dir):
     settings = tmp_path / "settings.json"
     backup = settings.with_name(settings.name + settings_patcher.DEFAULT_BACKUP_SUFFIX)
@@ -222,6 +255,29 @@ def test_uninstall_completions_removes_script_and_rc_line(monkeypatch, tmp_path)
 def test_uninstall_completions_rejects_bad_shell():
     with pytest.raises(ValueError):
         completions_mod.uninstall_completions("powershell")
+
+
+def test_uninstall_completions_fish_ownership_guard(monkeypatch):
+    """setup uninstall fans out across every shell; a user's own ot.fish that
+    opentraces never wrote must NOT be clobbered (codex #4)."""
+    rc = completions_mod._rc_path("fish")
+    rc.parent.mkdir(parents=True, exist_ok=True)
+
+    # Foreign file (no opentraces signature) -> preserved.
+    rc.write_text("complete -c ot -a 'mytool'\n")
+    assert completions_mod.uninstall_completions("fish")["removed"] == []
+    assert rc.exists()
+
+    # opentraces-written file -> removed.
+    rc.write_text(completions_mod.FISH_SCRIPT)
+    assert completions_mod.uninstall_completions("fish")["removed"]
+    assert not rc.exists()
+
+
+def test_pid_is_receiver_rejects_non_receiver():
+    """The current python test process is not an OTLP receiver -> never a kill
+    target via the PID-file fallback (codex #3)."""
+    assert uninstall._pid_is_receiver(os.getpid()) is False
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +393,31 @@ def test_e2e_purge_deletes_data_refs_and_marker(installed_world):
     assert not (staging / "trace.jsonl").exists()  # B2: staging root purged
     assert not git_ref_exists(repo, "refs/opentraces/local/events/v1")
     assert not (repo / ".opentraces.json").exists()  # marker deleted
+
+
+def test_e2e_project_purge_preserves_global_data(installed_world):
+    """`--project <repo> --purge` deletes that repo's refs + marker but PRESERVES
+    the cross-repo captured corpus (codex R2)."""
+    home, repo, cli, git = installed_world
+    head = git("rev-parse", "HEAD").stdout.strip()
+    git("update-ref", "refs/opentraces/local/events/v1", head)
+    bucket = home / ".opentraces" / "bucket"
+    bucket.mkdir(parents=True)
+    (bucket / "blob.json").write_text("{}")
+
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    proc = subprocess.run(
+        [sys.executable, "-m", "opentraces", "--json", "setup", "uninstall",
+         "--project", str(repo), "--purge", "--yes"],
+        cwd=str(repo), env=env, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    # Repo refs + marker gone...
+    assert not git_ref_exists(repo, "refs/opentraces/local/events/v1")
+    assert not (repo / ".opentraces.json").exists()
+    # ...but the global bucket survives a project-scoped purge.
+    assert bucket.exists() and (bucket / "blob.json").exists()
 
 
 def git_ref_exists(repo: Path, ref: str) -> bool:
