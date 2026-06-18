@@ -3768,6 +3768,7 @@ a:hover .openmake-mark {
   border: 1px solid var(--border);
   padding: 1px 5px;
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 .code-block-wrap {
   position: relative;
