@@ -6,11 +6,17 @@ workflow contract may only ADD tools; it can never narrow the row below the
 floor, and the default ``tier="off"`` no longer ships rows verbatim.
 
 Red-before-green proof (codex finding #5): the secret is an ENTROPY-ONLY,
-non-regex high-entropy token plus path/username PII, asserted at the
-``sanitize_dataset_row(...).row`` level — NOT through the publish gate, whose
-``scan_serialized`` would mask a regex/entropy leak. Pre-fix a narrowing
-``tools=["regex"]`` contract suppresses entropy/business_logic/path_anonymizer
-and the token/path survive; post-fix the floor union redacts them.
+non-regex high-entropy token, asserted at the ``sanitize_dataset_row(...).row``
+level — NOT through the publish gate, whose ``scan_serialized`` would mask a
+regex/entropy leak. Pre-fix a narrowing ``tools=["regex"]`` contract runs only
+``regex`` over the dict (entropy/business_logic suppressed), so the entropy-only
+token SURVIVES — that is the red assertion. (The pre-fix code did already run
+path_anonymizer unconditionally whenever any tool ran, so the seeded path was
+redacted even pre-fix; the entropy token, not the path, is what goes red.) The
+``tier="off"`` path is fully red pre-fix: it shipped the row VERBATIM, so token
+and path both survived. Post-fix the floor union redacts the token at every
+tier, and path_anonymizer is now an explicit floor member rather than an
+incidental always-on step.
 """
 
 from __future__ import annotations

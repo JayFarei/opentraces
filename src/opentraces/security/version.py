@@ -36,9 +36,11 @@ refactors that change the on-record metadata shape.
     and the default ``tier="off"`` no longer ships rows verbatim. The per-row
     ``DatasetRowSecurity`` sidecar grows ``requested_tools`` / ``effective_tools``
     / ``floor`` / ``floor_satisfied`` (author-declared vs floor-resolved), a
-    metadata-shape change. ``anonymize_paths`` auto-detection now skips
-    already-hashed (8-hex) username segments so the always-on path floor is
-    idempotent.
+    metadata-shape change. ``anonymize_paths`` now emits an unambiguous
+    ``[ot-user-<8hex>]`` marker (the leading ``[`` cannot start a detected
+    username), making it idempotent by construction — so path_anonymizer can run
+    in the always-on dataset reader floor without a content-shape skip that would
+    falsely pass a real hash-shaped username (``deadbeef``) through intact.
 """
 
 SECURITY_VERSION = "0.7.0"
