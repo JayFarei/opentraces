@@ -63,7 +63,6 @@ GLOBAL_JSON_ONLY = {
     "config show",
     "config tracking-mode",
     "ctx anchor-for-step",
-    "doctor",
     "init",
     "remove",
     "security sanitize",

@@ -59,7 +59,11 @@ def _doctor_json_only() -> bool:
         "paths without executing anything. (Env: OT_DOCTOR_PROBE_RUNTIMES=1.)"
     ),
 )
-def doctor_cmd(security_only: bool, probe_runtimes: bool) -> None:
+@click.option(
+    "--json", "as_json", is_flag=True,
+    help="Emit the machine-readable JSON envelope (suppresses human output).",
+)
+def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None:
     """Report security pipeline and integration health.
 
     Probes every configured integration (hooks, scanners, LLM review,
@@ -72,6 +76,13 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool) -> None:
     import os
 
     from ..core import doctor
+
+    # The Click flag alone is not enough: ``emit_json`` gates on the global
+    # ``_json_mode``, so on a real TTY ``doctor --json`` would still render
+    # human output. Toggle the global so the JSON-only path fires (matches
+    # ``opentraces --json doctor``). (issue #96 / codex finding #3)
+    if as_json:
+        _cli._json_mode = True
 
     probe_runtimes = probe_runtimes or os.environ.get(
         "OT_DOCTOR_PROBE_RUNTIMES", ""
@@ -501,7 +512,9 @@ def _trace_index_section(info: dict) -> None:
             info.get("search_snapshot_advice") or "opentraces trace index rebuild",
         )
 
-    state = info.get("state") or "missing"
+    # Issue #96: the top-level ``state`` now means the live search snapshot, so
+    # the legacy row reads ``legacy_index_state`` (the deprecated index.db).
+    state = info.get("legacy_index_state") or "missing"
     legacy_kind = {"ok": "ok", "stale": "off", "missing": "off", "error": "warn"}.get(
         state, "off"
     )
