@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from opentraces_schema import Agent, Step, TraceMap, TraceMapNode, TraceRecord
@@ -404,12 +405,21 @@ def test_from_session_rejects_path_traversal_and_glob(tmp_path, monkeypatch):
     assert list(iter_trace_record_objects(project_slug=slug)) == []
 
 
-def test_from_session_rejects_symlink_cross_project_escape(tmp_path, monkeypatch):
-    """SECURITY (codex finding 1, narrowed): a SYMLINK planted at the current
-    project's expected ``<id>.jsonl`` path, pointing at a SIBLING project's
-    transcript, must be REJECTED — the resolved path escapes the current
-    project's encoded dir even though it stays under ~/.claude/projects. Proves
-    no cross-project ingest via symlink."""
+@pytest.mark.parametrize("variant", ["file", "dir"])
+def test_from_session_rejects_symlink_cross_project_escape(tmp_path, monkeypatch, variant):
+    """SECURITY (codex finding 1, definitive): the WHOLE symlink class is rejected.
+
+    Two escapes, both pointing this project's lookup at a SIBLING project's
+    transcript that DOES resolve to a real file under ~/.claude/projects:
+
+    * "file": a symlink at this project's expected ``<id>.jsonl`` path → the
+      sibling's transcript file.
+    * "dir": this project's whole encoded DIR is a symlink → the sibling's
+      encoded dir (which contains ``<id>.jsonl``).
+
+    Both must be rejected (the resolved first segment ≠ this project's literal
+    encoded name) so neither ingests sibling content into this project's bucket.
+    """
 
     from opentraces.core.bucket_store import iter_trace_record_objects
     from opentraces.core.config import get_project_dir
@@ -424,12 +434,19 @@ def test_from_session_rejects_symlink_cross_project_escape(tmp_path, monkeypatch
     # A REAL transcript belonging to the SIBLING project's encoded dir.
     victim = _write_claude_transcript(tmp_path, sibling, sid)
 
-    # Plant a symlink at THIS project's expected path → the sibling's transcript.
-    proj_dir = tmp_path / ".claude" / "projects" / encode_claude_path(project)
-    proj_dir.mkdir(parents=True, exist_ok=True)
-    link = proj_dir / f"{sid}.jsonl"
-    link.symlink_to(victim)
-    assert link.is_file()  # the symlink DOES resolve to a real sibling file
+    projects = tmp_path / ".claude" / "projects"
+    cur_enc = projects / encode_claude_path(project)
+    if variant == "file":
+        # A real current dir, but the <id>.jsonl entry is a symlink to the sibling.
+        cur_enc.mkdir(parents=True, exist_ok=True)
+        link = cur_enc / f"{sid}.jsonl"
+        link.symlink_to(victim)
+        assert link.is_file()  # resolves to a real sibling file
+    else:
+        # The current project's whole encoded DIR is a symlink to the sibling dir.
+        projects.mkdir(parents=True, exist_ok=True)
+        cur_enc.symlink_to(projects / encode_claude_path(sibling))
+        assert (cur_enc / f"{sid}.jsonl").is_file()  # resolves through the dir symlink
 
     runner = CliRunner()
     result = runner.invoke(main, [

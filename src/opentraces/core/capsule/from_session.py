@@ -121,13 +121,22 @@ def _claude_transcript_path(project_dir: Path, session_id: str) -> Path:
 def _find_claude_transcript(session_id: str, project_dir: Path) -> Path | None:
     """Locate this project's Claude transcript for ``session_id``, safely.
 
-    Confinement (defense in depth on top of :func:`is_safe_session_id`): the
-    candidate must resolve — AFTER following symlinks — to a path INSIDE THIS
-    project's own encoded dir, not merely under the ``~/.claude/projects`` root.
-    A symlink planted at the project's expected ``<id>.jsonl`` path pointing at a
-    SIBLING project's transcript resolves outside the project dir and is rejected,
-    so it can never be ingested into this project's bucket. Returns the candidate
-    only when it both stays confined and exists.
+    Confinement (defense in depth on top of :func:`is_safe_session_id`) that
+    closes the WHOLE symlink class — file-symlink, dir-symlink, and any deeper
+    symlink. ``Path.resolve()`` collapses every symlink in the path, so we then
+    require the FIRST path segment of the resolved candidate (taken relative to
+    the resolved ``~/.claude/projects`` root) to equal the LITERAL encoded name
+    of the current project. We deliberately do NOT resolve the project dir as the
+    confinement root: if the encoded project dir itself were a symlink to a
+    sibling, resolving both sides would collapse into the sibling and the check
+    would wrongly pass. Comparing the literal encoded segment rejects:
+
+    * an ``<id>.jsonl`` symlink → a sibling's transcript (resolved parts[0] is the
+      sibling's encoded name ≠ ours), and
+    * a symlinked encoded DIR → a sibling encoded dir (resolved parts[0] is the
+      sibling's encoded name ≠ ours).
+
+    Returns the candidate only when it stays literally confined and exists.
     """
 
     from ..repo_identity import encode_claude_path
@@ -135,13 +144,16 @@ def _find_claude_transcript(session_id: str, project_dir: Path) -> Path | None:
     projects = Path.home() / ".claude" / "projects"
     if not projects.exists():
         return None
-    proj_dir = projects.resolve() / encode_claude_path(project_dir)
-    candidate = proj_dir / f"{session_id}.jsonl"
+    projects_root = projects.resolve()
+    encoded = encode_claude_path(project_dir)
+    candidate = projects_root / encoded / f"{session_id}.jsonl"
     try:
-        # Confine to the CURRENT project's encoded dir (not the projects root):
-        # follow symlinks, then require the real path to live under proj_dir.
-        candidate.resolve().relative_to(proj_dir.resolve())
+        rel = candidate.resolve().relative_to(projects_root)
     except (ValueError, OSError):
+        return None
+    # The resolved path's first segment under the projects root must be the
+    # literal encoded name of THIS project — not a sibling reached via a symlink.
+    if not rel.parts or rel.parts[0] != encoded:
         return None
     return candidate if candidate.is_file() else None
 
