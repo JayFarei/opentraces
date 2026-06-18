@@ -43,9 +43,11 @@ step = "doctor-json"
 path = "doctor.trail_event_log.state"
 equals = "ok"
 
-# (b) Force the skipped-large path so the advice ↳ next row renders. On pre-fix
-# code this row contained the `trail status` fiction; post-fix the skipped path
-# carries no advice at all, so the row is gone. RED pre-fix / GREEN post-fix.
+# (b) Force the skipped-large path. otbox tier-0 captures output (non-TTY), so
+# doctor emits the JSON form here; the assertion guards that output for the
+# `trail status` fiction. On pre-fix code the skipped path's advice carried it;
+# post-fix the skipped path carries no advice at all. RED pre-fix / GREEN post-fix.
+# (The human `↳ next` render path is covered by the source-string unit test.)
 [[steps]]
 type = "cli"
 id = "doctor-human-skipped"
