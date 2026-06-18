@@ -332,3 +332,5 @@ from . import _bucket_spine_v2  # noqa: E402,F401  (registers c-bucket-spine-v2-
 from . import _context_tree_substrate  # noqa: E402,F401  (registers c-context-tree-substrate)
 from . import _compacted_session  # noqa: E402,F401  (registers c-compacted-session)
 from . import _rewound_session  # noqa: E402,F401  (registers c-rewound-session)
+# Issue #93 — divergent install roots behind the integration runners.
+from . import _multi_install_mixed_runtime  # noqa: E402,F401  (registers c-multi-install-mixed-runtime)

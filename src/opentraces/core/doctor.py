@@ -585,14 +585,25 @@ def _interpreter_finding(
     }
 
 
-def _scan_json_hook_config(
-    path: Path, integration: str, findings: list[dict[str, Any]]
+# Friendly runner names for the runtime-provenance surface, keyed by the
+# legacy ``integration`` token the hook scanners emit.
+_RUNNER_DISPLAY_NAMES = {
+    "codex": "codex-cli",
+    "claude": "claude-code",
+    "git": "git",
+}
+
+
+def _collect_json_hook_runners(
+    path: Path, integration: str, runners: list[dict[str, Any]]
 ) -> None:
-    """Scan a Codex/Claude ``hooks[event][].hooks[].command`` config tree.
+    """Collect opentraces-owned runners from a Codex/Claude hook config tree.
 
     Both Codex (``~/.codex/hooks.json``) and Claude
     (``~/.claude/settings.json``, under the ``hooks`` key) share this shape.
-    Missing or corrupt files are silently skipped (never raise).
+    Appends one ``{name, integration, event, command, interpreter}`` entry per
+    opentraces-owned hook command — REGARDLESS of interpreter health (codex
+    finding #1). Missing or corrupt files are silently skipped (never raise).
     """
     try:
         if not path.is_file():
@@ -620,21 +631,23 @@ def _scan_json_hook_config(
                 command = hook.get("command")
                 if not _is_opentraces_hook_command(command):
                     continue
-                finding = _interpreter_finding(
-                    _interpreter_token(command),
-                    integration=integration,
-                    event=str(event),
+                runners.append(
+                    {
+                        "name": _RUNNER_DISPLAY_NAMES.get(integration, integration),
+                        "integration": integration,
+                        "event": str(event),
+                        "command": command,
+                        "interpreter": _interpreter_token(command),
+                    }
                 )
-                if finding is not None:
-                    findings.append(finding)
 
 
-def _scan_git_hook(cwd: Path, findings: list[dict[str, Any]]) -> None:
-    """Scan the repo's ``.git/hooks/opentraces-post-commit`` shim content.
+def _collect_git_hook_runners(cwd: Path, runners: list[dict[str, Any]]) -> None:
+    """Collect the repo's ``.git/hooks/opentraces-post-commit`` shim runner.
 
     The shim bakes the interpreter as ``"<python>" -m opentraces ...``; pull
     that token off the line carrying ``-m opentraces``. Missing/corrupt files
-    are skipped silently.
+    are skipped silently. Emitted regardless of interpreter health.
     """
     hook_file = cwd / ".git" / "hooks" / "opentraces-post-commit"
     try:
@@ -646,26 +659,27 @@ def _scan_git_hook(cwd: Path, findings: list[dict[str, Any]]) -> None:
     for line in content.splitlines():
         if "-m opentraces" not in line:
             continue
-        interpreter = _interpreter_token(line)
-        finding = _interpreter_finding(
-            interpreter,
-            integration="git",
-            event="post-commit",
+        runners.append(
+            {
+                "name": "git",
+                "integration": "git",
+                "event": "post-commit",
+                "command": line.strip(),
+                "interpreter": _interpreter_token(line),
+            }
         )
-        if finding is not None:
-            findings.append(finding)
 
 
-def _interpreter_health(cwd: Path) -> dict[str, Any]:
-    """Flag hook commands whose baked interpreter is an upgrade time-bomb.
+def _opentraces_hook_runners(cwd: Path) -> list[dict[str, Any]]:
+    """Enumerate EVERY opentraces-owned hook runner (codex finding #1).
 
-    Inspects the installed Codex / Claude / Git hook configs for
-    opentraces-owned commands and flags any whose interpreter (a) does not
-    exist on disk, or (b) is a version-pinned Homebrew Cellar path. Returns a
-    structured sub-report; missing or corrupt config files yield an empty,
-    ``ok`` report. Never raises.
+    Returns one ``{name, integration, event, command, interpreter}`` entry per
+    opentraces-owned Codex / Claude / Git hook command — healthy AND unhealthy
+    — so ``runtime_provenance`` can see the runner whose interpreter is a stable
+    pipx/brew install (the #93 case). ``_interpreter_health`` is rebuilt on top
+    of this (it keeps filtering to unstable interpreters only). Never raises.
     """
-    findings: list[dict[str, Any]] = []
+    runners: list[dict[str, Any]] = []
 
     try:
         from ..capture.codex_cli.sessions import codex_home
@@ -674,26 +688,546 @@ def _interpreter_health(cwd: Path) -> dict[str, Any]:
     except Exception:
         codex_dir = Path.home() / ".codex"
     try:
-        _scan_json_hook_config(codex_dir / "hooks.json", "codex", findings)
+        _collect_json_hook_runners(codex_dir / "hooks.json", "codex", runners)
     except Exception:  # noqa: BLE001 — doctor must never crash.
         pass
 
     try:
-        _scan_json_hook_config(
-            Path.home() / ".claude" / "settings.json", "claude", findings
+        _collect_json_hook_runners(
+            Path.home() / ".claude" / "settings.json", "claude", runners
         )
     except Exception:  # noqa: BLE001 — doctor must never crash.
         pass
 
     try:
-        _scan_git_hook(cwd, findings)
+        _collect_git_hook_runners(cwd, runners)
     except Exception:  # noqa: BLE001 — doctor must never crash.
         pass
+
+    return runners
+
+
+def _interpreter_health(cwd: Path) -> dict[str, Any]:
+    """Flag hook commands whose baked interpreter is an upgrade time-bomb.
+
+    Inspects EVERY opentraces-owned Codex / Claude / Git hook runner (via the
+    shared ``_opentraces_hook_runners`` extractor) and flags any whose
+    interpreter (a) does not exist on disk, or (b) is a version-pinned Homebrew
+    Cellar path. Returns a structured sub-report; missing or corrupt config
+    files yield an empty, ``ok`` report. Never raises.
+    """
+    findings: list[dict[str, Any]] = []
+    try:
+        runners = _opentraces_hook_runners(cwd)
+    except Exception:  # noqa: BLE001 — doctor must never crash.
+        runners = []
+    for runner in runners:
+        finding = _interpreter_finding(
+            runner.get("interpreter"),
+            integration=str(runner.get("integration") or "?"),
+            event=str(runner.get("event") or "?"),
+        )
+        if finding is not None:
+            findings.append(finding)
 
     return {
         "status": "warn" if findings else "ok",
         "findings": findings,
     }
+
+
+# --- runtime provenance (issue #93) ---------------------------------------
+
+# The probe a bounded subprocess runs in each distinct runner interpreter to
+# learn its REAL opentraces module file + dist version (codex finding #3 —
+# substring heuristics on the interpreter path cannot honestly populate these).
+_PROVENANCE_PROBE_CODE = (
+    "import opentraces,importlib.metadata as m;"
+    "print(opentraces.__file__);"
+    "print(m.version('opentraces'))"
+)
+
+# Trust gate (codex finding #1 — SECURITY). doctor must NEVER execute an
+# arbitrary binary lifted from a hook config. A runner interpreter is only
+# probed when it is a genuine ``<python> -m opentraces...`` shape: the
+# interpreter token is a plausible CPython basename AND the command invokes the
+# opentraces module. Console-scripts / arbitrary binaries become honest
+# ``unknown`` (``probe: "skipped_untrusted"``).
+_PY_BASENAME_RE = re.compile(r"^python(?:3(?:\.\d+)?)?(?:\.exe)?$", re.IGNORECASE)
+
+# Aggregate probe budget (codex finding #2). A bounded per-probe timeout does
+# not cap the NUMBER of distinct interpreters, so N opentraces-looking hook
+# commands cost N×timeout. Cap the distinct interpreters actually executed;
+# excess become ``probe: "skipped_probe_budget_exceeded"`` honest unknowns.
+MAX_PROBE_INTERPRETERS = 8
+
+
+def _is_plausible_python(interpreter: str | None) -> bool:
+    """True iff ``interpreter`` basename looks like a CPython executable.
+
+    ``python`` / ``python3`` / ``python3.12`` (optional ``.exe``). Used as the
+    trust gate before executing a runner — an arbitrary first token (e.g.
+    ``/tmp/payload``) is rejected.
+    """
+    if not interpreter or not isinstance(interpreter, str):
+        return False
+    return bool(_PY_BASENAME_RE.match(os.path.basename(interpreter)))
+
+
+def _is_trusted_probe_command(command: object, interpreter: str | None) -> bool:
+    """True iff this runner is safe to PROBE (codex finding #1).
+
+    Requires BOTH a plausible-python interpreter token AND a ``-m opentraces``
+    module invocation in the command. Anything else — an arbitrary binary, a
+    console-script (``opentraces``/``ot``) — is refused and never executed.
+    """
+    if not _is_plausible_python(interpreter):
+        return False
+    if not isinstance(command, str):
+        return False
+    return "-m opentraces" in command
+
+
+def _realpath(p: str | None) -> str | None:
+    if not p:
+        return None
+    try:
+        return os.path.realpath(p)
+    except OSError:
+        return p
+
+
+def _classify_source_kind(module_file: str | None) -> str:
+    """Classify an opentraces install from its resolved module file path.
+
+    Generalises ``cli._detect_install_method``'s logic to an arbitrary path
+    (that helper only classifies the CURRENT process from ``Path(__file__)``).
+    Returns ``brew`` / ``pipx`` / ``source`` / ``pip``, or ``unknown`` when the
+    probe could not resolve a module file (never fabricated).
+    """
+    if not module_file:
+        return "unknown"
+    low = module_file.lower()
+    # brew ONLY for canonical formula layouts — a Cellar/opentraces/<ver> root,
+    # or the opt/...opentraces/libexec symlink. A bare "/homebrew/" or
+    # "/libexec/" substring is NOT enough: a project venv living under a
+    # Homebrew-looking parent (or a foreign tool's libexec) must not be
+    # mislabeled brew (codex finding #3).
+    if "/cellar/opentraces/" in low or re.search(
+        r"/opt/(?:[^/]+/)*opentraces/libexec/", low
+    ):
+        return "brew"
+    if "/pipx/venvs/" in low or "/pipx/" in low:
+        return "pipx"
+    # Editable / source install: not in site-packages.
+    if "site-packages" not in module_file:
+        return "source"
+    return "pip"
+
+
+def _probe_interpreter(python: str) -> tuple[str | None, str | None]:
+    """Bounded best-effort probe of one interpreter's opentraces install.
+
+    Runs ``<python> -c <probe>`` with a short timeout to read the REAL
+    ``opentraces.__file__`` + dist version. On timeout / failure / any error
+    returns ``(None, None)`` — the caller records an honest ``unknown`` install
+    rather than guessing. Never raises.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [python, "-c", _PROVENANCE_PROBE_CODE],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:  # noqa: BLE001 — probe failure is an honest unknown.
+        return None, None
+    if proc.returncode != 0:
+        return None, None
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None, None
+    # Validate the probe OUTPUT shape before trusting it (codex finding #1,
+    # layer 2): a real probe prints the opentraces ``__init__.py`` path then a
+    # version string. Spoofed/garbage stdout from a trusted-but-broken
+    # interpreter is treated as an honest unknown, never trusted.
+    raw_module, dist_version = lines[0], lines[1]
+    if not raw_module.endswith("opentraces/__init__.py"):
+        return None, None
+    if not dist_version:
+        return None, None
+    module_file = _realpath(raw_module) or None
+    return module_file, dist_version
+
+
+def _current_runtime() -> dict[str, Any]:
+    """Provenance of the CURRENT (foreground) opentraces process. Never raises."""
+    import sys
+
+    out: dict[str, Any] = {
+        "argv0": sys.argv[0] if sys.argv else None,
+        "python": _realpath(sys.executable),
+        "module_file": None,
+        "dist_version": None,
+        "source_kind": "unknown",
+        "git_root": None,
+        "git_commit": None,
+    }
+    try:
+        import opentraces as _ot
+
+        out["module_file"] = _realpath(getattr(_ot, "__file__", None))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["dist_version"] = current_cli_version()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from ..cli import _detect_install_method
+
+        out["source_kind"] = _detect_install_method()
+    except Exception:  # noqa: BLE001
+        out["source_kind"] = _classify_source_kind(out["module_file"])
+
+    if out["source_kind"] == "source" and out["module_file"]:
+        out.update(_editable_git_provenance(out["module_file"]))
+    return out
+
+
+def _editable_git_provenance(module_file: str) -> dict[str, Any]:
+    """Best-effort git root + commit for an editable/source install.
+
+    The single subprocess on the common ``doctor`` path, short-timeout and
+    exception-isolated. Returns ``{}`` on any failure.
+    """
+    import subprocess
+
+    module_dir = os.path.dirname(module_file)
+    out: dict[str, Any] = {}
+    for key, args in (
+        ("git_root", ["git", "-C", module_dir, "rev-parse", "--show-toplevel"]),
+        ("git_commit", ["git", "-C", module_dir, "rev-parse", "--short", "HEAD"]),
+    ):
+        try:
+            proc = subprocess.run(
+                args, capture_output=True, text=True, timeout=2
+            )
+            if proc.returncode == 0:
+                out[key] = (proc.stdout or "").strip() or None
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+def _watcher_runner_interpreter() -> str | None:
+    """The interpreter frozen into the watcher worker shim, if any. Never raises."""
+    try:
+        prov = _watcher_provenance()
+    except Exception:  # noqa: BLE001
+        return None
+    return prov.get("shim_frozen_interpreter")
+
+
+def _otlp_runner_interpreter() -> str | None:
+    """Best-effort interpreter behind the OTLP receiver launch unit.
+
+    Reads the macOS launchd plist / Linux systemd unit's program arguments for
+    a ``*python*`` token. Returns ``None`` when the unit is absent or
+    unparseable. Never raises.
+    """
+    try:
+        from ..capture.otlp.lifecycle import LAUNCHD_PLIST_PATH
+
+        plist = LAUNCHD_PLIST_PATH
+        if not plist.is_file():
+            return None
+        text = plist.read_text(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return None
+    for match in re.findall(r"<string>([^<]*)</string>", text):
+        token = match.strip()
+        if "python" in token.lower() and "/" in token:
+            return token
+    return None
+
+
+def _runtime_provenance(
+    cwd: Path | None = None, *, probe: bool = False
+) -> dict[str, Any]:
+    """Surface dev/prod install provenance + mixed integration runtimes (#93).
+
+    SECURITY (codex round 2 — RCE close): by DEFAULT this executes NOTHING
+    derived from a hook config. Anyone who can write ``~/.codex/hooks.json`` can
+    also write the binary it points at, so no path-prefix allowlist is both safe
+    AND permits legit user-dir pipx installs. The honest default therefore
+    INSPECTS only:
+
+      * ``current`` — real values introspected from the RUNNING process
+        (``sys.executable`` / ``opentraces.__file__`` / ``__version__``); safe.
+      * runners — ``source_kind`` is INFERRED from the interpreter PATH via
+        ``_classify_source_kind`` (string inspection, no execution); their
+        ``module_file`` / ``dist_version`` are ``null`` and ``verified: false``,
+        ``probe: "not_run"``.
+      * ``state`` — ``mixed_runtimes`` vs ``single_runtime`` from the DISTINCT
+        install keys (verified module_file when known, else interpreter realpath)
+        across current + runners. This keeps #93's detection value WITHOUT
+        executing anything.
+
+    Only when ``probe=True`` (the opt-in ``--probe-runtimes`` flag /
+    ``OT_DOCTOR_PROBE_RUNTIMES=1``) does the bounded subprocess run — and even
+    then it stays gated (plausible-python basename + ``-m opentraces`` shape +
+    ``MAX_PROBE_INTERPRETERS`` budget + output-shape validation) as hygiene, and
+    it is user-consented execution. A successful probe upgrades a runner to
+    ``verified: true`` / ``probe: "ok"`` with a real module_file + version.
+
+    ``severity`` is ``warning`` (never ``error``) and never feeds ``exit_code``.
+    ``advice`` is an informational STRING. Every probe is exception-isolated;
+    never raises.
+    """
+    cwd = cwd or Path.cwd()
+
+    try:
+        current = _current_runtime()
+    except Exception:  # noqa: BLE001
+        current = {
+            "argv0": None, "python": None, "module_file": None,
+            "dist_version": None, "source_kind": "unknown",
+            "git_root": None, "git_commit": None,
+        }
+
+    cur_python = current.get("python")
+    cur_module = current.get("module_file")
+
+    try:
+        runners = _opentraces_hook_runners(cwd)
+    except Exception:  # noqa: BLE001
+        runners = []
+
+    # Map each runner to a stable (name, interpreter) tuple; add the watcher
+    # and OTLP runners, which live outside the hook configs. Dedup by
+    # (name, interpreter) so the same integration configured across several
+    # hook events collapses to ONE provenance row (plan: one entry per runner).
+    # Each spec carries a ``trusted`` flag (codex finding #1): only a genuine
+    # ``<python> -m opentraces...`` runner is ever executed. Hook runners derive
+    # trust from their command; the watcher/OTLP units are our own rendered
+    # shims, so they only require a plausible-python interpreter.
+    raw_specs: list[dict[str, Any]] = [
+        {
+            "name": r.get("name") or r.get("integration"),
+            "interpreter": _realpath(r.get("interpreter")),
+            "trusted": _is_trusted_probe_command(
+                r.get("command"), _realpath(r.get("interpreter"))
+            ),
+        }
+        for r in runners
+    ]
+    try:
+        watcher_interp = _watcher_runner_interpreter()
+    except Exception:  # noqa: BLE001
+        watcher_interp = None
+    if watcher_interp is not None:
+        _wi = _realpath(watcher_interp)
+        raw_specs.append(
+            {"name": "watcher", "interpreter": _wi, "trusted": _is_plausible_python(_wi)}
+        )
+    try:
+        otlp_interp = _otlp_runner_interpreter()
+    except Exception:  # noqa: BLE001
+        otlp_interp = None
+    if otlp_interp is not None:
+        _oi = _realpath(otlp_interp)
+        raw_specs.append(
+            {"name": "otlp", "interpreter": _oi, "trusted": _is_plausible_python(_oi)}
+        )
+    runner_specs: list[dict[str, Any]] = []
+    _spec_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for spec in raw_specs:
+        key = (spec.get("name"), spec.get("interpreter"))
+        if key in _spec_by_key:
+            # A duplicate runner (same name+interpreter across hook events) is
+            # trusted if ANY occurrence is a genuine module invocation.
+            if spec.get("trusted"):
+                _spec_by_key[key]["trusted"] = True
+            continue
+        _spec_by_key[key] = spec
+        runner_specs.append(spec)
+
+    # Resolve per-interpreter provenance. By DEFAULT (probe=False) nothing is
+    # executed: ``source_kind`` is inferred from the interpreter PATH and the
+    # module_file/version stay unknown (``verified=False``, ``probe="not_run"``).
+    # Only ``probe=True`` runs the gated, budgeted, output-validated subprocess
+    # to UPGRADE a trusted runner to verified values.
+    interp_module: dict[str, str | None] = {}
+    interp_kind: dict[str, str] = {}
+    interp_version: dict[str, str | None] = {}
+    interp_probe: dict[str, str] = {}
+    interp_verified: dict[str, bool] = {}
+    if cur_python:
+        # The current process is introspected, not config-derived-executed.
+        interp_module[cur_python] = cur_module
+        interp_kind[cur_python] = current.get("source_kind") or "unknown"
+        interp_version[cur_python] = current.get("dist_version")
+        interp_probe[cur_python] = "current"
+        interp_verified[cur_python] = cur_module is not None
+
+    probed_count = 0
+    for spec in runner_specs:
+        interp = spec.get("interpreter")
+        if not interp or interp in interp_module:
+            continue
+        # Honest, execution-free classification from the interpreter PATH.
+        path_kind = _classify_source_kind(interp)
+        interp_module[interp] = None
+        interp_kind[interp] = path_kind
+        interp_version[interp] = None
+        interp_verified[interp] = False
+
+        if not probe:
+            # DEFAULT: never execute a config-derived interpreter.
+            interp_probe[interp] = "not_run"
+            continue
+        # OPT-IN probe path (user-consented execution) — still gated as hygiene.
+        if not spec.get("trusted"):
+            interp_probe[interp] = "skipped_untrusted"
+            continue
+        if probed_count >= MAX_PROBE_INTERPRETERS:
+            interp_probe[interp] = "skipped_probe_budget_exceeded"
+            continue
+        probed_count += 1
+        try:
+            module_file, dist_version = _probe_interpreter(interp)
+        except Exception:  # noqa: BLE001
+            module_file, dist_version = None, None
+        if module_file is not None:
+            interp_module[interp] = module_file
+            interp_kind[interp] = _classify_source_kind(module_file)
+            interp_version[interp] = dist_version
+            interp_verified[interp] = True
+            interp_probe[interp] = "ok"
+        else:
+            interp_probe[interp] = "error"
+
+    def _install_key(interp: str | None) -> str:
+        """Dedup/identity key: the verified module_file when known, else the
+        interpreter realpath (honest under the no-execution default)."""
+        if interp and interp_verified.get(interp) and interp_module.get(interp):
+            return str(interp_module[interp])
+        return interp_module.get(interp) or f"interp:{interp or 'current'}"
+
+    # discovered_installs: one entry per distinct install key. Unverified
+    # entries carry null module_file/version (never fabricated) + verified flag.
+    discovered: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    cur_key = _install_key(cur_python)
+    discovered.append(
+        {
+            "module_file": cur_module,
+            "dist_version": current.get("dist_version"),
+            "source_kind": current.get("source_kind") or "unknown",
+            "interpreter": cur_python,
+            "verified": bool(interp_verified.get(cur_python)),
+            "probe": interp_probe.get(cur_python, "current"),
+        }
+    )
+    seen_keys.add(cur_key)
+    for interp in interp_module:
+        if interp == cur_python:
+            continue
+        key = _install_key(interp)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        discovered.append(
+            {
+                "module_file": interp_module.get(interp),
+                "dist_version": interp_version.get(interp),
+                "source_kind": interp_kind.get(interp, "unknown"),
+                "interpreter": interp,
+                "verified": bool(interp_verified.get(interp)),
+                "probe": interp_probe.get(interp, "not_run"),
+            }
+        )
+
+    # integration_runners: matches_current is true when the runner is literally
+    # the current interpreter, or (when probed) shares the current module_file.
+    integration_runners: list[dict[str, Any]] = []
+    for spec in runner_specs:
+        interp = spec.get("interpreter")
+        module_file = interp_module.get(interp) if interp else None
+        verified = bool(interp and interp_verified.get(interp))
+        matches_current = bool(
+            (interp is not None and cur_python is not None and interp == cur_python)
+            or (
+                verified
+                and module_file is not None
+                and cur_module is not None
+                and module_file == cur_module
+            )
+        )
+        integration_runners.append(
+            {
+                "name": spec.get("name"),
+                "runner": interp,
+                "python": interp,
+                "matches_current": matches_current,
+                "matches_install": interp_kind.get(interp) if interp else None,
+                "verified": verified,
+                "probe": interp_probe.get(interp) if interp else None,
+            }
+        )
+
+    # state: mixed when ≥2 distinct install keys execute across current +
+    # runners. Keys are verified module roots where known, else interpreter
+    # realpaths — so mixed detection survives the no-execution default.
+    distinct_keys = {_install_key(i) for i in interp_module}
+    state = "mixed_runtimes" if len(distinct_keys) >= 2 else "single_runtime"
+    severity = "warning" if state == "mixed_runtimes" else "ok"
+
+    if state == "mixed_runtimes":
+        advice = (
+            "Integrations execute opentraces from more than one install root. "
+            "This is usually harmless for a dev setup, but hooks/watcher can run "
+            "stale code. To converge on one runtime, re-render the integrations "
+            "from your chosen install (e.g. 'opentraces setup uninstall "
+            "--integrations-only' then reinstall, or keep them pinned "
+            "deliberately). No data is touched."
+        )
+    else:
+        advice = "All configured integrations resolve to the current install root."
+
+    return {
+        "current": current,
+        "discovered_installs": discovered,
+        "integration_runners": integration_runners,
+        "state": state,
+        "severity": severity,
+        "advice": advice,
+        # Whether the opt-in interpreter probe executed. False = inspection-only
+        # (no config-derived execution); module_file/dist_version are unverified.
+        "probed": bool(probe),
+    }
+
+
+def _safe_runtime_provenance(
+    cwd: Path | None = None, *, probe: bool = False
+) -> dict[str, Any]:
+    """``_runtime_provenance`` wrapped so an unexpected error never sinks the
+    whole ``doctor`` report. Returns a safe single-runtime shape on failure."""
+    try:
+        return _runtime_provenance(cwd, probe=probe)
+    except Exception:  # noqa: BLE001 — doctor must never crash.
+        return {
+            "current": {},
+            "discovered_installs": [],
+            "integration_runners": [],
+            "state": "single_runtime",
+            "severity": "ok",
+            "advice": "runtime-provenance probe failed; not enough signal to report.",
+            "probed": bool(probe),
+        }
 
 
 # --- attribution panel (plan 043 phase 7) ---------------------------------
@@ -1267,12 +1801,17 @@ def _registered_project_paths(cfg, cwd: Path | None = None) -> list[str]:
     return sorted(project_paths)
 
 
-def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
+def report(
+    cfg, cwd: Path | None = None, *, probe_runtimes: bool = False
+) -> dict[str, Any]:
     """Build the doctor payload.
 
     Args:
         cfg: loaded global config (has security.trufflehog.enabled, hf_token)
         cwd: project directory for post-processor probing (defaults to CWD)
+        probe_runtimes: opt-in — when True, the runtime-provenance section
+            EXECUTES the configured interpreters to read verified install
+            facts. Default False keeps doctor execution-free (security).
     """
     cwd = cwd or Path.cwd()
     th_version = find_trufflehog()
@@ -1317,6 +1856,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),
         "interpreter_health": _interpreter_health(cwd),
+        "runtime_provenance": _safe_runtime_provenance(cwd, probe=probe_runtimes),
         "trail_capture_audit": _trail_capture_audit(cwd),
         "context_tree": _context_tree_status(cwd),
     }
