@@ -1,7 +1,6 @@
 """Hidden substrate commands for ``ot trail`` — registered onto trail_group."""
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -13,7 +12,6 @@ from ..clients.text.colors import detect_color
 from .trail import trail_group
 from .trail_helpers import (
     _anchor_handle,
-    _audit_trail_capture,
     _human_evidence,
     _patch_handle,
     _render_search_results,
@@ -930,6 +928,133 @@ def mature_cmd(
         for error in summary["errors"]:
             click.echo(f"    {error}")
         sys.exit(2)
+
+
+@trail_group.command(
+    "verify",
+    cls=OpentracesCommand,
+    hidden=True,
+    examples=[
+        "opentraces trail verify --mode quick --json",
+        "opentraces trail verify --mode sample --sample-size 100 --json",
+        "opentraces trail verify --mode full --progress plain --json",
+    ],
+    see_also=[
+        ("opentraces doctor", "show install and trace-substrate health."),
+        ("opentraces trail rebuild", "re-derive advisory projections."),
+    ],
+    option_groups=[
+        ("Scope", ["project_dir"]),
+        ("Verification", ["mode", "sample_size"]),
+        ("Output", ["as_json", "progress_mode"]),
+    ],
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--mode",
+    "mode",
+    type=click.Choice(["quick", "sample", "full"]),
+    default="quick",
+    show_default=True,
+    help=(
+        "quick summarizes the ref without reading all event bodies; sample "
+        "checks a bounded first/last event sample; full verifies every event."
+    ),
+)
+@click.option(
+    "--sample-size",
+    "sample_size",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Events to sample from each end of the log in --mode sample.",
+)
+@click.option(
+    "--progress",
+    "progress_mode",
+    type=click.Choice(["auto", "plain", "json", "never"]),
+    default="auto",
+    show_default=True,
+    help=(
+        "Progress reporting on stderr. Use 'json' for agent-readable JSONL "
+        "heartbeats or 'plain' for human-readable heartbeats."
+    ),
+)
+@project_dir_option
+def verify_cmd(
+    as_json: bool,
+    mode: str,
+    sample_size: int,
+    progress_mode: str,
+    project_dir: Path | None,
+) -> None:
+    """Verify or summarize the canonical Trace Trails event log."""
+    from ._progress import build_cli_progress
+    from ..core.trails import event_log_verification_status
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    reporter = build_cli_progress("trail verify", progress_mode)
+    try:
+        reporter.stage(f"{mode}_event_log", batches_seen=0)
+        status = event_log_verification_status(
+            repo,
+            mode=mode,
+            sample_size=sample_size,
+        )
+    except Exception as exc:
+        click.echo(f"Unable to verify trail event log: {exc}", err=True)
+        sys.exit(2)
+    finally:
+        reporter.done()
+
+    status.setdefault("telemetry", {})
+    status["telemetry"]["stages"] = reporter.telemetry()
+
+    if as_json:
+        click.echo(_dump_json(status))
+    else:
+        _render_verify_status(status)
+
+    if status.get("state") in ("invalid", "error"):
+        sys.exit(3)
+
+
+def _render_verify_status(status: dict) -> None:
+    state = status.get("state") or "missing"
+    mode = status.get("mode") or "quick"
+    click.echo(f"Trace Trail event log: {state} ({mode})")
+    click.echo(f"  ref:     {status.get('ref') or '?'}")
+    head = status.get("head")
+    if head:
+        click.echo(f"  head:    {str(head)[:12]}")
+    click.echo(f"  source:  {status.get('verification_source') or '?'}")
+    click.echo(f"  batches: {status.get('batch_count') or 0}")
+    event_count = status.get("event_count")
+    click.echo(f"  events:  {event_count if event_count is not None else 'unknown'}")
+
+    def _checked(value: object, ok_text: str) -> str:
+        if value is None:
+            return "not checked"
+        return ok_text if value else "invalid"
+
+    click.echo(
+        "  batch parents: "
+        f"{_checked(status.get('batch_parents_linear'), 'linear')}"
+    )
+    click.echo(
+        "  content hashes: "
+        f"{_checked(status.get('content_hashes_valid'), 'valid')}"
+    )
+    click.echo(
+        "  event chain: "
+        f"{_checked(status.get('event_chain_valid'), 'valid')}"
+    )
+    if status.get("sampled_event_count") is not None:
+        click.echo(f"  sampled: {status.get('sampled_event_count')} event(s)")
+    for error in (status.get("errors") or [])[:5]:
+        click.echo(f"  error: {error}")
+    if state == "unverified_large":
+        click.echo("  next: opentraces trail verify --mode full --progress plain")
 
 
 @trail_group.command(

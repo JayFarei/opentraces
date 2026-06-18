@@ -1,0 +1,51 @@
+name = "trail-verify-large-log-bounded"
+description = """
+Issue #95: the command advised by doctor for large Trace Trails logs must be
+bounded and observable. Quick mode returns a structured summary with phase
+telemetry without reading every event body.
+"""
+lane = "core"
+tier = 0
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-real-session"]
+
+[[steps]]
+type = "cli"
+id = "quick-verify"
+argv = ["trail", "verify", "--mode", "quick", "--json"]
+timeout = 10
+
+[[assertions]]
+kind = "returncode"
+step = "quick-verify"
+equals = 0
+
+[[assertions]]
+kind = "duration_ms_max"
+step = "quick-verify"
+max = 10000
+
+[[assertions]]
+kind = "stdout_json"
+step = "quick-verify"
+path = "mode"
+equals = "quick"
+
+[[assertions]]
+kind = "stdout_json"
+step = "quick-verify"
+path = "phases.0.name"
+equals = "resolve_ref"
+
+[[assertions]]
+kind = "stdout_json"
+step = "quick-verify"
+path = "phases.1.name"
+equals = "check_batch_parents"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "quick-verify"
+path = "event_count"
+min = 1

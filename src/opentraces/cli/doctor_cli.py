@@ -789,8 +789,9 @@ def _trail_event_log_section(info: dict) -> None:
         _row("warn", "event log", state, detail=detail)
         skip = info.get("skip_reason") or "event log too large for doctor scan"
         _row("off", "verification", "skipped", detail=skip)
-        advice = info.get("advice") or "run 'opentraces trail status' for full verification"
-        _row("off", "  ↳ next", advice)
+        advice = info.get("advice")
+        if advice:
+            _row("off", "  ↳ next", advice)
         _row("ok", "batches", str(info.get("batch_count") or 0))
         return
 
@@ -814,6 +815,10 @@ def _trail_event_log_section(info: dict) -> None:
 
     for error in (info.get("errors") or [])[:3]:
         _row("err", "  ↳ error", str(error))
+
+    advice = info.get("advice")
+    if advice:
+        _row("off", "  ↳ next", advice)
 
 
 def _render_doctor_security(report: dict) -> None:

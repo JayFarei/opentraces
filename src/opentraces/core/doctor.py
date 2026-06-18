@@ -352,7 +352,11 @@ def _trail_event_log_status(cwd: Path) -> dict[str, Any]:
                 "batch_count": batch_count,
                 "doctor_scan_skipped": True,
                 "skip_reason": skip_reason,
-                "advice": "run 'opentraces trail status' for full event-log verification",
+                "advice": (
+                    "run 'opentraces trail verify --mode quick --json' for "
+                    "a bounded event-log summary; use '--mode full --progress "
+                    "plain' for full verification"
+                ),
                 "errors": [],
             }
             if watermark and watermark.get("head") == head:
@@ -377,7 +381,13 @@ def _trail_event_log_status(cwd: Path) -> dict[str, Any]:
                 "verification_source": "skipped_large_log",
             }
 
-        return event_log_status(cwd)
+        status = event_log_status(cwd)
+        if status.get("state") in ("invalid", "error"):
+            status["advice"] = (
+                "run 'opentraces trail verify --mode full --progress plain' "
+                "to inspect canonical event-log failures"
+            )
+        return status
     except Exception as exc:
         return {
             "ref": "refs/opentraces/local/events/v1",

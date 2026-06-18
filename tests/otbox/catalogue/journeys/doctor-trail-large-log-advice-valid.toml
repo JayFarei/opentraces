@@ -1,0 +1,56 @@
+name = "doctor-trail-large-log-advice-valid"
+description = """
+Issue #95: when `doctor` skips inline Trace Trails event-log verification
+because the log is too large, its remediation must point to a real bounded
+verification command and must distinguish skipped verification from invalid
+content.
+"""
+lane = "core"
+tier = 0
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-real-session"]
+
+[[steps]]
+type = "cli"
+id = "doctor-json-skipped"
+argv = ["--json", "doctor"]
+env = { OPENTRACES_DOCTOR_EVENT_LOG_MAX_BATCHES = "1" }
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-json-skipped"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-json-skipped"
+path = "doctor.trail_event_log.doctor_scan_skipped"
+equals = true
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor-json-skipped"
+path = "doctor.trail_event_log.advice"
+value = "opentraces trail verify --mode quick --json"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor-json-skipped"
+path = "doctor.trail_event_log.skip_reason"
+value = "doctor limit"
+
+[[steps]]
+type = "cli"
+id = "verify-help"
+argv = ["trail", "verify", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "verify-help"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "verify-help"
+value = "--mode"

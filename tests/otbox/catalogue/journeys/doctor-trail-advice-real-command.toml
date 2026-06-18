@@ -1,0 +1,93 @@
+name = "doctor-trail-advice-real-command"
+description = """
+Issue #95: `opentraces doctor`'s Trace Trails event-log advice must name a
+command that actually exists. Before the fix, the skipped-large path emitted
+"run 'opentraces trail status' for full verification" — but `trail status` is
+not a registered subcommand. This journey is a genuine acceptance gate (red
+pre-fix, green post-fix), not a characterization test.
+
+The `c-captured-real-session` checkpoint produces a real
+`refs/opentraces/local/events/v1` event log, so doctor has live Trace Trails
+state to report. On this small log doctor verifies `state="ok"`, but step
+`doctor-human-skipped` sets `OPENTRACES_DOCTOR_EVENT_LOG_MAX_BATCHES=1` (the
+doctor.py:415-422 lever, the same one the skipped-large unit test uses) to
+FORCE doctor down the skipped-large path. On pre-fix code that path renders the
+`trail status` fiction in the advice payload, so `stdout_not_contains
+"trail status"` is genuinely RED pre-fix and GREEN after the advice fix.
+
+Asserts: (a) JSON doctor reports trail_event_log.state == "ok" on the real log;
+(b) the forced-skipped render is clean of the `trail status` fiction and points
+to `trail verify`; (c) the real advised command `trail verify --help` exits 0; (d) `trail status`
+is genuinely "No such command" (exit 2) — the issue's exact failure mode.
+"""
+lane = "core"
+tier = 0
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-real-session"]
+
+# (a) JSON doctor: real event log reports a valid Trace Trails state.
+[[steps]]
+type = "cli"
+id = "doctor-json"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-json"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-json"
+path = "doctor.trail_event_log.state"
+equals = "ok"
+
+# (b) Force the skipped-large path. otbox tier-0 captures output (non-TTY), so
+# doctor emits the JSON form here; the assertion guards that output for the
+# `trail status` fiction. On pre-fix code the skipped path's advice carried it;
+# post-fix the skipped path carries `trail verify` advice. RED pre-fix / GREEN
+# post-fix. (The human `↳ next` render path is covered by unit tests.)
+[[steps]]
+type = "cli"
+id = "doctor-human-skipped"
+argv = ["doctor"]
+env = { OPENTRACES_DOCTOR_EVENT_LOG_MAX_BATCHES = "1" }
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor-human-skipped"
+value = "trail status"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-human-skipped"
+value = "trail verify"
+
+# (c) The real advised recovery command exists and its --help succeeds.
+[[steps]]
+type = "cli"
+id = "verify-help"
+argv = ["trail", "verify", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "verify-help"
+equals = 0
+
+# (d) `trail status` genuinely does not exist (the issue's failure mode).
+[[steps]]
+type = "cli"
+id = "status-help"
+argv = ["trail", "status", "--help"]
+expect_returncode = 2
+
+[[assertions]]
+kind = "returncode"
+step = "status-help"
+equals = 2
+
+[[assertions]]
+kind = "stderr_contains"
+step = "status-help"
+value = "No such command"

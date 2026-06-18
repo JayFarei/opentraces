@@ -5,7 +5,7 @@ Each row's trajectory comes from `kb/plans/063-jtbd-command-map.md` —
 the single source of truth. Drift fails CI under `--strict`.
 
 - Public commands: **156** (132 owned, 24 unowned)
-- Hidden commands: **33**
+- Hidden commands: **34**
 
 ## Public commands
 
@@ -93,7 +93,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `dataset schedule show` | automate-dataset-runs | gold | automate-dataset-runs, dataset-sync-skill-history | Show one dataset workflow schedule. |
 | `dataset security` | build-publishable-dataset | bronze | dataset-security-optional-toggle, dataset-security-required-rejection | Inspect or edit one dataset's security policy. |
 | `dataset status` | build-publishable-dataset | gold | build-publishable-dataset-shape, skill-usage-to-dataset | Show row count and publication-state breakdown for a dataset. |
-| `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, doctor-update-available-agent, doctor-update-available-ux, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, prompt-install-auth-flow, setup-upgrade-full-stack-repair, setup-upgrade-full-stack-ux, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
+| `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, doctor-trail-advice-real-command, doctor-trail-invalid-log-hard-failure, doctor-trail-large-log-advice-valid, doctor-update-available-agent, doctor-update-available-ux, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, prompt-install-auth-flow, setup-upgrade-full-stack-repair, setup-upgrade-full-stack-ux, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
 | `git-backfill` | attribution-backfill | silver | attribution-backfill, migration-u-trail-3-backfill-honest | Retroactively correlate inbox traces to past commits. |
 | `init` | onboard-repo | silver | capture-safety-excluded-marker, capture-safety-import-existing, migration-u-setup-3-init-idempotent, onboard-repo | Initialize opentraces in the current project. |
 | `remove` | offboard-repo | silver | cli-lifecycle, migration-u-config-5-remove-reports-deletion | Remove opentraces from the current project. |
@@ -205,6 +205,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `_trail sync` | build-dataset-from-lineage | — | — | Sync OpenTraces' trail state with the latest Git history. |
 | `_trail teleport` | _group_ | — | — | Deprecated alias for ``ot trace teleport``. |
 | `_trail timeline` | build-dataset-from-lineage | — | — | Show the observed Trace Trails timeline for a trace. |
+| `_trail verify` | verify-install | bronze | doctor-trail-advice-real-command, doctor-trail-invalid-log-hard-failure, doctor-trail-large-log-advice-valid, trail-verify-large-log-bounded | Verify or summarize the canonical Trace Trails event log. |
 
 ## Per-trajectory tier coverage
 
@@ -261,4 +262,4 @@ the single source of truth. Drift fails CI under `--strict`.
 | survival-walk | gold | 2 |
 | trace-index-rebuild-progress | bronze | 1 |
 | trace-spine | gold | 3 |
-| verify-install | silver | 2 |
+| verify-install | silver | 6 |

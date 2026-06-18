@@ -229,6 +229,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `trail diff` (hidden) | Developer computes the Trace Patch between two captured step snapshots to inspect what changed between steps | build-dataset-from-lineage | unowned | human |
 | `trail attach` (hidden) | Maintainer manually connects a trace's patches to a commit after a hook failure so blame becomes available | build-dataset-from-lineage | unowned | agent |
 | `trail mature` (hidden) | Maintainer force-matures pending patches into Git Anchors over recent commits so blame is available without waiting for the watcher | build-dataset-from-lineage | unowned | agent |
+| `trail verify` (hidden) | Maintainer verifies or summarizes the canonical Trace Trails event log after doctor reports skipped or invalid verification | verify-install | `trail-verify-large-log-bounded` | agent |
 | `trail rebuild` (hidden) | Maintainer re-derives advisory snapshot projections from the canonical event log after branch surgery or ref corruption | build-dataset-from-lineage | unowned | agent |
 | `trail teleport export` | Deprecated visible alias for `trace teleport export`. Still in the Click registry pending a future removal; do NOT exercise in new journeys | deprecated | unowned | — |
 | `trail teleport open` | Deprecated visible alias for `trace teleport open`. Still in the Click registry pending a future removal; do NOT exercise in new journeys | deprecated | unowned | — |
