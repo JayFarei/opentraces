@@ -138,27 +138,46 @@ def _hook_command(script: str) -> str:
     return f"{shlex.quote(py)} {shlex.quote(script)}"
 
 
-def _is_stale_opentraces_command(cmd: object, command: str) -> bool:
-    """True iff ``cmd`` is a DIFFERENT opentraces hook command to supersede.
+_OWNED_MODULE_PREFIX = "opentraces.capture.claude_code.hooks."
 
-    Matches both the script-path form this installer writes (``opentraces_<event>``)
-    AND the module form (``-m opentraces...`` / ``opentraces.capture...``) that an
-    older install — or a different runtime — may have left, so re-rendering to a
-    selected runtime (issue #99) supersedes the prior interpreter's hook rather
-    than stacking a second one for the same event.
+
+def _is_owned_opentraces_command(cmd: object, command: str, hooks_dir: Path) -> bool:
+    """True iff ``cmd`` is a DIFFERENT opentraces hook command WE OWN.
+
+    Scoped narrowly (codex BLOCKER, data-safety) so a USER hook that merely
+    contains the substring ``opentraces`` (e.g. ``/Users/me/src/opentraces/
+    tools/my_hook.sh``) is NEVER pruned. Only two shapes are ours:
+
+    * the SCRIPT-PATH form this installer writes — a token under the configured
+      Claude ``hooks_dir`` whose basename starts with ``opentraces_``; OR
+    * the MODULE form ``-m opentraces.capture.claude_code.hooks.<event>`` that an
+      older install (or a different runtime, issue #99) may have left.
+
+    A non-owned command that happens to contain ``opentraces`` elsewhere is left
+    untouched.
     """
     if not isinstance(cmd, str) or cmd == command:
         return False
-    return (
-        "opentraces_" in cmd
-        or "-m opentraces" in cmd
-        or "opentraces.capture" in cmd
-        or "/opentraces/" in cmd
-    )
+    if _OWNED_MODULE_PREFIX in cmd:
+        return True
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        tokens = cmd.split()
+    hd = os.path.normpath(str(hooks_dir))
+    for tok in tokens:
+        base = os.path.basename(tok)
+        if base.startswith("opentraces_") and os.path.normpath(
+            os.path.dirname(tok)
+        ) == hd:
+            return True
+    return False
 
 
-def _prune_stale_opentraces_hooks(event_hooks: list, command: str) -> list:
-    """Drop older opentraces hook commands for this event while preserving others."""
+def _prune_stale_opentraces_hooks(
+    event_hooks: list, command: str, hooks_dir: Path
+) -> list:
+    """Drop older opentraces hook commands WE OWN for this event; keep others."""
     kept = []
     for entry in event_hooks:
         if not isinstance(entry, dict):
@@ -169,14 +188,14 @@ def _prune_stale_opentraces_hooks(event_hooks: list, command: str) -> list:
             kept_inner = []
             for hook in inner:
                 hook_command = hook.get("command") if isinstance(hook, dict) else None
-                if _is_stale_opentraces_command(hook_command, command):
+                if _is_owned_opentraces_command(hook_command, command, hooks_dir):
                     continue
                 kept_inner.append(hook)
             if kept_inner:
                 kept.append({**entry, "hooks": kept_inner})
             continue
         entry_command = entry.get("command")
-        if _is_stale_opentraces_command(entry_command, command):
+        if _is_owned_opentraces_command(entry_command, command, hooks_dir):
             continue
         kept.append(entry)
     return kept
@@ -217,6 +236,7 @@ def install(
         event_hooks = _prune_stale_opentraces_hooks(
             hooks_cfg.setdefault(p.event, []),
             command,
+            th,
         )
         hooks_cfg[p.event] = event_hooks
         if _already_registered(event_hooks, command):

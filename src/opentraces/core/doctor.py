@@ -1260,11 +1260,21 @@ def _runtime_provenance(
     marker = _read_runtime_selection(cwd)
     if isinstance(marker, dict) and marker.get("mode") == "dev":
         dev_interp = _realpath(marker.get("interpreter"))
+        # SECURITY / data-safety (codex finding): only downgrade severity when
+        # the recorded dev interpreter STILL EXISTS + is executable AND every
+        # runner resolves to it. A stale marker pointing at a DELETED dev venv
+        # must NOT hide drift — keep severity `warning` and flag the stale marker.
+        raw_interp = marker.get("interpreter")
+        interp_live = bool(
+            raw_interp
+            and os.path.isfile(raw_interp)
+            and os.access(raw_interp, os.X_OK)
+        )
         runner_interps = [r.get("runner") for r in integration_runners]
         all_match_dev = bool(runner_interps) and all(
             ri == dev_interp for ri in runner_interps
         )
-        if dev_interp and all_match_dev:
+        if dev_interp and all_match_dev and interp_live:
             dev_runtime_active = True
             if severity == "warning":
                 severity = "ok"
@@ -1274,6 +1284,16 @@ def _runtime_provenance(
                 "'opentraces setup runtime use-dev'. This is intentional, not "
                 "drift. Run 'opentraces setup runtime use <pipx|homebrew>' to "
                 "switch back to an installed release. No data is touched."
+            )
+        elif dev_interp and not interp_live:
+            # Stale dev marker: the recorded interpreter is gone. Keep drift
+            # VISIBLE (do not downgrade) and name the remedy.
+            advice = (
+                "A 'setup runtime use-dev' marker points at an interpreter that "
+                f"no longer exists ({raw_interp}); the dev checkout may have "
+                "been deleted or rebuilt. Drift is NOT downgraded. Re-run "
+                "'opentraces setup runtime use-dev' or 'use <pipx|homebrew>' to "
+                "re-pin the glue. No data is touched."
             )
 
     return {

@@ -103,19 +103,41 @@ def resolve_target_interpreter(
         return None, f"unknown runtime kind {kind!r}; expected one of {SUPPORTED_KINDS}"
 
     installs = prov.get("discovered_installs") or []
+    candidate: str | None = None
     # 1 — verified match.
     for entry in installs:
         if entry.get("source_kind") == canonical and entry.get("verified") and entry.get("interpreter"):
-            return _realpath(entry["interpreter"]), None
+            candidate = _realpath(entry["interpreter"])
+            break
     # 2 — unverified path-classified match.
-    for entry in installs:
-        if entry.get("source_kind") == canonical and entry.get("interpreter"):
-            return _realpath(entry["interpreter"]), None
+    if candidate is None:
+        for entry in installs:
+            if entry.get("source_kind") == canonical and entry.get("interpreter"):
+                candidate = _realpath(entry["interpreter"])
+                break
     # 3 — runner-interpreter fallback.
-    for runner in prov.get("integration_runners") or []:
-        interp = runner.get("runner")
-        if interp and _classify_source_kind(interp) == canonical:
-            return _realpath(interp), None
+    if candidate is None:
+        for runner in prov.get("integration_runners") or []:
+            interp = runner.get("runner")
+            if interp and _classify_source_kind(interp) == canonical:
+                candidate = _realpath(interp)
+                break
+
+    if candidate is not None:
+        # SECURITY / #65 + #86: never re-bake a DELETED or version-pinned-Cellar
+        # interpreter (that is exactly the drift this feature must NOT introduce).
+        # Validate the candidate exists + is executable, and route it through
+        # stable_interpreter so a Cellar path is remapped to its live opt symlink
+        # (or rejected when the symlink is gone).
+        usable, resolved, why = _validate_interpreter(candidate)
+        if usable:
+            return resolved, None
+        return None, (
+            f"The {canonical!r} install's interpreter is not usable ({why}): "
+            f"{candidate}. `setup runtime use` will not re-bake a missing or "
+            "stale interpreter (that would reintroduce the #65/#86 drift it "
+            "exists to prevent). Reinstall that runtime or pick another."
+        )
 
     if prov.get("probed"):
         return None, (
@@ -131,11 +153,37 @@ def resolve_target_interpreter(
     )
 
 
+def _validate_interpreter(interpreter: str) -> tuple[bool, str | None, str | None]:
+    """Validate + stabilise a target interpreter (security / #65 / #86).
+
+    Returns ``(usable, resolved_interpreter, reason_if_not)``:
+
+    * resolves the interpreter through ``stable_interpreter`` (the #86 Cellar→opt
+      remap), then
+    * requires the RESOLVED path to exist on disk AND be executable.
+
+    A version-pinned Cellar path whose ``opt`` symlink is gone stays a Cellar
+    path after ``stable_interpreter`` and then fails the existence/executable
+    check — so it is rejected rather than baked into a hook that would silently
+    break on the next ``brew upgrade``.
+    """
+    from ..capture._interpreter import stable_interpreter
+
+    resolved = stable_interpreter(interpreter)
+    p = Path(resolved)
+    if not p.is_file():
+        return False, None, "interpreter does not exist on disk"
+    if not os.access(resolved, os.X_OK):
+        return False, None, "interpreter is not executable"
+    return True, resolved, None
+
+
 def resolve_dev_interpreter(
     prov: dict[str, Any], project: Path
 ) -> tuple[str | None, str | None]:
     """Resolve the editable-checkout interpreter for ``use-dev``."""
     current = prov.get("current") or {}
+    candidate: str | None = None
     if current.get("source_kind") == "source":
         # Use the RAW running interpreter (the editable checkout's venv python,
         # e.g. ``<checkout>/.venv/bin/python``) — NOT its realpath, which would
@@ -143,20 +191,21 @@ def resolve_dev_interpreter(
         # site-packages lack the editable opentraces (breaking the hook).
         import sys
 
-        if sys.executable:
-            return sys.executable, None
-        if current.get("python"):
-            return current["python"], None
-    # else look for a venv under the project (raw path, not realpath'd).
-    project = Path(project)
-    for venv in (".venv", ".testvenv", "venv"):
-        cand = project / venv / "bin" / "python"
-        if cand.is_file():
-            return str(cand), None
+        candidate = sys.executable or current.get("python")
+    if candidate is None:
+        # else look for a venv under the project (raw path, not realpath'd).
+        project = Path(project)
+        for venv in (".venv", ".testvenv", "venv"):
+            cand = project / venv / "bin" / "python"
+            if cand.is_file():
+                candidate = str(cand)
+                break
+    if candidate is not None and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+        return candidate, None
     return None, (
-        f"No editable-checkout interpreter found. Run `setup runtime use-dev` "
-        f"from a source checkout, or create a virtualenv ({project}/.venv) with "
-        "opentraces installed editable (`pip install -e .`)."
+        f"No usable editable-checkout interpreter found. Run `setup runtime "
+        f"use-dev` from a source checkout, or create a virtualenv "
+        f"({project}/.venv) with opentraces installed editable (`pip install -e .`)."
     )
 
 
@@ -181,10 +230,12 @@ def removal_command_for(
         return "pipx uninstall opentraces", None
     if kind == "source":
         if interpreter:
+            import shlex
+
             bindir = os.path.dirname(interpreter)
             pip = os.path.join(bindir, "pip")
             return (
-                f"{pip} uninstall opentraces",
+                f"{shlex.quote(pip)} uninstall opentraces",
                 "this is an editable checkout; to fully remove it, run the above "
                 "in its venv and delete the checkout tree.",
             )

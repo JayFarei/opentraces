@@ -13,6 +13,7 @@ adversarial findings folded into the plan:
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -108,6 +109,93 @@ def test_watcher_switch_rerenders_in_place_not_removed(
 
 
 # --------------------------------------------------------------------------
+# BLOCKER 2 — the watcher shim PINS the selected runtime FIRST
+# --------------------------------------------------------------------------
+def test_watcher_shim_pins_selected_runtime_first(
+    fake_home: Path, tmp_path: Path
+) -> None:
+    from opentraces.capture._interpreter import selected_interpreter
+    from opentraces.watcher import installer as winst
+
+    # A selected interpreter that prints a sentinel and exits.
+    selected = tmp_path / "selected" / "python"
+    selected.parent.mkdir(parents=True)
+    selected.write_text("#!/bin/sh\necho SELECTED-RUNTIME\n")
+    selected.chmod(0o755)
+
+    # A fake `opentraces` on the shim's probe list ($HOME/.local/bin) that would
+    # win the run-time probe loop if the shim reached it.
+    probed = fake_home / ".local" / "bin" / "opentraces"
+    probed.parent.mkdir(parents=True, exist_ok=True)
+    probed.write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2 $3" in\n'
+        '  "setup watcher sweep --help") exit 0;;\n'
+        "  *) echo PROBED-NOT-SELECTED; exit 0;;\n"
+        "esac\n"
+    )
+    probed.chmod(0o755)
+
+    with selected_interpreter(str(selected)):
+        shim = winst._write_shim()
+
+    out = subprocess.run(
+        ["sh", str(shim), "run"], capture_output=True, text=True,
+        env={**os.environ, "HOME": str(fake_home)},
+    )
+    # The SELECTED runtime is execed first; the probe loop never runs.
+    assert "SELECTED-RUNTIME" in out.stdout, out.stdout
+    assert "PROBED-NOT-SELECTED" not in out.stdout, out.stdout
+
+
+def test_watcher_shim_unpinned_when_no_selection(fake_home: Path) -> None:
+    # No selection active → no pinned block; the plain shim is byte-identical to
+    # the legacy `setup upgrade` shape (the #65 probe loop owns resolution).
+    from opentraces.watcher import installer as winst
+
+    shim = winst._write_shim()
+    body = shim.read_text()
+    assert "Runtime PINNED" not in body
+
+
+# --------------------------------------------------------------------------
+# BLOCKER 3 (data-safety) — claude prune is scoped to OWNED hooks only
+# --------------------------------------------------------------------------
+def test_user_hook_with_opentraces_substring_not_pruned(tmp_path: Path) -> None:
+    from opentraces.capture.claude_code.install import _prune_stale_opentraces_hooks
+
+    hooks_dir = tmp_path / ".claude" / "hooks"
+    new_command = f'"/py" "{hooks_dir}/opentraces_on_stop"'
+    # A USER hook whose path merely contains "opentraces" — must survive.
+    user_cmd = '"/usr/bin/python3" /Users/me/src/opentraces/tools/my_hook.sh'
+    # A stale OWNED module-form hook from another runtime — must be pruned.
+    owned_cmd = '"/old/pipx/bin/python" -m opentraces.capture.claude_code.hooks.on_stop'
+    event_hooks = [
+        {"hooks": [{"type": "command", "command": user_cmd}]},
+        {"hooks": [{"type": "command", "command": owned_cmd}]},
+    ]
+    kept = _prune_stale_opentraces_hooks(event_hooks, new_command, hooks_dir)
+    surviving = [
+        h["command"]
+        for e in kept for h in e.get("hooks", [])
+    ]
+    assert user_cmd in surviving, "user hook must NOT be pruned"
+    assert owned_cmd not in surviving, "stale owned module hook must be pruned"
+
+
+def test_owned_script_path_hook_is_pruned(tmp_path: Path) -> None:
+    from opentraces.capture.claude_code.install import _prune_stale_opentraces_hooks
+
+    hooks_dir = tmp_path / ".claude" / "hooks"
+    new_command = f'"/newpy" "{hooks_dir}/opentraces_on_stop"'
+    stale = f'"/oldpy" "{hooks_dir}/opentraces_on_stop"'  # same owned script, old interp
+    event_hooks = [{"hooks": [{"type": "command", "command": stale}]}]
+    kept = _prune_stale_opentraces_hooks(event_hooks, new_command, hooks_dir)
+    surviving = [h["command"] for e in kept for h in e.get("hooks", [])]
+    assert stale not in surviving
+
+
+# --------------------------------------------------------------------------
 # #86 — Cellar→opt remap survives selection
 # --------------------------------------------------------------------------
 def test_stable_interpreter_under_selection_remaps_brew(tmp_path: Path) -> None:
@@ -200,11 +288,11 @@ def test_use_brew_realshape_falls_back_or_guides(
     assert err and "--probe-runtimes" in err
 
 
-def test_use_pipx_resolves_from_discovered() -> None:
+def test_use_pipx_resolves_from_discovered(fake_home: Path) -> None:
+    pipx = _fake_pipx_python(fake_home)  # a REAL, executable file
     prov = {
         "discovered_installs": [
-            {"source_kind": "pipx", "interpreter": "/h/.local/pipx/venvs/opentraces/bin/python",
-             "verified": False},
+            {"source_kind": "pipx", "interpreter": pipx, "verified": False},
         ],
         "integration_runners": [],
         "probed": False,
@@ -212,6 +300,44 @@ def test_use_pipx_resolves_from_discovered() -> None:
     interp, err = rs.resolve_target_interpreter(prov, "pipx")
     assert err is None
     assert interp and "/pipx/venvs/" in interp
+
+
+# --------------------------------------------------------------------------
+# BLOCKER 1 — never re-bake a DELETED / unusable interpreter (#65/#86)
+# --------------------------------------------------------------------------
+def test_use_rejects_missing_interpreter() -> None:
+    # A discovered pipx install whose interpreter no longer exists on disk must
+    # be REJECTED (not silently re-baked into the glue). Pre-fix this returned
+    # the dead path → RED.
+    prov = {
+        "discovered_installs": [
+            {"source_kind": "pipx",
+             "interpreter": "/nope/.local/pipx/venvs/opentraces/bin/python",
+             "verified": False},
+        ],
+        "integration_runners": [],
+        "probed": False,
+    }
+    interp, err = rs.resolve_target_interpreter(prov, "pipx")
+    assert interp is None
+    assert err and ("not usable" in err or "does not exist" in err)
+
+
+def test_use_rejects_dead_cellar_interpreter(tmp_path: Path) -> None:
+    # A Homebrew Cellar interpreter whose opt symlink is gone cannot remap to a
+    # live path → stable_interpreter leaves the (now-deleted) Cellar path, which
+    # fails the existence check → rejected (the #86 drift this must prevent).
+    dead = str(tmp_path / "Cellar" / "opentraces" / "9.9.9" / "libexec" / "bin" / "python")
+    prov = {
+        "discovered_installs": [
+            {"source_kind": "brew", "interpreter": dead, "verified": False},
+        ],
+        "integration_runners": [],
+        "probed": False,
+    }
+    interp, err = rs.resolve_target_interpreter(prov, "homebrew")
+    assert interp is None
+    assert err
 
 
 # --------------------------------------------------------------------------
@@ -232,18 +358,14 @@ def test_dev_marker_roundtrip(tmp_path: Path) -> None:
     assert doctor._read_runtime_selection(proj) is None
 
 
-def test_doctor_reports_dev_runtime_active(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from opentraces.core import doctor
+def _make_executable(path: Path) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return str(path)
 
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    dev_interp = "/x/checkout/.venv/bin/python"
-    rs.write_dev_marker(proj, dev_interp, proj)
 
-    real = doctor.os.path.realpath(dev_interp)
-    # All runners resolve to the dev interpreter → deliberate dev mode.
+def _patch_runners(monkeypatch, doctor, dev_interp: str) -> None:
     monkeypatch.setattr(
         doctor, "_opentraces_hook_runners",
         lambda cwd: [
@@ -259,10 +381,43 @@ def test_doctor_reports_dev_runtime_active(
                  "source_kind": "pipx", "dist_version": "1.0"},
     )
 
+
+def test_doctor_reports_dev_runtime_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from opentraces.core import doctor
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    # The dev interpreter must EXIST + be executable for the downgrade.
+    dev_interp = _make_executable(proj / ".venv" / "bin" / "python")
+    rs.write_dev_marker(proj, dev_interp, proj)
+    _patch_runners(monkeypatch, doctor, dev_interp)
+
     prov = doctor._runtime_provenance(proj)
     assert prov["dev_runtime_active"] is True
     assert prov["severity"] != "warning"
     assert "deliberately active" in prov["advice"]
+
+
+def test_doctor_stale_dev_marker_keeps_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BLOCKER 4: a marker pointing at a DELETED dev venv must NOT downgrade
+    # severity — drift stays visible. Pre-fix this reported dev_runtime_active
+    # and severity ok → RED.
+    from opentraces.core import doctor
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    dead_interp = str(proj / ".venv" / "bin" / "python")  # never created
+    rs.write_dev_marker(proj, dead_interp, proj)
+    _patch_runners(monkeypatch, doctor, dead_interp)
+
+    prov = doctor._runtime_provenance(proj)
+    assert prov["dev_runtime_active"] is False
+    assert prov["severity"] == "warning"
+    assert "no longer exists" in prov["advice"]
 
 
 # --------------------------------------------------------------------------
@@ -271,27 +426,47 @@ def test_doctor_reports_dev_runtime_active(
 def test_dry_run_changes_nothing_but_lists_plan(
     fake_home: Path, tmp_path: Path
 ) -> None:
+    import hashlib
+
+    from opentraces.capture.claude_code import install as claude_install
+    from opentraces.capture.codex_cli import install as codex_install
     from opentraces.capture.git import install as git_install
     from opentraces.watcher import installer as winst
 
+    # Install ALL FOUR glue surfaces, then snapshot their bytes.
     repo = _make_git_repo(tmp_path)
     git_install.install(repo)
-    shim = winst._write_shim()
-    git_hook = repo / ".git" / "hooks" / "opentraces-post-commit"
-    pre_git = git_hook.read_bytes()
-    pre_shim = shim.read_bytes()
+    winst._write_shim()
+    claude_install.install()
+    codex_install.install()
+
+    glue = {
+        "git": repo / ".git" / "hooks" / "opentraces-post-commit",
+        "watcher": winst.shim_path(),
+        "claude": fake_home / ".claude" / "settings.json",
+        "codex": fake_home / ".codex" / "hooks.json",
+    }
+
+    def _hashes() -> dict:
+        return {
+            k: hashlib.sha256(p.read_bytes()).hexdigest()
+            for k, p in glue.items() if p.is_file()
+        }
+
+    before = _hashes()
+    assert set(before) == {"git", "watcher", "claude", "codex"}, before
 
     pipx = _fake_pipx_python(fake_home)
     out = repair_installed_integrations(
-        repo, interpreter=pipx, dry_run=True, only={"git", "watcher"}
+        repo, interpreter=pipx, dry_run=True,
+        only={"git", "watcher", "claude-code", "codex-cli"},
     )
 
     assert out["dry_run"] is True
     names = {row["name"] for row in out["plan"]}
-    assert {"git", "watcher"} <= names
+    assert {"git", "watcher", "claude-code", "codex-cli"} <= names
     for row in out["plan"]:
         if row["name"] in {"git", "watcher"}:
             assert row["target_interpreter"] == pipx
-    # Byte-identical: dry-run mutates nothing.
-    assert git_hook.read_bytes() == pre_git
-    assert winst.shim_path().read_bytes() == pre_shim
+    # Byte-identical across ALL FOUR glue files: dry-run mutates nothing.
+    assert _hashes() == before

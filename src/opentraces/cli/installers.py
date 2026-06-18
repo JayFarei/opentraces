@@ -2605,7 +2605,8 @@ def setup_runtime_use_dev(project: Path | None, integrations_only: bool,
 
 
 @setup_runtime_group.command("remove-duplicates")
-@click.option("--keep", "keep", type=str, default=None,
+@click.option("--keep", "keep",
+              type=click.Choice(["pipx", "homebrew", "brew", "source"]), default=None,
               help="Runtime to KEEP (pipx|homebrew|source); default keeps the current.")
 @click.option("--dry-run", "dry_run", is_flag=True, default=False,
               help="No effect (this verb already only prints); accepted for symmetry.")

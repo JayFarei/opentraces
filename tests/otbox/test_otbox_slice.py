@@ -301,6 +301,7 @@ _SETUP_RUNTIME_JOURNEYS = [
     "setup-runtime-use-installed-rewrites-integrations",
     "setup-runtime-use-dev-checkout",
     "setup-runtime-dry-run-no-mutation",
+    "setup-runtime-remove-duplicates-prints",
 ]
 
 
