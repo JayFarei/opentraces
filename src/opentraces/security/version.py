@@ -27,6 +27,18 @@ refactors that change the on-record metadata shape.
     applying field-path EXCLUSION, the "this never leaves" guarantee for
     prompt-bearing fields). The classifier verdict ``flags`` payload no longer
     carries ``matched_text``/``reason`` — only ``{pattern, severity}``.
+
+0.6.0 → 0.7.0
+    Issue #84 (non-overridable dataset reader floor). ``sanitize_dataset_row``
+    now ALWAYS unions in :data:`opentraces.security.dataset_rows.DATASET_ROW_FLOOR`
+    (``regex``, ``entropy``, ``business_logic``, ``path_anonymizer``) as the last
+    resolution step — a workflow author's security contract may only ADD tools,
+    and the default ``tier="off"`` no longer ships rows verbatim. The per-row
+    ``DatasetRowSecurity`` sidecar grows ``requested_tools`` / ``effective_tools``
+    / ``floor`` / ``floor_satisfied`` (author-declared vs floor-resolved), a
+    metadata-shape change. ``anonymize_paths`` auto-detection now skips
+    already-hashed (8-hex) username segments so the always-on path floor is
+    idempotent.
 """
 
-SECURITY_VERSION = "0.6.0"
+SECURITY_VERSION = "0.7.0"

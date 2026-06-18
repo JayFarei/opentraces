@@ -253,6 +253,52 @@ def test_empty_contract_policy_falls_back_to_tier_floor():
     assert {"regex", "entropy"} <= set(record["security_policy"]["tools_applied"])
 
 
+def test_append_rows_narrowing_contract_floor_redacts_written_jsonl():
+    """Issue #84 (e2e): a workflow contract narrowing to ``regex`` cannot suppress
+    the reader floor. The written train.jsonl row has the entropy-only token
+    redacted (the floor's entropy ran), and provenance records the author-declared
+    vs floor-resolved tool sets distinctly with floor_satisfied=True.
+    """
+    from opentraces.core.datasets import (
+        append_rows,
+        create_dataset,
+        dataset_path,
+        read_row_provenance,
+    )
+    from opentraces.security.dataset_rows import DATASET_ROW_FLOOR
+    from opentraces_schema import DatasetSecurityPolicy
+
+    # An entropy-only, NON-regex high-entropy token: regex alone does not catch
+    # it, so a ``["regex"]`` contract would ship it raw without the floor.
+    entropy_token = "Zx9Qw3Vb7Np2Kr8Lf4Dj6Hs1Tg5Mc0Ya"
+    create_dataset(
+        "narrow-ds",
+        workflow_skill="narrow-curator",
+        workflow_digest="sha256:wf",
+        row_schema=_row_schema(),
+        security=DatasetSecurityPolicy(
+            source="workflow",
+            required_tools=["regex"],
+            enabled_tools=["regex"],  # author narrows to regex only
+        ),
+    )
+    row = {
+        "source_trace_id": "trace-1",
+        "source_unit_id": "tu:trace-1:trace",
+        "summary": f"A row whose token {entropy_token} must be scrubbed.",
+    }
+    append_rows("narrow-ds", [row], run_id="run_1", privacy_tier="off")
+
+    data = (dataset_path("narrow-ds") / "data" / "train.jsonl").read_text()
+    assert entropy_token not in data  # the floor's entropy ran despite [regex]
+    record = next(iter(read_row_provenance("narrow-ds").values()))
+    policy = record["security_policy"]
+    assert policy["requested_tools"] == ["regex"]
+    assert set(DATASET_ROW_FLOOR) <= set(policy["effective_tools"])
+    assert policy["floor"] == list(DATASET_ROW_FLOOR)
+    assert policy["floor_satisfied"] is True
+
+
 def test_publish_check_blocks_rows_when_required_security_tools_missing():
     """Plan 092 R10: a dataset whose required tools are disabled (via override)
     cannot publish; evaluate_publication_state blocks every row."""
@@ -266,8 +312,10 @@ def test_publish_check_blocks_rows_when_required_security_tools_missing():
     )
     from opentraces_schema import DatasetSecurityPolicy
 
-    # business_logic is a required tool that is NOT in the privacy-tier floor,
-    # so disabling it means it genuinely never runs over the row.
+    # privacy_filter is the only row-runnable tool that is NOT in the
+    # non-overridable reader floor (issue #84), so disabling it means it
+    # genuinely never runs over the row — exercising the required-tools gate.
+    # (business_logic is now a floor tool: disabling it can no longer drop it.)
     create_dataset(
         "sec-gate",
         workflow_skill="sec-curator",
@@ -276,8 +324,8 @@ def test_publish_check_blocks_rows_when_required_security_tools_missing():
         publication_policy={"review": "auto"},
         security=DatasetSecurityPolicy(
             source="workflow",
-            required_tools=["business_logic"],
-            enabled_tools=["business_logic"],
+            required_tools=["privacy_filter"],
+            enabled_tools=["privacy_filter"],
             allow_disable_required=True,
         ),
     )
@@ -287,12 +335,12 @@ def test_publish_check_blocks_rows_when_required_security_tools_missing():
         "summary": "A row guarded by a required tool.",
     }
 
-    # Disable the required tool FIRST, then append: business_logic never runs,
+    # Disable the required tool FIRST, then append: privacy_filter never runs,
     # so the row's execution evidence is missing it and publish is blocked.
     dataset = load_dataset("sec-gate")
     new_policy, _ = apply_dataset_security_edit(
         dataset.manifest.security,
-        disable=["business_logic"],
+        disable=["privacy_filter"],
         unsafe_override=True,
         reason="testing the gate",
     )
@@ -308,7 +356,7 @@ def test_publish_check_blocks_rows_when_required_security_tools_missing():
     # required tool, so that fresh row is publishable.
     dataset = load_dataset("sec-gate")
     reenabled, _ = apply_dataset_security_edit(
-        dataset.manifest.security, enable=["business_logic"]
+        dataset.manifest.security, enable=["privacy_filter"]
     )
     save_manifest(dataset.path, dataset.manifest.model_copy(update={"security": reenabled}))
     row2 = {**row, "source_trace_id": "trace-2", "source_unit_id": "tu:trace-2:trace"}

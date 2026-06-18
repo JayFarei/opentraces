@@ -24,6 +24,17 @@ def hash_username(username: str) -> str:
     return hashlib.sha256(username.encode("utf-8")).hexdigest()[:8]
 
 
+# An already-applied username hash: the 8-lowercase-hex shape
+# :func:`hash_username` emits, REQUIRING at least one ``a-f`` letter. Auto-
+# detection skips these so a second anonymization pass over an already-
+# anonymized path is a no-op (idempotence, required to ship path_anonymizer in
+# the always-on dataset reader floor). The letter requirement avoids
+# misclassifying a purely-numeric user/employee id (e.g. ``06506792``) as a
+# hash; a hash that is coincidentally all-digits (~2%) is not double-protected,
+# which is harmless because the capture pipeline never double-sanitizes a row.
+_HASHED_USERNAME_RE = re.compile(r"^(?=[0-9a-f]{8}$)[0-9a-f]*[a-f][0-9a-f]*$")
+
+
 def _get_system_username() -> str | None:
     """Best-effort system username detection."""
     try:
@@ -53,6 +64,9 @@ def extract_usernames_from_paths(text: str) -> set[str]:
     found: set[str] = set()
     for pat in path_patterns:
         found.update(re.findall(pat, text))
+    # Idempotence guard: a name already equal to a username hash (8 lowercase
+    # hex) is treated as previously anonymized and is NOT re-detected/re-hashed.
+    found = {name for name in found if not _HASHED_USERNAME_RE.match(name)}
     return found - SYSTEM_USERNAMES
 
 
