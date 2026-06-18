@@ -679,13 +679,21 @@ def _collect_git_hook_runners(cwd: Path, runners: list[dict[str, Any]]) -> None:
     for line in content.splitlines():
         if "-m opentraces" not in line:
             continue
+        # Strip a trailing shell line-continuation (`... \`) before tokenising:
+        # the real owned-hook template (capture/git/install.py) is multi-line, so
+        # the ``-m opentraces`` line ends with ``\`` which makes ``shlex.split``
+        # raise (No escaped character) → a None interpreter. Single-line shims
+        # (e.g. the #93 checkpoint) are unaffected.
+        clean = line.strip()
+        while clean.endswith("\\"):
+            clean = clean[:-1].rstrip()
         runners.append(
             {
                 "name": "git",
                 "integration": "git",
                 "event": "post-commit",
-                "command": line.strip(),
-                "interpreter": _interpreter_token(line),
+                "command": clean,
+                "interpreter": _interpreter_token(clean),
             }
         )
 
@@ -815,6 +823,13 @@ def _realpath(p: str | None) -> str | None:
         return os.path.realpath(p)
     except OSError:
         return p
+
+
+def _abspath_no_realpath(p: str | os.PathLike[str] | None) -> str | None:
+    """Absolute path normalization that preserves venv symlink identity."""
+    if not p:
+        return None
+    return os.path.abspath(os.path.expanduser(os.fspath(p)))
 
 
 def _classify_source_kind(module_file: str | None) -> str:
@@ -974,6 +989,31 @@ def _otlp_runner_interpreter() -> str | None:
     return None
 
 
+def runtime_selection_marker_path(cwd: Path) -> Path:
+    """Path of the project-local runtime-selection marker (issue #99).
+
+    Lives under the PROJECT's ``.opentraces/`` config dir — NEVER under the
+    ``~/.opentraces`` bucket/dataset/staging tree. Records a deliberate dev
+    runtime so ``doctor`` reports it as intent, not drift.
+    """
+    return Path(cwd) / ".opentraces" / "runtime_selection.json"
+
+
+def _read_runtime_selection(cwd: Path) -> dict[str, Any] | None:
+    """Read the runtime-selection marker (path-only, never executes). None if
+    absent / unreadable / malformed."""
+    import json as _json
+
+    path = runtime_selection_marker_path(cwd)
+    try:
+        if not path.is_file():
+            return None
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — a broken marker is simply "no marker".
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _runtime_provenance(
     cwd: Path | None = None, *, probe: bool = False
 ) -> dict[str, Any]:
@@ -1037,6 +1077,7 @@ def _runtime_provenance(
     raw_specs: list[dict[str, Any]] = [
         {
             "name": r.get("name") or r.get("integration"),
+            "raw_interpreter": _abspath_no_realpath(r.get("interpreter")),
             "interpreter": _realpath(r.get("interpreter")),
             "trusted": _is_trusted_probe_command(
                 r.get("command"), _realpath(r.get("interpreter"))
@@ -1051,7 +1092,12 @@ def _runtime_provenance(
     if watcher_interp is not None:
         _wi = _realpath(watcher_interp)
         raw_specs.append(
-            {"name": "watcher", "interpreter": _wi, "trusted": _is_plausible_python(_wi)}
+            {
+                "name": "watcher",
+                "raw_interpreter": _abspath_no_realpath(watcher_interp),
+                "interpreter": _wi,
+                "trusted": _is_plausible_python(_wi),
+            }
         )
     try:
         otlp_interp = _otlp_runner_interpreter()
@@ -1060,7 +1106,12 @@ def _runtime_provenance(
     if otlp_interp is not None:
         _oi = _realpath(otlp_interp)
         raw_specs.append(
-            {"name": "otlp", "interpreter": _oi, "trusted": _is_plausible_python(_oi)}
+            {
+                "name": "otlp",
+                "raw_interpreter": _abspath_no_realpath(otlp_interp),
+                "interpreter": _oi,
+                "trusted": _is_plausible_python(_oi),
+            }
         )
     runner_specs: list[dict[str, Any]] = []
     _spec_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
@@ -1192,6 +1243,7 @@ def _runtime_provenance(
                 "name": spec.get("name"),
                 "runner": interp,
                 "python": interp,
+                "runner_raw": spec.get("raw_interpreter"),
                 "matches_current": matches_current,
                 "matches_install": interp_kind.get(interp) if interp else None,
                 "verified": verified,
@@ -1218,6 +1270,54 @@ def _runtime_provenance(
     else:
         advice = "All configured integrations resolve to the current install root."
 
+    # Mode 2 (issue #99): a deliberate dev runtime is INTENT, not drift. When
+    # the project-local marker says ``mode == "dev"`` and the integration
+    # runners all resolve to the recorded dev interpreter, report
+    # ``dev_runtime_active`` and downgrade ``severity`` warning→ok (the honest
+    # ``state`` is preserved). Path-only read; never executes anything.
+    dev_runtime_active = False
+    marker = _read_runtime_selection(cwd)
+    if isinstance(marker, dict) and marker.get("mode") == "dev":
+        marker_interp = _abspath_no_realpath(marker.get("interpreter"))
+        dev_interp = _realpath(marker_interp)
+        # SECURITY / data-safety (codex finding): only downgrade severity when
+        # the recorded dev interpreter STILL EXISTS + is executable AND every
+        # runner resolves to it. A stale marker pointing at a DELETED dev venv
+        # must NOT hide drift — keep severity `warning` and flag the stale marker.
+        raw_interp = marker_interp
+        interp_live = bool(
+            raw_interp
+            and os.path.isfile(raw_interp)
+            and os.access(raw_interp, os.X_OK)
+        )
+        runner_interps = [
+            _abspath_no_realpath(r.get("runner_raw")) for r in integration_runners
+        ]
+        all_match_dev = bool(runner_interps) and all(
+            ri == marker_interp for ri in runner_interps
+        )
+        if dev_interp and all_match_dev and interp_live:
+            dev_runtime_active = True
+            if severity == "warning":
+                severity = "ok"
+            advice = (
+                "Dev runtime deliberately active: every integration runner "
+                "resolves to the editable checkout interpreter recorded by "
+                "'opentraces setup runtime use-dev'. This is intentional, not "
+                "drift. Run 'opentraces setup runtime use <pipx|homebrew>' to "
+                "switch back to an installed release. No data is touched."
+            )
+        elif dev_interp and not interp_live:
+            # Stale dev marker: the recorded interpreter is gone. Keep drift
+            # VISIBLE (do not downgrade) and name the remedy.
+            advice = (
+                "A 'setup runtime use-dev' marker points at an interpreter that "
+                f"no longer exists ({raw_interp}); the dev checkout may have "
+                "been deleted or rebuilt. Drift is NOT downgraded. Re-run "
+                "'opentraces setup runtime use-dev' or 'use <pipx|homebrew>' to "
+                "re-pin the glue. No data is touched."
+            )
+
     return {
         "current": current,
         "discovered_installs": discovered,
@@ -1225,6 +1325,7 @@ def _runtime_provenance(
         "state": state,
         "severity": severity,
         "advice": advice,
+        "dev_runtime_active": dev_runtime_active,
         # Whether the opt-in interpreter probe executed. False = inspection-only
         # (no config-derived execution); module_file/dist_version are unverified.
         "probed": bool(probe),
@@ -1247,6 +1348,7 @@ def _safe_runtime_provenance(
             "severity": "ok",
             "advice": "runtime-provenance probe failed; not enough signal to report.",
             "probed": bool(probe),
+            "dev_runtime_active": False,
         }
 
 

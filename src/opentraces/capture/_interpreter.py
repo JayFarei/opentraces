@@ -28,9 +28,52 @@ stable symlink to bake into persisted hook commands).
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 import sys
+from contextlib import contextmanager
+
+# Process-local override for the interpreter baked into rendered hook commands.
+#
+# Issue #99: ``setup runtime use <kind>`` re-renders the integration glue so it
+# executes opentraces from a CHOSEN install root, not the running CLI's. The
+# four render paths do NOT share one chokepoint — codex/claude call
+# ``stable_interpreter()`` bare, git calls it with an EXPLICIT arg, and the
+# watcher shim baked ``sys.executable`` directly. So a no-arg default override
+# reaches at most two of them (the rejected adversarial-BLOCKER-1 design).
+#
+# Instead, this contextvar is consulted INSIDE ``stable_interpreter`` with
+# PRECEDENCE over the caller's explicit argument: when a selection is active it
+# wins even where the renderer would otherwise pass an explicit interpreter
+# (git). The watcher shim render is routed through ``stable_interpreter`` so it
+# participates too. When no selection is active (the default) behaviour is
+# byte-identical to before — the existing ``setup upgrade`` path is unchanged.
+_SELECTED_INTERPRETER: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "opentraces_selected_interpreter", default=None
+)
+
+
+def active_selection() -> str | None:
+    """Return the interpreter currently selected via ``selected_interpreter``."""
+    return _SELECTED_INTERPRETER.get()
+
+
+@contextmanager
+def selected_interpreter(executable: str | None):
+    """Within the block, ``stable_interpreter`` resolves to ``executable``.
+
+    A ``None`` executable is a no-op (keeps the existing default behaviour).
+    The override is process-local (a contextvar), scoped to the ``with`` block,
+    and applied INSIDE ``stable_interpreter`` so the #86 Cellar→opt remap still
+    runs on the selected interpreter. See issue #99.
+    """
+    token = _SELECTED_INTERPRETER.set(executable)
+    try:
+        yield
+    finally:
+        _SELECTED_INTERPRETER.reset(token)
+
 
 # Matches a Homebrew Cellar interpreter path on macOS (/opt/homebrew, /usr/local)
 # or Linux (/home/linuxbrew/.linuxbrew): <prefix>/Cellar/<formula>/<version>/<rest>.
@@ -53,9 +96,14 @@ def stable_interpreter(executable: str | None = None) -> str:
     already stable and pass through untouched. Defaults to ``sys.executable``
     when called with no argument.
 
-    See issue #86.
+    A process-local selection set via ``selected_interpreter`` (issue #99)
+    takes PRECEDENCE over ``executable`` — so a chosen runtime wins even at
+    render sites (git) that pass an explicit interpreter. The #86 Cellar→opt
+    remap below still applies to the selected interpreter.
+
+    See issue #86, issue #99.
     """
-    exe = executable or sys.executable or "python3"
+    exe = active_selection() or executable or sys.executable or "python3"
     m = _CELLAR_RE.match(exe)
     if not m:
         return exe

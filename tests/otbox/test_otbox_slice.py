@@ -282,3 +282,61 @@ def test_zero_host_residue(driver):
     )
     assert after_config == before_config, "real ~/.opentraces/config.json changed"
     assert not box.root.exists(), "box root left behind after teardown"
+
+
+# ---------------------------------------------------------------------------
+# Issue #99 — `setup runtime` group acceptance (tier-1, mixed-runtime world).
+#
+# These ride the `c-multi-install-mixed-runtime` checkpoint (shared with #93).
+# A cached snapshot bakes the build box's HOME into the hand-written hook
+# configs, and restore only path-rewrites some files — so we build the mixed
+# world FRESH per journey: restore the clean `c-installed-source` fork, then
+# apply the mixed delta live (consistent box-local paths). Run with:
+#
+#     .venv/bin/python -m pytest tests/otbox/test_otbox_slice.py \
+#         -k "setup-runtime or runtime" -v
+# ---------------------------------------------------------------------------
+_SETUP_RUNTIME_JOURNEYS = [
+    "setup-runtime-status-mixed",
+    "setup-runtime-use-installed-rewrites-integrations",
+    "setup-runtime-use-dev-checkout",
+    "setup-runtime-dry-run-no-mutation",
+    "setup-runtime-remove-duplicates-prints",
+]
+
+
+def _build_mixed_runtime_box(driver):
+    """A fresh mixed-runtime box with consistent box-local interpreter paths."""
+    from tests.otbox.checkpoints import resolve_checkpoint
+    from tests.otbox.checkpoints._multi_install_mixed_runtime import (
+        _multi_install_mixed_runtime_delta,
+    )
+
+    box = resolve_checkpoint(driver, "c-installed-source").box
+    _multi_install_mixed_runtime_delta(driver, box)
+    return box
+
+
+@pytest.mark.parametrize("journey_name", _SETUP_RUNTIME_JOURNEYS)
+def test_setup_runtime_journey(driver, journey_name):
+    """Issue #99 tier-1 acceptance journeys against a fresh mixed-runtime box."""
+    box = _build_mixed_runtime_box(driver)
+    try:
+        result = run_journey(driver, box, journey_name)
+        if result.verdict != "PASS":
+            tag = f"[otbox:{journey_name}]"
+            print(f"\n{tag} verdict={result.verdict} reason={result.reason}", flush=True)
+            for s in result.steps:
+                if not s.ok:
+                    res = s.result
+                    tail = ((res.stderr or res.stdout) if res else "")[-500:]
+                    print(f"{tag} STEP FAIL {s.step_id}: rc="
+                          f"{res.returncode if res else '?'} {s.message} :: {tail}",
+                          flush=True)
+            for a in getattr(result, "assertions", []) or []:
+                if not a.ok:
+                    print(f"{tag} ASSERT FAIL [{a.kind}] {a.message[:240]}", flush=True)
+        assert result.verdict == "PASS", f"{journey_name}: {result.reason}"
+    finally:
+        if box.root.exists():
+            driver.teardown(box)

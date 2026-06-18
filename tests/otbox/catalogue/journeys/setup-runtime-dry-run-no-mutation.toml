@@ -1,0 +1,109 @@
+name = "setup-runtime-dry-run-no-mutation"
+description = """
+Issue #99 — `setup runtime use pipx --dry-run` RESOLVES and PRINTS the plan
+without changing anything. Against `c-multi-install-mixed-runtime`:
+
+  * `dry_run == true`; the JSON plan lists the intended re-renders for
+    codex-cli / claude-code / git AND watcher.
+  * every plan row carries `target_interpreter == resolved pipx interpreter`
+    (cross-field `equals_var`); the watcher row is SYNTHESIZED (the watcher has
+    no `plan()` — Fix B.4) with action `re-render-shim`.
+  * the codex/claude/git/watcher glue files are byte-unchanged — after the
+    dry-run the watcher shim and git hook still hold their ORIGINAL (homebrew)
+    interpreter and never the pipx path.
+
+Tier 1 (opt-in).
+"""
+lane = "core"
+tier = 1
+from_checkpoints = ["c-multi-install-mixed-runtime"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+[[steps]]
+type = "shell"
+id = "dry"
+argv = [".testvenv/bin/opentraces", "--json", "setup", "runtime", "use", "pipx", "--dry-run"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dry"
+path = "dry_run"
+equals = true
+
+# the plan enumerates all four runners (watcher row is hand-synthesized).
+[[assertions]]
+kind = "stdout_json_contains"
+step = "dry"
+path = "plan"
+value = "watcher"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "dry"
+path = "plan"
+value = "git"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "dry"
+path = "plan"
+value = "codex-cli"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "dry"
+path = "plan"
+value = "claude-code"
+
+# the watcher plan row is the synthesized shim re-render.
+[[assertions]]
+kind = "stdout_json"
+step = "dry"
+path = "plan.0.name"
+equals = "watcher"
+
+[[assertions]]
+kind = "stdout_json"
+step = "dry"
+path = "plan.0.action"
+equals = "re-render-shim"
+
+# every plan row targets the resolved pipx interpreter.
+[[assertions]]
+kind = "stdout_json"
+step = "dry"
+path = "plan.0.target_interpreter"
+equals_var = "dry:resolved_interpreter"
+
+[[assertions]]
+kind = "stdout_json"
+step = "dry"
+path = "plan.3.target_interpreter"
+equals_var = "dry:resolved_interpreter"
+
+# MUTATION GUARD: the glue files are byte-unchanged — still on the ORIGINAL
+# (homebrew) interpreter, never repointed to pipx by a dry-run.
+[[steps]]
+type = "shell"
+id = "cat_watcher"
+argv = ["sh", "-c", "cat \"$HOME/.opentraces/bin/ot-watcher\""]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "cat_watcher"
+value = "/pipx/venvs/"
+
+[[steps]]
+type = "shell"
+id = "cat_git"
+argv = ["sh", "-c", "cat \"$(pwd)/.git/hooks/opentraces-post-commit\""]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "cat_git"
+value = "/pipx/venvs/"

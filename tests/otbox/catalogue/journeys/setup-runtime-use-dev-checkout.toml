@@ -1,0 +1,70 @@
+name = "setup-runtime-use-dev-checkout"
+description = """
+Issue #99 (Mode 2) — `setup runtime use-dev` points the glue at the editable
+checkout and records the choice so `doctor` reports it as DELIBERATE dev mode,
+not drift. Against `c-multi-install-mixed-runtime`, after `use-dev --project .
+--integrations-only` then `doctor --json`:
+
+  * `runtime_provenance.dev_runtime_active == true`
+  * severity downgraded to `ok` (not `warning`) — intentional, not accidental
+  * every integration runner resolves to the editable `.testvenv` interpreter
+    (`matches_current == true` for all; no runner diverges)
+
+Switching back is one command (`use pipx`/`use homebrew`), which clears the dev
+marker. Tier 1 (opt-in).
+"""
+lane = "core"
+tier = 1
+from_checkpoints = ["c-multi-install-mixed-runtime"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+[[steps]]
+type = "shell"
+id = "use_dev"
+argv = [".testvenv/bin/opentraces", "--json", "setup", "runtime", "use-dev", "--project", ".", "--integrations-only"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "use_dev"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "use_dev"
+path = "action"
+equals = "use-dev"
+
+[[steps]]
+type = "shell"
+id = "doctor"
+argv = [".testvenv/bin/opentraces", "--json", "doctor"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.dev_runtime_active"
+equals = true
+
+# deliberate dev mode is NOT drift — severity downgraded to ok.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.severity"
+equals = "ok"
+
+# every integration runner resolves to the editable checkout (no divergence).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners"
+equals = 4
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor"
+value = "\"matches_current\": false"
