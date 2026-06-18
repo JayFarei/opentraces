@@ -18,14 +18,10 @@ on a matched product slice:
     `slice.metadata.product_match_span` (no clamp happened), proven via the
     cross-path `equals_var` within the step.
 
-PRE-FLIGHT (load-bearing, do before relying on the synthetic world): confirm
-`capsule export {trace_id} --product opentraces --json` actually matches
-steps > 8 apart in the `c-captured-real-session` synthetic fixture (the
-needle "opentraces" appears across the captured edit corpus). If the chosen
-needle does NOT span > 8 steps (or matches nothing → the
-`product_episode_no_match` fallback), step 1's `product_match_span >= 9`
-assertion FAILS LOUDLY rather than silently testing the no-match fallback —
-swap the needle or seed one and record the observed span here.
+PRE-FLIGHT: the journey seeds an additive deterministic trace in the
+initialized `c-captured-real-session` world. The seeded trace mentions
+"opentraces" at steps 1 and 40, so the default radius=4 cap is load-bearing:
+the raw span is > 8 and the bounded export must clamp it.
 
 Tier 1 (opt-in).
 """
@@ -39,6 +35,56 @@ from_checkpoints = ["c-captured-real-session"]
 [preconditions]
 min_captured_traces = 1
 
+[[steps]]
+type = "shell"
+id = "seed-wide-product-trace"
+argv = [
+  "{py_bin}",
+  "-c",
+  """
+from pathlib import Path
+import sys
+
+from opentraces_schema import Agent, Step, TraceRecord
+
+from opentraces.core.bucket_store import write_trace_record
+from opentraces.core.config import get_project_dir
+
+project = Path(sys.argv[1])
+trace_id = "issue-98-wide-product-trace"
+steps = []
+for i in range(1, 43):
+    text = "routine capsule product-bound step " + str(i)
+    role = "agent"
+    if i == 1:
+        text = "Please evaluate the opentraces capsule export path."
+        role = "user"
+    elif i == 40:
+        text = "Return to opentraces and verify the export behavior."
+        role = "user"
+    steps.append(Step(step_index=i, role=role, content=text))
+
+record = TraceRecord(
+    trace_id=trace_id,
+    session_id="issue-98-wide-product-session",
+    agent=Agent(name="otbox-seeded-agent", model="otbox/model"),
+    task=dict(description="Seed a wide product episode for capsule export."),
+    dependencies=["opentraces"],
+    steps=steps,
+    outcome=dict(success=True, committed=False),
+)
+slug = get_project_dir(project).name
+write_trace_record(record, project_slug=slug, source_layer="capture")
+print(trace_id)
+  """,
+  "{project}",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "seed-wide-product-trace"
+equals = 0
+
 # ---------------------------------------------------------------------
 # Step 1 — default radius bounds the product episode (deterministic limitation
 # + a raw span that proves the bound is load-bearing).
@@ -46,7 +92,7 @@ min_captured_traces = 1
 [[steps]]
 type = "cli"
 id = "export-bounded"
-argv = ["capsule", "export", "{trace_id}", "--product", "opentraces", "--json"]
+argv = ["capsule", "export", "issue-98-wide-product-trace", "--product", "opentraces", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -72,7 +118,7 @@ min = 9
 [[steps]]
 type = "cli"
 id = "export-full-span"
-argv = ["capsule", "export", "{trace_id}", "--product", "opentraces", "--product-full-span", "--json"]
+argv = ["capsule", "export", "issue-98-wide-product-trace", "--product", "opentraces", "--product-full-span", "--json"]
 
 [[assertions]]
 kind = "returncode"
