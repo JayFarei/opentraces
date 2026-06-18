@@ -147,6 +147,51 @@ def install(repo: Path) -> bool:
     return True
 
 
+def _owned_hook_candidates(repo: Path) -> list[Path]:
+    """Possible locations of the owned post-commit shim for ``repo``."""
+    candidates: list[Path] = []
+    gdir = _git_dir(repo)
+    if gdir is not None:
+        candidates.append(gdir / "hooks" / HOOK_FILENAME)
+    candidates.append(Path(repo) / ".git" / "hooks" / HOOK_FILENAME)
+    # de-dup preserving order
+    seen: set[str] = set()
+    out: list[Path] = []
+    for c in candidates:
+        key = str(c)
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+def owned_hook_path(repo: Path) -> Path | None:
+    """Return the EXISTING owned-hook path for ``repo``, or None."""
+    for owned in _owned_hook_candidates(repo):
+        if owned.is_file():
+            return owned
+    return None
+
+
+def rerender_owned_hook(repo: Path) -> Path | None:
+    """Re-render the owned post-commit shim IN PLACE (issue #99 runtime switch).
+
+    Rewrites ONLY the existing ``opentraces-post-commit`` file with the current
+    ``_owned_hook_content()`` — so an active ``selected_interpreter`` selection
+    repoints the baked interpreter. Unlike ``install()`` this does NOT require a
+    fully-initialised git repo and never touches the post-commit chain block or
+    the notes refspec (both interpreter-independent and already present when the
+    integration is installed). Returns the path, or None if no owned hook
+    exists. Never raises on a missing repo.
+    """
+    owned = owned_hook_path(repo)
+    if owned is None:
+        return None
+    owned.write_text(_owned_hook_content())
+    _chmod_x(owned)
+    return owned
+
+
 def remove(repo: Path) -> bool:
     """Remove the opentraces hook and chain block. Idempotent."""
     gdir = _git_dir(repo)

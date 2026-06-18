@@ -1,0 +1,55 @@
+name = "capsule-preview-large-trace-progress"
+description = """
+Issue #98 (Part A, SILVER) — `capsule preview` on a real captured trace
+reports phase telemetry and is observably bounded, while still writing
+NOTHING.
+
+Against `c-captured-real-session` (a real Claude-driven captured session
+with slice / context / trail content), `capsule preview {trace_id} --json
+--progress json` must:
+
+  (a) return rc=0;
+  (b) keep `writes_anything == false` (the developer-approval checkpoint
+      never writes a capsule dir — the #98 progress wiring is additive and
+      stderr-only, so stdout stays clean);
+  (c) carry the additive `telemetry.stages` block on stdout (proving the
+      `--progress` option is wired and named stages are emitted, mirroring
+      the #88 `trace-index-rebuild-progress` journey).
+
+Fine-grained stderr-JSONL heartbeat-timing assertions live in the Layer-1
+unit `tests/test_capsule_progress_and_from_session.py`; otbox asserts the
+agent-facing stdout/rc contract.
+
+Tier 1 (opt-in): the captured-session checkpoints are tier-1.
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+[[steps]]
+type = "cli"
+id = "preview-progress"
+argv = ["capsule", "preview", "{trace_id}", "--json", "--progress", "json"]
+
+[[assertions]]
+kind = "returncode"
+step = "preview-progress"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "preview-progress"
+path = "writes_anything"
+equals = false
+
+# The additive per-stage progress telemetry block is present on stdout.
+[[assertions]]
+kind = "stdout_json"
+step = "preview-progress"
+path = "telemetry.stages"

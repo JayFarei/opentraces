@@ -1,0 +1,134 @@
+name = "dataset-reader-floor-non-overridable"
+description = """
+Issue #84: the dataset reader's redaction floor is non-overridable. Every
+projected row is sanitized by the floor (regex / entropy / business_logic /
+path_anonymizer) regardless of the workflow author's declared security contract,
+and the default ``tier="off"`` no longer ships rows verbatim.
+
+This journey seeds an ad-hoc dataset whose single row carries a regex-detectable
+secret AND username/path PII at the default off tier. Before the fix such a row
+was shipped raw and BLOCKED as ``privacy_tier_off``; after the fix the reader
+floor scrubs it at append time, so the row is no longer raw (not blocked) and
+``dataset status --json`` surfaces the resolved ``security.reader_floor`` with
+``floor_satisfied=true``. The redacted row then publishes to the fake HF remote.
+
+The author contract can only ADD tools to this floor, never narrow below it —
+proven at the unit layer (tests/security/test_dataset_row_floor.py); here we
+prove the agent-observable end of it through the shipped CLI surfaces.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["build-publishable-dataset"]
+persona = "both"
+requires = ["cli"]
+
+# --- 1. Seed an ad-hoc row carrying a secret + path PII at the off tier ----
+[[steps]]
+type = "write_file"
+id = "write-rows"
+path = "leaky_rows.jsonl"
+content = """
+{"source_trace_id": "trace-leak", "source_unit_id": "tu:trace-leak:trace", "summary": "leaks sk-live-abcdefghijklmnopqrstuvwxyz123456 from /Users/seededvictim/work/notes.txt"}
+"""
+
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "leaky_schema.json"
+content = """
+{"type": "object", "properties": {"source_trace_id": {"type": "string"}, "source_unit_id": {"type": "string"}, "summary": {"type": "string"}}, "required": ["source_trace_id", "summary"]}
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = [
+    "dataset", "new", "floor-ds",
+    "--rows-file", "leaky_rows.jsonl",
+    "--schema", "leaky_schema.json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+# --- 2. dataset status surfaces the non-overridable reader floor ----------
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["dataset", "status", "floor-ds", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+# The floor ran: it is reported, and every row satisfies it.
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "status"
+path = "security.reader_floor"
+equals = ["regex", "entropy", "business_logic", "path_anonymizer"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "security.floor_satisfied"
+equals = true
+
+# The off-tier secret row is NO LONGER blocked as raw (privacy_tier_off):
+# pre-fix this key was present (counts.blocked == 1); post-fix it is absent.
+[[assertions]]
+kind = "stdout_json_path_absent"
+step = "status"
+path = "counts.blocked"
+
+# --- 3. The redacted row publishes to the fake HF remote ------------------
+[[steps]]
+type = "cli"
+id = "remote-create"
+argv = ["dataset", "remote", "create", "floor-ds", "floor/dataset", "--private"]
+
+[[assertions]]
+kind = "returncode"
+step = "remote-create"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "review-approve"
+argv = ["dataset", "review", "approve", "floor-ds", "--all"]
+
+[[assertions]]
+kind = "returncode"
+step = "review-approve"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "publish"
+argv = ["dataset", "publish", "floor-ds"]
+
+[[assertions]]
+kind = "returncode"
+step = "publish"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "publish"
+value = "published: rows=1"
+
+# The secret never reaches the published shard — the floor scrubbed it before
+# the row left the machine, so the row can publish CLEAN instead of being
+# blocked. (Content-level redaction is proven at the unit/e2e layer.)
+[[assertions]]
+kind = "path_exists"
+path = "{fake_remote}/floor/dataset/dataset_infos.json"
+
+[[assertions]]
+kind = "file_count_min"
+path = "{fake_remote}/floor/dataset/data"
+min = 1

@@ -12,12 +12,12 @@ state to report. On this small log doctor verifies `state="ok"`, but step
 `doctor-human-skipped` sets `OPENTRACES_DOCTOR_EVENT_LOG_MAX_BATCHES=1` (the
 doctor.py:415-422 lever, the same one the skipped-large unit test uses) to
 FORCE doctor down the skipped-large path. On pre-fix code that path renders the
-`trail status` fiction in the human `↳ next` row, so `stdout_not_contains
+`trail status` fiction in the advice payload, so `stdout_not_contains
 "trail status"` is genuinely RED pre-fix and GREEN after the advice fix.
 
 Asserts: (a) JSON doctor reports trail_event_log.state == "ok" on the real log;
-(b) the forced-skipped human render is clean of the `trail status` fiction;
-(c) the real advised command `trail rebuild --help` exits 0; (d) `trail status`
+(b) the forced-skipped render is clean of the `trail status` fiction and points
+to `trail verify`; (c) the real advised command `trail verify --help` exits 0; (d) `trail status`
 is genuinely "No such command" (exit 2) — the issue's exact failure mode.
 """
 lane = "core"
@@ -46,8 +46,8 @@ equals = "ok"
 # (b) Force the skipped-large path. otbox tier-0 captures output (non-TTY), so
 # doctor emits the JSON form here; the assertion guards that output for the
 # `trail status` fiction. On pre-fix code the skipped path's advice carried it;
-# post-fix the skipped path carries no advice at all. RED pre-fix / GREEN post-fix.
-# (The human `↳ next` render path is covered by the source-string unit test.)
+# post-fix the skipped path carries `trail verify` advice. RED pre-fix / GREEN
+# post-fix. (The human `↳ next` render path is covered by unit tests.)
 [[steps]]
 type = "cli"
 id = "doctor-human-skipped"
@@ -59,15 +59,20 @@ kind = "stdout_not_contains"
 step = "doctor-human-skipped"
 value = "trail status"
 
+[[assertions]]
+kind = "stdout_contains"
+step = "doctor-human-skipped"
+value = "trail verify"
+
 # (c) The real advised recovery command exists and its --help succeeds.
 [[steps]]
 type = "cli"
-id = "rebuild-help"
-argv = ["trail", "rebuild", "--help"]
+id = "verify-help"
+argv = ["trail", "verify", "--help"]
 
 [[assertions]]
 kind = "returncode"
-step = "rebuild-help"
+step = "verify-help"
 equals = 0
 
 # (d) `trail status` genuinely does not exist (the issue's failure mode).

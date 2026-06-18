@@ -1,0 +1,94 @@
+name = "setup-runtime-status-mixed"
+description = """
+Issue #99 — `setup runtime status` PRESENTS the mixed-runtime split that #93
+detects. Against the `c-multi-install-mixed-runtime` checkpoint (editable
+foreground CLI; codex/claude hooks → fake pipx; git + watcher → fake homebrew;
+all inside the box HOME), `setup runtime status --json` reports:
+
+  * `state == "mixed_runtimes"`, severity `warning`
+  * 3 discovered installs spanning `pipx` + `brew` (+ the source foreground)
+  * the four runners (codex-cli / claude-code / git / watcher), all
+    `matches_current == false`
+  * a data-safe remediation block (never says "purge data")
+
+Detection is reused verbatim from #93 (never recomputed). Tier 1 (opt-in) —
+needs the shared mixed-runtime checkpoint.
+"""
+lane = "core"
+tier = 1
+from_checkpoints = ["c-multi-install-mixed-runtime"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+[[steps]]
+type = "shell"
+id = "status"
+argv = [".testvenv/bin/opentraces", "--json", "setup", "runtime", "status"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "state"
+equals = "mixed_runtimes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "severity"
+equals = "warning"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "status"
+path = "discovered_installs"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "status"
+path = "discovered_installs"
+value = "pipx"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "status"
+path = "discovered_installs"
+value = "brew"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "status"
+path = "integration_runners"
+equals = 4
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "integration_runners.0.name"
+equals = "codex-cli"
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "integration_runners.3.name"
+equals = "watcher"
+
+# every runner diverges from the foreground install (detection-only).
+[[assertions]]
+kind = "stdout_not_contains"
+step = "status"
+value = "\"matches_current\": true"
+
+# remediation exists and is data-safe.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "status"
+path = "remediation.note"
+value = "data-safe"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "status"
+value = "purge data"

@@ -1091,6 +1091,232 @@ def _verify_result_from_watermark(wm: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _missing_event_log_result(mode: str) -> dict[str, Any]:
+    return {
+        "ref": EVENT_LOG_REF,
+        "exists": False,
+        "head": None,
+        "batch_count": 0,
+        "event_count": 0,
+        "batch_parents_linear": False,
+        "content_hashes_valid": False,
+        "event_chain_valid": False,
+        "errors": [],
+        "state": "missing",
+        "mode": mode,
+        "verification_source": "missing_ref",
+        "phases": [
+            {"name": "resolve_ref", "status": "missing", "count": 0},
+        ],
+    }
+
+
+def quick_event_log_status(cwd: Path) -> dict[str, Any]:
+    """Return a bounded event-log summary without materialising all events."""
+    head = _ref_head(cwd)
+    if head is None:
+        return _missing_event_log_result("quick")
+
+    phases: list[dict[str, Any]] = [
+        {"name": "resolve_ref", "status": "ok", "head": head},
+    ]
+    errors: list[str] = []
+
+    linear, parent_errors, batch_count = _parents_are_linear(cwd)
+    errors.extend(parent_errors)
+    phases.append(
+        {
+            "name": "check_batch_parents",
+            "status": "ok" if linear else "invalid",
+            "count": batch_count,
+        }
+    )
+
+    event_count = 0
+    last_event_id = None
+    try:
+        tail = _read_head_batch_tail(cwd, head)
+        if tail is not None:
+            event_count, last_event_id = tail
+    except Exception as exc:  # noqa: BLE001 - diagnostic command reports, not crashes
+        errors.append(f"event log tail read failed: {exc}")
+    phases.append(
+        {
+            "name": "read_head_tail",
+            "status": "ok" if last_event_id else "empty",
+            "count": event_count,
+        }
+    )
+
+    watermark = _load_verify_watermark(cwd)
+    if watermark and watermark.get("head") == head and not errors:
+        result = _verify_result_from_watermark(watermark)
+        result.update(
+            {
+                "state": "ok",
+                "mode": "quick",
+                "verification_source": "cached_watermark",
+                "phases": phases,
+            }
+        )
+        return result
+
+    return {
+        "ref": EVENT_LOG_REF,
+        "exists": True,
+        "head": head,
+        "batch_count": batch_count,
+        "event_count": event_count,
+        "last_event_id": last_event_id,
+        "batch_parents_linear": linear,
+        "content_hashes_valid": None,
+        "event_chain_valid": None,
+        "errors": errors,
+        "state": "invalid" if errors else "unverified_large",
+        "mode": "quick",
+        "verification_source": "bounded_head_summary",
+        "phases": phases,
+    }
+
+
+def sampled_event_log_status(cwd: Path, *, sample_size: int = 50) -> dict[str, Any]:
+    """Verify a bounded first/last sample of event payload identities."""
+    head = _ref_head(cwd)
+    if head is None:
+        return _missing_event_log_result("sample")
+
+    sample_size = min(10_000, max(1, int(sample_size)))
+    phases: list[dict[str, Any]] = [
+        {"name": "resolve_ref", "status": "ok", "head": head},
+    ]
+    errors: list[str] = []
+
+    linear, parent_errors, batch_count = _parents_are_linear(cwd)
+    errors.extend(parent_errors)
+    phases.append(
+        {
+            "name": "check_batch_parents",
+            "status": "ok" if linear else "invalid",
+            "count": batch_count,
+        }
+    )
+
+    try:
+        entries = _list_event_blob_entries(cwd, head)
+    except Exception as exc:  # noqa: BLE001
+        entries = []
+        errors.append(f"event blob enumeration failed: {exc}")
+    event_count = len(entries)
+    phases.append(
+        {
+            "name": "enumerate_event_blobs",
+            "status": "ok" if entries else "empty",
+            "count": event_count,
+        }
+    )
+
+    if event_count <= sample_size * 2:
+        sampled_entries = entries
+    else:
+        sampled_entries = entries[:sample_size] + entries[-sample_size:]
+
+    sampled_content_ok = True
+    sampled_chain_ok = True
+    sampled_events: list[TrailEvent] = []
+    try:
+        for (path, _oid), raw in zip(
+            sampled_entries,
+            _read_blobs_batch(cwd, sampled_entries),
+            strict=False,
+        ):
+            event = TrailEvent.model_validate_json(raw)
+            sampled_events.append(event)
+            expected_sequence = int(Path(path).stem)
+            if event.event_sequence != expected_sequence:
+                sampled_chain_ok = False
+                errors.append(
+                    f"event {event.event_sequence}: filename sequence mismatch"
+                )
+            if event.content_hash != payload_content_hash(event.payload):
+                sampled_content_ok = False
+                errors.append(f"event {event.event_sequence}: content_hash mismatch")
+            if event.event_id != expected_event_id(event):
+                sampled_content_ok = False
+                errors.append(f"event {event.event_sequence}: event_id mismatch")
+    except Exception as exc:  # noqa: BLE001
+        sampled_content_ok = False
+        errors.append(f"sample read failed: {exc}")
+
+    sampled_events.sort(key=lambda event: event.event_sequence)
+    previous: TrailEvent | None = None
+    for event in sampled_events:
+        if previous and event.event_sequence == previous.event_sequence + 1:
+            if event.previous_event_id != previous.event_id:
+                sampled_chain_ok = False
+                errors.append(f"event {event.event_sequence}: previous_event_id mismatch")
+        previous = event
+
+    phases.append(
+        {
+            "name": "verify_sampled_events",
+            "status": "ok" if sampled_content_ok and sampled_chain_ok else "invalid",
+            "count": len(sampled_events),
+        }
+    )
+
+    return {
+        "ref": EVENT_LOG_REF,
+        "exists": True,
+        "head": head,
+        "batch_count": batch_count,
+        "event_count": event_count,
+        "batch_parents_linear": linear,
+        "content_hashes_valid": False if not sampled_content_ok else None,
+        "event_chain_valid": False if not sampled_chain_ok else None,
+        "sampled_event_count": len(sampled_events),
+        "sample_size": sample_size,
+        "sampled_content_hashes_valid": sampled_content_ok,
+        "sampled_event_chain_valid": sampled_chain_ok,
+        "errors": errors,
+        "state": "invalid" if errors else "sampled",
+        "mode": "sample",
+        "verification_source": "bounded_event_sample",
+        "phases": phases,
+    }
+
+
+def event_log_verification_status(
+    cwd: Path,
+    *,
+    mode: str = "quick",
+    sample_size: int = 50,
+) -> dict[str, Any]:
+    """Verify or summarize the canonical Trace Trails event log."""
+    if mode == "quick":
+        return quick_event_log_status(cwd)
+    if mode == "sample":
+        return sampled_event_log_status(cwd, sample_size=sample_size)
+    if mode != "full":
+        raise ValueError(f"unknown event-log verification mode: {mode}")
+
+    status = event_log_status(cwd)
+    status.update(
+        {
+            "mode": "full",
+            "verification_source": status.get("verification_source") or "full_scan",
+            "phases": [
+                {"name": "resolve_ref", "status": "ok" if status["exists"] else "missing"},
+                {
+                    "name": "verify_all_events",
+                    "status": "invalid" if status.get("errors") else "ok",
+                    "count": status.get("event_count") or 0,
+                },
+            ],
+        }
+    )
+    return status
+
+
 def _try_incremental_verify(
     cwd: Path, head: str, wm: dict[str, Any]
 ) -> dict[str, Any] | None:

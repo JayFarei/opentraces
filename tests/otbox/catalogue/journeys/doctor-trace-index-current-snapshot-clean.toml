@@ -1,0 +1,42 @@
+name = "doctor-trace-index-current-snapshot-clean"
+description = """
+Issue #96 — doctor's machine contract must describe the live search snapshot,
+not the deprecated legacy index.db. With a healthy snapshot built and NO legacy
+index.db present (the normal post-#89 state), `doctor` JSON must report
+`trace_index.state == "ok"`, advise the current `trace index rebuild` (never the
+`--legacy` form), and carry the legacy concern separately as
+`trace_index.legacy_index_state == "missing"` — legacy absence is not a current
+failure when search is healthy.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.state"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.rebuild_advice"
+equals = "opentraces trace index rebuild"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.legacy_index_state"
+equals = "missing"

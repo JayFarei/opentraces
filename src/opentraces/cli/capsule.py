@@ -32,11 +32,13 @@ from pathlib import Path
 
 import click
 
-from ._options import project_dir_option
-
-
-def _resolve_project(project: Path | None) -> Path:
-    return Path(project or Path.cwd()).resolve()
+from ._progress import build_cli_progress, progress_option
+from .capsule_export_helpers import (
+    _do_export,
+    _export_options,
+    _resolve_from_session_or_exit,
+    _resolve_project,
+)
 
 
 def _hf_token(explicit: str | None) -> str | None:
@@ -62,118 +64,6 @@ def _hf_token(explicit: str | None) -> str | None:
         except Exception:
             return None
     return None
-
-
-# Shared export options applied to export/share/issue.
-def _export_options(fn):
-    fn = click.option("--step", type=int, default=None, help="Failing step index (default: infer from error markers).")(fn)
-    fn = click.option("--node", "node_id", default=None, help="Context node id (default: from the failing step).")(fn)
-    fn = click.option("--radius", type=int, default=4, show_default=True, help="Slice radius around the failing step.")(fn)
-    fn = click.option("--repo-url", default=None, help="Override the public repo remote URL recorded in the pin.")(fn)
-    fn = project_dir_option(fn)
-    fn = click.option(
-        "--test-command", "test_command", default=None,
-        help="Declare the repro command that makes this capsule a runnable test.",
-    )(fn)
-    fn = click.option(
-        "--expect-error", "expect_error", default=None,
-        help="Expected error string for the repro (omit = expect a non-zero exit).",
-    )(fn)
-    fn = click.option(
-        "--setup-command", "setup_command", default=None,
-        help="A setup/build/install step to run before the repro (e.g. 'pip install -e .').",
-    )(fn)
-    fn = click.option(
-        "--consume", "consume_specs", multiple=True, metavar="[package|service:]NAME=PIN|URL",
-        help="Record a CONSUMED dependency the verdict can be re-posed against "
-             "(e.g. package:humanduration=git+https://github.com/o/r@v0.1.0). Repeatable.",
-    )(fn)
-    fn = click.option(
-        "--product", default=None, metavar="NAME",
-        help="Bind the capsule to ONE consumed product/dependency (the usage-episode "
-             "grouping anchor); also scopes the slice to the steps that reference it.",
-    )(fn)
-    fn = click.option(
-        "--include-prompts", "include_prompts", is_flag=True, default=False,
-        help="Include prompt-bearing fields (system prompt + per-step reasoning) in the "
-             "capsule. These are EXCLUDED by default; this opts them IN.",
-    )(fn)
-    return fn
-
-
-def _parse_consume(spec: str) -> dict:
-    """``[package|service:]NAME=PIN|ENDPOINT`` -> a consumes entry (default kind: package)."""
-
-    kind = "package"
-    body = spec
-    head = spec.split(":", 1)[0]
-    if ":" in spec and head in ("package", "service"):
-        kind, body = spec.split(":", 1)
-    if "=" not in body:
-        raise click.BadParameter(f"--consume expects NAME=VALUE, got {spec!r}")
-    name, value = body.split("=", 1)
-    name, value = name.strip(), value.strip()
-    if not name or not value:
-        raise click.BadParameter(f"--consume needs a non-empty NAME and VALUE, got {spec!r}")
-    if kind == "service":
-        return {"kind": "service", "name": name, "endpoint": value}
-    return {"kind": "package", "name": name, "pin": value}
-
-
-def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
-               test_command=None, expect_error=None, setup_command=None, consume_specs=(),
-               product=None, include_prompts=False):
-    from ..core.capsule.export import CapsuleExportError, export_capsule
-
-    project = _resolve_project(project_dir)
-    consumes = [_parse_consume(s) for s in (consume_specs or ())]
-    try:
-        capsule = export_capsule(
-            project_dir=project,
-            trace_id=trace_id,
-            step_index=step,
-            node_id=node_id,
-            radius=radius,
-            remote_url=repo_url,
-            test_command=test_command,
-            expect_error=expect_error,
-            setup_command=setup_command,
-            consumes=consumes,
-            product=product,
-            include_prompts=include_prompts,
-        )
-    except CapsuleExportError as exc:
-        click.echo(f"capsule export failed: {exc}", err=True)
-        sys.exit(2)
-    except Exception as exc:  # redaction gate, etc.
-        click.echo(f"capsule export failed: {exc}", err=True)
-        sys.exit(2)
-    _hint_consumes(capsule, consumes, product)
-    return capsule, project
-
-
-def _hint_consumes(capsule, declared_consumes, product) -> None:
-    """STDERR-ONLY suggestion (plan 090): if the episode is not bound to a product
-    and none was declared, suggest candidate ``--consume`` specs from the captured
-    deps. NEVER auto-writes ``environment.consumes`` — the developer must confirm."""
-
-    if product or declared_consumes:
-        return
-    deps = list((capsule.get("environment") or {}).get("dependencies") or [])
-    if not deps:
-        return
-    from ..enrichment import suggest_consumes
-
-    hints = suggest_consumes(deps)
-    if not hints:
-        return
-    click.echo(
-        "hint: this episode is not bound to a product. Add --product <name> or "
-        "--consume to anchor it. Candidates from captured dependencies:",
-        err=True,
-    )
-    for h in hints[:8]:
-        click.echo(f"  --consume {h}", err=True)
 
 
 def _egress_destinations(hf_repo, gh_repo) -> list[str]:
@@ -296,19 +186,53 @@ def capsule_group() -> None:
 
 
 @capsule_group.command("export")
-@click.argument("trace_id")
+@click.argument("trace_id", required=False, default=None)
 @_export_options
+@click.option("--from-session", "from_session", default=None, metavar="SESSION_ID",
+              help="Build a capsule from the CURRENT turn: materialize this live session "
+                   "into the bucket, then export it. Mutually exclusive with a trace id.")
+@click.option("--from-agent", "from_agent", type=click.Choice(["codex", "claude"]), default=None,
+              help="Disambiguate the --from-session source (default: auto-detect).")
+@click.option("--product-full-span", "product_full_span", is_flag=True, default=False,
+              help="Opt OUT of the default --product radius cap (restore the historical "
+                   "unbounded min..max episode span; may be slow on large sessions).")
+@progress_option
 @click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=None,
               help="Output dir (default: <project>/.opentraces/capsules).")
 @click.option("--bundle", "make_bundle", is_flag=True,
               help="Embed a hermetic source bundle (git archive at the pin) so the test runs even if the commit is gone.")
 @click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
-def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, out, make_bundle, as_json):
-    """Build a local, redacted, self-contained capsule for one agent usage episode."""
+def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, from_session, from_agent, product_full_span, progress_mode, out, make_bundle, as_json):
+    """Build a local, redacted, self-contained capsule for one agent usage episode.
+
+    Pass a TRACE_ID to capsule a finalized trace, or ``--from-session <id>`` to
+    capsule the CURRENT turn (the live session is materialized into the bucket
+    first). The two are mutually exclusive.
+    """
 
     from ..core.capsule.share import write_capsule_dir
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts)
+    # Mutual exclusion (Click positionals are required by default; trace_id is now
+    # optional so --from-session can stand alone).
+    if not trace_id and not from_session:
+        raise click.UsageError("provide a trace id or --from-session <id>")
+    if trace_id and from_session:
+        raise click.UsageError("--from-session is mutually exclusive with a trace id")
+    if from_agent and not from_session:
+        raise click.UsageError("--from-agent only applies with --from-session")
+    if from_session:
+        trace_id = _resolve_from_session_or_exit(from_session, from_agent, project_dir)
+
+    reporter = build_cli_progress("capsule export", progress_mode)
+    if product and product_full_span:
+        click.echo(
+            "note: --product-full-span runs an UNBOUNDED product episode "
+            "(min..max over every step that references the product); this can be "
+            "slow on large sessions.",
+            err=True,
+        )
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, product_full_span=product_full_span, progress=reporter)
+    reporter.done()
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     dest = out or (project / ".opentraces" / "capsules")
     arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes)
@@ -367,9 +291,14 @@ def open_cmd(ref, as_json, summary):
 @capsule_group.command("preview")
 @click.argument("trace_id")
 @_export_options
+@click.option("--product-full-span", "product_full_span", is_flag=True, default=False,
+              help="Opt OUT of the default --product radius cap (restore the historical "
+                   "unbounded min..max episode span; may be slow on large sessions).")
+@progress_option
 @click.option("--json", "as_json", is_flag=True, help="Emit the preview as JSON.")
 def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command,
-                expect_error, setup_command, consume_specs, product, include_prompts, as_json):
+                expect_error, setup_command, consume_specs, product, include_prompts,
+                product_full_span, progress_mode, as_json):
     """Preview egress BEFORE anything leaves the machine — writes/publishes NOTHING.
 
     Runs the full redaction pipeline, then prints the redaction manifest by field
@@ -377,10 +306,21 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
     publish WOULD reach. The developer-approval checkpoint.
     """
 
+    reporter = build_cli_progress("capsule preview", progress_mode)
+    if product and product_full_span:
+        click.echo(
+            "note: --product-full-span runs an UNBOUNDED product episode "
+            "(min..max over every step that references the product); this can be "
+            "slow on large sessions.",
+            err=True,
+        )
     capsule, _project = _do_export(
         trace_id, step, node_id, radius, repo_url, project_dir,
         test_command, expect_error, setup_command, consume_specs, product, include_prompts,
+        product_full_span=product_full_span, progress=reporter,
     )
+    reporter.done()
+    telemetry_stages = reporter.telemetry()
     manifest = (capsule.get("redaction") or {}).get("manifest") or {}
     privacy_scope = capsule.get("privacy_scope") or {}
     by_field_path = manifest.get("by_field_path") or {}
@@ -406,6 +346,10 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
             "business_logic": {"findings": by_tool.get("business_logic", 0)},
             "privacy_scope": privacy_scope,
             "destinations": destinations,
+            # Issue #98 — additive per-stage progress telemetry (stderr-only
+            # progress events do not pollute this stdout payload; this block is
+            # ADDITIVE to the preview JSON, NOT to the frozen capsule envelope).
+            "telemetry": {"stages": telemetry_stages},
         }, indent=2, ensure_ascii=False))
         return
 

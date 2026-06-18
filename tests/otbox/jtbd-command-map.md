@@ -54,6 +54,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **configure-security-detectors** | 1 → 2 | 1 | `setup trufflehog` + `setup privacy-filter` |
 | **configure-security-reviewer** | 1/1 | 1 | `setup llm-review` (also cross-refs `configure-publishing-gates`) |
 | **maintain-install** | 1/1 | 1 | `setup upgrade` |
+| **reconcile-runtime** | 1 → 4 | 1 | `setup runtime status/use/use-dev/remove-duplicates` — select / reconcile the active runtime on a multi-install machine (issue #99) |
 | **inspect-security-pipeline** | 1 → 3 | 1 | `security sanitize` + `security tools list` + `security tools info` (workflow-author + agent inspection surface, not setup) |
 | **session-ingest** | auto | 2 (Capture) | Hook-driven trace ingest (`_capture`, `_ingest-session`) |
 | **commit-correlation** | auto | 2 | Hook-driven commit→trace link (`_run-post-commit-hook`) |
@@ -168,6 +169,10 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `setup watcher uninstall` | Developer removes the watcher unit + shim entirely so the daemon no longer runs | enable-live-attribution (3/3) | unowned | human |
 | `setup watcher tick` | Developer triggers a single synchronous watcher tick + prints the report so they can diagnose attribution coverage without waiting for the scheduled poll | enable-live-attribution (diagnostic) | unowned | human |
 | `setup watcher sweep` | Production watcher entrypoint (#65): runs one bounded sweep over all enlisted projects then exits, so the launchd/systemd unit ticks every project without a long-lived daemon pinning RSS | enable-live-attribution (lifecycle: sweep) | unowned | human |
+| `setup runtime status` | Developer or agent sees which install root each integration runner executes on a multi-install (pipx + brew + source) machine, reusing #93 detection | reconcile-runtime (1/4) | `setup-runtime-status-mixed` | both |
+| `setup runtime use` | Developer re-renders the integration glue to a chosen installed runtime (pipx/homebrew/source) so hooks + watcher stop running stale code; integrations-only, dry-run-able | reconcile-runtime (2/4) | `setup-runtime-use-installed-rewrites-integrations`, `setup-runtime-dry-run-no-mutation` | both |
+| `setup runtime use-dev` | Developer points the integration glue at the editable checkout (dev mode) and records it so doctor reports deliberate dev runtime, not drift | reconcile-runtime (3/4) | `setup-runtime-use-dev-checkout` | both |
+| `setup runtime remove-duplicates` | Developer PRINTS (never executes) the data-safe package-removal commands for duplicate installs, keeping the chosen runtime | reconcile-runtime (4/4) | `setup-runtime-remove-duplicates-prints` | both |
 | `capture-otlp start` | Developer starts the local OTLP receiver so Claude Code telemetry can be collected for Context Tree capture | configure-otel-capture (2/6) | unowned | human |
 | `capture-otlp status` | Developer checks receiver health, capture counts, uptime, and raw-body footprint before trusting OTel-backed Context Tree evidence | configure-otel-capture (3/6) | unowned | both |
 | `capture-otlp flush` | Developer flushes receiver snapshots into a project's canonical event log so captured Context Tree layers become queryable by `ctx` | configure-otel-capture (4/6) | unowned | both |
@@ -224,6 +229,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `trail diff` (hidden) | Developer computes the Trace Patch between two captured step snapshots to inspect what changed between steps | build-dataset-from-lineage | unowned | human |
 | `trail attach` (hidden) | Maintainer manually connects a trace's patches to a commit after a hook failure so blame becomes available | build-dataset-from-lineage | unowned | agent |
 | `trail mature` (hidden) | Maintainer force-matures pending patches into Git Anchors over recent commits so blame is available without waiting for the watcher | build-dataset-from-lineage | unowned | agent |
+| `trail verify` (hidden) | Maintainer verifies or summarizes the canonical Trace Trails event log after doctor reports skipped or invalid verification | verify-install | `trail-verify-large-log-bounded` | agent |
 | `trail rebuild` (hidden) | Maintainer re-derives advisory snapshot projections from the canonical event log after branch surgery or ref corruption | build-dataset-from-lineage | unowned | agent |
 | `trail teleport export` | Deprecated visible alias for `trace teleport export`. Still in the Click registry pending a future removal; do NOT exercise in new journeys | deprecated | unowned | — |
 | `trail teleport open` | Deprecated visible alias for `trace teleport open`. Still in the Click registry pending a future removal; do NOT exercise in new journeys | deprecated | unowned | — |

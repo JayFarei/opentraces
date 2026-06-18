@@ -1,0 +1,54 @@
+name = "capsule-open-exported-roundtrip"
+description = """
+Issue #98 (Part A invariant, SILVER) — exporting a captured trace produces a
+valid, frozen `opentraces.capsule.v1` envelope carrying its redaction
+manifest + privacy scope, UNCHANGED by the #98 progress/bounding work (the
+frozen-envelope guarantee).
+
+`capsule export {trace_id} --json` emits the full capsule envelope on stdout;
+we assert it is a valid v1 capsule that carries the redaction manifest floor
+and the privacy-scope redaction floor — the same properties `capsule open`
+would surface. The file-write + `capsule open <path>` roundtrip is covered by
+the hermetic Layer-1 units (`test_from_session_codex` / the usage-episode
+suite) which resolve the written capsule.json; this journey pins the
+agent-facing envelope shape on a real captured trace.
+
+Tier 1 (opt-in).
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+[[steps]]
+type = "cli"
+id = "export-roundtrip"
+argv = ["capsule", "export", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "export-roundtrip"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "export-roundtrip"
+path = "schema_version"
+equals = "opentraces.capsule.v1"
+
+# The redaction manifest floor is present (the mandatory hard gate ran).
+[[assertions]]
+kind = "stdout_json"
+step = "export-roundtrip"
+path = "redaction.manifest.floor"
+
+# The privacy scope carries the redaction floor (egress declaration intact).
+[[assertions]]
+kind = "stdout_json"
+step = "export-roundtrip"
+path = "privacy_scope.redaction_floor"

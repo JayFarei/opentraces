@@ -18,6 +18,7 @@ import click
 from opentraces import cli as _cli
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
+from ._progress import progress_option
 from ..core.trace_meta import short_trace_id
 from ..core.trace_stage import resolve_visible_stage
 
@@ -415,6 +416,14 @@ def trace_discover(
 )
 @click.option("--vec", default=None, help="Reserved vector query mode.")
 @click.option("--hyde", default=None, help="Reserved HyDE query mode.")
+@click.option(
+    "--fresh",
+    is_flag=True,
+    help=(
+        "Strict freshness: fail with maintenance_needed if a fully up-to-date "
+        "snapshot cannot be proven (no serve-stale fallback)."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_query(
     lex_terms: tuple[str, ...],
@@ -459,6 +468,7 @@ def trace_query(
     query_source: str,
     vec: str | None,
     hyde: str | None,
+    fresh: bool,
     as_json: bool,
 ) -> None:
     """Search local retained traces and return bounded candidate packets."""
@@ -627,6 +637,7 @@ def trace_query(
             limit=limit,
             cursor=page_token,
             semantic=semantic,
+            strict_freshness=fresh,
         )
     except SearchSnapshotNeedsRebuild as exc:
         # search_traces auto-rebuilds the compact snapshot once before raising
@@ -688,11 +699,15 @@ def trace_query(
     }
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
-    # NOTE: SearchPage.warnings has zero writers in the read-only snapshot kernel
-    # (PR #34 routed Trace Trail freshness through SearchDiagnostics.rebuilt_index
-    # instead). The dead ``trail_freshness``/``warnings`` emission that used to live
-    # here was dropped (issue #27 item I) — re-add a real freshness surface only when
-    # the kernel actually populates page.warnings again.
+    # Issue #91: surface the served snapshot's freshness telemetry. On an
+    # actively-capturing box a stale-but-servable snapshot now returns
+    # status=ok + results + freshness.stale=true (serve last-known-good)
+    # instead of dead-ending at maintenance_needed; a clean read reports
+    # freshness.stale=false with build provenance. (This is the real writer
+    # the old dead ``warnings`` block always wanted — keyed ``freshness``, not
+    # the legacy ``trail_freshness``/``warnings`` names.)
+    if page.freshness is not None:
+        payload["freshness"] = page.freshness
     if semantic:
         from ..core.semantic import expand_semantic_query
 
@@ -819,11 +834,12 @@ def trace_skills(
 
 @trace_group.group("index", cls=OpentracesGroup, invoke_without_command=True)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@progress_option
 @click.pass_context
-def trace_index_group(ctx: click.Context, as_json: bool) -> None:
+def trace_index_group(ctx: click.Context, as_json: bool, progress_mode: str) -> None:
     """Rebuild and inspect the local trace search snapshot."""
     if ctx.invoked_subcommand is None:
-        _trace_index_rebuild_impl(as_json)
+        _trace_index_rebuild_impl(as_json, progress_mode=progress_mode)
 
 
 @trace_index_group.command("rebuild", cls=OpentracesCommand)
@@ -834,15 +850,19 @@ def trace_index_group(ctx: click.Context, as_json: bool) -> None:
     is_flag=True,
     help="Also rebuild the optional legacy Trace Index (trail-enriched map/get/slice); the default path already serves map/get/slice from the bucket.",
 )
-def trace_index_rebuild_cmd(as_json: bool, rebuild_legacy: bool) -> None:
+@progress_option
+def trace_index_rebuild_cmd(as_json: bool, rebuild_legacy: bool, progress_mode: str) -> None:
     """Rebuild the local read-only trace search snapshot."""
-    _trace_index_rebuild_impl(as_json, rebuild_legacy=rebuild_legacy)
+    _trace_index_rebuild_impl(
+        as_json, rebuild_legacy=rebuild_legacy, progress_mode=progress_mode
+    )
 
 
 def _trace_index_rebuild_impl(
     as_json: bool,
     *,
     rebuild_legacy: bool = False,
+    progress_mode: str = "auto",
 ) -> None:
     """Rebuild the read-only search snapshot.
 
@@ -858,6 +878,7 @@ def _trace_index_rebuild_impl(
         rebuild_index,
     )
     from ..core.trace_search_snapshot import build_trace_search_snapshot
+    from ._progress import build_cli_progress
 
     started = time.monotonic()
     healed_legacy_index = False
@@ -865,36 +886,49 @@ def _trace_index_rebuild_impl(
     legacy_index_missing = not default_index_path().exists()
     legacy_bootstrap_duration_ms = None
     legacy_rebuild_summary = None
-    if rebuild_legacy:
-        total_traces = _approx_bootstrap_trace_count()
-        click.echo(
-            "Rebuilding legacy Trace Index explicitly "
-            f"(~{total_traces} traces). This can take several minutes on a "
-            "large bucket; no output until it completes.",
-            err=True,
-        )
-        _bootstrap_started = time.monotonic()
-        summary = rebuild_index(default_index_path())
-        legacy_bootstrap_duration_ms = round(
-            (time.monotonic() - _bootstrap_started) * 1000,
-            2,
-        )
-        click.echo(
-            f"Legacy Trace Index rebuild done in "
-            f"{time.monotonic() - _bootstrap_started:.1f}s "
-            f"(~{total_traces} traces).",
-            err=True,
-        )
-        healed_legacy_index = True
-        legacy_rebuild_forced = True
-        legacy_rebuild_summary = {
-            "trace_count": summary.trace_count,
-            "unit_count": summary.unit_count,
-            "map_node_count": summary.map_node_count,
-        }
-    snapshot_started = time.monotonic()
-    search_summary = build_trace_search_snapshot()
-    snapshot_build_duration_ms = round((time.monotonic() - snapshot_started) * 1000, 2)
+    # Shared progress/heartbeat contract (issue #88). The reporter is built at
+    # the TOP — BEFORE the --legacy branch — so its background heartbeat covers
+    # the command's slowest mode (the blocking legacy ``rebuild_index()``), not
+    # just the snapshot build. The sink is stderr-only (click.echo(err=True)),
+    # so the stdout --json payload below stays a single clean object.
+    # traces_total is seeded CLI-side; core reports only traces_seen.
+    total_traces = _approx_bootstrap_trace_count()
+    reporter = build_cli_progress("trace index rebuild", progress_mode)
+    reporter.set_total(traces_total=total_traces)
+    try:
+        if rebuild_legacy:
+            click.echo(
+                "Rebuilding legacy Trace Index explicitly "
+                f"(~{total_traces} traces). This can take several minutes on a "
+                "large bucket; no output until it completes.",
+                err=True,
+            )
+            _bootstrap_started = time.monotonic()
+            # Beat the heartbeat through the long blocking legacy rebuild too.
+            reporter.stage("rebuilding_legacy_index", traces_total=total_traces)
+            summary = rebuild_index(default_index_path())
+            legacy_bootstrap_duration_ms = round(
+                (time.monotonic() - _bootstrap_started) * 1000,
+                2,
+            )
+            click.echo(
+                f"Legacy Trace Index rebuild done in "
+                f"{time.monotonic() - _bootstrap_started:.1f}s "
+                f"(~{total_traces} traces).",
+                err=True,
+            )
+            healed_legacy_index = True
+            legacy_rebuild_forced = True
+            legacy_rebuild_summary = {
+                "trace_count": summary.trace_count,
+                "unit_count": summary.unit_count,
+                "map_node_count": summary.map_node_count,
+            }
+        snapshot_started = time.monotonic()
+        search_summary = build_trace_search_snapshot(progress=reporter)
+        snapshot_build_duration_ms = round((time.monotonic() - snapshot_started) * 1000, 2)
+    finally:
+        reporter.done()
     payload = {
         "status": "ok",
         "search_snapshot": search_summary.as_dict(),
@@ -924,6 +958,10 @@ def _trace_index_rebuild_impl(
             "keep_warm_duration_ms": 0,
             "snapshot_build_duration_ms": snapshot_build_duration_ms,
             "legacy_bootstrap_duration_ms": legacy_bootstrap_duration_ms,
+            # Additive per-stage progress telemetry (issue #88). Nested under the
+            # existing top-level "telemetry" key, so the json-surface sweep
+            # (top-level-keys-only) is unaffected.
+            "stages": reporter.telemetry(),
         },
     }
     if as_json:

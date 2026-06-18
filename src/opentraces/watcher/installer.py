@@ -150,7 +150,31 @@ def _render_shim() -> str:
     supervision a process that exits after each sweep cannot accumulate
     memory across sweeps, so the supervisor IS the service loop.
     """
-    py = sys.executable or "python3"
+    # Route through stable_interpreter so (a) the #86 Cellar→opt remap applies
+    # to the baked fallback and (b) an active ``selected_interpreter`` selection
+    # (issue #99, ``setup runtime use``) wins.
+    from ..capture._interpreter import active_selection, stable_interpreter
+
+    py = stable_interpreter(sys.executable or "python3")
+
+    # Issue #99 (codex BLOCKER): when a runtime is SELECTED via `setup runtime
+    # use`, the chosen interpreter must WIN at run time — otherwise the CLI-probe
+    # loop below could still pick a Homebrew `opentraces` on PATH while doctor
+    # reports the selected runtime. So pin the selected interpreter as the FIRST
+    # execution path, guarded by -x so a later deletion (e.g. brew upgrade) falls
+    # through to #65 run-time resolution. The pin renders ONLY under an active
+    # selection; the plain `setup upgrade` shim stays byte-identical.
+    pinned = ""
+    if active_selection() is not None:
+        pinned = (
+            "# Runtime PINNED by `setup runtime use` (#99): the selected\n"
+            "# interpreter wins at run time, guarded by -x so a later deletion\n"
+            "# falls through to the #65 run-time resolution below.\n"
+            f'if [ -x "{py}" ]; then\n'
+            f'  exec "{py}" -m opentraces.watcher.daemon run-sweep "$@"\n'
+            "fi\n"
+        )
+
     return stamp_script(
         "#!/bin/sh\n"
         "# opentraces watcher shim — one-shot sweep under launchd/systemd\n"
@@ -160,6 +184,7 @@ def _render_shim() -> str:
         "# (codex P2): an older CLI in a probed location would otherwise be\n"
         "# exec'd, fail with 'no such command' every interval, and silently\n"
         "# stop the watcher after a reinstall/migration.\n"
+        f"{pinned}"
         "for c in /opt/homebrew/bin/opentraces /usr/local/bin/opentraces \\\n"
         '         "$HOME/.local/bin/opentraces" '
         '"$(command -v opentraces 2>/dev/null)"; do\n'
@@ -181,6 +206,29 @@ def _write_shim() -> Path:
     mode = path.stat().st_mode
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return path
+
+
+def shim_path() -> Path:
+    """Public accessor for the worker shim path (issue #99 re-render/plan)."""
+    return _shim_path()
+
+
+def shim_exists() -> bool:
+    return _shim_path().is_file()
+
+
+def rerender_shim() -> Path:
+    """Re-render the worker shim in place, picking up an active
+    ``selected_interpreter`` selection (issue #99 ``setup runtime use``).
+
+    Re-writes ONLY the shim file — the launchd plist / systemd unit are
+    interpreter-independent (they exec the shim), and #65 made the watcher a
+    one-shot-per-sweep job, so the supervisor re-execs the new shim on its next
+    interval. No ``launchctl``/``systemctl`` calls and no unit teardown, so the
+    unit stays present (``status().installed`` is unaffected) and tier-1 otbox
+    journeys never mutate the host's launchd/systemd state.
+    """
+    return _write_shim()
 
 
 # --- install / uninstall ---------------------------------------------------

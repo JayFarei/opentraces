@@ -1,0 +1,110 @@
+name = "setup-runtime-use-installed-rewrites-integrations"
+description = """
+Issue #99 — `setup runtime use pipx` CONVERGES the mixed glue onto one runtime.
+Against `c-multi-install-mixed-runtime` (codex/claude → fake pipx; git + watcher
+→ fake homebrew), after `use pipx --integrations-only` ALL FOUR integration
+runners (codex-cli / claude-code / git / watcher) resolve to the pipx
+interpreter:
+
+  * `integration_runners` length stays 4 — the watcher is RE-RENDERED in place,
+    NOT removed (stop-only quiesce / shim re-render, adversarial BLOCKER 3).
+  * every runner's `.runner` == the resolved pipx interpreter (cross-step
+    `equals_var` against the `use` envelope's `resolved_interpreter`, robust to
+    box-relative paths).
+  * the homebrew install root disappears (`discovered_installs` collapses to the
+    foreground source + pipx; no `brew/Cellar/opentraces` anywhere in the
+    report).
+
+Achievable ONLY because the explicit interpreter is threaded into git's
+`_owned_hook_content` AND the watcher shim (Fix B.2). OTLP is NOT asserted to
+converge (excluded from runtime selection in v1). A sentinel captured-data file
+under the box `~/.opentraces` survives the switch (data-safety). Tier 1
+(opt-in).
+"""
+lane = "core"
+tier = 1
+from_checkpoints = ["c-multi-install-mixed-runtime"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+# data-safety sentinel: a captured-data file the switch must never touch.
+[[steps]]
+type = "shell"
+id = "seed_data"
+argv = ["sh", "-c", "mkdir -p \"$HOME/.opentraces/bucket\" && printf keep > \"$HOME/.opentraces/bucket/SENTINEL\""]
+expect_returncode = 0
+
+[[steps]]
+type = "shell"
+id = "use_pipx"
+argv = [".testvenv/bin/opentraces", "--json", "setup", "runtime", "use", "pipx", "--integrations-only"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "use_pipx"
+path = "status"
+equals = "ok"
+
+[[steps]]
+type = "shell"
+id = "status2"
+argv = [".testvenv/bin/opentraces", "--json", "setup", "runtime", "status"]
+expect_returncode = 0
+
+# watcher survived the switch — still present (BLOCKER 3).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "status2"
+path = "integration_runners"
+equals = 4
+
+# all four runners now resolve to the SAME chosen pipx interpreter.
+[[assertions]]
+kind = "stdout_json"
+step = "status2"
+path = "integration_runners.0.runner"
+equals_var = "use_pipx:resolved_interpreter"
+
+[[assertions]]
+kind = "stdout_json"
+step = "status2"
+path = "integration_runners.1.runner"
+equals_var = "use_pipx:resolved_interpreter"
+
+[[assertions]]
+kind = "stdout_json"
+step = "status2"
+path = "integration_runners.2.runner"
+equals_var = "use_pipx:resolved_interpreter"
+
+[[assertions]]
+kind = "stdout_json"
+step = "status2"
+path = "integration_runners.3.runner"
+equals_var = "use_pipx:resolved_interpreter"
+
+# the homebrew install root is gone — only foreground source + pipx remain.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "status2"
+path = "discovered_installs"
+equals = 2
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "status2"
+value = "brew/Cellar/opentraces"
+
+# DATA-SAFETY: the sentinel captured-data file survived the switch byte-for-byte.
+[[steps]]
+type = "shell"
+id = "check_data"
+argv = ["sh", "-c", "cat \"$HOME/.opentraces/bucket/SENTINEL\""]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "check_data"
+value = "keep"

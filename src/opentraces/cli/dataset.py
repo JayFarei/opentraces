@@ -16,6 +16,7 @@ from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
 from opentraces_schema import DatasetSecurityPolicy
 
+from ..security.dataset_rows import DATASET_ROW_FLOOR
 from ._security_flags import SECURITY_TOOL_NAMES
 from ..core.datasets import (
     add_dataset_remote,
@@ -575,6 +576,18 @@ def dataset_status(name: str, as_json: bool) -> None:
     }
     if _is_manual_dataset(dataset):
         payload["manual"] = True
+    # Issue #84: surface the non-overridable reader floor so it is inspectable.
+    # The floor runs over every row regardless of the workflow author's contract;
+    # ``floor_satisfied`` is false iff any row's execution evidence misses it
+    # (e.g. a row appended before the floor existed — the gate blocks those).
+    floor_unsatisfied = any(
+        "dataset_reader_floor_unsatisfied" in entry.block_reasons
+        for entry in state.rows.values()
+    )
+    payload["security"] = {
+        "reader_floor": list(DATASET_ROW_FLOOR),
+        "floor_satisfied": not floor_unsatisfied,
+    }
     # Cluster F D9: status surfaces the same row_quality block list does.
     rq = _compute_row_quality_summary(name)
     if rq is not None:

@@ -244,6 +244,64 @@ def test_incremental_verify_equals_full_verify(tmp_path: Path) -> None:
     assert full["errors"] == []
 
 
+def test_quick_event_log_verification_summarizes_without_full_content_check(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    _append_simple(tmp_path, "tA", "s1")
+    _append_simple(tmp_path, "tA", "s2")
+
+    status = event_log.event_log_verification_status(tmp_path, mode="quick")
+
+    assert status["state"] == "unverified_large"
+    assert status["mode"] == "quick"
+    assert status["verification_source"] == "bounded_head_summary"
+    assert status["event_count"] == 2
+    assert status["batch_parents_linear"] is True
+    assert status["content_hashes_valid"] is None
+    assert status["event_chain_valid"] is None
+    assert [phase["name"] for phase in status["phases"]] == [
+        "resolve_ref",
+        "check_batch_parents",
+        "read_head_tail",
+    ]
+
+
+def test_sampled_event_log_verification_checks_bounded_event_identities(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    _append_simple(tmp_path, "tA", "s1")
+    _append_simple(tmp_path, "tA", "s2")
+    _append_simple(tmp_path, "tA", "s3")
+
+    status = event_log.event_log_verification_status(
+        tmp_path,
+        mode="sample",
+        sample_size=1,
+    )
+
+    assert status["state"] == "sampled"
+    assert status["mode"] == "sample"
+    assert status["event_count"] == 3
+    assert status["sampled_event_count"] == 2
+    assert status["sampled_content_hashes_valid"] is True
+    assert status["content_hashes_valid"] is None
+
+
+def test_full_event_log_verification_status_uses_full_verifier(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _append_simple(tmp_path, "tA", "s1")
+
+    status = event_log.event_log_verification_status(tmp_path, mode="full")
+
+    assert status["state"] == "ok"
+    assert status["mode"] == "full"
+    assert status["verification_source"] == "full_scan"
+    assert status["content_hashes_valid"] is True
+    assert status["event_chain_valid"] is True
+
+
 def test_incremental_verify_detects_corruption_in_new_events(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _append_simple(tmp_path, "tA", "s1")

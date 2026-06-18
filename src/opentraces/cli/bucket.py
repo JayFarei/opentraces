@@ -213,7 +213,7 @@ def bucket_status_cmd(as_json: bool) -> None:
     if remote_config.get("enabled"):
         click.echo(f"  remote:     {remote_config.get('url') or 'configured'}")
         click.echo(f"  sync policy: {remote_config.get('sync_policy', 'daemon')}")
-    click.echo(f"  traces:     {trace_records.get('object_count', 0)}")
+    click.echo(f"  traces:     {bucket.get('trace_count', trace_records.get('object_count', 0))}")
     click.echo(f"  raw sources: {raw_sources.get('object_count', 0)}")
     click.echo(f"  trail events: {trail_events.get('event_count', 0)}")
     click.echo(f"  syncable:   {trace_records.get('syncable_count', 0)}")
@@ -290,6 +290,27 @@ def bucket_remote_status_cmd(remote_root: Path | None, as_json: bool) -> None:
         click.echo(f"  remote: {remote.get('remote_digest')}")
     if remote.get("advice"):
         click.echo(f"  advice: {remote.get('advice')}")
+    _echo_security_gate(remote.get("security_gate"))
+
+
+def _echo_security_gate(gate: dict | None) -> None:
+    """Render the additive security-gate block in human mode (issue #94)."""
+    if not gate:
+        return
+    if gate.get("state") == "unknown":
+        click.echo("  security gate: unknown (no persisted bucket manifest)")
+    else:
+        click.echo(
+            "  security gate: "
+            f"{'eligible' if gate.get('eligible') else 'blocked'} "
+            f"(unfiltered={gate.get('unfiltered_count')}, "
+            f"stale={gate.get('security_stale_count')})"
+        )
+    reasons = gate.get("blocking_reasons") or []
+    if reasons:
+        click.echo(f"    blocking: {', '.join(reasons)}")
+    for command in gate.get("advice") or []:
+        click.echo(f"    -> {command}")
 
 
 @bucket_remote_group.command("diff", cls=OpentracesCommand)

@@ -1,0 +1,204 @@
+name = "doctor-multi-install-detects-mixed-runtime"
+description = """
+Issue #93 — the load-bearing acceptance journey. Against the
+`c-multi-install-mixed-runtime` checkpoint (the editable foreground CLI with the
+codex/claude hooks pointed at a fake pipx install, the git post-commit shim and
+the watcher worker shim pointed at a fake homebrew install — all inside the box
+HOME), `doctor --json` from the editable `.testvenv` CLI must DETECT the split:
+
+  * `runtime_provenance.state == "mixed_runtimes"`, severity `warning`
+  * ≥2 discovered installs of distinct `source_kind` (source + pipx + brew)
+  * the codex-cli / claude-code / git / watcher runners all `matches_current ==
+    false`
+  * informational remediation text exists and never says "purge data"
+    (detection-only; remediation/selection is sibling #99)
+
+SECURITY (codex round 2): the DEFAULT `doctor` path executes NOTHING derived
+from the hook config — mixed-runtime detection comes purely from the interpreter
+PATHS (`source_kind` inferred, `probe: "not_run"`, `verified: false`,
+`probed: false`). A second step opts into `--probe-runtimes` (user-consented
+execution) and asserts the trusted fake-python runners upgrade to verified
+values (`probe: "ok"`, `probed: true`).
+
+The mixed box deliberately diverges the install roots; the watcher shim is kept
+clean so the existing watcher/hook-drift exit gates stay quiet and doctor exits
+0 here (the assertions read the JSON body; `expect_returncode` pins the observed
+exit). Tier 1 (opt-in) — needs the new checkpoint.
+"""
+lane = "core"
+tier = 1
+from_checkpoints = ["c-multi-install-mixed-runtime"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+[[steps]]
+type = "shell"
+id = "doctor"
+argv = [".testvenv/bin/opentraces", "--json", "doctor"]
+expect_returncode = 0
+
+# DEFAULT path executes nothing config-derived: `probed` is false.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.probed"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.state"
+equals = "mixed_runtimes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.severity"
+equals = "warning"
+
+# ≥2 distinct installs discovered (source + pipx + brew on this checkpoint).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "doctor"
+path = "doctor.runtime_provenance.discovered_installs"
+equals = 3
+
+# distinct source_kind / module_file roots are present.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.discovered_installs"
+value = "pipx"
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.discovered_installs"
+value = "brew"
+
+# exactly the four configured runners are enumerated (codex/claude/git/watcher).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners"
+equals = 4
+
+# STRUCTURAL per-runner assertions (codex recommendation): every expected
+# runner is present at its deterministic position AND each `matches_current`
+# is the boolean false — proving divergence per-runner, not via a substring
+# that could match any single entry. Order: codex-cli, claude-code, git,
+# watcher (hook-config order, then the appended watcher unit).
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.0.name"
+equals = "codex-cli"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.0.matches_current"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.1.name"
+equals = "claude-code"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.1.matches_current"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.2.name"
+equals = "git"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.2.matches_current"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.3.name"
+equals = "watcher"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.3.matches_current"
+equals = false
+
+# SECURITY: by default NO runner was executed — every runner is `not_run`
+# (detected from interpreter paths, not by running them).
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.0.probe"
+equals = "not_run"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.integration_runners.3.probe"
+equals = "not_run"
+
+# defence-in-depth: no runner anywhere claims to match the current install.
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor"
+value = "\"matches_current\": true"
+
+# remediation text exists and is data-safe (detection only).
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor"
+path = "doctor.runtime_provenance.advice"
+value = "No data is touched"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "doctor"
+value = "purge data"
+
+# --- OPT-IN probe step: user-consented execution of the trusted runners. -----
+# The checkpoint's fake interpreters ARE genuine `<.../bin/python> -m opentraces`
+# shapes, so `--probe-runtimes` upgrades them to verified install facts.
+[[steps]]
+type = "shell"
+id = "doctor_probe"
+argv = [".testvenv/bin/opentraces", "--json", "doctor", "--probe-runtimes"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor_probe"
+path = "doctor.runtime_provenance.probed"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor_probe"
+path = "doctor.runtime_provenance.state"
+equals = "mixed_runtimes"
+
+# the trusted fake-python runners were executed → verified (`probe == "ok"`).
+[[assertions]]
+kind = "stdout_json"
+step = "doctor_probe"
+path = "doctor.runtime_provenance.integration_runners.0.probe"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor_probe"
+path = "doctor.runtime_provenance.integration_runners.0.matches_current"
+equals = false

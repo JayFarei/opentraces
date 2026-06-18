@@ -66,6 +66,55 @@ def bucket_security_overview(cfg: Any = None) -> dict[str, Any]:
     }
 
 
+def bucket_sync_security_gate(*, unfiltered: int, stale: int) -> dict[str, Any]:
+    """Shared bucket-sync security eligibility gate (issue #94).
+
+    The single computation behind BOTH doctor's bucket security remediation
+    (``doctor._bucket_security_remediation_for_doctor``) and ``bucket remote
+    status``'s ``security_gate`` block. It reads ``filtering_configured`` from
+    config and maps the ``(unfiltered, stale)`` counts to the one actionable
+    remediation step.
+
+    The counts are supplied by the caller — both callers read them off the
+    PERSISTED ``bucket/manifest.json`` (``trace_records.unfiltered_count`` /
+    ``security_stale_count``). This helper performs NO bucket scan; it never
+    calls :func:`bucket_security_overview`. That keeps the sync-diagnostic
+    surfaces cheap on large buckets (the O(N) live-scan fast path is #97/#88).
+
+    Returns ``{configured, unfiltered_count, security_stale_count, eligible,
+    blocking_reasons, remediation}``. ``eligible`` here is the SECURITY axis
+    only (``remediation is None``); ``bucket remote status`` composes it with
+    the remote-configured axis for overall sync eligibility.
+    """
+
+    from .pipeline import _resolved_tool_names
+
+    try:
+        from .config import load_config
+
+        configured = bool(_resolved_tool_names(load_config(), skip_trufflehog=False))
+    except Exception:
+        configured = False
+    remediation = bucket_security_remediation(
+        unfiltered=unfiltered,
+        stale=stale,
+        filtering_configured=configured,
+    )
+    blocking_reasons: list[str] = []
+    if unfiltered:
+        blocking_reasons.append("unfiltered_records")
+    if stale:
+        blocking_reasons.append("security_version_stale")
+    return {
+        "configured": configured,
+        "unfiltered_count": int(unfiltered),
+        "security_stale_count": int(stale),
+        "eligible": remediation is None,
+        "blocking_reasons": blocking_reasons,
+        "remediation": remediation,
+    }
+
+
 def bucket_security_remediation(
     *,
     unfiltered: int,

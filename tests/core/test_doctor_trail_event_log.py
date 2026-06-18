@@ -142,7 +142,7 @@ def test_trail_event_log_status_skips_large_logs_without_verification(
     assert audit["state"] == "skipped"
 
 
-def test_trail_event_log_invalid_advice_points_at_rebuild_not_status(tmp_path: Path) -> None:
+def test_trail_event_log_invalid_advice_points_at_verify_not_rebuild(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _append_fixture_event(tmp_path)
     _tamper_first_event(tmp_path)
@@ -152,10 +152,11 @@ def test_trail_event_log_invalid_advice_points_at_rebuild_not_status(tmp_path: P
     assert status["state"] == "invalid"
     advice = status.get("advice", "")
     assert "trail status" not in advice
-    assert "trail rebuild" in advice
+    assert "trail rebuild" not in advice
+    assert "trail verify --mode full" in advice
 
 
-def test_trail_event_log_skipped_large_carries_no_status_advice(
+def test_trail_event_log_skipped_large_advises_bounded_verify(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -167,7 +168,10 @@ def test_trail_event_log_skipped_large_carries_no_status_advice(
     status = _trail_event_log_status(tmp_path)
 
     assert status["state"] == "unverified_large"
-    assert "advice" not in status
+    advice = status.get("advice", "")
+    assert "trail status" not in advice
+    assert "trail rebuild" not in advice
+    assert "trail verify --mode quick --json" in advice
 
 
 def test_doctor_source_has_no_trail_status_string() -> None:

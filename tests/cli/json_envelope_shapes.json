@@ -248,6 +248,50 @@
    "status"
   ]
  },
+ "setup runtime remove-duplicates": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "data_safety",
+   "duplicates",
+   "executed",
+   "keep",
+   "status"
+  ]
+ },
+ "setup runtime status": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "advice",
+   "current",
+   "dev_runtime_active",
+   "discovered_installs",
+   "integration_runners",
+   "probed",
+   "remediation",
+   "severity",
+   "state",
+   "status"
+  ]
+ },
+ "setup runtime use-dev": {
+  "schema_version": null,
+  "top_level_keys": [
+   "action",
+   "data_safety",
+   "dev_marker",
+   "dry_run",
+   "errors",
+   "integrations_only",
+   "repaired",
+   "resolved_interpreter",
+   "runners_targeted",
+   "runtime",
+   "skipped",
+   "status"
+  ]
+ },
  "setup skill": {
   "schema_version": null,
   "top_level_keys": [

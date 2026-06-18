@@ -1,0 +1,51 @@
+name = "doctor-trace-index-current-snapshot-stale"
+description = """
+Issue #96 — when the live search snapshot is dirty/stale, doctor's top-level
+`trace_index.state` must read `stale` and advise the CURRENT snapshot rebuild
+(`opentraces trace index rebuild`), never the deprecated `--legacy` string. We
+dirty the snapshot via `mark_search_snapshot_dirty` (the same marker capture and
+bucket writes set) and confirm doctor reflects the live snapshot, not the legacy
+index.db.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+# Dirty the live search snapshot in the box's isolated HOME so snapshot_status
+# returns `stale`. Runs under the box env (HOME -> box home) via the driver.
+[[steps]]
+type = "shell"
+id = "dirty-snapshot"
+argv = [
+    "{py_bin}",
+    "-c",
+    "from opentraces.core.trace_search_state import mark_search_snapshot_dirty; mark_search_snapshot_dirty('otbox_stale')",
+]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "dirty-snapshot"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.state"
+equals = "stale"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.rebuild_advice"
+equals = "opentraces trace index rebuild"

@@ -1,0 +1,113 @@
+name = "doctor-trail-invalid-log-hard-failure"
+description = """
+Issue #95: invalid Trace Trails event-log content must be reported as a real
+hard failure, distinct from the skipped-large state, and the remediation must
+point at `trail verify` rather than projection rebuild.
+"""
+lane = "core"
+tier = 0
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[[steps]]
+type = "shell"
+id = "tamper-event-log"
+argv = [
+  "{py_bin}",
+  "-c",
+  """
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+repo = Path.cwd()
+ref = "refs/opentraces/local/events/v1"
+
+def git(*args, input=None, env=None):
+    return subprocess.check_output(
+        ["git", *args],
+        cwd=repo,
+        input=input,
+        text=True,
+        env=env,
+    ).strip()
+
+head = git("rev-parse", ref)
+paths = git("ls-tree", "-r", "--name-only", head, "events").splitlines()
+event_path = sorted(path for path in paths if path.endswith(".json"))[0]
+raw = git("show", f"{head}:{event_path}")
+event = json.loads(raw)
+event["payload"]["issue_95_tamper"] = True
+tampered = json.dumps(event, sort_keys=True, indent=2) + "\\n"
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = os.environ.copy()
+    env["GIT_INDEX_FILE"] = str(Path(tmp) / "index")
+    git("read-tree", head, env=env)
+    blob = git("hash-object", "-w", "--stdin", input=tampered, env=env)
+    git(
+        "update-index",
+        "--cacheinfo",
+        f"100644,{blob},{event_path}",
+        env=env,
+    )
+    tree = git("write-tree", env=env)
+
+commit = git("commit-tree", tree, "-m", "tamper issue 95 event log")
+git("update-ref", ref, commit, head)
+""",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "tamper-event-log"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "doctor-invalid"
+argv = ["--json", "doctor"]
+expect_returncode = 3
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-invalid"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-invalid"
+path = "doctor.trail_event_log.state"
+equals = "invalid"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-invalid"
+path = "doctor.trail_event_log.content_hashes_valid"
+equals = false
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "doctor-invalid"
+path = "doctor.trail_event_log.advice"
+value = "opentraces trail verify --mode full"
+
+[[steps]]
+type = "cli"
+id = "verify-invalid"
+argv = ["trail", "verify", "--mode", "full", "--json"]
+expect_returncode = 3
+
+[[assertions]]
+kind = "returncode"
+step = "verify-invalid"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-invalid"
+path = "state"
+equals = "invalid"

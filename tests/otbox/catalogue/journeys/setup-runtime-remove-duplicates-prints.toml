@@ -1,0 +1,62 @@
+name = "setup-runtime-remove-duplicates-prints"
+description = """
+Issue #99 — `setup runtime remove-duplicates` PRINTS the data-safe package
+removal commands for the duplicate installs and NEVER executes them. Against
+`c-multi-install-mixed-runtime` with `--keep pipx`:
+
+  * `executed == false` (print-only; nothing was run)
+  * the duplicate installs (the foreground source + the homebrew root) are
+    listed with their removal commands, the kept pipx runtime is excluded
+  * no captured-data path is touched and the output never says "purge data"
+
+Tier 1 (opt-in).
+"""
+lane = "core"
+tier = 1
+from_checkpoints = ["c-multi-install-mixed-runtime"]
+persona = "agent"
+requires = ["cli"]
+trajectories = ["verify-install"]
+
+[[steps]]
+type = "shell"
+id = "remove_dups"
+argv = [".testvenv/bin/opentraces", "--json", "setup", "runtime", "remove-duplicates", "--keep", "pipx"]
+expect_returncode = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "remove_dups"
+path = "executed"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "remove_dups"
+path = "keep"
+equals = "pipx"
+
+# the duplicate installs (source + brew) are listed for removal.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "remove_dups"
+path = "duplicates"
+equals = 2
+
+[[assertions]]
+kind = "stdout_json_contains"
+step = "remove_dups"
+path = "duplicates"
+value = "uninstall opentraces"
+
+# data-safe: never executes, never mentions purging data.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "remove_dups"
+path = "data_safety"
+value = "PRINTED only"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "remove_dups"
+value = "purge data"

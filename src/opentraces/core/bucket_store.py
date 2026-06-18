@@ -2155,6 +2155,56 @@ def _load_manifest(path: Path | None = None) -> dict[str, Any] | None:
     return payload
 
 
+DEFAULT_BUCKET_MANIFEST_MAX_BYTES = 16 * 1024 * 1024
+
+
+def bucket_manifest_max_bytes() -> int:
+    """Byte cap for cheap persisted-manifest reads (shared by doctor + gate).
+
+    Reads ``OPENTRACES_DOCTOR_BUCKET_MANIFEST_MAX_BYTES`` (the same env knob
+    doctor uses) so doctor's bucket panel and ``bucket remote status``'s
+    security gate degrade on an oversized manifest at the SAME threshold.
+    """
+
+    raw = os.environ.get("OPENTRACES_DOCTOR_BUCKET_MANIFEST_MAX_BYTES")
+    if raw:
+        try:
+            return max(1024, int(raw))
+        except ValueError:
+            return DEFAULT_BUCKET_MANIFEST_MAX_BYTES
+    return DEFAULT_BUCKET_MANIFEST_MAX_BYTES
+
+
+def read_persisted_manifest_capped(
+    max_bytes: int | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Read-only, byte-capped read of the persisted ``bucket/manifest.json``.
+
+    Returns ``(state, manifest)`` where ``state`` is one of ``"ok"`` /
+    ``"absent"`` / ``"too_large"`` / ``"error"``. NEVER scans the bucket and
+    NEVER writes ``manifest.json`` — it is the cheap, side-effect-free read that
+    both doctor's bucket panel and the ``bucket remote status`` security gate use
+    so a huge manifest degrades identically (matching doctor's ``too-large``
+    behaviour) instead of stalling / blowing memory on ``read_text``.
+    """
+
+    manifest_path = bucket_manifest_path()
+    if not manifest_path.exists():
+        return ("absent", None)
+    cap = bucket_manifest_max_bytes() if max_bytes is None else max_bytes
+    try:
+        if manifest_path.stat().st_size > cap:
+            return ("too_large", None)
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return ("error", None)
+    if not isinstance(payload, dict):
+        return ("error", None)
+    if payload.get("schema_version") != BUCKET_MANIFEST_SCHEMA:
+        return ("error", None)
+    return ("ok", payload)
+
+
 def bucket_manifest(
     *,
     write: bool = False,
@@ -2646,6 +2696,48 @@ def _machine_neutral_digest_view(value: Any) -> Any:
     return value
 
 
+def _bounded_status_view(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Project the bucket manifest into a bounded, summary-only status view.
+
+    Issue #97 — ``bucket status --json`` must answer sync/security/event/context
+    counts WITHOUT dumping every trace. The full v2 ``traces[]`` enumeration (the
+    dominant O(N) size term), the per-record ``trace_records.snapshot`` block, and
+    the per-projection ``trail.freshness`` array are stripped here; the full
+    per-trace listing stays on ``bucket manifest --json`` (the unchanged frozen
+    ``opentraces.bucket.manifest.v2`` envelope). This is a non-mutating projection
+    over a shallow copy so the manifest the caller computed is never aliased.
+
+    NOTE (honest size-vs-latency split): this bounds OUTPUT size only. The
+    manifest is still computed by the O(N) object-store scan, so ``bucket status``
+    remains O(N) in WALL TIME — the latency cure (persisting scalar counters) is a
+    tracked follow-up, out of this change's locked scope.
+    """
+
+    view = dict(manifest)
+    # Drop the full per-trace enumeration; keep a scalar count. (Agrees with
+    # ``trace_records.object_count`` by construction — one v2 row per record.)
+    view["trace_count"] = len(manifest.get("traces") or [])
+    view.pop("traces", None)
+    view["traces_omitted"] = True  # self-documenting: full list via `bucket manifest --json`
+
+    # Drop the non-scalar ``snapshot`` block; keep the sibling scalar counters.
+    trace_records = manifest.get("trace_records")
+    if isinstance(trace_records, dict):
+        tr = dict(trace_records)
+        tr.pop("snapshot", None)
+        view["trace_records"] = tr
+
+    # Drop the per-projection ``freshness`` array; keep ``stale_count`` +
+    # ``last_projection_sync_at``.
+    trail = manifest.get("trail")
+    if isinstance(trail, dict):
+        tr = dict(trail)
+        tr.pop("freshness", None)
+        view["trail"] = tr
+
+    return view
+
+
 def bucket_status(
     *, write_manifest: bool = True, heal: bool = True
 ) -> dict[str, Any]:
@@ -2655,9 +2747,11 @@ def bucket_status(
     manifest = bucket_manifest(
         write=write_manifest, heal=heal, include_objects=False
     )
+    # Issue #97 — status is summary-only: bound the payload (drop traces[],
+    # trace_records.snapshot, trail.freshness). Full listing via `bucket manifest`.
     return {
         "status": "ok",
-        "bucket": manifest,
+        "bucket": _bounded_status_view(manifest),
         "config": _bucket_config_payload(),
     }
 
