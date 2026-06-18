@@ -419,21 +419,21 @@ class TestAnonymizePaths:
         text = f"/Users/{TEST_USERNAME}/src/project/file.py"
         result = anonymize_paths(text, username=self.USERNAME)
         expected_hash = hash_username(self.USERNAME)
-        assert f"/Users/{expected_hash}/" in result
+        assert f"/Users/[ot-user-{expected_hash}]/" in result
         assert TEST_USERNAME not in result
 
     def test_linux_path(self):
         text = f"/home/{TEST_USERNAME}/projects/app.py"
         result = anonymize_paths(text, username=self.USERNAME)
         expected_hash = hash_username(self.USERNAME)
-        assert f"/home/{expected_hash}/" in result
+        assert f"/home/[ot-user-{expected_hash}]/" in result
         assert TEST_USERNAME not in result
 
     def test_windows_backslash_path(self):
         text = rf"C:\Users\{TEST_USERNAME}\Documents\code.py"
         result = anonymize_paths(text, username=self.USERNAME)
         expected_hash = hash_username(self.USERNAME)
-        assert f"C:\\Users\\{expected_hash}\\" in result
+        assert f"C:\\Users\\[ot-user-{expected_hash}]\\" in result
         assert TEST_USERNAME not in result
 
     def test_windows_forward_slash_path(self):
@@ -445,7 +445,7 @@ class TestAnonymizePaths:
         text = f"/mnt/c/Users/{TEST_USERNAME}/code/app.py"
         result = anonymize_paths(text, username=self.USERNAME)
         expected_hash = hash_username(self.USERNAME)
-        assert f"/mnt/c/Users/{expected_hash}/" in result
+        assert f"/mnt/c/Users/[ot-user-{expected_hash}]/" in result
         assert TEST_USERNAME not in result
 
     def test_wsl_unc_path(self):
@@ -457,14 +457,14 @@ class TestAnonymizePaths:
         text = f"-Users-{TEST_USERNAME}-src-project"
         result = anonymize_paths(text, username=self.USERNAME)
         expected_hash = hash_username(self.USERNAME)
-        assert f"-Users-{expected_hash}-" in result
+        assert f"-Users-[ot-user-{expected_hash}]-" in result
         assert TEST_USERNAME not in result
 
     def test_tilde_path(self):
         text = f"~{TEST_USERNAME}/documents/file.txt"
         result = anonymize_paths(text, username=self.USERNAME)
         expected_hash = hash_username(self.USERNAME)
-        assert f"~{expected_hash}" in result
+        assert f"~[ot-user-{expected_hash}]" in result
         assert TEST_USERNAME not in result
 
     def test_extra_usernames(self):
@@ -482,6 +482,47 @@ class TestAnonymizePaths:
         result = anonymize_paths(text, username=None, extra_usernames=None)
         # Should be unchanged if no username found (may detect system user)
         assert "file.py" in result
+
+
+class TestAnonymizePathsHashShapedUsernames:
+    """Issue #84 (codex diff review): a real username that *looks like* a hash
+    must NOT be skipped. The earlier shape-based idempotence guard filtered any
+    8-hex-with-letter segment out of auto-detection, shipping ``deadbeef`` /
+    ``cafe1234`` INTACT. The marker shape ``[ot-user-<8hex>]`` makes anonymize
+    idempotent without any content-shape skip, so real hash-shaped usernames are
+    always anonymized.
+    """
+
+    def test_hex_letter_username_is_anonymized_not_skipped(self):
+        result = anonymize_paths("/Users/deadbeef/work/notes.txt", username=None)
+        assert "deadbeef" not in result
+        assert "[ot-user-" in result
+
+    def test_hex_digit_username_is_anonymized_not_skipped(self):
+        result = anonymize_paths("/home/cafe1234/project", username=None)
+        assert "cafe1234" not in result
+        assert "[ot-user-" in result
+
+    def test_numeric_employee_id_is_anonymized_not_skipped(self):
+        # 06506792 is all digits (hash-shaped) yet a real employee id.
+        result = anonymize_paths("/Users/06506792/dotfiles", username=None)
+        assert "06506792" not in result
+
+    def test_all_digit_hash_output_is_idempotent(self):
+        # hash_username("user49") == "62752906" — an all-digit hash body. The
+        # marker still makes a second pass a no-op (the leading '[' cannot start
+        # a detected username), so anonymize is stable across two passes.
+        once = anonymize_paths("/Users/user49/x.py", username="user49")
+        twice = anonymize_paths(once, username="user49")
+        assert "user49" not in once
+        assert "62752906" in once  # the hash body survives inside the marker
+        assert once == twice
+
+    def test_auto_detected_foreign_username_is_idempotent(self):
+        once = anonymize_paths("/Users/seededvictim/secret.txt", username="someoneelse")
+        twice = anonymize_paths(once, username="someoneelse")
+        assert "seededvictim" not in once
+        assert once == twice
 
 
 # ===================================================================
@@ -966,7 +1007,7 @@ class TestAutoDetectAnonymization:
         result = anonymize_paths(text, username=TEST_USERNAME)
         assert "foreign_user" not in result
         expected_hash = hash_username("foreign_user")
-        assert f"/Users/{expected_hash}/" in result
+        assert f"/Users/[ot-user-{expected_hash}]/" in result
 
     def test_both_explicit_and_detected(self):
         """Both the explicit username and auto-detected ones get anonymized."""
@@ -992,8 +1033,8 @@ class TestAutoDetectAnonymization:
         explicit_result = anonymize_paths(text, username="testuser123")
         # Both should produce the same hash for testuser123
         expected_hash = hash_username("testuser123")
-        assert f"/Users/{expected_hash}/" in auto_result
-        assert f"/Users/{expected_hash}/" in explicit_result
+        assert f"/Users/[ot-user-{expected_hash}]/" in auto_result
+        assert f"/Users/[ot-user-{expected_hash}]/" in explicit_result
 
     def test_system_path_not_anonymized(self):
         """/Users/Shared/ should not be anonymized."""
@@ -1156,4 +1197,4 @@ Internal URL: https://jira.internal.corp/browse/SEC-123
         result = anonymize_paths(serialized, username=TEST_USERNAME)
         assert "/Users/victim/" not in result
         expected_hash = hash_username("victim")
-        assert f"/Users/{expected_hash}/" in result
+        assert f"/Users/[ot-user-{expected_hash}]/" in result
