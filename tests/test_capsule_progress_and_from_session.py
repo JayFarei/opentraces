@@ -261,8 +261,34 @@ def _claude_turn(i: int, session_id: str) -> list[dict]:
     ]
 
 
-def _write_claude_transcript(home: Path, session_id: str, turns: int = 2) -> Path:
-    enc = "-Users-fake-proj"
+def _hook_only_codex_sidecar(project_dir: Path, session_id: str) -> Path:
+    """A REAL Codex hook sidecar: opentraces_hook lines only, no rollout
+    envelopes. The codex parser yields no steps → the session is UNPARSED."""
+
+    path = project_dir / ".opentraces" / "codex-cli" / "hooks" / f"{session_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {"type": "opentraces_hook", "event": "SessionStart",
+         "timestamp": "2026-06-18T09:00:00Z", "data": {"session_id": session_id}},
+        {"type": "opentraces_hook", "event": "PreToolUse",
+         "timestamp": "2026-06-18T09:00:01Z",
+         "data": {"tool_use_id": "t1", "tool": "exec_command", "tool_input": {}}},
+        {"type": "opentraces_hook", "event": "Stop",
+         "timestamp": "2026-06-18T09:00:02Z", "data": {"session_id": session_id}},
+    ]
+    with path.open("w") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    return path
+
+
+def _write_claude_transcript(home: Path, project_dir: Path, session_id: str, turns: int = 2) -> Path:
+    # Claude stores transcripts under the project's OWN encoded-cwd dir; the
+    # resolver now looks ONLY there (no cross-project glob), so the fixture must
+    # land in the exact encoded dir for `project_dir`.
+    from opentraces.core.repo_identity import encode_claude_path
+
+    enc = encode_claude_path(project_dir)
     path = home / ".claude" / "projects" / enc / f"{session_id}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
@@ -304,7 +330,7 @@ def test_from_session_claude(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     _enroll(project)
     sid = "claude-sess-1"
-    _write_claude_transcript(tmp_path, sid)
+    _write_claude_transcript(tmp_path, project, sid)
 
     runner = CliRunner()
     result = runner.invoke(main, [
@@ -315,6 +341,90 @@ def test_from_session_claude(tmp_path, monkeypatch):
     capsule = json.loads(result.stdout)
     assert capsule["schema_version"] == "opentraces.capsule.v1"
     assert capsule["capsule_id"]
+
+
+def test_from_session_codex_hook_only_remediation(tmp_path, monkeypatch):
+    """The HONEST Codex current-turn case: a real hook-only sidecar (no
+    response_item envelopes) carries no turns → the parser yields no steps →
+    UNPARSED. The CLI must NOT crash on the resulting trace_id=None and must
+    emit the 'source found but no materializable turns' remediation."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project = tmp_path / "proj"
+    _enroll(project)
+    sid = "codex-hookonly-1"
+    _hook_only_codex_sidecar(project, sid)
+
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "capsule", "export", "--from-session", sid, "--from-agent", "codex",
+        "--project", str(project), "--json",
+    ])
+    assert result.exit_code == 2
+    # No crash on trace_id=None: the only exception is the clean SystemExit(2).
+    assert result.exception is None or isinstance(result.exception, SystemExit), result.exception
+    err = result.stderr
+    assert "no materializable turns" in err
+    assert ".opentraces/codex-cli/hooks/" in err
+    # Distinct from the not-found remedy ("no Codex sidecar at ...").
+    assert "no Codex sidecar" not in err
+
+
+def test_from_session_rejects_path_traversal_and_glob(tmp_path, monkeypatch):
+    """SECURITY (codex finding): a session id is an opaque filename. Traversal
+    and glob ids are REJECTED before any glob/ingest — no cross-project read, no
+    crash. Seed a transcript in a SIBLING project that a naive glob would catch;
+    prove it is never ingested."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project = tmp_path / "proj"
+    _enroll(project)
+
+    # A real transcript belonging to a DIFFERENT project, addressable by a naive
+    # `*/<id>.jsonl` glob — the secure resolver must never reach it.
+    other = tmp_path / "other-proj"
+    _enroll(other)
+    _write_claude_transcript(tmp_path, other, "victim-sess")
+
+    runner = CliRunner()
+    for bad in ("../x", "*", "victim[", "a/b", "..", "foo?.bar"):
+        result = runner.invoke(main, [
+            "capsule", "export", "--from-session", bad, "--from-agent", "claude",
+            "--project", str(project), "--json",
+        ])
+        assert result.exit_code == 2, (bad, result.stdout)
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "not a valid session id" in result.stderr, (bad, result.stderr)
+
+    # `*` must NOT have pulled the other project's transcript into THIS bucket.
+    from opentraces.core.bucket_store import iter_trace_record_objects
+    from opentraces.core.config import get_project_dir
+
+    slug = get_project_dir(project).name
+    assert list(iter_trace_record_objects(project_slug=slug)) == []
+
+
+def test_from_session_cross_project_transcript_not_ingested(tmp_path, monkeypatch):
+    """Even a perfectly-valid id whose transcript lives under ANOTHER project's
+    encoded dir must not be ingested into THIS project's bucket — the resolver
+    only looks in this project's own encoded dir."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project = tmp_path / "proj"
+    _enroll(project)
+    other = tmp_path / "other-proj"
+    _enroll(other)
+    sid = "shared-id-1"
+    # Transcript exists ONLY under the OTHER project's encoded dir.
+    _write_claude_transcript(tmp_path, other, sid)
+
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "capsule", "export", "--from-session", sid, "--from-agent", "claude",
+        "--project", str(project), "--json",
+    ])
+    assert result.exit_code == 2
+    assert "may not be captured yet" in result.stderr  # not found in THIS project
 
 
 def test_from_session_not_materialized_remediation(tmp_path, monkeypatch):

@@ -58,6 +58,7 @@ equals = "opentraces.capsule.v1"
 type = "cli"
 id = "from-session-miss"
 argv = ["capsule", "export", "--from-session", "no-such-session-xyz", "--json"]
+expect_returncode = 2
 
 [[assertions]]
 kind = "returncode"

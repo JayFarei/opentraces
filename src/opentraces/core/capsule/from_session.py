@@ -17,8 +17,16 @@ Two source shapes, resolved per-agent (the asymmetry is real, not papered over):
   rollout-shaped file at that path to prove the resolve→ingest→export wiring.
 * **Claude Code** does NOT write an opentraces sidecar; its capture path ingests
   Claude's own session transcript under ``~/.claude/projects/<enc-cwd>/<id>.jsonl``
-  (``capture/claude_code/parse.py``). We glob that transcript and ingest it with
-  the ``claude-code`` parser.
+  (``capture/claude_code/parse.py``). We resolve the EXACT transcript inside THIS
+  project's own ``encode_claude_path(project_dir)`` dir (never a glob across every
+  project) and ingest it with the ``claude-code`` parser.
+
+SECURITY: the ``session_id`` is treated as an opaque filename stem. It is
+validated by :func:`is_safe_session_id` before any path is built — a separator,
+``..``, or a glob metacharacter is rejected up front — and the Claude lookup is
+pinned to the project's own encoded dir (with a resolve-under-root escape guard),
+so a hostile id can neither traverse the filesystem nor pull another project's
+transcript into this project's bucket.
 
 The single load-bearing reuse is :func:`ingest_one_session`: it is idempotent,
 enforces project-exclusion at the one choke point, and runs the security sanitize
@@ -40,6 +48,7 @@ NOT_FOUND = "not_found"
 EXCLUDED = "excluded"
 LOCKED = "locked"
 UNPARSED = "unparsed"
+INVALID_ID = "invalid_id"
 
 
 @dataclass
@@ -54,13 +63,6 @@ class SessionResolution:
     detail: str | None = None
 
 
-def _codex_sidecar_path(project_dir: Path, session_id: str) -> Path:
-    """The Codex opentraces hook sidecar path for one session in this project."""
-
-    safe = _safe_sidecar_name(session_id)
-    return project_dir / ".opentraces" / "codex-cli" / "hooks" / f"{safe}.jsonl"
-
-
 def _safe_sidecar_name(value: str) -> str:
     # Mirror capture/codex_cli/hooks/_common.py::safe_session_id so a resolver
     # lookup lands on the same file the hook wrote.
@@ -70,16 +72,70 @@ def _safe_sidecar_name(value: str) -> str:
     return out or "unknown"
 
 
-def _claude_glob(session_id: str) -> str:
-    return f"~/.claude/projects/*/{session_id}.jsonl"
+def is_safe_session_id(session_id: str) -> bool:
+    """A session id is treated as an OPAQUE filename stem, never a path.
+
+    Reject anything that could traverse the filesystem or expand as a glob:
+    a path separator, a bare ``.``/``..`` component, or any character outside
+    ``[A-Za-z0-9_.-]`` (which also rejects the glob metacharacters ``* ? [ ]``).
+    Equivalently, the id must be unchanged by the hook's own sanitizer — so the
+    resolver can never look anywhere other than the exact file the hook wrote.
+    """
+
+    if not session_id or session_id in {".", ".."}:
+        return False
+    if "/" in session_id or "\\" in session_id:
+        return False
+    # The codex hook strips disallowed chars + leading/trailing ``._``; requiring
+    # the id to be a fixed point of that sanitizer rejects ``*``, ``[``, ``]``,
+    # ``?`` (mapped to ``_``) and any leading-dot / trailing-dot oddity.
+    return _safe_sidecar_name(session_id) == session_id
 
 
-def _find_claude_transcript(session_id: str) -> Path | None:
+def _codex_sidecar_path(project_dir: Path, session_id: str) -> Path:
+    """The Codex opentraces hook sidecar path for one session in this project.
+
+    Caller MUST have validated ``session_id`` with :func:`is_safe_session_id`
+    first; we use it verbatim (no transform) so the lookup is the exact file.
+    """
+
+    return project_dir / ".opentraces" / "codex-cli" / "hooks" / f"{session_id}.jsonl"
+
+
+def _claude_transcript_path(project_dir: Path, session_id: str) -> Path:
+    """The EXACT Claude transcript path for this session IN THIS PROJECT.
+
+    Claude stores sessions under ``~/.claude/projects/<encoded-cwd>/<id>.jsonl``
+    where ``<encoded-cwd>`` is :func:`encode_claude_path` of the cwd. We resolve
+    only inside this project's own encoded dir — never a glob across every
+    project — so a session id can neither traverse out of the projects root nor
+    pull in ANOTHER project's transcript into this project's bucket.
+    """
+
+    from ..repo_identity import encode_claude_path
+
+    projects = (Path.home() / ".claude" / "projects").resolve()
+    return projects / encode_claude_path(project_dir) / f"{session_id}.jsonl"
+
+
+def _find_claude_transcript(session_id: str, project_dir: Path) -> Path | None:
+    """Locate this project's Claude transcript for ``session_id``, safely.
+
+    Returns the candidate only when it (a) stays inside the projects root after
+    resolving symlinks (escape guard, defense in depth on top of the id
+    validation) and (b) actually exists.
+    """
+
     projects = Path.home() / ".claude" / "projects"
     if not projects.exists():
         return None
-    matches = sorted(projects.glob(f"*/{session_id}.jsonl"))
-    return matches[0] if matches else None
+    candidate = _claude_transcript_path(project_dir, session_id)
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(projects.resolve())  # must stay under the root
+    except (ValueError, OSError):
+        return None
+    return candidate if candidate.is_file() else None
 
 
 def _classify_ingest(result, *, agent: str, **paths) -> SessionResolution:
@@ -134,9 +190,18 @@ def resolve_session_to_trace(
     from ..ingest import ingest_one_session
 
     project_dir = Path(project_dir).resolve()
+
+    # SECURITY: the id is an opaque filename stem, never a path. Reject traversal
+    # / glob metacharacters BEFORE building any path or touching the filesystem.
+    if not is_safe_session_id(session_id):
+        return SessionResolution(
+            status=INVALID_ID, agent=agent,
+            detail=f"{session_id!r} is not a valid session id",
+        )
+
     codex_path = _codex_sidecar_path(project_dir, session_id)
-    claude_glob = _claude_glob(session_id)
-    paths = {"codex_sidecar": codex_path, "claude_glob": claude_glob}
+    claude_path = _claude_transcript_path(project_dir, session_id)
+    paths = {"codex_sidecar": codex_path, "claude_glob": str(claude_path)}
 
     want_codex = agent in (None, "codex")
     want_claude = agent in (None, "claude")
@@ -148,7 +213,7 @@ def resolve_session_to_trace(
         return _classify_ingest(result, agent="codex", **paths)
 
     if want_claude:
-        transcript = _find_claude_transcript(session_id)
+        transcript = _find_claude_transcript(session_id, project_dir)
         if transcript is not None:
             result = ingest_one_session(
                 transcript, project_dir, parser_name="claude-code"
@@ -158,7 +223,8 @@ def resolve_session_to_trace(
     # Neither source materialized. If the user pinned an agent, only that source
     # was checked — the remediation names what was looked for.
     return SessionResolution(
-        status=NOT_FOUND, agent=agent, codex_sidecar=codex_path, claude_glob=claude_glob
+        status=NOT_FOUND, agent=agent,
+        codex_sidecar=codex_path, claude_glob=str(claude_path),
     )
 
 
@@ -168,6 +234,8 @@ __all__ = [
     "EXCLUDED",
     "LOCKED",
     "UNPARSED",
+    "INVALID_ID",
     "SessionResolution",
+    "is_safe_session_id",
     "resolve_session_to_trace",
 ]

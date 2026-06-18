@@ -311,6 +311,7 @@ def _resolve_from_session_or_exit(session_id, from_agent, project_dir):
 
     from ..core.capsule.from_session import (
         EXCLUDED,
+        INVALID_ID,
         LOCKED,
         NOT_FOUND,
         RESOLVED,
@@ -323,6 +324,16 @@ def _resolve_from_session_or_exit(session_id, from_agent, project_dir):
 
     if res.status == RESOLVED:
         return res.trace_id
+
+    if res.status == INVALID_ID:
+        click.echo(
+            f"capsule export --from-session {session_id!r}: not a valid session id. "
+            "A session id is an opaque token (letters, digits, '_', '.', '-') — it "
+            "must not contain path separators, '..', or glob characters. Pass the "
+            "exact session id (e.g. from 'opentraces trace query --cwd').",
+            err=True,
+        )
+        sys.exit(2)
 
     if res.status == EXCLUDED:
         click.echo(
@@ -341,16 +352,25 @@ def _resolve_from_session_or_exit(session_id, from_agent, project_dir):
         )
         sys.exit(2)
 
-    # NOT_FOUND or UNPARSED — name the exact paths checked + the recovery.
-    extra = ""
     if res.status == UNPARSED:
-        extra = (
-            " A source was found but carries no materializable turns yet "
-            f"({res.detail})."
+        # A source EXISTS but carries no materializable turns yet (e.g. a Codex
+        # hook-only sidecar with no response_item envelopes). Distinct from
+        # not-found: name the source that was found, not "no sidecar".
+        where = res.codex_sidecar if res.agent == "codex" else res.claude_glob
+        click.echo(
+            f"capsule export --from-session {session_id}: a {res.agent or 'session'} "
+            f"source was found at {where} but carries no materializable turns yet "
+            f"({res.detail}). The session may not be captured yet — finish the turn "
+            "(the Stop hook ingests it), then run 'opentraces trace query --cwd' to "
+            "find the trace id.",
+            err=True,
         )
+        sys.exit(2)
+
+    # NOT_FOUND — name the exact paths checked + the recovery.
     click.echo(
         f"capsule export --from-session {session_id}: no Codex sidecar at "
-        f"{res.codex_sidecar} and no Claude transcript at {res.claude_glob}.{extra} "
+        f"{res.codex_sidecar} and no Claude transcript at {res.claude_glob}. "
         "The session may not be captured yet — finish the turn (the Stop hook "
         "ingests it), then run 'opentraces trace query --cwd' to find the trace "
         "id, or pass --from-agent to disambiguate.",
@@ -392,6 +412,8 @@ def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comm
         raise click.UsageError("provide a trace id or --from-session <id>")
     if trace_id and from_session:
         raise click.UsageError("--from-session is mutually exclusive with a trace id")
+    if from_agent and not from_session:
+        raise click.UsageError("--from-agent only applies with --from-session")
     if from_session:
         trace_id = _resolve_from_session_or_exit(from_session, from_agent, project_dir)
 
