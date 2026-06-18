@@ -125,16 +125,52 @@ but the `capsule` command noun and the `<!-- opentraces-capsule: <id> -->` /
   the `product_episode` slice matches the product string against tool-call/observation
   text, so capsules carry a `product_inferred_not_captured` limitation.
 
+## Current-turn capture & bounded slow paths (issue #98)
+
+**Capsule vs the raw hook sidecar — which to attach to a bug report.** A raw
+agent hook sidecar (Codex's `.opentraces/codex-cli/hooks/<id>.jsonl`, or a
+Claude session transcript) is the *unredacted* on-disk capture artifact: it is
+host-coupled, carries absolute home paths, and has had NO security floor or
+prompt exclusion applied. Never attach it to a public bug report. A **capsule**
+is the privacy-bounded, frozen, self-contained projection of that same session —
+redacted through the mandatory floor, prompt-bearing fields excluded by default,
+bounded by construction. For bug reports, always export a capsule.
+
+**Current turn (`capsule export --from-session <id>`).** To capsule the session
+you are *in* (before the Stop hook finalizes it), pass `--from-session <id>`
+instead of a trace id (the two are mutually exclusive). The resolver
+(`from_session.py`) materializes the live session into the bucket via the shared
+idempotent `ingest_one_session` choke point (so it is redacted identically to a
+finalized trace), then the normal export runs. Sources resolve per-agent — Codex
+→ its opentraces hook sidecar; Claude → its `~/.claude/projects/*/<id>.jsonl`
+transcript. A miss emits one of three cause-specific remediations (not-found /
+excluded-project / lock-contention). NOTE: a pure Codex hook sidecar carries no
+turns, so the Codex produces-a-capsule path requires rollout content at that path
+(Codex=PARTIAL); the Claude transcript path is the load-bearing current-turn case.
+
+**Bounded `--product` + progress.** `--product` slices were previously unbounded
+(`min..max` over every step that references the product), which could span almost
+a whole session and hang. The episode is now capped at `2*radius` around the first
+match by default (with a deterministic `product_episode_bounded` limitation +
+`slice.metadata.product_match_span` / `bounded_to`); `--product-full-span` opts
+back into the historical unbounded span. `capsule export` / `capsule preview` also
+accept `--progress auto|plain|json|never` (the shared issue-#88 contract) so the
+two projection scans (trail anchors, context resume) are observable, never
+silently hung; `preview --json` carries an additive `telemetry.stages` block.
+There is NO hard wall-clock `--deadline` in v1 (deferred to v1.1) — a clean
+partial over a half-scanned Trail projection is not well-defined.
+
 ## Module map
 
 | File | Responsibility |
 |------|----------------|
 | `contract.py` | Frozen `opentraces.capsule.v1` envelope, `capsule_id`, validate (+reject-newer). |
-| `export.py` | `export_capsule(project_dir, trace_id, ...)` — assembly over slice + resume packet + intent + repo pin. |
+| `export.py` | `export_capsule(project_dir, trace_id, ...)` — assembly over slice + resume packet + intent + repo pin; optional `progress` reporter + bounded `--product` slice (#98). |
+| `from_session.py` | `resolve_session_to_trace(session_id, project_dir, agent)` — materialize a CURRENT turn into the bucket (Codex sidecar / Claude transcript) for `--from-session` (#98). |
 | `bucket_context.py` | Self-sufficient resume packet from the trace's bucket companion. |
 | `redaction.py` | Mandatory floor + counts-only manifest + hard gate + home scrub. |
 | `render.py` | `render_issue_body` / `render_capsule_markdown` (agent-first, human-second). |
 | `share.py` | URL mint, local write, HF publish (capsule-only), clipboard, idempotent `gh` issue. |
-| `../../cli/capsule.py` | `opentraces capsule {export, open, share, issue}`. |
+| `../../cli/capsule.py` | `opentraces capsule {export, open, share, issue}` (export gains `--from-session` / `--from-agent` / `--product-full-span` / `--progress`; preview gains `--product-full-span` / `--progress`). |
 
 Tests: `tests/test_capsule.py` (hermetic) + `tests/test_capsule_export_integration.py`.

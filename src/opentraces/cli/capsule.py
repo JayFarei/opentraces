@@ -33,6 +33,7 @@ from pathlib import Path
 import click
 
 from ._options import project_dir_option
+from ._progress import build_cli_progress, progress_option
 
 
 def _resolve_project(project: Path | None) -> Path:
@@ -122,7 +123,7 @@ def _parse_consume(spec: str) -> dict:
 
 def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
                test_command=None, expect_error=None, setup_command=None, consume_specs=(),
-               product=None, include_prompts=False):
+               product=None, include_prompts=False, product_full_span=False, progress=None):
     from ..core.capsule.export import CapsuleExportError, export_capsule
 
     project = _resolve_project(project_dir)
@@ -140,13 +141,19 @@ def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
             setup_command=setup_command,
             consumes=consumes,
             product=product,
+            product_full_span=product_full_span,
             include_prompts=include_prompts,
+            progress=progress,
         )
     except CapsuleExportError as exc:
         click.echo(f"capsule export failed: {exc}", err=True)
+        if progress is not None:
+            progress.done()
         sys.exit(2)
     except Exception as exc:  # redaction gate, etc.
         click.echo(f"capsule export failed: {exc}", err=True)
+        if progress is not None:
+            progress.done()
         sys.exit(2)
     _hint_consumes(capsule, consumes, product)
     return capsule, project
@@ -295,20 +302,109 @@ def capsule_group() -> None:
     """
 
 
+def _resolve_from_session_or_exit(session_id, from_agent, project_dir):
+    """Materialize a live session into the bucket and return its trace_id.
+
+    Issue #98 Part B. Emits one of three cause-specific remediations and exits 2
+    when the session has not (or cannot) materialize into a capsule-able trace.
+    """
+
+    from ..core.capsule.from_session import (
+        EXCLUDED,
+        LOCKED,
+        NOT_FOUND,
+        RESOLVED,
+        UNPARSED,
+        resolve_session_to_trace,
+    )
+
+    project = _resolve_project(project_dir)
+    res = resolve_session_to_trace(session_id, project, agent=from_agent)
+
+    if res.status == RESOLVED:
+        return res.trace_id
+
+    if res.status == EXCLUDED:
+        click.echo(
+            f"capsule export --from-session {session_id}: the project at {project} "
+            "is excluded from capture (opentraces ignore marker), so this session "
+            "was never staged. Remove the exclusion or run from a captured project.",
+            err=True,
+        )
+        sys.exit(2)
+
+    if res.status == LOCKED:
+        click.echo(
+            f"capsule export --from-session {session_id}: another ingest is "
+            "finalizing this session; retry in a moment.",
+            err=True,
+        )
+        sys.exit(2)
+
+    # NOT_FOUND or UNPARSED — name the exact paths checked + the recovery.
+    extra = ""
+    if res.status == UNPARSED:
+        extra = (
+            " A source was found but carries no materializable turns yet "
+            f"({res.detail})."
+        )
+    click.echo(
+        f"capsule export --from-session {session_id}: no Codex sidecar at "
+        f"{res.codex_sidecar} and no Claude transcript at {res.claude_glob}.{extra} "
+        "The session may not be captured yet — finish the turn (the Stop hook "
+        "ingests it), then run 'opentraces trace query --cwd' to find the trace "
+        "id, or pass --from-agent to disambiguate.",
+        err=True,
+    )
+    sys.exit(2)
+
+
 @capsule_group.command("export")
-@click.argument("trace_id")
+@click.argument("trace_id", required=False, default=None)
 @_export_options
+@click.option("--from-session", "from_session", default=None, metavar="SESSION_ID",
+              help="Build a capsule from the CURRENT turn: materialize this live session "
+                   "into the bucket, then export it. Mutually exclusive with a trace id.")
+@click.option("--from-agent", "from_agent", type=click.Choice(["codex", "claude"]), default=None,
+              help="Disambiguate the --from-session source (default: auto-detect).")
+@click.option("--product-full-span", "product_full_span", is_flag=True, default=False,
+              help="Opt OUT of the default --product radius cap (restore the historical "
+                   "unbounded min..max episode span; may be slow on large sessions).")
+@progress_option
 @click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=None,
               help="Output dir (default: <project>/.opentraces/capsules).")
 @click.option("--bundle", "make_bundle", is_flag=True,
               help="Embed a hermetic source bundle (git archive at the pin) so the test runs even if the commit is gone.")
 @click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
-def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, out, make_bundle, as_json):
-    """Build a local, redacted, self-contained capsule for one agent usage episode."""
+def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, from_session, from_agent, product_full_span, progress_mode, out, make_bundle, as_json):
+    """Build a local, redacted, self-contained capsule for one agent usage episode.
+
+    Pass a TRACE_ID to capsule a finalized trace, or ``--from-session <id>`` to
+    capsule the CURRENT turn (the live session is materialized into the bucket
+    first). The two are mutually exclusive.
+    """
 
     from ..core.capsule.share import write_capsule_dir
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts)
+    # Mutual exclusion (Click positionals are required by default; trace_id is now
+    # optional so --from-session can stand alone).
+    if not trace_id and not from_session:
+        raise click.UsageError("provide a trace id or --from-session <id>")
+    if trace_id and from_session:
+        raise click.UsageError("--from-session is mutually exclusive with a trace id")
+    if from_session:
+        trace_id = _resolve_from_session_or_exit(from_session, from_agent, project_dir)
+
+    reporter = build_cli_progress("capsule export", progress_mode)
+    if product and product_full_span:
+        click.echo(
+            "note: --product-full-span runs an UNBOUNDED product episode "
+            "(min..max over every step that references the product); this can be "
+            "slow on large sessions.",
+            err=True,
+        )
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, product_full_span=product_full_span, progress=reporter)
+    reporter.done()
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     dest = out or (project / ".opentraces" / "capsules")
     arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes)
@@ -367,9 +463,14 @@ def open_cmd(ref, as_json, summary):
 @capsule_group.command("preview")
 @click.argument("trace_id")
 @_export_options
+@click.option("--product-full-span", "product_full_span", is_flag=True, default=False,
+              help="Opt OUT of the default --product radius cap (restore the historical "
+                   "unbounded min..max episode span; may be slow on large sessions).")
+@progress_option
 @click.option("--json", "as_json", is_flag=True, help="Emit the preview as JSON.")
 def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command,
-                expect_error, setup_command, consume_specs, product, include_prompts, as_json):
+                expect_error, setup_command, consume_specs, product, include_prompts,
+                product_full_span, progress_mode, as_json):
     """Preview egress BEFORE anything leaves the machine — writes/publishes NOTHING.
 
     Runs the full redaction pipeline, then prints the redaction manifest by field
@@ -377,10 +478,21 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
     publish WOULD reach. The developer-approval checkpoint.
     """
 
+    reporter = build_cli_progress("capsule preview", progress_mode)
+    if product and product_full_span:
+        click.echo(
+            "note: --product-full-span runs an UNBOUNDED product episode "
+            "(min..max over every step that references the product); this can be "
+            "slow on large sessions.",
+            err=True,
+        )
     capsule, _project = _do_export(
         trace_id, step, node_id, radius, repo_url, project_dir,
         test_command, expect_error, setup_command, consume_specs, product, include_prompts,
+        product_full_span=product_full_span, progress=reporter,
     )
+    reporter.done()
+    telemetry_stages = reporter.telemetry()
     manifest = (capsule.get("redaction") or {}).get("manifest") or {}
     privacy_scope = capsule.get("privacy_scope") or {}
     by_field_path = manifest.get("by_field_path") or {}
@@ -406,6 +518,10 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
             "business_logic": {"findings": by_tool.get("business_logic", 0)},
             "privacy_scope": privacy_scope,
             "destinations": destinations,
+            # Issue #98 — additive per-stage progress telemetry (stderr-only
+            # progress events do not pollute this stdout payload; this block is
+            # ADDITIVE to the preview JSON, NOT to the frozen capsule envelope).
+            "telemetry": {"stages": telemetry_stages},
         }, indent=2, ensure_ascii=False))
         return
 

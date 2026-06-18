@@ -1,0 +1,86 @@
+name = "capsule-export-bounded-default-slice"
+description = """
+Issue #98 (Part A, SILVER) — `capsule export --product` is BOUNDED by
+default, and `--product-full-span` is the explicit opt-in to the unbounded
+episode.
+
+There is no otbox assertion kind that subtracts two JSON paths, so the bound
+is asserted via the deterministic limitation + metadata that A2 ALWAYS emits
+on a matched product slice:
+
+  Step 1 (default radius): `capsule export {trace_id} --product opentraces
+    --json` → rc=0; `slice.limitations` CONTAINS `product_episode_bounded`
+    (the cap was in effect); and `slice.metadata.product_match_span >= 9`
+    (the RAW episode matched steps > 2*radius=8 apart, so the bound is
+    load-bearing, not vacuous on a tiny episode).
+  Step 2 (--product-full-span): the unbounded span is restored — no
+    `product_episode_bounded`, and `slice.metadata.bounded_to` EQUALS
+    `slice.metadata.product_match_span` (no clamp happened), proven via the
+    cross-path `equals_var` within the step.
+
+PRE-FLIGHT (load-bearing, do before relying on the synthetic world): confirm
+`capsule export {trace_id} --product opentraces --json` actually matches
+steps > 8 apart in the `c-captured-real-session` synthetic fixture (the
+needle "opentraces" appears across the captured edit corpus). If the chosen
+needle does NOT span > 8 steps (or matches nothing → the
+`product_episode_no_match` fallback), step 1's `product_match_span >= 9`
+assertion FAILS LOUDLY rather than silently testing the no-match fallback —
+swap the needle or seed one and record the observed span here.
+
+Tier 1 (opt-in).
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — default radius bounds the product episode (deterministic limitation
+# + a raw span that proves the bound is load-bearing).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "export-bounded"
+argv = ["capsule", "export", "{trace_id}", "--product", "opentraces", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "export-bounded"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "export-bounded"
+path = "slice.limitations"
+equals = ["product_episode_bounded"]
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "export-bounded"
+path = "slice.metadata.product_match_span"
+min = 9
+
+# ---------------------------------------------------------------------
+# Step 2 — --product-full-span restores the unbounded span (no clamp:
+# bounded_to == product_match_span via cross-path equals_var).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "export-full-span"
+argv = ["capsule", "export", "{trace_id}", "--product", "opentraces", "--product-full-span", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "export-full-span"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "export-full-span"
+path = "slice.metadata.bounded_to"
+equals_var = "export-full-span:slice.metadata.product_match_span"

@@ -1,0 +1,80 @@
+name = "capsule-export-current-turn-codex"
+description = """
+Issue #98 (Part B, SILVER — CODEX=PARTIAL) — the Codex `--from-session`
+remediation branch is artifact-INDEPENDENT and runs in default CI; the
+Codex produces-a-capsule branch is precondition-gated so it SKIPs (never
+green-theaters) until the real Codex capture artifact is committed.
+
+`c-captured-codex-real-session` is artifact-preferred / INERT-when-absent
+(no synthetic fallback): when `tests/otbox/captures/codex-linear-edit/
+snapshot.tar.gz` is absent (the default-CI case) it provides no session and
+records an empty-audit, so any step gated on `min_captured_traces=1` SKIPs.
+
+  Step 1 (remediation, artifact-independent): a deliberately non-existent id
+    with `--from-agent codex` → rc=2 AND the message names BOTH the Codex
+    sidecar path fragment (`.opentraces/codex-cli/hooks/`) and "may not be
+    captured yet". This never depends on `{session_id}` from the inert audit.
+  Step 2 (produces-a-capsule, precondition-gated): `capsule export
+    --from-session {session_id} --from-agent codex --json` → rc=0 + the v1
+    schema. Guarded by `[preconditions] min_captured_traces=1` so it SKIPs
+    when the artifact is absent and only asserts when a real Codex capture is
+    committed.
+
+The Codex produces-a-capsule path's red-before-green is owned by the
+hermetic Layer-1 `test_from_session_codex` (seeds a parseable rollout at the
+sidecar path directly). Tier 1 (opt-in).
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — remediation branch (artifact-independent, runs in default CI).
+# Uses a non-existent id so it never touches the inert audit's {session_id}.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "codex-from-session-miss"
+argv = ["capsule", "export", "--from-session", "no-such-codex-session", "--from-agent", "codex", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "codex-from-session-miss"
+equals = 2
+
+[[assertions]]
+kind = "stderr_contains"
+step = "codex-from-session-miss"
+value = ".opentraces/codex-cli/hooks/"
+
+[[assertions]]
+kind = "stderr_contains"
+step = "codex-from-session-miss"
+value = "may not be captured yet"
+
+# ---------------------------------------------------------------------
+# Step 2 — produces-a-capsule branch (SKIPs unless the real Codex artifact
+# is committed; the precondition above gates the whole journey, so this step
+# only asserts when min_captured_traces is satisfied).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "codex-from-session-build"
+argv = ["capsule", "export", "--from-session", "{session_id}", "--from-agent", "codex", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "codex-from-session-build"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "codex-from-session-build"
+path = "schema_version"
+equals = "opentraces.capsule.v1"
