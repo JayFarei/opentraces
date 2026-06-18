@@ -50,81 +50,76 @@ def remote_status(*, fake_root: Path | None = None) -> dict[str, Any]:
 
     Every branch carries an additive ``security_gate`` block (issue #94) so the
     sync-diagnostic surface explains the security posture that actually gates a
-    push — not only the digest relation. The gate is sourced from the shared
-    :func:`bucket_security.bucket_sync_security_gate` reading the PERSISTED
-    manifest, so doctor and this surface converge on counts + remediation.
+    push — not only the digest relation.
+
+    The gate is computed FIRST, from a read-only, byte-capped read of the
+    PERSISTED ``bucket/manifest.json`` (codex finding #1/#2): it never calls
+    ``bucket_manifest`` / ``bucket_security_overview`` (both SCAN) and never
+    writes ``manifest.json``. Computing it before any status helper runs means
+    the gate reflects the genuinely-persisted state, NOT a manifest the digest
+    helper builds — a missing/oversized persisted manifest yields
+    ``security_gate.state == "unknown"``. (The configured-remote digest helpers
+    DO still scan to compute the local digest; that pre-existing scan is #97,
+    out of #94's scope — only the GATE is guaranteed scan-free here.)
     """
 
     if fake_root is not None:
-        return _with_security_gate(
-            _fake_payload(fake_remote_status(fake_root)), remote_configured=True
-        )
+        gate = _security_gate(remote_configured=True)
+        payload = _fake_payload(fake_remote_status(fake_root))
+        payload["security_gate"] = gate
+        return payload
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
+        # Ambient fake remote = a fake-remote root wired via env/config. Detect
+        # it cheaply (no scan) so the gate's remote-configured axis is correct.
+        remote_configured = fake_remote_root() is not None
+        gate = _security_gate(remote_configured=remote_configured)
         fake = _ambient_fake_status()
         if fake is not None:
-            return _with_security_gate(fake, remote_configured=True)
-        return _with_security_gate(
-            {
-                "schema_version": REMOTE_SCHEMA,
-                "state": "unconfigured",
-                "provider": remote.provider,
-                "advice": "run opentraces setup bucket",
-            },
-            remote_configured=False,
-        )
+            fake["security_gate"] = gate
+            return fake
+        payload = {
+            "schema_version": REMOTE_SCHEMA,
+            "state": "unconfigured",
+            "provider": remote.provider,
+            "advice": "run opentraces setup bucket",
+            "security_gate": gate,
+        }
+        return payload
+    gate = _security_gate(remote_configured=True)
     if remote.provider == "fake":
-        return _with_security_gate(
-            _fake_payload(fake_remote_status()), remote_configured=True
-        )
-    return _with_security_gate(
-        _hf_status(remote.url, cfg.hf_token), remote_configured=True
-    )
-
-
-def _with_security_gate(
-    payload: dict[str, Any], *, remote_configured: bool
-) -> dict[str, Any]:
-    """Attach the additive ``security_gate`` block to a remote-status payload.
-
-    Additive only: the flat ``state`` / ``provider`` / ``advice`` keys current
-    consumers read are preserved untouched. ``REMOTE_SCHEMA`` is the nested
-    contract; ``security_gate`` is an additive field on it (no version break).
-    """
-
-    payload["security_gate"] = _security_gate(remote_configured=remote_configured)
+        payload = _fake_payload(fake_remote_status())
+    else:
+        payload = _hf_status(remote.url, cfg.hf_token)
+    payload["security_gate"] = gate
     return payload
 
 
 def _security_gate(*, remote_configured: bool) -> dict[str, Any]:
     """Build the bucket-sync security gate for ``bucket remote status``.
 
-    Reads the PERSISTED ``bucket/manifest.json`` counts the cheap way doctor
-    does (``_load_manifest`` — NEVER ``bucket_manifest`` / ``bucket_security_
-    overview``, both of which SCAN). A missing manifest yields ``state ==
-    "unknown"`` rather than triggering a scan (codex finding #1). ``eligible``
-    composes the security axis (remediation is None) with the remote-configured
-    axis; ``blocking_reasons`` and ``advice`` list the remote-unconfigured step
-    first, then the security remediation (codex finding #3 / issue contract).
+    Reads the PERSISTED ``bucket/manifest.json`` via the shared read-only,
+    byte-capped reader (``read_persisted_manifest_capped`` — NEVER
+    ``bucket_manifest`` / ``bucket_security_overview``, both of which SCAN, and
+    never writing the file). A missing / oversized / unreadable persisted
+    manifest yields ``state == "unknown"`` rather than triggering a scan or a
+    write (codex finding #1/#2; the byte cap matches doctor's ``too-large``
+    threshold). ``eligible`` composes the security axis (remediation is None)
+    with the remote-configured axis; ``blocking_reasons`` and ``advice`` list
+    the remote-unconfigured step first, then the security remediation (codex
+    finding #3 / issue contract).
     """
 
     from .bucket_security import bucket_sync_security_gate
-    from .bucket_store import _load_manifest
+    from .bucket_store import read_persisted_manifest_capped
 
-    manifest: dict[str, Any] | None = None
-    unknown_reason: str | None = None
-    try:
-        manifest = _load_manifest()
-    except Exception:
-        manifest = None
-        unknown_reason = "manifest_unreadable"
-    if manifest is None:
-        if unknown_reason is None:
-            unknown_reason = "manifest_absent"
+    state, manifest = read_persisted_manifest_capped()
+    if state != "ok" or manifest is None:
+        # absent / too_large / error -> unknown, WITHOUT scanning or writing.
         return {
             "state": "unknown",
-            "reason": unknown_reason,
+            "reason": f"manifest_{state}",
             "configured": None,
             "unfiltered_count": None,
             "security_stale_count": None,

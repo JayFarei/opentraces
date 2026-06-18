@@ -157,27 +157,165 @@ def test_eligible_bucket() -> None:
     assert gate["advice"] == []
 
 
-def test_missing_manifest_is_unknown_not_a_scan(monkeypatch) -> None:
-    """No persisted manifest -> security_gate is ``unknown``, never a scan."""
+def _manifest_path() -> Path:
+    from opentraces.core import paths
+
+    return paths.bucket_dir() / "manifest.json"
+
+
+def _forbid_all_scanners(monkeypatch) -> None:
+    """Make every O(N) scan / write entry point hard-fail.
+
+    Covers BOTH module bindings of ``bucket_manifest`` (bucket_store's, used by
+    ``fake_remote_status``; bucket_remote's, used by ``_hf_status``) plus the
+    live ``bucket_security_overview`` scan. If the gate path touches any of
+    them, the test fails loudly.
+    """
+
+    def _fail(*args, **kwargs):  # pragma: no cover - must never be called
+        raise AssertionError("the security gate must not scan or write")
+
+    monkeypatch.setattr("opentraces.core.bucket_store.bucket_manifest", _fail)
+    monkeypatch.setattr("opentraces.core.bucket_remote.bucket_manifest", _fail)
+    monkeypatch.setattr(
+        "opentraces.core.bucket_security.bucket_security_overview", _fail
+    )
+
+
+def test_gate_reads_persisted_manifest_read_only_no_scan(monkeypatch) -> None:
+    """`_security_gate` never scans or writes — direct proof.
+
+    With every scan/write entry point rigged to raise, the gate must still
+    resolve from the read-only byte-capped persisted read: ``unknown`` when no
+    manifest exists (and creating none), ``ok`` with counts when one does.
+    """
     from opentraces.core import bucket_remote
 
-    def _fail_scan(*args, **kwargs):  # pragma: no cover - must not be called
-        raise AssertionError("remote_status must not scan the bucket")
+    _forbid_all_scanners(monkeypatch)
 
-    # Both O(N) scan entry points are forbidden on the security-gate path.
-    monkeypatch.setattr(
-        "opentraces.core.bucket_store.bucket_manifest", _fail_scan
-    )
-    monkeypatch.setattr(
-        "opentraces.core.bucket_security.bucket_security_overview", _fail_scan
-    )
+    # No manifest -> unknown, and NOTHING was created.
+    assert not _manifest_path().exists()
+    gate = bucket_remote._security_gate(remote_configured=True)
+    assert gate["state"] == "unknown"
+    assert gate["remediation"] is None
+    assert not _manifest_path().exists(), "the gate must not create manifest.json"
 
+    # A hand-written persisted manifest -> ok with counts, still no scan/write.
+    _write_manifest(unfiltered=2, stale=0)
+    gate = bucket_remote._security_gate(remote_configured=True)
+    assert gate["state"] == "ok"
+    assert gate["unfiltered_count"] == 2
+
+
+def test_remote_status_unconfigured_gate_unknown_without_creating_manifest() -> None:
+    """End-to-end: unconfigured remote + no manifest -> unknown, none created.
+
+    The unconfigured branch runs no status helper at all, so this is a clean
+    end-to-end proof that the gate neither scanned nor wrote.
+    """
+    from opentraces.core import bucket_remote
+
+    assert not _manifest_path().exists()
     gate = bucket_remote.remote_status()["security_gate"]
     assert gate["state"] == "unknown"
     assert gate["remediation"] is None
-    # Unconfigured remote is still surfaced even without a manifest.
     assert "remote_unconfigured" in gate["blocking_reasons"]
     assert gate["advice"] == ["opentraces setup bucket"]
+    assert not _manifest_path().exists()
+
+
+def test_remote_status_configured_branches_gate_no_scan_no_write(
+    monkeypatch, tmp_path
+) -> None:
+    """Codex finding #1/#3: the gate adds no scan/write on EVERY branch.
+
+    For the explicit-fake-root, ambient-fake, configured-fake, and HF branches:
+    with no persisted manifest and the status-helper digest scan neutralized to
+    a read-only stub, ``remote_status`` reports ``security_gate.state ==
+    "unknown"`` AND creates NO manifest.json — proving the gate neither scanned
+    nor wrote on the configured branches (the configured-remote digest scan
+    itself is the pre-existing #97 surface, neutralized here).
+    """
+    from opentraces.core import bucket_remote
+    from opentraces.core.config import (
+        BucketConfig,
+        BucketRemoteConfig,
+        load_config,
+        save_config,
+    )
+
+    # Read-only stub for the status helpers' local-digest scan: returns a digest
+    # WITHOUT writing manifest.json (the gate doesn't call this at all).
+    def _readonly_manifest(*args, **kwargs):
+        return {"digest": "sha256:stub"}
+
+    monkeypatch.setattr(
+        "opentraces.core.bucket_store.bucket_manifest", _readonly_manifest
+    )
+    monkeypatch.setattr(
+        "opentraces.core.bucket_remote.bucket_manifest", _readonly_manifest
+    )
+
+    def _assert_unknown_no_write(payload) -> None:
+        assert payload["security_gate"]["state"] == "unknown"
+        assert not _manifest_path().exists(), "the gate must not create manifest.json"
+
+    # 1. Explicit fake_root branch.
+    _assert_unknown_no_write(bucket_remote.remote_status(fake_root=tmp_path / "fr"))
+
+    # 2. Ambient fake branch (env-wired fake remote root, storage still local).
+    monkeypatch.setenv(
+        "OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(tmp_path / "ambient")
+    )
+    _assert_unknown_no_write(bucket_remote.remote_status())
+    monkeypatch.delenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", raising=False)
+
+    # 3. Configured fake remote branch.
+    cfg = load_config()
+    cfg.bucket = BucketConfig(
+        storage="remote",
+        local_cache=True,
+        remote=BucketRemoteConfig(
+            enabled=True,
+            provider="fake",
+            url=f"file://{tmp_path / 'configured'}",
+        ),
+    )
+    save_config(cfg)
+    _assert_unknown_no_write(bucket_remote.remote_status())
+
+    # 4. HF remote branch (no token -> helper returns error; gate is unknown).
+    cfg = load_config()
+    cfg.hf_token = None
+    cfg.bucket = BucketConfig(
+        storage="remote",
+        local_cache=True,
+        remote=BucketRemoteConfig(
+            enabled=True,
+            provider="huggingface",
+            url="hf://me/private-bucket",
+        ),
+    )
+    save_config(cfg)
+    _assert_unknown_no_write(bucket_remote.remote_status())
+
+
+def test_too_large_manifest_degrades_like_doctor(monkeypatch) -> None:
+    """An oversized persisted manifest -> ``unknown``, no parse (matches doctor).
+
+    The byte cap is the same knob doctor uses; the gate must NOT ``read_text``
+    a huge manifest.
+    """
+    from opentraces.core import bucket_remote
+
+    # Cap at the floor (1024 bytes); pad the manifest past it.
+    monkeypatch.setenv("OPENTRACES_DOCTOR_BUCKET_MANIFEST_MAX_BYTES", "1024")
+    _write_manifest(unfiltered=3, stale=0, extra_trace_records={"_pad": "x" * 4000})
+    assert _manifest_path().stat().st_size > 1024
+
+    gate = bucket_remote.remote_status()["security_gate"]
+    assert gate["state"] == "unknown"
+    assert gate["reason"] == "manifest_too_large"
 
 
 def test_doctor_and_remote_converge() -> None:

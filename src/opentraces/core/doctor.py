@@ -225,13 +225,12 @@ def _bucket_security_remediation_for_doctor(
 
 
 def _doctor_bucket_manifest_max_bytes() -> int:
-    raw = os.environ.get("OPENTRACES_DOCTOR_BUCKET_MANIFEST_MAX_BYTES")
-    if raw:
-        try:
-            return max(1024, int(raw))
-        except ValueError:
-            return _DOCTOR_BUCKET_MANIFEST_MAX_BYTES
-    return _DOCTOR_BUCKET_MANIFEST_MAX_BYTES
+    # Single source of truth (issue #94): doctor's bucket panel and the
+    # `bucket remote status` security gate degrade on an oversized manifest at
+    # the SAME byte cap.
+    from .bucket_store import bucket_manifest_max_bytes
+
+    return bucket_manifest_max_bytes()
 
 
 def _bucket_context_tree_section(
