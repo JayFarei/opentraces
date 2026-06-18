@@ -404,6 +404,45 @@ def test_from_session_rejects_path_traversal_and_glob(tmp_path, monkeypatch):
     assert list(iter_trace_record_objects(project_slug=slug)) == []
 
 
+def test_from_session_rejects_symlink_cross_project_escape(tmp_path, monkeypatch):
+    """SECURITY (codex finding 1, narrowed): a SYMLINK planted at the current
+    project's expected ``<id>.jsonl`` path, pointing at a SIBLING project's
+    transcript, must be REJECTED — the resolved path escapes the current
+    project's encoded dir even though it stays under ~/.claude/projects. Proves
+    no cross-project ingest via symlink."""
+
+    from opentraces.core.bucket_store import iter_trace_record_objects
+    from opentraces.core.config import get_project_dir
+    from opentraces.core.repo_identity import encode_claude_path
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project = tmp_path / "proj"
+    _enroll(project)
+    sibling = tmp_path / "sibling-proj"
+    _enroll(sibling)
+    sid = "escape-sess"
+    # A REAL transcript belonging to the SIBLING project's encoded dir.
+    victim = _write_claude_transcript(tmp_path, sibling, sid)
+
+    # Plant a symlink at THIS project's expected path → the sibling's transcript.
+    proj_dir = tmp_path / ".claude" / "projects" / encode_claude_path(project)
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    link = proj_dir / f"{sid}.jsonl"
+    link.symlink_to(victim)
+    assert link.is_file()  # the symlink DOES resolve to a real sibling file
+
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "capsule", "export", "--from-session", sid, "--from-agent", "claude",
+        "--project", str(project), "--json",
+    ])
+    # Rejected as not-found (the escape is refused) — NOT ingested.
+    assert result.exit_code == 2
+    assert "may not be captured yet" in result.stderr
+    slug = get_project_dir(project).name
+    assert list(iter_trace_record_objects(project_slug=slug)) == []
+
+
 def test_from_session_cross_project_transcript_not_ingested(tmp_path, monkeypatch):
     """Even a perfectly-valid id whose transcript lives under ANOTHER project's
     encoded dir must not be ingested into THIS project's bucket — the resolver

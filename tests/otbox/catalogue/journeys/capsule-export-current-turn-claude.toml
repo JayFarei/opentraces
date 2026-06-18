@@ -7,9 +7,10 @@ remediation on a miss.
 `c-captured-real-session` is genuinely synthetic-fallback (Plan 072 R3 —
 artifact-preferred, synthetic-fallback), so it runs in default CI. The
 captured Claude session transcript lands under the box `~/.claude/projects/
-*/<session_id>.jsonl`, which is exactly what the `--from-session` resolver
-globs and ingests, so the produces-a-capsule branch is ARTIFACT-INDEPENDENT
-here.
+<encoded-cwd>/<session_id>.jsonl`, which is exactly the project-confined exact
+path the `--from-session` resolver looks up (inside THIS project's own encoded
+dir — never a cross-project glob) and ingests, so the produces-a-capsule branch
+is ARTIFACT-INDEPENDENT here.
 
   Step 1 (produces-a-capsule): `capsule export --from-session {session_id}
     --json` → rc=0 AND `schema_version == opentraces.capsule.v1` (a valid,

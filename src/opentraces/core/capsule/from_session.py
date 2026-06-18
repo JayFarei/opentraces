@@ -121,18 +121,26 @@ def _claude_transcript_path(project_dir: Path, session_id: str) -> Path:
 def _find_claude_transcript(session_id: str, project_dir: Path) -> Path | None:
     """Locate this project's Claude transcript for ``session_id``, safely.
 
-    Returns the candidate only when it (a) stays inside the projects root after
-    resolving symlinks (escape guard, defense in depth on top of the id
-    validation) and (b) actually exists.
+    Confinement (defense in depth on top of :func:`is_safe_session_id`): the
+    candidate must resolve — AFTER following symlinks — to a path INSIDE THIS
+    project's own encoded dir, not merely under the ``~/.claude/projects`` root.
+    A symlink planted at the project's expected ``<id>.jsonl`` path pointing at a
+    SIBLING project's transcript resolves outside the project dir and is rejected,
+    so it can never be ingested into this project's bucket. Returns the candidate
+    only when it both stays confined and exists.
     """
+
+    from ..repo_identity import encode_claude_path
 
     projects = Path.home() / ".claude" / "projects"
     if not projects.exists():
         return None
-    candidate = _claude_transcript_path(project_dir, session_id)
+    proj_dir = projects.resolve() / encode_claude_path(project_dir)
+    candidate = proj_dir / f"{session_id}.jsonl"
     try:
-        resolved = candidate.resolve()
-        resolved.relative_to(projects.resolve())  # must stay under the root
+        # Confine to the CURRENT project's encoded dir (not the projects root):
+        # follow symlinks, then require the real path to live under proj_dir.
+        candidate.resolve().relative_to(proj_dir.resolve())
     except (ValueError, OSError):
         return None
     return candidate if candidate.is_file() else None
