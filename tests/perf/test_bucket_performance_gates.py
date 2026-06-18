@@ -810,22 +810,85 @@ def test_bench_ingest_tick_100_events(repo: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.skip(reason="requires 10k-blob bucket fixture; run nightly")
-def test_bench_bucket_status_10k_blobs() -> None:  # pragma: no cover
-    """``bucket status`` over a 10k-blob bucket: <300ms.
+@pytest.mark.skip(reason="seeds a large synthetic bucket; run nightly")
+def test_bench_bucket_status_10k_blobs(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # pragma: no cover
+    """``bucket status`` over a large bucket: bounded output + no blob enumeration.
 
-    Plan 080 §10: the status verb reads the manifest summary; it must
-    NOT enumerate every blob (which would dominate cost). Skipped by
-    default; documents the gate.
+    Plan 080 §10 + issue #97: the status verb reads the manifest summary; it must
+    NOT enumerate the blob tree (which would dominate cost), and its `--json`
+    payload must stay summary-only (no `traces[]` / `trace_records.snapshot` /
+    `trail.freshness`) regardless of N. Skipped by default (the seed is heavy);
+    this is the nightly scaled guard that PINS the latency/no-enumeration claim.
 
-    Reference shape (when fixture is wired)::
-
-        from opentraces.core.bucket_store import bucket_status
-        start = time.perf_counter()
-        status = bucket_status(write_manifest=False)
-        elapsed = time.perf_counter() - start
-        assert elapsed * 1000 < 300
+    NOTE: this pins the no-enumeration invariant at scale; it does NOT claim the
+    O(N) object-store scan is eliminated (that latency cure is a tracked
+    follow-up — issue #97 closes the SIZE half, not the wall-time half).
     """
+
+    from opentraces.core.bucket_store import (
+        blobs_v1_root,
+        bucket_status,
+        project_per_trace_exports,
+    )
+
+    # Seed a large synthetic bucket. N is deliberately scaled (10k blobs at the
+    # nightly tier); the no-enumeration assertion is identical at any N.
+    N = 2000
+    for i in range(N):
+        tid = f"trace-BST{i:05d}"
+        _seed_minimal_session(repo, trace_id=tid, seed=f"bst{i:05d}")
+        record = _build_trace_record(tid)
+        project_per_trace_exports(
+            repo, project_slug="proj", trace_id=tid, record=record
+        )
+
+    blobs_root = blobs_v1_root().resolve()
+    blob_enumerations: list[str] = []
+    real_iterdir = Path.iterdir
+    real_glob = Path.glob
+
+    def _counting_iterdir(self: Path) -> Any:
+        try:
+            resolved = self.resolve()
+            if resolved == blobs_root or blobs_root in resolved.parents:
+                blob_enumerations.append(f"iterdir:{resolved}")
+        except OSError:
+            pass
+        return real_iterdir(self)
+
+    def _counting_glob(self: Path, pattern: str) -> Any:
+        try:
+            resolved = self.resolve()
+            if resolved == blobs_root or blobs_root in resolved.parents:
+                blob_enumerations.append(f"glob:{resolved}:{pattern}")
+        except OSError:
+            pass
+        return real_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "iterdir", _counting_iterdir)
+    monkeypatch.setattr(Path, "glob", _counting_glob)
+
+    start = time.perf_counter()
+    status = bucket_status(write_manifest=False, heal=False)
+    elapsed = time.perf_counter() - start
+
+    bucket = status["bucket"]
+    # SIZE: the payload is summary-only regardless of N.
+    assert "traces" not in bucket
+    assert bucket["trace_count"] == N
+    assert "snapshot" not in bucket["trace_records"]
+    assert "freshness" not in bucket["trail"]
+    # NO ENUMERATION of the blob tree on the status read path.
+    assert blob_enumerations == [], (
+        f"bucket_status enumerated blob tree {len(blob_enumerations)} time(s); "
+        f"first 3: {blob_enumerations[:3]}"
+    )
+    BUDGET_MS = 300.0
+    assert elapsed * 1000 < BUDGET_MS, (
+        f"bucket_status_{N}: {elapsed * 1000:.1f}ms > {BUDGET_MS}ms"
+    )
 
 
 def test_bench_bucket_status_small_no_enumeration(

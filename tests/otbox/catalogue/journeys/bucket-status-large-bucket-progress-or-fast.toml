@@ -1,0 +1,56 @@
+name = "bucket-status-large-bucket-progress-or-fast"
+description = """
+Issue #97 — soft no-regression signal (tier 1, opt-in; perf is
+environment-sensitive).
+
+The issue comment asked for a "fast or progress" status. This PR closes the
+SIZE half (bounded output) but NOT the LATENCY half — `bucket status` stays
+O(N) in wall time for the trace-scan-derived counts. So this journey gates on
+the bounded OUTPUT (traces[] absent) plus a SOFT small-world wall-time budget.
+It is explicitly NOT the latency acceptance criterion: the executable latency
+pin is the perf suite (`tests/perf/test_bucket_performance_gates.py` —
+`test_bench_bucket_status_small_no_enumeration`, kept green, and the scaled
+nightly `test_bench_bucket_status_10k_blobs`), not this soft duration.
+
+Asserts (against `c-bucket-spine-v2-multi-trace-mixed`):
+  - `bucket status --json` exits 0.
+  - bucket.traces is ABSENT (no full dump).
+  - duration within the small-world smoke budget (full CLI process; soft).
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-multi-trace-mixed"]
+
+[preconditions]
+min_captured_traces = 2
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — bucket status completes without dumping every trace.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-status-progress-or-fast"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-status-progress-or-fast"
+equals = 0
+
+# Bounded output: no full per-trace dump.
+[[assertions]]
+kind = "stdout_json_path_absent"
+step = "bucket-status-progress-or-fast"
+path = "bucket.traces"
+
+# Soft wall-time budget (full CLI process; python start dominates on the
+# small world). NOT the latency AC — see description.
+[[assertions]]
+kind = "duration_ms_max"
+step = "bucket-status-progress-or-fast"
+max = 2500

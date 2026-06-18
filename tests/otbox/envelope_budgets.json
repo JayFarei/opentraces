@@ -6,8 +6,9 @@
   },
   "bucket-status": {
     "argv": ["--json", "bucket", "status"],
-    "max_tokens": 1900,
-    "measured_at_seed": 920
+    "max_tokens": 760,
+    "measured_at_seed": 619,
+    "note": "Issue #97 — status is summary-only (traces[] / trace_records.snapshot / trail.freshness omitted; full list via `bucket manifest --json`). Budget is deliberately TIGHT (not the usual 2x): below the pre-strip 920 measured on this single-trace world, so re-introducing traces[]/snapshot/freshness fails CI even at N=1, regardless of corpus size."
   },
   "bucket-manifest": {
     "argv": ["bucket", "manifest", "--json"],

@@ -266,6 +266,59 @@ def test_bucket_manifest_status_and_fake_remote(tmp_path, monkeypatch):
     assert [obj.trace_id for obj in iter_trace_record_objects()] == ["trace-bucket-manifest"]
 
 
+def test_bucket_status_payload_is_bounded(tmp_path):
+    """Issue #97 — `bucket status` is summary-only; full traces[] on `manifest`.
+
+    Seeds a multi-trace bucket and proves the status payload drops the O(N)
+    `traces[]` array, the per-record `trace_records.snapshot` block, and the
+    per-projection `trail.freshness` array — while keeping the answerable
+    scalar counters and a `trace_count` that agrees with the manifest. The
+    full per-trace listing must still be reachable via `bucket manifest`.
+    """
+
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_status,
+        write_trace_record,
+    )
+
+    seeded = ["trace-bounded-a", "trace-bounded-b", "trace-bounded-c"]
+    for trace_id in seeded:
+        write_trace_record(
+            _scanned_trace(trace_id),
+            project_slug="demo",
+            source_layer="canonical",
+            legacy_mirror=False,
+        )
+
+    status = bucket_status(write_manifest=False, heal=False)
+    bucket = status["bucket"]
+
+    # The full enumeration and the non-scalar blocks are dropped.
+    assert "traces" not in bucket
+    assert bucket["traces_omitted"] is True
+    assert "snapshot" not in bucket["trace_records"]
+    assert "freshness" not in bucket["trail"]
+
+    # The scalar count is present and agrees with the record object count.
+    assert bucket["trace_count"] == len(seeded)
+    assert bucket["trace_count"] == bucket["trace_records"]["object_count"]
+
+    # The answerable scalar counters survive the strip.
+    assert "syncable_count" in bucket["trace_records"]
+    assert "security_stale_count" in bucket["trace_records"]
+    assert "unfiltered_count" in bucket["trace_records"]
+    assert "batch_count" in bucket["events_v1"]
+    assert "eligible" in bucket["sync"]
+    assert bucket["trail"]["stale_count"] == 0
+    assert bucket["schema_version"] == "opentraces.bucket.manifest.v2"
+    assert bucket["bucket_digest"].startswith("sha256:")
+
+    # The full per-trace listing is still reachable via `bucket manifest`.
+    manifest = bucket_manifest(write=False, heal=False, include_objects=False)
+    assert sorted(row["trace_id"] for row in manifest["traces"]) == sorted(seeded)
+
+
 def test_raw_source_artifact_is_bucket_local_and_manifested(tmp_path):
     from opentraces.core.bucket_store import (
         bucket_manifest,
@@ -467,9 +520,11 @@ def test_legacy_in_place_mirrors_never_auto_adopted(tmp_path):
     assert manifest["traces"] == []
     assert not trace_v1_json_path(slug, "trace-legacy-in-place").exists()
 
-    # `bucket status` (the S5 journey surface) agrees.
+    # `bucket status` (the S5 journey surface) is summary-only (#97): the full
+    # traces[] enumeration lives on `bucket manifest`; status carries a count.
     status = bucket_status()
-    assert status["bucket"]["traces"] == []
+    assert "traces" not in status["bucket"]
+    assert status["bucket"]["trace_count"] == 0
 
     # The #28 bucket-sourced repair pass must skip it too.
     result = bucket_repair(dry_run=False)
@@ -549,11 +604,11 @@ def test_record_only_ingest_is_materialized_by_manifest_self_heal(tmp_path):
     assert [row["trace_id"] for row in manifest["traces"]] == ["trace-record-only-1"]
     assert trace_v1_json_path(slug, "trace-record-only-1").exists()
 
-    # `bucket status` (manifest-only reader) agrees.
+    # `bucket status` (summary-only reader, #97) agrees on the count; the full
+    # enumeration is reachable via `bucket manifest`.
     status = bucket_status()
-    assert [row["trace_id"] for row in status["bucket"]["traces"]] == [
-        "trace-record-only-1"
-    ]
+    assert "traces" not in status["bucket"]
+    assert status["bucket"]["trace_count"] == 1
 
     # The in-place JSONL stays untouched (record-only contract: the staged
     # source is not consumed by materialization).
@@ -661,12 +716,13 @@ def test_bucket_read_verbs_are_side_effect_free(tmp_path):
 
     before_hash = _bucket_tree_byte_hash()
 
-    # --- bucket status (read-only) -------------------------------------
+    # --- bucket status (read-only, summary-only #97) -------------------
     status = bucket_status(write_manifest=False, heal=False)
-    status_rows = [row["trace_id"] for row in status["bucket"]["traces"]]
-    assert status_rows == ["trace-read-verb-orphan"]
+    assert "traces" not in status["bucket"]
+    assert status["bucket"]["trace_count"] == 1
+    # The count agrees with the object-store record count by construction.
     assert (
-        len(status["bucket"]["traces"])
+        status["bucket"]["trace_count"]
         == status["bucket"]["trace_records"]["object_count"]
     )
     assert _bucket_tree_byte_hash() == before_hash, "bucket status mutated the bucket"

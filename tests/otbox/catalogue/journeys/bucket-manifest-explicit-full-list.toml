@@ -1,0 +1,55 @@
+name = "bucket-manifest-explicit-full-list"
+description = """
+Issue #97 must-preserve side — the full per-trace listing stays reachable
+via the EXISTING `bucket manifest --json` (no new CLI surface).
+
+After `bucket status` is bounded to a summary, an agent that needs the full
+per-trace enumeration asks `bucket manifest --json`. The frozen
+`opentraces.bucket.manifest.v2` envelope is UNCHANGED by issue #97 and still
+emits the whole traces[] array (with per-trace digests).
+
+Asserts (against `c-bucket-spine-v2-multi-trace-mixed`, >1 trace):
+  - `bucket manifest --json` exits 0.
+  - manifest.traces.0.trace_id is present (full enumeration here).
+  - manifest.schema_version == opentraces.bucket.manifest.v2.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-multi-trace-mixed"]
+
+[preconditions]
+min_captured_traces = 2
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — bucket manifest carries the full per-trace listing.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-manifest-full"
+argv = ["bucket", "manifest", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-manifest-full"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-manifest-full"
+path = "manifest.traces.0.trace_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-manifest-full"
+path = "manifest.traces.1.trace_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-manifest-full"
+path = "manifest.schema_version"
+equals = "opentraces.bucket.manifest.v2"
