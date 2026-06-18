@@ -43,6 +43,7 @@ from opentraces_schema.dataset import SECURITY_TOOL_ORDER
 
 from ..security import SECURITY_VERSION
 from ..security.dataset_rows import (
+    DATASET_ROW_FLOOR,
     DatasetRowSecurity,
     sanitize_dataset_row,
     unsupported_dataset_row_tools,
@@ -799,6 +800,13 @@ def _build_row_provenance(
             "required_tools": list(dataset.manifest.security.required_tools),
             "required_satisfied": dataset.manifest.security.required_tools_satisfied(),
             "tools_applied": list(row_security.tools_applied),
+            # Issue #84: author-declared input vs the floor-resolved set that
+            # actually governed sanitization. The author can only ADD tools; the
+            # non-overridable reader floor is always present in effective_tools.
+            "requested_tools": list(row_security.requested_tools),
+            "effective_tools": list(row_security.effective_tools),
+            "floor": list(row_security.floor),
+            "floor_satisfied": bool(row_security.floor_satisfied),
         },
         "run": run_provenance or {},
     }
@@ -894,7 +902,11 @@ def evaluate_publication_state(
     # tools. This blocks rows where a required tool could not run, was disabled
     # via override, or was re-enabled only after the row was appended raw.
     required_tools = set(dataset.manifest.security.required_tools)
-    provenance = read_row_provenance(name) if required_tools else {}
+    # Issue #84: provenance is the per-row execution evidence the floor gate
+    # reads on RE-evaluation (when no fresh row_security is supplied). It must be
+    # loaded unconditionally — not only when a contract declares required tools —
+    # else row_tools is empty on re-eval and the floor backstop misfires.
+    provenance = read_row_provenance(name)
     selected = set(row_ids or [])
     state = read_publication_state(name)
     rows_by_id = read_rows_by_id(name)
@@ -946,6 +958,12 @@ def evaluate_publication_state(
         # tools actually ran, the row is not raw even at tier "off".
         if entry_privacy_tier == "off" and not row_tools:
             block_reasons.append("privacy_tier_off")
+        # Issue #84: the non-overridable reader floor is an independent gate
+        # backstop. A row that ran without the full floor (e.g. appended before
+        # the floor existed, or via a path that skipped it) is blocked — fresh
+        # rows always satisfy it because sanitize_dataset_row unions it in.
+        if set(DATASET_ROW_FLOOR) - row_tools:
+            block_reasons.append("dataset_reader_floor_unsatisfied")
         security_stale = bool(
             entry_privacy_tier != "off" and entry_security_version != SECURITY_VERSION
         )

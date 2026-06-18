@@ -671,6 +671,18 @@ separately as `doctor.trace_index.legacy_index_state`, so its absence is not a
 current failure when the snapshot is healthy. Both `opentraces --json doctor`
 and the command-local `opentraces doctor --json` emit this payload.
 
+Under `--json`, `doctor.runtime_provenance` reports install **provenance** —
+not just versions — so a machine with multiple opentraces runtimes (editable
+checkout, pipx, Homebrew) that all report the same version is still
+distinguishable. It carries `current` (the foreground command's python +
+`module_file` + `source_kind` + git root/commit), `discovered_installs` (the
+distinct code roots behind the configured integration runners, with real
+`module_file`/`dist_version` from a bounded probe), `integration_runners`
+(codex/claude/git/watcher/otlp, each with `matches_current`), and a
+`state` of `single_runtime` or `mixed_runtimes`. Mixed runtimes are a
+`warning` (never an error — they never change doctor's exit code); the advice
+is informational and never deletes or rewrites anything.
+
 `init --agent` accepts `claude`, `claude-code`, `codex`, `codex-cli`, or `pi`.
 `--import-existing` currently imports existing Claude Code traces for the
 current repo. Codex CLI and Pi capture start with future sessions after their
@@ -696,13 +708,28 @@ opentraces trace teleport export <trace-id> --output <dir>
 Common `trace query` filters include `--lex`, `--semantic`, `--skill`,
 `--tool`, `--files`, `--signal`, `--survival`, `--since`, `--candidate-kind`,
 `--project`, and `--cwd`. `trace query` is read-only against the local search
-snapshot: it neither rebuilds the index nor pulls remote data. `trace skills`
+snapshot: it neither rebuilds the index nor pulls remote data. Under active
+capture the snapshot can be marked stale by a concurrent write; rather than
+dead-ending with `maintenance_needed`, the default query serves the
+last-known-good snapshot and attaches a `freshness` object (`stale`,
+`stale_reason`, `built_at`, `source_hash`, `rebuild_recommended`). Pass
+`--fresh` for strict freshness: it returns `maintenance_needed` instead of
+serving a stale snapshot when freshness cannot be proven. `trace skills`
 uses the same compact snapshot's `skill_invocations` table and emits
 `telemetry.duration_ms` plus `search_diagnostics` so agents can tell whether a
 raw scan happened. To search remote traces, first `opentraces bucket remote
 pull` and then refresh the snapshot with `opentraces trace index --json`.
 (`trace get --remote-bucket` / `--remote
 owner/repo` remain the per-trace remote-read path.)
+
+Explicit maintenance commands that can run for minutes accept a shared
+`--progress auto|plain|json|never` flag (starting with `opentraces trace index
+rebuild`). Progress and heartbeat events go to **stderr** so the final `--json`
+payload on stdout stays clean; `--progress json` emits a stable JSONL event
+stream (`{"event":"progress","command":...,"stage":...,"elapsed_ms":...}`) that
+lets an agent tell "working" from "hung". Default is `auto` (quiet on a
+non-TTY/CI, human-readable on a terminal); read commands like `trace query`
+stay quiet and never gain hidden rebuild/progress behavior.
 
 `--semantic` expands a small static dictionary of service/library concepts
 observed in trace evidence (for example Hugging Face or MongoDB); it is not an
@@ -803,6 +830,17 @@ tool at a time. `bucket security run [--all | --trace <id>]` applies the configu
 filter to existing records so they become remote-sync eligible. The policy
 commands flip the same `cfg.security.<tool>.enabled` flags as `security tools` and
 `config set`, scoped to the bucket.
+
+`bucket remote status --json` carries an additive `security_gate` block so a
+single command answers "why can't this bucket sync, and what makes it
+eligible?". It reports `configured`, `unfiltered_count`, `security_stale_count`,
+`eligible`, `blocking_reasons` (in order: `setup bucket` first when the remote is
+unconfigured, then `bucket security policy --policy basic` → `bucket security run
+--all`), and `remediation`. `doctor` and `bucket remote status` derive this from
+the same persisted-manifest counts via one shared helper, so they agree on counts
+and remediation; `bucket security status` shares the remediation. The gate reads
+the persisted bucket manifest (no corpus scan); a missing manifest yields
+`security_gate` state `unknown`.
 
 `bucket status` and `bucket manifest` are side-effect-free reads: they never
 write under the bucket. Self-heal (materializing the top-level manifest from the
@@ -2076,6 +2114,21 @@ front-matter `security:` contract at `dataset new --workflow <path>` and pinned
 to that workflow's digest (`source_workflow_digest`). The resolved
 `enabled_tools` start as the contract's required tools plus its
 `default_enabled_tools`, in canonical registry order.
+
+**The reader's security floor is non-overridable.** Every dataset row is
+sanitized by at least `regex`, `entropy`, `business_logic`, and
+`path_anonymizer` — the `DATASET_ROW_FLOOR` — regardless of what the source
+workflow's contract declares. A third-party workflow contract can only *add*
+tools to this floor, never narrow below it; the floor runs even when a contract
+enables a smaller set and even at `privacy_tier: off` (which therefore no longer
+ships rows verbatim). Because the floor is unioned in as the last resolution
+step, no policy flag — including an authored `allow_disable_required` +
+`--unsafe-override` — can drop a floor tool from what actually runs (an override
+on a floor tool is recorded but does not weaken sanitization). Each row records
+its author-declared `requested_tools` distinctly from the floor-resolved
+`effective_tools`, and `dataset status --json` surfaces `security.reader_floor`
++ `security.floor_satisfied` so the guarantee is inspectable. This enforces the
+promise that the redaction rules that run are the consumer's, not the author's.
 
 The policy is per-dataset, not a global config toggle. Toggling a tool on one
 dataset never affects another dataset or the bucket egress policy.

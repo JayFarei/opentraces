@@ -162,6 +162,86 @@ def test_stale_snapshot_self_heals() -> None:
     assert current_dirty_token() is None
 
 
+def _persistent_dirty(monkeypatch) -> None:
+    # Issue #91: simulate active capture re-dirtying the marker DURING the one
+    # self-heal rebuild, so the retry stays stale (the marker survives the
+    # rebuild's clear). Patches the module-level _iter_documents the build
+    # uses, mirroring the mechanism unit test.
+    from opentraces.core import trace_search_snapshot as tss
+
+    real_iter = tss._iter_documents
+
+    def dirty_during_build():
+        for doc in real_iter():
+            mark_search_snapshot_dirty("during-build", trace_id=doc.trace_id)
+            yield doc
+
+    monkeypatch.setattr(tss, "_iter_documents", dirty_during_build)
+
+
+def test_query_serves_stale_with_warning(monkeypatch) -> None:
+    # Issue #91: a persistently-dirty snapshot serves last-known-good results
+    # with status==ok + freshness.stale==true, NOT maintenance_needed.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+    mark_search_snapshot_dirty("active-capture", trace_id="trace-site")
+    _persistent_dirty(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "ok"
+    assert [item["trace_id"] for item in payload["candidates"]] == ["trace-site"]
+    assert payload["freshness"]["stale"] is True
+    assert payload["freshness"]["rebuild_recommended"] is True
+    assert payload["freshness"]["stale_reason"] == "stale"
+
+
+def test_query_fresh_strict_fails(monkeypatch) -> None:
+    # Issue #91: --fresh demands provable freshness; when it cannot be proven
+    # (marker survives the rebuild) the strict path returns maintenance_needed.
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+    mark_search_snapshot_dirty("active-capture", trace_id="trace-site")
+    _persistent_dirty(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--fresh", "--json"],
+    )
+
+    assert result.exit_code == 3, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "maintenance_needed"
+    assert payload["reason"] == "stale"
+    assert payload["advice"] == "opentraces trace index"
+
+
+def test_query_fresh_clean_snapshot_serves_ok(monkeypatch) -> None:
+    # Issue #91: --fresh on a clean snapshot serves normally with
+    # freshness.stale==false (strict mode only fails when freshness is
+    # genuinely unprovable).
+    _write_trace("demo-project", _trace("trace-site", "Fix site search"))
+    build_trace_search_snapshot()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--fresh", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "ok"
+    assert payload["freshness"]["stale"] is False
+
+
 def test_query_exit_3_when_rebuild_fails(monkeypatch) -> None:
     # Issue #30 contract: maintenance_needed/exit 3 remains ONLY when the
     # self-heal build itself fails. Force the auto-rebuild to raise and assert

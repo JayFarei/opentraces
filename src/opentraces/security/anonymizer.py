@@ -24,6 +24,20 @@ def hash_username(username: str) -> str:
     return hashlib.sha256(username.encode("utf-8")).hexdigest()[:8]
 
 
+def _anonymized_username(username: str) -> str:
+    """Return the unambiguous anonymized marker for a username.
+
+    The marker shape ``[ot-user-<8hex>]`` is what every path/username
+    replacement emits. Its leading ``[`` cannot start a username under the
+    detection regex, so :func:`anonymize_paths` is IDEMPOTENT by construction —
+    a second pass cannot re-detect an already-anonymized segment, and no
+    content-shape skip (which would falsely pass a real hash-shaped username
+    like ``deadbeef`` through intact) is needed. Auto-detection always runs over
+    real names; only this marker is structurally inert.
+    """
+    return f"[ot-user-{hash_username(username)}]"
+
+
 def _get_system_username() -> str | None:
     """Best-effort system username detection."""
     try:
@@ -68,7 +82,7 @@ def _build_path_only_patterns(
     patterns: list[tuple[re.Pattern, str]] = []
     for uname in usernames:
         escaped = re.escape(uname)
-        hashed = hash_username(uname)
+        hashed = _anonymized_username(uname)
 
         # macOS
         patterns.append((
@@ -113,7 +127,7 @@ def _build_patterns(usernames: list[str]) -> list[tuple[re.Pattern, str]]:
     patterns: list[tuple[re.Pattern, str]] = []
     for uname in usernames:
         escaped = re.escape(uname)
-        hashed = hash_username(uname)
+        hashed = _anonymized_username(uname)
 
         # macOS: /Users/<name>/...
         patterns.append((
@@ -239,7 +253,7 @@ def anonymize_paths(
     # Catches non-path contexts (e.g. "alice  staff" in ls -la output).
     # Uses word-boundary matching to avoid replacing substrings of longer words.
     for uname in unique_explicit:
-        hashed = hash_username(uname)
+        hashed = _anonymized_username(uname)
         result = re.sub(re.escape(uname), hashed, result)
 
     return result

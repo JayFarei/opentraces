@@ -107,7 +107,10 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
         run_id="run-1",
         privacy_tier="medium",
     )
-    blocked = append_rows(
+    # Issue #84: an off-tier row carrying a secret is no longer shipped raw and
+    # blocked — the reader floor redacts the secret at append time, so the row
+    # publishes CLEAN (a stronger outcome: the data is shared, the secret is not).
+    secret_row = append_rows(
         "publishable",
         [
             _row(
@@ -119,18 +122,20 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
         privacy_tier="off",
     )
     state = read_publication_state("publishable")
-    assert "privacy_tier_off" in state.rows[blocked.row_ids[0]].block_reasons
+    # The floor ran (row_tools non-empty) -> not a raw privacy_tier_off block.
+    assert "privacy_tier_off" not in state.rows[secret_row.row_ids[0]].block_reasons
+    assert state.rows[secret_row.row_ids[0]].block_reasons == []
 
     checked = publish_dataset("publishable", check_only=True, contributor="tester")
     assert checked.uploaded is False
-    assert checked.new_row_count == 1
-    assert checked.blocked_count == 1
+    assert checked.new_row_count == 2
+    assert checked.blocked_count == 0
     assert any(path.startswith("data/tester-") for path in checked.staged_files)
 
     published = publish_dataset("publishable", contributor="tester")
     assert published.uploaded is True
-    assert published.new_row_count == 1
-    assert published.blocked_count == 1
+    assert published.new_row_count == 2
+    assert published.blocked_count == 0
     assert published.remote_head_before
     assert published.remote_head_after
 
@@ -138,21 +143,30 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
     assert not (remote_root / ".opentraces").exists()
     remote_rows = "\n".join(path.read_text() for path in (remote_root / "data").glob("*.jsonl"))
     assert "Safe public row." in remote_rows
+    # The secret was scrubbed by the floor, so the row leaves with it redacted.
     assert "sk-live-" not in remote_rows
 
     state = read_publication_state("publishable")
     assert state.rows[good.row_ids[0]].status == "published"
     assert "me/publishable" in state.rows[good.row_ids[0]].uploaded_to
-    assert state.rows[blocked.row_ids[0]].status == "blocked"
+    assert state.rows[secret_row.row_ids[0]].status == "published"
+    assert "me/publishable" in state.rows[secret_row.row_ids[0]].uploaded_to
 
 
-def test_plan058_append_rows_defaults_to_raw_off_privacy_tier():
+def test_plan058_append_rows_default_off_tier_runs_the_reader_floor():
+    """Issue #84: the default ``tier="off"`` no longer ships rows verbatim — the
+    non-overridable reader floor (regex/entropy/business_logic/path_anonymizer)
+    runs over every row, so a regex-detectable secret is redacted at append time
+    rather than shipped raw and blocked. The tier LABEL stays ``off`` (a
+    shareable shorthand), but the row is filtered, not raw.
+    """
     from opentraces.core.datasets import (
         append_rows,
         create_dataset,
         dataset_path,
         read_publication_state,
     )
+    from opentraces.security import SECURITY_VERSION
 
     create_dataset(
         "raw-by-default",
@@ -172,14 +186,17 @@ def test_plan058_append_rows_defaults_to_raw_off_privacy_tier():
     )
 
     data = (dataset_path("raw-by-default") / "data" / "train.jsonl").read_text()
-    assert "sk-proj-" in data
-    assert "[REDACTED]" not in data
+    # The reader floor redacted the secret even at tier "off" (the security fix).
+    assert "sk-proj-" not in data
+    assert "[REDACTED]" in data
     entry = read_publication_state("raw-by-default").rows[summary.row_ids[0]]
-    assert entry.status == "blocked"
+    # No longer raw -> not blocked as privacy_tier_off; the floor satisfied the gate.
     assert entry.privacy_tier == "off"
-    assert entry.security_version is None
-    assert entry.redactions_applied == 0
-    assert "privacy_tier_off" in entry.block_reasons
+    assert entry.security_version == SECURITY_VERSION
+    assert entry.redactions_applied >= 1
+    assert "privacy_tier_off" not in entry.block_reasons
+    assert entry.block_reasons == []
+    assert entry.status == "publishable"
 
 
 def test_plan058_append_rows_writes_row_provenance_sidecar():

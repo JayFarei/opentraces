@@ -47,16 +47,34 @@ def _doctor_json_only() -> bool:
     help="Show only the security tool subview (versions + enabled tools).",
 )
 @click.option(
+    "--probe-runtimes", "probe_runtimes", is_flag=True,
+    help=(
+        "Runtime-provenance only: EXECUTE the configured integration "
+        "interpreters (hooks/watcher) to read verified install facts "
+        "(module_file + version). Off by default — doctor never runs a "
+        "binary derived from your hook config unless you ask. Only use this "
+        "when you trust the contents of ~/.codex/hooks.json, "
+        "~/.claude/settings.json and your git/watcher shims. The default "
+        "(no-probe) path already detects mixed runtimes from interpreter "
+        "paths without executing anything. (Env: OT_DOCTOR_PROBE_RUNTIMES=1.)"
+    ),
+)
+@click.option(
     "--json", "as_json", is_flag=True,
     help="Emit the machine-readable JSON envelope (suppresses human output).",
 )
-def doctor_cmd(security_only: bool, as_json: bool) -> None:
+def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None:
     """Report security pipeline and integration health.
 
     Probes every configured integration (hooks, scanners, LLM review,
     post-processors) and reports versions, enabled tool state, and any
     actionable failures. Exits non-zero if a required configured tool is broken.
+
+    Runtime-provenance is inspection-only by default and executes nothing from
+    your hook config; pass ``--probe-runtimes`` to opt into verified probing.
     """
+    import os
+
     from ..core import doctor
 
     # The Click flag alone is not enough: ``emit_json`` gates on the global
@@ -66,8 +84,12 @@ def doctor_cmd(security_only: bool, as_json: bool) -> None:
     if as_json:
         _cli._json_mode = True
 
+    probe_runtimes = probe_runtimes or os.environ.get(
+        "OT_DOCTOR_PROBE_RUNTIMES", ""
+    ).strip() in ("1", "true", "yes")
+
     cfg = _cli.load_config()
-    report = doctor.report(cfg, Path.cwd())
+    report = doctor.report(cfg, Path.cwd(), probe_runtimes=probe_runtimes)
 
     # Human XOR JSON: ``emit_json`` writes the ``---OPENTRACES_JSON---`` block
     # whenever ``--json`` is set OR stdout is not a TTY (piped / captured). In
@@ -407,6 +429,65 @@ def _interpreter_health_section(info: dict) -> None:
     _cli.human_echo(f"    {_cli._dim(remedy)}")
 
 
+def _runtime_provenance_section(info: dict) -> None:
+    """Render the install-provenance / mixed-runtime panel (issue #93).
+
+    Always renders the current install root + per-runner provenance so an agent
+    can see WHICH code root each integration executes. A ``mixed_runtimes``
+    state adds a single warning + advice line — detection only, no auto-fix.
+    """
+    if not info:
+        return
+    _section("Runtime provenance")
+    current = info.get("current") or {}
+    state = info.get("state") or "single_runtime"
+
+    kind = current.get("source_kind") or "unknown"
+    module_file = current.get("module_file") or "?"
+    version = current.get("dist_version") or "?"
+    _row("ok", "current", f"{kind} · {version}", detail=module_file)
+    if current.get("python"):
+        _row("info", "python", current["python"])
+    if current.get("git_commit") or current.get("git_root"):
+        git = " ".join(
+            x for x in (current.get("git_root"), current.get("git_commit")) if x
+        )
+        _row("info", "git", git)
+
+    for r in info.get("integration_runners") or []:
+        name = r.get("name") or "?"
+        py = r.get("python") or "?"
+        ok = r.get("matches_current")
+        _row(
+            "ok" if ok else "warn",
+            name,
+            "matches current" if ok else f"different runtime ({r.get('matches_install') or 'unknown'})",
+            detail=py,
+        )
+
+    installs = info.get("discovered_installs") or []
+    if len(installs) > 1:
+        roots = ", ".join(
+            i.get("source_kind") or "unknown" for i in installs
+        )
+        _row("info", "installs", f"{len(installs)} distinct ({roots})")
+
+    if state == "mixed_runtimes":
+        _row("warn", "state", "mixed runtimes")
+        advice = info.get("advice")
+        if advice:
+            _cli.human_echo(f"    {_cli._dim(advice)}")
+
+    if not info.get("probed"):
+        _cli.human_echo(
+            "    "
+            + _cli._dim(
+                "runner installs inferred from interpreter paths (not executed). "
+                "Run 'opentraces doctor --probe-runtimes' to verify by execution."
+            )
+        )
+
+
 def _trace_index_section(info: dict) -> None:
     """Search read model vs legacy compat cache, split by concern (issue #89).
 
@@ -590,6 +671,7 @@ def _render_doctor_human(report: dict) -> None:
     _hooks_section(report["hooks"])
     _post_commit_hook_section(report.get("post_commit_hook") or {})
     _interpreter_health_section(report.get("interpreter_health") or {})
+    _runtime_provenance_section(report.get("runtime_provenance") or {})
     _trail_event_log_section(report.get("trail_event_log") or {})
     _cli.human_echo("")
 
