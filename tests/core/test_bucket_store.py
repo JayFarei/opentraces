@@ -319,6 +319,41 @@ def test_bucket_status_payload_is_bounded(tmp_path):
     assert sorted(row["trace_id"] for row in manifest["traces"]) == sorted(seeded)
 
 
+def test_bounded_status_view_does_not_mutate_source():
+    """Issue #97 — `_bounded_status_view` is a non-mutating projection.
+
+    The status path must never alias/mutate the manifest dict the caller
+    computed (it may be the cached/persisted manifest). Build a manifest with
+    the three heavy blocks and prove the projection copies rather than mutates.
+    """
+
+    from opentraces.core.bucket_store import _bounded_status_view
+
+    manifest = {
+        "schema_version": "opentraces.bucket.manifest.v2",
+        "traces": [{"trace_id": "t-1"}, {"trace_id": "t-2"}],
+        "trace_records": {"object_count": 2, "snapshot": {"objects": ["x"]}},
+        "trail": {"freshness": [{"projection": "p"}], "stale_count": 0},
+    }
+
+    view = _bounded_status_view(manifest)
+
+    # The view is bounded.
+    assert "traces" not in view
+    assert view["trace_count"] == 2
+    assert view["traces_omitted"] is True
+    assert "snapshot" not in view["trace_records"]
+    assert "freshness" not in view["trail"]
+
+    # The ORIGINAL manifest is untouched — all three heavy blocks survive.
+    assert manifest["traces"] == [{"trace_id": "t-1"}, {"trace_id": "t-2"}]
+    assert manifest["trace_records"]["snapshot"] == {"objects": ["x"]}
+    assert manifest["trail"]["freshness"] == [{"projection": "p"}]
+    # The nested dicts the view kept must be copies, not the same objects.
+    assert view["trace_records"] is not manifest["trace_records"]
+    assert view["trail"] is not manifest["trail"]
+
+
 def test_raw_source_artifact_is_bucket_local_and_manifested(tmp_path):
     from opentraces.core.bucket_store import (
         bucket_manifest,

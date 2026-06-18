@@ -894,17 +894,20 @@ def test_bench_bucket_status_10k_blobs(
 def test_bench_bucket_status_small_no_enumeration(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Smoke: ``bucket_manifest`` does not enumerate context blob files.
+    """Smoke: ``bucket_status`` is bounded AND does not enumerate blob files.
 
-    The HARD assertion is preservation of the no-enumeration invariant on
-    the status read path. We can't run 10k blobs in CI, but we can hook
-    ``Path.iterdir`` / ``Path.glob`` to detect any blob-tree scan during
-    the status call.
+    Two HARD assertions on the actual ``bucket_status`` read path (issue #97):
+    (a) the payload is summary-only — ``traces[]`` / ``trace_records.snapshot``
+    / ``trail.freshness`` are ABSENT — so this gate goes RED on pre-fix code
+    where ``bucket_status`` still emits the full manifest; and (b) the call
+    does not scan the blob tree. We can't run 10k blobs in CI, but we can hook
+    ``Path.iterdir`` / ``Path.glob`` to detect any blob-tree scan during the
+    status call.
     """
 
     from opentraces.core.bucket_store import (
         blobs_v1_root,
-        bucket_manifest,
+        bucket_status,
         project_per_trace_exports,
     )
 
@@ -941,10 +944,16 @@ def test_bench_bucket_status_small_no_enumeration(
     monkeypatch.setattr(Path, "glob", _counting_glob)
 
     start = time.perf_counter()
-    manifest = bucket_manifest(write=False)
+    status = bucket_status(write_manifest=False, heal=False)
     elapsed = time.perf_counter() - start
 
-    assert manifest.get("schema_version") == "opentraces.bucket.manifest.v2"
+    bucket = status["bucket"]
+    assert bucket.get("schema_version") == "opentraces.bucket.manifest.v2"
+    # Issue #97 — the status payload is bounded summary-only. This is RED on
+    # pre-fix code (where bucket_status emits the whole manifest).
+    assert "traces" not in bucket
+    assert "snapshot" not in bucket["trace_records"]
+    assert "freshness" not in bucket["trail"]
     BUDGET_MS = 300.0
     # Small-fixture budget is generous; the HARD gate is no enumeration.
     assert elapsed * 1000 < BUDGET_MS, (

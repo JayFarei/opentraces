@@ -855,8 +855,13 @@ def _bucket_only_delta(driver: Driver, box: Box) -> None:
     _check(driver.exec(box, ["rm", "-rf", f"{project}/.git"]), "drop project .git")
 
     cli = resolve_cli_argv()
-    status = _cli_json(driver, box, "bucket", "status", "--json", label="bucket status (no git)")
-    rows = (status.get("bucket") or {}).get("traces") or []
+    # Issue #97 — `bucket status` is summary-only; the full traces[] enumeration
+    # lives on `bucket manifest --json`. Assert the listing survived .git removal
+    # against the manifest (status keeps only scalars/digest).
+    manifest_payload = _cli_json(
+        driver, box, "bucket", "manifest", "--json", label="bucket manifest (no git)"
+    )
+    rows = (manifest_payload.get("manifest") or {}).get("traces") or []
     if not rows:
         raise CheckpointError(
             f"{_FAMILY}-bucket-only: manifest lost its traces after .git removal"
