@@ -49,6 +49,21 @@ to that workflow's digest (`source_workflow_digest`). The resolved
 `enabled_tools` start as the contract's required tools plus its
 `default_enabled_tools`, in canonical registry order.
 
+**The reader's security floor is non-overridable.** Every dataset row is
+sanitized by at least `regex`, `entropy`, `business_logic`, and
+`path_anonymizer` — the `DATASET_ROW_FLOOR` — regardless of what the source
+workflow's contract declares. A third-party workflow contract can only *add*
+tools to this floor, never narrow below it; the floor runs even when a contract
+enables a smaller set and even at `privacy_tier: off` (which therefore no longer
+ships rows verbatim). Because the floor is unioned in as the last resolution
+step, no policy flag — including an authored `allow_disable_required` +
+`--unsafe-override` — can drop a floor tool from what actually runs (an override
+on a floor tool is recorded but does not weaken sanitization). Each row records
+its author-declared `requested_tools` distinctly from the floor-resolved
+`effective_tools`, and `dataset status --json` surfaces `security.reader_floor`
++ `security.floor_satisfied` so the guarantee is inspectable. This enforces the
+promise that the redaction rules that run are the consumer's, not the author's.
+
 The policy is per-dataset, not a global config toggle. Toggling a tool on one
 dataset never affects another dataset or the bucket egress policy.
 
