@@ -138,6 +138,25 @@ def _hook_command(script: str) -> str:
     return f"{shlex.quote(py)} {shlex.quote(script)}"
 
 
+def _is_stale_opentraces_command(cmd: object, command: str) -> bool:
+    """True iff ``cmd`` is a DIFFERENT opentraces hook command to supersede.
+
+    Matches both the script-path form this installer writes (``opentraces_<event>``)
+    AND the module form (``-m opentraces...`` / ``opentraces.capture...``) that an
+    older install — or a different runtime — may have left, so re-rendering to a
+    selected runtime (issue #99) supersedes the prior interpreter's hook rather
+    than stacking a second one for the same event.
+    """
+    if not isinstance(cmd, str) or cmd == command:
+        return False
+    return (
+        "opentraces_" in cmd
+        or "-m opentraces" in cmd
+        or "opentraces.capture" in cmd
+        or "/opentraces/" in cmd
+    )
+
+
 def _prune_stale_opentraces_hooks(event_hooks: list, command: str) -> list:
     """Drop older opentraces hook commands for this event while preserving others."""
     kept = []
@@ -150,22 +169,14 @@ def _prune_stale_opentraces_hooks(event_hooks: list, command: str) -> list:
             kept_inner = []
             for hook in inner:
                 hook_command = hook.get("command") if isinstance(hook, dict) else None
-                if (
-                    isinstance(hook_command, str)
-                    and "opentraces_" in hook_command
-                    and hook_command != command
-                ):
+                if _is_stale_opentraces_command(hook_command, command):
                     continue
                 kept_inner.append(hook)
             if kept_inner:
                 kept.append({**entry, "hooks": kept_inner})
             continue
         entry_command = entry.get("command")
-        if (
-            isinstance(entry_command, str)
-            and "opentraces_" in entry_command
-            and entry_command != command
-        ):
+        if _is_stale_opentraces_command(entry_command, command):
             continue
         kept.append(entry)
     return kept
