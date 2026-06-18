@@ -333,6 +333,17 @@ filter to existing records so they become remote-sync eligible. The policy
 commands flip the same `cfg.security.<tool>.enabled` flags as `security tools` and
 `config set`, scoped to the bucket.
 
+`bucket remote status --json` carries an additive `security_gate` block so a
+single command answers "why can't this bucket sync, and what makes it
+eligible?". It reports `configured`, `unfiltered_count`, `security_stale_count`,
+`eligible`, `blocking_reasons` (in order: `setup bucket` first when the remote is
+unconfigured, then `bucket security policy --policy basic` → `bucket security run
+--all`), and `remediation`. `doctor` and `bucket remote status` derive this from
+the same persisted-manifest counts via one shared helper, so they agree on counts
+and remediation; `bucket security status` shares the remediation. The gate reads
+the persisted bucket manifest (no corpus scan); a missing manifest yields
+`security_gate` state `unknown`.
+
 `bucket status` and `bucket manifest` are side-effect-free reads: they never
 write under the bucket. Self-heal (materializing the top-level manifest from the
 per-trace envelopes on disk) is explicit via `bucket manifest --heal`, or do a

@@ -212,26 +212,25 @@ def _bucket_security_remediation_for_doctor(
     if unfiltered == 0 and stale == 0:
         return None
     try:
-        from .bucket_security import bucket_security_remediation
-        from .config import load_config
-        from .pipeline import _resolved_tool_names
+        from .bucket_security import bucket_sync_security_gate
 
-        configured = bool(_resolved_tool_names(load_config(), skip_trufflehog=False))
+        # Convergence by construction (issue #94): doctor and `bucket remote
+        # status` both drive the same shared gate off the persisted manifest
+        # counts, so their remediation can never drift.
+        return bucket_sync_security_gate(unfiltered=unfiltered, stale=stale)[
+            "remediation"
+        ]
     except Exception:
         return None
-    return bucket_security_remediation(
-        unfiltered=unfiltered, stale=stale, filtering_configured=configured
-    )
 
 
 def _doctor_bucket_manifest_max_bytes() -> int:
-    raw = os.environ.get("OPENTRACES_DOCTOR_BUCKET_MANIFEST_MAX_BYTES")
-    if raw:
-        try:
-            return max(1024, int(raw))
-        except ValueError:
-            return _DOCTOR_BUCKET_MANIFEST_MAX_BYTES
-    return _DOCTOR_BUCKET_MANIFEST_MAX_BYTES
+    # Single source of truth (issue #94): doctor's bucket panel and the
+    # `bucket remote status` security gate degrade on an oversized manifest at
+    # the SAME byte cap.
+    from .bucket_store import bucket_manifest_max_bytes
+
+    return bucket_manifest_max_bytes()
 
 
 def _bucket_context_tree_section(

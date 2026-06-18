@@ -46,25 +46,135 @@ class BucketRemoteError(RuntimeError):
 
 
 def remote_status(*, fake_root: Path | None = None) -> dict[str, Any]:
-    """Return provider-aware private bucket remote status."""
+    """Return provider-aware private bucket remote status.
+
+    Every branch carries an additive ``security_gate`` block (issue #94) so the
+    sync-diagnostic surface explains the security posture that actually gates a
+    push — not only the digest relation.
+
+    The gate is computed FIRST, from a read-only, byte-capped read of the
+    PERSISTED ``bucket/manifest.json`` (codex finding #1/#2): it never calls
+    ``bucket_manifest`` / ``bucket_security_overview`` (both SCAN) and never
+    writes ``manifest.json``. Computing it before any status helper runs means
+    the gate reflects the genuinely-persisted state, NOT a manifest the digest
+    helper builds — a missing/oversized persisted manifest yields
+    ``security_gate.state == "unknown"``. (The configured-remote digest helpers
+    DO still scan to compute the local digest; that pre-existing scan is #97,
+    out of #94's scope — only the GATE is guaranteed scan-free here.)
+    """
 
     if fake_root is not None:
-        return _fake_payload(fake_remote_status(fake_root))
+        gate = _security_gate(remote_configured=True)
+        payload = _fake_payload(fake_remote_status(fake_root))
+        payload["security_gate"] = gate
+        return payload
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
+        # Ambient fake remote = a fake-remote root wired via env/config. Detect
+        # it cheaply (no scan) so the gate's remote-configured axis is correct.
+        remote_configured = fake_remote_root() is not None
+        gate = _security_gate(remote_configured=remote_configured)
         fake = _ambient_fake_status()
         if fake is not None:
+            fake["security_gate"] = gate
             return fake
-        return {
+        payload = {
             "schema_version": REMOTE_SCHEMA,
             "state": "unconfigured",
             "provider": remote.provider,
             "advice": "run opentraces setup bucket",
+            "security_gate": gate,
         }
+        return payload
+    gate = _security_gate(remote_configured=True)
     if remote.provider == "fake":
-        return _fake_payload(fake_remote_status())
-    return _hf_status(remote.url, cfg.hf_token)
+        payload = _fake_payload(fake_remote_status())
+    else:
+        payload = _hf_status(remote.url, cfg.hf_token)
+    payload["security_gate"] = gate
+    return payload
+
+
+def _security_gate(*, remote_configured: bool) -> dict[str, Any]:
+    """Build the bucket-sync security gate for ``bucket remote status``.
+
+    Reads the PERSISTED ``bucket/manifest.json`` via the shared read-only,
+    byte-capped reader (``read_persisted_manifest_capped`` — NEVER
+    ``bucket_manifest`` / ``bucket_security_overview``, both of which SCAN, and
+    never writing the file). A missing / oversized / unreadable persisted
+    manifest yields ``state == "unknown"`` rather than triggering a scan or a
+    write (codex finding #1/#2; the byte cap matches doctor's ``too-large``
+    threshold). ``eligible`` composes the security axis (remediation is None)
+    with the remote-configured axis; ``blocking_reasons`` and ``advice`` list
+    the remote-unconfigured step first, then the security remediation (codex
+    finding #3 / issue contract).
+    """
+
+    from .bucket_security import bucket_sync_security_gate
+    from .bucket_store import read_persisted_manifest_capped
+
+    state, manifest = read_persisted_manifest_capped()
+    if state != "ok" or manifest is None:
+        # absent / too_large / error -> unknown, WITHOUT scanning or writing.
+        return {
+            "state": "unknown",
+            "reason": f"manifest_{state}",
+            "configured": None,
+            "unfiltered_count": None,
+            "security_stale_count": None,
+            "eligible": False,
+            "blocking_reasons": (
+                ["remote_unconfigured"] if not remote_configured else []
+            ),
+            "remediation": None,
+            "advice": (
+                ["opentraces setup bucket"] if not remote_configured else []
+            ),
+        }
+
+    trace_records = manifest.get("trace_records") or {}
+    unfiltered = int(trace_records.get("unfiltered_count") or 0)
+    stale = int(trace_records.get("security_stale_count") or 0)
+    gate = bucket_sync_security_gate(unfiltered=unfiltered, stale=stale)
+
+    blocking_reasons: list[str] = []
+    if not remote_configured:
+        blocking_reasons.append("remote_unconfigured")
+    blocking_reasons.extend(gate["blocking_reasons"])
+
+    return {
+        "state": "ok",
+        "configured": gate["configured"],
+        "unfiltered_count": gate["unfiltered_count"],
+        "security_stale_count": gate["security_stale_count"],
+        "eligible": remote_configured and gate["remediation"] is None,
+        "blocking_reasons": blocking_reasons,
+        "remediation": gate["remediation"],
+        "advice": _security_advice_chain(
+            remote_configured=remote_configured, remediation=gate["remediation"]
+        ),
+    }
+
+
+def _security_advice_chain(
+    *, remote_configured: bool, remediation: dict[str, Any] | None
+) -> list[str]:
+    """Ordered, copy-pasteable remediation commands for the security gate.
+
+    ``setup bucket`` first when the remote is unconfigured, then the security
+    chain: ``policy --policy basic`` -> ``run --all`` when the filter is not
+    configured, else just ``run --all``.
+    """
+
+    chain: list[str] = []
+    if not remote_configured:
+        chain.append("opentraces setup bucket")
+    if remediation:
+        if remediation.get("state") == "not_configured":
+            chain.append("opentraces bucket security policy --policy basic")
+        chain.append("opentraces bucket security run --all")
+    return chain
 
 
 def remote_diff(*, fake_root: Path | None = None) -> dict[str, Any]:
