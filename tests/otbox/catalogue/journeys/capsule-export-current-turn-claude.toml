@@ -1,0 +1,72 @@
+name = "capsule-export-current-turn-claude"
+description = """
+Issue #98 (Part B, SILVER) — `capsule export --from-session <id>` builds a
+capsule from the CURRENT Claude turn, and emits a clear "not materialized"
+remediation on a miss.
+
+`c-captured-real-session` is genuinely synthetic-fallback (Plan 072 R3 —
+artifact-preferred, synthetic-fallback), so it runs in default CI. The
+captured Claude session transcript lands under the box `~/.claude/projects/
+<encoded-cwd>/<session_id>.jsonl`, which is exactly the project-confined exact
+path the `--from-session` resolver looks up (inside THIS project's own encoded
+dir — never a cross-project glob) and ingests, so the produces-a-capsule branch
+is ARTIFACT-INDEPENDENT here.
+
+  Step 1 (produces-a-capsule): `capsule export --from-session {session_id}
+    --json` → rc=0 AND `schema_version == opentraces.capsule.v1` (a valid,
+    openable v1 envelope built from the live session).
+  Step 2 (remediation): a bogus id → rc=2 AND the not-materialized message
+    naming the checked paths.
+
+The Codex produces-a-capsule path is owned by the hermetic Layer-1 unit
+`test_from_session_codex` and the artifact-independent remediation branch in
+`capsule-export-current-turn-codex` (the Codex checkpoint is INERT when its
+artifact is absent — no synthetic fallback). Tier 1 (opt-in).
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — current-turn capsule from the live Claude session.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "from-session-claude"
+argv = ["capsule", "export", "--from-session", "{session_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "from-session-claude"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "from-session-claude"
+path = "schema_version"
+equals = "opentraces.capsule.v1"
+
+# ---------------------------------------------------------------------
+# Step 2 — a session that has neither source emits the remediation.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "from-session-miss"
+argv = ["capsule", "export", "--from-session", "no-such-session-xyz", "--json"]
+expect_returncode = 2
+
+[[assertions]]
+kind = "returncode"
+step = "from-session-miss"
+equals = 2
+
+[[assertions]]
+kind = "stderr_contains"
+step = "from-session-miss"
+value = "may not be captured yet"

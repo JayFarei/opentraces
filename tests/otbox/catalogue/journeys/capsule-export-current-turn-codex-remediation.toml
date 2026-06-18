@@ -1,0 +1,45 @@
+name = "capsule-export-current-turn-codex-remediation"
+description = """
+Issue #98 (Part B, CODEX remediation — tier 0, runs in default CI).
+
+The Codex produces-a-capsule path is artifact-gated (its checkpoint is INERT
+when the capture artifact is absent), so it would never exercise the riskiest
+real Codex behavior — the miss/remediation — in default CI. This journey is
+artifact-INDEPENDENT: `capsule export --from-session <bogus> --from-agent
+codex --json` against a plain installed source (no sidecar, no transcript)
+must exit 2 and name BOTH the Codex sidecar path fragment and the recovery,
+WITHOUT a live `codex` binary and without any capture artifact. No
+preconditions, so it actually RUNS (not SKIPs) in the tier-0 sweep.
+
+The Codex produces-a-capsule path is end-to-end verified by the hermetic
+Layer-1 unit `test_from_session_codex` (seeds a parseable rollout at the
+sidecar path) and the honest hook-only case by
+`test_from_session_codex_hook_only_remediation`.
+"""
+lane = "core"
+tier = 0
+tier_label = "bronze"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-installed-source"]
+
+[[steps]]
+type = "cli"
+id = "codex-from-session-miss"
+argv = ["capsule", "export", "--from-session", "no-such-codex-session", "--from-agent", "codex", "--json"]
+expect_returncode = 2
+
+[[assertions]]
+kind = "returncode"
+step = "codex-from-session-miss"
+equals = 2
+
+[[assertions]]
+kind = "stderr_contains"
+step = "codex-from-session-miss"
+value = ".opentraces/codex-cli/hooks/"
+
+[[assertions]]
+kind = "stderr_contains"
+step = "codex-from-session-miss"
+value = "may not be captured yet"

@@ -17,7 +17,10 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..progress import ProgressLike
 
 from ..bucket_store import read_trace_record_object, trace_record_path
 from ..config import get_project_dir
@@ -256,17 +259,37 @@ def export_capsule(
     setup_command: str | None = None,
     consumes: list[dict[str, Any]] | None = None,
     product: str | None = None,
+    product_full_span: bool = False,
     include_prompts: bool = False,
+    progress: "ProgressLike | None" = None,
 ) -> dict[str, Any]:
     """Build a frozen ``opentraces.capsule.v1`` envelope for one failing session.
 
     Anchors on the single failing ``context_node_id``. Raises
     :class:`CapsuleExportError` for an empty slice or a capsule with no captured
     intent; records (does not raise on) an unresolved context node.
+
+    ``progress`` is an optional, keyword-only :class:`~opentraces.core.progress.
+    ProgressLike` reporter (issue #98). When omitted it coalesces to a no-op so
+    every existing caller (share / issue / all tests) stays byte-identical. Named
+    stages are driven at the verified slow points (trace load, slice build,
+    context resolve, trail anchors, redact); the reporter's background heartbeat
+    covers the in-C blocking inside each projection scan. The reporter is the
+    caller's object — the CLI reads ``reporter.telemetry()`` AFTER this returns —
+    so the return type is unchanged (no ``(capsule, telemetry)`` tuple).
+
+    ``product_full_span`` (issue #98) opts OUT of the default ``--product`` radius
+    cap, restoring the historical unbounded ``min..max`` episode span. Default
+    ``False`` bounds the product slice to ``2*radius`` around the first match.
     """
+
+    from ..progress import NullProgress
+
+    reporter: "ProgressLike" = progress if progress is not None else NullProgress()
 
     project_dir = Path(project_dir).resolve()
     slug = get_project_dir(project_dir).name
+    reporter.stage("load_trace")
     obj = read_trace_record_object(trace_record_path(slug, trace_id))
     if obj is None:
         raise CapsuleExportError(
@@ -283,13 +306,20 @@ def export_capsule(
     from ..trace_map import build_trace_map
     from ..trace_slices import slice_around_step, slice_for_product
 
+    reporter.stage("build_slice")
     trace_map = build_trace_map(record)
     product_episode_no_match = False
     if product:
         # Plan 090 — bound the episode to the steps that reference the consumed
         # product. Heuristic (no captured per-step product label); fall back to a
         # radius slice when nothing references it (and record that honestly).
-        slice_payload = slice_for_product(trace_map, record, product_match=product)
+        # Issue #98 — the product episode is bounded to ``2*radius`` by default
+        # (the actual hang the issue reported); ``--product-full-span`` opts back
+        # into the historical unbounded ``min..max`` span.
+        slice_radius = None if product_full_span else radius
+        slice_payload = slice_for_product(
+            trace_map, record, product_match=product, radius=slice_radius
+        )
         if slice_payload is None:
             product_episode_no_match = True
             slice_payload = slice_around_step(
@@ -314,6 +344,7 @@ def export_capsule(
     # Context resume packet (the machine reproduction unit). The function never
     # raises: an unresolved node returns an error envelope we record as a
     # limitation rather than failing the export.
+    reporter.stage("resolve_context")
     if resolved_node:
         from ..context_tree.resume import context_resume_packet
 
@@ -375,6 +406,7 @@ def export_capsule(
         "consumes": list(consumes or []),
     }
 
+    reporter.stage("trail_anchors")
     anchors = _trail_anchors(project_dir, trace_id)
     if not anchors:
         limitations.append("trail_anchors_unavailable")
@@ -468,9 +500,11 @@ def export_capsule(
     from ...security.tools.capsule_scope_tool import DEFAULT_PROMPT_EXCLUDE
 
     exclude_paths = None if include_prompts else list(DEFAULT_PROMPT_EXCLUDE)
+    reporter.stage("redact")
     redacted, manifest = redact_envelope(raw, exclude_paths=exclude_paths)
     assert_redaction_gate(manifest)
     redacted["redaction"] = {"manifest": manifest}
+    reporter.done()
     return redacted
 
 

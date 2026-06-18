@@ -2587,6 +2587,9 @@ opentraces capsule export <trace-id> \
   [--expect-error "AssertionError"] \
   [--setup-command "pip install -e ."] \
   [--consume package:humanduration=git+https://github.com/o/r@v0.1.0] \
+  [--from-session <id> [--from-agent claude|codex]] \
+  [--product-full-span] \
+  [--progress auto|plain|json|never] \
   [--out <dir>] \
   [--bundle] \
   [--json]
@@ -2594,6 +2597,7 @@ opentraces capsule export <trace-id> \
 
 Writes `capsules/v1/<id>/capsule.json` + `capsule.md` under `<project>/.opentraces/`.
 Primary stdout is the `capsule.json` path. `--json` prints the full envelope.
+The `<trace-id>` is optional when `--from-session` is given (the two are mutually exclusive).
 
 - `--product <name>` binds the capsule to one consumed product and scopes the slice
   to steps that reference it. If omitted and the session captured dependency names,
@@ -2602,6 +2606,18 @@ Primary stdout is the `capsule.json` path. `--json` prints the full envelope.
   IN; they are excluded by default (see [Layered Redaction](#layered-redaction)).
 - `--bundle` embeds a hermetic `git archive` at the pinned commit so the test runs
   even if the commit is later unreachable.
+- `--from-session <id>` builds a capsule for the **current turn** from a live hook
+  sidecar instead of a retained trace id — it ingests the session first, then exports.
+  `--from-agent claude|codex` selects which sidecar; if the session isn't found or
+  isn't parseable the command prints a specific remediation (and Codex sidecars whose
+  rollout content isn't yet at the ingested path fall back to that remediation).
+- `--product-full-span` opts the `--product` slice out of the default radius clamp
+  (the bounded window that keeps a large session from slicing end-to-end). Use it
+  only when you need the full matched span.
+- `--progress auto|plain|json|never` reports stage/heartbeat to **stderr** during the
+  slow export phases (slice / context / trail-anchor projection); the `--json` envelope
+  on stdout stays clean. `auto` is quiet on a non-TTY. (Shared with the `trace index
+  rebuild` progress contract.)
 
 ### `capsule preview` — inspect egress before anything leaves
 

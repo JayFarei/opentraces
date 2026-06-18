@@ -1,0 +1,78 @@
+name = "capsule-export-current-turn-codex"
+description = """
+Issue #98 (Part B, SILVER — CODEX=PARTIAL) — the Codex produces-a-capsule
+branch through the real CLI.
+
+The journey seeds a parseable Codex rollout-shaped sidecar under the current
+project's `.opentraces/codex-cli/hooks/` directory, then runs:
+
+  `capsule export --from-session issue-98-codex-session --from-agent codex --json`
+
+This proves the materializable Codex path end-to-end without relying on a
+committed real-Codex artifact. The artifact-independent hook-only remediation
+branch (the honest production current-turn limit for Codex sidecars with no
+`response_item` envelopes) lives in the separate tier-0
+`capsule-export-current-turn-codex-remediation` journey.
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+[[steps]]
+type = "shell"
+id = "seed-codex-rollout-sidecar"
+argv = [
+  "{py_bin}",
+  "-c",
+  """
+from pathlib import Path
+import json
+import sys
+
+project = Path(sys.argv[1])
+session_id = "issue-98-codex-session"
+sidecar = project / ".opentraces" / "codex-cli" / "hooks" / (session_id + ".jsonl")
+sidecar.parent.mkdir(parents=True, exist_ok=True)
+cwd = str(project)
+rows = [
+    dict(type="session_meta", payload=dict(id=session_id, timestamp="2026-06-18T09:00:00Z", cwd=cwd, cli_version="0.140.0", model="gpt-5.5", model_provider="openai")),
+    dict(type="turn_context", payload=dict(turn_id="turn-1", cwd=cwd, model="gpt-5.5", user_instructions="use opentraces")),
+    dict(type="response_item", payload=dict(type="message", role="user", content=[dict(type="input_text", text="please use opentraces now")])),
+    dict(type="response_item", payload=dict(type="function_call", name="exec_command", arguments=json.dumps(dict(cmd="opentraces trace query", workdir=cwd)), call_id="call-1")),
+    dict(type="response_item", payload=dict(type="function_call_output", call_id="call-1", output="ok: 1 trace")),
+    dict(type="response_item", payload=dict(type="message", role="assistant", content=[dict(type="output_text", text="opentraces ran fine")])),
+]
+with sidecar.open("w", encoding="utf-8") as f:
+    for row in rows:
+        f.write(json.dumps(row) + "\\n")
+print(sidecar)
+  """,
+  "{project}",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "seed-codex-rollout-sidecar"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "codex-from-session-build"
+argv = ["capsule", "export", "--from-session", "issue-98-codex-session", "--from-agent", "codex", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "codex-from-session-build"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "codex-from-session-build"
+path = "schema_version"
+equals = "opentraces.capsule.v1"

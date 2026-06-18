@@ -114,6 +114,7 @@ def slice_for_product(
     record: Any | None,
     *,
     product_match: str,
+    radius: int | None = None,
 ) -> dict[str, Any] | None:
     """Bound a slice to the steps whose tool calls / observations reference ONE
     consumed product (package name / endpoint host / path fragment).
@@ -125,6 +126,19 @@ def slice_for_product(
     emit a misleading empty/degenerate product episode. Delegates to
     :func:`slice_by_steps`, so the payload key set (``opentraces.trace_slice.v1``)
     is identical to every other template.
+
+    ``radius`` (issue #98) caps the unbounded ``min..max`` blowup that hung
+    ``capsule export --product`` on large sessions: a product string appearing at
+    an early AND a late step would otherwise span nearly the whole trace. When
+    ``radius is not None`` the episode is clamped to ``[first_match, min(last_match,
+    first_match + 2*radius)]`` and the slice ALWAYS records the deterministic
+    ``product_episode_bounded`` limitation (the cap was in effect, whether or not
+    it actually shrank the span). When ``radius is None`` the historical
+    ``min..max`` span is preserved (the explicit ``--product-full-span`` opt-in) and
+    no ``product_episode_bounded`` limitation is added. Either way the slice
+    metadata carries ``product_match_span`` (RAW pre-clamp span) and ``bounded_to``
+    (post-clamp span) so a consumer can prove the episode WAS large and that it was
+    (or was not) clamped.
     """
 
     needle = (product_match or "").strip().lower()
@@ -140,19 +154,41 @@ def slice_for_product(
     if not matched_steps:
         return None
     first_match, last_match = min(matched_steps), max(matched_steps)
-    return slice_by_steps(
+    raw_span = last_match - first_match
+    if radius is not None:
+        bounded_radius = max(0, radius)
+        end_match = min(last_match, first_match + 2 * bounded_radius)
+    else:
+        end_match = last_match
+    bounded_to = end_match - first_match
+    payload = slice_by_steps(
         trace_map,
         record,
         start_step_index=first_match,
-        end_step_index=last_match,
+        end_step_index=end_match,
         source="template:product_episode",
         template="product_episode",
         metadata={
             "template": "product_episode",
             "product_match": product_match,
             "matched_step_count": len(matched_steps),
+            # Raw (pre-clamp) episode span and the post-clamp span. Both are
+            # plain ints so they survive redaction untouched and give consumers
+            # two numeric paths to assert the bound against a constant.
+            "product_match_span": raw_span,
+            "bounded_to": bounded_to,
+            "radius": bounded_radius if radius is not None else None,
         },
     )
+    if radius is not None:
+        # Deterministic: emitted on ANY matched product slice when the radius cap
+        # was in effect — NOT only when last_match - first_match > 2*radius — so a
+        # consumer assertion does not depend on the episode happening to exceed the
+        # cap. The no-match fallback path never reaches here.
+        payload.setdefault("limitations", [])
+        if "product_episode_bounded" not in payload["limitations"]:
+            payload["limitations"].append("product_episode_bounded")
+    return payload
 
 
 def _node_references_product(node: TraceMapNode, needle: str) -> bool:
