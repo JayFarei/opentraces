@@ -104,31 +104,38 @@ def resolve_target_interpreter(
 
     installs = prov.get("discovered_installs") or []
     candidate: str | None = None
+    # Candidates are taken AS-IS (NOT realpath-collapsed). #86/codex: a live
+    # Homebrew opentraces venv interpreter
+    # (``.../Cellar/opentraces/<ver>/libexec/bin/python``) realpaths down to the
+    # bare ``python@3.x`` — baking THAT loses the opentraces venv. We must hand
+    # the un-collapsed path to stable_interpreter so its Cellar→opt remap
+    # PRESERVES the opentraces venv identity (``.../opt/opentraces/.../python``).
     # 1 — verified match.
     for entry in installs:
         if entry.get("source_kind") == canonical and entry.get("verified") and entry.get("interpreter"):
-            candidate = _realpath(entry["interpreter"])
+            candidate = entry["interpreter"]
             break
     # 2 — unverified path-classified match.
     if candidate is None:
         for entry in installs:
             if entry.get("source_kind") == canonical and entry.get("interpreter"):
-                candidate = _realpath(entry["interpreter"])
+                candidate = entry["interpreter"]
                 break
     # 3 — runner-interpreter fallback.
     if candidate is None:
         for runner in prov.get("integration_runners") or []:
             interp = runner.get("runner")
             if interp and _classify_source_kind(interp) == canonical:
-                candidate = _realpath(interp)
+                candidate = interp
                 break
 
     if candidate is not None:
         # SECURITY / #65 + #86: never re-bake a DELETED or version-pinned-Cellar
         # interpreter (that is exactly the drift this feature must NOT introduce).
-        # Validate the candidate exists + is executable, and route it through
-        # stable_interpreter so a Cellar path is remapped to its live opt symlink
-        # (or rejected when the symlink is gone).
+        # Route the candidate through stable_interpreter (Cellar→opt remap that
+        # PRESERVES the opentraces venv identity), then validate THAT output
+        # exists + is executable. A Cellar path with no live opt symlink stays a
+        # Cellar path and then fails the existence check → rejected.
         usable, resolved, why = _validate_interpreter(candidate)
         if usable:
             return resolved, None

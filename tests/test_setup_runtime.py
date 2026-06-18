@@ -183,6 +183,26 @@ def test_user_hook_with_opentraces_substring_not_pruned(tmp_path: Path) -> None:
     assert owned_cmd not in surviving, "stale owned module hook must be pruned"
 
 
+def test_non_opentraces_module_command_not_pruned(tmp_path: Path) -> None:
+    # A non-OpenTraces MODULE command that merely contains the substring
+    # "opentraces" (a third-party module, or a basename with no hooks-dir path)
+    # must NOT be pruned — only the exact opentraces.capture.claude_code.hooks.
+    # prefix and owned hooks-dir scripts are ours.
+    from opentraces.capture.claude_code.install import _prune_stale_opentraces_hooks
+
+    hooks_dir = tmp_path / ".claude" / "hooks"
+    new_command = f'"/py" "{hooks_dir}/opentraces_on_stop"'
+    foreign = [
+        '"/usr/bin/python3" -m opentraces_other.hook',   # different top module
+        '"/usr/bin/python3" -m my.opentraces_thing',     # substring inside module
+    ]
+    event_hooks = [{"hooks": [{"type": "command", "command": c}]} for c in foreign]
+    kept = _prune_stale_opentraces_hooks(event_hooks, new_command, hooks_dir)
+    surviving = [h["command"] for e in kept for h in e.get("hooks", [])]
+    for c in foreign:
+        assert c in surviving, f"non-OT module command wrongly pruned: {c}"
+
+
 def test_owned_script_path_hook_is_pruned(tmp_path: Path) -> None:
     from opentraces.capture.claude_code.install import _prune_stale_opentraces_hooks
 
@@ -321,6 +341,42 @@ def test_use_rejects_missing_interpreter() -> None:
     interp, err = rs.resolve_target_interpreter(prov, "pipx")
     assert interp is None
     assert err and ("not usable" in err or "does not exist" in err)
+
+
+def test_use_brew_preserves_opentraces_venv_not_bare_python(tmp_path: Path) -> None:
+    # A LIVE Homebrew opentraces venv interpreter
+    # (.../Cellar/opentraces/<ver>/libexec/bin/python) is a symlink down to the
+    # bare python@3.x. Resolution must hand the UN-collapsed path to
+    # stable_interpreter so the Cellar→opt remap preserves the opentraces venv
+    # identity (.../opt/opentraces/.../python) — NOT collapse it to the bare
+    # python@3.x (that would reintroduce #86 drift + lose opentraces).
+    brew = tmp_path / "brew"
+    base = brew / "Cellar" / "python@3.14" / "3.14" / "bin" / "python3.14"
+    base.parent.mkdir(parents=True)
+    base.write_text("#!/bin/sh\n")
+    base.chmod(0o755)
+
+    venv_python = brew / "Cellar" / "opentraces" / "1.0" / "libexec" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base)  # venv bin/python → base interpreter
+
+    opt = brew / "opt" / "opentraces"
+    opt.parent.mkdir(parents=True)
+    opt.symlink_to(brew / "Cellar" / "opentraces" / "1.0")
+
+    prov = {
+        "discovered_installs": [
+            {"source_kind": "brew", "interpreter": str(venv_python), "verified": False},
+        ],
+        "integration_runners": [],
+        "probed": False,
+    }
+    interp, err = rs.resolve_target_interpreter(prov, "homebrew")
+    assert err is None, err
+    # PRESERVED: the stable opt/opentraces venv path, NOT the bare python@3.x.
+    assert interp == str(opt / "libexec" / "bin" / "python")
+    assert "opt/opentraces" in interp
+    assert "python@3.14" not in interp
 
 
 def test_use_rejects_dead_cellar_interpreter(tmp_path: Path) -> None:
