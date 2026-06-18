@@ -3556,6 +3556,7 @@ a:hover .openmake-mark {
 .schema-sidebar a.active { color: var(--accent); }
 @media (max-width: 768px) {
   .schema-layout { grid-template-columns: 1fr; gap: 16px; }
+  .schema-layout > * { min-width: 0; }
   .schema-sidebar { position: static; display: flex; flex-wrap: wrap; gap: 4px 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
   .schema-sidebar > div { display: contents; }
   .schema-sidebar a { padding: 4px 0; }
