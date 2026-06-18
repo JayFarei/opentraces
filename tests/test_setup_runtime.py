@@ -456,6 +456,35 @@ def test_doctor_reports_dev_runtime_active(
     assert "deliberately active" in prov["advice"]
 
 
+def test_doctor_dev_marker_preserves_venv_symlink_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A venv python is commonly a symlink to a base interpreter. Dev-mode intent
+    # must match the exact selected venv path, not any other venv that realpaths
+    # to the same base Python.
+    from opentraces.core import doctor
+
+    base = _make_executable(tmp_path / "base-python")
+    proj = tmp_path / "proj"
+    other = tmp_path / "other"
+    proj.mkdir()
+    other.mkdir()
+    proj_interp = proj / ".venv" / "bin" / "python"
+    other_interp = other / ".venv" / "bin" / "python"
+    proj_interp.parent.mkdir(parents=True)
+    other_interp.parent.mkdir(parents=True)
+    proj_interp.symlink_to(base)
+    other_interp.symlink_to(base)
+
+    rs.write_dev_marker(proj, str(proj_interp), proj)
+    _patch_runners(monkeypatch, doctor, str(other_interp))
+
+    prov = doctor._runtime_provenance(proj)
+
+    assert prov["dev_runtime_active"] is False
+    assert prov["severity"] == "warning"
+
+
 def test_doctor_stale_dev_marker_keeps_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

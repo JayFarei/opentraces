@@ -75,6 +75,13 @@ def _realpath(p: str | None) -> str | None:
         return p
 
 
+def _abspath_no_realpath(p: str | os.PathLike[str] | None) -> str | None:
+    """Absolute path normalization that preserves venv symlink identity."""
+    if not p:
+        return None
+    return os.path.abspath(os.path.expanduser(os.fspath(p)))
+
+
 # ---------------------------------------------------------------------------
 # target-interpreter resolution (Fix B.5 — hardened for real machines)
 # ---------------------------------------------------------------------------
@@ -307,9 +314,15 @@ def write_dev_marker(cwd: Path, interpreter: str, project: Path) -> Path:
 
     path = runtime_selection_marker_path(cwd)
     path.parent.mkdir(parents=True, exist_ok=True)
+    marker_interpreter = _abspath_no_realpath(interpreter) or interpreter
     path.write_text(
         _json.dumps(
-            {"mode": "dev", "interpreter": _realpath(interpreter), "project": str(project)},
+            {
+                "mode": "dev",
+                "interpreter": marker_interpreter,
+                "interpreter_realpath": _realpath(marker_interpreter),
+                "project": _abspath_no_realpath(project) or str(project),
+            },
             indent=2,
         )
         + "\n",

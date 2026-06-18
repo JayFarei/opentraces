@@ -825,6 +825,13 @@ def _realpath(p: str | None) -> str | None:
         return p
 
 
+def _abspath_no_realpath(p: str | os.PathLike[str] | None) -> str | None:
+    """Absolute path normalization that preserves venv symlink identity."""
+    if not p:
+        return None
+    return os.path.abspath(os.path.expanduser(os.fspath(p)))
+
+
 def _classify_source_kind(module_file: str | None) -> str:
     """Classify an opentraces install from its resolved module file path.
 
@@ -1070,6 +1077,7 @@ def _runtime_provenance(
     raw_specs: list[dict[str, Any]] = [
         {
             "name": r.get("name") or r.get("integration"),
+            "raw_interpreter": _abspath_no_realpath(r.get("interpreter")),
             "interpreter": _realpath(r.get("interpreter")),
             "trusted": _is_trusted_probe_command(
                 r.get("command"), _realpath(r.get("interpreter"))
@@ -1084,7 +1092,12 @@ def _runtime_provenance(
     if watcher_interp is not None:
         _wi = _realpath(watcher_interp)
         raw_specs.append(
-            {"name": "watcher", "interpreter": _wi, "trusted": _is_plausible_python(_wi)}
+            {
+                "name": "watcher",
+                "raw_interpreter": _abspath_no_realpath(watcher_interp),
+                "interpreter": _wi,
+                "trusted": _is_plausible_python(_wi),
+            }
         )
     try:
         otlp_interp = _otlp_runner_interpreter()
@@ -1093,7 +1106,12 @@ def _runtime_provenance(
     if otlp_interp is not None:
         _oi = _realpath(otlp_interp)
         raw_specs.append(
-            {"name": "otlp", "interpreter": _oi, "trusted": _is_plausible_python(_oi)}
+            {
+                "name": "otlp",
+                "raw_interpreter": _abspath_no_realpath(otlp_interp),
+                "interpreter": _oi,
+                "trusted": _is_plausible_python(_oi),
+            }
         )
     runner_specs: list[dict[str, Any]] = []
     _spec_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
@@ -1225,6 +1243,7 @@ def _runtime_provenance(
                 "name": spec.get("name"),
                 "runner": interp,
                 "python": interp,
+                "runner_raw": spec.get("raw_interpreter"),
                 "matches_current": matches_current,
                 "matches_install": interp_kind.get(interp) if interp else None,
                 "verified": verified,
@@ -1259,20 +1278,23 @@ def _runtime_provenance(
     dev_runtime_active = False
     marker = _read_runtime_selection(cwd)
     if isinstance(marker, dict) and marker.get("mode") == "dev":
-        dev_interp = _realpath(marker.get("interpreter"))
+        marker_interp = _abspath_no_realpath(marker.get("interpreter"))
+        dev_interp = _realpath(marker_interp)
         # SECURITY / data-safety (codex finding): only downgrade severity when
         # the recorded dev interpreter STILL EXISTS + is executable AND every
         # runner resolves to it. A stale marker pointing at a DELETED dev venv
         # must NOT hide drift — keep severity `warning` and flag the stale marker.
-        raw_interp = marker.get("interpreter")
+        raw_interp = marker_interp
         interp_live = bool(
             raw_interp
             and os.path.isfile(raw_interp)
             and os.access(raw_interp, os.X_OK)
         )
-        runner_interps = [r.get("runner") for r in integration_runners]
+        runner_interps = [
+            _abspath_no_realpath(r.get("runner_raw")) for r in integration_runners
+        ]
         all_match_dev = bool(runner_interps) and all(
-            ri == dev_interp for ri in runner_interps
+            ri == marker_interp for ri in runner_interps
         )
         if dev_interp and all_match_dev and interp_live:
             dev_runtime_active = True
