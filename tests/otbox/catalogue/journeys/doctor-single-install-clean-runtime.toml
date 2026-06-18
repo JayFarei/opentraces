@@ -6,6 +6,9 @@ integration runners), the freshly-installed CLI's `doctor --json` must report
 `runtime_provenance.state == "single_runtime"` with severity `ok` and no
 mixed-runtime warning. Proves the detection surface stays quiet when every
 integration resolves to the current install root.
+
+SECURITY (codex round 2): the default path executes nothing config-derived, so
+`runtime_provenance.probed` is false here too.
 """
 lane = "core"
 tier = 0
@@ -18,6 +21,12 @@ trajectories = ["verify-install"]
 type = "shell"
 id = "doctor"
 argv = [".testvenv/bin/opentraces", "--json", "doctor"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.runtime_provenance.probed"
+equals = false
 
 [[assertions]]
 kind = "stdout_json"

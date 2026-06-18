@@ -955,16 +955,38 @@ def _otlp_runner_interpreter() -> str | None:
     return None
 
 
-def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
+def _runtime_provenance(
+    cwd: Path | None = None, *, probe: bool = False
+) -> dict[str, Any]:
     """Surface dev/prod install provenance + mixed integration runtimes (#93).
 
-    Detection-only (no mutation): reports the current process, the distinct
-    opentraces installs discovered behind every configured integration runner,
-    and per-runner ``matches_current`` flags. ``state`` is ``mixed_runtimes``
-    when ≥2 distinct module-file roots execute across current + runners.
-    ``severity`` is ``warning`` (never ``error``) and never feeds ``exit_code``
-    (codex finding #2). ``advice`` is an informational STRING — remediation is
-    sibling #99. Every probe is exception-isolated; never raises.
+    SECURITY (codex round 2 — RCE close): by DEFAULT this executes NOTHING
+    derived from a hook config. Anyone who can write ``~/.codex/hooks.json`` can
+    also write the binary it points at, so no path-prefix allowlist is both safe
+    AND permits legit user-dir pipx installs. The honest default therefore
+    INSPECTS only:
+
+      * ``current`` — real values introspected from the RUNNING process
+        (``sys.executable`` / ``opentraces.__file__`` / ``__version__``); safe.
+      * runners — ``source_kind`` is INFERRED from the interpreter PATH via
+        ``_classify_source_kind`` (string inspection, no execution); their
+        ``module_file`` / ``dist_version`` are ``null`` and ``verified: false``,
+        ``probe: "not_run"``.
+      * ``state`` — ``mixed_runtimes`` vs ``single_runtime`` from the DISTINCT
+        install keys (verified module_file when known, else interpreter realpath)
+        across current + runners. This keeps #93's detection value WITHOUT
+        executing anything.
+
+    Only when ``probe=True`` (the opt-in ``--probe-runtimes`` flag /
+    ``OT_DOCTOR_PROBE_RUNTIMES=1``) does the bounded subprocess run — and even
+    then it stays gated (plausible-python basename + ``-m opentraces`` shape +
+    ``MAX_PROBE_INTERPRETERS`` budget + output-shape validation) as hygiene, and
+    it is user-consented execution. A successful probe upgrades a runner to
+    ``verified: true`` / ``probe: "ok"`` with a real module_file + version.
+
+    ``severity`` is ``warning`` (never ``error``) and never feeds ``exit_code``.
+    ``advice`` is an informational STRING. Every probe is exception-isolated;
+    never raises.
     """
     cwd = cwd or Path.cwd()
 
@@ -1034,35 +1056,45 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
         _spec_by_key[key] = spec
         runner_specs.append(spec)
 
-    # Probe each DISTINCT runner interpreter that is not already the current
-    # process's interpreter (the common single-runtime case → zero probes).
+    # Resolve per-interpreter provenance. By DEFAULT (probe=False) nothing is
+    # executed: ``source_kind`` is inferred from the interpreter PATH and the
+    # module_file/version stay unknown (``verified=False``, ``probe="not_run"``).
+    # Only ``probe=True`` runs the gated, budgeted, output-validated subprocess
+    # to UPGRADE a trusted runner to verified values.
     interp_module: dict[str, str | None] = {}
     interp_kind: dict[str, str] = {}
     interp_version: dict[str, str | None] = {}
     interp_probe: dict[str, str] = {}
+    interp_verified: dict[str, bool] = {}
     if cur_python:
+        # The current process is introspected, not config-derived-executed.
         interp_module[cur_python] = cur_module
         interp_kind[cur_python] = current.get("source_kind") or "unknown"
         interp_version[cur_python] = current.get("dist_version")
         interp_probe[cur_python] = "current"
+        interp_verified[cur_python] = cur_module is not None
 
     probed_count = 0
     for spec in runner_specs:
         interp = spec.get("interpreter")
         if not interp or interp in interp_module:
             continue
-        # SECURITY (finding #1): an untrusted runner is NEVER executed.
+        # Honest, execution-free classification from the interpreter PATH.
+        path_kind = _classify_source_kind(interp)
+        interp_module[interp] = None
+        interp_kind[interp] = path_kind
+        interp_version[interp] = None
+        interp_verified[interp] = False
+
+        if not probe:
+            # DEFAULT: never execute a config-derived interpreter.
+            interp_probe[interp] = "not_run"
+            continue
+        # OPT-IN probe path (user-consented execution) — still gated as hygiene.
         if not spec.get("trusted"):
-            interp_module[interp] = None
-            interp_kind[interp] = "unknown"
-            interp_version[interp] = None
             interp_probe[interp] = "skipped_untrusted"
             continue
-        # Budget (finding #2): cap distinct interpreters actually probed.
         if probed_count >= MAX_PROBE_INTERPRETERS:
-            interp_module[interp] = None
-            interp_kind[interp] = "unknown"
-            interp_version[interp] = None
             interp_probe[interp] = "skipped_probe_budget_exceeded"
             continue
         probed_count += 1
@@ -1070,53 +1102,71 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
             module_file, dist_version = _probe_interpreter(interp)
         except Exception:  # noqa: BLE001
             module_file, dist_version = None, None
-        interp_module[interp] = module_file
-        interp_kind[interp] = _classify_source_kind(module_file)
-        interp_version[interp] = dist_version
-        interp_probe[interp] = "probed"
+        if module_file is not None:
+            interp_module[interp] = module_file
+            interp_kind[interp] = _classify_source_kind(module_file)
+            interp_version[interp] = dist_version
+            interp_verified[interp] = True
+            interp_probe[interp] = "ok"
+        else:
+            interp_probe[interp] = "error"
 
-    # discovered_installs: one entry per distinct resolved module_file, plus a
-    # distinct unknown per un-resolvable interpreter (honest, never fabricated).
+    def _install_key(interp: str | None) -> str:
+        """Dedup/identity key: the verified module_file when known, else the
+        interpreter realpath (honest under the no-execution default)."""
+        if interp and interp_verified.get(interp) and interp_module.get(interp):
+            return str(interp_module[interp])
+        return interp_module.get(interp) or f"interp:{interp or 'current'}"
+
+    # discovered_installs: one entry per distinct install key. Unverified
+    # entries carry null module_file/version (never fabricated) + verified flag.
     discovered: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
-    # Seed with the current install first so it always appears.
-    cur_key = cur_module or f"unknown:{cur_python or 'current'}"
+    cur_key = _install_key(cur_python)
     discovered.append(
         {
             "module_file": cur_module,
             "dist_version": current.get("dist_version"),
             "source_kind": current.get("source_kind") or "unknown",
             "interpreter": cur_python,
+            "verified": bool(interp_verified.get(cur_python)),
             "probe": interp_probe.get(cur_python, "current"),
         }
     )
     seen_keys.add(cur_key)
-    for interp, module_file in interp_module.items():
+    for interp in interp_module:
         if interp == cur_python:
             continue
-        key = module_file or f"unknown:{interp}"
+        key = _install_key(interp)
         if key in seen_keys:
             continue
         seen_keys.add(key)
         discovered.append(
             {
-                "module_file": module_file,
+                "module_file": interp_module.get(interp),
                 "dist_version": interp_version.get(interp),
                 "source_kind": interp_kind.get(interp, "unknown"),
                 "interpreter": interp,
-                "probe": interp_probe.get(interp, "unknown"),
+                "verified": bool(interp_verified.get(interp)),
+                "probe": interp_probe.get(interp, "not_run"),
             }
         )
 
-    # integration_runners: matches_current vs the current module file.
+    # integration_runners: matches_current is true when the runner is literally
+    # the current interpreter, or (when probed) shares the current module_file.
     integration_runners: list[dict[str, Any]] = []
     for spec in runner_specs:
         interp = spec.get("interpreter")
         module_file = interp_module.get(interp) if interp else None
+        verified = bool(interp and interp_verified.get(interp))
         matches_current = bool(
-            module_file is not None
-            and cur_module is not None
-            and module_file == cur_module
+            (interp is not None and cur_python is not None and interp == cur_python)
+            or (
+                verified
+                and module_file is not None
+                and cur_module is not None
+                and module_file == cur_module
+            )
         )
         integration_runners.append(
             {
@@ -1125,16 +1175,16 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
                 "python": interp,
                 "matches_current": matches_current,
                 "matches_install": interp_kind.get(interp) if interp else None,
+                "verified": verified,
                 "probe": interp_probe.get(interp) if interp else None,
             }
         )
 
-    # state: mixed when ≥2 distinct non-null module roots execute across
-    # current + runners.
-    distinct_modules = {
-        m for m in interp_module.values() if m is not None
-    }
-    state = "mixed_runtimes" if len(distinct_modules) >= 2 else "single_runtime"
+    # state: mixed when ≥2 distinct install keys execute across current +
+    # runners. Keys are verified module roots where known, else interpreter
+    # realpaths — so mixed detection survives the no-execution default.
+    distinct_keys = {_install_key(i) for i in interp_module}
+    state = "mixed_runtimes" if len(distinct_keys) >= 2 else "single_runtime"
     severity = "warning" if state == "mixed_runtimes" else "ok"
 
     if state == "mixed_runtimes":
@@ -1156,14 +1206,19 @@ def _runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
         "state": state,
         "severity": severity,
         "advice": advice,
+        # Whether the opt-in interpreter probe executed. False = inspection-only
+        # (no config-derived execution); module_file/dist_version are unverified.
+        "probed": bool(probe),
     }
 
 
-def _safe_runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
+def _safe_runtime_provenance(
+    cwd: Path | None = None, *, probe: bool = False
+) -> dict[str, Any]:
     """``_runtime_provenance`` wrapped so an unexpected error never sinks the
     whole ``doctor`` report. Returns a safe single-runtime shape on failure."""
     try:
-        return _runtime_provenance(cwd)
+        return _runtime_provenance(cwd, probe=probe)
     except Exception:  # noqa: BLE001 — doctor must never crash.
         return {
             "current": {},
@@ -1172,6 +1227,7 @@ def _safe_runtime_provenance(cwd: Path | None = None) -> dict[str, Any]:
             "state": "single_runtime",
             "severity": "ok",
             "advice": "runtime-provenance probe failed; not enough signal to report.",
+            "probed": bool(probe),
         }
 
 
@@ -1746,12 +1802,17 @@ def _registered_project_paths(cfg, cwd: Path | None = None) -> list[str]:
     return sorted(project_paths)
 
 
-def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
+def report(
+    cfg, cwd: Path | None = None, *, probe_runtimes: bool = False
+) -> dict[str, Any]:
     """Build the doctor payload.
 
     Args:
         cfg: loaded global config (has security.trufflehog.enabled, hf_token)
         cwd: project directory for post-processor probing (defaults to CWD)
+        probe_runtimes: opt-in — when True, the runtime-provenance section
+            EXECUTES the configured interpreters to read verified install
+            facts. Default False keeps doctor execution-free (security).
     """
     cwd = cwd or Path.cwd()
     th_version = find_trufflehog()
@@ -1796,7 +1857,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),
         "interpreter_health": _interpreter_health(cwd),
-        "runtime_provenance": _safe_runtime_provenance(cwd),
+        "runtime_provenance": _safe_runtime_provenance(cwd, probe=probe_runtimes),
         "trail_capture_audit": _trail_capture_audit(cwd),
         "context_tree": _context_tree_status(cwd),
     }

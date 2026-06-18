@@ -174,7 +174,10 @@ def test_discovered_installs_uses_probe(
 
     monkeypatch.setattr(doctor, "_probe_interpreter", fake_probe)
 
-    prov = doctor._runtime_provenance(Path("/tmp/repo"))
+    # Probing is OPT-IN (security): only `probe=True` reads verified module
+    # facts by executing the trusted runner interpreters.
+    prov = doctor._runtime_provenance(Path("/tmp/repo"), probe=True)
+    assert prov["probed"] is True
     installs = {i.get("module_file"): i for i in prov["discovered_installs"]}
 
     # The probe's real module_file is used + classified, never fabricated.
@@ -182,24 +185,30 @@ def test_discovered_installs_uses_probe(
     assert pipx_mod in installs
     assert installs[pipx_mod]["source_kind"] == "pipx"
     assert installs[pipx_mod]["dist_version"] == "0.4.6"
+    assert installs[pipx_mod]["verified"] is True
+    assert installs[pipx_mod]["probe"] == "ok"
 
-    # The broken probe → honest unknown, never a guessed module_file.
-    unknowns = [
+    # The broken probe → honest unknown module_file (None), verified False.
+    broken_entries = [
         i for i in prov["discovered_installs"]
-        if i.get("module_file") is None and i.get("source_kind") == "unknown"
+        if i.get("module_file") is None and i.get("verified") is False
+        and i.get("probe") == "error"
     ]
-    assert unknowns, prov["discovered_installs"]
+    assert broken_entries, prov["discovered_installs"]
 
 
 # --------------------------------------------------------------------------
 # mixed vs single runtime detection
 # --------------------------------------------------------------------------
-def test_mixed_runtimes_detected(monkeypatch: pytest.MonkeyPatch) -> None:
+# pipx- and brew-SHAPED interpreter paths so the execution-free classifier can
+# label them WITHOUT running anything (codex round 2 — no default execution).
+_PIPX_PY = "/root/a/.local/pipx/venvs/opentraces/bin/python"
+_BREW_PY = "/root/b/homebrew/Cellar/opentraces/0.4.6/libexec/bin/python"
+
+
+def _mixed_runtime_world(monkeypatch: pytest.MonkeyPatch) -> None:
     cur_python = "/root/cur/bin/python"
     cur_module = "/root/cur/src/opentraces/__init__.py"
-    a = "/root/a/bin/python"
-    b = "/root/b/bin/python"
-
     monkeypatch.setattr(
         doctor,
         "_current_runtime",
@@ -217,40 +226,88 @@ def test_mixed_runtimes_detected(monkeypatch: pytest.MonkeyPatch) -> None:
         doctor,
         "_opentraces_hook_runners",
         lambda cwd: [
-            _runner("codex-cli", "codex", "PostToolUse", a),
-            _runner("claude-code", "claude", "Stop", a),
-            _runner("git", "git", "post-commit", b),
+            _runner("codex-cli", "codex", "PostToolUse", _PIPX_PY),
+            _runner("claude-code", "claude", "Stop", _PIPX_PY),
+            _runner("git", "git", "post-commit", _BREW_PY),
         ],
     )
-    monkeypatch.setattr(doctor, "_watcher_runner_interpreter", lambda: b)
+    monkeypatch.setattr(doctor, "_watcher_runner_interpreter", lambda: _BREW_PY)
     monkeypatch.setattr(doctor, "_otlp_runner_interpreter", lambda: None)
-    monkeypatch.setattr(
-        doctor,
-        "_probe_interpreter",
-        lambda python: {
-            a: ("/root/a/.local/pipx/venvs/opentraces/lib/python3.12/site-packages/opentraces/__init__.py", "0.4.6"),
-            b: ("/root/b/Cellar/opentraces/0.4.6/libexec/lib/python3.12/site-packages/opentraces/__init__.py", "0.4.6"),
-        }.get(python, (None, None)),
-    )
 
-    prov = doctor._runtime_provenance(Path("/tmp/repo"))
 
+def test_mixed_runtimes_detected_without_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The DEFAULT path executes NOTHING — mixed runtimes are still detected from
+    # the distinct interpreter-path source_kinds (source + pipx + brew).
+    _mixed_runtime_world(monkeypatch)
+
+    def _no_probe(python: str):
+        raise AssertionError(f"default doctor must NOT execute {python!r}")
+
+    monkeypatch.setattr(doctor, "_probe_interpreter", _no_probe)
+
+    prov = doctor._runtime_provenance(Path("/tmp/repo"))  # probe defaults False
+
+    assert prov["probed"] is False
     assert prov["state"] == "mixed_runtimes"
     assert prov["severity"] == "warning"
-    module_files = {i.get("module_file") for i in prov["discovered_installs"]}
-    assert len(module_files) >= 2
-    # The two non-current installs carry distinct module files.
-    assert any("/pipx/" in (m or "") for m in module_files)
-    assert any("/Cellar/" in (m or "") for m in module_files)
+
+    kinds = {i.get("source_kind") for i in prov["discovered_installs"]}
+    assert {"source", "pipx", "brew"} <= kinds, prov["discovered_installs"]
+    # Unverified by default — module_file/version are honest nulls, not guessed.
+    for i in prov["discovered_installs"]:
+        if i.get("source_kind") in ("pipx", "brew"):
+            assert i["verified"] is False
+            assert i["module_file"] is None
+            assert i["dist_version"] is None
+            assert i["probe"] == "not_run"
 
     runners = {r["name"]: r for r in prov["integration_runners"]}
     for name in ("codex-cli", "claude-code", "git", "watcher"):
         assert name in runners, runners
         assert runners[name]["matches_current"] is False
+        assert runners[name]["probe"] == "not_run"
+        assert runners[name]["verified"] is False
 
     # advice is an informational STRING, never a mutation directive.
     assert isinstance(prov["advice"], str) and prov["advice"]
     assert "purge data" not in prov["advice"].lower()
+
+
+def test_mixed_runtimes_verified_with_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # WITH the opt-in probe, trusted runners upgrade to verified module facts.
+    _mixed_runtime_world(monkeypatch)
+    monkeypatch.setattr(
+        doctor,
+        "_probe_interpreter",
+        lambda python: {
+            _PIPX_PY: (
+                "/root/a/.local/pipx/venvs/opentraces/lib/python3.12/"
+                "site-packages/opentraces/__init__.py",
+                "0.4.6",
+            ),
+            _BREW_PY: (
+                "/root/b/homebrew/Cellar/opentraces/0.4.6/libexec/lib/"
+                "python3.12/site-packages/opentraces/__init__.py",
+                "0.4.6",
+            ),
+        }.get(python, (None, None)),
+    )
+
+    prov = doctor._runtime_provenance(Path("/tmp/repo"), probe=True)
+
+    assert prov["probed"] is True
+    assert prov["state"] == "mixed_runtimes"
+    verified = [i for i in prov["discovered_installs"] if i.get("verified")]
+    # current + pipx + brew all verified (current via introspection).
+    assert any("/pipx/" in (i.get("module_file") or "") for i in verified)
+    assert any("/Cellar/" in (i.get("module_file") or "") for i in verified)
+    for r in prov["integration_runners"]:
+        assert r["matches_current"] is False
+        assert r["probe"] == "ok"
 
 
 def test_single_runtime_clean(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -412,23 +469,35 @@ def test_untrusted_hook_command_is_never_executed(
 
     # NOTE: _probe_interpreter is intentionally NOT mocked — the real subprocess
     # path is exercised so the sentinel is the genuine execution proof.
+
+    # (1) DEFAULT path: doctor executes NOTHING config-derived. The runner is
+    # reported as `not_run`; the payload is never run.
     prov = doctor._runtime_provenance(tmp_path / "repo")
-
+    assert prov["probed"] is False
     assert not sentinel.exists(), (
-        "SECURITY: doctor executed an arbitrary hook binary — sentinel dropped"
+        "SECURITY: default doctor executed an arbitrary hook binary"
     )
-
     runner = next(
         r for r in prov["integration_runners"] if r["name"] == "codex-cli"
     )
-    assert runner["probe"] == "skipped_untrusted"
+    assert runner["probe"] == "not_run"
+    assert runner["verified"] is False
     assert runner["matches_current"] is False
-    assert runner["matches_install"] in (None, "unknown")
-    # The discovered install for the untrusted interpreter is honest unknown.
-    assert any(
-        i.get("source_kind") == "unknown" and i.get("module_file") is None
-        for i in prov["discovered_installs"]
+
+    # (2) EVEN WITH the opt-in probe, the basename + `-m opentraces` gate still
+    # refuses an arbitrary binary — `/tmp/.../payload opentraces` is rejected as
+    # skipped_untrusted and STILL never executed (user-consented probe, but the
+    # gate is hygiene against exactly this shape).
+    prov2 = doctor._runtime_provenance(tmp_path / "repo", probe=True)
+    assert prov2["probed"] is True
+    assert not sentinel.exists(), (
+        "SECURITY: --probe-runtimes executed an arbitrary hook binary"
     )
+    runner2 = next(
+        r for r in prov2["integration_runners"] if r["name"] == "codex-cli"
+    )
+    assert runner2["probe"] == "skipped_untrusted"
+    assert runner2["verified"] is False
 
 
 def test_console_script_runner_is_untrusted_not_probed(
@@ -467,10 +536,11 @@ def test_console_script_runner_is_untrusted_not_probed(
 
     monkeypatch.setattr(doctor, "_probe_interpreter", _no_probe)
 
-    prov = doctor._runtime_provenance(Path("/tmp/repo"))
+    # Even with the opt-in probe enabled, the console-script shape is refused.
+    prov = doctor._runtime_provenance(Path("/tmp/repo"), probe=True)
     runner = prov["integration_runners"][0]
     assert runner["probe"] == "skipped_untrusted"
-    assert runner["matches_install"] in (None, "unknown")
+    assert runner["verified"] is False
 
 
 # --------------------------------------------------------------------------
@@ -544,7 +614,8 @@ def test_probe_budget_caps_distinct_interpreters(
 
     monkeypatch.setattr(doctor, "_probe_interpreter", counting_probe)
 
-    prov = doctor._runtime_provenance(Path("/tmp/repo"))
+    # Budget only applies to the opt-in probe path.
+    prov = doctor._runtime_provenance(Path("/tmp/repo"), probe=True)
 
     # Never probed more than the cap, regardless of how many distinct runners.
     assert len(probed) <= doctor.MAX_PROBE_INTERPRETERS
@@ -555,7 +626,8 @@ def test_probe_budget_caps_distinct_interpreters(
     ]
     assert len(skipped) == n - doctor.MAX_PROBE_INTERPRETERS
     for r in skipped:
-        assert r["matches_install"] in (None, "unknown")
+        # Budget-skipped runners are never verified (no execution happened).
+        assert r["verified"] is False
 
 
 # --------------------------------------------------------------------------

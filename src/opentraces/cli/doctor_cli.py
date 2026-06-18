@@ -46,17 +46,39 @@ def _doctor_json_only() -> bool:
     "--security", "security_only", is_flag=True,
     help="Show only the security tool subview (versions + enabled tools).",
 )
-def doctor_cmd(security_only: bool) -> None:
+@click.option(
+    "--probe-runtimes", "probe_runtimes", is_flag=True,
+    help=(
+        "Runtime-provenance only: EXECUTE the configured integration "
+        "interpreters (hooks/watcher) to read verified install facts "
+        "(module_file + version). Off by default — doctor never runs a "
+        "binary derived from your hook config unless you ask. Only use this "
+        "when you trust the contents of ~/.codex/hooks.json, "
+        "~/.claude/settings.json and your git/watcher shims. The default "
+        "(no-probe) path already detects mixed runtimes from interpreter "
+        "paths without executing anything. (Env: OT_DOCTOR_PROBE_RUNTIMES=1.)"
+    ),
+)
+def doctor_cmd(security_only: bool, probe_runtimes: bool) -> None:
     """Report security pipeline and integration health.
 
     Probes every configured integration (hooks, scanners, LLM review,
     post-processors) and reports versions, enabled tool state, and any
     actionable failures. Exits non-zero if a required configured tool is broken.
+
+    Runtime-provenance is inspection-only by default and executes nothing from
+    your hook config; pass ``--probe-runtimes`` to opt into verified probing.
     """
+    import os
+
     from ..core import doctor
 
+    probe_runtimes = probe_runtimes or os.environ.get(
+        "OT_DOCTOR_PROBE_RUNTIMES", ""
+    ).strip() in ("1", "true", "yes")
+
     cfg = _cli.load_config()
-    report = doctor.report(cfg, Path.cwd())
+    report = doctor.report(cfg, Path.cwd(), probe_runtimes=probe_runtimes)
 
     # Human XOR JSON: ``emit_json`` writes the ``---OPENTRACES_JSON---`` block
     # whenever ``--json`` is set OR stdout is not a TTY (piped / captured). In
@@ -444,6 +466,15 @@ def _runtime_provenance_section(info: dict) -> None:
         advice = info.get("advice")
         if advice:
             _cli.human_echo(f"    {_cli._dim(advice)}")
+
+    if not info.get("probed"):
+        _cli.human_echo(
+            "    "
+            + _cli._dim(
+                "runner installs inferred from interpreter paths (not executed). "
+                "Run 'opentraces doctor --probe-runtimes' to verify by execution."
+            )
+        )
 
 
 def _trace_index_section(info: dict) -> None:
