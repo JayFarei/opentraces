@@ -213,7 +213,7 @@ def bucket_status_cmd(as_json: bool) -> None:
     if remote_config.get("enabled"):
         click.echo(f"  remote:     {remote_config.get('url') or 'configured'}")
         click.echo(f"  sync policy: {remote_config.get('sync_policy', 'daemon')}")
-    click.echo(f"  traces:     {trace_records.get('object_count', 0)}")
+    click.echo(f"  traces:     {bucket.get('trace_count', trace_records.get('object_count', 0))}")
     click.echo(f"  raw sources: {raw_sources.get('object_count', 0)}")
     click.echo(f"  trail events: {trail_events.get('event_count', 0)}")
     click.echo(f"  syncable:   {trace_records.get('syncable_count', 0)}")

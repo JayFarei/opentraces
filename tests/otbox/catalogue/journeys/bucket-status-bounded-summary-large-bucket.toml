@@ -1,0 +1,86 @@
+name = "bucket-status-bounded-summary-large-bucket"
+description = """
+Issue #97 acceptance (shape gate) — `bucket status --json` is summary-only.
+
+On a multi-trace bucket (`c-bucket-spine-v2-multi-trace-mixed`, >1 trace),
+the status payload MUST NOT carry the O(N) per-trace enumeration, the
+per-record snapshot block, or the per-projection trail freshness array. It
+answers sync / security / event / context counts WITHOUT dumping every
+trace; the full per-trace listing lives on `bucket manifest --json`.
+
+This is the SIZE half of the issue ("too large"). The LATENCY half ("slow")
+is NOT closed here — `bucket status` stays O(N) in wall time; that cure is a
+tracked follow-up. The deterministic shape gate below makes a future re-bloat
+(re-adding traces[]/snapshot/freshness) fail CI regardless of corpus size.
+
+Asserts:
+  - `bucket status --json` exits 0.
+  - traces[] / trace_records.snapshot / trail.freshness are ABSENT.
+  - trace_count >= 2 (the count is present and reflects the multi-trace world).
+  - sync.eligible, events_v1.batch_count, schema_version are still answerable.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-multi-trace-mixed"]
+
+[preconditions]
+min_captured_traces = 2
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — bucket status is bounded summary-only.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-status-bounded"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-status-bounded"
+equals = 0
+
+# The O(N) enumeration and non-scalar blocks are dropped.
+[[assertions]]
+kind = "stdout_json_path_absent"
+step = "bucket-status-bounded"
+path = "bucket.traces"
+
+[[assertions]]
+kind = "stdout_json_path_absent"
+step = "bucket-status-bounded"
+path = "bucket.trace_records.snapshot"
+
+[[assertions]]
+kind = "stdout_json_path_absent"
+step = "bucket-status-bounded"
+path = "bucket.trail.freshness"
+
+# The scalar count is present and reflects the multi-trace world.
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-status-bounded"
+path = "bucket.trace_count"
+min = 2
+
+# The answerable scalars survive the strip.
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-status-bounded"
+path = "bucket.sync.eligible"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-status-bounded"
+path = "bucket.events_v1.batch_count"
+min = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-status-bounded"
+path = "bucket.schema_version"
+equals = "opentraces.bucket.manifest.v2"

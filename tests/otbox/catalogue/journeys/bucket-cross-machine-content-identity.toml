@@ -94,6 +94,25 @@ step = "machine-a-status"
 path = "bucket.bucket_digest"
 equals_var = "machine-a-push:remote.digest"
 
+# Issue #97 — status is summary-only (traces[] dropped); the full per-trace
+# listing (incl. per-trace digests) lives on `bucket manifest --json`. The
+# cross-machine traces[] byte-identity proof runs against the manifest.
+[[steps]]
+type = "cli"
+id = "machine-a-manifest"
+argv = ["bucket", "manifest", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "machine-a-manifest"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "machine-a-manifest"
+path = "manifest.traces.0.trace_id"
+equals = "{trace_id}"
+
 [[steps]]
 type = "cli"
 id = "machine-a-trace-get"
@@ -161,12 +180,24 @@ step = "machine-b-status-post-pull"
 path = "bucket.bucket_digest"
 equals_var = "machine-a-push:remote.digest"
 
-# Resolution H: traces[] rows (incl. per-trace digests) byte-identical.
+# Issue #97 — the traces[] byte-identity proof moves to `bucket manifest`
+# (status no longer carries traces[]). Resolution H: traces[] rows (incl.
+# per-trace digests) byte-identical across the wipe-and-pull boundary.
+[[steps]]
+type = "cli"
+id = "machine-b-manifest-post-pull"
+argv = ["bucket", "manifest", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "machine-b-manifest-post-pull"
+equals = 0
+
 [[assertions]]
 kind = "stdout_json_equals_var"
-step = "machine-b-status-post-pull"
-path = "bucket.traces"
-equals_var = "machine-a-status:bucket.traces"
+step = "machine-b-manifest-post-pull"
+path = "manifest.traces"
+equals_var = "machine-a-manifest:manifest.traces"
 
 # Sync state settled to current on the receiving side.
 [[steps]]

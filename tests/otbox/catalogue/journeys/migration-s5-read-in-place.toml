@@ -83,8 +83,9 @@ step = "bucket-status"
 equals = 0
 
 # The private bucket holds zero trace records — no legacy adoption.
+# Issue #97 — status is summary-only; the count answers "zero records".
 [[assertions]]
-kind = "stdout_json_length_equals"
+kind = "stdout_json"
 step = "bucket-status"
-path = "bucket.traces"
+path = "bucket.trace_count"
 equals = 0

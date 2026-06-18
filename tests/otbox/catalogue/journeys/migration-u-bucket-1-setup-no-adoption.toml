@@ -46,10 +46,11 @@ kind = "returncode"
 step = "bucket-status"
 equals = 0
 
+# Issue #97 — status is summary-only; the count answers "zero adopted".
 [[assertions]]
-kind = "stdout_json_length_equals"
+kind = "stdout_json"
 step = "bucket-status"
-path = "bucket.traces"
+path = "bucket.trace_count"
 equals = 0
 
 # The legacy 0.3.0 shard is still on disk after the bucket opt-in.

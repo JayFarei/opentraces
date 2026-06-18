@@ -402,7 +402,13 @@ def _multi_trace_delta(driver: Driver, box: Box) -> None:
     _slug, trace_id_2 = _resolve_trace(driver, box, _SESSION_2_ID)
     status = _cli_json(driver, box, "bucket", "status", "--json", label="bucket status")
     bucket = status.get("bucket") or {}
-    rows = bucket.get("traces") or []
+    # Issue #97 — `bucket status` is summary-only; the full traces[] enumeration
+    # lives on `bucket manifest --json`. Count traces from the manifest.
+    manifest_payload = _cli_json(
+        driver, box, "bucket", "manifest", "--json", label="bucket manifest"
+    )
+    manifest = manifest_payload.get("manifest") or {}
+    rows = manifest.get("traces") or []
     if len(rows) < 2:
         raise CheckpointError(
             f"{_FAMILY}-multi-trace-mixed: expected >=2 manifest traces, got {len(rows)}"
@@ -849,8 +855,13 @@ def _bucket_only_delta(driver: Driver, box: Box) -> None:
     _check(driver.exec(box, ["rm", "-rf", f"{project}/.git"]), "drop project .git")
 
     cli = resolve_cli_argv()
-    status = _cli_json(driver, box, "bucket", "status", "--json", label="bucket status (no git)")
-    rows = (status.get("bucket") or {}).get("traces") or []
+    # Issue #97 — `bucket status` is summary-only; the full traces[] enumeration
+    # lives on `bucket manifest --json`. Assert the listing survived .git removal
+    # against the manifest (status keeps only scalars/digest).
+    manifest_payload = _cli_json(
+        driver, box, "bucket", "manifest", "--json", label="bucket manifest (no git)"
+    )
+    rows = (manifest_payload.get("manifest") or {}).get("traces") or []
     if not rows:
         raise CheckpointError(
             f"{_FAMILY}-bucket-only: manifest lost its traces after .git removal"
