@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..trails.event_log import read_events
+from ..trails.event_log import read_events, read_events_for_trace
 from .contract import (
     CONTEXT_COMPACTION_OBSERVED,
     CONTEXT_LAYER_CAPTURED,
@@ -454,6 +454,34 @@ def build_context_tree_projection(
         orphan_branch_roots_by_trace=orphan_branch_roots_by_trace,
         subagent_session_ids_by_trace=subagent_session_ids_by_trace,
         capture_limitations_by_trace=capture_limitations_by_trace,
+    )
+
+
+def build_context_tree_projection_for_trace(
+    repo: Path, trace_id: str, **kwargs: Any
+) -> ContextTreeProjection:
+    """Memory-bounded single-trace Context Tree projection.
+
+    Materialises ONLY the events referencing ``trace_id`` as pydantic
+    (``read_events_for_trace``, the #65 bounded reader) instead of the whole
+    canonical event log + its snapshot pickle + verification — which was the
+    full-log walk that made ``ctx`` read verbs hang ~10 min / risk OOM on a
+    large/mature corpus (issue #87). Semantically identical to
+    ``build_context_tree_projection(repo, trace_id=trace_id)`` for that trace
+    (the projection is per-trace keyed); a trace with no events yields an empty
+    projection, exactly as the full read did.
+
+    NOTE: ``read_events_for_trace`` still raw-byte-scans every event blob to
+    find the trace's events, so this is bounded in MEMORY but ~O(log size) in
+    I/O (≈12 s on a 62k-ref repo vs the prior >60 s hang). Truly sub-second
+    needs the per-trace bucket companion (``context.jsonl.gz``) or a persisted
+    read-model catalog — the #87 follow-ups.
+    """
+    return build_context_tree_projection(
+        repo,
+        trace_id=trace_id,
+        events=read_events_for_trace(repo, trace_id),
+        **kwargs,
     )
 
 
