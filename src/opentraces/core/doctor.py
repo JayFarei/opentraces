@@ -932,12 +932,16 @@ def _current_runtime() -> dict[str, Any]:
         out["dist_version"] = current_cli_version()
     except Exception:  # noqa: BLE001
         pass
-    try:
-        from ..cli import _detect_install_method
-
-        out["source_kind"] = _detect_install_method()
-    except Exception:  # noqa: BLE001
-        out["source_kind"] = _classify_source_kind(out["module_file"])
+    # Classify the CURRENT runtime with the SAME execution-free classifier used
+    # for every OTHER discovered runtime (``_classify_source_kind`` below +
+    # ``runtime_select``) rather than reaching UP into
+    # ``cli._detect_install_method`` — that was both a core→cli layering
+    # inversion AND a divergent/older brew heuristic, so the foreground process
+    # could be classified differently than the interpreters it is compared
+    # against in #93's mixed-runtime detection. ``out["module_file"]`` is the
+    # resolved ``opentraces.__file__`` computed just above (``None`` →
+    # ``"unknown"``, never fabricated).
+    out["source_kind"] = _classify_source_kind(out["module_file"])
 
     if out["source_kind"] == "source" and out["module_file"]:
         out.update(_editable_git_provenance(out["module_file"]))
