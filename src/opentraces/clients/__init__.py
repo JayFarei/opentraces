@@ -1,1 +1,1 @@
-"""Client interfaces: CLI, TUI, and web-based trace review."""
+"""Client interfaces: CLI and text rendering for trace review."""

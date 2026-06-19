@@ -18,12 +18,10 @@ from this trace?". Two data sources feed the answer, both keyed by
 ``compute()`` merges both sources, keyed by commit sha, and always
 prefers attribution-cache line counts when present. Overlapping /
 orphan tiers are filtered by default because in the per-session framing
-they'd drown real signal with time-window coincidence (see the 162→36
-reduction documented in ``clients/web/graph_api.load_inverse_blame``).
+they'd drown real signal with time-window coincidence (the filter trimmed
+an observed 162→36 commit set during early validation).
 
-Shared by ``cli/blame.py`` (trace-mode CLI) and ``clients/web/graph_api.py``
-(web ``/api/trace/<id>/commits``). Both surfaces render this identically
-by construction.
+Consumed by ``cli/blame.py`` (the trace-mode ``trail blame`` CLI).
 """
 
 from __future__ import annotations

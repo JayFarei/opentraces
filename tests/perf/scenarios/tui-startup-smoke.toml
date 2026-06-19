@@ -1,9 +1,0 @@
-name = "tui-startup-smoke"
-domain = "tui"
-lane = "smoke"
-adapter = "python"
-target = "tui.startup"
-fixture = "stack"
-tier = "small"
-repetitions = 1
-warmups = 0

@@ -428,24 +428,6 @@ def _require_project_opted_in(action: str) -> None:
         raise NotOptedInError(cwd, action=action)
 
 
-# -- Web / TUI / port helpers (moved to _web.py) ------------------------------
-#
-# Implementations live in _web.py; re-exported here for backward-compat.
-
-from ._web import (
-    _launch_tui_ui,
-    _listener_pid_for_port,
-    _command_for_pid,
-    _port_is_listening,
-    _wait_for_port_release,
-    _is_opentraces_web_process,
-    _reclaim_stale_web_port,
-    _serve_web_app,
-    _launch_web_ui,
-    _schedule_browser_open,
-)
-
-
 def _parse_agent_selection(agent_text: str) -> list[str]:
     return normalize_agents([part.strip() for part in agent_text.split(",") if part.strip()])
 
@@ -3596,62 +3578,6 @@ def _emit_dry_run(
         f"new_gen={counts['new_generation']} noop={counts['noop']}"
     )
 
-@main.command(
-    examples=[
-        "opentraces web",
-        "opentraces web --port 6060 --no-open",
-    ],
-    see_also=[
-        ("opentraces tui", "same inbox, terminal UI."),
-    ],
-)
-@click.option("--port", type=int, default=5050, help="Port for the local web inbox.")
-@click.option("--no-open", is_flag=True, help="Do not open a browser automatically.")
-def web(port: int, no_open: bool) -> None:
-    """Open the browser inbox UI.
-
-    Starts a local Flask server against the current project's inbox. Use
-    this when you want richer diff views than the TUI, or to share the
-    review URL with a teammate on the same machine.
-    """
-    try:
-        _launch_web_ui(port=port, open_browser=_is_interactive_terminal() and not no_open)
-    except ImportError:
-        click.echo("Flask not installed. Run: pip install opentraces[web]")
-        sys.exit(2)
-
-
-@main.command(
-    examples=[
-        "opentraces tui",
-        "opentraces tui --fullscreen",
-        "opentraces tui --limit 0",
-    ],
-    see_also=[
-        ("opentraces web", "same inbox, browser UI."),
-    ],
-)
-@click.option("--fullscreen", is_flag=True, help="Open directly into fullscreen inspect mode.")
-@click.option(
-    "--limit",
-    type=int,
-    default=500,
-    show_default=True,
-    help="Maximum number of traces to load (most recent first). Use 0 for no limit.",
-)
-def tui(fullscreen: bool, limit: int) -> None:
-    """Open the terminal inbox UI.
-
-    Default entry point for reviewing traces without leaving the shell.
-    Running bare ``opentraces`` launches the same UI in an interactive
-    terminal.
-    """
-    try:
-        _launch_tui_ui(fullscreen=fullscreen, limit=limit if limit > 0 else None)
-    except ImportError:
-        click.echo("Textual not installed. Run: pip install opentraces[tui]")
-        sys.exit(2)
-
 
 def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
     """Resolve the HF dataset repo_id using priority chain.
@@ -3778,8 +3704,6 @@ for _legacy_root_command in [
     "add",
     "push",
     "pull",
-    "web",
-    "tui",
     "remote",
     "redact",
     "llm-review",

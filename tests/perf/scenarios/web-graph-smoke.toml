@@ -1,9 +1,0 @@
-name = "web-graph-smoke"
-domain = "web"
-lane = "smoke"
-adapter = "python"
-target = "web.api_graph"
-fixture = "stack"
-tier = "small"
-repetitions = 4
-warmups = 1

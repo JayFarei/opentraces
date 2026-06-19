@@ -30,15 +30,14 @@ perf_scenarios = [
   "scan-project-smoke",
   "watcher-active-smoke",
   "watcher-quiet-smoke",
-  "web-refresh-smoke",
 ]
 user_smoke_tests = []
 live_tests = []
 notes = "This is the representative ingest path for existing traces, watcher-backed correlation, and refresh from the review surfaces."
 
 [[journeys]]
-id = "web-review"
-title = "Legacy browser inbox review, trace detail, tree view, and viewer rendering"
+id = "viewer-rendering"
+title = "React trace-viewer SPA rendering (flatten tree, graph view, review view)"
 priority = "secondary"
 profiled = false
 doc_refs = [
@@ -48,37 +47,13 @@ doc_refs = [
   "web/site/src/components/Hero.tsx",
 ]
 perf_scenarios = [
-  "web-context-smoke",
-  "web-traces-smoke",
-  "web-detail-smoke",
-  "web-stats-smoke",
-  "web-trace-tree-smoke",
   "viewer-flatten-tree-smoke",
   "viewer-review-view-smoke",
   "viewer-graph-view-smoke",
 ]
-user_smoke_tests = ["tests/e2e/test_web_agent_browser_smoke.py::test_web_viewer_loads_seeded_trace"]
+user_smoke_tests = []
 live_tests = []
-notes = "Decommissioned legacy raw-trace web review surface. Scenarios remain catalogued for history but are skipped until the next dataset-scoped review UI lands."
-
-[[journeys]]
-id = "tui-review"
-title = "Legacy terminal inbox startup, navigation, and review actions"
-priority = "secondary"
-profiled = false
-doc_refs = [
-  "web/site/docs/docs/getting-started/quickstart.md",
-  "web/site/docs/docs/workflow/review.md",
-  "web/site/src/components/GetStarted.tsx",
-]
-perf_scenarios = [
-  "tui-startup-smoke",
-  "tui-navigation-smoke",
-  "tui-review-actions-smoke",
-]
-user_smoke_tests = ["tests/e2e/test_tui_tmux_smoke.py::test_tui_launches_and_quits_in_tmux"]
-live_tests = []
-notes = "Decommissioned legacy raw-trace TUI surface. Scenarios remain catalogued for history but are skipped until the next dataset-scoped review UI lands."
+notes = "The legacy Flask inbox web client and Textual TUI were removed in the CLI spine simplification. The React trace-viewer SPA under web/viewer/ stays catalogued via its node-harness viewer-* scenarios until the next dataset-scoped review UI lands."
 
 [[journeys]]
 id = "cli-review-batch"
@@ -97,7 +72,7 @@ notes = "Representative scriptable local work is modeled as a fast status snapsh
 
 [[journeys]]
 id = "provenance-graph-blame"
-title = "Commit graph, commit blame, inverse blame, and web blame"
+title = "Commit graph, commit blame, and inverse blame"
 priority = "primary"
 profiled = true
 doc_refs = [
@@ -109,11 +84,8 @@ doc_refs = [
 perf_scenarios = [
   "graph-core-smoke",
   "graph-cli-smoke",
-  "blame-core-smoke",
   "blame-cli-smoke",
   "inverse-blame-smoke",
-  "web-graph-smoke",
-  "web-blame-smoke",
 ]
 user_smoke_tests = []
 live_tests = []
@@ -148,7 +120,7 @@ doc_refs = [
   "web/site/src/components/Hero.tsx",
 ]
 perf_scenarios = []
-user_smoke_tests = ["tests/e2e/test_web_push_browser_e2e.py::test_browser_publication_guidance_keeps_trace_committed"]
+user_smoke_tests = []
 live_tests = ["tests/publish/test_upload.py::TestLivePushIntegration::test_push_cli_uploads_to_private_hf_repo"]
 notes = "The old root push perf target has been removed with the staged-trace push flow. A fresh dataset publish perf target should be added once the local dataset publication contract is stable."
 

@@ -745,7 +745,7 @@ def _synthesize_legacy_remote_keys(data: dict) -> None:
     """Populate ``data["remote"]`` / ``data["visibility"]`` from the active remote.
 
     Backward compatibility for callers (cli/__init__.py, cli/publish.py,
-    cli/inspect.py, clients/web_server.py, etc.) that still read the
+    cli/inspect.py, etc.) that still read the
     legacy keys. These synthesized keys are NOT persisted by
     ``save_project_config()`` — they exist only in the in-memory dict
     returned to callers during the transition to the new schema. Step 4
