@@ -154,7 +154,19 @@ def test_captured_with_pr_branch_checkpoint_has_branch_history(driver):
     try:
         audit = cp.box.notes.get("c_captured_with_pr_branch_audit") or {}
         assert audit.get("base_commit_sha"), audit
-        assert audit.get("branch_name") == "feat/pr-branch-test", audit
+        # Only the synthetic harness produces the hardcoded `feat/pr-branch-test`
+        # branch; a real-agent capture artifact derives branch_name from the
+        # captured world's live git HEAD and legitimately picks its own name
+        # (the checkpoint code documents "real-agent artifacts choose their own
+        # branch names"). Assert the literal for synthetic; for any captured
+        # artifact require a real, non-base feature branch.
+        source = (audit.get("capture_metadata") or {}).get("source")
+        base_branch = audit.get("base_branch") or "main"
+        if source == "synthetic":
+            assert audit.get("branch_name") == "feat/pr-branch-test", audit
+        else:
+            assert audit.get("branch_name"), audit
+            assert audit["branch_name"] != base_branch, audit
         assert int(audit.get("branch_commit_count") or 0) >= 2, audit
         branch_commits = audit.get("branch_commit_shas") or []
         assert len(branch_commits) >= 2, audit

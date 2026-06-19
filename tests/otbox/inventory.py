@@ -84,17 +84,34 @@ def walk_click_registry() -> list[CommandEntry]:
 # --------------------------------------------------------------------------
 # Journey ownership cross-reference
 # --------------------------------------------------------------------------
+# Journey shell steps that pin an explicit opentraces binary (e.g. the
+# runtime-selection journeys invoking `.testvenv/bin/opentraces`) still
+# exercise the command for ownership purposes — recognise the binary by
+# basename so a leading binary token is not mistaken for the command path.
+_OT_BINARY_BASENAMES = frozenset({"opentraces", "ot", "otd"})
+
+
+def _is_ot_binary_token(token: object) -> bool:
+    return isinstance(token, str) and token.rsplit("/", 1)[-1] in _OT_BINARY_BASENAMES
+
+
 def _extract_command_path(argv: list[str]) -> str | None:
     """Extract a 'command path' (e.g. 'dataset remote create') from a journey argv.
 
-    A journey's ``cli`` step argv is just the args passed to opentraces — the
-    first non-flag positional words form the command path.
+    A ``cli`` step argv is just the args passed to opentraces; a ``shell`` step
+    that invokes opentraces directly leads with the binary token (a bare name or
+    an explicit path like ``.testvenv/bin/opentraces``). A leading binary token
+    is skipped so both forms yield the same command path.
     """
     parts: list[str] = []
     seen_arg = False
     for token in argv:
         if not isinstance(token, str):
             return None
+        # Skip a leading opentraces-binary token (shell steps pin an explicit
+        # binary path to exercise runtime selection); it is not the command.
+        if not parts and not seen_arg and _is_ot_binary_token(token):
+            continue
         if token.startswith("-"):
             if seen_arg:
                 break
@@ -142,10 +159,18 @@ def map_journey_ownership(
         for traj in doc.get("trajectories", []) or []:
             journey_trajectories.append((journey_name, str(traj)))
         for step in doc.get("steps", []):
-            if step.get("type") != "cli":
-                continue
+            stype = step.get("type")
             argv = step.get("argv", [])
-            cmd = _extract_command_path(argv)
+            # Credit `cli` steps (argv = bare opentraces args) and `shell`
+            # steps that invoke an opentraces binary directly (argv[0] is the
+            # binary — e.g. runtime-selection journeys). Other shell steps
+            # (`sh -c`, `cat`, ...) are not opentraces invocations.
+            if stype == "cli":
+                cmd = _extract_command_path(argv)
+            elif stype == "shell" and argv and _is_ot_binary_token(argv[0]):
+                cmd = _extract_command_path(argv)
+            else:
+                continue
             if cmd is None:
                 continue
             # Walk back through partial matches: "dataset remote create"

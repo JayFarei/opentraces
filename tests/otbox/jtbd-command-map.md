@@ -67,6 +67,8 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **inspect-context-tree** | 1 → 9 | 3 | `ctx tree/show/step/reads/writes/diff/compactions/list/info` for what the model saw |
 | **resume-from-context** | 1 → 4 | 3 | `ctx prune/resume/resolve/anchor-for-step` for replay and handoff packets |
 | **extract-bounded-evidence** ★ | 1 → 2 | 3 + 6 | `trace slice` for dataset workflows |
+| **skill-intelligence** ★ | 1 → N | 3 + 6 | `trace skills` → skill episodes / rollouts / eval-tasks projected into a dataset (the skill-intelligence consumer) |
+| **trace-index-rebuild-progress** | 1/1 | 3 | `trace index rebuild` under the `--progress`/heartbeat contract (plan 088) |
 | **resolve-trace-artifact** | 1/1 | 3 | `trace get` (incl. `--resume`) |
 | **maintain-index** | 1 → 2 | 4 | `trace index rebuild` + `status` + `compact` |
 | **recreate-trace-environment** ★ | 1 → 2 | 3 + 6 | `trace teleport export` + `open` — reconstitutes the environment that produced a trace, for perturbation analysis, RL training, evaluation harnesses, or "rewind" features in OSS repos |
@@ -143,7 +145,8 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `setup trufflehog` | Developer configures the optional TruffleHog secret detector for redaction and publication safety checks | configure-security-detectors (1/2) | unowned | both |
 | `setup privacy-filter` | Developer configures the optional `openai/privacy-filter` PII detector for dataset-row scanning | configure-security-detectors (2/2) | unowned | both |
 | `setup llm-review` | Developer configures the optional LLM reviewer that gates dataset publication | configure-security-reviewer (1/1) | unowned | both |
-| `setup upgrade` | Developer upgrades the CLI + refreshes the project skill file after a new release | maintain-install (1/1) | unowned | both |
+| `setup upgrade` | Developer upgrades the CLI + refreshes the project skill file after a new release | maintain-install (1/2) | unowned | both |
+| `setup uninstall` | Developer reverses the opentraces install — the symmetric inverse of `setup` — removing hooks/daemons/env while preserving captured traces, datasets, and buckets (`--purge` to also delete the corpus) | maintain-install (2/2) | `setup-uninstall-dry-run` | both |
 | `security sanitize` | Developer or workflow author pipes JSON through the security pipeline tool registry to sanitize a record in a language-agnostic way | inspect-security-pipeline (1/3) | unowned | both |
 | `security tools list` | Developer or agent inspects the registered security tools + their enable state before deciding which to opt into | inspect-security-pipeline (2/3) | unowned | both |
 | `security tools info` | Developer inspects one tool's descriptor (config keys, runtime requirements) before opt-in | inspect-security-pipeline (3/3) | unowned | both |
@@ -185,6 +188,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 |---|---|---|---|---|
 | `trace query` | Agent filters local retained traces by lexical/semantic/facet criteria so it can retrieve bounded CandidatePackets without loading full transcripts | retrieve-relevant-traces (1/3) ★ | `trace-map-and-slice`, `cli-publish-happy-path`, `tier1-cold-publish`, `tier1-warm-reuse` | both |
 | `trace discover` | Agent groups retained traces into topic timeline cards so it can orient across prior work without loading full transcripts | retrieve-relevant-traces (2/3) ★ | `agent-session-to-published-dataset` | both |
+| `trace skills` | Agent or developer lists the skills observed across retained traces ranked by usage so it can see which skills sessions actually invoked before scoping a dataset | retrieve-relevant-traces (3/3) ★ | `skill-usage-to-dataset` | both |
 | `trace map` | Agent expands a deterministic TraceMap around a known trace or unit to inspect structural context without reading the full transcript | inspect-trace-context (1/2) | `trace-map-and-slice` | both |
 | `trace slice` | Agent extracts deterministic TraceSlice packets via template or manual step range so dataset workflows get bounded reproducible input | extract-bounded-evidence (1/2) ★ | `trace-map-and-slice` | agent |
 | `trace get` | Human or agent resolves a trace, trace unit, map node, or `ot://` resource by ref to inspect full content (or `--resume` to hand control back to an upstream agent) | resolve-trace-artifact (1/1) | `cli-lifecycle` | both |
@@ -240,7 +244,9 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 |---|---|---|---|---|
 | `bucket status` | Developer or agent checks bucket health + sync eligibility + trail freshness before deciding whether to push to the remote | inspect-private-storage (1/2) | `bucket-inspect` | both |
 | `bucket manifest` | Developer materializes + prints the bucket manifest to confirm every trace was written + get the current digest | inspect-private-storage (2/2) | `bucket-inspect` | both |
-| `bucket security` | Developer sets the bucket egress security policy (off/basic/recommended/strict, or a custom per-tool set) that runs over raw captured traces before private bucket sync | configure-bucket (1/2) | `bucket-security-policy-basic` | both |
+| `bucket security policy` | Developer inspects or sets which security tools the bucket egress filter runs (off/basic/recommended/strict or a custom per-tool set) before private sync | configure-bucket (1/3) | `bucket-security-policy-basic` | both |
+| `bucket security run` | Developer applies the configured security filter over already-captured records so they become remote-sync eligible | configure-bucket (2/3) | `bucket-security-policy-basic` | both |
+| `bucket security status` | Developer or agent checks the bucket security posture + the exact remediation before a remote sync | configure-bucket (3/3) | `bucket-remote-status-filtered-eligible` | both |
 | `bucket remote status` | Developer compares the local bucket digest with the remote before deciding whether a push or pull is safe | compare-bucket-digests (1/1) | unowned | both |
 | `bucket remote diff` | Developer sees which objects diverge between local and remote manifests before committing to a push or pull | compare-bucket-digests (1/1) | unowned | both |
 | `bucket remote push` | Developer mirrors the local bucket to the configured HF remote so traces are backed up off-machine | backup-bucket-to-remote (1/1) | unowned | both |
