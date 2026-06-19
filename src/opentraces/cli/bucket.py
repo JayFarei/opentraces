@@ -9,6 +9,7 @@ import click
 
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
+from ._progress import build_cli_progress, progress_option
 from ._security_flags import (
     BUCKET_SECURITY_POLICIES,
     SECURITY_TOOL_NAMES,
@@ -189,14 +190,28 @@ def bucket_security_policy_cmd(
 
 @bucket_group.command("status", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_status_cmd(as_json: bool) -> None:
+@progress_option
+def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
     """Show local bucket health, sync eligibility, and trail freshness."""
     from ..core.bucket_store import bucket_status
 
     # Issue #55 — `bucket status` is a pure read: no manifest.json write, no
     # per-trace envelope materialization. Self-heal is explicit via
     # `bucket manifest --heal` / `bucket repair`.
-    payload = bucket_status(write_manifest=False, heal=False)
+    #
+    # #87 — the read still parses every retained TraceRecord (the per-trace
+    # security-state recompute), which on a large bucket runs for minutes with
+    # no signpost. The shared progress/heartbeat reporter turns that SILENT hang
+    # into a staged, heartbeat-backed, observable op. The sink is stderr-only
+    # and auto-quiet in CI / non-TTY, so the `--json` stdout payload below stays
+    # a single clean object.
+    reporter = build_cli_progress("bucket status", progress_mode)
+    try:
+        payload = bucket_status(
+            write_manifest=False, heal=False, progress=reporter
+        )
+    finally:
+        reporter.done()
     if as_json:
         click.echo(_dump_json(payload))
         return

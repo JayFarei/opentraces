@@ -2210,6 +2210,7 @@ def bucket_manifest(
     write: bool = False,
     heal: bool = True,
     include_objects: bool = False,
+    progress=None,
 ) -> dict[str, Any]:
     """Return the local bucket manifest used by future remote sync.
 
@@ -2227,8 +2228,19 @@ def bucket_manifest(
     NO ``manifest.json``. The summary is record-derived in both branches, so
     the digest invariant holds (the read-only digest equals the digest a
     later ``--heal`` / ``bucket repair`` persists to disk).
+
+    #87 — ``progress`` (a shared ``ProgressReporter`` or ``None``) labels each
+    O(N) scan phase so a long read on a large bucket is heartbeat-observable
+    rather than a silent multi-minute hang. ``None`` → a no-op ``NullProgress``,
+    keeping every non-CLI caller byte-identical.
     """
 
+    if progress is None:
+        from .progress import NullProgress
+
+        progress = NullProgress()
+
+    progress.stage("scan_trace_records")
     trace_snapshot = trace_record_snapshot(include_objects=include_objects)
     objects = trace_snapshot.get("objects") or []
     # Issue #31 — iterate the TraceRecord object store ONCE; reuse the parsed
@@ -2255,10 +2267,14 @@ def bucket_manifest(
         default="",
     ) or None
 
+    progress.stage("scan_raw_sources")
     raw_snapshot = raw_source_snapshot(include_objects=include_objects)
+    progress.stage("scan_trail_events")
     trail_event_exports = trail_event_snapshot(include_objects=include_objects)
+    progress.stage("scan_context_trees")
     context_trees_snapshot = context_tree_snapshot(include_objects=include_objects)
 
+    progress.stage("trail_freshness")
     trail_freshness: list[dict[str, Any]] = []
     try:
         from .trace_index import default_index_path, trail_freshness_warnings
@@ -2294,6 +2310,7 @@ def bucket_manifest(
     # row. Materializing on disk in both write modes keeps ``bucket verify``
     # check 3 green and keeps ``bucket repair``'s write=False candidate-digest
     # comparison consistent. Atomic same-bytes writers preserve idempotency.
+    progress.stage("reconcile_traces")
     _existing_pairs = {(row["project_slug"], row["trace_id"]) for row in traces_v2_rows}
     _project_paths: dict[str, Path] | None = None
     for obj in record_objects:
@@ -2739,13 +2756,15 @@ def _bounded_status_view(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def bucket_status(
-    *, write_manifest: bool = True, heal: bool = True
+    *, write_manifest: bool = True, heal: bool = True, progress=None
 ) -> dict[str, Any]:
     # Issue #55 — ``heal`` mirrors :func:`bucket_manifest`. Internal callers
     # keep the materializing default; the CLI ``bucket status`` read verb passes
     # ``write_manifest=False, heal=False`` for a byte-level side-effect-free read.
+    # #87 — ``progress`` (a shared ``ProgressReporter`` or ``None``) is threaded
+    # into the O(N) object-store scan so a long read is observable, not silent.
     manifest = bucket_manifest(
-        write=write_manifest, heal=heal, include_objects=False
+        write=write_manifest, heal=heal, include_objects=False, progress=progress
     )
     # Issue #97 — status is summary-only: bound the payload (drop traces[],
     # trace_records.snapshot, trail.freshness). Full listing via `bucket manifest`.
