@@ -21,15 +21,17 @@ except Exception:  # pragma: no cover
     HfApi = None  # type: ignore[assignment]
 
 from . import paths
-from .bucket_store import (
-    BUCKET_MANIFEST_SCHEMA,
-    bucket_manifest,
-    classify_bucket_remote_state,
+from .bucket_fake_remote import (
     fake_remote_diff,
     fake_remote_pull,
     fake_remote_push,
     fake_remote_root,
     fake_remote_status,
+)
+from .bucket_store import (
+    BUCKET_MANIFEST_SCHEMA,
+    bucket_manifest,
+    classify_bucket_remote_state,
     write_bucket_sync_state,
 )
 from .config import load_config

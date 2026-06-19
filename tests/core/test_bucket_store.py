@@ -198,14 +198,16 @@ def test_bucket_security_state_marks_unfiltered_and_stale_records():
 
 
 def test_bucket_manifest_status_and_fake_remote(tmp_path, monkeypatch):
-    from opentraces.core.bucket_store import (
-        bucket_manifest,
-        bucket_manifest_path,
-        bucket_status,
+    from opentraces.core.bucket_fake_remote import (
         fake_remote_diff,
         fake_remote_pull,
         fake_remote_push,
         fake_remote_status,
+    )
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_manifest_path,
+        bucket_status,
         iter_trace_record_objects,
         write_trace_record,
     )
