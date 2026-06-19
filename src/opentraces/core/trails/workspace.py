@@ -21,7 +21,7 @@ from ...core.config import (
 )
 from ...core.repo_identity import encode_claude_path
 from ...core.state import StateManager
-from .event_log import EVENT_LOG_REF, read_events
+from .event_log import EVENT_LOG_REF, read_events, read_events_for_trace
 from .ids import normalize_id
 from .models import TrailEvent
 from .search_records import summary_search_touches_trace
@@ -328,9 +328,18 @@ def _trace_events(repo: Path, trace_id: str) -> list[TrailEvent]:
     # plan 090: the v2 anchor-search summary event spans traces (top-level
     # trace_id None), so fan it into this trace's view when one of its per-patch
     # results belongs here, matching the legacy per-patch behavior.
+    #
+    # #87: read_events_for_trace (bounded — raw-bytes prefilter, no full-log
+    # pydantic walk) is sound here because EVERY event this filter keeps carries
+    # ``trace_id`` in its bytes: a real top-level trace_id, a payload trace_id,
+    # or (the v2 summary) a results[] entry whose trace_id == this trace
+    # (summary_search_touches_trace matches exactly that). So the prefilter can
+    # only over-include, never miss; the comprehension below post-filters
+    # exactly as before. This bounds `trail track <trace>` + workspace export
+    # (was a ~10min/OOM full-log walk on a large corpus).
     return [
         event
-        for event in read_events(repo)
+        for event in read_events_for_trace(repo, trace_id)
         if event.trace_id == trace_id
         or event.payload.get("trace_id") == trace_id
         or summary_search_touches_trace(event, trace_id)
