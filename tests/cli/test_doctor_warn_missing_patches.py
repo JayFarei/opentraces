@@ -14,7 +14,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from opentraces.cli import main
-from opentraces.cli.doctor import audit_trail_capture
+from opentraces.core.doctor import audit_trail_capture
 from opentraces.core.config import _write_marker
 from opentraces.core.trails import TrailEventDraft, append_event_batch
 from opentraces.core.trails.models import sha256_text
