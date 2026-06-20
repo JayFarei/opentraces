@@ -612,6 +612,64 @@ def _simulate_record_only_ingest(project_dir: Path, record: TraceRecord, source_
     return slug
 
 
+def test_bucket_status_fast_reads_persisted_and_matches_full_scan(tmp_path):
+    """Plan 087 — ``bucket_status_fast`` serves O(1) from the persisted manifest.
+
+    After a full heal (post-087 rows carry the status accelerator), the fast read
+    reports ``freshness.stale=False`` sourced from ``row_status`` and its counts
+    match the authoritative O(N) ``bucket_status`` scan. An out-of-band dirty mark
+    then flips it stale without a rescan.
+    """
+
+    from opentraces.core.bucket_manifest_state import mark_bucket_manifest_dirty
+    from opentraces.core.bucket_store import (
+        bucket_manifest,
+        bucket_status,
+        bucket_status_fast,
+    )
+
+    project = tmp_path / "hot"
+    _enroll_project(project, "0ddba110ddba110ddba110ddba110dd5")
+    record = _scanned_trace("trace-fast-status")
+    source_jsonl = tmp_path / "session-fast.jsonl"
+    source_jsonl.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    _simulate_record_only_ingest(project, record, source_jsonl)
+
+    # Full heal -> post-087 manifest: rows get status, version stamped current.
+    bucket_manifest(write=True, heal=True)
+
+    # The fast (persisted) read must be byte-level side-effect-free.
+    before_hash = _bucket_tree_byte_hash()
+    fast = bucket_status_fast()
+    assert _bucket_tree_byte_hash() == before_hash, "bucket_status_fast mutated the bucket"
+    assert fast["freshness"]["stale"] is False, fast["freshness"]
+    assert fast["freshness"]["source"] == "row_status"
+
+    # Fast counts == authoritative O(N) scan counts.
+    full = bucket_status(write_manifest=False, heal=False)
+    fast_tr = fast["bucket"]["trace_records"]
+    full_tr = full["bucket"]["trace_records"]
+    for key in (
+        "object_count",
+        "syncable_count",
+        "unfiltered_count",
+        "security_stale_count",
+    ):
+        assert fast_tr[key] == full_tr[key], (key, fast_tr, full_tr)
+    assert fast["bucket"]["trace_count"] == full["bucket"]["trace_count"]
+
+    # An out-of-band security re-scan flips freshness stale with NO rescan, and a
+    # stale read-model must NEVER report remote-eligible (conservative: it cannot
+    # confirm every trace's security state off counts it knows may be incomplete).
+    mark_bucket_manifest_dirty("security_rescan")
+    stale = bucket_status_fast()
+    assert stale["freshness"]["stale"] is True
+    assert "out_of_band_security_change" in stale["freshness"]["reasons"]
+    assert stale["freshness"]["rebuild_recommended"] == "opentraces bucket manifest --heal"
+    assert stale["bucket"]["sync"]["eligible"] is False
+    assert "read_model_stale" in stale["bucket"]["sync"]["blocked_reasons"]
+
+
 def test_record_only_ingest_is_materialized_by_manifest_self_heal(tmp_path):
     """PR #63 — record-only staged traces are NOT legacy mirrors.
 

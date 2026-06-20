@@ -964,6 +964,200 @@ def bucket_status(
     }
 
 
+def _aggregate_status_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate the per-row ``status`` accelerator into bucket-status counts.
+
+    Plan 087 — O(rows-in-memory), no per-trace file I/O. ``unknown_count`` is the
+    number of rows whose ``status`` was never populated (a pre-087 manifest, or a
+    row written before its object envelope existed); callers fall back to the
+    persisted scalar block when EVERY row is unknown.
+    """
+
+    syncable = unfiltered = security_stale = privacy_off = unknown = 0
+    last_write_at = ""
+    for row in rows:
+        status = row.get("status") if isinstance(row, dict) else None
+        if not isinstance(status, dict) or not status.get("known"):
+            unknown += 1
+            continue
+        if status.get("syncable") is True:
+            syncable += 1
+        elif status.get("syncable") is False:
+            unfiltered += 1
+        if status.get("security_stale"):
+            security_stale += 1
+        if status.get("privacy_off"):
+            privacy_off += 1
+        written = status.get("written_at")
+        if written and str(written) > last_write_at:
+            last_write_at = str(written)
+    return {
+        "syncable_count": syncable,
+        "unfiltered_count": unfiltered,
+        "security_stale_count": security_stale,
+        "privacy_off_count": privacy_off,
+        "unknown_count": unknown,
+        "last_write_at": last_write_at or None,
+    }
+
+
+def _bucket_status_from_persisted(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Build the bucket-status payload from a persisted manifest (plan 087).
+
+    O(1) in the bucket size: reads sync/security counts from the per-row
+    ``status`` accelerator (falling back to the persisted ``trace_records``
+    scalar block for a pre-087 manifest whose rows carry no status), and stamps
+    a ``freshness`` block from three cheap signals — the out-of-band dirty
+    marker, a ``security_version`` skew, and a row-count vs ``object_count`` gap.
+    """
+
+    from .bucket_manifest_state import current_bucket_manifest_dirty_token
+
+    rows = [r for r in (manifest.get("traces") or []) if isinstance(r, dict)]
+    scalar = manifest.get("trace_records") or {}
+    agg = _aggregate_status_from_rows(rows)
+    known_rows = len(rows) - agg["unknown_count"]
+
+    reasons: list[str] = []
+    try:
+        if current_bucket_manifest_dirty_token() is not None:
+            reasons.append("out_of_band_security_change")
+    except Exception:
+        pass
+    if manifest.get("security_version") != SECURITY_VERSION:
+        reasons.append("security_version_skew")
+    object_count = scalar.get("object_count")
+    if isinstance(object_count, int) and object_count != len(rows):
+        reasons.append("incomplete_rows")
+
+    if rows and known_rows == 0:
+        # Pre-087 manifest: rows carry no status accelerator. Use the persisted
+        # (stale-but-present) scalar block so counts are sensible, not all-zero.
+        counts = {
+            "object_count": object_count if isinstance(object_count, int) else len(rows),
+            "syncable_count": scalar.get("syncable_count", 0),
+            "unfiltered_count": scalar.get("unfiltered_count", 0),
+            "security_stale_count": scalar.get("security_stale_count", 0),
+            "privacy_off_count": scalar.get("privacy_off_count", 0),
+            "last_write_at": scalar.get("last_write_at"),
+        }
+        source = "scalar_block"
+        reasons.append("status_not_populated")
+    else:
+        counts = {
+            "object_count": len(rows),
+            "syncable_count": agg["syncable_count"],
+            "unfiltered_count": agg["unfiltered_count"],
+            "security_stale_count": agg["security_stale_count"],
+            "privacy_off_count": agg["privacy_off_count"],
+            "last_write_at": agg["last_write_at"],
+        }
+        source = "row_status"
+        if agg["unknown_count"]:
+            reasons.append("status_partially_populated")
+
+    stale = bool(reasons)
+
+    # Reuse the existing bounded projection (drops traces[]/snapshot/freshness),
+    # then override the count + sync blocks with the freshly aggregated numbers
+    # so the rendered eligibility matches the rendered counts.
+    view = _bounded_status_view(manifest)
+    view["trace_count"] = len(rows)
+    view["trace_records"] = {
+        **(view.get("trace_records") or {}),
+        **counts,
+    }
+    # Eligibility is CONSERVATIVE: a stale read-model (out-of-band rescan,
+    # version skew, incomplete or partially-populated rows) cannot confirm every
+    # trace's security state, so it must never report eligible=True off counts it
+    # knows are incomplete — that would claim remote-syncable when an unscanned
+    # trace is hiding in the unknown rows. ``bucket remote push`` recomputes the
+    # authoritative manifest anyway, so a conservative status never blocks a real
+    # push; it only avoids a false "ready" on a stale read.
+    blocked = _bucket_sync_blockers(
+        unfiltered_count=counts["unfiltered_count"],
+        stale_security_count=counts["security_stale_count"],
+    )
+    if stale and "read_model_stale" not in blocked:
+        blocked = [*blocked, "read_model_stale"]
+    view["sync"] = {
+        "eligible": (not stale)
+        and counts["unfiltered_count"] == 0
+        and counts["security_stale_count"] == 0,
+        "blocked_reasons": blocked,
+    }
+
+    return {
+        "status": "ok",
+        "bucket": view,
+        "freshness": {
+            "stale": stale,
+            "reasons": reasons,
+            "source": source,
+            "rebuild_recommended": (
+                "opentraces bucket manifest --heal" if reasons else None
+            ),
+            "last_full_sweep_at": manifest.get("generated_at"),
+        },
+        "config": _bucket_config_payload(),
+    }
+
+
+def bucket_status_fast(*, progress=None) -> dict[str, Any]:
+    """Size-independent ``bucket status`` read (plan 087).
+
+    Reads the persisted ``manifest.json`` O(1) and serves sync/security counts
+    from the per-row ``status`` accelerator with a ``freshness`` stamp — instead
+    of the O(N) full-TraceRecord + security-recompute scan that times out
+    (>400s) on a large bucket. Falls back to the side-effect-free in-memory scan
+    ONLY when no usable persisted manifest exists (absent/error — rare, since
+    capture upserts the manifest); degrades (no scan) when the manifest exceeds
+    the byte cap, recommending ``bucket repair`` rather than hanging.
+    """
+
+    state, manifest = read_persisted_manifest_capped()
+    if state == "ok" and isinstance(manifest, dict):
+        return _bucket_status_from_persisted(manifest)
+    if state == "too_large":
+        return {
+            "status": "ok",
+            "bucket": {
+                "root": str(paths.bucket_dir()),
+                "state": "too-large",
+                "trace_count": None,
+                "trace_records": {},
+                "trail": {},
+                "raw_sources": {},
+                "trail_events": {},
+                # Keep the eligible-present contract every other path satisfies.
+                "sync": {
+                    "eligible": False,
+                    "blocked_reasons": ["manifest_too_large"],
+                },
+            },
+            "freshness": {
+                "stale": True,
+                "reasons": ["manifest_too_large"],
+                "source": "degraded",
+                "rebuild_recommended": "opentraces bucket repair",
+                "last_full_sweep_at": None,
+            },
+            "config": _bucket_config_payload(),
+        }
+    # absent / error: the persisted read-model is unavailable. Fall back to the
+    # side-effect-free in-memory O(N) scan (preserves correctness + the read-only
+    # contract on a not-yet-built bucket).
+    payload = bucket_status(write_manifest=False, heal=False, progress=progress)
+    payload["freshness"] = {
+        "stale": False,
+        "reasons": [],
+        "source": "full_scan",
+        "rebuild_recommended": None,
+        "last_full_sweep_at": payload.get("bucket", {}).get("generated_at"),
+    }
+    return payload
+
+
 def sync_trace_records_from_local_stores(
     *,
     prune: bool = True,

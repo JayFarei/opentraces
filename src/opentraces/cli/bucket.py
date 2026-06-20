@@ -193,23 +193,22 @@ def bucket_security_policy_cmd(
 @progress_option
 def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
     """Show local bucket health, sync eligibility, and trail freshness."""
-    from ..core.bucket_store import bucket_status
+    from ..core.bucket_store import bucket_status_fast
 
     # Issue #55 — `bucket status` is a pure read: no manifest.json write, no
     # per-trace envelope materialization. Self-heal is explicit via
     # `bucket manifest --heal` / `bucket repair`.
     #
-    # #87 — the read still parses every retained TraceRecord (the per-trace
-    # security-state recompute), which on a large bucket runs for minutes with
-    # no signpost. The shared progress/heartbeat reporter turns that SILENT hang
-    # into a staged, heartbeat-backed, observable op. The sink is stderr-only
-    # and auto-quiet in CI / non-TTY, so the `--json` stdout payload below stays
-    # a single clean object.
+    # Plan 087 — size-independent read. The steady-state path reads the persisted
+    # manifest O(1) and aggregates sync/security counts from the per-row status
+    # accelerator with a freshness stamp, replacing the O(N) per-TraceRecord scan
+    # that ran for minutes on a large bucket. The scan survives only as the
+    # fallback for a not-yet-built bucket (absent/error). The progress reporter
+    # covers that fallback; the sink is stderr-only and auto-quiet in CI / non-TTY
+    # so the `--json` stdout payload stays a single clean object.
     reporter = build_cli_progress("bucket status", progress_mode)
     try:
-        payload = bucket_status(
-            write_manifest=False, heal=False, progress=reporter
-        )
+        payload = bucket_status_fast(progress=reporter)
     finally:
         reporter.done()
     if as_json:
@@ -228,7 +227,10 @@ def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
     if remote_config.get("enabled"):
         click.echo(f"  remote:     {remote_config.get('url') or 'configured'}")
         click.echo(f"  sync policy: {remote_config.get('sync_policy', 'daemon')}")
-    click.echo(f"  traces:     {bucket.get('trace_count', trace_records.get('object_count', 0))}")
+    _trace_count = bucket.get("trace_count")
+    if _trace_count is None:
+        _trace_count = trace_records.get("object_count")
+    click.echo(f"  traces:     {_trace_count if _trace_count is not None else 'unavailable'}")
     click.echo(f"  raw sources: {raw_sources.get('object_count', 0)}")
     click.echo(f"  trail events: {trail_events.get('event_count', 0)}")
     click.echo(f"  syncable:   {trace_records.get('syncable_count', 0)}")
@@ -243,6 +245,13 @@ def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
     )
     for reason in sync.get("blocked_reasons") or []:
         click.echo(f"    blocked: {reason}")
+    freshness = payload.get("freshness") or {}
+    if freshness.get("stale"):
+        reasons = ", ".join(freshness.get("reasons") or []) or "stale"
+        click.echo(f"  freshness:  STALE ({reasons})")
+        hint = freshness.get("rebuild_recommended")
+        if hint:
+            click.echo(f"    refresh with: {hint}")
 
 
 @bucket_group.command("manifest", cls=OpentracesCommand)
