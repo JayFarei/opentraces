@@ -133,7 +133,7 @@ def workflow_remove(name: str, yes: bool, as_json: bool) -> None:
     click.echo(f"Workflow removed: {name}")
 
 
-@workflow_group.command("optimize", cls=OpentracesCommand)
+@workflow_group.command("optimize", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--workflow", "workflow_name", default=None,
     help="Scored-rollout workflow that projects captured traces into rows. [default: skill-opt-v1]",
@@ -274,7 +274,7 @@ def workflow_optimize(
         click.echo(f"not promoted: {outcome.metadata['promote_skipped_reason']}")
 
 
-@workflow_group.command("skill-intelligence", cls=OpentracesCommand)
+@workflow_group.command("skill-intelligence", cls=OpentracesCommand, hidden=True)
 @click.option("--project", default=None, help="Restrict the corpus audit to one project slug.")
 @click.option("--skill", default=None, help="Force the selected skill pack instead of audit selection.")
 @click.option(
@@ -350,7 +350,7 @@ def workflow_skill_intelligence(
         click.echo("promotion: manual/default-off; no skill was automatically promoted")
 
 
-@workflow_group.command("verifier-factory", cls=OpentracesCommand)
+@workflow_group.command("verifier-factory", cls=OpentracesCommand, hidden=True)
 @click.option("--project", default=None, help="Restrict mining to one project slug.")
 @click.option(
     "--example",

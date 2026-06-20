@@ -70,7 +70,7 @@ STATUS_FRESHNESS_SECONDS = 60.0
 # --------------------------------------------------------------------------- #
 
 
-@click.group("capture-otlp", cls=OpentracesGroup)
+@click.group("capture-otlp", cls=OpentracesGroup, hidden=True)
 def capture_otlp_group() -> None:
     """Run and control the OTLP receiver capture source.
 

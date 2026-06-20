@@ -161,7 +161,7 @@ def setup_watcher_restart() -> None:
     click.echo("restarted.")
 
 
-@setup_watcher_group.command("sweep")
+@setup_watcher_group.command("sweep", hidden=True)
 @click.option("--in-process", "in_process", is_flag=True,
               help="Tick projects in this process instead of budgeted "
                    "child processes (tests / debugging).")
@@ -191,7 +191,7 @@ def setup_watcher_sweep(in_process: bool, json_out: bool) -> None:
     )
 
 
-@setup_watcher_group.command("tick")
+@setup_watcher_group.command("tick", hidden=True)
 @click.option("--project", "project_dir", type=click.Path(
                   exists=True, file_okay=False, dir_okay=True, path_type=Path),
               default=None, help="Project directory (default: all enlisted).")

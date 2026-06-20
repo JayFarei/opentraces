@@ -17,7 +17,7 @@ import opentraces.cli as _cli
 from .installers import setup_group
 
 
-@setup_group.group("runtime")
+@setup_group.group("runtime", hidden=True)
 def setup_runtime_group() -> None:
     """Select / reconcile the active opentraces runtime (issue #99).
 

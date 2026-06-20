@@ -28,6 +28,15 @@ HIDDEN_PLUMBING = [
     "bucket security",
     "trace teleport",
     "git-backfill",
+    # Tier B — experimental / operator / internal feature groups + subcommands.
+    "capture-otlp",
+    "skill-verifier",
+    "setup runtime",
+    "setup watcher sweep",
+    "setup watcher tick",
+    "workflow optimize",
+    "workflow skill-intelligence",
+    "workflow verifier-factory",
 ]
 
 CORE_VISIBLE = [
