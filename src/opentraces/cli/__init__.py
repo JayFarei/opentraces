@@ -2491,6 +2491,7 @@ from .installers import setup_group as _setup_group  # noqa: E402
 # decomposition; installers no longer imports it, so this is the registration
 # trigger.)
 from . import setup_watcher as _setup_watcher  # noqa: E402,F401
+from . import setup_runtime as _setup_runtime  # noqa: E402,F401
 
 
 @_setup_group.command("auth")
