@@ -2493,6 +2493,7 @@ from .installers import setup_group as _setup_group  # noqa: E402
 from . import setup_watcher as _setup_watcher  # noqa: E402,F401
 from . import setup_runtime as _setup_runtime  # noqa: E402,F401
 from . import setup_agents as _setup_agents  # noqa: E402,F401
+from . import setup_bucket as _setup_bucket  # noqa: E402,F401
 # Imported BEFORE the legacy-root _drop_command loop below: review_llm_cmd is a
 # @main.command("llm-review") that the loop then drops from the root (it stays as
 # `setup llm-review`), exactly as when it lived in installers.py.
