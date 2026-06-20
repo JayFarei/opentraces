@@ -20,7 +20,6 @@ WORKFLOW_VERBS = ["workflow"]
 DATASET_VERBS = ["dataset"]
 SECURITY_VERBS = ["security"]
 CAPTURE_VERBS = ["capture-otlp"]
-MAINTENANCE_VERBS = ["git-backfill"]
 
 # Legacy/internal verbs still registered at the root but NOT advertised in
 # the journey-first sections.
@@ -40,7 +39,8 @@ SECTION_HEADERS_IN_ORDER = [
     "DATASET COMMANDS",
     "SECURITY COMMANDS",
     "CAPTURE COMMANDS",
-    "MAINTENANCE COMMANDS",
+    # Plan 087: MAINTENANCE COMMANDS auto-collapses — its only verb (git-backfill)
+    # is now hidden (callable, off --help) as part of the core-surface simplification.
 ]
 
 
@@ -146,7 +146,6 @@ def test_dataset_block_contains_current_primary_verbs():
         ("WORKFLOW COMMANDS", WORKFLOW_VERBS),
         ("SECURITY COMMANDS", SECURITY_VERBS),
         ("CAPTURE COMMANDS", CAPTURE_VERBS),
-        ("MAINTENANCE COMMANDS", MAINTENANCE_VERBS),
     ],
 )
 def test_new_public_blocks_contain_current_primary_verbs(header, verbs):

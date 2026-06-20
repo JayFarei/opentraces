@@ -25,7 +25,7 @@ def bucket_group() -> None:
     """Inspect and troubleshoot the local trace bucket."""
 
 
-@bucket_group.group("security", cls=OpentracesGroup)
+@bucket_group.group("security", cls=OpentracesGroup, hidden=True)
 def bucket_security_group() -> None:
     """Inspect, configure, and apply the private bucket security filter.
 
@@ -448,7 +448,7 @@ def bucket_remote_pull_cmd(
         click.echo("  eager: true (all blobs fetched)")
 
 
-@bucket_group.command("replay", cls=OpentracesCommand)
+@bucket_group.command("replay", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--repo",
     "repo",
@@ -495,7 +495,7 @@ def bucket_replay_cmd(
 _REBUILD_SUBSTRATES = ("context-tree", "trail", "traces", "all")
 
 
-@bucket_group.command("rebuild", cls=OpentracesCommand)
+@bucket_group.command("rebuild", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--substrate",
     "substrate",
@@ -724,7 +724,7 @@ def bucket_verify_cmd(sample_size: int, as_full: bool, as_json: bool) -> None:
         sys.exit(3)
 
 
-@bucket_group.command("prune", cls=OpentracesCommand)
+@bucket_group.command("prune", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--dry-run",
     "dry_run",
@@ -773,7 +773,7 @@ def bucket_prune_cmd(dry_run: bool, as_json: bool) -> None:
     click.echo(f"  deleted: {deleted}")
 
 
-@bucket_group.command("prefetch", cls=OpentracesCommand)
+@bucket_group.command("prefetch", cls=OpentracesCommand, hidden=True)
 @click.argument("trace_id")
 @click.option(
     "--remote",

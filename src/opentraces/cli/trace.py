@@ -2044,7 +2044,7 @@ def _load_project_state():
 # ---------------------------------------------------------------------------
 
 
-@trace_group.group("teleport", cls=OpentracesGroup)
+@trace_group.group("teleport", cls=OpentracesGroup, hidden=True)
 def teleport_group() -> None:
     """Move a trace and its retained Git evidence between workspaces."""
 
