@@ -745,12 +745,82 @@ def project_per_trace_exports(
     )
 
 
+def _row_status_block(record_envelope: dict[str, Any] | None) -> dict[str, Any]:
+    """Per-trace security/freshness state for a ``traces[]`` row.
+
+    Plan 087 (size-independent bucket reads) — the row carries the same
+    per-trace security facts the O(N) ``trace_records`` scalar block aggregates
+    (``syncable`` / ``privacy_off`` / ``security_stale`` / ``written_at``), so
+    ``bucket status`` can re-aggregate the counts straight from the persisted
+    manifest rows in O(rows-in-memory) instead of re-parsing every TraceRecord
+    envelope. Sourced verbatim from the trace-record OBJECT envelope (the same
+    authoritative source the scalar block reads), so the row count and the
+    scalar count never diverge.
+
+    This block is DELIBERATELY excluded from ``bucket_digest`` (see
+    ``_digest_safe_trace_rows`` in bucket_store) — it is a local read-model
+    accelerator, not sync-protocol material, so adding it does not perturb the
+    cross-machine digest. ``known=False`` when no object envelope was available
+    (the count is then treated as not-yet-known and drives a serve-stale stamp).
+    """
+
+    security = record_envelope.get("security") if isinstance(record_envelope, dict) else None
+    if not isinstance(security, dict):
+        return {
+            "known": False,
+            "syncable": None,
+            "privacy_off": None,
+            "security_stale": None,
+            "written_at": None,
+        }
+    written_at = record_envelope.get("written_at") if isinstance(record_envelope, dict) else None
+    return {
+        "known": True,
+        "syncable": bool(security.get("syncable")),
+        "privacy_off": security.get("privacy_tier") == "off",
+        "security_stale": bool(security.get("stale")),
+        "written_at": str(written_at) if written_at else None,
+    }
+
+
+def _resolve_record_envelope(
+    project_slug: str,
+    trace_id: str,
+    record: TraceRecord | None,
+) -> dict[str, Any] | None:
+    """Best-effort AUTHORITATIVE object-store envelope for a row's status block.
+
+    Plan 087 — every ``traces[]`` row-producing path (full-sweep ``iter_traces_v2``,
+    the orphan reconcile loop, ``upsert_manifest_trace_row``, the ``ctx info``
+    fallback) must derive ``status`` from the SAME source, or two heals of the
+    same trace produce different rows and break manifest idempotency. The
+    canonical source is the trace-record OBJECT envelope (what the O(N) scalar
+    block reads); fall back to a record-derived security state only when the
+    object is not on disk yet. Returns ``None`` when neither is available
+    (status then reports ``known=False`` → drives a serve-stale stamp).
+    """
+
+    try:
+        obj = read_trace_record_object(trace_record_path(project_slug, trace_id))
+        if obj is not None:
+            return obj.envelope
+    except Exception:
+        pass
+    if record is not None:
+        try:
+            return {"security": bucket_security_state(record)}
+        except Exception:
+            pass
+    return None
+
+
 def _per_trace_v2_summary(
     project_slug: str,
     trace_id: str,
     record: TraceRecord | None,
     *,
     assume_envelope_present: bool = False,
+    record_envelope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute the manifest summary block for one per-trace envelope.
 
@@ -765,6 +835,11 @@ def _per_trace_v2_summary(
     context events (read-only) instead of the not-yet-written companion. This
     makes the read-only digest byte-identical to the digest a subsequent
     ``bucket repair`` / ``bucket manifest --heal`` persists.
+
+    Plan 087 — ``record_envelope`` is the trace-record OBJECT envelope (carrying
+    the authoritative ``security`` block + ``written_at``). When provided, the
+    row gains a digest-excluded ``status`` block so ``bucket status`` can read
+    sync/security counts from the manifest rows without an O(N) envelope scan.
     """
 
     trail_path = trace_v1_trail_path(project_slug, trace_id)
@@ -879,17 +954,29 @@ def _per_trace_v2_summary(
             "has_sources": has_sources,
         },
         "remote_sync_eligible": False,
+        # Plan 087 — digest-EXCLUDED local read-model accelerator (stripped in
+        # bucket_store._digest_safe_trace_rows before hashing). NOT in
+        # ``digest_material`` above, so the per-row ``digest`` is also unchanged.
+        "status": _row_status_block(record_envelope),
         "digest": _digest_payload(digest_material),
     }
 
 
 def iter_traces_v2(
     project_slug: str | None = None,
+    *,
+    record_envelopes: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Yield per-trace summary rows from the v2 layout (plan 080 §4).
 
-    Sorted by ``(project_slug, trace_id)``. Used by ``ctx list``, manifest
-    projection, and ``bucket verify``.
+    Sorted by ``(project_slug, trace_id)``. Used by the manifest full sweep.
+
+    Plan 087 — ``record_envelopes`` is an OPTIONAL ``{(project_slug, trace_id):
+    object_envelope}`` map of already-parsed trace-record object envelopes. The
+    full sweep passes the ``iter_trace_record_objects()`` result it ALREADY read
+    so each row's ``status`` block is sourced without a second object-store read
+    (avoids doubling the sweep's per-trace I/O). When a pair is absent (or no map
+    is given), fall back to :func:`_resolve_record_envelope` (one read).
     """
 
     root = traces_v1_root()
@@ -909,7 +996,14 @@ def iter_traces_v2(
             record = TraceRecord.model_validate(raw)
         except (OSError, ValueError, json.JSONDecodeError, ValidationError):
             record = None
-        rows.append(_per_trace_v2_summary(proj_slug, tid, record))
+        envelope: dict[str, Any] | None = None
+        if record_envelopes is not None:
+            envelope = record_envelopes.get((proj_slug, tid))
+        if envelope is None:
+            envelope = _resolve_record_envelope(proj_slug, tid, record)
+        rows.append(
+            _per_trace_v2_summary(proj_slug, tid, record, record_envelope=envelope)
+        )
     rows.sort(key=lambda item: (item["project_slug"], item["trace_id"]))
     return rows
 
@@ -937,7 +1031,12 @@ def trace_v2_summary_by_id(trace_id: str) -> dict[str, Any] | None:
             record = TraceRecord.model_validate(raw)
         except (OSError, ValueError, json.JSONDecodeError, ValidationError):
             record = None
-        return _per_trace_v2_summary(proj_slug, trace_id, record)
+        return _per_trace_v2_summary(
+            proj_slug,
+            trace_id,
+            record,
+            record_envelope=_resolve_record_envelope(proj_slug, trace_id, record),
+        )
     return None
 
 

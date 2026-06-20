@@ -159,6 +159,7 @@ from .bucket_envelope import (
     _per_trace_v2_summary,
     _project_store_bucket_record,
     _read_jsonl_trace_records,
+    _resolve_record_envelope,
     _resolve_trace_record_pointer,
     _trace_ids_for_project,
     _write_per_trace_envelope,
@@ -414,7 +415,13 @@ def bucket_manifest(
 
     # Plan 080 §4 — new ``traces[]`` block + ``events_v1`` index. Sorted by
     # (project_slug, trace_id) for deterministic digests.
-    traces_v2_rows = iter_traces_v2()
+    # Plan 087 — reuse the already-parsed object envelopes (read once at
+    # ``record_objects`` above) so each row's ``status`` block is sourced without
+    # a second per-trace object-store read on this O(N) sweep.
+    _record_envelopes = {
+        (obj.project_slug, obj.trace_id): obj.envelope for obj in record_objects
+    }
+    traces_v2_rows = iter_traces_v2(record_envelopes=_record_envelopes)
 
     # Issue #31 — read-side reconcile. On a restored / cross-machine world the
     # TraceRecord object store can hold traces that have no per-trace v2
@@ -456,6 +463,7 @@ def bucket_manifest(
                     obj.trace_id,
                     obj.record,
                     assume_envelope_present=True,
+                    record_envelope=obj.envelope,
                 )
             )
             _existing_pairs.add(pair)
@@ -473,7 +481,12 @@ def bucket_manifest(
                 record=obj.record,
             )
             traces_v2_rows.append(
-                _per_trace_v2_summary(obj.project_slug, obj.trace_id, obj.record)
+                _per_trace_v2_summary(
+                    obj.project_slug,
+                    obj.trace_id,
+                    obj.record,
+                    record_envelope=obj.envelope,
+                )
             )
             _existing_pairs.add(pair)
         except Exception:
@@ -484,7 +497,12 @@ def bucket_manifest(
                     obj.project_slug, obj.trace_id, obj.record, [], []
                 )
                 traces_v2_rows.append(
-                    _per_trace_v2_summary(obj.project_slug, obj.trace_id, obj.record)
+                    _per_trace_v2_summary(
+                        obj.project_slug,
+                        obj.trace_id,
+                        obj.record,
+                        record_envelope=obj.envelope,
+                    )
                 )
                 _existing_pairs.add(pair)
             except Exception:
@@ -580,8 +598,10 @@ def bucket_manifest(
             "schema_version": manifest["schema_version"],
             "bucket_root": manifest["bucket_root"],
             "security_version": manifest["security_version"],
-            "traces": sorted(
-                traces_v2_rows, key=lambda r: (r["project_slug"], r["trace_id"])
+            "traces": _digest_safe_trace_rows(
+                sorted(
+                    traces_v2_rows, key=lambda r: (r["project_slug"], r["trace_id"])
+                )
             ),
             "events_v1": manifest["events_v1"],
             "trace_records": manifest["trace_records"],
@@ -741,7 +761,16 @@ def upsert_manifest_trace_row(
     is unchanged because both paths derive it from the same envelope.
     """
 
-    row = _per_trace_v2_summary(project_slug, trace_id, record)
+    # Plan 087 — source the row's digest-excluded ``status`` block from the
+    # authoritative trace-record OBJECT envelope (the same source every other
+    # row-producing path uses), so an upsert-maintained row matches a full
+    # sweep and re-heals stay idempotent.
+    row = _per_trace_v2_summary(
+        project_slug,
+        trace_id,
+        record,
+        record_envelope=_resolve_record_envelope(project_slug, trace_id, record),
+    )
 
     manifest_path = bucket_manifest_path()
     with _manifest_upsert_lock():
@@ -791,8 +820,8 @@ def upsert_manifest_trace_row(
                 "schema_version": doc["schema_version"],
                 "bucket_root": doc["bucket_root"],
                 "security_version": doc.get("security_version", SECURITY_VERSION),
-                "traces": sorted(
-                    traces, key=lambda r: (r["project_slug"], r["trace_id"])
+                "traces": _digest_safe_trace_rows(
+                    sorted(traces, key=lambda r: (r["project_slug"], r["trace_id"]))
                 ),
                 "events_v1": doc.get("events_v1", {}),
                 "trace_records": doc.get("trace_records", {}),
@@ -809,6 +838,21 @@ def upsert_manifest_trace_row(
         if existing_view is None or existing_view != _manifest_change_view(doc):
             _atomic_write_json(manifest_path, doc)
     return row
+
+
+def _digest_safe_trace_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip the plan-087 ``status`` accelerator from each ``traces[]`` row.
+
+    The per-row ``status`` block (syncable/privacy_off/security_stale/written_at)
+    is a LOCAL read-model accelerator for ``bucket status`` — it is NOT
+    cross-machine sync-protocol material. Excluding it here keeps
+    ``bucket_digest`` byte-identical to the pre-plan-087 digest (guarded by
+    ``test_cross_machine_bucket_digest_byte_identical``), so a bucket pulled on
+    another machine still reproduces the pushed digest. The row's own ``digest``
+    field is already status-free (``status`` is not in ``digest_material``).
+    """
+
+    return [{k: v for k, v in row.items() if k != "status"} for row in rows]
 
 
 _MACHINE_LOCAL_DIGEST_KEYS = frozenset({"root", "repo_path"})
