@@ -41,6 +41,8 @@ HIDDEN_PLUMBING = [
     "setup auth",
     # Folded into the idempotent `dataset remote create` (create-or-bind).
     "dataset remote add",
+    # Niche query variant (grouped topic capsule); core search is `trace query`.
+    "trace discover",
 ]
 
 CORE_VISIBLE = [

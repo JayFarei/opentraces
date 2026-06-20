@@ -193,7 +193,7 @@ def trace_group() -> None:
     """Search, map, slice, and retrieve retained traces."""
 
 
-@trace_group.command("discover", cls=OpentracesCommand)
+@trace_group.command("discover", cls=OpentracesCommand, hidden=True)  # plan 087 — niche query variant (grouped topic capsule); core search is `trace query`. Callable, off --help.
 @click.argument("topic_terms", nargs=-1, required=True)
 @click.option(
     "--by",
