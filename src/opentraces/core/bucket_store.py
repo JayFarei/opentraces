@@ -360,6 +360,20 @@ def bucket_manifest(
 
         progress = NullProgress()
 
+    # Plan 087 — capture the manifest read-model dirty token BEFORE the O(N)
+    # reconcile reads the envelopes. A full ``write=True`` sweep refreshes the
+    # rows from those envelopes, so it may clear the marker afterward — but only
+    # if no out-of-band writer re-marked DURING the sweep (token-unchanged), so a
+    # concurrent security re-scan is never lost.
+    _dirty_token_at_start: str | None = None
+    if write:
+        try:
+            from .bucket_manifest_state import current_bucket_manifest_dirty_token
+
+            _dirty_token_at_start = current_bucket_manifest_dirty_token()
+        except Exception:
+            _dirty_token_at_start = None
+
     progress.stage("scan_trace_records")
     trace_snapshot = trace_record_snapshot(include_objects=include_objects)
     objects = trace_snapshot.get("objects") or []
@@ -644,6 +658,18 @@ def bucket_manifest(
             manifest
         ):
             _atomic_write_json(manifest_path, manifest)
+        # Plan 087 — the persisted rows now reflect a full envelope reconcile, so
+        # the read-model is fresh. Clear the dirty marker iff no out-of-band
+        # writer re-marked while we scanned (token-safe; a concurrent re-mark
+        # keeps the marker so the next ``bucket status`` still serves stale).
+        try:
+            from .bucket_manifest_state import (
+                clear_bucket_manifest_dirty_if_unchanged,
+            )
+
+            clear_bucket_manifest_dirty_if_unchanged(_dirty_token_at_start)
+        except Exception:
+            pass
     return manifest
 
 
@@ -1008,6 +1034,17 @@ def sync_trace_records_from_local_stores(
             from .trace_search_state import mark_search_snapshot_dirty
 
             mark_search_snapshot_dirty("trace_record_remove")
+        except Exception:
+            pass
+    if written or removed:
+        # Plan 087 — this mirror rewrote/removed object envelopes out of band of
+        # the manifest rows (security re-derive on enabled-tool change, or a
+        # legacy-mirror prune). Flag the manifest read-model stale so
+        # ``bucket status`` serves the cached row counts marked stale until a heal.
+        try:
+            from .bucket_manifest_state import mark_bucket_manifest_dirty
+
+            mark_bucket_manifest_dirty("sync_trace_records_from_local_stores")
         except Exception:
             pass
     return BucketSyncSummary(
