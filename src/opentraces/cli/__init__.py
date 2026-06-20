@@ -2485,6 +2485,13 @@ def _auth_whoami() -> None:
 
 from .installers import setup_group as _setup_group  # noqa: E402
 
+# Import the extracted `setup watcher` sub-group module for its side effect: the
+# `@setup_group.group`/`@...command` decorators register the watcher commands on
+# `setup_group` at CLI load. (Moved out of installers.py in the cli/setup
+# decomposition; installers no longer imports it, so this is the registration
+# trigger.)
+from . import setup_watcher as _setup_watcher  # noqa: E402,F401
+
 
 @_setup_group.command("auth")
 @click.option(
