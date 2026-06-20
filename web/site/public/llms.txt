@@ -2188,7 +2188,7 @@ opentraces dataset review approve my-dataset --all
 
 ```bash
 opentraces dataset remote create my-dataset owner/team-traces --private
-opentraces dataset remote add my-dataset owner/existing-traces
+opentraces dataset remote create my-dataset owner/existing-traces  # idempotent: binds an existing HF dataset too
 opentraces dataset remote list my-dataset --verbose
 opentraces dataset remote visibility my-dataset owner/team-traces --public
 opentraces dataset remote remove my-dataset owner/team-traces

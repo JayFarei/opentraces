@@ -381,8 +381,7 @@ opentraces dataset review <name>
 opentraces dataset review approve <name> <row_id>
 opentraces dataset review reject <name> <row_id>
 opentraces dataset review reset <name> <row_id>
-opentraces dataset remote create <name> <owner/name> --private
-opentraces dataset remote add <name> <owner/name>
+opentraces dataset remote create <name> <owner/name> --private  # idempotent: creates the HF dataset, or binds it if it already exists
 opentraces dataset remote list <name>
 opentraces dataset remote visibility <name> --public
 opentraces dataset publish <name> --check-only
