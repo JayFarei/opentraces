@@ -8,7 +8,7 @@ unlink — deleting a fresh marker and losing a rebuild signal.
 
 from __future__ import annotations
 
-from opentraces.core import trace_search_state as state
+from opentraces.core import dirty_marker as marker_mod
 from opentraces.core.trace_search_state import (
     clear_dirty_marker_if_unchanged,
     current_dirty_token,
@@ -47,7 +47,8 @@ def test_clear_preserves_concurrently_rewritten_marker(monkeypatch) -> None:
     # Simulate the interleaving: between our os.rename grabbing the old marker
     # and the token check, a concurrent writer os.replace-es a fresh marker into
     # the original path. We inject that by re-marking right after the rename.
-    real_rename = state.os.rename
+    # The race-safe rename now lives in the shared dirty_marker primitive.
+    real_rename = marker_mod.os.rename
     fired = {"done": False}
 
     def racing_rename(src, dst):
@@ -57,7 +58,7 @@ def test_clear_preserves_concurrently_rewritten_marker(monkeypatch) -> None:
             # A concurrent dirty mark lands in the now-free original slot.
             mark_search_snapshot_dirty("second", trace_id="t2")
 
-    monkeypatch.setattr(state.os, "rename", racing_rename)
+    monkeypatch.setattr(marker_mod.os, "rename", racing_rename)
 
     clear_dirty_marker_if_unchanged(stale_token)
 
