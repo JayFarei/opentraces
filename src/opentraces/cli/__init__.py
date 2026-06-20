@@ -2492,6 +2492,7 @@ from .installers import setup_group as _setup_group  # noqa: E402
 # trigger.)
 from . import setup_watcher as _setup_watcher  # noqa: E402,F401
 from . import setup_runtime as _setup_runtime  # noqa: E402,F401
+from . import setup_agents as _setup_agents  # noqa: E402,F401
 
 
 @_setup_group.command("auth")
