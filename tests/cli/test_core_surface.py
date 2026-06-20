@@ -39,6 +39,8 @@ HIDDEN_PLUMBING = [
     "workflow verifier-factory",
     # Redundant alias of the canonical `auth login`.
     "setup auth",
+    # Folded into the idempotent `dataset remote create` (create-or-bind).
+    "dataset remote add",
 ]
 
 CORE_VISIBLE = [

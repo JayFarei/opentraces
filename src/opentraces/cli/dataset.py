@@ -229,12 +229,17 @@ def _hf_auth() -> tuple[str | None, str | None]:
     return cfg.hf_token, username
 
 
-@dataset_remote_group.command("add", cls=OpentracesCommand)
+@dataset_remote_group.command("add", cls=OpentracesCommand, hidden=True)
 @click.argument("name")
 @click.argument("repo")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_remote_add(name: str, repo: str, as_json: bool) -> None:
-    """Connect a local dataset to an existing HuggingFace dataset remote."""
+    """Connect a local dataset to an existing HuggingFace dataset remote.
+
+    Plan 087: folded into the idempotent ``dataset remote create`` (which now
+    binds an existing repo as well as creating a new one). Kept hidden + callable
+    as a legacy alias for the bind-only behaviour.
+    """
     token, username = _hf_auth()
     try:
         repo_id = normalize_hf_repo_id(repo, username)
@@ -264,22 +269,37 @@ def dataset_remote_add(name: str, repo: str, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_remote_create(name: str, repo: str, is_private: bool, as_json: bool) -> None:
-    """Create a private-by-default HuggingFace dataset remote and bind it."""
+    """Bind a HuggingFace dataset remote, creating it if it doesn't exist.
+
+    Plan 087 — idempotent create-or-bind (absorbs the former ``add``): creates a
+    private-by-default HF dataset and binds it; if the repo ALREADY exists, binds
+    the existing one (honouring its current visibility) instead of erroring.
+    """
     token, username = _hf_auth()
     try:
         repo_id = normalize_hf_repo_id(repo, username)
         created = _remote_create(repo_id, is_private, token)
-        if not created:
-            raise ValueError(
-                f"{repo_id} already exists on HuggingFace. "
-                f"Run: opentraces dataset remote add {name} {repo_id}"
-            )
-        visibility = "private" if is_private else "public"
-        summary = add_dataset_remote(name, repo_id, visibility=visibility)
+        if created:
+            visibility = "private" if is_private else "public"
+            summary = add_dataset_remote(name, repo_id, visibility=visibility)
+            verb = "created"
+        else:
+            # Already exists -> bind it (the former `add` behaviour), reflecting
+            # the existing repo's visibility rather than the --private flag.
+            info = _remote_probe(repo_id, token)
+            if info is None:
+                raise ValueError(
+                    f"{repo_id} exists on HuggingFace but could not be read. "
+                    "Check your access permissions."
+                )
+            repo_id = info.get("id") or repo_id
+            visibility = "private" if info.get("private") else "public"
+            summary = add_dataset_remote(name, repo_id, visibility=visibility)
+            verb = "connected"
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
-    _emit_remote_payload(summary, as_json=as_json, verb="created")
+    _emit_remote_payload(summary, as_json=as_json, verb=verb)
 
 
 @dataset_remote_group.command("list", cls=OpentracesCommand)

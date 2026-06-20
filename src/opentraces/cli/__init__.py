@@ -2947,7 +2947,7 @@ def _classify_hf_repo_error(exc: Exception, repo_id: str) -> tuple[str, str, str
             f"You don't have write access to the '{owner}' namespace on HuggingFace.",
             (
                 f"Join the '{owner}' org, or pick a different namespace "
-                f"(e.g. your own user) with 'opentraces dataset remote add'."
+                f"(e.g. your own user) with 'opentraces dataset remote create'."
             ),
         )
 

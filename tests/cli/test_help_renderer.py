@@ -185,7 +185,8 @@ def test_legacy_verbs_are_not_advertised():
     ("args", "expected"),
     [
         (["dataset", "--help"], ["new", "list", "publish", "review"]),
-        (["dataset", "remote", "--help"], ["add", "Connect a local dataset", "create"]),
+        # Plan 087: `add` folded into the idempotent `create` (hidden alias).
+        (["dataset", "remote", "--help"], ["create", "list", "remove"]),
         (["dataset", "schedule", "--help"], ["add", "Add a local schedule", "pause"]),
         (["workflow", "--help"], ["create", "list", "remove"]),
     ],

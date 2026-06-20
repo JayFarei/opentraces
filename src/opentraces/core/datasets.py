@@ -1156,7 +1156,8 @@ def publish_dataset(
     if not remote_name:
         raise ValueError(
             "dataset has no active remote; run `opentraces dataset remote create "
-            f"{name} <owner/name>` or `opentraces dataset remote add {name} <owner/name>`"
+            f"{name} <owner/name>` (creates the HF dataset, or binds it if it "
+            "already exists)"
         )
     if remote_name not in dataset.manifest.remotes:
         raise ValueError(f"remote not found: {remote_name}")
