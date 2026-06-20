@@ -96,10 +96,16 @@ def _collect_event_log_patch_ids(
     When ``since`` is provided, only Trace Patches whose ``event_time`` is
     on/after the cutoff are included. Order preserves event_sequence so
     the most recent patches appear last.
-    """
-    from ..core.trails import read_events
 
-    events = read_events(repo)
+    Plan 087 — scoped to ``trace_patch_created`` blobs via the raw-bytes
+    prefilter, so enumerating every patch id parses a tiny fraction of a large
+    event log (the ~500k ``git_anchor_search_completed`` + context events are
+    never JSON-parsed) instead of the whole history. ``read_events_scoped``
+    returns event_sequence-sorted, so ordering is unchanged.
+    """
+    from ..core.trails import read_events_scoped
+
+    events = read_events_scoped(repo, event_types={"trace_patch_created"})
     out: list[str] = []
     seen: set[str] = set()
     for event in events:
@@ -134,6 +140,14 @@ def _emit_batch_track(
     ``sync_patch`` so a batch of 100+ patches doesn't pay the read cost
     100+ times.
 
+    Plan 087 — the single read is SCOPED to exactly the event types
+    ``sync_patch`` consults (``trace_patch_created`` + ``git_anchor_created`` +
+    the ``patch_survival_cached`` survival cache); on a large log this skips
+    JSON-parsing the ~500k commit-keyed anchor-search events and all context
+    events, bounding the read to a tiny fraction of the history. The threaded
+    list is a strict superset of every event ``sync_patch`` reads, so survival
+    output is byte-identical to a full ``read_events`` thread.
+
     Cluster F D1: each row also carries ``trace_id`` (looked up from the
     ``trace_patch_created`` event payload) so JSONL consumers can group
     rows by trace without a sidecar projection. Cluster F D2/D3: a
@@ -141,10 +155,19 @@ def _emit_batch_track(
     of patches on the same file pays one ``git log --diff-filter=D``
     lookup, not N.
     """
-    from ..core.trails import read_events, sync_patch
+    from ..core.trails import read_events_scoped, sync_patch
 
+    # The exact, complete set sync_patch + build_survival_cache_index read from
+    # the threaded events list (verified against the sync.py call graph).
+    _patch_sync_event_types = {
+        "trace_patch_created",
+        "git_anchor_created",
+        "patch_survival_cached",
+    }
     try:
-        cached_events = read_events(repo)
+        cached_events = read_events_scoped(
+            repo, event_types=_patch_sync_event_types
+        )
     except Exception:
         cached_events = None
 
