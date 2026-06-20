@@ -222,7 +222,7 @@ def _run_setup_wizard() -> None:
         if _wizard_confirm(
             "log into HuggingFace now?",
             default=True,
-            hint="needed for dataset remotes; skip and run 'opentraces setup auth' later",
+            hint="needed for dataset remotes; skip and run 'opentraces auth login' later",
         ):
             try:
                 from ..core.config import save_credentials, CREDENTIALS_PATH

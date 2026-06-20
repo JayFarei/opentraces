@@ -67,7 +67,7 @@ GLOBAL_JSON_ONLY = {
     "init",
     "remove",
     "security sanitize",
-    "setup auth",
+    # setup auth: hidden (redundant with `auth login`) -> off the PUBLIC sweep.
     "setup claude-code",
     "setup codex-cli",
     "setup git",

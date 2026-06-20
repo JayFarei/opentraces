@@ -2506,7 +2506,7 @@ from . import setup_review_llm as _setup_review_llm  # noqa: E402,F401
 from . import doctor_cli as _doctor_cli  # noqa: E402,F401
 
 
-@_setup_group.command("auth")
+@_setup_group.command("auth", hidden=True)  # plan 087 — redundant with `auth login` (the canonical home); callable, off --help
 @click.option(
     "--token",
     is_flag=True,

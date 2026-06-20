@@ -37,6 +37,8 @@ HIDDEN_PLUMBING = [
     "workflow optimize",
     "workflow skill-intelligence",
     "workflow verifier-factory",
+    # Redundant alias of the canonical `auth login`.
+    "setup auth",
 ]
 
 CORE_VISIBLE = [
