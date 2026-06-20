@@ -42,8 +42,7 @@ def setup_group(ctx: click.Context) -> None:
                     powering `opentraces trail blame`.
       watcher       background attribution daemon (launchd/systemd) that
                     walks enlisted projects and matures Trace Trails.
-                    Has its own subcommands: install/start/stop/status/tick.
-      auth          HuggingFace login for private bucket sync and dataset remotes.
+                    Has its own subcommands: install/start/stop/status.
       bucket        Configure the private bucket as remote-by-default or local-only.
       trufflehog    optional deep secret detector. Findings redact in place
                     only when the tool is explicitly enabled.
@@ -57,7 +56,8 @@ def setup_group(ctx: click.Context) -> None:
                     git refs (``--purge``).
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
-    integration, or call a subcommand to target one directly.
+    integration, or call a subcommand to target one directly. HuggingFace login
+    lives at ``opentraces auth login``.
     """
     if ctx.invoked_subcommand is not None:
         return

@@ -235,7 +235,7 @@ opentraces dataset publish bug-fixes --check-only
 - `setup capture-otlp` patches `~/.claude/settings.json` so Claude Code emits OpenTelemetry, enabling the higher-fidelity Context Tree capture source. Control the receiver with `capture-otlp start/stop/restart/status/flush`.
 - `setup skill` installs the shared agent skill into Claude Code, Codex CLI, and Pi harness skill directories.
 - In Pi, the package exposes `/ot-capture-status`, `/ot-setup`, `/ot-search <query>`, `/ot-trace <trace-id>`, `/ot-standup`, `/ot-capsule [trace-id]`, and `/ot-dataset`. Use `/ot-search` to find candidates in the local/private bucket, then `/ot-trace` to load one trace's tool evidence.
-- `setup auth` logs in to HuggingFace for dataset and bucket remotes.
+- `auth login` logs in to HuggingFace for dataset and bucket remotes.
 - `setup upgrade` upgrades the whole stack: it upgrades the CLI via the detected install method (pipx/brew/pip; a source/editable install skips the package upgrade and refreshes glue + skill), re-renders all installed integration glue (watcher shim, git post-commit hook, claude-code & codex-cli hooks, OTLP settings + autostart) re-stamped to the new version, and refreshes the project skill file. Use `setup upgrade --integrations-only` to re-render already-installed glue to the current CLI version without a CLI bump.
 
 ## Trace

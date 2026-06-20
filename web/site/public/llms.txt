@@ -544,7 +544,7 @@ opentraces setup git
 opentraces setup watcher install
 opentraces setup watcher status
 opentraces setup bucket
-opentraces setup auth
+opentraces auth login
 opentraces setup capture-otlp
 opentraces setup trufflehog
 opentraces setup privacy-filter

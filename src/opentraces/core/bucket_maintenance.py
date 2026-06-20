@@ -4,11 +4,10 @@ Extracted from the ``bucket_store`` god module (plan: god-module decomposition).
 These are the operator-facing maintenance operations over the private bucket —
 they read and rewrite bucket content from the canonical event log + blob store
 (``bucket repair`` / ``verify`` / ``prune`` / ``prefetch``, the two ``rebuild_*``
-helpers, and the one-shot ``migrate_bucket_to_v2``). They form a *leaf* of the
-bucket layer: the dependency is one-directional (``bucket_maintenance`` ->
-``bucket_store``); ``bucket_store`` never imports this module (only docstring
-mentions remain), so there is no import cycle. The intra-cluster call
-``migrate_bucket_to_v2`` -> ``bucket_repair`` is intra-module.
+helpers, and the one-shot ``migrate_bucket_to_v2``). They form a leaf of the
+bucket layer: storage primitives come from their true owner modules, while the
+few manifest/facade helpers still come from ``bucket_store``. The intra-cluster
+call ``migrate_bucket_to_v2`` -> ``bucket_repair`` is intra-module.
 """
 
 from __future__ import annotations
@@ -22,9 +21,7 @@ from urllib.parse import unquote
 
 
 from . import paths
-# Cluster helpers are imported from their TRUE source modules (not re-routed
-# through the bucket_store god module) so the dependency points down the layer,
-# not sideways through the hub.
+from ._bucket_io import _atomic_write_bytes
 from .bucket_context_store import (
     _blob_content_matches_path,
     _hash_for_blob_path,
@@ -33,35 +30,37 @@ from .bucket_context_store import (
     _layer_id_refs_from_events_mirror,
     project_context_tree_to_bucket,
 )
-from .bucket_events import sync_events_mirror
-from .bucket_layout import (
-    blobs_v1_context_path,
-    blobs_v1_root,
-    context_layer_blob_path,
-)
-from .bucket_store import (
-    BUCKET_EVENTS_INDEX_SCHEMA,
-    BUCKET_MANIFEST_SCHEMA,
-    BUCKET_PER_TRACE_SCHEMA,
-    BucketLayoutError,
-    _atomic_write_bytes,
-    _copy_bucket_tree,
+from .bucket_envelope import (
     _events_for_export_loop,
     _is_legacy_read_in_place_mirror,
     _iter_opted_in_projects,
-    _load_manifest,
     _trace_ids_for_project,
-    bucket_manifest,
-    bucket_manifest_path,
-    events_v1_index_path,
-    iter_trace_record_objects,
     project_per_trace_exports,
+)
+from .bucket_events import BUCKET_EVENTS_INDEX_SCHEMA, sync_events_mirror
+from .bucket_layout import (
+    blobs_v1_context_path,
+    blobs_v1_root,
+    bucket_manifest_path,
+    context_layer_blob_path,
+    events_v1_index_path,
     trace_v1_context_path,
     trace_v1_json_path,
     trace_v1_sources_path,
     trace_v1_trail_path,
     traces_v1_root,
 )
+from .bucket_models import (
+    BUCKET_MANIFEST_SCHEMA,
+    BUCKET_PER_TRACE_SCHEMA,
+    BucketLayoutError,
+)
+from .bucket_store import (
+    _copy_bucket_tree,
+    _load_manifest,
+    bucket_manifest,
+)
+from .bucket_trace_records import iter_trace_record_objects
 
 
 def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:

@@ -133,7 +133,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `completions install` | Developer installs shell completions for bash/zsh/fish so `ot <TAB>` works | enable-shell-completions (2/3) | unowned | human |
 | `completions uninstall` | Developer removes installed completions after uninstalling or switching shells | enable-shell-completions (3/3) | unowned | human |
 | `setup` (bare) | Developer walks an interactive wizard that covers every integration after init | onboard-integrations (1/1) | unowned | human |
-| `setup auth` | Alias for `auth login` reachable from the wizard | connect-hf-identity (1/3) — alias | unowned | human |
+| `setup auth` (hidden) | Backwards-compatible alias for the canonical `auth login` command | connect-hf-identity (1/3) — alias | unowned | human |
 | `setup bucket` | Developer configures whether captured traces sync to a private HF remote or stay local-only | configure-bucket (1/1) | unowned | both |
 | `setup claude-code` | Developer installs the four Claude Code hooks (PreToolUse / PostToolUse / Stop / PostCompact) so sessions are captured | connect-agent-runtime (1/2) | `capture-safety-tracking-mode` | both |
 | `setup codex-cli` | Developer installs Codex CLI capture hooks so Codex sessions enter the same trace/bucket substrates as Claude Code | configure-codex-runtime (1/1) | `codex-full-parity-latest` | both |
@@ -273,7 +273,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `dataset publish` | Curator ships approved rows + contract files to the active HF remote after review gates pass | build-publishable-dataset (6/6) ★ | `cli-publish-happy-path`, `tier1-cold-publish` | both |
 | `dataset remove` | Curator tears down a local dataset after confirming, reclaiming state and removing stale config | decommission-dataset (1/1) | unowned | human |
 | `dataset remote create` | Curator provisions a new private HF dataset repo + binds it in one step so publish has a destination | bind-hf-remote (1/3) | `cli-publish-happy-path`, `tier1-cold-publish` | both |
-| `dataset remote add` | Curator binds an already-existing HF dataset repo to the local dataset manifest | bind-hf-remote (1/3) | unowned | both |
+| `dataset remote add` (hidden) | Backwards-compatible bind-only alias; canonical create-or-bind lives at `dataset remote create` | bind-hf-remote (1/3) — alias | unowned | both |
 | `dataset remote list` | Curator inspects which HF remotes are bound to a given dataset | bind-hf-remote (2/3) | unowned | both |
 | `dataset remote remove` | Curator disconnects (and optionally deletes) a remote binding when decommissioning or rotating | bind-hf-remote (3/3) | unowned | human |
 | `dataset remote visibility` | Curator flips a bound HF dataset between private + public so community access can be opened after internal review | manage-hf-visibility (1/1) | unowned | human |
@@ -549,8 +549,8 @@ this section.
    `setup claude-code` (capture hooks) and `setup skill` (skill
    registry). Both are entry points into the same trajectory; pick
    either based on what the developer is wiring first.
-4. **`setup auth` is documented as an alias** of `auth login`. No
-   separate trajectory.
+4. **`setup auth` is a hidden compatibility alias** of `auth login`. No
+   separate trajectory or public ownership journey.
 5. **`backfill` and `git-backfill` are both in the same
    `attribution-backfill` trajectory.** `backfill` writes the per-line
    attribution cache (commit→file:line); `git-backfill` writes

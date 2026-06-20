@@ -5,12 +5,15 @@ content-addressed trace evidence, optional raw source artifacts, portable
 Trace Trail event exports, and rebuildable projections; versioned datasets
 stay outside the bucket as HF-shaped repositories.
 
-This module is the PUBLIC FACADE. The implementation is split across three
+This module is the PUBLIC FACADE. The implementation is split across focused
 sibling modules to keep each cluster cohesive:
 
   _bucket_io.py            — Pure I/O utilities (atomic writes, gzip, digests)
   bucket_events.py         — Trail/events-mirror cluster (plan 080 §4)
   bucket_context_store.py  — Context Tree bucket projection (plan 079/080)
+  bucket_trace_records.py  — TraceRecord object store and legacy JSONL bridge
+  bucket_raw_sources.py    — Raw-source artifact links and snapshots
+  bucket_envelope.py       — Per-trace envelope projection and summary rows
 
 Every symbol that existed here before the split is re-exported from this
 module so all ~91 existing call sites remain importable from
