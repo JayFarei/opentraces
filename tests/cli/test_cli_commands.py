@@ -190,45 +190,33 @@ class TestMachineMode:
         """Legacy env var remains harmless while bare invocation prints help."""
         monkeypatch.setenv("OPENTRACES_NO_TUI", "1")
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
-        launched = []
-        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
         runner = CliRunner()
         result = runner.invoke(main, [])
         assert result.exit_code == 0
-        assert len(launched) == 0, "TUI should not launch when OPENTRACES_NO_TUI is set"
         assert "opentraces" in result.output.lower()
 
     def test_non_tty_stdout_prints_help(self, monkeypatch):
-        """Bare invocation on non-TTY stdout should print help, not launch TUI."""
+        """Bare invocation on non-TTY stdout should print help."""
         monkeypatch.delenv("OPENTRACES_NO_TUI", raising=False)
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: False)
-        launched = []
-        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
         runner = CliRunner()
         result = runner.invoke(main, [])
         assert result.exit_code == 0
-        assert len(launched) == 0, "TUI should not launch on non-TTY stdout"
 
     def test_no_tui_env_var_empty_string_still_suppresses(self, monkeypatch):
         """Any non-empty legacy env var value still leaves help-mode behavior."""
         monkeypatch.setenv("OPENTRACES_NO_TUI", "true")
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
-        launched = []
-        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
         runner = CliRunner()
         result = runner.invoke(main, [])
         assert result.exit_code == 0
-        assert len(launched) == 0
 
     def test_interactive_bare_invocation_prints_help(self, monkeypatch):
-        """Interactive bare invocation no longer launches the legacy TUI."""
+        """Interactive bare invocation prints help (the legacy TUI is removed)."""
         monkeypatch.delenv("OPENTRACES_NO_TUI", raising=False)
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
-        launched = []
-        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
         result = CliRunner().invoke(main, [])
         assert result.exit_code == 0
-        assert len(launched) == 0
         assert "opentraces" in result.output.lower()
 
 

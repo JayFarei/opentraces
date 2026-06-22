@@ -145,3 +145,96 @@ def test_prune_old_versions(tmp_path):
         "sem-0.3.3",
         "sem-0.3.4",
     ]
+
+
+# --- detected version + platform support ----------------------------------
+
+def test_install_reports_detected_version_not_pinned(tmp_path, monkeypatch):
+    """install() records the version the binary ACTUALLY reports, not the
+    pinned manifest constant — so a stale/bogus override surfaces honestly."""
+    fake = tmp_path / "sem"
+    fake.write_text("#!/bin/sh\necho 'sem 9.9.9'\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("OPENTRACES_ENTITY_BIN", str(fake))
+    result = _inst.install(dest_dir=tmp_path / "dest")
+    assert result.version == "9.9.9"
+    assert result.version != ENTITY_BINARY_VERSION
+
+
+def test_is_platform_supported(monkeypatch):
+    monkeypatch.setattr(_inst, "current_platform", lambda: "linux-x86_64")
+    assert _inst.is_platform_supported() is True
+    # a uname that normalizes to a key with no manifest source (Intel macOS)
+    monkeypatch.setattr(_inst, "current_platform", lambda: "darwin-x86_64")
+    assert _inst.is_platform_supported() is False
+
+    def _raise():
+        raise _inst.InstallError("unsupported")
+
+    monkeypatch.setattr(_inst, "current_platform", _raise)
+    assert _inst.is_platform_supported() is False
+
+
+# --- ensure_installed (auto-provision) ------------------------------------
+
+def test_ensure_installed_env_override(tmp_path, monkeypatch):
+    fake = tmp_path / "sem"
+    fake.write_text("#!/bin/sh\necho 'sem 0.3.19'\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("OPENTRACES_ENTITY_BIN", str(fake))
+    res = _inst.ensure_installed(best_effort=True)
+    assert res is not None
+    assert res.source == "env-override"
+
+
+def test_ensure_installed_unsupported_platform_returns_none(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENTRACES_ENTITY_BIN", raising=False)
+    monkeypatch.setattr(_inst, "_BIN_DIR", tmp_path / "bin")
+    monkeypatch.setattr(_inst, "_PROVISION_MARKER", tmp_path / "bin" / ".mark")
+    monkeypatch.setattr(_inst, "is_platform_supported", lambda: False)
+    # never raises, just degrades to None (file-level attribution stands)
+    assert _inst.ensure_installed(best_effort=True) is None
+
+
+def test_ensure_installed_best_effort_suppresses_retry(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENTRACES_ENTITY_BIN", raising=False)
+    bindir = tmp_path / "bin"
+    marker = bindir / ".mark"
+    monkeypatch.setattr(_inst, "_BIN_DIR", bindir)
+    monkeypatch.setattr(_inst, "_PROVISION_MARKER", marker)
+    monkeypatch.setattr(_inst, "is_platform_supported", lambda: True)
+
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise _inst.InstallError("download failed")
+
+    monkeypatch.setattr(_inst, "install", boom)
+
+    # first attempt: tries, fails, drops the marker, returns None
+    assert _inst.ensure_installed(best_effort=True) is None
+    assert calls["n"] == 1
+    assert marker.exists()
+
+    # second attempt: suppressed by the marker (no re-download storm)
+    assert _inst.ensure_installed(best_effort=True) is None
+    assert calls["n"] == 1
+
+    # retry_failed bypasses the marker (e.g. on 'setup upgrade')
+    assert _inst.ensure_installed(best_effort=True, retry_failed=True) is None
+    assert calls["n"] == 2
+
+
+def test_ensure_installed_non_best_effort_raises(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENTRACES_ENTITY_BIN", raising=False)
+    monkeypatch.setattr(_inst, "_BIN_DIR", tmp_path / "bin")
+    monkeypatch.setattr(_inst, "_PROVISION_MARKER", tmp_path / "bin" / ".mark")
+    monkeypatch.setattr(_inst, "is_platform_supported", lambda: True)
+
+    def boom(*a, **k):
+        raise _inst.InstallError("download failed")
+
+    monkeypatch.setattr(_inst, "install", boom)
+    with pytest.raises(_inst.InstallError):
+        _inst.ensure_installed(best_effort=False)

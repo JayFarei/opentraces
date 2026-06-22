@@ -166,10 +166,10 @@ def _manifest_path() -> Path:
 def _forbid_all_scanners(monkeypatch) -> None:
     """Make every O(N) scan / write entry point hard-fail.
 
-    Covers BOTH module bindings of ``bucket_manifest`` (bucket_store's, used by
-    ``fake_remote_status``; bucket_remote's, used by ``_hf_status``) plus the
-    live ``bucket_security_overview`` scan. If the gate path touches any of
-    them, the test fails loudly.
+    Covers EVERY module binding of ``bucket_manifest`` (bucket_fake_remote's,
+    used by ``fake_remote_status``; bucket_remote's, used by ``_hf_status``;
+    bucket_store's, the shared origin) plus the live ``bucket_security_overview``
+    scan. If the gate path touches any of them, the test fails loudly.
     """
 
     def _fail(*args, **kwargs):  # pragma: no cover - must never be called
@@ -177,6 +177,7 @@ def _forbid_all_scanners(monkeypatch) -> None:
 
     monkeypatch.setattr("opentraces.core.bucket_store.bucket_manifest", _fail)
     monkeypatch.setattr("opentraces.core.bucket_remote.bucket_manifest", _fail)
+    monkeypatch.setattr("opentraces.core.bucket_fake_remote.bucket_manifest", _fail)
     monkeypatch.setattr(
         "opentraces.core.bucket_security.bucket_security_overview", _fail
     )
@@ -254,6 +255,13 @@ def test_remote_status_configured_branches_gate_no_scan_no_write(
     )
     monkeypatch.setattr(
         "opentraces.core.bucket_remote.bucket_manifest", _readonly_manifest
+    )
+    # fake_remote_status now lives in bucket_fake_remote with its own
+    # module-level ``bucket_manifest`` binding (god-module decomposition), so the
+    # stub must be applied there too — otherwise the configured-fake branch calls
+    # the real ``bucket_manifest(write=True)`` and writes manifest.json.
+    monkeypatch.setattr(
+        "opentraces.core.bucket_fake_remote.bucket_manifest", _readonly_manifest
     )
 
     def _assert_unknown_no_write(payload) -> None:

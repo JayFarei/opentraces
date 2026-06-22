@@ -40,9 +40,13 @@ def test_introspect_commands_follow_click_tree():
     payload = json.loads(result.output)
     commands = payload["commands"]
 
-    for root in ("bucket", "security", "ctx", "capture-otlp", "workflow"):
+    # Core groups stay visible (capture-otlp is now hidden under the plan-087
+    # core-surface simplification, but still registered + callable).
+    for root in ("bucket", "security", "ctx", "workflow"):
         assert root in commands
         assert commands[root]["hidden"] is False
+    assert commands["capture-otlp"]["hidden"] is True
+    assert "status" in commands["capture-otlp"]["children"]  # still callable
 
     assert "index" in commands["trace"]["children"]
     assert "teleport" in commands["trace"]["children"]

@@ -175,7 +175,19 @@ class SkillInstaller:
             h: _harness_status(HARNESS_DIRS[h])
             for h in HARNESS_DIRS
         }
-        drift = installed and inst_ver != __version__
+        # Emit drift as a reason LIST (same shape as every other installer's
+        # status, so doctor's soft/hard drift classifier treats the skill
+        # uniformly): no stamp -> "version-missing" (benign), stamped-but-stale
+        # -> "version-drift" (a real version mismatch). The skill's *hard*
+        # signal is ``broken_harnesses`` (a harness present but not canonical).
+        if not installed:
+            drift: list[str] = []
+        elif inst_ver is None:
+            drift = ["version-missing"]
+        elif inst_ver != __version__:
+            drift = ["version-drift"]
+        else:
+            drift = []
         broken = [
             h for h, s in harness_states.items()
             if s.get("present") and not s.get("canonical")

@@ -110,3 +110,33 @@ def test_setup_skill_remove_single_harness_preserves_canonical(
     assert canonical.exists()
     assert claude_link.is_symlink()
     assert not codex_link.exists()
+
+
+def test_skill_status_drift_is_reason_list(tmp_path: Path, monkeypatch) -> None:
+    """Skill drift is a reason LIST (version-missing / version-drift), the same
+    shape every other installer emits — so doctor's soft/hard drift classifier
+    treats the skill uniformly. Regression: the skill emitted a coarse bool,
+    which masked version-drift as 'soft' (exit 0) while other installers'
+    version-drift stayed hard (exit 3)."""
+    from opentraces import __version__
+    from opentraces.capture.skill import install as skill_install
+
+    home = tmp_path / "home"
+    _redirect_skill_paths(monkeypatch, home)
+    canonical = skill_install.CANONICAL
+    canonical.mkdir(parents=True, exist_ok=True)
+    (canonical / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    installer = skill_install.SkillInstaller()
+
+    # present but unstamped -> version-missing (benign)
+    assert installer.status()["drift"] == ["version-missing"]
+
+    # stamped at an older version -> version-drift (a real mismatch)
+    (canonical / skill_install.VERSION_FILE).write_text("0.0.1\n", encoding="utf-8")
+    assert installer.status()["drift"] == ["version-drift"]
+
+    # stamped at the current version -> no drift
+    (canonical / skill_install.VERSION_FILE).write_text(
+        __version__ + "\n", encoding="utf-8"
+    )
+    assert installer.status()["drift"] == []

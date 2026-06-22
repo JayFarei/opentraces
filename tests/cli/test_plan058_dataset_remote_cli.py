@@ -82,6 +82,37 @@ def test_dataset_remote_lifecycle_updates_dataset_manifest(monkeypatch):
     assert set(load_dataset("remote-ready").manifest.remotes) == {"me/new"}
 
 
+def test_dataset_remote_create_is_idempotent_create_or_bind(monkeypatch):
+    """Plan 087 — `create` absorbs `add`: when the HF repo ALREADY exists, it
+    binds the existing one (honouring its visibility) instead of erroring."""
+    runner = CliRunner()
+    runner.invoke(
+        dataset_group,
+        ["new", "bindable", "--workflow", "curator", "--workflow-digest", "sha256:w"],
+    )
+    # The repo already exists: create returns False, probe reveals it is public.
+    monkeypatch.setattr(
+        "opentraces.cli.dataset._remote_create",
+        lambda repo_id, private, token: False,
+    )
+    monkeypatch.setattr(
+        "opentraces.cli.dataset._remote_probe",
+        lambda repo_id, token: {"id": repo_id, "private": False},
+    )
+
+    made = runner.invoke(
+        dataset_group,
+        ["remote", "create", "bindable", "me/already-there", "--json"],
+    )
+    assert made.exit_code == 0, made.output
+    payload = json.loads(made.output)
+    assert payload["remote"]["name"] == "me/already-there"
+    # Bound with the EXISTING repo's visibility (public), not the --private default.
+    manifest = load_dataset("bindable").manifest
+    assert manifest.remotes["me/already-there"].visibility == "public"
+    assert manifest.active_remote == "me/already-there"
+
+
 def test_dataset_review_commands_update_publication_state_without_row_mutation():
     runner = CliRunner()
     runner.invoke(

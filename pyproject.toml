@@ -20,8 +20,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-web = ["flask>=3.0"]
-tui = ["textual>=0.50.0"]
 import = ["datasets>=2.16.0"]
 # LLM polish via the Anthropic API. Most users won't need this — the
 # `claude` and `codex` CLIs (with subscription auth) are preferred and

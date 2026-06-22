@@ -14,7 +14,7 @@ publishes reviewed dataset rows to HuggingFace remotes.
 
 ## Current Command Model
 
-- Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
+- Global setup: `opentraces setup`, `opentraces auth login`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace skills`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
 - Trace Intelligence: `opentraces trace map|get --waste`, `opentraces trace map|get --run-intel`, `opentraces trace compare`
@@ -38,7 +38,7 @@ debugging but are hidden from `--help` after the CLI spine simplification.
 
 ```bash
 opentraces setup
-opentraces setup auth
+opentraces auth login
 opentraces setup bucket          # configure remote-by-default private bucket sync
 opentraces setup codex-cli       # install terminal Codex CLI hooks in ~/.codex/hooks.json
 opentraces setup pi              # check/install the Pi package entry
@@ -381,8 +381,7 @@ opentraces dataset review <name>
 opentraces dataset review approve <name> <row_id>
 opentraces dataset review reject <name> <row_id>
 opentraces dataset review reset <name> <row_id>
-opentraces dataset remote create <name> <owner/name> --private
-opentraces dataset remote add <name> <owner/name>
+opentraces dataset remote create <name> <owner/name> --private  # idempotent: creates the HF dataset, or binds it if it already exists
 opentraces dataset remote list <name>
 opentraces dataset remote visibility <name> --public
 opentraces dataset publish <name> --check-only
@@ -468,7 +467,7 @@ opentraces dataset security <name> --json
 | Problem | Action |
 |---|---|
 | Not initialized | Run `opentraces init` |
-| Auth missing | Run `opentraces setup auth` or `opentraces auth login` |
+| Auth missing | Run `opentraces auth login` |
 | No traces visible | Check `opentraces setup claude-code` / `setup codex-cli`; for Pi run `/ot-capture-status` or `opentraces setup pi --dry-run --json` and confirm capture is enabled (`tracking-mode global` and the repo not `excluded`, or an explicit `opentraces init --agent pi`); then `opentraces status` |
 | Trace Trail event log invalid | Run `opentraces doctor`; `opentraces trail rebuild` re-derives advisory projections |
 | Bucket not syncing | Run `opentraces setup bucket` to configure a remote, then `opentraces bucket remote status` |

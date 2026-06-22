@@ -82,6 +82,38 @@ def _run(repo: Path, args: list[str]):
     return CliRunner().invoke(main, args + ["--project", str(repo)])
 
 
+def test_plan087_scoped_batch_read_is_faithful_to_full_read(tmp_path: Path) -> None:
+    """Plan 087 — ``trail track --all`` now threads a SCOPED event read into
+    ``sync_patch`` (only the patch-sync event types) instead of a full log read,
+    so a large log's ~500k anchor-search + context events are never parsed. This
+    is only sound if the scoped read returns EXACTLY the events a full read would
+    of those types, in event_sequence order — proved here end to end.
+    """
+    from opentraces.core.trails import read_events, read_events_scoped
+
+    _init_repo(tmp_path)
+    _seed_patches(tmp_path, 6, anchored_count=4)
+
+    # Run the batch once so sync_patch writes patch_survival_cached events (the
+    # third scoped type) into the log.
+    res = _run(tmp_path, ["trail", "track", "--all", "--json"])
+    assert res.exit_code == 0, res.output
+
+    types = {"trace_patch_created", "git_anchor_created", "patch_survival_cached"}
+    scoped_events = read_events_scoped(tmp_path, event_types=types)
+    full = [
+        (e.event_type, e.event_sequence)
+        for e in read_events(tmp_path)
+        if e.event_type in types
+    ]
+    scoped = [(e.event_type, e.event_sequence) for e in scoped_events]
+    # Load-bearing: the scoped thread is byte-for-byte the events of these types
+    # a full read would surface, in the same order -> identical survival output.
+    assert scoped == full, "scoped read diverged from the filtered full read"
+    # And the scope is type-correct (never admits an out-of-scope event type).
+    assert {e.event_type for e in scoped_events} <= types
+
+
 def test_track_since_returns_jsonl_one_row_per_patch(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _seed_patches(tmp_path, 5)

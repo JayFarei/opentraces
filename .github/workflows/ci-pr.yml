@@ -4,8 +4,8 @@
 # REPL, user-smoke, or wall-clock budget assertions. Integration/e2e coverage is
 # still on PRs, but sharded by file bucket. Timing-sensitive assertions run
 # serially to avoid xdist/runner contention false reds. The `otbox-slice` job
-# carries continue-on-error until 2026-06-23 at the latest (14-day grace,
-# tracked in the run log).
+# (thin vertical slice + catalogue lint + assertion-registry + jtbd SSoT drift
+# gate) is hard-required through the `unit` aggregator.
 name: ci-pr
 
 on:
@@ -131,6 +131,7 @@ jobs:
     needs:
       - fast-premerge
       - timing-sensitive
+      - otbox-slice
     if: always()
     steps:
       - name: Require fast pre-merge lane
@@ -143,12 +144,16 @@ jobs:
             echo "timing-sensitive result: ${{ needs['timing-sensitive'].result }}"
             exit 1
           fi
+          if [ "${{ needs['otbox-slice'].result }}" != "success" ]; then
+            echo "otbox-slice result: ${{ needs['otbox-slice'].result }}"
+            exit 1
+          fi
 
   otbox-slice:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Phase 0 grace: must become a hard-required check by 2026-06-23 (run log tracks this).
-    continue-on-error: true
+    # Hard-required: the `unit` aggregator gates on this job's result (the
+    # Phase-0 continue-on-error grace ended once the slice + SSoT gate went green).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -166,9 +171,10 @@ jobs:
           git config --global user.email "otbox-ci@opentraces.local"
           git config --global user.name "otbox-ci"
           git config --global init.defaultBranch main
-      - name: Catalogue lint + assertion-registry contract
+      - name: Catalogue lint + assertion-registry + SSoT drift gate
         run: |
           python -m pytest tests/otbox/test_catalogue_lint.py \
-            tests/otbox/test_journey_assertions.py -q
+            tests/otbox/test_journey_assertions.py \
+            tests/otbox/test_jtbd_ssot.py -q
       - name: otbox vertical slice
         run: make otbox-slice

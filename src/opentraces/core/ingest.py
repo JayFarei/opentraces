@@ -237,6 +237,374 @@ def _has_grown(jsonl_path: Path, observed_size: int,
 
 
 # --------------------------------------------------------------------------- #
+# Ingest stage helpers
+#
+# Each of these owns ONE best-effort concern lifted out of ``_ingest_locked``
+# so a failure is attributable to a single named call rather than to one of a
+# stack of look-alike try/except blocks. They are deliberately side-effecting
+# (they mutate ``final_record`` / write substrates in place) and never raise:
+# the substrates are additive projections that must not make normal inbox
+# capture fragile. The one exception is the canonical trace-record write inside
+# ``write_trace_to_bucket``, which is load-bearing and intentionally propagates.
+# --------------------------------------------------------------------------- #
+
+def _emit_trail_events(
+    project_dir: Path,
+    final_record,
+    trace_id: str,
+    *,
+    reconcile_watcher: bool,
+    trace_record_only: bool,
+) -> None:
+    """Emit the local Trail event-log projection for this record.
+
+    Trace Trails Phase 2: hook metadata is parsed before the canonical
+    trace_id exists. Emit the local event-log projection after identity and
+    generation are known. This substrate must not make normal inbox capture
+    fragile, so TrailEvent write failures are logged but non-fatal.
+    """
+    if trace_record_only:
+        return
+    try:
+        from .trails import (
+            emit_step_window_events_from_record,
+            reconcile_watcher_observations,
+        )
+
+        emit_step_window_events_from_record(project_dir, final_record)
+        if reconcile_watcher:
+            reconcile_watcher_observations(project_dir)
+    except Exception:
+        logger.warning(
+            "trace trail event emission/reconciliation failed for %s", trace_id,
+            exc_info=True,
+        )
+
+
+def _backfill_patches_onto_record(
+    project_dir: Path,
+    final_record,
+    trace_id: str,
+    *,
+    trace_record_only: bool,
+) -> None:
+    """Backfill ``TraceRecord.patches[]`` from the canonical trail event log.
+
+    Plan 080 §3: ``trace_patch_created`` events are the spine of truth for
+    patches; this projection lifts a curated Patch row per event onto the
+    record so consumers (datasets, viewer, blame) get the cross-substrate join
+    keys (``patch_id``, ``step_index``, ``tool_call_id``, ``capture_method``)
+    without reading the event log themselves. Full diff content stays in
+    trail.jsonl.gz. Defensive: failure here must not block ingest. The
+    post-commit hook (Track 2) sets ``Patch.anchor`` later; the derive helper
+    then projects to ``outcome`` + ``git_links``.
+    """
+    if trace_record_only or final_record.patches:
+        return
+    try:
+        final_record.patches = _backfill_patches_from_trail_events(
+            project_dir, final_record.trace_id, final_record.generation_index,
+        )
+    except Exception:
+        logger.warning(
+            "patches backfill from trail events failed for %s", trace_id,
+            exc_info=True,
+        )
+
+
+def _derive_outcome_from_patches(final_record, trace_id: str) -> None:
+    """Refresh ``outcome`` + ``git_links`` from anchored patches.
+
+    Plan 080 Resolution C: with patches[] populated, refresh derived fields.
+    At ingest time no patch has an anchor yet (post-commit has not fired), so
+    the helper would clobber the legacy step-derived Bash-commit signal; only
+    invoke when at least one patch is anchored.
+    """
+    if not any(p.anchor is not None and p.anchor.found for p in final_record.patches):
+        return
+    try:
+        from .trace_derived import derive_outcome_and_git_links_from_patches
+
+        derive_outcome_and_git_links_from_patches(final_record)
+    except Exception:
+        logger.warning(
+            "derive_outcome_and_git_links_from_patches failed for %s", trace_id,
+            exc_info=True,
+        )
+
+
+def _emit_context_tree(
+    project_dir: Path,
+    final_record,
+    parser,
+    trace_id: str,
+    *,
+    parser_name: str,
+    transcript_path: Path,
+    trace_record_only: bool,
+) -> None:
+    """Capture the Context Tree substrate (plan 077) for this record.
+
+    Independent best-effort block so a Context Tree failure never blocks Trail
+    event emission or normal ingest. Mutates ``final_record`` in place:
+    populates ``Step.context_node_id`` from the active-path step->node map (R10
+    cross-substrate join) and stamps ``context_tree_summary`` so doctor + the
+    bucket manifest can report it without re-reading the event log.
+    """
+    if trace_record_only:
+        return
+    try:
+        emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
+        if callable(emit_context_tree):
+            ct_summary = emit_context_tree(
+                project_dir=project_dir,
+                final_record=final_record,
+                transcript_path=transcript_path,
+            )
+        elif parser_name == "claude-code":
+            from ..capture.claude_code.context_tree_capture import (
+                emit_context_tree_events_from_record,
+            )
+
+            ct_summary = emit_context_tree_events_from_record(
+                project_dir=project_dir,
+                final_record=final_record,
+                transcript_path=transcript_path,
+            )
+        else:
+            ct_summary = {}
+        ct_summary = ct_summary or {}
+        # R10 cross-substrate join: populate Step.context_node_id from the
+        # active-path step_index -> node_id map the orchestrator returned.
+        # Mutating final_record.steps in place before the staging JSONL is
+        # written downstream makes the link visible to every consumer without
+        # a re-parse pass.
+        step_map = ct_summary.get("step_node_id_map") or {}
+        if step_map:
+            for step in final_record.steps:
+                node_id = step_map.get(step.step_index)
+                if node_id is not None:
+                    step.context_node_id = node_id
+        # Surface the projection summary onto the trace record so doctor and
+        # the bucket manifest can report it without reading the event log
+        # again. Strip the (internal) step_node_id_map first.
+        public_summary = {
+            k: v for k, v in ct_summary.items() if k != "step_node_id_map"
+        }
+        final_record.context_tree_summary = public_summary
+    except Exception:
+        logger.warning(
+            "context tree event emission failed for %s", trace_id,
+            exc_info=True,
+        )
+
+
+@dataclass
+class BucketWriteOutcome:
+    """Per-write attribution for :func:`write_trace_to_bucket`.
+
+    ``writes`` maps each best-effort bucket projection that was *attempted* to
+    ``None`` (succeeded) or an error string (swallowed). The canonical
+    ``write_trace_record`` is intentionally absent: it is load-bearing and
+    propagates rather than being recorded here.
+    """
+
+    trace_id: str
+    writes: dict[str, str | None] = field(default_factory=dict)
+
+    @property
+    def failures(self) -> dict[str, str]:
+        return {name: err for name, err in self.writes.items() if err}
+
+
+def write_trace_to_bucket(
+    final_record,
+    project_dir: Path,
+    *,
+    parser_name: str,
+    source_jsonl: Path,
+    trace_record_only: bool,
+) -> BucketWriteOutcome:
+    """Persist a parsed record to the private bucket as ONE attributable unit.
+
+    Sequences the canonical record write plus the additive bucket projections
+    in dependency order, each isolated so one failing projection never blocks
+    the rest (per-write isolation preserved from the pre-decomposition inline
+    blocks). Returns a :class:`BucketWriteOutcome` naming any swallowed failure.
+
+    The canonical ``write_trace_record`` is the one load-bearing write: it is
+    NOT swallowed — a failure propagates to ``ingest_one_session``'s wrapper so
+    the session is reported ``action="error"`` rather than silently half-staged.
+    """
+    from .bucket_store import (
+        sync_trail_events_from_repo,
+        write_raw_source_artifact,
+        write_trace_record,
+    )
+
+    trace_id = final_record.trace_id
+    project_slug = get_project_dir(project_dir).name
+    outcome = BucketWriteOutcome(trace_id=trace_id)
+
+    write_trace_record(
+        final_record,
+        project_slug=project_slug,
+        source_layer="canonical",
+        legacy_mirror=True,
+    )
+    # NOTE: this raw-source link is load-bearing beyond re-parse capability —
+    # it is the per-trace capture-time provenance marker that
+    # ``bucket_store._is_legacy_read_in_place_mirror`` keys on (PR #63) to
+    # tell a 0.4+ staged record (projection deferred, manifest/repair MUST
+    # materialize it later) apart from a plan-085-S5 legacy read-in-place
+    # mirror (never auto-adopted). Keep it UNCONDITIONAL: the
+    # ``--trace-record-only`` fast path skips ``project_per_trace_exports``
+    # below, and without this link its deferred projection would never happen.
+    try:
+        write_raw_source_artifact(
+            source_jsonl,
+            trace_id=trace_id,
+            project_slug=project_slug,
+            source_kind=f"{parser_name}-session-jsonl",
+            parser=parser_name,
+        )
+        outcome.writes["raw_source"] = None
+    except Exception as exc:  # noqa: BLE001
+        outcome.writes["raw_source"] = f"{type(exc).__name__}: {exc}"
+        logger.warning("raw source bucket write failed for %s", trace_id, exc_info=True)
+    if not trace_record_only:
+        try:
+            sync_trail_events_from_repo(project_dir, repo_id=project_slug)
+            outcome.writes["trail_events"] = None
+        except Exception as exc:  # noqa: BLE001
+            outcome.writes["trail_events"] = f"{type(exc).__name__}: {exc}"
+            logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
+        # Plan 079: first-class Context Tree bucket projection. Stage 2 is
+        # additive; the trail-piggyback above is intentionally not removed.
+        try:
+            from .bucket_store import project_context_tree_to_bucket
+
+            project_context_tree_to_bucket(
+                project_dir, project_slug=project_slug,
+                trace_id=trace_id,
+            )
+            outcome.writes["context_tree"] = None
+        except Exception as exc:  # noqa: BLE001
+            outcome.writes["context_tree"] = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "context tree bucket projection failed for %s", trace_id, exc_info=True
+            )
+        # Issue #31 — write-side capture parity. Project the per-trace v2
+        # envelope (``bucket/traces/v1/<proj>/<trace>/``) at capture time so the
+        # manifest projection (``bucket manifest`` / ``ctx list``) agrees with
+        # ``bucket status`` / the trace index without waiting for a later
+        # ``bucket repair``. Best-effort; never make capture fragile. The
+        # Bug-A ``trace_record_only`` fast path skips this (guarded by the
+        # enclosing ``if not trace_record_only:``).
+        try:
+            from .bucket_store import project_per_trace_exports
+
+            project_per_trace_exports(
+                project_dir,
+                project_slug=project_slug,
+                trace_id=trace_id,
+                record=final_record,
+            )
+            outcome.writes["per_trace_exports"] = None
+        except Exception as exc:  # noqa: BLE001
+            outcome.writes["per_trace_exports"] = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "per-trace bucket envelope projection failed for %s",
+                trace_id,
+                exc_info=True,
+            )
+        # Issue #54 — materialize the manifest row at capture time. The
+        # per-trace envelope above makes ``bucket status`` / the index see the
+        # trace, but the manifest-only readers (``ctx list`` / ``ctx info``)
+        # open ``manifest.json`` directly with no in-memory reconcile, so
+        # without this they reported an empty bucket until a ``bucket manifest``
+        # / ``bucket repair`` heal verb ran. This upsert is bounded to one
+        # trace (reuses the envelope just written; never sweeps the object
+        # store — the #44 latency class). Best-effort; never make capture
+        # fragile. The ``--trace-record-only`` fast path skips it (guarded by
+        # the enclosing ``if not trace_record_only:``), keeping its deferred
+        # projection for ``bucket manifest --heal`` / ``bucket repair``.
+        try:
+            from .bucket_store import upsert_manifest_trace_row
+
+            upsert_manifest_trace_row(
+                project_dir,
+                project_slug=project_slug,
+                trace_id=trace_id,
+                record=final_record,
+            )
+            outcome.writes["manifest_row"] = None
+        except Exception as exc:  # noqa: BLE001
+            outcome.writes["manifest_row"] = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "manifest row upsert failed for %s", trace_id, exc_info=True
+            )
+    return outcome
+
+
+def _keep_index_warm_after_ingest(
+    final_record,
+    trace_id: str,
+    *,
+    trace_record_only: bool,
+) -> None:
+    """Keep the warm Trace Index / search projection in step with the bucket.
+
+    Plan 087 U5: now that the trace is in the bucket, bring the warm Trace
+    Index + search projection up to date so the trace is queryable without a
+    manual ``trace index refresh``. Looked up via the module attribute
+    (``keep_index_warm``) so tests can monkeypatch it. ``keep_index_warm``
+    never raises, but wrap defensively anyway — keeping the warm cache fresh
+    must never make capture fragile.
+    """
+    if not trace_record_only:
+        try:
+            # F3: pass the single trace we just wrote so keep-warm refreshes ONLY
+            # that trace (no ~46s whole-corpus delta). Warm both the index and the
+            # projection here since this is the one place we cheaply know the exact
+            # delta; the projection refresh is bounded to this one trace_id.
+            keep_index_warm(
+                trace_id=final_record.trace_id,
+                query_sources=("index", "projection"),
+            )
+        except Exception:
+            logger.warning(
+                "keep-warm hook failed for %s (best-effort, ignored)", trace_id,
+                exc_info=True,
+            )
+    else:
+        # --trace-record-only deliberately skips the heavy projection / trail /
+        # context warm-up so a broad retained-record backfill stays bounded, but
+        # it must still keep the INDEX cheap-sync marker in step with the bucket.
+        # Skipping this entirely (the prior behaviour) left
+        # `synced_cheap_signal:index` stale while the just-written record flipped
+        # the stat-only bucket signal, so the NEXT `trace query` saw a marker
+        # mismatch and fell into the whole-corpus `_current_bucket_trace_digests`
+        # materialisation (every TraceRecord parsed at once, ~4GB RSS, >1min).
+        # The F3 single-trace path is bounded: it runs only the mtime-gated
+        # `refresh_index` for this one trace (the trail projection early-returns
+        # because record-only never appends trail events) and re-stamps the
+        # marker. Projection / trail / context stay deferred, preserving the
+        # bounded-backfill intent, while the next query short-circuits warm.
+        try:
+            keep_index_warm(
+                trace_id=final_record.trace_id,
+                query_sources=("index",),
+            )
+        except Exception:
+            logger.warning(
+                "record-only index keep-warm failed for %s (best-effort, ignored)",
+                trace_id,
+                exc_info=True,
+            )
+
+
+# --------------------------------------------------------------------------- #
 # Core ingest
 # --------------------------------------------------------------------------- #
 
@@ -421,257 +789,55 @@ def _ingest_locked(
     # record we are about to write below (``next_generation``).
     final_record.generation_index = next_generation
 
-    # Trace Trails Phase 2: hook metadata is parsed before the canonical
-    # trace_id exists. Emit the local event-log projection after identity and
-    # generation are known. This substrate must not make normal inbox capture
-    # fragile, so TrailEvent write failures are logged but non-fatal.
-    if not trace_record_only:
-        try:
-            from .trails import (
-                emit_step_window_events_from_record,
-                reconcile_watcher_observations,
-            )
+    # Trace Trails Phase 2: emit the local event-log projection now that
+    # identity + generation are known. Best-effort + attributable.
+    _emit_trail_events(
+        project_dir, final_record, trace_id,
+        reconcile_watcher=reconcile_watcher,
+        trace_record_only=trace_record_only,
+    )
 
-            emit_step_window_events_from_record(project_dir, final_record)
-            if reconcile_watcher:
-                reconcile_watcher_observations(project_dir)
-        except Exception:
-            logger.warning(
-                "trace trail event emission/reconciliation failed for %s", trace_id,
-                exc_info=True,
-            )
-
-    # Plan 080 §3: backfill ``TraceRecord.patches[]`` from the canonical trail
-    # event log. ``trace_patch_created`` events are the spine of truth for
-    # patches; this projection lifts a curated Patch row per event onto the
-    # record so consumers (datasets, viewer, blame) get the cross-substrate
-    # join keys (``patch_id``, ``step_index``, ``tool_call_id``,
-    # ``capture_method``) without reading the event log themselves. Full diff
-    # content stays in trail.jsonl.gz. Defensive: failure here must not block
-    # ingest. The post-commit hook (Track 2) sets ``Patch.anchor`` later; the
-    # derive helper then projects to ``outcome`` + ``git_links``.
-    if not trace_record_only and not final_record.patches:
-        try:
-            final_record.patches = _backfill_patches_from_trail_events(
-                project_dir, final_record.trace_id, final_record.generation_index,
-            )
-        except Exception:
-            logger.warning(
-                "patches backfill from trail events failed for %s", trace_id,
-                exc_info=True,
-            )
-
-    # Plan 080 Resolution C: with patches[] populated, refresh derived fields.
-    # At ingest time no patch has an anchor yet (post-commit has not fired),
-    # so the helper would clobber the legacy step-derived Bash-commit signal;
-    # only invoke when at least one patch is anchored.
-    if any(p.anchor is not None and p.anchor.found for p in final_record.patches):
-        try:
-            from .trace_derived import derive_outcome_and_git_links_from_patches
-
-            derive_outcome_and_git_links_from_patches(final_record)
-        except Exception:
-            logger.warning(
-                "derive_outcome_and_git_links_from_patches failed for %s", trace_id,
-                exc_info=True,
-            )
+    # Plan 080 §3 + Resolution C: backfill patches[] from the canonical trail
+    # event log, then refresh outcome/git_links from any anchored patch.
+    # Best-effort + attributable.
+    _backfill_patches_onto_record(
+        project_dir, final_record, trace_id,
+        trace_record_only=trace_record_only,
+    )
+    _derive_outcome_from_patches(final_record, trace_id)
 
     # Context Tree substrate (plan 077): capture what the LLM saw at each
-    # active-path record. Independent try block so a Context Tree failure
-    # never blocks Trail event emission or normal ingest.
-    if not trace_record_only:
-        try:
-            emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
-            if callable(emit_context_tree):
-                ct_summary = emit_context_tree(
-                    project_dir=project_dir,
-                    final_record=final_record,
-                    transcript_path=jsonl_path,
-                )
-            elif parser_name == "claude-code":
-                from ..capture.claude_code.context_tree_capture import (
-                    emit_context_tree_events_from_record,
-                )
-
-                ct_summary = emit_context_tree_events_from_record(
-                    project_dir=project_dir,
-                    final_record=final_record,
-                    transcript_path=jsonl_path,
-                )
-            else:
-                ct_summary = {}
-            ct_summary = ct_summary or {}
-            # R10 cross-substrate join: populate Step.context_node_id from the
-            # active-path step_index -> node_id map the orchestrator returned.
-            # Mutating final_record.steps in place before the staging JSONL is
-            # written downstream makes the link visible to every consumer
-            # without a re-parse pass.
-            step_map = ct_summary.get("step_node_id_map") or {}
-            if step_map:
-                for step in final_record.steps:
-                    node_id = step_map.get(step.step_index)
-                    if node_id is not None:
-                        step.context_node_id = node_id
-            # Surface the projection summary onto the trace record so doctor
-            # and the bucket manifest can report it without reading the event
-            # log again. Strip the (internal) step_node_id_map first.
-            public_summary = {
-                k: v for k, v in ct_summary.items() if k != "step_node_id_map"
-            }
-            final_record.context_tree_summary = public_summary
-        except Exception:
-            logger.warning(
-                "context tree event emission failed for %s", trace_id,
-                exc_info=True,
-            )
+    # active-path record. Best-effort + attributable.
+    _emit_context_tree(
+        project_dir, final_record, parser, trace_id,
+        parser_name=parser_name,
+        transcript_path=jsonl_path,
+        trace_record_only=trace_record_only,
+    )
 
     # Write the staging JSONL (idempotent overwrite).
     staging_dir = get_project_traces_dir(project_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
     staging_file = staging_dir / f"{trace_id}.jsonl"
     staging_file.write_text(final_record.to_jsonl_line() + "\n")
-    from .bucket_store import (
-        sync_trail_events_from_repo,
-        write_raw_source_artifact,
-        write_trace_record,
+
+    # Persist to the private bucket as one attributable unit: the canonical
+    # record write (load-bearing, propagates) plus the additive projections
+    # (raw source, trail events, context tree, per-trace envelope, manifest
+    # row), each isolated so one failing projection never blocks the rest.
+    write_trace_to_bucket(
+        final_record, project_dir,
+        parser_name=parser_name,
+        source_jsonl=jsonl_path,
+        trace_record_only=trace_record_only,
     )
 
-    project_slug = get_project_dir(project_dir).name
-    write_trace_record(
-        final_record,
-        project_slug=project_slug,
-        source_layer="canonical",
-        legacy_mirror=True,
+    # Plan 087 U5: bring the warm Trace Index / search projection in step with
+    # the bucket so the trace is queryable without a manual refresh.
+    # Best-effort + attributable.
+    _keep_index_warm_after_ingest(
+        final_record, trace_id, trace_record_only=trace_record_only,
     )
-    # NOTE: this raw-source link is load-bearing beyond re-parse capability —
-    # it is the per-trace capture-time provenance marker that
-    # ``bucket_store._is_legacy_read_in_place_mirror`` keys on (PR #63) to
-    # tell a 0.4+ staged record (projection deferred, manifest/repair MUST
-    # materialize it later) apart from a plan-085-S5 legacy read-in-place
-    # mirror (never auto-adopted). Keep it UNCONDITIONAL: the
-    # ``--trace-record-only`` fast path skips ``project_per_trace_exports``
-    # below, and without this link its deferred projection would never happen.
-    try:
-        write_raw_source_artifact(
-            jsonl_path,
-            trace_id=final_record.trace_id,
-            project_slug=project_slug,
-            source_kind=f"{parser_name}-session-jsonl",
-            parser=parser_name,
-        )
-    except Exception:
-        logger.warning("raw source bucket write failed for %s", trace_id, exc_info=True)
-    if not trace_record_only:
-        try:
-            sync_trail_events_from_repo(project_dir, repo_id=project_slug)
-        except Exception:
-            logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
-        # Plan 079: first-class Context Tree bucket projection. Stage 2 is
-        # additive; the trail-piggyback above is intentionally not removed.
-        try:
-            from .bucket_store import project_context_tree_to_bucket
-
-            project_context_tree_to_bucket(
-                project_dir, project_slug=project_slug,
-                trace_id=final_record.trace_id,
-            )
-        except Exception:
-            logger.warning(
-                "context tree bucket projection failed for %s", trace_id, exc_info=True
-            )
-        # Issue #31 — write-side capture parity. Project the per-trace v2
-        # envelope (``bucket/traces/v1/<proj>/<trace>/``) at capture time so the
-        # manifest projection (``bucket manifest`` / ``ctx list``) agrees with
-        # ``bucket status`` / the trace index without waiting for a later
-        # ``bucket repair``. Best-effort; never make capture fragile. The
-        # Bug-A ``trace_record_only`` fast path skips this (guarded by the
-        # enclosing ``if not trace_record_only:``).
-        try:
-            from .bucket_store import project_per_trace_exports
-
-            project_per_trace_exports(
-                project_dir,
-                project_slug=project_slug,
-                trace_id=final_record.trace_id,
-                record=final_record,
-            )
-        except Exception:
-            logger.warning(
-                "per-trace bucket envelope projection failed for %s",
-                trace_id,
-                exc_info=True,
-            )
-        # Issue #54 — materialize the manifest row at capture time. The
-        # per-trace envelope above makes ``bucket status`` / the index see the
-        # trace, but the manifest-only readers (``ctx list`` / ``ctx info``)
-        # open ``manifest.json`` directly with no in-memory reconcile, so
-        # without this they reported an empty bucket until a ``bucket manifest``
-        # / ``bucket repair`` heal verb ran. This upsert is bounded to one
-        # trace (reuses the envelope just written; never sweeps the object
-        # store — the #44 latency class). Best-effort; never make capture
-        # fragile. The ``--trace-record-only`` fast path skips it (guarded by
-        # the enclosing ``if not trace_record_only:``), keeping its deferred
-        # projection for ``bucket manifest --heal`` / ``bucket repair``.
-        try:
-            from .bucket_store import upsert_manifest_trace_row
-
-            upsert_manifest_trace_row(
-                project_dir,
-                project_slug=project_slug,
-                trace_id=final_record.trace_id,
-                record=final_record,
-            )
-        except Exception:
-            logger.warning(
-                "manifest row upsert failed for %s", trace_id, exc_info=True
-            )
-
-    # Plan 087 U5: best-effort keep-warm. Now that the trace is in the bucket,
-    # bring the warm Trace Index + search projection up to date so the trace is
-    # queryable without a manual ``trace index refresh``. Looked up via the
-    # module attribute so tests can monkeypatch it. ``keep_index_warm`` never
-    # raises, but wrap defensively anyway — keeping the warm cache fresh must
-    # never make capture fragile.
-    if not trace_record_only:
-        try:
-            # F3: pass the single trace we just wrote so keep-warm refreshes ONLY
-            # that trace (no ~46s whole-corpus delta). Warm both the index and the
-            # projection here since this is the one place we cheaply know the exact
-            # delta; the projection refresh is bounded to this one trace_id.
-            keep_index_warm(
-                trace_id=final_record.trace_id,
-                query_sources=("index", "projection"),
-            )
-        except Exception:
-            logger.warning(
-                "keep-warm hook failed for %s (best-effort, ignored)", trace_id,
-                exc_info=True,
-            )
-    else:
-        # --trace-record-only deliberately skips the heavy projection / trail /
-        # context warm-up so a broad retained-record backfill stays bounded, but
-        # it must still keep the INDEX cheap-sync marker in step with the bucket.
-        # Skipping this entirely (the prior behaviour) left
-        # `synced_cheap_signal:index` stale while the just-written record flipped
-        # the stat-only bucket signal, so the NEXT `trace query` saw a marker
-        # mismatch and fell into the whole-corpus `_current_bucket_trace_digests`
-        # materialisation (every TraceRecord parsed at once, ~4GB RSS, >1min).
-        # The F3 single-trace path is bounded: it runs only the mtime-gated
-        # `refresh_index` for this one trace (the trail projection early-returns
-        # because record-only never appends trail events) and re-stamps the
-        # marker. Projection / trail / context stay deferred, preserving the
-        # bounded-backfill intent, while the next query short-circuits warm.
-        try:
-            keep_index_warm(
-                trace_id=final_record.trace_id,
-                query_sources=("index",),
-            )
-        except Exception:
-            logger.warning(
-                "record-only index keep-warm failed for %s (best-effort, ignored)",
-                trace_id,
-                exc_info=True,
-            )
 
     # Decide the status this generation enters.
     #

@@ -9,6 +9,7 @@ import click
 
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
+from ._progress import build_cli_progress, progress_option
 from ._security_flags import (
     BUCKET_SECURITY_POLICIES,
     SECURITY_TOOL_NAMES,
@@ -24,7 +25,7 @@ def bucket_group() -> None:
     """Inspect and troubleshoot the local trace bucket."""
 
 
-@bucket_group.group("security", cls=OpentracesGroup)
+@bucket_group.group("security", cls=OpentracesGroup, hidden=True)
 def bucket_security_group() -> None:
     """Inspect, configure, and apply the private bucket security filter.
 
@@ -189,14 +190,27 @@ def bucket_security_policy_cmd(
 
 @bucket_group.command("status", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_status_cmd(as_json: bool) -> None:
+@progress_option
+def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
     """Show local bucket health, sync eligibility, and trail freshness."""
-    from ..core.bucket_store import bucket_status
+    from ..core.bucket_store import bucket_status_fast
 
     # Issue #55 — `bucket status` is a pure read: no manifest.json write, no
     # per-trace envelope materialization. Self-heal is explicit via
     # `bucket manifest --heal` / `bucket repair`.
-    payload = bucket_status(write_manifest=False, heal=False)
+    #
+    # Plan 087 — size-independent read. The steady-state path reads the persisted
+    # manifest O(1) and aggregates sync/security counts from the per-row status
+    # accelerator with a freshness stamp, replacing the O(N) per-TraceRecord scan
+    # that ran for minutes on a large bucket. The scan survives only as the
+    # fallback for a not-yet-built bucket (absent/error). The progress reporter
+    # covers that fallback; the sink is stderr-only and auto-quiet in CI / non-TTY
+    # so the `--json` stdout payload stays a single clean object.
+    reporter = build_cli_progress("bucket status", progress_mode)
+    try:
+        payload = bucket_status_fast(progress=reporter)
+    finally:
+        reporter.done()
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -213,7 +227,10 @@ def bucket_status_cmd(as_json: bool) -> None:
     if remote_config.get("enabled"):
         click.echo(f"  remote:     {remote_config.get('url') or 'configured'}")
         click.echo(f"  sync policy: {remote_config.get('sync_policy', 'daemon')}")
-    click.echo(f"  traces:     {bucket.get('trace_count', trace_records.get('object_count', 0))}")
+    _trace_count = bucket.get("trace_count")
+    if _trace_count is None:
+        _trace_count = trace_records.get("object_count")
+    click.echo(f"  traces:     {_trace_count if _trace_count is not None else 'unavailable'}")
     click.echo(f"  raw sources: {raw_sources.get('object_count', 0)}")
     click.echo(f"  trail events: {trail_events.get('event_count', 0)}")
     click.echo(f"  syncable:   {trace_records.get('syncable_count', 0)}")
@@ -228,6 +245,13 @@ def bucket_status_cmd(as_json: bool) -> None:
     )
     for reason in sync.get("blocked_reasons") or []:
         click.echo(f"    blocked: {reason}")
+    freshness = payload.get("freshness") or {}
+    if freshness.get("stale"):
+        reasons = ", ".join(freshness.get("reasons") or []) or "stale"
+        click.echo(f"  freshness:  STALE ({reasons})")
+        hint = freshness.get("rebuild_recommended")
+        if hint:
+            click.echo(f"    refresh with: {hint}")
 
 
 @bucket_group.command("manifest", cls=OpentracesCommand)
@@ -369,6 +393,9 @@ def bucket_remote_push_cmd(
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
+        from opentraces import cli as root_cli
+        root_cli._fail_hf_or_reraise(exc, "")
     payload = {"status": "ok", "remote": remote}
     if as_json:
         click.echo(_dump_json(payload))
@@ -412,6 +439,9 @@ def bucket_remote_pull_cmd(
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
+        from opentraces import cli as root_cli
+        root_cli._fail_hf_or_reraise(exc, "")
     payload = {"status": "ok", "remote": remote}
     if as_json:
         click.echo(_dump_json(payload))
@@ -424,7 +454,7 @@ def bucket_remote_pull_cmd(
         click.echo("  eager: true (all blobs fetched)")
 
 
-@bucket_group.command("replay", cls=OpentracesCommand)
+@bucket_group.command("replay", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--repo",
     "repo",
@@ -471,7 +501,7 @@ def bucket_replay_cmd(
 _REBUILD_SUBSTRATES = ("context-tree", "trail", "traces", "all")
 
 
-@bucket_group.command("rebuild", cls=OpentracesCommand)
+@bucket_group.command("rebuild", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--substrate",
     "substrate",
@@ -700,7 +730,7 @@ def bucket_verify_cmd(sample_size: int, as_full: bool, as_json: bool) -> None:
         sys.exit(3)
 
 
-@bucket_group.command("prune", cls=OpentracesCommand)
+@bucket_group.command("prune", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--dry-run",
     "dry_run",
@@ -749,7 +779,7 @@ def bucket_prune_cmd(dry_run: bool, as_json: bool) -> None:
     click.echo(f"  deleted: {deleted}")
 
 
-@bucket_group.command("prefetch", cls=OpentracesCommand)
+@bucket_group.command("prefetch", cls=OpentracesCommand, hidden=True)
 @click.argument("trace_id")
 @click.option(
     "--remote",

@@ -21,6 +21,7 @@ from .event_log import (
     invalidate_read_events_cache,
     make_survival_cache_draft,
     read_events,
+    read_events_scoped,
     verify_event_log,
 )
 from .exact import append_exact_patch_trail
@@ -121,6 +122,7 @@ __all__ = [
     "open_trace_workspace",
     "play_trace_timeline",
     "read_events",
+    "read_events_scoped",
     "rebuild_projections",
     "reconcile_commit_anchors",
     "reconcile_watcher_observations",

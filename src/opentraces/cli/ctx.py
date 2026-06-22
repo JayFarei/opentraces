@@ -576,10 +576,10 @@ def ctx_tree_cmd(
     project_dir: Path | None,
 ) -> None:
     """Print the parentUuid-rooted Context Tree for a trace."""
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import build_context_tree_projection_for_trace
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
+    projection = build_context_tree_projection_for_trace(repo, trace_id)
     node_ids = projection.nodes_by_trace.get(trace_id, [])
     if not node_ids:
         payload = _empty_state(
@@ -908,10 +908,10 @@ def ctx_step_cmd(
     project_dir: Path | None,
 ) -> None:
     """Look up the ContextNode for a given step index (alias for show)."""
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import build_context_tree_projection_for_trace
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
+    projection = build_context_tree_projection_for_trace(repo, trace_id)
     node = projection.node_for_step(trace_id, step_index)
     if node is None:
         if as_json:
@@ -1007,10 +1007,10 @@ def ctx_reads_cmd(
     project_dir: Path | None,
 ) -> None:
     """List tool_result-shaped reads (environment-to-agent) for a trace."""
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import build_context_tree_projection_for_trace
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
+    projection = build_context_tree_projection_for_trace(repo, trace_id)
     if trace_id not in projection.nodes_by_trace:
         payload = _empty_state(
             CONTEXT_READS_SCHEMA_VERSION,
@@ -1082,10 +1082,10 @@ def ctx_writes_cmd(
     project_dir: Path | None,
 ) -> None:
     """List Edit/Write-shaped writes (agent-to-environment) for a trace."""
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import build_context_tree_projection_for_trace
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
+    projection = build_context_tree_projection_for_trace(repo, trace_id)
     if trace_id not in projection.nodes_by_trace:
         payload = _empty_state(
             CONTEXT_WRITES_SCHEMA_VERSION,
@@ -1138,6 +1138,7 @@ def ctx_writes_cmd(
 @ctx_group.command(
     "diff",
     cls=OpentracesCommand,
+    hidden=True,  # plan 087 — Context Tree substrate plumbing; callable, off --help
     examples=[
         "opentraces ctx diff <node-a> <node-b>",
         "opentraces ctx diff <node-a> <node-b> --layer messages --json",
@@ -1227,6 +1228,7 @@ def ctx_diff_cmd(
 @ctx_group.command(
     "compactions",
     cls=OpentracesCommand,
+    hidden=True,  # plan 087 — Context Tree substrate diagnostic; callable, off --help
     examples=[
         "opentraces ctx compactions <trace-id>",
         "opentraces ctx compactions <trace-id> --index 0 --show-loss --json",
@@ -1258,10 +1260,10 @@ def ctx_compactions_cmd(
     project_dir: Path | None,
 ) -> None:
     """List compaction boundaries for a trace."""
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import build_context_tree_projection_for_trace
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
+    projection = build_context_tree_projection_for_trace(repo, trace_id)
     if trace_id not in projection.nodes_by_trace:
         payload = _empty_state(
             CONTEXT_TREE_SCHEMA_VERSION,
@@ -1332,6 +1334,7 @@ def ctx_compactions_cmd(
 @ctx_group.command(
     "prune",
     cls=OpentracesCommand,
+    hidden=True,  # plan 087 — resume-from-step-N plumbing; callable, off --help
     examples=[
         "opentraces ctx prune <node-id> --source-jsonl path/to/session.jsonl",
         "opentraces ctx prune <node-id> --source-jsonl path/to/session.jsonl --to-session rewind-step7 --write --json",
@@ -1435,6 +1438,7 @@ def ctx_prune_cmd(
 @ctx_group.command(
     "resume",
     cls=OpentracesCommand,
+    hidden=True,  # plan 087 — RL/research resume-packet plumbing; callable, off --help
     examples=[
         "opentraces ctx resume <node-id>",
         "opentraces ctx resume <node-id> --json",
@@ -1512,6 +1516,7 @@ def ctx_resume_cmd(
 @ctx_group.command(
     "resolve",
     cls=OpentracesCommand,
+    hidden=True,  # plan 087 — ot:// URI resolution plumbing; callable, off --help
     examples=[
         "opentraces ctx resolve ot://context-node/sha256/<id> --json",
         "opentraces ctx resolve ot://context-tree/<trace-id>/active-path --json",
@@ -1576,6 +1581,7 @@ def ctx_resolve_cmd(
 @ctx_group.command(
     "anchor-for-step",
     cls=OpentracesCommand,
+    hidden=True,  # plan 087 — low-level scalar lookup plumbing; callable, off --help
     examples=[
         "opentraces ctx anchor-for-step <trace-id> 7",
     ],
@@ -1600,10 +1606,10 @@ def ctx_anchor_for_step_cmd(
     journey can pipe directly into git log / shell comparison. Missing
     anchor exits rc=3 with a stderr message.
     """
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import build_context_tree_projection_for_trace
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
+    projection = build_context_tree_projection_for_trace(repo, trace_id)
     node = projection.node_for_step(trace_id, step_index)
     if node is None:
         click.echo(

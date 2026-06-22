@@ -270,6 +270,15 @@ def apply_bucket_security_filter(
             mark_search_snapshot_dirty("bucket_security_run")
         except Exception:
             pass
+        # Plan 087 — security re-scan rewrote object-envelope ``syncable``/``stale``
+        # out of band of the manifest rows; flag the manifest read-model stale so
+        # ``bucket status`` serves the cached counts marked stale until a heal.
+        try:
+            from .bucket_manifest_state import mark_bucket_manifest_dirty
+
+            mark_bucket_manifest_dirty("bucket_security_run")
+        except Exception:
+            pass
 
     return {
         "status": "ok",

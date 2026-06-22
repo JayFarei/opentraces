@@ -2,11 +2,6 @@
 max_p95_ms = 400.0
 max_peak_rss_mb = 80.0
 
-[blame-core-smoke]
-max_p95_ms = 200.0
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
 [graph-cli-smoke]
 max_p95_ms = 500.0
 max_peak_rss_mb = 80.0
@@ -37,30 +32,6 @@ max_cold_ms = 600.0
 max_p50_ms = 650.0
 max_p95_ms = 750.0
 max_peak_rss_mb = 80.0
-
-[tui-navigation-smoke]
-max_cold_ms = 1205.82
-max_p50_ms = 1205.82
-max_p95_ms = 1205.82
-max_peak_rss_mb = 168.24
-max_python_heap_peak_mb = 30.0
-max_rss_delta_mb = 29.0
-
-[tui-review-actions-smoke]
-max_cold_ms = 2024.4
-max_p50_ms = 2024.4
-max_p95_ms = 2024.4
-max_peak_rss_mb = 222.27
-max_python_heap_peak_mb = 45.75
-max_rss_delta_mb = 30.0
-
-[tui-startup-smoke]
-max_cold_ms = 350.0
-max_p50_ms = 350.0
-max_p95_ms = 350.0
-max_peak_rss_mb = 231.93
-max_python_heap_peak_mb = 18.0
-max_rss_delta_mb = 10.0
 
 [viewer-flatten-tree-smoke]
 max_initial_p95_ms = 2.0
@@ -94,52 +65,4 @@ max_rss_delta_mb = 1.0
 [watcher-quiet-smoke]
 max_p95_ms = 150.0
 max_python_heap_peak_mb = 1.0
-max_rss_delta_mb = 1.0
-
-[web-blame-smoke]
-max_p95_ms = 100.0
-max_peak_rss_mb = 232.01
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
-[web-context-smoke]
-max_p95_ms = 20.0
-max_peak_rss_mb = 232.32
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
-[web-detail-smoke]
-max_p95_ms = 180.0
-max_peak_rss_mb = 232.38
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
-[web-graph-smoke]
-max_p95_ms = 220.0
-max_peak_rss_mb = 232.54
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
-[web-refresh-smoke]
-max_p95_ms = 750.0
-max_peak_rss_mb = 232.75
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
-[web-stats-smoke]
-max_p95_ms = 180.0
-max_peak_rss_mb = 232.75
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
-[web-trace-tree-smoke]
-max_p95_ms = 180.0
-max_peak_rss_mb = 232.75
-max_python_heap_peak_mb = 2.0
-max_rss_delta_mb = 1.0
-
-[web-traces-smoke]
-max_p95_ms = 180.0
-max_peak_rss_mb = 232.75
-max_python_heap_peak_mb = 2.0
 max_rss_delta_mb = 1.0

@@ -78,6 +78,19 @@ def current_platform() -> str:
     )
 
 
+def is_platform_supported() -> bool:
+    """True iff the running platform has a downloadable manifest source.
+
+    False for hosts the binary isn't published for (e.g. Intel macOS or
+    Windows today) — callers should report a clean "file-level attribution
+    fallback" rather than a failed download.
+    """
+    try:
+        return bool(_source_url(current_platform()))
+    except InstallError:
+        return False
+
+
 # --- manifest helpers ------------------------------------------------------
 
 def _load_manifest() -> dict:
@@ -118,6 +131,18 @@ def _source_url(platform: str) -> str:
 
 
 # --- verification ----------------------------------------------------------
+
+def detected_version(binary_path: Path) -> str | None:
+    """The version the binary ACTUALLY reports (vs the pinned manifest version).
+
+    Lets callers surface what's really installed — so a stale or bogus
+    env-override binary shows its real (mismatched) version instead of a
+    confident pinned one.
+    """
+    from .runner import EntityRunner
+
+    return EntityRunner(binary_path=binary_path).version()
+
 
 def verify(binary_path: Path) -> bool:
     """Run --version against the binary. True iff exit 0 and non-empty output."""
@@ -173,7 +198,9 @@ def _download(url: str, dest: Path, *, progress=None) -> None:
     # pre-create fresh tmp
     if dest.exists():
         dest.unlink()
-    with urllib.request.urlopen(url) as resp, open(dest, "wb") as out:  # noqa: S310
+    # Bounded timeout so a stalled connection can't hang init / a watcher tick
+    # (urlopen otherwise blocks forever). 30s is generous for a few-MB binary.
+    with urllib.request.urlopen(url, timeout=30) as resp, open(dest, "wb") as out:  # noqa: S310
         while True:
             chunk = resp.read(1 << 15)
             if not chunk:
@@ -237,7 +264,7 @@ def install(
                 f"{_ENV_OVERRIDE} is set to {p}, but --version didn't succeed."
             )
         return InstallResult(
-            path=p, version=ENTITY_BINARY_VERSION,
+            path=p, version=detected_version(p) or ENTITY_BINARY_VERSION,
             platform=_safe_platform(), source="env-override",
         )
 
@@ -248,7 +275,7 @@ def install(
     if target.is_file() and not force:
         if verify(target):
             return InstallResult(
-                path=target, version=ENTITY_BINARY_VERSION,
+                path=target, version=detected_version(target) or ENTITY_BINARY_VERSION,
                 platform=_safe_platform(), source="already-present",
             )
         # binary exists but is broken — fall through and re-download
@@ -305,7 +332,7 @@ def install(
     _prune_old_versions(dest_dir)
 
     return InstallResult(
-        path=target, version=ENTITY_BINARY_VERSION,
+        path=target, version=detected_version(target) or ENTITY_BINARY_VERSION,
         platform=platform, source="download",
     )
 
@@ -317,3 +344,60 @@ def _safe_platform() -> str:
         return current_platform()
     except InstallError:
         return "unknown"
+
+
+_PROVISION_MARKER = _BIN_DIR / ".entity-provision-attempt"
+
+
+def ensure_installed(
+    *, best_effort: bool = True, force: bool = False, retry_failed: bool = False
+) -> InstallResult | None:
+    """Auto-provision the entity-parser binary, transparently and safely.
+
+    Called from ``init`` (the opt-in moment) and ``setup upgrade`` so the
+    binary is provisioned + kept current WITHOUT the user having to discover
+    the explicit ``setup entity-parser`` step. Designed for hot/offline paths:
+
+      * env-override or an already-present valid binary -> cheap re-verify.
+      * unsupported platform -> returns None (file-level attribution stands).
+      * offline / download failure under ``best_effort`` -> returns None and
+        drops a one-shot attempt marker so we don't re-download on every
+        subsequent ``init``. ``force=True`` (explicit refresh) ignores the
+        marker and clears it on success.
+
+    Never raises under ``best_effort`` (the default): entity enrichment is
+    optional and degrades gracefully, so provisioning must never break the
+    caller (init / upgrade / a background tick).
+    """
+    override = os.environ.get(_ENV_OVERRIDE)
+    already = _target_path(_BIN_DIR).is_file()
+    try:
+        if override or already:
+            # Cheap path: verify (and, if forced, re-download a broken one).
+            return install(force=force)
+        if not is_platform_supported():
+            return None
+        if not force and not retry_failed:
+            try:
+                if (
+                    _PROVISION_MARKER.exists()
+                    and _PROVISION_MARKER.read_text().strip() == ENTITY_BINARY_VERSION
+                ):
+                    return None  # already tried + failed for this version
+            except OSError:
+                pass
+        result = install(force=force)
+        try:
+            _PROVISION_MARKER.unlink(missing_ok=True)  # success: clear marker
+        except OSError:
+            pass
+        return result
+    except InstallError:
+        try:
+            _BIN_DIR.mkdir(parents=True, exist_ok=True)
+            _PROVISION_MARKER.write_text(ENTITY_BINARY_VERSION)
+        except OSError:
+            pass
+        if best_effort:
+            return None
+        raise

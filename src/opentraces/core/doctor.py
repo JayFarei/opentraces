@@ -24,6 +24,7 @@ from ..core.integration_versions import (
     version_status,
 )
 from ..core.processors import probe_processors
+from ..core.trails.capture_audit import audit_trail_capture
 from ..enrichment.entities import EntityRunner
 from ..enrichment.entities.installer import _safe_platform
 from ..enrichment.entities.runner import resolve_binary_path
@@ -930,12 +931,16 @@ def _current_runtime() -> dict[str, Any]:
         out["dist_version"] = current_cli_version()
     except Exception:  # noqa: BLE001
         pass
-    try:
-        from ..cli import _detect_install_method
-
-        out["source_kind"] = _detect_install_method()
-    except Exception:  # noqa: BLE001
-        out["source_kind"] = _classify_source_kind(out["module_file"])
+    # Classify the CURRENT runtime with the SAME execution-free classifier used
+    # for every OTHER discovered runtime (``_classify_source_kind`` below +
+    # ``runtime_select``) rather than reaching UP into
+    # ``cli._detect_install_method`` — that was both a core→cli layering
+    # inversion AND a divergent/older brew heuristic, so the foreground process
+    # could be classified differently than the interpreters it is compared
+    # against in #93's mixed-runtime detection. ``out["module_file"]`` is the
+    # resolved ``opentraces.__file__`` computed just above (``None`` →
+    # ``"unknown"``, never fabricated).
+    out["source_kind"] = _classify_source_kind(out["module_file"])
 
     if out["source_kind"] == "source" and out["module_file"]:
         out.update(_editable_git_provenance(out["module_file"]))
@@ -1579,7 +1584,11 @@ def _watcher_status() -> dict[str, Any]:
         provenance = _watcher_provenance()
     except Exception:  # noqa: BLE001
         provenance = {"drift": [], "error": "provenance-check-failed"}
-    if provenance.get("drift") and health == "ok":
+    # Only HARD provenance drift degrades watcher health, so the health label
+    # agrees with exit_code (a benign shim-version-missing must not make the
+    # report say "provenance-drift" while the process exits 0). The full drift
+    # list stays in ``provenance["drift"]`` for anyone who wants the staleness.
+    if _has_hard_drift(provenance.get("drift")) and health == "ok":
         health = "provenance-drift"
 
     return {
@@ -1875,16 +1884,41 @@ def _entity_parser_status() -> dict[str, Any]:
         "advice": str | None,   # what to run if missing
       }
     """
+    from ..enrichment.entities.installer import is_platform_supported
+    from ..enrichment.entities.version import ENTITY_BINARY_VERSION
+
     path = resolve_binary_path()
     runner = EntityRunner(binary_path=path)
     installed = runner.available()
     version = runner.version() if installed else None
+    supported = is_platform_supported()
+    up_to_date = bool(installed and version == ENTITY_BINARY_VERSION)
+    if installed and up_to_date:
+        advice = None
+    elif installed and not up_to_date:
+        advice = (
+            f"installed {version}, expected {ENTITY_BINARY_VERSION}; "
+            "run 'opentraces setup entity-parser --force' to refresh"
+        )
+    elif not supported:
+        advice = (
+            "no entity-parser binary for this platform; attribution uses the "
+            "file/line-level fallback"
+        )
+    else:
+        advice = (
+            "run 'opentraces setup entity-parser' (auto-installs on 'init') for "
+            "function-level attribution"
+        )
     return {
         "binary_path": str(path),
         "installed": installed,
         "version": version,
+        "expected_version": ENTITY_BINARY_VERSION,
+        "up_to_date": up_to_date,
         "platform": _safe_platform(),
-        "advice": None if installed else "run 'opentraces setup entity-parser'",
+        "platform_supported": supported,
+        "advice": advice,
     }
 
 
@@ -2119,9 +2153,7 @@ def _dir_size_bytes(path: Path) -> int:
 
 def _trail_capture_audit(cwd: Path) -> dict[str, Any]:
     """Cluster C-4: surface traces with ``file_edit`` events but zero
-    ``trace_patch_created`` events in the last 7 days. The audit logic
-    lives in ``cli.doctor`` so cluster-C tests can target it without
-    monkey-patching this aggregator."""
+    ``trace_patch_created`` events in the last 7 days."""
     skip_reason = _doctor_event_log_skip_reason(cwd)
     if skip_reason is not None:
         return {
@@ -2133,7 +2165,6 @@ def _trail_capture_audit(cwd: Path) -> dict[str, Any]:
             "advice": "run a focused trail-capture audit outside doctor",
         }
     try:
-        from ..cli.doctor import audit_trail_capture
         return audit_trail_capture(cwd, days=7)
     except Exception as exc:  # pragma: no cover — defensive
         return {
@@ -2145,8 +2176,45 @@ def _trail_capture_audit(cwd: Path) -> dict[str, Any]:
         }
 
 
+# Drift reasons that mean "this hook/shim is present but carries no version
+# stamp" — i.e. it was rendered by an older or stamp-less CLI. The glue is
+# functional, just unstamped; this is benign WARN-severity and must never drive
+# a non-zero exit, or a freshly-restored captured world / any older-stamp
+# install makes `doctor` fail scripts / CI / `&&` chains for a non-problem.
+# Every OTHER drift reason is a real break that still drives exit 3: a genuine
+# version mismatch (``version-drift`` / ``shim-version-drift`` / the skill at a
+# different version, ``daemon-version-drift``) means the deployed glue is from a
+# different CLI and the user should `setup upgrade`; ``shim-interpreter-missing``
+# / ``shim-legacy-verb`` / ``daemon-executable-missing`` / broken harnesses mean
+# it cannot run. The classification is applied uniformly everywhere drift is
+# acted on — exit_code AND the watcher health label — so the report never
+# contradicts the exit code.
+_SOFT_DRIFT_REASONS: frozenset[str] = frozenset({"version-missing", "shim-version-missing"})
+
+
+def _has_hard_drift(drift: Any) -> bool:
+    """True when ``drift`` contains a genuinely-broken reason string (anything
+    other than a benign stamp-absence in :data:`_SOFT_DRIFT_REASONS`).
+
+    Only a list/tuple/set of reason strings can carry a hard reason. A non-list
+    drift — the skill hook's coarse version-staleness bool (``drift = installed
+    and inst_ver != __version__``) or pi's ``None`` — has no classifiable hard
+    reason; staleness alone is a warning, never a break, so it is never hard.
+    (The skill's hard signal is ``broken_harnesses``, checked separately.) This
+    also keeps :func:`exit_code` from ever raising on an unexpected drift shape.
+    """
+    if not isinstance(drift, (list, tuple, set)):
+        return False
+    return any(reason not in _SOFT_DRIFT_REASONS for reason in drift)
+
+
 def exit_code(report_data: dict[str, Any]) -> int:
-    """Non-zero when a configured integration is broken."""
+    """Non-zero when a configured integration is genuinely broken.
+
+    Benign stamp-absence drift (``version-missing`` / ``shim-version-missing``)
+    is WARN-severity and does NOT drive a non-zero exit; the human render
+    already shows it yellow, so the exit code must agree.
+    """
     sec = report_data.get("security") or {}
     entries = sec.get("tools") or []
     for t in entries:
@@ -2155,13 +2223,13 @@ def exit_code(report_data: dict[str, Any]) -> int:
             return 3
     for h in report_data.get("hooks") or []:
         if h.get("installer") == "skill" and h.get("installed") and (
-            h.get("drift") or h.get("broken_harnesses")
+            _has_hard_drift(h.get("drift")) or h.get("broken_harnesses")
         ):
             return 3
-        if h.get("installed") and h.get("drift"):
+        if h.get("installed") and _has_hard_drift(h.get("drift")):
             return 3
     watcher = report_data.get("watcher") or {}
-    if (watcher.get("provenance") or {}).get("drift"):
+    if _has_hard_drift((watcher.get("provenance") or {}).get("drift")):
         return 3
     if (report_data.get("trail_event_log") or {}).get("state") in ("invalid", "error"):
         return 3

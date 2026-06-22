@@ -428,24 +428,6 @@ def _require_project_opted_in(action: str) -> None:
         raise NotOptedInError(cwd, action=action)
 
 
-# -- Web / TUI / port helpers (moved to _web.py) ------------------------------
-#
-# Implementations live in _web.py; re-exported here for backward-compat.
-
-from ._web import (
-    _launch_tui_ui,
-    _listener_pid_for_port,
-    _command_for_pid,
-    _port_is_listening,
-    _wait_for_port_release,
-    _is_opentraces_web_process,
-    _reclaim_stale_web_port,
-    _serve_web_app,
-    _launch_web_ui,
-    _schedule_browser_open,
-)
-
-
 def _parse_agent_selection(agent_text: str) -> list[str]:
     return normalize_agents([part.strip() for part in agent_text.split(",") if part.strip()])
 
@@ -798,9 +780,38 @@ def config_set(
         click.echo("Usage: ot config set <key> <value> [--project|--global]", err=True)
         sys.exit(2)
 
+    # hf_token is deliberately never persisted via config set: save_config
+    # excludes it (it lives in the credential store / env), and writing it to a
+    # project marker would leak a secret into a committed file. Reject loudly
+    # instead of silently dropping the value behind a success message.
+    if key == "hf_token":
+        click.echo(
+            "hf_token cannot be set with 'config set' (it is never written to "
+            "config.json or a project marker). Use 'opentraces auth login' to "
+            "store your HuggingFace token, or export HF_TOKEN in your environment.",
+            err=True,
+        )
+        sys.exit(2)
+
     if scope_project:
         # Write to repo marker via load/save_project_config helpers.
-        from ..core.config import load_project_config, save_project_config
+        from ..core.config import (
+            _PORTABLE_FIELDS,
+            load_project_config,
+            save_project_config,
+        )
+        # The marker only persists the portable policy fields; any other key
+        # would be silently dropped on write. Reject it instead of reporting a
+        # misleading success (same false-success class as hf_token above).
+        if key not in _PORTABLE_FIELDS:
+            click.echo(
+                f"'{key}' is not a project-scoped config key (it would be "
+                f"silently dropped from the marker).\n"
+                f"Valid --project keys: {', '.join(_PORTABLE_FIELDS)}.\n"
+                f"For other keys use --global.",
+                err=True,
+            )
+            sys.exit(2)
         proj_dir = Path.cwd()
         proj_cfg = load_project_config(proj_dir)
         if append_value:
@@ -1253,6 +1264,18 @@ def init(
     # Plan-043 phase 6: record root commit + prompt for first-run backfill.
     _plan043_finalize_identity(project_dir)
 
+    # Auto-provision the entity-parser binary so function-level attribution
+    # works without the user discovering the explicit 'setup entity-parser'.
+    # Best-effort + offline-safe: an unsupported platform or a failed/offline
+    # fetch degrades silently to file/line-level attribution (a one-shot
+    # marker stops it re-downloading on every init). Never blocks init.
+    entity_provisioned = None
+    try:
+        from ..enrichment.entities import installer as _entity_installer
+        entity_provisioned = _entity_installer.ensure_installed(best_effort=True)
+    except Exception:  # noqa: BLE001 - optional enrichment must never break init
+        entity_provisioned = None
+
     click.echo()
     print_banner(tagline=_ok("initialized"))
     click.echo(f"{_dim('Project: ')} {_bold(project_dir.name)}  {_dim(f'({review_policy} policy)')}")
@@ -1271,6 +1294,8 @@ def init(
         click.echo(f"  Hook:    {', '.join(hook_targets) if hook_targets else 'installed'}")
     if skill_installed:
         click.echo("  Skill:   .agents/skills/opentraces/SKILL.md")
+    if entity_provisioned is not None:
+        click.echo(f"  Entity parser: {entity_provisioned.version} ({entity_provisioned.source})")
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
     click.echo(f"  Policy:  {review_policy}")
     click.echo(f"  Push:    {push_policy}")
@@ -1339,6 +1364,7 @@ def remove(purge_all: bool) -> None:
     ref and trace-to-commit notes.
     """
     from ..core.config import (
+        NotOptedInError,
         _marker_path,
         get_project_dir,
         unregister_project as _unregister_project,
@@ -1351,11 +1377,14 @@ def remove(purge_all: bool) -> None:
     removed_hook = _remove_capture_hook(project_dir)
 
     # Resolve the global per-project dir BEFORE deleting the marker
-    # (slug derivation needs the marker's project_id).
+    # (slug derivation needs the marker's project_id). A non-opted-in dir
+    # raises NotOptedInError here; that must NOT abort remove — a cleanup
+    # command should fall through to its own "nothing to remove" path
+    # rather than tell the user to 'init' first.
     global_dir = None
     try:
         global_dir = get_project_dir(project_dir)
-    except RuntimeError:
+    except (RuntimeError, NotOptedInError):
         pass
 
     removed_local = False
@@ -1741,6 +1770,14 @@ def _upgrade_impl(skill_only: bool, *, integrations_only: bool = False) -> None:
     from ..core.integration_repair import repair_installed_integrations
 
     project_dir = Path.cwd()
+    # Refresh / provision the entity-parser binary (integration glue): picks up a
+    # bumped manifest version, and retries a prior offline/failed fetch. Best-
+    # effort + offline-safe, so it never breaks the upgrade.
+    try:
+        from ..enrichment.entities import installer as _entity_installer
+        _entity_installer.ensure_installed(best_effort=True, retry_failed=True)
+    except Exception:  # noqa: BLE001 - optional enrichment must never break upgrade
+        pass
     if delegated_repair is None:
         integration_repair = repair_installed_integrations(project_dir)
         _render_integration_repair_summary(integration_repair)
@@ -2503,8 +2540,28 @@ def _auth_whoami() -> None:
 
 from .installers import setup_group as _setup_group  # noqa: E402
 
+# Import the extracted `setup watcher` sub-group module for its side effect: the
+# `@setup_group.group`/`@...command` decorators register the watcher commands on
+# `setup_group` at CLI load. (Moved out of installers.py in the cli/setup
+# decomposition; installers no longer imports it, so this is the registration
+# trigger.)
+from . import setup_watcher as _setup_watcher  # noqa: E402,F401
+from . import setup_runtime as _setup_runtime  # noqa: E402,F401
+from . import setup_agents as _setup_agents  # noqa: E402,F401
+from . import setup_bucket as _setup_bucket  # noqa: E402,F401
+from . import setup_infra as _setup_infra  # noqa: E402,F401
+from . import setup_secrets as _setup_secrets  # noqa: E402,F401
+# Imported BEFORE the legacy-root _drop_command loop below: review_llm_cmd is a
+# @main.command("llm-review") that the loop then drops from the root (it stays as
+# `setup llm-review`), exactly as when it lived in installers.py.
+from . import setup_review_llm as _setup_review_llm  # noqa: E402,F401
+# Registration trigger for the `doctor` command surface (a stray side-effect
+# import that previously sat in the installers review-llm section; relocated here
+# with the other registration imports). Unrelated to review-llm.
+from . import doctor_cli as _doctor_cli  # noqa: E402,F401
 
-@_setup_group.command("auth")
+
+@_setup_group.command("auth", hidden=True)  # plan 087 — redundant with `auth login` (the canonical home); callable, off --help
 @click.option(
     "--token",
     is_flag=True,
@@ -2945,7 +3002,7 @@ def _classify_hf_repo_error(exc: Exception, repo_id: str) -> tuple[str, str, str
             f"You don't have write access to the '{owner}' namespace on HuggingFace.",
             (
                 f"Join the '{owner}' org, or pick a different namespace "
-                f"(e.g. your own user) with 'opentraces dataset remote add'."
+                f"(e.g. your own user) with 'opentraces dataset remote create'."
             ),
         )
 
@@ -2963,6 +3020,28 @@ def _classify_hf_repo_error(exc: Exception, repo_id: str) -> tuple[str, str, str
         f"HuggingFace request failed: {exc}",
         None,
     )
+
+
+def _fail_hf_or_reraise(exc: Exception, repo_id: str) -> None:
+    """Exit 3 with actionable guidance for HuggingFace / network errors.
+
+    Shared by the dataset + bucket remote CLI surfaces so a rejected/forbidden
+    token (or a network outage) produces a clean message instead of a raw
+    traceback. Re-raises anything that is NOT an HF HTTP error or a network
+    error so genuine programming bugs still surface.
+    """
+    try:
+        from huggingface_hub.errors import HfHubHTTPError
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import HfHubHTTPError  # type: ignore
+    # OSError covers requests' ConnectionError/Timeout (RequestException -> IOError).
+    if not isinstance(exc, (HfHubHTTPError, OSError)):
+        raise exc
+    _code, _kind, message, hint = _classify_hf_repo_error(exc, repo_id)
+    click.echo(message, err=True)
+    if hint:
+        click.echo(hint, err=True)
+    sys.exit(3)
 
 
 @remote.command("add")
@@ -3596,62 +3675,6 @@ def _emit_dry_run(
         f"new_gen={counts['new_generation']} noop={counts['noop']}"
     )
 
-@main.command(
-    examples=[
-        "opentraces web",
-        "opentraces web --port 6060 --no-open",
-    ],
-    see_also=[
-        ("opentraces tui", "same inbox, terminal UI."),
-    ],
-)
-@click.option("--port", type=int, default=5050, help="Port for the local web inbox.")
-@click.option("--no-open", is_flag=True, help="Do not open a browser automatically.")
-def web(port: int, no_open: bool) -> None:
-    """Open the browser inbox UI.
-
-    Starts a local Flask server against the current project's inbox. Use
-    this when you want richer diff views than the TUI, or to share the
-    review URL with a teammate on the same machine.
-    """
-    try:
-        _launch_web_ui(port=port, open_browser=_is_interactive_terminal() and not no_open)
-    except ImportError:
-        click.echo("Flask not installed. Run: pip install opentraces[web]")
-        sys.exit(2)
-
-
-@main.command(
-    examples=[
-        "opentraces tui",
-        "opentraces tui --fullscreen",
-        "opentraces tui --limit 0",
-    ],
-    see_also=[
-        ("opentraces web", "same inbox, browser UI."),
-    ],
-)
-@click.option("--fullscreen", is_flag=True, help="Open directly into fullscreen inspect mode.")
-@click.option(
-    "--limit",
-    type=int,
-    default=500,
-    show_default=True,
-    help="Maximum number of traces to load (most recent first). Use 0 for no limit.",
-)
-def tui(fullscreen: bool, limit: int) -> None:
-    """Open the terminal inbox UI.
-
-    Default entry point for reviewing traces without leaving the shell.
-    Running bare ``opentraces`` launches the same UI in an interactive
-    terminal.
-    """
-    try:
-        _launch_tui_ui(fullscreen=fullscreen, limit=limit if limit > 0 else None)
-    except ImportError:
-        click.echo("Textual not installed. Run: pip install opentraces[tui]")
-        sys.exit(2)
-
 
 def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
     """Resolve the HF dataset repo_id using priority chain.
@@ -3778,8 +3801,6 @@ for _legacy_root_command in [
     "add",
     "push",
     "pull",
-    "web",
-    "tui",
     "remote",
     "redact",
     "llm-review",

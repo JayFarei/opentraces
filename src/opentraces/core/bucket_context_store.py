@@ -668,7 +668,7 @@ def context_tree_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# Private helpers used by bucket_verify / bucket_prune in bucket_store.py
+# Private helpers used by bucket_verify / bucket_prune in bucket_maintenance.py
 # ---------------------------------------------------------------------------
 
 

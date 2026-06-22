@@ -62,11 +62,12 @@ GLOBAL_JSON_ONLY = {
     "config set",
     "config show",
     "config tracking-mode",
-    "ctx anchor-for-step",
+    # ctx anchor-for-step: hidden under the plan-087 core-surface simplification
+    # (callable, off --help) -> no longer part of the PUBLIC sweep.
     "init",
     "remove",
     "security sanitize",
-    "setup auth",
+    # setup auth: hidden (redundant with `auth login`) -> off the PUBLIC sweep.
     "setup claude-code",
     "setup codex-cli",
     "setup git",

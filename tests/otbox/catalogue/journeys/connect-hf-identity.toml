@@ -28,14 +28,6 @@ type = "cli"
 id = "logout-help"
 argv = ["auth", "logout", "--help"]
 
-# `setup auth` is documented as a wizard-side alias for `auth login`
-# (plan 063 §8.4); proving the alias surface keeps the trajectory
-# end-to-end owned.
-[[steps]]
-type = "cli"
-id = "setup-auth-help"
-argv = ["setup", "auth", "--help"]
-
 [[assertions]]
 kind = "returncode"
 step = "whoami"
@@ -61,8 +53,3 @@ value = "--device-timeout"
 kind = "stdout_contains"
 step = "logout-help"
 value = "Log out"
-
-[[assertions]]
-kind = "stdout_contains"
-step = "setup-auth-help"
-value = "--device-timeout"

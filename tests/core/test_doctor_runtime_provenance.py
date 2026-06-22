@@ -374,6 +374,149 @@ def test_exit_code_unaffected_by_mixed_runtime() -> None:
 
 
 # --------------------------------------------------------------------------
+# exit_code drift policy — benign stamp-absence (``version-missing`` /
+# ``shim-version-missing``) is WARN-severity and exits 0; every genuinely
+# broken reason still exits 3. Regression: doctor rc=3 on benign drift in a
+# freshly-restored captured world / older-stamp install broke otbox journeys
+# (codex-parity-*, budgeted-surfaces) and bites real scripts/CI.
+# --------------------------------------------------------------------------
+def _report_with_hook_drift(drift, *, installer="claude-code", broken=None):
+    h = {"installer": installer, "installed": True, "drift": list(drift)}
+    if broken is not None:
+        h["broken_harnesses"] = broken
+    return {
+        "security": {"tools": []},
+        "hooks": [h],
+        "watcher": {"provenance": {"drift": []}},
+        "trail_event_log": {"state": "ok"},
+    }
+
+
+def test_exit_code_benign_version_missing_hook_drift_is_zero() -> None:
+    assert doctor.exit_code(_report_with_hook_drift(["version-missing"])) == 0
+
+
+def test_exit_code_benign_skill_version_missing_is_zero() -> None:
+    report = _report_with_hook_drift(["version-missing"], installer="skill", broken=[])
+    assert doctor.exit_code(report) == 0
+
+
+def test_exit_code_benign_watcher_shim_version_missing_is_zero() -> None:
+    report = {
+        "security": {"tools": []},
+        "hooks": [],
+        "watcher": {"provenance": {"drift": ["shim-version-missing"]}},
+        "trail_event_log": {"state": "ok"},
+    }
+    assert doctor.exit_code(report) == 0
+
+
+@pytest.mark.parametrize(
+    "hard_reason",
+    [
+        "version-drift",
+        "shim-interpreter-missing",
+        "shim-legacy-verb",
+        "shim-version-drift",
+        "daemon-executable-missing",
+        "daemon-version-drift",
+    ],
+)
+def test_exit_code_hard_hook_drift_is_three(hard_reason: str) -> None:
+    assert doctor.exit_code(_report_with_hook_drift([hard_reason])) == 3
+
+
+def test_exit_code_mixed_soft_and_hard_drift_is_three() -> None:
+    # A real break alongside a benign reason still fails.
+    report = _report_with_hook_drift(["version-missing", "version-drift"])
+    assert doctor.exit_code(report) == 3
+
+
+def test_exit_code_broken_harnesses_still_three_despite_benign_drift() -> None:
+    report = _report_with_hook_drift(
+        ["version-missing"], installer="skill", broken=["claude"]
+    )
+    assert doctor.exit_code(report) == 3
+
+
+def test_exit_code_hard_watcher_provenance_drift_is_three() -> None:
+    report = {
+        "security": {"tools": []},
+        "hooks": [],
+        "watcher": {"provenance": {"drift": ["daemon-version-drift"]}},
+        "trail_event_log": {"state": "ok"},
+    }
+    assert doctor.exit_code(report) == 3
+
+
+def test_exit_code_skill_bool_version_staleness_is_zero() -> None:
+    # The skill hook reports drift as a coarse BOOL (version staleness:
+    # `drift = installed and inst_ver != __version__`), not a reason list.
+    # Staleness alone is a warning, not a break.
+    report = {
+        "security": {"tools": []},
+        "hooks": [
+            {"installer": "skill", "installed": True, "drift": True, "broken_harnesses": []}
+        ],
+        "watcher": {"provenance": {"drift": []}},
+        "trail_event_log": {"state": "ok"},
+    }
+    assert doctor.exit_code(report) == 0
+
+
+def test_exit_code_skill_bool_drift_with_broken_harness_is_three() -> None:
+    report = {
+        "security": {"tools": []},
+        "hooks": [
+            {
+                "installer": "skill",
+                "installed": True,
+                "drift": True,
+                "broken_harnesses": ["claude-code"],
+            }
+        ],
+        "watcher": {"provenance": {"drift": []}},
+        "trail_event_log": {"state": "ok"},
+    }
+    assert doctor.exit_code(report) == 3
+
+
+def test_exit_code_skill_list_version_missing_is_zero() -> None:
+    # The skill installer now emits drift as a reason LIST (same shape as every
+    # other installer). version-missing (no stamp) is benign → exit 0.
+    report = _report_with_hook_drift(["version-missing"], installer="skill", broken=[])
+    assert doctor.exit_code(report) == 0
+
+
+def test_exit_code_skill_list_version_drift_is_three() -> None:
+    # The consistency fix: skill version-DRIFT (stamped at a different version)
+    # is a real mismatch and exits 3 — exactly like claude-code/codex/git
+    # version-drift. No more cross-installer asymmetry from the old bool shape.
+    report = _report_with_hook_drift(["version-drift"], installer="skill", broken=[])
+    assert doctor.exit_code(report) == 3
+
+
+def test_exit_code_never_raises_on_mixed_drift_shapes() -> None:
+    # Regression: with benign hook drift no longer early-returning, exit_code
+    # reached the skill branch whose drift is a bool and raised TypeError
+    # ('bool' object is not iterable). It must tolerate every real-world drift
+    # shape (list / None / bool) without raising. Mirrors a real captured box:
+    # claude-code/git drift=['version-missing'], pi drift=None, skill drift=True.
+    report = {
+        "security": {"tools": []},
+        "hooks": [
+            {"installer": "claude-code", "installed": True, "drift": ["version-missing"]},
+            {"installer": "git", "installed": True, "drift": ["version-missing"]},
+            {"installer": "pi", "installed": True, "drift": None},
+            {"installer": "skill", "installed": True, "drift": True, "broken_harnesses": []},
+        ],
+        "watcher": {"provenance": {"drift": []}},
+        "trail_event_log": {"state": "ok"},
+    }
+    assert doctor.exit_code(report) == 0
+
+
+# --------------------------------------------------------------------------
 # robustness — never raises (finding: doctor must never crash)
 # --------------------------------------------------------------------------
 def test_provenance_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:

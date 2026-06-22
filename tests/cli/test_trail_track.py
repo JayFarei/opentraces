@@ -216,11 +216,20 @@ def test_help_listing_hides_old_verbs(tmp_path):
 
 def test_teleport_now_lives_under_trace(tmp_path):
     """``ot trace teleport`` is the canonical home; trail teleport stays
-    callable as a hidden alias for one release."""
+    callable as a hidden alias for one release.
+
+    Plan 087: teleport is now HIDDEN from ``trace --help`` (a niche cross-machine
+    workflow, off the core surface) but stays registered + callable under trace.
+    """
     runner = CliRunner()
+    # Canonical home: registered + callable under `trace` (hidden from --help).
+    trace_teleport_help = runner.invoke(
+        main, ["trace", "teleport", "--help"], color=False
+    )
+    assert trace_teleport_help.exit_code == 0, trace_teleport_help.output
     trace_help = runner.invoke(main, ["trace", "--help"], color=False)
     assert trace_help.exit_code == 0, trace_help.output
-    assert "  teleport" in trace_help.output
+    assert "  teleport" not in trace_help.output, "teleport should be hidden from --help"
 
     # The trail-side teleport must still dispatch (hidden alias).
     trail_teleport_help = runner.invoke(main, ["trail", "teleport", "--help"], color=False)

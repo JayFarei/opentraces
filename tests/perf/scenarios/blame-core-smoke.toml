@@ -1,9 +1,0 @@
-name = "blame-core-smoke"
-domain = "core"
-lane = "smoke"
-adapter = "python"
-target = "graph_api.load_blame"
-fixture = "stack"
-tier = "small"
-repetitions = 4
-warmups = 1

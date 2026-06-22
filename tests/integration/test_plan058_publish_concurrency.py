@@ -389,8 +389,8 @@ def test_plan058_publish_v6_no_bound_remote_fails_with_hint_and_no_side_effects(
 
     message = str(excinfo.value)
     assert "no active remote" in message
+    # Plan 087: `create` is the canonical idempotent create-or-bind verb.
     assert "dataset remote create" in message
-    assert "dataset remote add" in message
 
     fake_remote_snapshot_after: list[Path] = []
     if fake_remote_root.exists():

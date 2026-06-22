@@ -18,7 +18,7 @@ from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
 
 
-@click.group("skill-verifier", cls=OpentracesGroup)
+@click.group("skill-verifier", cls=OpentracesGroup, hidden=True)
 def skill_verifier_group() -> None:
     """Author and calibrate a trace-grounded verifier (rubric) for a skill."""
 

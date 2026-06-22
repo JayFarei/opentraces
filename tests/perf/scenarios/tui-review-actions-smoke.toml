@@ -1,9 +1,0 @@
-name = "tui-review-actions-smoke"
-domain = "tui"
-lane = "smoke"
-adapter = "python"
-target = "tui.review_actions"
-fixture = "stack"
-tier = "small"
-repetitions = 1
-warmups = 0

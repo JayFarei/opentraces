@@ -19,8 +19,6 @@ BUCKET_VERBS = ["bucket"]
 WORKFLOW_VERBS = ["workflow"]
 DATASET_VERBS = ["dataset"]
 SECURITY_VERBS = ["security"]
-CAPTURE_VERBS = ["capture-otlp"]
-MAINTENANCE_VERBS = ["git-backfill"]
 
 # Legacy/internal verbs still registered at the root but NOT advertised in
 # the journey-first sections.
@@ -39,8 +37,9 @@ SECTION_HEADERS_IN_ORDER = [
     "WORKFLOW COMMANDS",
     "DATASET COMMANDS",
     "SECURITY COMMANDS",
-    "CAPTURE COMMANDS",
-    "MAINTENANCE COMMANDS",
+    # Plan 087: CAPTURE COMMANDS (capture-otlp) + MAINTENANCE COMMANDS (git-backfill)
+    # auto-collapse — those groups are now hidden (callable, off --help) as part of
+    # the core-surface simplification.
 ]
 
 
@@ -145,8 +144,6 @@ def test_dataset_block_contains_current_primary_verbs():
         ("BUCKET COMMANDS", BUCKET_VERBS),
         ("WORKFLOW COMMANDS", WORKFLOW_VERBS),
         ("SECURITY COMMANDS", SECURITY_VERBS),
-        ("CAPTURE COMMANDS", CAPTURE_VERBS),
-        ("MAINTENANCE COMMANDS", MAINTENANCE_VERBS),
     ],
 )
 def test_new_public_blocks_contain_current_primary_verbs(header, verbs):
@@ -188,7 +185,8 @@ def test_legacy_verbs_are_not_advertised():
     ("args", "expected"),
     [
         (["dataset", "--help"], ["new", "list", "publish", "review"]),
-        (["dataset", "remote", "--help"], ["add", "Connect a local dataset", "create"]),
+        # Plan 087: `add` folded into the idempotent `create` (hidden alias).
+        (["dataset", "remote", "--help"], ["create", "list", "remove"]),
         (["dataset", "schedule", "--help"], ["add", "Add a local schedule", "pause"]),
         (["workflow", "--help"], ["create", "list", "remove"]),
     ],

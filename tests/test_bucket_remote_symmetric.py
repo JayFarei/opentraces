@@ -579,6 +579,70 @@ def test_cross_machine_bucket_digest_byte_identical(repo, tmp_path):
     )
 
 
+def test_plan087_status_accelerator_is_present_but_digest_invisible(repo, tmp_path):
+    """Plan 087 — the per-row ``status`` accelerator must NOT perturb the digest.
+
+    ``bucket status`` re-aggregates sync/security counts from a digest-EXCLUDED
+    ``status`` block on each ``traces[]`` row (instead of an O(N) envelope scan).
+    Because the cross-machine ``bucket_digest`` is a shipped sync protocol, the
+    block must be invisible to the digest: a bucket pushed by pre-plan-087 code
+    (no ``status``) and re-digested by this code must hash identically. This
+    test pins the three invariants that guarantee that.
+    """
+
+    import copy
+
+    from opentraces.core.bucket_store import (
+        _digest_payload,
+        _digest_safe_trace_rows,
+        _machine_neutral_digest_view,
+        bucket_manifest,
+    )
+
+    _project_envelope(repo, trace_id="trace-S1", seed="s1", project_slug="proj")
+    manifest = bucket_manifest(write=True)
+    rows = manifest["traces"]
+    assert rows, "expected at least one trace row"
+
+    # 1. The accelerator is present and shaped on every row.
+    for row in rows:
+        assert "status" in row, "status accelerator missing from row"
+        assert set(row["status"]) >= {
+            "known",
+            "syncable",
+            "privacy_off",
+            "security_stale",
+            "written_at",
+        }
+
+    # 2. The digest-safe projection drops status entirely.
+    for safe_row in _digest_safe_trace_rows(rows):
+        assert "status" not in safe_row
+
+    # 3. Mutating status (or deleting it, the pre-plan-087 shape) does NOT change
+    #    the hashed digest material — status is invisible to bucket_digest.
+    def _row_digest(trace_rows):
+        return _digest_payload(
+            _machine_neutral_digest_view(_digest_safe_trace_rows(trace_rows))
+        )
+
+    baseline = _row_digest(rows)
+
+    mutated = copy.deepcopy(rows)
+    for row in mutated:
+        row["status"]["syncable"] = not bool(row["status"]["syncable"])
+        row["status"]["security_stale"] = not bool(row["status"]["security_stale"])
+        row["status"]["written_at"] = "1999-01-01T00:00:00Z"
+    assert _row_digest(mutated) == baseline, "mutating status changed the digest"
+
+    pre_plan087 = copy.deepcopy(rows)
+    for row in pre_plan087:
+        row.pop("status", None)
+    assert _row_digest(pre_plan087) == baseline, (
+        "a manifest with no status block (pre-plan-087 shape) must hash identically"
+    )
+
+
 def test_cross_machine_bucket_digest_different_root(repo, tmp_path, monkeypatch):
     """Issue #29 — ``bucket_digest`` is machine-INDEPENDENT.
 

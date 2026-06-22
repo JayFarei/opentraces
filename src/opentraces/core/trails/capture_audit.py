@@ -1,15 +1,4 @@
-"""Cluster C-4 — trail-capture audit surface for ``opentraces doctor``.
-
-The doctor command lives at ``cli.doctor_cli.doctor_cmd`` and pulls its
-data from ``core.doctor.report``. This module exposes a focused helper
-that scans recent traces in the local index and reports any whose
-TrailEvent log shows ``file_edit`` events without matching
-``trace_patch_created`` events — the indexer-bug signal we want to
-surface a day before, not 12 hours after.
-
-The helper is in ``cli/`` so cluster-C tests can target it directly
-without monkey-patching the larger ``core/doctor.py`` aggregator.
-"""
+"""Trace Trail capture-health audit helpers."""
 
 from __future__ import annotations
 
@@ -45,16 +34,13 @@ def audit_trail_capture(
       * ``incomplete`` — list of ``{trace_id, file_edits, patches}``
         for any trace where file_edits > 0 AND patches == 0;
       * ``state`` — ``"ok"`` / ``"warn"`` / ``"missing"``.
-
-    ``state`` is ``"warn"`` when at least one incomplete trace is found,
-    ``"missing"`` if the event log itself is unreadable, ``"ok"``
-    otherwise.
     """
+
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=max(days, 1))
 
     try:
-        from ..core.trails import read_events
+        from .event_log import read_events
     except Exception as exc:
         return {
             "state": "missing",

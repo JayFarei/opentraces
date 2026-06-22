@@ -19,7 +19,7 @@ from ..capture.git import post_commit as _pc
 from ._options import project_dir_option
 
 
-@click.command("git-backfill")
+@click.command("git-backfill", hidden=True)
 @project_dir_option
 @click.option("--max-commits", type=int, default=500, show_default=True,
               help="Cap on first-parent commits to walk.")

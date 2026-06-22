@@ -71,6 +71,7 @@
   "top_level_keys": [
    "bucket",
    "config",
+   "freshness",
    "status"
   ]
  },

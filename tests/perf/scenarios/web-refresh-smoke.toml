@@ -1,9 +1,0 @@
-name = "web-refresh-smoke"
-domain = "web"
-lane = "smoke"
-adapter = "python"
-target = "web.api_refresh"
-fixture = "scan_project"
-tier = "small"
-repetitions = 3
-warmups = 0

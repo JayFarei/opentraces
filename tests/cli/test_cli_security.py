@@ -122,7 +122,7 @@ class TestSetupReviewLLM:
         self, runner, isolated_config, monkeypatch,
     ) -> None:
         # Stub the reachability probe so tests don't touch the network.
-        import opentraces.cli.installers as _inst
+        import opentraces.cli.setup_review_llm as _inst
         monkeypatch.setattr(
             _inst, "_test_review_llm",
             lambda *a, **k: (True, "stubbed: reachable"),
