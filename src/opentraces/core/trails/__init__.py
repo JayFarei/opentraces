@@ -32,6 +32,7 @@ from .maturation import MaturationSummary, has_unsearched_recent_patches, mature
 from .query import (
     TrailQueryProjection,
     build_trail_query_projection,
+    build_trail_query_projection_for_commits,
     trail_query_summary,
 )
 from .reconciler import reconcile_watcher_observations
@@ -96,6 +97,7 @@ __all__ = [
     "attach_trace_to_commit",
     "build_survival_cache_index",
     "build_trail_query_projection",
+    "build_trail_query_projection_for_commits",
     "get_cached_survival",
     "import_event_log",
     "make_survival_cache_draft",

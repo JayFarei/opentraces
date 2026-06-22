@@ -22,7 +22,7 @@ from typing import Any
 from opentraces.core.config import get_project_traces_dir
 
 from .contract import enrich_trail_row, projection_digest
-from .event_log import EVENT_LOG_REF, read_events
+from .event_log import EVENT_LOG_REF, read_events, read_events_scoped
 from .ids import id_from_payload
 from .models import TrailEvent
 from .search_records import iter_search_records
@@ -293,9 +293,72 @@ class TrailQueryProjection:
         return rows
 
 
+# Event types the Trail Query projection is built from. The commit-scoped
+# builder (plan 120, #120) reads ONLY these via read_events_scoped instead of
+# walking the whole canonical event log; the row-construction code below is
+# byte-identical regardless of whether the events came from the full log or the
+# commit-scoped read.
+_PROJECTION_EVENT_TYPES = {
+    "trace_patch_created",
+    "git_anchor_created",
+    "git_anchor_search_completed",
+}
+# Maps each commit-keyed event type to the payload key whose nested ``hex``
+# must equal a wanted commit sha (used by read_events_scoped's commit_filter).
+_PROJECTION_COMMIT_FILTER = {
+    "git_anchor_created": "commit_id",
+    "git_anchor_search_completed": "search_head",
+}
+
+
 def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
+    """Build the full Trail Query projection over the whole canonical log.
+
+    Used by consumers that legitimately need whole-log aggregates
+    (``events_seen`` / ``projection_digest`` / every patch row): the Trace
+    Index, capsule export, inverse blame, and ``to_summary``. Commit-scoped
+    consumers (``trail blame commit``, ``trail graph``) should use
+    :func:`build_trail_query_projection_for_commits` instead.
+    """
     repo = repo.resolve()
     events = read_events(repo)
+    return _build_projection_from_events(repo, events)
+
+
+def build_trail_query_projection_for_commits(
+    repo: Path, commit_shas: set[str]
+) -> TrailQueryProjection:
+    """Build a Trail Query projection scoped to ``commit_shas`` (plan 120, #120).
+
+    Identical row-construction to :func:`build_trail_query_projection`, but the
+    events are read via :func:`read_events_scoped` — only the projection's event
+    types are JSON-parsed and the commit-keyed anchor/search events are
+    additionally gated to those that reference one of ``commit_shas``. This keeps
+    ``trail blame commit`` and ``trail graph`` bounded on a 62k+-ref log instead
+    of walking the whole canonical event log per invocation.
+
+    BYTE-IDENTITY BOUNDARY: ``anchors_by_commit[sha]`` rows for any sha in
+    ``commit_shas`` are deep-equal to the full builder's, because
+    ``anchors_by_commit`` is keyed by the anchor's OWN commit ``hex`` and
+    ``with_current_survival`` derives survival independently of which other
+    events were loaded. The whole-log aggregates (``events_seen`` /
+    ``projection_digest`` / the full ``patches_by_id``) are NOT byte-identical
+    in the scoped builder by construction — callers MUST NOT surface those.
+    The canonical event log is unchanged; this is a rebuildable read accelerator.
+    """
+    repo = repo.resolve()
+    events = read_events_scoped(
+        repo,
+        event_types=_PROJECTION_EVENT_TYPES,
+        commit_filter=_PROJECTION_COMMIT_FILTER,
+        commit_shas=commit_shas,
+    )
+    return _build_projection_from_events(repo, events)
+
+
+def _build_projection_from_events(
+    repo: Path, events: list[TrailEvent]
+) -> TrailQueryProjection:
     projection = TrailQueryProjection(
         repo=repo,
         events_seen=len(events),

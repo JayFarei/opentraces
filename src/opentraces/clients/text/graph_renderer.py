@@ -860,10 +860,30 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
                     c.entity_breakdowns = breakdowns
         except Exception:
                 pass
-    try:
-        from opentraces.core.trails import build_trail_query_projection
+    return commits
 
-        trail_projection = build_trail_query_projection(project_cwd)
+
+def _attach_trail_evidence(commits: list[Commit], project_cwd: Path) -> list[Commit]:
+    """Join Trail Query evidence onto ``commits`` (plan 120, #120).
+
+    Scoped by construction: the loop below only ever queries the SHAs of the
+    commits it is handed, so the projection is built via
+    ``build_trail_query_projection_for_commits`` over exactly those SHAs instead
+    of walking the whole canonical event log. Callers MUST pass the
+    already-narrowed window (the paginated commit-mode window, or the
+    pivot-filtered set in trace mode) — passing the full git-history commit list
+    would make ``window_shas`` the entire history SHA set and re-admit the whole
+    ``git_anchor_search_completed`` flood the scoping is meant to avoid. The
+    joined evidence is byte-identical for the supplied window (anchors_by_commit
+    is keyed by the anchor's own commit hex).
+    """
+    window_shas = {c.sha for c in commits if c.sha}
+    try:
+        from opentraces.core.trails import build_trail_query_projection_for_commits
+
+        trail_projection = build_trail_query_projection_for_commits(
+            project_cwd, window_shas
+        )
     except Exception:
         trail_projection = None
     if trail_projection is None:
@@ -915,9 +935,18 @@ def load_commits_from_repo(project_cwd: Path, opts: RenderOptions) -> list[Commi
     commits = _attach_attribution(commits, project_cwd,
                                   show_entities=opts.show_entities)
     if opts.mode == "trace" and opts.pivot_trace_id:
+        # Trace-primary: the pivot filter must see trail-events-sourced traces
+        # too, so attach trail evidence BEFORE filtering. The window is the
+        # pivot-matching commits (bounded by the pivot, not by history).
+        commits = _attach_trail_evidence(commits, project_cwd)
         pivot = opts.pivot_trace_id
         commits = [c for c in commits
                    if any((t.trace_id == pivot or
                            t.trace_id.startswith(pivot))
                           for t in c.traces)]
-    return _paginate(commits, opts)
+        return _paginate(commits, opts)
+    # Commit-primary: attach trail evidence to the paginated window only, so the
+    # commit-scoped projection reads a bounded SHA set (plan 120, #120) instead
+    # of every commit in history.
+    commits = _paginate(commits, opts)
+    return _attach_trail_evidence(commits, project_cwd)

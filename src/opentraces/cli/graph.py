@@ -13,7 +13,6 @@ implements the 7-rule GitButler manifesto (plan 043 Appendix A).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import click
@@ -109,9 +108,16 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
         has_any = False
     has_trail_events = False
     try:
-        from ..core.trails import build_trail_query_projection
+        # Plan 120 (#120): bounded whole-log presence probe. The hint only
+        # gates a stderr message, so a cheap existence check over the anchor
+        # event type (parses only git_anchor_created blobs, <1% of the log)
+        # is behaviour-equivalent to building the full projection and testing
+        # .anchors_by_id, without the per-invocation whole-log walk.
+        from ..core.trails import read_events_scoped
 
-        has_trail_events = bool(build_trail_query_projection(cwd).anchors_by_id)
+        has_trail_events = bool(
+            read_events_scoped(cwd, event_types={"git_anchor_created"})
+        )
     except Exception:
         has_trail_events = False
     if not has_any and not has_trail_events:
