@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opentraces.ai/seo-snapshots/change-ledger.schema.json",
+  "title": "Per-change annotation ledger record",
+  "description": "One record per experiment-loop change (SEO-AEO-LOOP.md §4 step 6). Enforces the change-budget lock (never >1 in_flight per page) and is the SSoT for keep/revert verdicts.",
+  "type": "object",
+  "required": ["ts", "page", "change", "hypothesis", "deployed_sha", "verdict_eligible_date", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "ts": { "type": "string", "format": "date-time" },
+    "page": { "type": "string", "description": "URL path the change targets" },
+    "change": { "type": "string", "description": "the single bounded edit" },
+    "hypothesis": { "type": "string", "description": "targeted metric + expected direction (directional, not a fabricated decimal)" },
+    "lever": { "type": "string", "description": "Princeton GEO menu item or structural lever applied" },
+    "deployed_sha": { "type": "string" },
+    "deployed_date": { "type": "string", "format": "date" },
+    "verdict_eligible_date": { "type": "string", "format": "date", "description": "deployed_date + 21-28d; no verdict before this" },
+    "status": { "type": "string", "enum": ["in_flight", "judged_keep", "judged_inconclusive", "reverted"] },
+    "causal_pre_period": { "type": "string", "description": "pre-change window used for the CausalImpact read" },
+    "causal_covariates": { "type": "array", "items": { "type": "string" } },
+    "confounders": { "type": "array", "items": { "type": "string" }, "description": "core updates / model swaps coinciding" },
+    "before": { "type": "object" },
+    "after": { "type": "object" },
+    "verdict_notes": { "type": "string" }
+  }
+}

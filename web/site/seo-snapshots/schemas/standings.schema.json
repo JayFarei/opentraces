@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opentraces.ai/seo-snapshots/standings.schema.json",
+  "title": "SEO/AEO standings snapshot record",
+  "description": "One append-only JSONL record per (run, surface). Keyed by (run_date_bucket, deploy_sha, surface) for idempotent reconciliation (SEO-AEO-LOOP.md §3).",
+  "type": "object",
+  "required": ["ts", "run_date_bucket", "deploy_sha", "surface", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "ts": { "type": "string", "format": "date-time", "description": "ISO 8601 timestamp the record was written" },
+    "run_date_bucket": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "UTC date bucket; the monitor dedupe key" },
+    "deploy_sha": { "type": "string", "description": "short git SHA of the site at read time" },
+    "surface": {
+      "type": "string",
+      "description": "which signal this record captures",
+      "enum": ["seo_check", "crawler_hits", "gsc_search_analytics", "gsc_index", "geo_panel", "crux", "referrals", "indexnow"]
+    },
+    "status": { "type": "string", "enum": ["pending", "complete", "error"] },
+    "payload": { "type": "object", "description": "surface-specific data (per-page verdicts, counts, rates, CIs)" },
+    "notes": { "type": "string" }
+  }
+}

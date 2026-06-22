@@ -228,3 +228,24 @@ Order by cheapest-high-signal-no-credential first, credentialed/paid last. Note 
 - https://www.semrush.com/blog/ai-mode-comparison-study/
 
 > **Provenance note on vendor statistics.** The figures "~81% third-party listicle citations," "40-60% monthly citation churn," "~11% Perplexity↔ChatGPT overlap," and Perplexity's "45-point freshness premium" originate in single vendor/blog studies (Similarweb, BuzzStream, AthenaHQ, insightscout, and AEO-platform marketing). They are unreplicated and vendor-marketing-adjacent. This doc uses them as **directional priors only** and never as keep/revert thresholds or hypothesis targets. The Princeton lift percentages are from one 2023 study (arXiv 2311.09735), Perplexity-measured and query-averaged — treat them the same way.
+
+## Phase 0 — implementation status (wired vs deferred)
+
+Phase 0 was built and adversarially reviewed (see the closed defects below). This section is the **source of truth for current status** — read §2/§3/§7 above as the design, not as a claim that everything is implemented. The honest split:
+
+**Wired and verified (runs today, no credentials):**
+- **Standings store** — `seo-snapshots/` with three append-only ledgers + JSON schemas + README. Writers: `crawler-report` (`crawler_hits`), `seo-check --write` (`seo_check`), `indexnow-submit --submit` (`indexnow`). They append **unconditionally** — the §3 "duplicate scheduler fire is a no-op" dedupe and pending-resumption are a Phase 1 scheduler step, NOT yet implemented ("latest per key wins" holds; the no-op safety does not).
+- **Deterministic SEO gate** — `scripts/seo/seo-check.mjs` + `.github/workflows/seo-checks.yml`. Per priority page: title/description/canonical/indexable (meta-robots), JSON-LD validity + light name parity + **no-misframing on curated nodes** (rejects a "centralized SaaS" drift) + **SoftwareApplication fact allowlist** (MIT license, Python, free); robots real `Allow:/` + **no blanket `Disallow`** + **Content-Signal=yes** (values, not presence); sitemap smoke test. 71 checks green. Hardened against the false-negatives an adversarial pass found (value-blind robots checks, one-word parity, whole-HTML noindex grep).
+- **Crawler report** — `scripts/seo/crawler-report.mjs`. Under `--verify`, the load-bearing signal (coverage/total) counts **only rDNS-verified** hits, so a forged `User-Agent: GPTBot` from a random IP can neither inflate presence nor mask a zero-fetch regression; unverified counts are reported separately as "claimed". Parser handles NDJSON + plain access logs (incl. trailing fields) + array-valued fields + IPv6 forward-confirm. The PARSER is done and tested; a real **log SOURCE is NOT configured** (it reads a file/stdin) — see deferred.
+- **AI-referral classifier** — `src/lib/ai-referrers.ts`. Exact/suffix host matching (spoof-safe; `myopenai.com.evil.net` ≠ AI), http(s)-only, ccTLD-family boundary match. 11/11 unit cases. This is a **lib only — imported by nothing yet**; the "AI Search" channel is not lit up (see deferred).
+- **IndexNow** — `scripts/seo/indexnow-submit.mjs` + live public key file + config. Dry-run is the default and is genuinely **side-effect-free** (sends nothing, writes nothing); `--submit` verifies the key file **content** (not just reachability) before posting. Built and dry-run-validated; **not fired live**, and **not auto-wired** into deploy.
+- **Sitemap freshness fix** — shipped (Cycle 8 in `DISCOVERABILITY-LOOP.md`): real git-derived per-URL `lastmod`.
+
+**Deferred (needs infra / scheduler / credentials — NOT done despite §2/§3/§7 phrasing):**
+- **Scheduled monitor** (the 2–3 day cron) — Phase 0 ships the scripts, not the scheduler. GitHub Actions cron + Claude Code headless executor is Phase 1 (§5).
+- **§3 dedupe/no-op idempotency** + pending-resumption — Phase 1.
+- **Content-hash sitemap `lastmod` honesty** — the gate currently checks only "no `new Date()` in source + differentiated dates" (a weaker smoke test), NOT "`lastmod` advanced only when the content hash changed". The real content-hash check (§2/§3) is deferred.
+- **Crawler log source** — a Vercel Log Drain (or scheduled `vercel logs --json` feed) must be configured; until then the crawler signal has no data.
+- **IndexNow auto-fire on deploy** — the site deploys via Vercel git-integration (no GH Actions deploy job), so a post-deploy trigger is needed; today it is a manual `npm run seo:indexnow -- --submit` after the key is live.
+- **AI-referral channel wiring** — the analytics tracker is an external Cloudflare worker; lighting up the channel needs either editing that worker with `classifyReferrer`, or a consumer that reads its event export and writes a `referrals` standings record.
+- **All credentialed signals** (GSC, BigQuery, the GEO citation panel, CrUX) — Phase 1/2.

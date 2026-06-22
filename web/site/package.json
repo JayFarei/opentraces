@@ -9,6 +9,9 @@
     "start": "next start",
     "lint": "eslint",
     "sitemap-dates": "node scripts/gen-sitemap-dates.mjs",
+    "seo:check": "node scripts/seo/seo-check.mjs",
+    "seo:crawlers": "node scripts/seo/crawler-report.mjs",
+    "seo:indexnow": "node scripts/seo/indexnow-submit.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },

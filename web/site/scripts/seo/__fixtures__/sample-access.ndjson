@@ -1,0 +1,7 @@
+{"timestamp":"2026-06-22T08:01:10Z","path":"/","userAgent":"Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)","clientIp":"20.171.207.10"}
+{"timestamp":"2026-06-22T08:02:33Z","path":"/docs","userAgent":"Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)","clientIp":"160.79.104.10"}
+{"timestamp":"2026-06-22T08:03:00Z","path":"/llms.txt","userAgent":"Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)","clientIp":"4.227.36.10"}
+{"timestamp":"2026-06-22T08:04:21Z","path":"/schema/latest","userAgent":"Mozilla/5.0 (compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot)","clientIp":"20.171.207.20"}
+{"timestamp":"2026-06-22T08:05:00Z","path":"/","userAgent":"Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)","clientIp":"66.249.66.1"}
+{"timestamp":"2026-06-22T08:06:00Z","path":"/explorer","userAgent":"Mozilla/5.0 (X11; Linux x86_64) regular human visitor","clientIp":"203.0.113.9"}
+{"timestamp":"2026-06-22T08:07:00Z","path":"/admin","userAgent":"GPTBot/1.2 SPOOFED-from-random-ip","clientIp":"198.51.100.7"}

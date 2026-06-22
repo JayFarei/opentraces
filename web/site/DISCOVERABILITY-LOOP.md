@@ -83,3 +83,6 @@ Shipped to production (commit `cbc9ae71ba4`, deploy `dpl_GzWf5MfoPFx2qen3fvs4bz7
 - **Result:** _pending build + deploy + verify_
 
 See `SEO-AEO-LOOP.md` for the full monitor-and-tweak loop design (the "is it actually working?" verification loop).
+
+### Phase 0 of SEO-AEO-LOOP.md — built + adversarially hardened
+The free, no-credential, in-repo slice: standings store (`seo-snapshots/` + schemas), deterministic SEO CI gate (`scripts/seo/seo-check.mjs` + `.github/workflows/seo-checks.yml`, 71 checks), AI-crawler log report with rDNS spoof-rejection (`crawler-report.mjs`), IndexNow (`indexnow-submit.mjs`, dry-run default + live key), and the AI-referral classifier (`src/lib/ai-referrers.ts`). A 7-agent adversarial review found 5 high-severity false-negatives (value-blind robots checks, one-word JSON-LD parity, spoofable crawler counts, ledger-polluting dry-run, substring referrer spoofing) — all fixed and re-tested (gate correctly rejects `Content-Signal=no` / blanket `Disallow` / "centralized SaaS" misframing). Honest wired-vs-deferred status is the "Phase 0 — implementation status" section of `SEO-AEO-LOOP.md` (deferred: scheduler, crawler log source, IndexNow auto-fire, referral-channel wiring, content-hash lastmod honesty, all credentialed signals).

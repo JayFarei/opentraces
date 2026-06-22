@@ -1,0 +1,38 @@
+name: seo-checks
+
+# Deterministic, no-credential SEO/AEO pre-deploy gate (Phase 0 of
+# web/site/SEO-AEO-LOOP.md). Builds the marketing site and asserts every
+# priority page is indexable with a distinct title/description/canonical, valid
+# JSON-LD that matches visible text, intact robots/Content-Signal, and an honest
+# sitemap lastmod. A status check, not a required merge gate, until promoted in
+# branch protection.
+
+on:
+  pull_request:
+    paths: ["web/site/**", ".github/workflows/seo-checks.yml"]
+  push:
+    branches: [main]
+    paths: ["web/site/**", ".github/workflows/seo-checks.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  seo-gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/site/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: SEO gate
+        run: node scripts/seo/seo-check.mjs --json

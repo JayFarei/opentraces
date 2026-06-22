@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opentraces.ai/seo-snapshots/community-actions.schema.json",
+  "title": "Off-site / community action record",
+  "description": "The dominant GEO lever is off-site (SEO-AEO-LOOP.md §4a). Human-owned: the agent DETECTS and DRAFTS; a human posts. One record per action.",
+  "type": "object",
+  "required": ["ts", "surface", "action", "owner", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "ts": { "type": "string", "format": "date-time" },
+    "surface": { "type": "string", "description": "where (HN thread / subreddit / GitHub discussion / comparison post URL)" },
+    "trigger": { "type": "string", "description": "the gap that surfaced it (e.g. 'engines cite competitor X via this thread where we're absent')" },
+    "action": { "type": "string", "description": "what was done or drafted" },
+    "linked_page": { "type": "string", "description": "opentraces page the action points at" },
+    "owner": { "type": "string", "enum": ["agent_drafted", "human"], "description": "agent may draft/queue only; posting is human" },
+    "status": { "type": "string", "enum": ["queued", "drafted", "posted", "skipped"] },
+    "outcome": { "type": "string", "description": "observed later: appeared in cited domains? correlated citation lift?" }
+  }
+}
