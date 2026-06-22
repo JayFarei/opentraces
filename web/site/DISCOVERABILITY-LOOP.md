@@ -72,3 +72,14 @@ Final verification: `next build` green, ESLint clean on all touched files, every
 **Not yet done (requires explicit go-ahead):** production deploy (`/deploy-site`), and the post-deploy engine spot-check (query real AI/search engines for the top questions and fold wrong/missing descriptions back in as new gaps — meaningful only against the deployed site).
 
 **Deferred (low-impact, not blocking):** `FAQPage` JSON-LD on home, per-page OG images, a concise `llms.txt` index split from the full dump.
+
+## Post-convergence
+
+Shipped to production (commit `cbc9ae71ba4`, deploy `dpl_GzWf5MfoPFx2qen3fvs4bz7gKzBE`, aliased `https://www.opentraces.ai`). Verify harness: `allGreen: true`, 0 failures across 9 routes × desktop/mobile. Independently confirmed all JSON-LD + canonicals + per-page titles + `/schema/latest` sitemap entry live in prod.
+
+### Cycle 8 — sitemap `lastmod` honesty (found by the SEO/AEO research pass)
+- **Gap:** `sitemap.ts` stamped `lastModified: new Date()` on every URL at build time → every deploy falsely claimed every page changed (freshness-gaming; engines discount inaccurate lastmod).
+- **Change:** `scripts/gen-sitemap-dates.mjs` derives per-URL last-modified from git history → committed `src/lib/sitemap-lastmod.json` (read at build, so Vercel needs no git); `sitemap.ts` uses it and omits `lastModified` when no honest date exists; `npm run sitemap-dates` regenerates.
+- **Result:** _pending build + deploy + verify_
+
+See `SEO-AEO-LOOP.md` for the full monitor-and-tweak loop design (the "is it actually working?" verification loop).
