@@ -13,7 +13,6 @@ implements the 7-rule GitButler manifesto (plan 043 Appendix A).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import click
