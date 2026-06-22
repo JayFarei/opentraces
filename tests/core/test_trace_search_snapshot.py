@@ -1268,3 +1268,213 @@ def test_refresh_clears_unchanged_dirty_marker_after_bookkeeping_edit() -> None:
 
     page = search_traces("freshly captured", SearchFilters(), limit=5)
     assert [hit.trace_id for hit in page.hits] == ["trace-warm-2"]
+
+
+# --- #124: cold-build guard (refuse unbounded inline hydration at scale) ------
+
+
+def test_cold_build_below_threshold_is_byte_identical() -> None:
+    # The guard MUST be a no-op below the threshold: a missing snapshot still
+    # cold-builds inline and serves the IDENTICAL SnapshotSummary + SearchPage
+    # (hits + diagnostics + source_hash) it produced before the guard existed.
+    # The two-trace corpus is far below COLD_BUILD_MAX_SOURCES, so this proves
+    # equivalence (bounded == full) on the existing fixture shape.
+    _write_trace(
+        "demo-project",
+        _trace("trace-site", description="Fix the marketing site search hang"),
+    )
+    _write_trace(
+        "demo-project",
+        _trace("trace-api", description="Tune the API importer"),
+    )
+
+    assert not default_snapshot_path().exists()
+
+    # Cold inline build via the read path (snapshot ABSENT).
+    page = search_traces(
+        "marketing",
+        SearchFilters(project="demo-project", skill="review", tool="Edit", file_kind="tsx"),
+        limit=3,
+    )
+
+    # Same hits + same diagnostics shape as the explicit-build path
+    # (test_snapshot_builds_trace_level_docs_and_searches_read_only), modulo the
+    # rebuilt/wrote flags which are expected True on the cold self-heal.
+    assert [hit.trace_id for hit in page.hits] == ["trace-site"]
+    diag = page.diagnostics.as_dict()
+    assert diag["used_search_snapshot"] is True
+    assert diag["used_fts"] is True
+    assert diag["rows_examined"] == 1
+    assert diag["hits_returned"] == 1
+    assert diag["hydrated_count"] == 0
+    assert diag["raw_trace_scan"] is False
+    assert diag["python_full_corpus_sort"] is False
+    assert diag["rebuilt_index"] is True
+    assert diag["wrote_to_index"] is True
+
+    # And the snapshot the cold build produced is byte-identical in its
+    # source_hash to a fresh explicit rebuild over the same corpus.
+    summary = build_trace_search_snapshot()
+    assert summary.trace_count == 2
+    status = snapshot_status()
+    assert status["state"] == "ok"
+
+
+class _FakeSource:
+    """Lightweight CorpusSource stand-in: carries NO record body.
+
+    Used to prove the count path (``iter_sources``) is cheap — a guard that
+    counted by hydrating bodies would blow up on these stubs.
+    """
+
+    def __init__(self, trace_id: str) -> None:
+        self.trace_id = trace_id
+        self.project_slug = "demo-project"
+
+
+def _install_oversized_corpus_and_builder_spy(monkeypatch, n: int):
+    """Make iter_sources yield ``n`` body-free stubs and spy on the builder.
+
+    Returns the spy ``calls`` list — it MUST stay empty when the guard trips
+    (proves no inline hydration / no OOM work ran).
+    """
+
+    from opentraces.core import trace_corpus
+    from opentraces.core import trace_search_snapshot as snapshot
+
+    def _fake_iter_sources():
+        for i in range(n):
+            yield _FakeSource(f"trace-{i:06d}")
+
+    monkeypatch.setattr(trace_corpus, "iter_sources", _fake_iter_sources)
+
+    calls: list[Path | None] = []
+
+    def _spy_build(*_args, **kwargs):
+        calls.append(kwargs.get("path"))
+        raise AssertionError("build_trace_search_snapshot must not run when guard trips")
+
+    monkeypatch.setattr(snapshot, "build_trace_search_snapshot", _spy_build)
+    return calls
+
+
+def test_cold_build_over_threshold_search_traces_returns_maintenance_needed(monkeypatch) -> None:
+    from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
+
+    calls = _install_oversized_corpus_and_builder_spy(
+        monkeypatch, COLD_BUILD_MAX_SOURCES + 1
+    )
+    assert not default_snapshot_path().exists()
+
+    try:
+        search_traces("anything", SearchFilters(), limit=3)
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "cold_build_too_large"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("oversized cold build should raise cold_build_too_large")
+
+    # The expensive inline build was NEVER invoked: the guard tripped first.
+    assert calls == []
+
+
+def test_cold_build_over_threshold_list_skill_usage_returns_maintenance_needed(monkeypatch) -> None:
+    from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
+
+    calls = _install_oversized_corpus_and_builder_spy(
+        monkeypatch, COLD_BUILD_MAX_SOURCES + 1
+    )
+    assert not default_snapshot_path().exists()
+
+    try:
+        list_skill_usage(SearchFilters(), limit=10)
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "cold_build_too_large"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("oversized cold build should raise cold_build_too_large")
+
+    assert calls == []
+
+
+def test_cold_build_over_threshold_list_skill_invocation_units_returns_maintenance_needed(
+    monkeypatch,
+) -> None:
+    from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
+
+    calls = _install_oversized_corpus_and_builder_spy(
+        monkeypatch, COLD_BUILD_MAX_SOURCES + 1
+    )
+    assert not default_snapshot_path().exists()
+
+    try:
+        list_skill_invocation_units(skill="review")
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "cold_build_too_large"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("oversized cold build should raise cold_build_too_large")
+
+    assert calls == []
+
+
+def test_cold_build_threshold_is_env_overridable(monkeypatch) -> None:
+    # A corpus that would trip the default ceiling is admitted when the operator
+    # raises OPENTRACES_COLD_BUILD_MAX_SOURCES above it. We prove the GUARD does
+    # not fire (it raises a DISTINCT sentinel from the build spy so we can tell a
+    # guard-trip apart from reaching the build) — the build is reached, not the
+    # cold_build_too_large refusal.
+    from opentraces.core import trace_corpus
+    from opentraces.core import trace_search_snapshot as snapshot
+    from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
+
+    n = COLD_BUILD_MAX_SOURCES + 5
+    monkeypatch.setenv("OPENTRACES_COLD_BUILD_MAX_SOURCES", str(n + 1000))
+
+    def _fake_iter_sources():
+        for i in range(n):
+            yield _FakeSource(f"trace-{i:06d}")
+
+    monkeypatch.setattr(trace_corpus, "iter_sources", _fake_iter_sources)
+
+    class _ReachedBuild(Exception):
+        pass
+
+    def _build_sentinel(*_args, **_kwargs):
+        raise _ReachedBuild()
+
+    monkeypatch.setattr(snapshot, "build_trace_search_snapshot", _build_sentinel)
+    assert not default_snapshot_path().exists()
+
+    try:
+        search_traces("anything", SearchFilters(), limit=3)
+    except _ReachedBuild:
+        pass  # guard did NOT fire; the inline build was reached
+    except SearchSnapshotNeedsRebuild as exc:  # pragma: no cover - failure clarity
+        raise AssertionError(
+            f"guard should not fire when threshold raised, got {exc.reason}"
+        )
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("expected to reach the inline build")
+
+
+def test_explicit_warm_build_is_not_guarded_at_scale(monkeypatch) -> None:
+    # The guard lives ONLY in the read functions' cold-build branch. The
+    # explicit warm build (build_trace_search_snapshot, as called by
+    # `trace index`) must build regardless of source count — it is the supported
+    # way to build at scale and is never routed through _guard_cold_build.
+    from opentraces.core import trace_search_snapshot as snapshot
+
+    guard_calls: list[Path] = []
+    real_guard = snapshot._guard_cold_build
+
+    def _tracking_guard(p):
+        guard_calls.append(p)
+        return real_guard(p)
+
+    monkeypatch.setattr(snapshot, "_guard_cold_build", _tracking_guard)
+
+    # A real (small) corpus so the explicit build genuinely runs.
+    _write_trace("demo-project", _trace("trace-site", description="Fix the site"))
+    summary = build_trace_search_snapshot()
+
+    assert summary.trace_count == 1
+    # The explicit build path never consults the cold-build guard.
+    assert guard_calls == []

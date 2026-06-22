@@ -642,3 +642,44 @@ def test_trace_index_missing_legacy_reports_explicit_repair_without_bootstrap() 
     assert not default_index_path().exists()
     assert "Bootstrapping" not in result.stdout
     assert "Bootstrapping" not in result.stderr
+
+
+def test_trace_query_over_threshold_cold_build_returns_maintenance_needed(monkeypatch) -> None:
+    # #124: on a large/fresh bucket with no snapshot, the first query must NOT
+    # start the unbounded inline hydration. The cold-build guard refuses it and
+    # the CLI surfaces the IDENTICAL maintenance_needed/exit-3 envelope the issue
+    # requires — only the reason string is the new pass-through 'cold_build_too_large'.
+    from opentraces.core import trace_corpus
+    from opentraces.core import trace_search_snapshot as tss
+    from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
+
+    class _Stub:
+        def __init__(self, tid: str) -> None:
+            self.trace_id = tid
+            self.project_slug = "demo-project"
+
+    def _fake_iter_sources():
+        for i in range(COLD_BUILD_MAX_SOURCES + 1):
+            yield _Stub(f"trace-{i:06d}")
+
+    monkeypatch.setattr(trace_corpus, "iter_sources", _fake_iter_sources)
+
+    def _no_build(*_args, **_kwargs):
+        raise AssertionError("inline cold build must not run when the guard trips")
+
+    monkeypatch.setattr(tss, "build_trace_search_snapshot", _no_build)
+    assert not default_snapshot_path().exists()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
+    )
+
+    assert result.exit_code == 3, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "maintenance_needed"
+    assert payload["reason"] == "cold_build_too_large"
+    assert payload["advice"] == "opentraces trace index"
+    # The guard fired before any build/hydration ran.
+    assert not default_snapshot_path().exists()
