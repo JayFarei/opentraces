@@ -85,3 +85,64 @@ export function getSkillContent(): string {
   }
   return "";
 }
+
+const SITE = "https://opentraces.ai";
+
+/** First prose paragraph of a doc, cleaned into a meta description (≤155 chars). */
+function extractDescription(markdown: string): string | null {
+  const noCode = markdown.replace(/```[\s\S]*?```/g, "");
+  const buf: string[] = [];
+  for (const raw of noCode.split("\n")) {
+    const line = raw.trim();
+    if (!line) {
+      if (buf.length) break; // blank line ends the first paragraph
+      continue;
+    }
+    if (line.startsWith("#")) continue; // headings
+    if (line.startsWith(">")) continue; // blockquotes
+    if (/^([-*+]|\d+\.)\s/.test(line)) continue; // list items
+    buf.push(line);
+  }
+  if (!buf.length) return null;
+  let text = buf
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // links → text
+    .replace(/[*_`]+/g, "") // emphasis/code marks
+    .trim();
+  if (text.length > 155) text = text.slice(0, 152).replace(/\s+\S*$/, "") + "…";
+  return text || null;
+}
+
+export interface DocMeta {
+  title: string;
+  heading: string;
+  description: string;
+  canonical: string;
+}
+
+/**
+ * Page-specific metadata for a docs slug. Reads the markdown directly (no
+ * network) so it is cheap during static generation; the releases page, which
+ * is fetched at runtime, uses a generic description.
+ */
+export function getDocMeta(slug: string): DocMeta | null {
+  const navTitle = DOC_NAV.find((d) => d.slug === slug)?.title;
+
+  let content = "";
+  if (slug !== "overview/releases") {
+    const exactPath = path.join(CONTENT_DIR, `${slug || "index"}.md`);
+    const indexPath = path.join(CONTENT_DIR, slug, "index.md");
+    if (fs.existsSync(exactPath)) content = fs.readFileSync(exactPath, "utf-8");
+    else if (fs.existsSync(indexPath)) content = fs.readFileSync(indexPath, "utf-8");
+    else return null;
+  }
+
+  const heading = slug === "" ? "opentraces Documentation" : navTitle ?? "Documentation";
+  const title = slug === "" ? "Documentation — opentraces" : `${heading} — opentraces docs`;
+  const description =
+    extractDescription(content) ??
+    `${navTitle ?? "opentraces"} documentation — the open-source CLI for capturing AI coding agent traces and publishing them as datasets on Hugging Face Hub.`;
+
+  return { title, heading, description, canonical: `${SITE}/docs${slug ? "/" + slug : ""}` };
+}

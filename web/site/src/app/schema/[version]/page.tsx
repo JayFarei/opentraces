@@ -1,13 +1,44 @@
-"use client";
-
+import type { Metadata } from "next";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { notFound } from "next/navigation";
-import { use } from "react";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import SectionRule from "@/components/SectionRule";
-import { versions, findVersion, latestVersion, type Field } from "@/lib/schema-versions";
+import JsonLd from "@/components/JsonLd";
+import SchemaVersionSelect from "@/components/SchemaVersionSelect";
+import { schemaStructuredData } from "@/lib/structured-data";
+import {
+  versions,
+  versionSlugs,
+  findVersion,
+  latestVersion,
+  type Field,
+} from "@/lib/schema-versions";
+
+const SITE = "https://opentraces.ai";
+
+export function generateStaticParams() {
+  return versionSlugs().map((version) => ({ version }));
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ version: string }>;
+}): Promise<Metadata> {
+  const { version } = await params;
+  const schema = findVersion(version);
+  if (!schema) return {};
+  const label = version === "latest" ? "latest" : `v${schema.version}`;
+  const title = `Schema ${label} — opentraces`;
+  const canonical = `${SITE}/schema/${version}`;
+  return {
+    title,
+    description: schema.summary,
+    alternates: { canonical },
+    openGraph: { title, description: schema.summary, url: canonical, type: "article" },
+  };
+}
 
 function FieldTable({ fields }: { fields: Field[] }) {
   return (
@@ -40,17 +71,29 @@ function FieldTable({ fields }: { fields: Field[] }) {
   );
 }
 
-export default function SchemaVersionPage({ params }: { params: Promise<{ version: string }> }) {
-  const { version } = use(params);
-  const router = useRouter();
+export default async function SchemaVersionPage({
+  params,
+}: {
+  params: Promise<{ version: string }>;
+}) {
+  const { version } = await params;
   const schema = findVersion(version);
 
   if (!schema) notFound();
 
   const displaySlug = version === "latest" ? "latest" : schema.version;
+  const canonical = `${SITE}/schema/${version}`;
 
   return (
     <div className="container">
+      <JsonLd
+        data={schemaStructuredData({
+          version: schema.version,
+          date: schema.date,
+          summary: schema.summary,
+          canonical,
+        })}
+      />
       <Nav />
 
       <section style={{ paddingTop: 48, paddingBottom: 32 }}>
@@ -75,52 +118,12 @@ export default function SchemaVersionPage({ params }: { params: Promise<{ versio
             Schema
           </h1>
 
-          <div style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-            background: "var(--bg-alt)",
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            padding: "4px 10px 4px 12px",
-          }}>
-            <select
-              value={displaySlug}
-              onChange={(e) => router.push(`/schema/${e.target.value}`)}
-              style={{
-                background: "transparent",
-                color: "var(--accent)",
-                border: "none",
-                fontSize: 14,
-                fontFamily: "var(--font-mono)",
-                fontWeight: 500,
-                cursor: "pointer",
-                outline: "none",
-                appearance: "none",
-                WebkitAppearance: "none",
-                paddingRight: 16,
-                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239A9895' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
-                backgroundRepeat: "no-repeat",
-                backgroundPosition: "right 0 center",
-              }}
-            >
-              <option value="latest">latest (v{latestVersion})</option>
-              {versions.map((v) => (
-                <option key={v.version} value={v.version}>v{v.version}</option>
-              ))}
-            </select>
-
-            <span style={{
-              width: 1,
-              height: 16,
-              background: "var(--border)",
-              flexShrink: 0,
-            }} />
-
-            <span style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap" }}>
-              {schema.date}
-            </span>
-          </div>
+          <SchemaVersionSelect
+            displaySlug={displaySlug}
+            latestVersion={latestVersion}
+            versions={versions}
+            date={schema.date}
+          />
         </div>
 
         <p style={{ fontSize: 13, color: "var(--text-muted)", maxWidth: 560, margin: "12px 0 0" }}>
