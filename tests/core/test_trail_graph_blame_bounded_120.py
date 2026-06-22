@@ -272,3 +272,45 @@ def test_commit_scoped_read_is_bounded(tmp_path: Path, monkeypatch) -> None:
         f"scoped parsed {scoped_parses} of {total_blobs} blobs; "
         "expected it to skip the foreign search-event flood"
     )
+
+
+def test_graph_commit_mode_joins_only_the_paginated_window(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """CALLER REGRESSION (#120): commit-primary ``trail graph`` must attach
+    trail evidence to the PAGINATED window only — never the full git history.
+
+    The scoped builder (tested above) is correct in isolation; the shipped bug
+    was in the CALLER (``load_commits_from_repo``), which ran the trail-evidence
+    join BEFORE ``_paginate`` and so handed the scoped builder EVERY commit's
+    SHA — re-admitting the whole ``git_anchor_search_completed`` flood the
+    scoping is meant to avoid. The builder-level tests stayed green through that
+    bug because they call the builder directly with an already-narrow SHA set.
+    This pins the ordering: the join must see ``<= limit`` commits, not all of
+    history. Moving ``_attach_trail_evidence`` back before ``_paginate`` fails
+    this test.
+    """
+    from opentraces.clients.text import graph_renderer
+
+    shas = _seed_multi_commit_world(tmp_path, n_commits=5)
+    assert len(shas) > 2  # the world genuinely spans more than one page
+
+    captured: dict = {}
+    real_attach = graph_renderer._attach_trail_evidence
+
+    def _spy(commits, project_cwd):
+        captured["count"] = len(commits)
+        return real_attach(commits, project_cwd)
+
+    monkeypatch.setattr(graph_renderer, "_attach_trail_evidence", _spy)
+
+    opts = graph_renderer.RenderOptions(mode="commit", limit=2, page=1)
+    graph_renderer.load_commits_from_repo(tmp_path, opts)
+
+    assert "count" in captured, "the trail-evidence join was never invoked"
+    assert captured["count"] <= opts.limit, (
+        f"trail-evidence join saw {captured['count']} commits but the rendered "
+        f"page is {opts.limit}; pagination MUST precede the join, else the "
+        "bounded commit-scoped read is fed the full git history (the #120 "
+        "flood regression)."
+    )
