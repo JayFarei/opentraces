@@ -860,10 +860,18 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
                     c.entity_breakdowns = breakdowns
         except Exception:
                 pass
+    # Plan 120 (#120): the loop below only ever queries the SHAs of the
+    # already-paginated ``commits`` window, so build a projection scoped to
+    # those SHAs via read_events_scoped instead of walking the whole canonical
+    # event log. The joined evidence is byte-identical for the rendered window
+    # (anchors_by_commit is keyed by the anchor's own commit hex).
+    window_shas = {c.sha for c in commits if c.sha}
     try:
-        from opentraces.core.trails import build_trail_query_projection
+        from opentraces.core.trails import build_trail_query_projection_for_commits
 
-        trail_projection = build_trail_query_projection(project_cwd)
+        trail_projection = build_trail_query_projection_for_commits(
+            project_cwd, window_shas
+        )
     except Exception:
         trail_projection = None
     if trail_projection is None:

@@ -551,6 +551,23 @@ def _trail_projection_for(project_cwd: Path):
         return None
 
 
+def _trail_projection_for_commits(project_cwd: Path, commit_shas: set[str]):
+    """Commit-scoped Trail Query projection (plan 120, #120).
+
+    ``trail blame commit`` only ever reads ``anchors_for_commit_with_survival``
+    for the resolved commit sha, so the projection can be built from the
+    commit-scoped slice of the canonical event log instead of a whole-log walk.
+    Falls back to the full builder if the scoped read raises, so the
+    behaviour (and the None-on-error contract) is unchanged.
+    """
+    try:
+        from ..core.trails import build_trail_query_projection_for_commits
+
+        return build_trail_query_projection_for_commits(project_cwd, commit_shas)
+    except Exception:
+        return _trail_projection_for(project_cwd)
+
+
 def _trail_trace_id_for_prefix(project_cwd: Path, prefix: str) -> str | None:
     projection = _trail_projection_for(project_cwd)
     if projection is None:
@@ -563,7 +580,7 @@ def _trail_evidence_for_commit(
     sha: str,
     scope_file: str | None = None,
 ) -> list[dict]:
-    projection = _trail_projection_for(project_cwd)
+    projection = _trail_projection_for_commits(project_cwd, {sha})
     if projection is None:
         return []
     rows = projection.anchors_for_commit_with_survival(sha)
