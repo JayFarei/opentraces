@@ -32,7 +32,7 @@ export OPENTRACES_TEST_PROJECT_DIR=~/.claude/projects/<your-project-slug>
 pytest tests/ -v
 ```
 
-The legacy raw-trace TUI and React viewer are retained in the tree but decommissioned from the default build/test gate until the next dataset-scoped review UI lands. The buildable docs live under `web/site/`.
+The Textual TUI and the Flask web review backend have been removed; `src/opentraces/clients/` now ships only the text renderers used by the CLI. The legacy React viewer source remains under `web/viewer/` but is decommissioned and out of the default build/test gate until the next dataset-scoped review UI lands. The buildable docs live under `web/site/`.
 
 ## Layout
 
@@ -47,8 +47,8 @@ Core directories:
 - `src/opentraces/enrichment/` - git signals, attribution, dependencies, metrics
 - `src/opentraces/quality/` - scoring and upload gates
 - `src/opentraces/security/` - redaction and scanning pipeline
-- `src/opentraces/clients/` - legacy TUI and web backend clients (decommissioned)
-- `web/viewer/` - legacy React trace review UI (decommissioned)
+- `src/opentraces/clients/` - text renderers for CLI trace review (the Textual TUI and Flask web backend have been removed)
+- `web/viewer/` - legacy React trace review UI source (decommissioned)
 - `web/site/` - Next.js docs and marketing site
 - `tests/` - Python test suite
 

@@ -1256,13 +1256,15 @@ _INTERACTIVE_REVIEW_DECOMMISSIONED = (
     "mode",
     flag_value="tui",
     default=None,
-    help="Legacy interactive review client; currently unavailable.",
+    hidden=True,  # removed interactive client; flag kept callable, off --help
+    help="Removed interactive review client; use `--json` plus approve/reject/reset.",
 )
 @click.option(
     "--web",
     "mode",
     flag_value="web",
-    help="Legacy interactive review client; currently unavailable.",
+    hidden=True,  # removed interactive client; flag kept callable, off --help
+    help="Removed interactive review client; use `--json` plus approve/reject/reset.",
 )
 @click.option(
     "--all",

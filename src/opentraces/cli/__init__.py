@@ -1070,7 +1070,7 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
         ("opentraces setup pi", "install/check the Pi package entry"),
         ("opentraces setup git", "install or remove the git post-commit hook"),
         ("opentraces dataset remote create", "create or bind a dataset remote"),
-        ("opentraces setup auth", "authenticate with HuggingFace"),
+        ("opentraces auth login", "authenticate with HuggingFace"),
     ],
     option_groups=[
         ("Agents", ["agents", "import_existing"]),
@@ -1199,9 +1199,9 @@ def init(
     save_project_config(project_dir, proj_config)
 
     # Register this project in the global opted-in list. This is the
-    # user-visible consent record: `opentraces list --projects` reads it,
-    # and every capture/TUI/web/push path cross-checks `.opentraces/
-    # config.json` against it before doing anything.
+    # user-visible consent record: `opentraces status` reads it, and every
+    # capture/publish path cross-checks `.opentraces/config.json` against
+    # it before doing anything.
     from ..core.config import register_project as _register_project
     _cfg_for_register = load_config()
     if _register_project(_cfg_for_register, project_dir):

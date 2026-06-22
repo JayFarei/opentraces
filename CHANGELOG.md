@@ -7,6 +7,43 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-06-22
+
+### Fixed
+
+- **Large-bucket read-path hangs (#87).** Single-trace `ctx` and `trail` reads, and `trail track --all`, are now bounded to a scoped event read instead of walking the full event log; `bucket status` is size-independent (O(1) persisted read).
+- **`trail graph` / `trail blame commit` no longer hang at scale (#120).** The trail-evidence join is scoped to the rendered commit window instead of the full git history.
+- **`ctx show` / `ctx diff` no longer hang at scale (#121).** They resolve the owning trace and read a bounded per-trace projection instead of a whole-repo one.
+- **First-query cold-build guard (#124).** On a large bucket, a missing or schema-bumped search snapshot now returns `maintenance_needed` (advising `opentraces trace index`) instead of an unbounded inline rebuild that could OOM; a schema-valid but dirty snapshot still serves stale results.
+- Hardened CLI remote error handling and `config` / `remove` / `dataset schedule` UX edge cases.
+
+### Changed
+
+- **Simplified CLI surface.** Substrate/maintenance plumbing and experimental/operator groups are hidden from `--help` (still callable); `trail blame` is now a group (`trail blame commit`, `trail blame pr`); `dataset remote add` merged into the idempotent `dataset remote create`; `setup auth` hidden in favour of `auth login`; `trace discover` hidden.
+- **Removed the decommissioned Textual TUI and Flask web review client** (`clients/` now ships only the text renderers).
+- The `sem` entity-parser auto-provisions on `init` (best-effort, offline-safe) and is version-managed, instead of a hidden manual `setup entity-parser` step.
+
+### Internal
+
+- Decomposed the `bucket_store`, `config`, `cli/installers`, and `ingest_one_session` god modules into focused units (behaviour byte-identical); fixed two core→cli layering inversions.
+
+## [0.4.7] - 2026-06-18
+
+### Added
+
+- **`opentraces setup uninstall` (#85)** — a single, data-safe reverse-of-install.
+- **Runtime selection on multi-install machines (#93, #99)** — `doctor` runtime-provenance detection plus a `setup runtime` group to pin the active install.
+- **`bucket remote status` reports shared security-gate eligibility (#94).**
+- **Shared `--progress` / heartbeat contract** for `trace index` rebuild and `bucket status` (#88, #97).
+- **Capsule: bounded progress + current-turn session export (#98).**
+
+### Fixed
+
+- **`trace query` serves last-known-good results with freshness telemetry under active capture; `--fresh` is strict (#91).**
+- **Non-overridable dataset reader-floor (#84)** — an author contract can only add security tools, never weaken the floor.
+- `doctor` JSON `trace_index` reflects the live search snapshot, not the deprecated `index.db` (#96); trail event-log advice repointed off a nonexistent command and given bounded verification (#95).
+- Deprecated `index.db` as a default read model (#89).
+
 ## [0.4.6] - 2026-06-15
 
 ### Added

@@ -20,11 +20,11 @@ Use the CLI row review surface until the next dataset-scoped UI lands.
 
 | State | Meaning |
 |-------|---------|
-| `inbox` | Needs review |
-| `approved` | Ready for publish |
+| `needs_review` | Awaiting a review decision |
+| `publishable` | Approved and ready for publish |
 | `published` | Uploaded upstream |
 | `rejected` | Kept local only |
-| `blocked` | Needs action before approval |
+| `blocked` | Security gate not satisfied; needs action before approval |
 
 ## What To Check
 

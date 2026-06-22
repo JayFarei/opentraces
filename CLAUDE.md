@@ -9,7 +9,7 @@ Open schema + CLI for capturing agent traces into a private local bucket, applyi
 - **Language**: Python 3.10+
 - **Schema**: `opentraces-schema` (standalone Pydantic v2 package in `packages/`)
 - **CLI**: Click-based (`src/opentraces/cli/`)
-- **Web review**: Flask (`src/opentraces/clients/web/`) + React SPA (`web/viewer/`) — decommissioned; `web` and `tui` verbs are dropped from the CLI root
+- **Web review**: removed in v0.4.8 — the Flask web server (`src/opentraces/clients/web/`) and the Textual TUI (`src/opentraces/clients/tui.py`) are deleted; the React SPA under `web/viewer/` is unmaintained; `web` and `tui` verbs were never in the CLI root
 - **Marketing site**: Next.js (`web/site/`)
 - **Coming soon page**: Static HTML (`web/coming-soon/`)
 - **Optional security extras** (opt-in via `opentraces setup <tool>`): `trufflehog` (binary), `transformers` + `torch` (for the `openai/privacy-filter` PII NER), and an OpenAI-compat LLM endpoint (for `llm_pii` and `llm_review`).
@@ -37,10 +37,10 @@ pytest tests/ -v
   - `enrichment/` - Read-only enrichers: git signals, attribution, dependencies, metrics. `enrichment/git/` holds the plan-041 commit-correlation stack — `correlator.py`, `notes_store.py` (`refs/notes/opentraces` read/write), `blame.py` (file:line to trace), `liveness.py` (lazy `commit_reachable` / `content_alive`), `jj_support.py` (Jujutsu change-id fallback). Note: post-commit tier assignment lives in `capture/git/post_commit.py`.
   - `quality/` - Trace quality assessment, persona rubrics, upload gates, parse gate
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
-  - `clients/` - Presentation layers (text, TUI, web backend), business logic lives in `core/`
+  - `clients/` - Presentation layers. Only `clients/text/` remains (terminal renderers: colors, graph, trace-tree); the Textual TUI (`clients/tui.py`) and Flask web review backend (`clients/web/`) were removed in v0.4.8. Business logic lives in `core/`.
   - `workflow_templates/` - Bundled dataset workflow skill packages (e.g. `skill-command-trajectory-eval-v1/`) that `opentraces workflow create <workflow-name> --template <template-name>` materializes into a project.
 - `web/` - Web frontends
-  - `viewer/` - React SPA trace review UI
+  - `viewer/` - React SPA trace review UI (unmaintained; the CLI no longer launches it)
   - `site/` - Next.js marketing site
   - `coming-soon/` - Static coming-soon page (Vercel)
 - `tests/` - Test suite

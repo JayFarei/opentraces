@@ -458,13 +458,12 @@ def _filter_by_trace_ids(records: list[dict],
 
 def _persist_llm_verdicts(staging_dir: Path, outcome, state) -> None:
     """Write each verdict back into its trace's ``metadata.llm_review``
-    so later gates (``push --llm-review``) and the TUI can see them.
+    so later publish gates can see them.
 
     Verdicts that flag the trace (``shareable=no`` or
     ``missed_sensitive_data=yes``) also promote the trace to the
-    BLOCKED state — the push flow skips BLOCKED traces entirely and
-    the user sees the flag surfaced in the TUI rather than the trace
-    silently failing the gate on every push attempt.
+    BLOCKED state — the publish flow skips BLOCKED traces entirely so
+    the trace does not silently fail the gate on every publish attempt.
     """
     import json as _json
 
@@ -688,11 +687,10 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
         force=force,
         on_progress=_progress,
     )
-    # Persist verdicts so downstream gates (``push --llm-review``) and
-    # the TUI can see them. Without this the verdict only lives in the
-    # JSON payload we emit below and is lost as soon as the command
-    # exits. Bad verdicts also mark the trace BLOCKED in state so the
-    # push flow skips them and the user sees them flagged.
+    # Persist verdicts so downstream publish gates can see them. Without
+    # this the verdict only lives in the JSON payload we emit below and is
+    # lost as soon as the command exits. Bad verdicts also mark the trace
+    # BLOCKED in state so the publish flow skips them and they stay flagged.
     state_for_block = StateManager(get_project_state_path(Path.cwd()))
     _persist_llm_verdicts(staging, outcome, state_for_block)
     _cli.emit_json({
