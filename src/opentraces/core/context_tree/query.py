@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..trails.event_log import read_events, read_events_for_trace
+from ..trails.event_log import read_events, read_events_for_trace, read_events_scoped
 from .contract import (
     CONTEXT_COMPACTION_OBSERVED,
     CONTEXT_LAYER_CAPTURED,
@@ -483,6 +483,51 @@ def build_context_tree_projection_for_trace(
         events=read_events_for_trace(repo, trace_id),
         **kwargs,
     )
+
+
+def resolve_node_traces(repo: Path, node_ids: set[str]) -> dict[str, str]:
+    """Resolve ``node_id`` -> owning ``trace_id`` via a bounded event read.
+
+    Reads ONLY ``context_node_observed`` events (``read_events_scoped`` with a
+    raw-bytes prefilter, typically <1% of the canonical log) instead of
+    materialising the whole event log + snapshot + verification — which is the
+    full-log walk that made ``ctx show`` / ``ctx diff`` hang on a large corpus
+    (issue #121, same root cause as #87). The canonical event log stays
+    authoritative: the resolution is read off the ``context_node_observed``
+    payloads (``node_id`` + ``trace_id``, both present on every
+    ``ContextNode``, models.py), never a manifest/companion derivation (the
+    manifest carries the projection roll-up, not per-node ids).
+
+    A content-addressed ``node_id`` does not embed its ``trace_id``, so the
+    node -> trace mapping cannot be derived from the string and a real lookup
+    is required; this is that lookup, bounded by the count of node events.
+
+    Returns a mapping of the requested ``node_id``s that were found; unknown
+    ids are simply absent (callers fall through to their not-found branch).
+    Bounded in MEMORY/event-type-slice; like ``read_events_scoped`` it still
+    lists every event blob entry once, so it is bounded — not strictly
+    sub-second on a very large log — consistent with the #87/#110 honest
+    boundary.
+    """
+    if not node_ids:
+        return {}
+    out: dict[str, str] = {}
+    remaining = set(node_ids)
+    for event in read_events_scoped(repo, event_types={CONTEXT_NODE_OBSERVED}):
+        payload = event.payload if isinstance(event.payload, dict) else None
+        if not payload:
+            continue
+        nid = payload.get("node_id")
+        if nid not in remaining:
+            continue
+        tid = payload.get("trace_id") or event.trace_id
+        if not tid:
+            continue
+        out[nid] = tid
+        remaining.discard(nid)
+        if not remaining:
+            break
+    return out
 
 
 # --------------------------------------------------------------------------- #

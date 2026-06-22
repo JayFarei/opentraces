@@ -26,7 +26,10 @@ from opentraces.core.context_tree.contract import (
     CONTEXT_TREE_SCHEMA_VERSION,
     CONTEXT_WRITES_SCHEMA_VERSION,
 )
-from opentraces.core.context_tree.query import build_context_tree_projection
+from opentraces.core.context_tree.query import (
+    build_context_tree_projection,
+    resolve_node_traces,
+)
 from opentraces_schema.models import Agent, TraceRecord
 
 
@@ -570,3 +573,151 @@ def test_ctx_anchor_for_step_missing_step_rc3(runner, linear_project):
         ],
     )
     assert result.exit_code == 3
+
+
+# --------------------------------------------------------------------------- #
+# Issue #121: bounded ctx show / ctx diff reads (equivalence + structural bound)
+# --------------------------------------------------------------------------- #
+
+
+def _emit_fixture_trace(name: str, trace_id: str, repo: Path, workdir: Path) -> None:
+    """Capture a session fixture and emit its context-tree events into ``repo``."""
+    base = FIXTURES_DIR / name
+    spec = importlib.util.spec_from_file_location(
+        f"_xt_{name.replace('-', '_')}", base / "session.py"
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    workdir.mkdir(parents=True, exist_ok=True)
+    transcript = workdir / f"{name}.jsonl"
+    mod.run(workdir, transcript)
+    record = TraceRecord(
+        trace_id=trace_id,
+        session_id=f"sess-{name}",
+        agent=Agent(name="claude-code", version="otbox-fake-1.0"),
+        steps=[],
+    )
+    emit_context_tree_events_from_record(
+        project_dir=repo,
+        final_record=record,
+        transcript_path=transcript,
+    )
+
+
+@pytest.fixture
+def multi_trace_project(tmp_path):
+    """A tmp project with TWO captured traces (cross-trace diff coverage)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    _emit_fixture_trace("context-tree-linear", "trace-a", repo, tmp_path / "wa")
+    _emit_fixture_trace("context-tree-multi-turn", "trace-b", repo, tmp_path / "wb")
+    projection = build_context_tree_projection(repo)
+    return repo, projection
+
+
+def test_ctx_show_equals_whole_repo_path(runner, linear_project):
+    """The bounded ctx show payload is byte-identical to the OLD whole-repo path.
+
+    Computes the expected ``node`` dict directly from the full-walk
+    ``build_context_tree_projection(repo)`` (the pre-#121 source) and asserts
+    the CLI's bounded read reproduces it bit-for-bit.
+    """
+    project, _, projection = linear_project
+    node_id = list(projection.nodes_by_id.keys())[0]
+    # Whole-repo projection (the prior path) — recompute fresh, no cache reuse.
+    full = build_context_tree_projection(project)
+    full_node = full.nodes_by_id[node_id]
+    expected_node = {
+        "node_id": full_node.node_id,
+        "parent_node_id": full_node.parent_node_id,
+        "branch_type": full_node.branch_type,
+        "trace_id": full_node.trace_id,
+        "step_index": full_node.step_index,
+        "transcript_uuid": full_node.transcript_uuid,
+        "transcript_offset": full_node.transcript_offset,
+        "capture_completeness": full_node.capture_completeness,
+        "subagent_session_id": full_node.subagent_session_id,
+        "trail_anchor_hint": full_node.trail_anchor_hint,
+    }
+    data = _invoke_json(
+        runner,
+        ["show", node_id, *_project_arg(project), "--json"],
+    )
+    assert data["node"] == expected_node
+
+
+def test_ctx_diff_cross_trace_equals_whole_repo_layer_diff(runner, multi_trace_project):
+    """Cross-trace diff (node_a in trace A, node_b in trace B) still works.
+
+    Asserts the bounded merge-of-two-per-trace-projections reproduces the
+    whole-repo ``layer_diff`` byte-for-byte — the case a naive single-trace
+    fix would silently break.
+    """
+    repo, projection = multi_trace_project
+    node_a = projection.nodes_by_trace["trace-a"][0]
+    node_b = projection.nodes_by_trace["trace-b"][0]
+    # Sanity: the two nodes really belong to different traces.
+    assert projection.nodes_by_id[node_a].trace_id != \
+        projection.nodes_by_id[node_b].trace_id
+    expected_diff = build_context_tree_projection(repo).layer_diff(node_a, node_b)
+    data = _invoke_json(
+        runner,
+        ["diff", node_a, node_b, *_project_arg(repo), "--json"],
+    )
+    assert data["diff"] == expected_diff
+
+
+def test_ctx_show_diff_never_call_full_read_events(runner, multi_trace_project, monkeypatch):
+    """Structural bound: neither command calls the whole-log ``read_events``.
+
+    Mirrors the #87/#110 bounded-read tests — ``read_events`` (the full walk)
+    is monkeypatched to blow up; the scoped/per-trace readers stay live, so a
+    green run proves the bounded path is the one taken.
+    """
+    import opentraces.core.trails.event_log as event_log_mod
+
+    def _boom(*_a, **_k):  # pragma: no cover - asserts via raising
+        raise AssertionError("full read_events walk must not be called (#121)")
+
+    monkeypatch.setattr(event_log_mod, "read_events", _boom)
+    # query.py imports read_events by name — patch that binding too.
+    import opentraces.core.context_tree.query as query_mod
+    monkeypatch.setattr(query_mod, "read_events", _boom)
+
+    repo, projection = multi_trace_project
+    node_a = projection.nodes_by_trace["trace-a"][0]
+    node_b = projection.nodes_by_trace["trace-b"][0]
+
+    show = runner.invoke(
+        ctx_group, ["show", node_a, *_project_arg(repo), "--json"]
+    )
+    assert show.exit_code == 0, show.output
+    diff = runner.invoke(
+        ctx_group, ["diff", node_a, node_b, *_project_arg(repo), "--json"]
+    )
+    assert diff.exit_code == 0, diff.output
+
+
+def test_ctx_show_unresolved_node_rc3_via_bounded_path(runner, multi_trace_project):
+    """Unresolvable node_id falls through to the existing rc=3 not-found branch."""
+    repo, _ = multi_trace_project
+    bad_id = "sha256:" + "0" * 64
+    result = runner.invoke(ctx_group, ["show", bad_id, *_project_arg(repo)])
+    assert result.exit_code == 3
+    data = _invoke_json(
+        runner, ["show", bad_id, *_project_arg(repo), "--json"]
+    )
+    assert data["limitations"] == ["context_layer_unavailable"]
+
+
+def test_resolve_node_traces_cli_smoke(multi_trace_project):
+    """The resolver returns owning traces for known nodes, omits unknown."""
+    repo, projection = multi_trace_project
+    node_a = projection.nodes_by_trace["trace-a"][0]
+    node_b = projection.nodes_by_trace["trace-b"][0]
+    resolved = resolve_node_traces(repo, {node_a, node_b, "sha256:" + "f" * 64})
+    assert resolved[node_a] == "trace-a"
+    assert resolved[node_b] == "trace-b"
+    assert len(resolved) == 2
