@@ -393,6 +393,9 @@ def bucket_remote_push_cmd(
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
+        from opentraces import cli as root_cli
+        root_cli._fail_hf_or_reraise(exc, "")
     payload = {"status": "ok", "remote": remote}
     if as_json:
         click.echo(_dump_json(payload))
@@ -436,6 +439,9 @@ def bucket_remote_pull_cmd(
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
+        from opentraces import cli as root_cli
+        root_cli._fail_hf_or_reraise(exc, "")
     payload = {"status": "ok", "remote": remote}
     if as_json:
         click.echo(_dump_json(payload))

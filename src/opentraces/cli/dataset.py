@@ -229,6 +229,17 @@ def _hf_auth() -> tuple[str | None, str | None]:
     return cfg.hf_token, username
 
 
+def _fail_hf(exc: Exception, repo_id: str) -> None:
+    """Exit 3 with actionable guidance for HF / network errors; re-raise others.
+
+    Thin wrapper over the shared ``cli._fail_hf_or_reraise`` so the dataset and
+    bucket remote surfaces handle rejected tokens / outages identically.
+    """
+    from opentraces import cli as root_cli
+
+    root_cli._fail_hf_or_reraise(exc, repo_id)
+
+
 @dataset_remote_group.command("add", cls=OpentracesCommand, hidden=True)
 @click.argument("name")
 @click.argument("repo")
@@ -276,6 +287,7 @@ def dataset_remote_create(name: str, repo: str, is_private: bool, as_json: bool)
     the existing one (honouring its current visibility) instead of erroring.
     """
     token, username = _hf_auth()
+    repo_id = repo
     try:
         repo_id = normalize_hf_repo_id(repo, username)
         created = _remote_create(repo_id, is_private, token)
@@ -299,6 +311,8 @@ def dataset_remote_create(name: str, repo: str, is_private: bool, as_json: bool)
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
+        _fail_hf(exc, repo_id)
     _emit_remote_payload(summary, as_json=as_json, verb=verb)
 
 
@@ -349,6 +363,7 @@ def dataset_remote_remove(
     as_json: bool,
 ) -> None:
     """Disconnect a dataset remote, optionally deleting the HF dataset."""
+    repo_id = ""
     try:
         dataset = load_dataset(name)
         resolved = remote or (
@@ -369,6 +384,8 @@ def dataset_remote_remove(
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
+        _fail_hf(exc, repo_id)
     payload = _remote_payload(summary)
     payload["deleted_remote"] = delete_remote
     if as_json:
@@ -380,21 +397,27 @@ def dataset_remote_remove(
 @dataset_remote_group.command("visibility", cls=OpentracesCommand)
 @click.argument("name")
 @click.argument("remote", required=False, default=None)
-@click.option("--private", "make_private", flag_value=True, default=None,
+@click.option("--private", "private_flag", is_flag=True, default=False,
               help="Set the bound HuggingFace dataset remote to private.")
-@click.option("--public", "make_private", flag_value=False,
+@click.option("--public", "public_flag", is_flag=True, default=False,
               help="Set the bound HuggingFace dataset remote to public.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_remote_visibility(
     name: str,
     remote: str | None,
-    make_private: bool | None,
+    private_flag: bool,
+    public_flag: bool,
     as_json: bool,
 ) -> None:
     """Change a bound HuggingFace dataset remote between private and public."""
-    if make_private is None:
+    if private_flag and public_flag:
+        click.echo("--private and --public are mutually exclusive.", err=True)
+        sys.exit(2)
+    if not (private_flag or public_flag):
         click.echo("Specify --private or --public.", err=True)
         sys.exit(2)
+    make_private = private_flag
+    repo_id = ""
     try:
         dataset = load_dataset(name)
         resolved = remote or (
@@ -412,6 +435,8 @@ def dataset_remote_visibility(
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
+        _fail_hf(exc, repo_id)
     _emit_remote_payload(summary, as_json=as_json, verb="updated")
 
 
@@ -524,6 +549,10 @@ def dataset_schedule_resume(name: str, as_json: bool) -> None:
 def dataset_schedule_logs(name: str, tail: bool, as_json: bool) -> None:
     """Show local scheduler log lines for a dataset."""
     try:
+        # Confirm a schedule exists first so a missing schedule exits 3
+        # ("schedule not found"), consistent with show/pause/resume/remove,
+        # rather than silently returning an empty log at exit 0.
+        read_schedule(name)
         logs = read_schedule_logs(name, tail=tail)
     except FileNotFoundError as exc:
         click.echo(str(exc), err=True)
@@ -1375,7 +1404,7 @@ def dataset_publish(
     except DatasetRemoteSchemaAheadError as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
-    except ValueError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
     publish_payload = _publish_summary_payload(summary)

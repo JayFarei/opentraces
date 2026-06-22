@@ -780,9 +780,38 @@ def config_set(
         click.echo("Usage: ot config set <key> <value> [--project|--global]", err=True)
         sys.exit(2)
 
+    # hf_token is deliberately never persisted via config set: save_config
+    # excludes it (it lives in the credential store / env), and writing it to a
+    # project marker would leak a secret into a committed file. Reject loudly
+    # instead of silently dropping the value behind a success message.
+    if key == "hf_token":
+        click.echo(
+            "hf_token cannot be set with 'config set' (it is never written to "
+            "config.json or a project marker). Use 'opentraces auth login' to "
+            "store your HuggingFace token, or export HF_TOKEN in your environment.",
+            err=True,
+        )
+        sys.exit(2)
+
     if scope_project:
         # Write to repo marker via load/save_project_config helpers.
-        from ..core.config import load_project_config, save_project_config
+        from ..core.config import (
+            _PORTABLE_FIELDS,
+            load_project_config,
+            save_project_config,
+        )
+        # The marker only persists the portable policy fields; any other key
+        # would be silently dropped on write. Reject it instead of reporting a
+        # misleading success (same false-success class as hf_token above).
+        if key not in _PORTABLE_FIELDS:
+            click.echo(
+                f"'{key}' is not a project-scoped config key (it would be "
+                f"silently dropped from the marker).\n"
+                f"Valid --project keys: {', '.join(_PORTABLE_FIELDS)}.\n"
+                f"For other keys use --global.",
+                err=True,
+            )
+            sys.exit(2)
         proj_dir = Path.cwd()
         proj_cfg = load_project_config(proj_dir)
         if append_value:
@@ -1321,6 +1350,7 @@ def remove(purge_all: bool) -> None:
     ref and trace-to-commit notes.
     """
     from ..core.config import (
+        NotOptedInError,
         _marker_path,
         get_project_dir,
         unregister_project as _unregister_project,
@@ -1333,11 +1363,14 @@ def remove(purge_all: bool) -> None:
     removed_hook = _remove_capture_hook(project_dir)
 
     # Resolve the global per-project dir BEFORE deleting the marker
-    # (slug derivation needs the marker's project_id).
+    # (slug derivation needs the marker's project_id). A non-opted-in dir
+    # raises NotOptedInError here; that must NOT abort remove — a cleanup
+    # command should fall through to its own "nothing to remove" path
+    # rather than tell the user to 'init' first.
     global_dir = None
     try:
         global_dir = get_project_dir(project_dir)
-    except RuntimeError:
+    except (RuntimeError, NotOptedInError):
         pass
 
     removed_local = False
@@ -2965,6 +2998,28 @@ def _classify_hf_repo_error(exc: Exception, repo_id: str) -> tuple[str, str, str
         f"HuggingFace request failed: {exc}",
         None,
     )
+
+
+def _fail_hf_or_reraise(exc: Exception, repo_id: str) -> None:
+    """Exit 3 with actionable guidance for HuggingFace / network errors.
+
+    Shared by the dataset + bucket remote CLI surfaces so a rejected/forbidden
+    token (or a network outage) produces a clean message instead of a raw
+    traceback. Re-raises anything that is NOT an HF HTTP error or a network
+    error so genuine programming bugs still surface.
+    """
+    try:
+        from huggingface_hub.errors import HfHubHTTPError
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import HfHubHTTPError  # type: ignore
+    # OSError covers requests' ConnectionError/Timeout (RequestException -> IOError).
+    if not isinstance(exc, (HfHubHTTPError, OSError)):
+        raise exc
+    _code, _kind, message, hint = _classify_hf_repo_error(exc, repo_id)
+    click.echo(message, err=True)
+    if hint:
+        click.echo(hint, err=True)
+    sys.exit(3)
 
 
 @remote.command("add")
