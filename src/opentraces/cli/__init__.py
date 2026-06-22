@@ -1264,6 +1264,18 @@ def init(
     # Plan-043 phase 6: record root commit + prompt for first-run backfill.
     _plan043_finalize_identity(project_dir)
 
+    # Auto-provision the entity-parser binary so function-level attribution
+    # works without the user discovering the explicit 'setup entity-parser'.
+    # Best-effort + offline-safe: an unsupported platform or a failed/offline
+    # fetch degrades silently to file/line-level attribution (a one-shot
+    # marker stops it re-downloading on every init). Never blocks init.
+    entity_provisioned = None
+    try:
+        from ..enrichment.entities import installer as _entity_installer
+        entity_provisioned = _entity_installer.ensure_installed(best_effort=True)
+    except Exception:  # noqa: BLE001 - optional enrichment must never break init
+        entity_provisioned = None
+
     click.echo()
     print_banner(tagline=_ok("initialized"))
     click.echo(f"{_dim('Project: ')} {_bold(project_dir.name)}  {_dim(f'({review_policy} policy)')}")
@@ -1282,6 +1294,8 @@ def init(
         click.echo(f"  Hook:    {', '.join(hook_targets) if hook_targets else 'installed'}")
     if skill_installed:
         click.echo("  Skill:   .agents/skills/opentraces/SKILL.md")
+    if entity_provisioned is not None:
+        click.echo(f"  Entity parser: {entity_provisioned.version} ({entity_provisioned.source})")
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
     click.echo(f"  Policy:  {review_policy}")
     click.echo(f"  Push:    {push_policy}")
@@ -1756,6 +1770,14 @@ def _upgrade_impl(skill_only: bool, *, integrations_only: bool = False) -> None:
     from ..core.integration_repair import repair_installed_integrations
 
     project_dir = Path.cwd()
+    # Refresh / provision the entity-parser binary (integration glue): picks up a
+    # bumped manifest version, and retries a prior offline/failed fetch. Best-
+    # effort + offline-safe, so it never breaks the upgrade.
+    try:
+        from ..enrichment.entities import installer as _entity_installer
+        _entity_installer.ensure_installed(best_effort=True, retry_failed=True)
+    except Exception:  # noqa: BLE001 - optional enrichment must never break upgrade
+        pass
     if delegated_repair is None:
         integration_repair = repair_installed_integrations(project_dir)
         _render_integration_repair_summary(integration_repair)

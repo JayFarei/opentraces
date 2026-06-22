@@ -1884,16 +1884,41 @@ def _entity_parser_status() -> dict[str, Any]:
         "advice": str | None,   # what to run if missing
       }
     """
+    from ..enrichment.entities.installer import is_platform_supported
+    from ..enrichment.entities.version import ENTITY_BINARY_VERSION
+
     path = resolve_binary_path()
     runner = EntityRunner(binary_path=path)
     installed = runner.available()
     version = runner.version() if installed else None
+    supported = is_platform_supported()
+    up_to_date = bool(installed and version == ENTITY_BINARY_VERSION)
+    if installed and up_to_date:
+        advice = None
+    elif installed and not up_to_date:
+        advice = (
+            f"installed {version}, expected {ENTITY_BINARY_VERSION}; "
+            "run 'opentraces setup entity-parser --force' to refresh"
+        )
+    elif not supported:
+        advice = (
+            "no entity-parser binary for this platform; attribution uses the "
+            "file/line-level fallback"
+        )
+    else:
+        advice = (
+            "run 'opentraces setup entity-parser' (auto-installs on 'init') for "
+            "function-level attribution"
+        )
     return {
         "binary_path": str(path),
         "installed": installed,
         "version": version,
+        "expected_version": ENTITY_BINARY_VERSION,
+        "up_to_date": up_to_date,
         "platform": _safe_platform(),
-        "advice": None if installed else "run 'opentraces setup entity-parser'",
+        "platform_supported": supported,
+        "advice": advice,
     }
 
 

@@ -222,15 +222,26 @@ def setup_entity_parser(force: bool) -> None:
 
     if total["n"]:
         click.echo("")
+    # Report the version the binary ACTUALLY reports (result.version), not the
+    # pinned manifest constant — so a stale/bogus env-override surfaces honestly.
+    up_to_date = result.version == ENTITY_BINARY_VERSION
     _cli.human_echo(
         f"Entity parser installed at {result.path} "
-        f"(version {ENTITY_BINARY_VERSION}, {result.source})"
+        f"(version {result.version}, {result.source})"
     )
+    if not up_to_date:
+        _cli.human_echo(
+            f"{_cli._warn('warning')}: expected version {ENTITY_BINARY_VERSION} "
+            f"but the binary reports {result.version!r}. Entity enrichment may "
+            f"be degraded; run 'opentraces setup entity-parser --force' to refresh."
+        )
     _cli.emit_json({
         "status": "ok",
         "action": "setup-entity-parser",
         "binary_path": str(result.path),
-        "version": ENTITY_BINARY_VERSION,
+        "version": result.version,
+        "expected_version": ENTITY_BINARY_VERSION,
+        "up_to_date": up_to_date,
         "platform": result.platform,
         "source": result.source,
     })
