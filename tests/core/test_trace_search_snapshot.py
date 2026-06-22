@@ -1478,3 +1478,88 @@ def test_explicit_warm_build_is_not_guarded_at_scale(monkeypatch) -> None:
     assert summary.trace_count == 1
     # The explicit build path never consults the cold-build guard.
     assert guard_calls == []
+
+
+# --------------------------------------------------------------------------- #
+# #124 follow-up: the WARM self-heal rebuild is also guarded at scale.
+#
+# The cold-build guard (snapshot MISSING) only covered first-query-on-fresh-box.
+# A self-heal rebuild over an EXISTING-but-unservable snapshot — e.g. a
+# SNAPSHOT_SCHEMA_VERSION bump after `setup upgrade` (wrong_schema) — is an
+# equally expensive FULL build. On a too-large bucket it must NOT rebuild inline
+# (OOM); it routes to `opentraces trace index` (maintenance_needed). A merely
+# dirty (stale, schema-valid) snapshot is still servable, so the too-large path
+# prefers serve-stale (issue #91) over refusing.
+# --------------------------------------------------------------------------- #
+
+def _make_wrong_schema_snapshot() -> None:
+    """Build a snapshot, then stamp it with a prior schema version (unservable
+    -> a full self-heal rebuild is required to read it)."""
+    import sqlite3
+
+    _write_trace("demo-project", _trace("trace-warm", description="needs rebuild"))
+    build_trace_search_snapshot()
+    with sqlite3.connect(default_snapshot_path()) as conn:
+        conn.execute(
+            "update snapshot_meta set value = ? where key = 'schema_version'",
+            ("opentraces.trace_search_snapshot.v3",),
+        )
+        conn.commit()
+    assert snapshot_status()["state"] == "wrong_schema"
+
+
+def test_warm_rebuild_over_threshold_wrong_schema_returns_maintenance_needed(monkeypatch) -> None:
+    # A SCHEMA-bump self-heal rebuild on a too-large bucket must refuse the
+    # inline FULL rebuild (cold_build_too_large -> maintenance_needed), not OOM.
+    from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
+
+    _make_wrong_schema_snapshot()
+    # Oversize the corpus AND spy the builder (raises if the rebuild is reached).
+    calls = _install_oversized_corpus_and_builder_spy(
+        monkeypatch, COLD_BUILD_MAX_SOURCES + 1
+    )
+
+    try:
+        search_traces(None, SearchFilters(project="demo-project"), limit=10)
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "cold_build_too_large"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("oversized warm schema-bump rebuild should refuse inline")
+
+    # The expensive inline rebuild was NEVER invoked: the guard tripped first.
+    assert calls == []
+
+
+def test_warm_rebuild_over_threshold_stale_serves_stale(monkeypatch) -> None:
+    # A merely-dirty (stale, schema-VALID) snapshot on a too-large bucket is
+    # still servable: prefer serve-stale over an unbounded inline rebuild
+    # (preserves issue #91 on an actively-capturing large box).
+    from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
+
+    _write_trace("demo-project", _trace("trace-warm", description="Fix the search hang"))
+    build_trace_search_snapshot()
+    mark_search_snapshot_dirty("active-capture", trace_id="trace-warm")
+
+    calls = _install_oversized_corpus_and_builder_spy(
+        monkeypatch, COLD_BUILD_MAX_SOURCES + 1
+    )
+
+    page = search_traces("search", SearchFilters(project="demo-project"), limit=10)
+
+    # Served from the existing snapshot stale — no inline rebuild, no refusal.
+    assert [hit.trace_id for hit in page.hits] == ["trace-warm"]
+    assert page.diagnostics.rebuilt_index is False
+    assert page.freshness["stale"] is True
+    assert page.freshness["stale_reason"] == "stale"
+    assert calls == []
+
+
+def test_warm_rebuild_below_threshold_still_rebuilds() -> None:
+    # No regression: below the threshold, the warm self-heal rebuild runs inline
+    # and serves rc=0 exactly as before (#124 guard is a no-op for normal sizes).
+    _make_wrong_schema_snapshot()  # real (size-1) corpus, under threshold
+
+    page = search_traces(None, SearchFilters(project="demo-project"), limit=10)
+
+    assert [hit.trace_id for hit in page.hits] == ["trace-warm"]
+    assert page.diagnostics.rebuilt_index is True
