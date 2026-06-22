@@ -240,7 +240,7 @@ opentraces dataset publish bug-fixes --check-only
 
 ## Trace
 
-The trace surface returns bounded projections over a local BM25 + semantic Trace Index, so you can search and slice without loading full transcripts.
+The trace surface returns bounded projections over a local lexical + concept Trace Index (BM25 plus a bounded concept join, not embeddings), so you can search and slice without loading full transcripts.
 
 - `trace query` returns bounded candidate packets; `trace skills` lists observed skills ranked by snapshot-backed invocation usage; `trace map` returns a deterministic Trace Map; `trace get` resolves a trace, trace unit, map node, or `ot://` Trail resource.
 - `trace slice <trace-id> --template bursts` materializes one deterministic slice per detected change burst. Manual `--from-step/--to-step`, `--around-step`, and `--around-patch` windows are available when a workflow needs an explicit range. A Trace Slice is context for audit and later dataset projection, not a training datum by itself.

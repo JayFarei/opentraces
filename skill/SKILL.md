@@ -130,8 +130,9 @@ opentraces trace compare <trace_a> <trace_b> --json
 opentraces trace teleport export <trace_id> --output <dir>
 ```
 
-`trace query` returns bounded candidate packets over the local BM25 +
-semantic Trace Index. `trace skills` lists observed skills ranked by
+`trace query` returns bounded candidate packets over the local lexical +
+concept Trace Index (BM25 plus a bounded concept join, not embeddings).
+`trace skills` lists observed skills ranked by
 snapshot-backed invocation usage. `trace index --json` refreshes and reports
 the local search snapshot with stage telemetry.
 `trace map` returns a workflow-neutral evidence map or candidate slice.

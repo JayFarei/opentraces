@@ -51,6 +51,19 @@ from .trace_search_state import clear_dirty_marker_if_unchanged, current_dirty_t
 SNAPSHOT_SCHEMA_VERSION = "opentraces.trace_search_snapshot.v5"
 SNAPSHOT_DB_NAME = "search.sqlite"
 DEFAULT_LIMIT = 20
+
+# Upper bound on the number of corpus sources we will hydrate inline during a
+# COLD auto-rebuild (a missing snapshot served by a read function). The inline
+# cold build streams ``trace_corpus.load_record`` per source — full
+# TraceRecord/BucketTraceRecord hydration over the entire bucket — which on a
+# large/fresh bucket is the ~170s / multi-GB-RSS OOM risk documented in #87 /
+# #124. Above this many cheap (no-body) sources we refuse the unbounded inline
+# build and route the caller to the explicit ``opentraces trace index`` warm
+# build instead, surfacing ``maintenance_needed`` / exit 3 through the existing
+# CLI mapping. The explicit warm build (``trace index``) is NEVER guarded — it
+# is the supported way to build at scale. The default admits every existing
+# test/CI corpus unchanged; override with ``OPENTRACES_COLD_BUILD_MAX_SOURCES``.
+COLD_BUILD_MAX_SOURCES = 2000
 VISIBLE_FILE_LIMIT = 8
 VISIBLE_FACET_LIMIT = 24
 VISIBLE_SIGNAL_LIMIT = 12
@@ -94,6 +107,60 @@ def _notify_rebuilding() -> None:
         file=sys.stderr,
         flush=True,
     )
+
+
+def _cold_build_max_sources() -> int:
+    """Resolve the cold-build source ceiling, honoring the env override.
+
+    ``OPENTRACES_COLD_BUILD_MAX_SOURCES`` lets operators raise/lower the
+    threshold without a code change. A non-integer / negative override falls
+    back to the conservative module default.
+    """
+
+    raw = os.environ.get("OPENTRACES_COLD_BUILD_MAX_SOURCES")
+    if raw is None:
+        return COLD_BUILD_MAX_SOURCES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return COLD_BUILD_MAX_SOURCES
+    return value if value >= 0 else COLD_BUILD_MAX_SOURCES
+
+
+def _cold_build_exceeds(snapshot_path: Path) -> bool:
+    """True iff the corpus exceeds the inline-build ceiling.
+
+    Counts corpus sources via ``trace_corpus.iter_sources`` — documented cheap
+    (globs + dedupes by ``trace_id``, loads NO record bodies, cannot OOM).
+    Shared by the COLD-build guard and the WARM self-heal rebuild guard (#124
+    + follow-up) so both refuse an unbounded inline build identically.
+    """
+
+    from . import trace_corpus
+
+    ceiling = _cold_build_max_sources()
+    source_count = sum(1 for _ in trace_corpus.iter_sources())
+    return source_count > ceiling
+
+
+def _guard_cold_build(snapshot_path: Path) -> None:
+    """Refuse an unbounded inline COLD build on a large bucket.
+
+    Raises ``SearchSnapshotNeedsRebuild("cold_build_too_large", ...)`` BEFORE the
+    expensive inline ``build_trace_search_snapshot`` hydration when the corpus
+    count exceeds the threshold. The caller then surfaces ``maintenance_needed``
+    / exit 3 with an ``opentraces trace index`` advice (the explicit warm build
+    is never guarded). Below the threshold this is a no-op and the cold build
+    runs inline exactly as before (byte-identical output).
+
+    Called from a read function's snapshot-MISSING cold-build branch. The WARM
+    self-heal rebuild over an EXISTING snapshot guards via ``_cold_build_exceeds``
+    directly (#124 follow-up) so a full schema-bump rebuild can't OOM either; the
+    explicit ``opentraces trace index`` build is never guarded.
+    """
+
+    if _cold_build_exceeds(snapshot_path):
+        raise SearchSnapshotNeedsRebuild("cold_build_too_large", path=snapshot_path)
 
 
 @dataclass(frozen=True)
@@ -664,6 +731,7 @@ def search_traces(
     if not snapshot_path.exists():
         if not auto_rebuild:
             raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        _guard_cold_build(snapshot_path)
         _notify_rebuilding()
         build_trace_search_snapshot(path=snapshot_path)
         rebuilt = True
@@ -720,6 +788,22 @@ def search_traces(
         # or auto_rebuild is off, decide between serve-stale and raise.
         if not auto_rebuild or rebuilt:
             rows, total = _serve_or_raise(exc)
+        elif _cold_build_exceeds(snapshot_path):
+            # #124 follow-up (warm-path OOM guard): a self-heal rebuild is a FULL
+            # build, so on a too-large bucket it would OOM exactly like a cold
+            # build. A schema-VALID but dirty (``stale``) snapshot is still
+            # servable — prefer serve-stale over an unbounded inline rebuild
+            # (preserves issue #91 on an actively-capturing box). A schema-INVALID
+            # snapshot (e.g. a SNAPSHOT_SCHEMA_VERSION bump after ``setup
+            # upgrade``) cannot be served, so route it to ``opentraces trace
+            # index`` (maintenance_needed) instead of rebuilding inline.
+            if (not strict_freshness) and exc.reason == "stale":
+                stale_reason = exc.reason
+                rows, total = _read(allow_stale=True)
+            else:
+                raise SearchSnapshotNeedsRebuild(
+                    "cold_build_too_large", path=snapshot_path
+                )
         else:
             _notify_rebuilding()
             build_trace_search_snapshot(path=snapshot_path)
@@ -780,6 +864,7 @@ def list_skill_usage(
     if not snapshot_path.exists():
         if not auto_rebuild:
             raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        _guard_cold_build(snapshot_path)
         _notify_rebuilding()
         build_trace_search_snapshot(path=snapshot_path)
         rebuilt = True
@@ -804,6 +889,11 @@ def list_skill_usage(
     except SearchSnapshotNeedsRebuild:
         if not auto_rebuild or rebuilt:
             raise
+        # #124 follow-up: a self-heal rebuild is a FULL build — guard it on a
+        # too-large bucket so a schema-bump rebuild can't OOM (route to
+        # ``opentraces trace index`` / maintenance_needed instead).
+        if _cold_build_exceeds(snapshot_path):
+            raise SearchSnapshotNeedsRebuild("cold_build_too_large", path=snapshot_path)
         _notify_rebuilding()
         build_trace_search_snapshot(path=snapshot_path)
         rebuilt = True
@@ -842,6 +932,7 @@ def list_skill_invocation_units(
     if not snapshot_path.exists():
         if not auto_rebuild:
             raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+        _guard_cold_build(snapshot_path)
         _notify_rebuilding()
         build_trace_search_snapshot(path=snapshot_path)
         rebuilt = True
@@ -863,6 +954,9 @@ def list_skill_invocation_units(
     except SearchSnapshotNeedsRebuild:
         if not auto_rebuild or rebuilt:
             raise
+        # #124 follow-up: guard the warm full-rebuild on a too-large bucket.
+        if _cold_build_exceeds(snapshot_path):
+            raise SearchSnapshotNeedsRebuild("cold_build_too_large", path=snapshot_path)
         _notify_rebuilding()
         build_trace_search_snapshot(path=snapshot_path)
         return _read()
