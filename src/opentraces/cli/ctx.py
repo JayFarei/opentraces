@@ -725,11 +725,24 @@ def ctx_show_cmd(
     workflows. ``--remote`` + ``--offline`` together means "use the
     local cache only; do NOT contact the remote".
     """
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import (
+        build_context_tree_projection_for_trace,
+        resolve_node_traces,
+    )
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
-    node = projection.nodes_by_id.get(node_id)
+    # Issue #121: bound the read — resolve the owning trace via a scoped
+    # (context_node_observed-only) event read, then project just that trace,
+    # instead of materialising the whole event log. Byte-identical output:
+    # the per-trace projection contains exactly this node + its 4 layer ids.
+    resolved = resolve_node_traces(repo, {node_id})
+    owner_trace = resolved.get(node_id)
+    projection = (
+        build_context_tree_projection_for_trace(repo, owner_trace)
+        if owner_trace is not None
+        else None
+    )
+    node = projection.nodes_by_id.get(node_id) if projection is not None else None
     if node is None:
         if as_json:
             _emit(_empty_state(
@@ -1170,11 +1183,35 @@ def ctx_diff_cmd(
     project_dir: Path | None,
 ) -> None:
     """Diff two ContextNodes layer-by-layer."""
-    from ..core.context_tree.query import build_context_tree_projection
+    from ..core.context_tree.query import (
+        build_context_tree_projection_for_trace,
+        resolve_node_traces,
+    )
 
     repo = _project_repo(project_dir)
-    projection = build_context_tree_projection(repo)
-    if node_a not in projection.nodes_by_id or node_b not in projection.nodes_by_id:
+    # Issue #121: bound the read. The two nodes MAY belong to different
+    # traces, so resolve both owning traces via a scoped event read, then
+    # build per-trace projection(s) and merge their nodes/layers into one
+    # projection for layer_diff. Byte-identical: layer_diff is a pure
+    # function of the two nodes + their layer contents, reproduced exactly
+    # by the per-trace subset. (content-addressed dedup is order-independent.)
+    resolved = resolve_node_traces(repo, {node_a, node_b})
+    owner_a = resolved.get(node_a)
+    owner_b = resolved.get(node_b)
+    projection = None
+    if owner_a is not None and owner_b is not None:
+        projection = build_context_tree_projection_for_trace(repo, owner_a)
+        if owner_b != owner_a:
+            other = build_context_tree_projection_for_trace(repo, owner_b)
+            for nid, n in other.nodes_by_id.items():
+                projection.nodes_by_id.setdefault(nid, n)
+            for lid, layer in other.layers_by_id.items():
+                projection.layers_by_id.setdefault(lid, layer)
+    if (
+        projection is None
+        or node_a not in projection.nodes_by_id
+        or node_b not in projection.nodes_by_id
+    ):
         if as_json:
             _emit(_empty_state(
                 CONTEXT_TREE_SCHEMA_VERSION,

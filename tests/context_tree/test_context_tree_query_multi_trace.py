@@ -25,7 +25,10 @@ from pathlib import Path
 from opentraces.capture.claude_code.context_tree_capture import (
     emit_context_tree_events_from_record,
 )
-from opentraces.core.context_tree.query import build_context_tree_projection
+from opentraces.core.context_tree.query import (
+    build_context_tree_projection,
+    resolve_node_traces,
+)
 from opentraces_schema.models import Agent, TraceRecord
 
 
@@ -133,3 +136,46 @@ def test_orphan_branch_roots_are_roots_not_every_rewind_node(tmp_path):
     root_node = projection.nodes_by_id[roots[0]]
     parent = projection.nodes_by_id.get(root_node.parent_node_id or "")
     assert parent is None or parent.branch_type != "rewind_branch"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #121: bounded node_id -> trace_id resolver
+# --------------------------------------------------------------------------- #
+
+
+def test_resolve_node_traces_across_two_traces(tmp_path):
+    """``resolve_node_traces`` maps each node to its OWNING trace.
+
+    The bounded resolver (scoped over context_node_observed only) must
+    return the correct trace_id for nodes drawn from >= 2 distinct traces,
+    and omit an unknown node_id (drives the rc=3 fall-through in ctx
+    show/diff).
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    first = _ingest_fixture("context-tree-linear", repo, tmp_path / "w1")
+    second = _ingest_fixture("context-tree-multi-turn", repo, tmp_path / "w2")
+
+    projection = build_context_tree_projection(repo)
+    node_a = projection.nodes_by_trace[first][0]
+    node_b = projection.nodes_by_trace[second][0]
+    unknown = "sha256:" + "0" * 64
+
+    resolved = resolve_node_traces(repo, {node_a, node_b, unknown})
+    assert resolved.get(node_a) == first
+    assert resolved.get(node_b) == second
+    # Unknown id is simply absent (callers fall through to not-found).
+    assert unknown not in resolved
+    # Every resolved id agrees with the full-walk projection's node record.
+    assert resolved[node_a] == projection.nodes_by_id[node_a].trace_id
+    assert resolved[node_b] == projection.nodes_by_id[node_b].trace_id
+
+
+def test_resolve_node_traces_empty_input_is_empty(tmp_path):
+    """No requested ids -> no event read, empty mapping (bounded short-circuit)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    _ingest_fixture("context-tree-linear", repo, tmp_path / "w1")
+    assert resolve_node_traces(repo, set()) == {}
