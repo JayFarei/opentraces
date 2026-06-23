@@ -72,6 +72,17 @@ export function readRecords(file) {
   return readFileSync(path, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 }
 
+// §3 idempotency: has a record for this (run_date_bucket, deploy_sha, surface)
+// already been written? Lets a writer no-op a duplicate/late scheduler fire.
+// Never coalesces an "unknown" deploy_sha (two distinct deploys that both failed
+// the SHA lookup must not be treated as the same run).
+export function recordExists(file, { run_date_bucket, deploy_sha, surface }) {
+  if (deploy_sha === "unknown") return false;
+  return readRecords(file).some(
+    (r) => r.run_date_bucket === run_date_bucket && r.deploy_sha === deploy_sha && r.surface === surface,
+  );
+}
+
 // The commit SHA of the deployed/working site. Prefer the CI/Vercel-provided
 // SHA so a shallow/detached/headless checkout doesn't silently collapse to a
 // single "unknown" key (which would make the idempotency key ambiguous).

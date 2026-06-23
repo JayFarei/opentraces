@@ -1,0 +1,74 @@
+name: seo-monitor
+
+# Scheduled SEO/AEO monitor (Phase 1 spine of web/site/SEO-AEO-LOOP.md §5). Every
+# ~2 days it runs the DETERMINISTIC, no-credential checks against the LIVE site,
+# appends a `seo_check` record to the in-repo standings store, commits it (so
+# history/diffs come for free), and goes RED on a regression (the alert). The
+# write is idempotent per (run_date_bucket, deploy_sha, surface) — a duplicate
+# fire is a no-op. Credentialed signals (GSC, the GEO citation panel, CrUX) and
+# the crawler log-drain feed slot in here as added steps in Phase 1/2.
+
+on:
+  schedule:
+    - cron: "0 14 */2 * *" # every 2 days, 14:00 UTC (the 2–3 day MONITOR beat)
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Base URL to monitor"
+        default: "https://www.opentraces.ai"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seo-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run SEO monitor (live site)
+        id: monitor
+        working-directory: web/site
+        env:
+          URL: ${{ github.event.inputs.url || 'https://www.opentraces.ai' }}
+        run: |
+          set +e
+          node scripts/seo/seo-check.mjs --url "$URL" --write --json > monitor-result.json
+          code=$?
+          set -e
+          cat monitor-result.json
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Commit standings snapshot
+        if: always()
+        working-directory: web/site
+        run: |
+          if git diff --quiet -- seo-snapshots/; then
+            echo "no standings change to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seo-snapshots/
+          git commit -m "chore(seo): standings snapshot $(date -u +%F) [skip ci]"
+          git pull --rebase --autostash origin main
+          git push origin HEAD:main
+
+      - name: Alert on regression
+        if: always()
+        run: |
+          if [ "${{ steps.monitor.outputs.exit }}" != "0" ]; then
+            echo "::error::SEO monitor found a regression on the live site — see the committed standings snapshot"
+            exit 1
+          fi
+          echo "SEO monitor clean"

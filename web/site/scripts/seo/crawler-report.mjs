@@ -17,12 +17,13 @@
 // unverified and spoofable; treat them as claimed, not signal.
 import { readFileSync } from "node:fs";
 import { promises as dns } from "node:dns";
-import { matchCrawler, appendRecord, runDateBucket, currentDeploySha, PRIORITY_PAGES } from "./lib.mjs";
+import { matchCrawler, appendRecord, recordExists, runDateBucket, currentDeploySha, PRIORITY_PAGES } from "./lib.mjs";
 
 const args = process.argv.slice(2);
 const verify = args.includes("--verify");
 const asJson = args.includes("--json");
 const noWrite = args.includes("--no-write");
+const force = args.includes("--force");
 const fileArg = args.find((a) => !a.startsWith("--"));
 const isFixture = !!fileArg && fileArg.includes("__fixtures__");
 
@@ -141,7 +142,16 @@ const record = {
     coverage,
   },
 };
-if (!noWrite && !isFixture) appendRecord("standings.jsonl", record);
+const dupeKey = { run_date_bucket: record.run_date_bucket, deploy_sha: record.deploy_sha, surface: "crawler_hits" };
+let wrote = false;
+if (!noWrite && !isFixture) {
+  if (!force && recordExists("standings.jsonl", dupeKey)) {
+    console.error("(idempotent) crawler_hits already recorded for this (date, sha) — use --force to override");
+  } else {
+    appendRecord("standings.jsonl", record);
+    wrote = true;
+  }
+}
 
 if (asJson) {
   console.log(JSON.stringify(record, null, 2));
@@ -153,5 +163,5 @@ if (asJson) {
   console.log(`Priority-page + llms.txt coverage (${verify ? "verified" : "claimed"}):`);
   for (const [p, n] of Object.entries(coverage)) console.log(`  ${p}: ${n}${n === 0 ? "  ⚠ zero fetches (precondition for citation)" : ""}`);
   if (isFixture) console.log("\n(fixture input — not writing to standings)");
-  else if (!noWrite) console.log("\nappended crawler_hits record to seo-snapshots/standings.jsonl");
+  else if (wrote) console.log("\nappended crawler_hits record to seo-snapshots/standings.jsonl");
 }
