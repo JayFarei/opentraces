@@ -49,6 +49,16 @@ jobs:
           cat monitor-result.json
           echo "exit=$code" >> "$GITHUB_OUTPUT"
 
+      - name: GSC pull (credentialed; no-ops without the secret)
+        if: always()
+        working-directory: web/site
+        continue-on-error: true
+        env:
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL || 'sc-domain:opentraces.ai' }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: node scripts/seo/gsc-report.mjs --write
+
       - name: Commit standings snapshot
         if: always()
         working-directory: web/site

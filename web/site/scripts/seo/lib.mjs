@@ -76,10 +76,17 @@ export function readRecords(file) {
 // already been written? Lets a writer no-op a duplicate/late scheduler fire.
 // Never coalesces an "unknown" deploy_sha (two distinct deploys that both failed
 // the SHA lookup must not be treated as the same run).
+// A SUCCESSFUL prior record blocks a re-write (idempotent). A prior `error`
+// record does NOT — a later run may supersede it (self-heal a transient failure;
+// latest-per-key wins on read). `--force` overrides regardless.
 export function recordExists(file, { run_date_bucket, deploy_sha, surface }) {
   if (deploy_sha === "unknown") return false;
   return readRecords(file).some(
-    (r) => r.run_date_bucket === run_date_bucket && r.deploy_sha === deploy_sha && r.surface === surface,
+    (r) =>
+      r.run_date_bucket === run_date_bucket &&
+      r.deploy_sha === deploy_sha &&
+      r.surface === surface &&
+      r.status !== "error",
   );
 }
 

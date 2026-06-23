@@ -12,6 +12,7 @@
     "seo:check": "node scripts/seo/seo-check.mjs",
     "seo:monitor": "node scripts/seo/seo-check.mjs --url https://www.opentraces.ai --write",
     "seo:crawlers": "node scripts/seo/crawler-report.mjs",
+    "seo:gsc": "node scripts/seo/gsc-report.mjs",
     "seo:indexnow": "node scripts/seo/indexnow-submit.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
