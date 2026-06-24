@@ -218,6 +218,10 @@ function applySeam(html) {
     ["app-shell + Sidebar open guard", RAW_SHELL, SEAMED_SHELL, 'data-embed={embed ? "1" : "0"}'],
     ["Sidebar close + Topbar open guard", RAW_SIDEBAR_CLOSE, SEAMED_SIDEBAR_CLOSE, "/>\n      )}\n\n      <div style={{display:"],
     ["Topbar close guard", RAW_TOPBAR_CLOSE, SEAMED_TOPBAR_CLOSE, 'setView("traces-landing")}\n        />\n        )}'],
+    ["pulls deep-link wiring",
+      `activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} />`,
+      `activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} initialPull={HUB_INIT.pullId} /* @ot-embed-seam: deep-link opens a PR detail */ />`,
+      "initialPull={HUB_INIT.pullId}"],
   ]) {
     if (out.includes(markerIfApplied)) { steps.push(`${name} present (skip)`); continue; }
     if (!out.includes(raw)) throw new Error(`anchor missing: ${name}. Design structure changed — re-review seam.`);
@@ -228,6 +232,27 @@ function applySeam(html) {
   return { out, steps };
 }
 
+// Small component-level behavior the site keeps on top of the design export,
+// re-applied on every import until/unless it is folded into the design source.
+// (RepoPullsPage opens straight into a PR detail when deep-linked via ?pr=…)
+const PULLS_FILE = join(HUB, "landing-repo-pulls.jsx");
+const RAW_PULLS = `function RepoPullsPage({ repoId }) {
+  const [openPullId, setOpenPullId] = React.useState(null);`;
+const SEAMED_PULLS = `// \`initialPull\` (optional) boots straight into a PR detail instead of the list —
+// the marketing /hub pulls card passes it via ?pr=… so the embed opens on an
+// open PR; standalone sidebar nav passes nothing and lands on the list.
+function RepoPullsPage({ repoId, initialPull }) {
+  const [openPullId, setOpenPullId] = React.useState(initialPull || null);`;
+
+function applyPullsPatch() {
+  if (!existsSync(PULLS_FILE)) return "landing-repo-pulls.jsx missing (skip)";
+  const src = readFileSync(PULLS_FILE, "utf8");
+  if (src.includes("function RepoPullsPage({ repoId, initialPull })")) return "pulls PR-default present (skip)";
+  if (!src.includes(RAW_PULLS)) throw new Error("anchor missing: RepoPullsPage signature. Design structure changed — re-review the pulls PR-default patch.");
+  writeFileSync(PULLS_FILE, src.replace(RAW_PULLS, SEAMED_PULLS));
+  return "apply pulls PR-default";
+}
+
 function cmdApply() {
   if (!existsSync(INDEX)) { console.error(`✗ ${INDEX} not found — run the design pull first (see scripts/SYNC-HUB.md).`); process.exit(2); }
   if (!existsSync(EMBED_CSS)) { writeFileSync(EMBED_CSS, EMBED_CSS_BODY); console.log("· wrote public/hub-preview/_embed.css"); }
@@ -236,6 +261,7 @@ function cmdApply() {
   for (const s of steps) console.log(`  · ${s}`);
   if (out !== html) { writeFileSync(INDEX, out); console.log("✓ embed seam applied to index.html"); }
   else console.log("✓ index.html already fully seamed (no change)");
+  console.log(`  · ${applyPullsPatch()}`);
 }
 
 // Contract check: every view/child referenced by /hub must be handled by the App.

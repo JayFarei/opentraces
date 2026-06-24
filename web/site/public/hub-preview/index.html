@@ -403,7 +403,7 @@ function App() {
           {view === "improving" && <SelfImprovingPage onSelectRepo={(id) => openRepo(id, "overview")} />}
           {view === "settings"  && <GlobalSettingsPage onSelectRepo={(id) => openRepo(id, "settings")} />}
           {view === "repo" && activeRepoId && (
-            activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} />
+            activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} initialPull={HUB_INIT.pullId} /* @ot-embed-seam: deep-link opens a PR detail */ />
             : activeRepoChild === "traces" ? <RepoTracesPage repoId={activeRepoId} onSelectTrace={openTrace} />
             : activeRepoChild === "settings" ? <RepoSettingsPage repoId={activeRepoId} />
             : <RepoOverview

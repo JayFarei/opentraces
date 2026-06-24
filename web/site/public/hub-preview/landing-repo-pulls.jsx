@@ -389,8 +389,11 @@ function RepoPullDetail({ repoId, pullId, onBack }) {
 }
 
 // Outer router for the repo "Pull requests" child.
-function RepoPullsPage({ repoId }) {
-  const [openPullId, setOpenPullId] = React.useState(null);
+// `initialPull` (optional) boots straight into a PR detail instead of the list —
+// the marketing /hub pulls card passes it via ?pr=… so the embed opens on an
+// open PR; standalone sidebar nav passes nothing and lands on the list.
+function RepoPullsPage({ repoId, initialPull }) {
+  const [openPullId, setOpenPullId] = React.useState(initialPull || null);
   if (openPullId) {
     return (
       <RepoPullDetail
