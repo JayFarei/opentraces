@@ -33,6 +33,7 @@ from .query import (
     TrailQueryProjection,
     build_trail_query_projection,
     build_trail_query_projection_for_commits,
+    build_trail_query_projection_for_trace,
     trail_query_summary,
 )
 from .reconciler import reconcile_watcher_observations
@@ -98,6 +99,7 @@ __all__ = [
     "build_survival_cache_index",
     "build_trail_query_projection",
     "build_trail_query_projection_for_commits",
+    "build_trail_query_projection_for_trace",
     "get_cached_survival",
     "import_event_log",
     "make_survival_cache_draft",

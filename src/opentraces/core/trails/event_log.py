@@ -329,6 +329,22 @@ def append_event_batch(
         commit_sha = _commit_batch(cwd, tree_sha, head, batch_id)
 
         if _update_event_log_ref(cwd, commit_sha, head):
+            # #137: maintain the rebuildable OID index at the single append
+            # chokepoint — O(K) in the K just-appended events, best-effort, and
+            # never able to fail the append. The new commit's own tree carries
+            # exactly the K new event blobs, so the index needs no whole-log walk.
+            try:
+                from . import event_index
+
+                event_index.extend_after_append(
+                    cwd,
+                    previous_head=head,
+                    new_head=commit_sha,
+                    new_entries=_event_blob_entries(cwd, [commit_sha]),
+                    events=events,
+                )
+            except Exception:  # noqa: BLE001 — index is an accelerator, not a gate
+                pass
             return events
         if attempt == EVENT_LOG_APPEND_MAX_RETRIES:
             break
@@ -629,21 +645,28 @@ def _list_event_blob_entries(cwd: Path, head: str) -> list[tuple[str, str]]:
     return entries
 
 
-def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
-    """Read every event whose body references ``trace_id`` — bounded by ONE
-    trace's footprint, never the whole log (#65).
+def _event_owns_trace(event: TrailEvent, trace_id: str) -> bool:
+    """Exact per-trace membership: a top-level ``trace_id``, a payload
+    ``trace_id``, or a v2 anchor-search summary touching the trace. This is the
+    predicate every per-trace consumer post-filters to, and the rule the #137
+    index posts ``by_trace`` under, so the index fast-path and the full-scan
+    fallback return the identical event set."""
+    from .search_records import summary_search_touches_trace
 
-    The raw-bytes prefilter (``trace_id`` must appear in the blob) can only
-    over-include; callers that need exact ``trace_id`` matching post-filter
-    (``_events_for_trace_from_iter`` does). This replaced the full
-    ``read_events`` walk in the per-trace bucket export, which materialised
-    ~872K pydantic events + a 2GB snapshot pickle per ingested trace per tick
-    on the #65 repo.
-    """
-    cwd = cwd.resolve()
-    head = _ref_head(cwd)
-    if head is None or not trace_id:
-        return []
+    if event.trace_id == trace_id:
+        return True
+    payload = event.payload
+    if isinstance(payload, dict) and payload.get("trace_id") == trace_id:
+        return True
+    return summary_search_touches_trace(event, trace_id)
+
+
+def _read_events_for_trace_fullscan(
+    cwd: Path, head: str, trace_id: str
+) -> list[TrailEvent]:
+    """Slow-but-correct fallback: scan the whole log with a raw-bytes prefilter,
+    then keep exactly the trace's events. Used only when the #137 index is
+    unavailable AND a rebuild failed (a degenerate error path)."""
     entries = _list_event_blob_entries(cwd, head)
     if not entries:
         return []
@@ -652,7 +675,45 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
     for raw in _iter_blobs_batch(cwd, entries):
         if token not in raw:
             continue
-        matched.append(TrailEvent.model_validate_json(raw))
+        event = TrailEvent.model_validate_json(raw)
+        if _event_owns_trace(event, trace_id):
+            matched.append(event)
+    matched.sort(key=lambda event: event.event_sequence)
+    return matched
+
+
+def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
+    """Read every event belonging to ``trace_id`` — bounded by ONE trace's
+    footprint, never the whole log.
+
+    #137: routed through the rebuildable OID index, so this reads only the
+    trace's own event blobs (O(result)) instead of byte-streaming the whole ref
+    (the ~12s zero-match floor on a mature log). Membership is the exact
+    per-trace predicate (:func:`_event_owns_trace`) — top-level ``trace_id``, a
+    payload ``trace_id``, or a v2 summary touching the trace — which every
+    consumer (``_events_for_trace_from_iter``, workspace export, context-tree
+    fan-in) already post-filters to. When the index is unavailable it is rebuilt
+    once (the bootstrap scan); only if that also fails does it fall back to the
+    full scan, slow-but-correct (the index is an accelerator, never required).
+    """
+    cwd = cwd.resolve()
+    head = _ref_head(cwd)
+    if head is None or not trace_id:
+        return []
+    from . import event_index
+
+    idx = event_index.fresh_index_for_read(cwd, head)
+    if idx is None:
+        idx = event_index.rebuild_event_index(cwd, head)
+    if idx is None:
+        return _read_events_for_trace_fullscan(cwd, head, trace_id)
+    entries = idx.entries_for_trace(trace_id)
+    if not entries:
+        return []
+    matched = [
+        TrailEvent.model_validate_json(raw)
+        for raw in _iter_blobs_batch(cwd, entries)
+    ]
     matched.sort(key=lambda event: event.event_sequence)
     return matched
 
@@ -701,55 +762,70 @@ def read_events_scoped(
     head = _ref_head(cwd)
     if head is None:
         return []
-    entries = _list_event_blob_entries(cwd, head)
-    if not entries:
-        return []
 
-    # Cheap raw-bytes prefilter so only wanted blobs are JSON-parsed. Types that
-    # carry a commit_filter (anchor/search events) are additionally gated on the
-    # reconciled commit's sha appearing in the blob — on a real log these
-    # commit-keyed events dominate (e.g. ~500k git_anchor_search_completed), and
-    # all but this commit's handful would otherwise be parsed only to be dropped
-    # by commit_filter below. The post-parse checks still enforce exact matching,
-    # so the commit-sha prefilter can only over-include, never miss.
     commit_filter = commit_filter or {}
-    plain_tokens = [
-        f'"{t}"'.encode() for t in event_types if t not in commit_filter
-    ]
-    filtered_tokens = [
-        f'"{t}"'.encode() for t in event_types if t in commit_filter
-    ]
+    event_types = set(event_types)
     # Unify single + batched commit-sha forms. ``wanted_shas`` is the set the
-    # post-parse filter membership-checks; ``commit_tokens`` is the raw-bytes
-    # prefilter (a blob is admitted if ANY wanted sha appears, since the
-    # post-parse check still enforces exact matching — the prefilter can only
-    # over-include, never miss).
+    # post-parse filter membership-checks.
     wanted_shas: set[str] = set()
     if commit_sha:
         wanted_shas.add(commit_sha)
     if commit_shas:
         wanted_shas.update(commit_shas)
-    commit_tokens = [sha.encode() for sha in wanted_shas]
 
-    def _wanted(raw: bytes) -> bool:
-        if any(token in raw for token in plain_tokens):
-            return True
-        if not filtered_tokens:
-            return False
-        if commit_tokens and not any(token in raw for token in commit_tokens):
-            return False
-        return any(token in raw for token in filtered_tokens)
+    # #137: resolve candidate blobs through the rebuildable OID index when it is
+    # fresh — only the wanted-type (and, for commit-keyed types, wanted-commit)
+    # blobs are read, instead of byte-streaming the whole ref. The index is a
+    # SUPERSET of the events that pass the exact post-parse filter below, so the
+    # filtered result is byte-identical to the full scan — just bounded. When the
+    # index is unavailable it is rebuilt once; only if that also fails does this
+    # fall back to the whole-log raw-bytes-prefilter scan (slow-but-correct).
+    from . import event_index
+
+    idx = event_index.fresh_index_for_read(cwd, head)
+    if idx is None:
+        idx = event_index.rebuild_event_index(cwd, head)
+
+    _prefilter = None
+    if idx is not None:
+        entries = idx.entries_for_scoped(
+            event_types=event_types,
+            commit_filter=commit_filter,
+            wanted_shas=wanted_shas,
+        )
+    else:
+        entries = _list_event_blob_entries(cwd, head)
+        # Cheap raw-bytes prefilter so only wanted blobs are JSON-parsed. Types
+        # carrying a commit_filter are additionally gated on a wanted sha
+        # appearing in the blob — on a real log these commit-keyed events
+        # dominate (e.g. ~500k git_anchor_search_completed). The post-parse
+        # checks still enforce exact matching, so the prefilter can only
+        # over-include, never miss.
+        plain_tokens = [f'"{t}"'.encode() for t in event_types if t not in commit_filter]
+        filtered_tokens = [f'"{t}"'.encode() for t in event_types if t in commit_filter]
+        commit_tokens = [sha.encode() for sha in wanted_shas]
+
+        def _prefilter(raw: bytes) -> bool:
+            if any(token in raw for token in plain_tokens):
+                return True
+            if not filtered_tokens:
+                return False
+            if commit_tokens and not any(token in raw for token in commit_tokens):
+                return False
+            return any(token in raw for token in filtered_tokens)
+
+    if not entries:
+        return []
 
     # #65: with a ``sink``, matching events are handed over one at a time (in
     # event_sequence order — ``entries`` is sorted by the zero-padded name)
     # and never retained here, so a consumer that keeps only a bounded
     # projection (the reconciler's cold rebuild) has bounded peak RSS no
     # matter how large the log is. Blobs stream one at a time through
-    # ``_iter_blobs_batch`` — the previous 8192-entry chunking slurped up to
-    # ~280MB of raw blob bytes per chunk on a mature log.
+    # ``_iter_blobs_batch``.
     matched: list[TrailEvent] = []
     for raw in _iter_blobs_batch(cwd, entries):
-        if not _wanted(raw):
+        if _prefilter is not None and not _prefilter(raw):
             continue
         event = TrailEvent.model_validate_json(raw)
         if event.event_type not in event_types:
@@ -1005,9 +1081,12 @@ def invalidate_read_events_cache(cwd: Path | None = None) -> None:
     in-process append paths already invalidate when they advance the
     ref head implicitly via the per-(repo, head) key.
     """
+    from . import event_index
+
     if cwd is None:
         _READ_EVENTS_CACHE.clear()
         _VERIFY_STATUS_CACHE.clear()
+        event_index.invalidate_event_index_memo(None)
         return
     repo_key = str(Path(cwd).resolve())
     for key in list(_READ_EVENTS_CACHE.keys()):
@@ -1016,6 +1095,7 @@ def invalidate_read_events_cache(cwd: Path | None = None) -> None:
     for key in list(_VERIFY_STATUS_CACHE.keys()):
         if key[0] == repo_key:
             _VERIFY_STATUS_CACHE.pop(key, None)
+    event_index.invalidate_event_index_memo(cwd)
 
 
 def _parents_are_linear(cwd: Path) -> tuple[bool, list[str], int]:

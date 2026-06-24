@@ -166,10 +166,17 @@ def _intent_for_step(record: Any, trace_map: Any, step_index: int) -> dict[str, 
 
 
 def _trail_anchors(project_dir: Path, trace_id: str) -> list[dict[str, Any]]:
+    # #137: source this trace's Trail anchors through the bounded, index-served
+    # per-trace projection — it reads only the trace's own event blobs instead of
+    # byte-streaming the whole canonical log (the full-walk that made
+    # ``ot capsule export`` wedge on a mature ref; HB#1 removes that read floor).
+    # ``anchors_for_trace_with_survival`` is byte-identical to the full builder's
+    # for the trace (see ``build_trail_query_projection_for_trace``), so the
+    # capsule's ``trail_anchors`` are unchanged in content, only fast to produce.
     try:
-        from ..trails.query import build_trail_query_projection
+        from ..trails.query import build_trail_query_projection_for_trace
 
-        projection = build_trail_query_projection(project_dir)
+        projection = build_trail_query_projection_for_trace(project_dir, trace_id)
         rows = projection.anchors_for_trace_with_survival(trace_id)
         return [dict(r) for r in rows]
     except Exception:  # pragma: no cover - trail optional

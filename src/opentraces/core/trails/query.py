@@ -22,7 +22,12 @@ from typing import Any
 from opentraces.core.config import get_project_traces_dir
 
 from .contract import enrich_trail_row, projection_digest
-from .event_log import EVENT_LOG_REF, read_events, read_events_scoped
+from .event_log import (
+    EVENT_LOG_REF,
+    read_events,
+    read_events_for_trace,
+    read_events_scoped,
+)
 from .ids import id_from_payload
 from .models import TrailEvent
 from .search_records import iter_search_records
@@ -353,6 +358,33 @@ def build_trail_query_projection_for_commits(
         commit_filter=_PROJECTION_COMMIT_FILTER,
         commit_shas=commit_shas,
     )
+    return _build_projection_from_events(repo, events)
+
+
+def build_trail_query_projection_for_trace(
+    repo: Path, trace_id: str
+) -> TrailQueryProjection:
+    """Build a Trail Query projection scoped to one ``trace_id`` (#137).
+
+    Identical row-construction to :func:`build_trail_query_projection`, but the
+    events are read via :func:`read_events_for_trace` — only the trace's own
+    event blobs are read (O(result)) instead of byte-streaming the whole ref.
+    This is what ``capsule export`` and other per-trace consumers use so a single
+    trace's lineage resolves instantly on a mature log.
+
+    BYTE-IDENTITY BOUNDARY: ``anchors_for_trace(trace_id)`` /
+    ``anchors_for_trace_with_survival(trace_id)`` /
+    ``patches_for_trace(trace_id)`` rows are deep-equal to the full builder's,
+    because every ``git_anchor_created`` event carries the patch's ``trace_id``
+    (anchors.py / exact.py) and ``with_current_survival`` derives survival
+    independently of which other events were loaded. The whole-log aggregates
+    (``events_seen`` / ``projection_digest`` / the full ``patches_by_id`` /
+    cross-trace delegation linkage) are NOT byte-identical in the scoped builder
+    by construction — callers MUST NOT surface those. The canonical event log is
+    unchanged; this is a rebuildable read accelerator.
+    """
+    repo = repo.resolve()
+    events = read_events_for_trace(repo, trace_id)
     return _build_projection_from_events(repo, events)
 
 
