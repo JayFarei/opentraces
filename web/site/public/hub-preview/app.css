@@ -859,10 +859,16 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
   text-overflow: ellipsis;
   min-width: 0;
 }
+/* Compact mode shows only the icon + title + the inline meta line. The summary
+   and the intel chips are dropped here: in the compact flex row the hidden
+   summary still claimed ~230px and the intel chips wrapped into a tall stack,
+   both starving the title (it collapsed to ~3 chars). The context-waste signal
+   the chips carry already appears in the inline meta on the right. */
 .trace-card[data-compact="true"] .trace-summary {
-  max-height: 0;
-  opacity: 0;
-  margin: 0;
+  display: none;
+}
+.trace-card[data-compact="true"] .trace-intel-row {
+  display: none;
 }
 .trace-card[data-compact="true"] .trace-meta {
   display: none;
