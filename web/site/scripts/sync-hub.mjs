@@ -24,7 +24,7 @@
 // anchor name instead of silently shipping a broken embed. That failure IS the
 // drift alarm — re-review the seam against the new structure.
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -264,8 +264,38 @@ function cmdApply() {
   console.log(`  · ${applyPullsPatch()}`);
 }
 
+// Guard against a mis-mapped pull: a *.css that actually holds JS/JSX, a *.jsx
+// that holds CSS, or a *.css byte-identical to its sibling *.jsx (the exact
+// failure that once blanked the run-intelligence styles). Cheap, runs on every
+// check so a bad pull is caught before deploy instead of in production.
+function checkFileTypes() {
+  const files = readdirSync(HUB);
+  const problems = [];
+  const jsHead = /\b(function\s|=>|React\.|window\.[A-Za-z]|className=)/;
+  const cssRule = /^\s*[.#@][\w-]+[^\n]*\{/m;
+  for (const f of files) {
+    if (f.endsWith(".css")) {
+      const head = readFileSync(join(HUB, f), "utf8").slice(0, 2000);
+      if (jsHead.test(head) && !cssRule.test(head)) problems.push(`${f} looks like JS/JSX, not CSS`);
+      const twin = f.replace(/\.css$/, ".jsx");
+      if (files.includes(twin) && readFileSync(join(HUB, f), "utf8") === readFileSync(join(HUB, twin), "utf8"))
+        problems.push(`${f} is byte-identical to ${twin} (mis-mapped pull)`);
+    } else if (f.endsWith(".jsx")) {
+      const head = readFileSync(join(HUB, f), "utf8").slice(0, 1500);
+      if (cssRule.test(head) && !jsHead.test(head)) problems.push(`${f} looks like CSS, not JS`);
+    }
+  }
+  if (problems.length) {
+    console.error("✗ file-type mismatch in public/hub-preview (re-pull the named files):");
+    for (const p of problems) console.error(`  - ${p}`);
+    process.exit(1);
+  }
+  console.log(`✓ file types intact — ${files.filter(f => /\.(css|jsx)$/.test(f)).length} css/jsx files are the right kind.`);
+}
+
 // Contract check: every view/child referenced by /hub must be handled by the App.
 function cmdCheck() {
+  checkFileTypes();
   const html = readFileSync(INDEX, "utf8");
   const feats = readFileSync(HUB_FEATURES, "utf8");
   // Views the App actually switches on.

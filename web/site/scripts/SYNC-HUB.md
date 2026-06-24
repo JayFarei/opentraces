@@ -69,6 +69,11 @@ rather than shipping a broken embed.
 node scripts/sync-hub.mjs check
 ```
 
+Also guards file types: a `*.css` that actually holds JS/JSX, or a `*.css`
+byte-identical to its `*.jsx` sibling (a mis-mapped pull — this once blanked the
+run-intelligence chip styles), fails the check before deploy. Re-pull the named
+file if it fires.
+
 Fails if `src/lib/hub-features.ts` references a `view:` the design no longer handles.
 For a deeper visual check, boot each embed URL in a browser:
 `/hub-preview/index.html?embed=1&view=<id>&…` (the set lives in `hub-features.ts`).
