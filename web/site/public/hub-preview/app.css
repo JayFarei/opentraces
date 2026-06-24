@@ -3,7 +3,6 @@
  */
 
 :root {
-  color-scheme: dark;
   /* Surfaces */
   --bg: #0d1117;
   --surface: #161b22;
@@ -49,7 +48,6 @@ html.theme-swap, html.theme-swap *, html.theme-swap *::before, html.theme-swap *
 }
 
 [data-theme="light"] {
-  color-scheme: light;
   /* Stacklane-inspired warm neutrals: bg = subtle warm gray, surfaces = pure white */
   --bg: #f5f5f4;
   --surface: #ffffff;
@@ -92,12 +90,6 @@ button { font-family: inherit; color: inherit; background: transparent; border: 
   background: var(--bg);
 }
 .app-shell[data-sb="collapsed"] { grid-template-columns: var(--sidebar-collapsed-w) 1fr; }
-
-/* Embed mode: the marketing /hub showcase boots one chromeless feature per
-   iframe (?embed=1&view=…). No sidebar, no topbar — the main panel fills the
-   canvas so each feature reads as a focused sub-artifact. */
-.app-shell[data-embed="1"] { grid-template-columns: 1fr; }
-.app-shell[data-embed="1"] .main { height: 100vh; }
 
 /* ─────────────  Sidebar  ───────────── */
 .sidebar {
@@ -545,7 +537,9 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 
 .breadcrumb {
   display: flex; align-items: center; gap: 8px;
-  flex: 1; min-width: 0;
+  /* Size to content; .tb-spacer absorbs the free space. Only shrink (and
+   * ellipsize the current crumb) when the window is genuinely too narrow. */
+  flex: 0 1 auto; min-width: 0;
 }
 .bc-icon {
   width: 18px; height: 18px;
@@ -675,114 +669,61 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 }
 
 /* ── Easter egg: Jay's avatar "texts" you (iMessage-styled, hub tokens) ── */
-.tb-avatar-wrap {
-  position: relative;
-  display: inline-flex;
-}
+.tb-avatar-wrap { position: relative; display: inline-flex; }
 .avatar-chat {
   position: absolute;
   top: calc(100% + 11px);
   right: -4px;
-  z-index: 60;
   width: 232px;
-  padding: 10px 12px 12px;
-  border-radius: 16px;
+  z-index: 60;
+  padding: 10px 11px 11px;
   background: var(--surface);
+  border-radius: 14px;
   border: 1px solid var(--border);
-  box-shadow:
-    0 12px 32px -8px color-mix(in oklch, var(--fg) 30%, transparent),
-    0 2px 6px -2px color-mix(in oklch, var(--fg) 22%, transparent);
+  box-shadow: 0 12px 32px -8px color-mix(in oklch, var(--fg) 30%, transparent),
+              0 2px 6px -2px color-mix(in oklch, var(--fg) 22%, transparent);
   transform-origin: top right;
   animation: avatar-chat-in var(--duration-slow) var(--ease-out);
 }
-/* little pointer toward the avatar */
 .avatar-chat-tail {
-  position: absolute;
-  top: -6px;
-  right: 14px;
-  width: 12px;
-  height: 12px;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  border-top: 1px solid var(--border);
-  transform: rotate(45deg);
-  border-radius: 3px 0 0 0;
+  position: absolute; top: -6px; right: 14px; width: 12px; height: 12px;
+  background: var(--surface); border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border); transform: rotate(45deg); border-radius: 3px 0 0 0;
 }
-.avatar-chat-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 8px;
-}
-.avatar-chat-head img {
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 1px solid color-mix(in oklch, var(--fg) 14%, transparent);
-}
-.avatar-chat-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--fg);
-}
-.avatar-chat-now {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--fg-mute);
-}
-/* stacked, staggered message thread */
-.avatar-chat-thread {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
+.avatar-chat-head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+.avatar-chat-head img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; border: 1px solid color-mix(in oklch, var(--fg) 14%, transparent); }
+.avatar-chat-name { font-size: 12.5px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg); }
+.avatar-chat-now { margin-left: auto; font-size: 10.5px; color: var(--fg-mute); }
+.avatar-chat-thread { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .avatar-chat-bubble {
-  position: relative;
-  display: inline-block;
-  max-width: 100%;
-  padding: 9px 12px;
-  border-radius: 16px 16px 16px 5px;
-  background: var(--surface-3);
-  color: var(--fg);
-  font-size: 13px;
-  line-height: 1.4;
+  position: relative; display: inline-block; max-width: 100%;
+  padding: 9px 12px; border-radius: 16px 16px 16px 5px;
+  background: var(--surface-3); color: var(--fg); font-size: 13px; line-height: 1.4;
   animation: avatar-chat-bubble-in var(--duration-base) var(--ease-out);
 }
 .avatar-chat-bubble-typing { padding: 11px 13px; }
-.avatar-chat-bubble-in { animation: avatar-chat-bubble-in var(--duration-base) var(--ease-out); }
-.avatar-chat-wave { display: inline-block; animation: avatar-chat-wave 1.1s ease-in-out 0.25s 3; }
+.avatar-chat-wave {
+  display: inline-block;
+  animation: avatar-chat-wave 0.55s ease-in-out 3;
+}
 .avatar-chat-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 11px;
-  border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 11px; border-radius: 999px;
   background: color-mix(in oklch, var(--c-user) 18%, transparent);
   border: 1px solid color-mix(in oklch, var(--c-user) 42%, transparent);
   color: color-mix(in oklch, var(--c-user) 72%, var(--fg));
-  font-size: 12px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: background var(--duration-fast) var(--ease-out),
-              border-color var(--duration-fast) var(--ease-out);
+  font-size: 12px; font-weight: 600; text-decoration: none;
+  animation: avatar-chat-bubble-in var(--duration-base) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 .avatar-chat-link:hover {
   background: color-mix(in oklch, var(--c-user) 28%, transparent);
   border-color: color-mix(in oklch, var(--c-user) 60%, transparent);
 }
 .avatar-chat-xmark { flex: none; }
-/* typing dots */
-.avatar-chat-typing {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
+.avatar-chat-typing { display: inline-flex; align-items: center; gap: 4px; }
 .avatar-chat-typing span {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--fg-mute);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--fg-mute);
   animation: avatar-chat-dot 1.2s ease-in-out infinite;
 }
 .avatar-chat-typing span:nth-child(2) { animation-delay: 0.18s; }
@@ -803,13 +744,6 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 @keyframes avatar-chat-wave {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(3px); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .avatar-chat,
-  .avatar-chat-bubble,
-  .avatar-chat-bubble-in,
-  .avatar-chat-wave { animation: none; }
-  .avatar-chat-typing span { animation-duration: 0.001s; }
 }
 
 /* ─────────────  Main scroll area  ───────────── */
@@ -1755,3 +1689,18 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 /* Toast / hidden views */
 .viewport[data-tab="conversation"] .trail-pane { display: none; }
 .viewport[data-tab="trail"] .conv-shell { display: none; }
+
+/* ─────────────  Polish pass — sidebar labels never wrap  ───────────── */
+.sb-nav-item { white-space: nowrap; }
+.sb-nav-item > span:not(.icon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Trace header: meta values and tab labels stay on one line */
+.tm-item .v { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-row .tab { white-space: nowrap; }
+/* Conversation: the message grid's 1fr column must be allowed to shrink so
+ * tool-call rows ellipsize instead of pushing the pane wider. */
+.msg > div:last-child { min-width: 0; }
+.tool-call { max-width: 100%; min-width: 0; }
+/* Breadcrumb: clip within its flex slot so it never bleeds under the topbar controls */
+.breadcrumb { overflow: hidden; }
+.breadcrumb .bc-item { white-space: nowrap; }
+.breadcrumb .bc-item.current { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

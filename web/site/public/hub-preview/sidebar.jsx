@@ -14,7 +14,6 @@ const REPO_CHILDREN = [
   { id: "overview", label: "Overview" },
   { id: "traces", label: "Traces" },
   { id: "pulls", label: "Pull requests" },
-  { id: "trails", label: "Trails" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -261,7 +260,7 @@ function Sidebar({
         </button>
       </nav>
 
-      {!collapsed && <div className="sb-group-label">Trace intelligence <span className="pro-badge">PRO</span></div>}
+      {!collapsed && <div className="sb-group-label">Trace intelligence</div>}
       <nav className="sb-nav-sub" aria-label="Intelligence">
         <button className="sb-nav-item" aria-current={activeNav === "spotlight"} onClick={() => onNav("spotlight")} title="Spotlight">
           <Icon name="sparkles" size={15} className="icon" />
@@ -309,7 +308,7 @@ function Sidebar({
       </div>
 
       <div className="sb-foot">
-        <button className="sb-nav-item">
+        <button className="sb-nav-item" aria-current={activeNav === "settings"} onClick={() => onNav("settings")} title="Settings">
           <Icon name="settings" size={15} className="icon" />
           <span>Settings</span>
         </button>

@@ -1,388 +1,185 @@
-/* Run-intelligence layer — visual styles for the three read-only overlays.
- * Reuses app.css tokens; adds run-health / context-waste / compare colors. */
+// Run-intelligence layer — presentational components (read-only overlays).
+// FidelityBadge · RunHealthStrip · RowMarks (waste + health glyphs w/ hover) ·
+// ContextWasteChip · HealthCounts.
 
-:root {
-  --c-waste-med: oklch(76% 0.15 75);   /* amber — medium-severity waste */
-  --c-waste-low: var(--fg-mute);       /* grey — low-severity waste */
-  --c-fail:    var(--c-error);          /* failure red */
-  --c-loop:    oklch(72% 0.17 52);      /* loop orange */
-  --c-resteer: var(--c-exec);           /* resteer purple */
-  --c-recover: var(--c-git);            /* recovery green */
-}
-
-/* ─────────────  Fidelity badge  ───────────── */
-.fidelity-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 2px 7px 2px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  color: var(--fg-dim);
-  background: var(--surface-2);
-  white-space: nowrap;
-  cursor: default;
-}
-.fidelity-badge .fb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-mute); }
-.fidelity-badge[data-fidelity="otel"] {
-  color: var(--c-read);
-  border-color: color-mix(in oklch, var(--c-read) 35%, var(--border));
-  background: color-mix(in oklch, var(--c-read) 12%, var(--surface));
-}
-.fidelity-badge[data-fidelity="otel"] .fb-dot {
-  background: var(--c-read);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--c-read) 25%, transparent);
+function FidelityBadge({ fidelity }) {
+  const otel = fidelity === "otel";
+  return (
+    <span
+      className="fidelity-badge"
+      data-fidelity={fidelity}
+      title={otel
+        ? "Wire-fidelity — char counts & commands captured from full OTel wire data"
+        : "Record — values reconstructed from the run record"}
+    >
+      <span className="fb-dot" />
+      {otel ? "wire-fidelity" : "record"}
+    </span>
+  );
 }
 
-/* ─────────────  Run-health strip (above the timeline)  ───────────── */
-.run-health {
-  display: flex; align-items: center; gap: 14px;
-  flex-wrap: wrap;
-  padding: 12px 18px;
-  margin: 0;
-  background: color-mix(in oklch, var(--surface-2) 50%, var(--surface));
-  border-bottom: 1px solid var(--border);
-}
-.run-health .rh-lead {
-  display: flex; align-items: center; gap: 9px;
-  padding-right: 14px;
-  border-right: 1px solid var(--border);
-}
-.run-health .rh-title {
-  font-family: var(--font-mono);
-  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
-  color: var(--fg-mute);
-}
-.run-health .rh-status {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--fg);
-  text-transform: capitalize;
-}
-.run-health .rh-status .dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--c-recover);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--c-recover) 22%, transparent);
-}
-.run-health[data-status="failure"] .rh-status .dot,
-.run-health[data-status="error"] .rh-status .dot { background: var(--c-fail); box-shadow: 0 0 0 2px color-mix(in oklch, var(--c-fail) 22%, transparent); }
-
-.rh-pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.rh-pill {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 5px 11px 5px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  cursor: pointer;
-  transition: border-color var(--duration-fast) var(--ease-out),
-              background var(--duration-fast) var(--ease-out),
-              opacity var(--duration-fast) var(--ease-out);
-}
-.rh-pill .rhp-glyph {
-  width: 16px; height: 16px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 10px; line-height: 1;
-  color: #fff;
-  flex-shrink: 0;
-}
-.rh-pill .rhp-count { font-family: var(--font-mono); font-size: 13px; color: var(--fg); font-weight: 500; }
-.rh-pill .rhp-label {
-  font-family: var(--font-mono); font-size: 10px;
-  letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim);
-}
-.rh-pill[data-zero="true"] { opacity: 0.4; cursor: default; }
-.rh-pill[data-zero="true"] .rhp-glyph { background: var(--fg-sub) !important; }
-.rh-pill:not([data-zero="true"]):hover { border-color: var(--border-strong); background: var(--surface-3); }
-.rh-pill[data-on="true"] {
-  border-color: var(--rhp-color);
-  background: color-mix(in oklch, var(--rhp-color) 12%, var(--surface));
-}
-.run-health[data-filtered="true"] .rh-pill:not([data-on="true"]):not([data-zero="true"]) { opacity: 0.5; }
-
-.rh-clear {
-  font-size: 11px; color: var(--fg-mute);
-  padding: 4px 8px; border-radius: 5px;
-}
-.rh-clear:hover { color: var(--fg); background: var(--surface-2); }
-.run-health .rh-spacer { flex: 1; }
-
-/* ─────────────  Timeline row markers (waste + health)  ───────────── */
-.tj-row[data-waste="medium"]::after,
-.tj-row[data-waste="low"]::after {
-  content: ""; position: absolute; left: -18px; top: 3px; bottom: 3px;
-  width: 2px; border-radius: 2px;
-}
-.tj-row[data-waste="medium"]::after { background: var(--c-waste-med); }
-.tj-row[data-waste="low"]::after { background: var(--c-waste-low); opacity: 0.7; }
-.tj-row[data-waste="medium"] { background: color-mix(in oklch, var(--c-waste-med) 6%, transparent); }
-.tj-row.focused[data-waste="medium"] { background: color-mix(in oklch, var(--c-waste-med) 11%, transparent); }
-
-/* Marker cluster sits in the left gutter (within timeline-body padding). */
-.row-marks {
-  position: absolute;
-  left: -16px; top: 0; bottom: 0;
-  width: 14px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px;
-  z-index: 3;
-}
-.row-mark {
-  width: 13px; height: 13px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 50%;
-  font-size: 9px; line-height: 1;
-  cursor: pointer;
-  position: relative;
-}
-.row-mark.health { color: #fff; box-shadow: 0 0 0 1.5px var(--surface); }
-.row-mark.waste {
-  border-radius: 3px;
-  background: transparent;
-  color: var(--c-waste-med);
-  border: 1px solid currentColor;
-  font-size: 8px;
-}
-.row-mark.waste[data-sev="low"] { color: var(--c-waste-low); opacity: 0.85; }
-
-/* Health glyph dim/highlight when a health pill filter is active */
-.timeline[data-health-filter] .row-mark.health[data-dim="true"] { opacity: 0.28; }
-.timeline[data-health-filter] .row-mark.health[data-dim="false"] {
-  box-shadow: 0 0 0 1.5px var(--surface), 0 0 0 3.5px color-mix(in oklch, var(--mk-color) 45%, transparent);
+// Generic hover-popover marker used for both waste + health marks.
+function HoverMark({ className, style, label, popClass, children, ...rest }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <span
+      className={"row-mark " + className}
+      style={style}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onClick={(e) => e.stopPropagation()}
+      {...rest}
+    >
+      {label}
+      {open && <div className={"mark-pop " + (popClass || "")}>{children}</div>}
+    </span>
+  );
 }
 
-/* Context-waste focus filter — dim non-flagged rows */
-.timeline[data-waste-filter="true"] .tj-row:not([data-waste]) { opacity: 0.22; }
-.timeline[data-waste-filter="true"] .tj-row:not([data-waste]) .row-marks { opacity: 0; }
-
-/* ─────────────  Hover card (shared by waste + health marks)  ───────────── */
-.mark-pop {
-  position: absolute;
-  left: 22px; top: 50%; transform: translateY(-50%);
-  z-index: 30;
-  width: 300px;
-  padding: 11px 13px;
-  background: var(--surface-3);
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  box-shadow: 0 12px 28px -10px rgba(0,0,0,0.5);
-  cursor: default;
-  animation: mkpop 120ms var(--ease-out);
-}
-@keyframes mkpop { from { opacity: 0; transform: translateY(-50%) translateX(-3px); } to { opacity: 1; transform: translateY(-50%) translateX(0); } }
-.mark-pop .mp-head {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 7px;
-}
-.mark-pop .mp-kind {
-  font-family: var(--font-mono); font-size: 10px;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  padding: 2px 7px; border-radius: 4px;
-  color: #fff;
-}
-.mark-pop .mp-sev {
-  font-family: var(--font-mono); font-size: 9.5px;
-  letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--fg-mute);
-  margin-left: auto;
-}
-.mark-pop .mp-reason {
-  font-family: var(--font-body);
-  font-size: 12.5px; color: var(--fg); line-height: 1.45;
-  margin-bottom: 8px; text-wrap: pretty;
-}
-.mark-pop .mp-ev {
-  font-family: var(--font-mono);
-  font-size: 11px; color: var(--fg-dim); line-height: 1.5;
-  padding: 7px 9px;
-  background: color-mix(in oklch, var(--bg) 60%, var(--surface-2));
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  word-break: break-word;
-}
-.mark-pop .mp-foot {
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 8px;
-  font-family: var(--font-mono); font-size: 9.5px; color: var(--fg-mute);
-}
-.mark-pop .mp-conf { letter-spacing: 0.04em; }
-.mark-pop .mp-node {
-  margin-left: auto;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;
-  opacity: 0.8;
+function WastePop({ finding }) {
+  const sevColor = finding.severity === "medium" ? "var(--c-waste-med)" : "var(--c-waste-low)";
+  return (
+    <>
+      <div className="mp-head">
+        <span className="mp-kind" style={{ background: sevColor, color: finding.severity === "medium" ? "#1a1206" : "#fff" }}>
+          {WASTE_PATTERN_LABEL[finding.pattern] || finding.pattern}
+        </span>
+        <span className="mp-sev">{finding.severity}</span>
+      </div>
+      <div className="mp-reason">{finding.reason}</div>
+      <div className="mp-ev">{finding.evidence}</div>
+      <div className="mp-foot">
+        <span className="mp-conf">conf {Math.round(finding.confidence * 100)}%</span>
+        <span className="mp-node mono">{finding.node_id}</span>
+      </div>
+    </>
+  );
 }
 
-/* ─────────────  Context-waste chip (in trace header)  ───────────── */
-.cw-chip {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 4px 10px 4px 8px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in oklch, var(--c-waste-med) 35%, var(--border));
-  background: color-mix(in oklch, var(--c-waste-med) 10%, var(--surface));
-  color: var(--fg);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-}
-.cw-chip:hover { background: color-mix(in oklch, var(--c-waste-med) 18%, var(--surface)); }
-.cw-chip[data-on="true"] {
-  border-color: var(--c-waste-med);
-  background: color-mix(in oklch, var(--c-waste-med) 22%, var(--surface));
-}
-.cw-chip .cwc-mark {
-  width: 14px; height: 14px; border-radius: 3px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--c-waste-med); color: var(--c-waste-med);
-  font-size: 9px;
-}
-.cw-chip .cwc-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.02em; }
-.cw-chip .cwc-n { font-weight: 600; color: var(--c-waste-med); }
-
-/* Small run-health count cluster (header + landing rows) */
-.health-counts { display: inline-flex; align-items: center; gap: 5px; }
-.health-counts .hc-pill {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 1px 6px 1px 4px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-}
-.health-counts .hc-glyph {
-  width: 12px; height: 12px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 8px; color: #fff; line-height: 1;
-}
-.health-counts .hc-n { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-dim); }
-.health-counts.tiny .hc-pill { padding: 0; background: transparent; border: 0; }
-.health-counts.tiny .hc-glyph { width: 11px; height: 11px; font-size: 7.5px; }
-
-/* ─────────────  Trace compare view  ───────────── */
-.compare-view { padding: 4px 0 40px 0; }
-.cmp-head { margin-bottom: 18px; }
-.cmp-head .ll-h1 { display: flex; align-items: center; gap: 12px; }
-.cmp-sub { font-size: 13px; color: var(--fg-dim); margin: 6px 0 0 0; max-width: 640px; }
-
-.cmp-pickers {
-  display: grid;
-  grid-template-columns: 1fr 44px 1fr;
-  gap: 14px; align-items: stretch;
-  margin-bottom: 18px;
-}
-.cmp-pick {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 14px 16px;
-  box-shadow: var(--shadow-card);
-}
-.cmp-pick[data-side="a"] { border-top: 2px solid var(--fg-mute); }
-.cmp-pick[data-side="b"] { border-top: 2px solid var(--c-read); }
-.cmp-pick .cp-side {
-  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em;
-  text-transform: uppercase; color: var(--fg-mute); margin-bottom: 8px;
-  display: flex; align-items: center; gap: 8px;
-}
-.cmp-pick[data-side="b"] .cp-side { color: var(--c-read); }
-.cmp-pick select {
-  width: 100%;
-  font-family: var(--font-body); font-size: 13px;
-  color: var(--fg); background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: 6px;
-  padding: 8px 10px; cursor: pointer; outline: none;
-}
-.cmp-pick select:focus { border-color: var(--border-strong); }
-.cmp-pick .cp-meta {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin-top: 10px; font-size: 11.5px; color: var(--fg-mute);
-}
-.cmp-pick .cp-meta .mono { font-family: var(--font-mono); }
-.cmp-pick .cp-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim); }
-.cmp-swap {
-  display: flex; align-items: center; justify-content: center;
-  align-self: center;
-}
-.cmp-swap button {
-  width: 36px; height: 36px; border-radius: 50%;
-  border: 1px solid var(--border); background: var(--surface);
-  color: var(--fg-dim);
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.cmp-swap button:hover { color: var(--fg); border-color: var(--border-strong); background: var(--surface-2); }
-
-.cmp-table {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-card);
-}
-.cmp-trow {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) 1fr 1fr minmax(120px, 0.9fr);
-  align-items: center;
-  padding: 0 18px;
-  min-height: 40px;
-  border-top: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
-}
-.cmp-thead {
-  border-top: none;
-  background: var(--surface-2);
-  min-height: 44px;
-}
-.cmp-thead .ct-cell {
-  font-family: var(--font-mono); font-size: 10px;
-  letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-mute);
-}
-.cmp-thead .ct-a, .cmp-thead .ct-b, .cmp-thead .ct-d { text-align: right; }
-.cmp-thead .ct-b { color: var(--c-read); }
-.cmp-sec-head {
-  background: color-mix(in oklch, var(--surface-2) 55%, var(--bg));
-  min-height: 34px;
-  grid-template-columns: 1fr;
-}
-.cmp-sec-head .cs-title {
-  font-family: var(--font-mono); font-size: 10.5px;
-  letter-spacing: 0.16em; text-transform: uppercase; color: var(--fg-dim);
-}
-.cmp-trow .ct-label { font-size: 13px; color: var(--fg); }
-.cmp-trow .ct-label.strong { font-weight: 600; }
-.cmp-trow .ct-label .lb-na { font-family: var(--font-mono); font-size: 10px; color: var(--fg-sub); margin-left: 8px; letter-spacing: 0.04em; }
-.cmp-trow .ct-a, .cmp-trow .ct-b {
-  font-family: var(--font-mono); font-size: 13px; text-align: right;
-}
-.cmp-trow .ct-a { color: var(--fg-dim); }
-.cmp-trow .ct-b { color: var(--fg); }
-.cmp-trow .ct-na { color: var(--fg-sub); }
-.cmp-trow.strong { background: color-mix(in oklch, var(--c-read) 5%, transparent); }
-.cmp-trow .ct-d { display: flex; justify-content: flex-end; }
-
-.delta-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono); font-size: 11.5px;
-  padding: 2px 8px; border-radius: 999px;
-  background: var(--surface-2); color: var(--fg-mute);
-  border: 1px solid var(--border);
-}
-.delta-chip .dc-arrow { font-size: 9px; }
-.delta-chip[data-dir="up"]   { color: var(--c-recover); background: color-mix(in oklch, var(--c-recover) 12%, var(--surface)); border-color: color-mix(in oklch, var(--c-recover) 30%, var(--border)); }
-.delta-chip[data-dir="down"] { color: var(--c-fail);    background: color-mix(in oklch, var(--c-fail) 12%, var(--surface));    border-color: color-mix(in oklch, var(--c-fail) 30%, var(--border)); }
-.delta-chip[data-dir="flat"] { color: var(--fg-mute); }
-.delta-chip[data-dir="na"]   { color: var(--fg-sub); border-style: dashed; }
-
-/* "Compare runs" entry button on the landing */
-.cmp-entry {
-  display: inline-flex; align-items: center; gap: 7px;
-  font-size: 12.5px; color: var(--fg-dim);
-  padding: 6px 12px; border-radius: 6px;
-  border: 1px solid var(--border); background: var(--surface);
-}
-.cmp-entry:hover { color: var(--fg); border-color: var(--border-strong); background: var(--surface-2); }
-.cmp-entry .ce-ab {
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  color: var(--c-read);
+function HealthPop({ signal }) {
+  const cfg = HEALTH_KINDS[signal.kind];
+  return (
+    <>
+      <div className="mp-head">
+        <span className="mp-kind" style={{ background: cfg.color }}>{cfg.glyph} {cfg.label}</span>
+        <span className="mp-sev">{signal.severity}</span>
+      </div>
+      <div className="mp-reason">{signal.reason}</div>
+      <div className="mp-ev">“{signal.matched_text}”</div>
+      <div className="mp-foot">
+        <span className="mp-conf">conf {Math.round(signal.confidence * 100)}%</span>
+        <span className="mp-node mono">{signal.node_id}</span>
+      </div>
+    </>
+  );
 }
 
-.ov-table-head .ov-th-actions { display: flex; align-items: center; gap: 12px; }
+// Left-gutter marker cluster for a single timeline row.
+function RowMarks({ wasteFindings, healthSignals, healthFilter }) {
+  const waste = wasteFindings && wasteFindings.length
+    ? wasteFindings.slice().sort((a, b) => (a.severity === "medium" ? -1 : 1))[0]
+    : null;
+  const signal = healthSignals && healthSignals.length ? healthSignals[0] : null;
+  if (!waste && !signal) return null;
 
-/* Intel row in the trace header card */
-.trace-intel-row {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin-top: 12px;
+  return (
+    <span className="row-marks" aria-hidden="false">
+      {signal && (() => {
+        const cfg = HEALTH_KINDS[signal.kind];
+        const dim = healthFilter ? (signal.kind !== healthFilter ? "true" : "false") : undefined;
+        return (
+          <HoverMark
+            className="health"
+            style={{ background: cfg.color, "--mk-color": cfg.color }}
+            label={cfg.glyph}
+            data-dim={dim}
+          >
+            <HealthPop signal={signal} />
+          </HoverMark>
+        );
+      })()}
+      {waste && (
+        <HoverMark className="waste" label="!" style={{}} data-sev={waste.severity}>
+          <WastePop finding={waste} />
+        </HoverMark>
+      )}
+    </span>
+  );
 }
-.trace-card[data-compact="true"] .trace-intel-row { display: none; }
+
+function RunHealthStrip({ health, fidelity, activeKind, onKind }) {
+  return (
+    <div className="run-health" data-status={health.status} data-filtered={activeKind ? "true" : "false"}>
+      <div className="rh-lead">
+        <span className="rh-title">Run health</span>
+        <span className="rh-status"><span className="dot" />{health.status}</span>
+      </div>
+      <div className="rh-pills">
+        {HEALTH_ORDER.map(k => {
+          const cfg = HEALTH_KINDS[k];
+          const c = health.counts[k] || 0;
+          const zero = c === 0;
+          const on = activeKind === k;
+          return (
+            <button
+              key={k}
+              className="rh-pill"
+              data-zero={zero ? "true" : "false"}
+              data-on={on ? "true" : "false"}
+              style={{ "--rhp-color": cfg.color }}
+              onClick={() => { if (!zero) onKind(on ? null : k); }}
+              title={zero ? `No ${cfg.label} signals` : `${c} ${cfg.label} ${c === 1 ? "signal" : "signals"} — click to focus`}
+            >
+              <span className="rhp-glyph" style={{ background: cfg.color }}>{cfg.glyph}</span>
+              <span className="rhp-count">{c}</span>
+              <span className="rhp-label">{cfg.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="rh-spacer" />
+      {activeKind && <button className="rh-clear" onClick={() => onKind(null)}>clear focus</button>}
+      <FidelityBadge fidelity={fidelity} />
+    </div>
+  );
+}
+
+function ContextWasteChip({ summary, on, onToggle }) {
+  const n = summary?.context_waste_count || 0;
+  if (!n) return null;
+  return (
+    <button
+      className="cw-chip"
+      data-on={on ? "true" : "false"}
+      onClick={onToggle}
+      title="Filter the Trail timeline to context-waste rows"
+    >
+      <span className="cwc-mark">!</span>
+      <span className="cwc-label">context-waste: <span className="cwc-n">{n}</span></span>
+    </button>
+  );
+}
+
+function HealthCounts({ counts, tiny }) {
+  const kinds = HEALTH_ORDER.filter(k => (counts[k] || 0) > 0);
+  if (!kinds.length) return null;
+  return (
+    <span className={"health-counts" + (tiny ? " tiny" : "")}>
+      {kinds.map(k => {
+        const cfg = HEALTH_KINDS[k];
+        return (
+          <span className="hc-pill" key={k} title={`${counts[k]} ${cfg.label}`}>
+            <span className="hc-glyph" style={{ background: cfg.color }}>{cfg.glyph}</span>
+            <span className="hc-n">{counts[k]}</span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+window.FidelityBadge = FidelityBadge;
+window.RowMarks = RowMarks;
+window.RunHealthStrip = RunHealthStrip;
+window.ContextWasteChip = ContextWasteChip;
+window.HealthCounts = HealthCounts;

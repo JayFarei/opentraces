@@ -37,7 +37,7 @@ function SelfImprovingPage({ onSelectRepo }) {
   return (
     <div className="landing landing-page">
       <PageHero
-        kicker="Automation"
+        kicker="Conversation intelligence"
         title="Self-Improving"
         subtitle="When intent spikes or SOP violations exceed thresholds, the agent drafts a fix, opens a PR, and waits for review. You stay in the loop."
         actions={

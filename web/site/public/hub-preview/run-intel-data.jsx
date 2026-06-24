@@ -1,6 +1,6 @@
 // Run-intelligence layer — frozen, read-only JSON envelopes the Hub fetches & renders.
 // Three deterministic overlays on top of an existing trace:
-//   1. opentraces.context_waste.v2  — annotate the timeline with wasteful patterns
+//   1. opentraces.context_waste.v1  — annotate the timeline with wasteful patterns
 //   2. run-health  { status, trace_id, signals, counts }  — narrative beats of a run
 //   3. opentraces.trace_compare.v1  — side-by-side A/B delta
 // Every envelope carries fidelity: "record" | "otel". Nothing here writes back.
@@ -11,7 +11,7 @@ const TRACE_ID = "6eaf9ff4-b9aa-4c15-95ee-08e79b470b6f";
 // step_index values are the real 1-based indices in the trace; node_id mirrors
 // the canonical tu:<trace>:<kind>:<id> shape the CLI emits.
 const CONTEXT_WASTE = {
-  schema: "opentraces.context_waste.v2",
+  schema: "opentraces.context_waste.v1",
   trace_id: TRACE_ID,
   fidelity: "otel",
   thresholds: { large_output_chars: 8000, repeated_read_min: 3, repeated_read_window_min: 20 },

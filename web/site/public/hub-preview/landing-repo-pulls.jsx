@@ -389,9 +389,8 @@ function RepoPullDetail({ repoId, pullId, onBack }) {
 }
 
 // Outer router for the repo "Pull requests" child.
-// initialPullId (from ?pr=… deep-links / embeds) opens straight into a PR detail.
-function RepoPullsPage({ repoId, initialPullId }) {
-  const [openPullId, setOpenPullId] = React.useState(initialPullId || null);
+function RepoPullsPage({ repoId }) {
+  const [openPullId, setOpenPullId] = React.useState(null);
   if (openPullId) {
     return (
       <RepoPullDetail

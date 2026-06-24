@@ -1,0 +1,6 @@
+/* @ot-embed-seam — site-owned, NOT part of the Claude design export.
+   Chromeless embed layout for the marketing-site /hub iframes (?embed=1).
+   The Claude design's own app.css is left untouched; this overlay is preserved
+   across design re-imports (the sync job never overwrites it). */
+.app-shell[data-embed="1"] { grid-template-columns: 1fr; }
+.app-shell[data-embed="1"] .main { height: 100vh; }

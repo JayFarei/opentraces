@@ -7,29 +7,32 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="app.css" />
-<link rel="stylesheet" href="landing.css?v=5" />
-<link rel="stylesheet" href="pages.css?v=4" />
+<link rel="stylesheet" href="app.css?v=2" />
+<link rel="stylesheet" href="landing.css?v=7" />
+<link rel="stylesheet" href="pages.css?v=5" />
 <link rel="stylesheet" href="pages-pulls.css?v=3" />
+<link rel="stylesheet" href="pages-repo.css?v=3" />
+<link rel="stylesheet" href="pages-settings.css?v=1" />
 <link rel="stylesheet" href="run-intel.css?v=1" />
-<link rel="stylesheet" href="capsules.css?v=5" />
+<link rel="stylesheet" href="capsules.css?v=6" />
 <link rel="stylesheet" href="command-palette.css?v=1" />
+<!-- @ot-embed-seam — site-owned chromeless-embed overlay (not in the design export) -->
+<link rel="stylesheet" href="_embed.css?v=1" />
 <script>
   // Apply theme immediately to avoid flash of wrong theme
   try {
-    var t = localStorage.getItem('ot-theme');
-    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    var t = localStorage.getItem('ot-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', t);
-    document.documentElement.style.colorScheme = t;
   } catch (e) {
     document.documentElement.setAttribute('data-theme', 'dark');
-    document.documentElement.style.colorScheme = 'dark';
   }
 </script>
 </head>
 <body>
 <div id="root"></div>
 
+<!-- @ot-embed-seam: production React builds (the design exports the slower dev
+     builds; the deployed site has always used production). Swapped by sync-hub. -->
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
@@ -49,6 +52,11 @@
 <script type="text/babel" src="compare.jsx"></script>
 <script type="text/babel" src="landing-repo.jsx"></script>
 <script type="text/babel" src="landing-repo-pulls.jsx"></script>
+<script type="text/babel" src="landing-repo-data.jsx"></script>
+<script type="text/babel" src="landing-repo-overview.jsx"></script>
+<script type="text/babel" src="landing-repo-traces.jsx"></script>
+<script type="text/babel" src="landing-repo-settings.jsx"></script>
+<script type="text/babel" src="landing-settings-global.jsx"></script>
 <script type="text/babel" src="landing-dataset.jsx"></script>
 <script type="text/babel" src="pages-data.jsx"></script>
 <script type="text/babel" src="pages-shared.jsx"></script>
@@ -67,16 +75,16 @@
 <script type="text/babel" src="pages-capsules-tweaks.jsx"></script>
 <script type="text/babel" src="command-palette.jsx"></script>
 
-<script type="text/babel">
-// ── Embed / deep-link mode ───────────────────────────────────────────────
-// The marketing site's /hub showcase embeds each feature as its own chromeless
-// iframe via ?embed=1&view=<id>&… . This parses those params once into the
-// App's initial nav state. When embed=1 the sidebar + topbar are not rendered,
-// so the artifact shows only the requested feature panel.
-function readHubInit() {
+<script>
+/* @ot-embed-seam:start — site-owned host seam (deep-link + chromeless embed).
+   Inert when opened standalone: with no ?embed/?view params it yields the exact
+   full-chrome defaults the Claude design ships with, so the artifact renders as
+   authored. The marketing site passes ?embed=1&view=… to boot one chromeless
+   panel. This block is re-applied verbatim by scripts/sync-hub on every design
+   re-import, and is structured to lift straight into the design source later. */
+(function () {
   var p;
   try { p = new URLSearchParams(window.location.search); } catch (e) { p = new URLSearchParams(""); }
-  var embed = p.get("embed") === "1";
   var v = p.get("view");
   var repo = p.get("repo");
   var dataset = p.get("dataset");
@@ -84,34 +92,34 @@ function readHubInit() {
   var traceId = p.get("trace");
   var tab = p.get("tab");
   var pr = p.get("pr");
-  var pullId = pr ? (pr.indexOf("pr-") === 0 ? pr : "pr-" + pr) : null;
-  var base = {
-    embed: embed,
+  var init = {
+    embed: p.get("embed") === "1",
     view: "traces-landing",
     activeNav: "traces",
     activeRepoId: null, activeRepoChild: null, expandedRepo: "jayfarei/opentraces",
     activeDatasetId: null, activeDatasetChild: null, expandedDataset: null,
     activeTraceId: null,
     activeTab: tab === "trail" ? "trail" : "conversation",
-    pullId: pullId,
+    pullId: pr ? (pr.indexOf("pr-") === 0 ? pr : "pr-" + pr) : null,
   };
-  if (!v) return base;
   if (v === "repo") {
     var r = repo || "jayfarei/opentraces";
-    return Object.assign({}, base, { view: "repo", activeNav: "", activeRepoId: r, expandedRepo: r, activeRepoChild: child || "overview" });
-  }
-  if (v === "dataset") {
+    init.view = "repo"; init.activeNav = ""; init.activeRepoId = r; init.expandedRepo = r; init.activeRepoChild = child || "overview";
+  } else if (v === "dataset") {
     var d = dataset || "ds-edge-traces";
-    return Object.assign({}, base, { view: "dataset", activeNav: "", activeDatasetId: d, expandedDataset: d, activeDatasetChild: child || "overview" });
+    init.view = "dataset"; init.activeNav = ""; init.activeDatasetId = d; init.expandedDataset = d; init.activeDatasetChild = child || "overview";
+  } else if (v === "trace") {
+    init.view = "trace"; init.activeNav = ""; init.activeTraceId = traceId || null;
+  } else if (v) {
+    var navFor = { "traces-landing": "traces", spotlight: "spotlight", intents: "intents", evals: "evals", capsules: "capsules", alerts: "alerts", improving: "improving", settings: "settings", compare: "" };
+    init.view = v; init.activeNav = navFor[v] != null ? navFor[v] : "";
   }
-  if (v === "trace") {
-    return Object.assign({}, base, { view: "trace", activeNav: "", activeTraceId: traceId || null });
-  }
-  var navFor = { "traces-landing": "traces", spotlight: "spotlight", intents: "intents", evals: "evals", capsules: "capsules", alerts: "alerts", improving: "improving", compare: "" };
-  return Object.assign({}, base, { view: v, activeNav: navFor[v] != null ? navFor[v] : "" });
-}
-var HUB_INIT = readHubInit();
+  window.__HUB_INIT__ = init;
+})();
+/* @ot-embed-seam:end */
+</script>
 
+<script type="text/babel">
 function App() {
   const [trace, setTrace] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
@@ -119,19 +127,23 @@ function App() {
 
   // App nav state
   // view: 'trace' (existing trace viewer), 'traces-landing', 'repo', 'dataset'
-  const embed = HUB_INIT.embed;
-  const [view, setView] = React.useState(HUB_INIT.view);
-  const [activeNav, setActiveNav] = React.useState(HUB_INIT.activeNav);
+  /* @ot-embed-seam:start — boot initial nav state from the host (URL params),
+     each falling back to the design's own default so standalone is unchanged. */
+  const HUB_INIT = (typeof window !== "undefined" && window.__HUB_INIT__) || {};
+  const embed = !!HUB_INIT.embed;
+  const [view, setView] = React.useState(HUB_INIT.view || "traces-landing");
+  const [activeNav, setActiveNav] = React.useState(HUB_INIT.activeNav ?? "traces");
+  /* @ot-embed-seam:end */
   const [expandedSections, setExpandedSections] = React.useState(["datasets", "repositories"]);
   const [searchQuery, setSearchQuery] = React.useState("");
-  const [activeTraceId, setActiveTraceId] = React.useState(HUB_INIT.activeTraceId);
-  const [activeDatasetId, setActiveDatasetId] = React.useState(HUB_INIT.activeDatasetId);
-  const [activeDatasetChild, setActiveDatasetChild] = React.useState(HUB_INIT.activeDatasetChild);
-  const [expandedDataset, setExpandedDataset] = React.useState(HUB_INIT.expandedDataset);
-  const [activeRepoId, setActiveRepoId] = React.useState(HUB_INIT.activeRepoId);
-  const [expandedRepo, setExpandedRepo] = React.useState(HUB_INIT.expandedRepo);
-  const [activeRepoChild, setActiveRepoChild] = React.useState(HUB_INIT.activeRepoChild);
-  const [activeTab, setActiveTab] = React.useState(HUB_INIT.activeTab);
+  const [activeTraceId, setActiveTraceId] = React.useState(HUB_INIT.activeTraceId ?? null);
+  const [activeDatasetId, setActiveDatasetId] = React.useState(HUB_INIT.activeDatasetId ?? null);
+  const [activeDatasetChild, setActiveDatasetChild] = React.useState(HUB_INIT.activeDatasetChild ?? null);
+  const [expandedDataset, setExpandedDataset] = React.useState(HUB_INIT.expandedDataset ?? null);
+  const [activeRepoId, setActiveRepoId] = React.useState(HUB_INIT.activeRepoId ?? null);
+  const [expandedRepo, setExpandedRepo] = React.useState(HUB_INIT.expandedRepo || "jayfarei/opentraces");
+  const [activeRepoChild, setActiveRepoChild] = React.useState(HUB_INIT.activeRepoChild ?? null);
+  const [activeTab, setActiveTab] = React.useState(HUB_INIT.activeTab || "conversation");
   const [focusedIdx, setFocusedIdx] = React.useState(0);
   const [openedStep, setOpenedStep] = React.useState(null);
   const [headerCompact, setHeaderCompact] = React.useState(false);
@@ -152,38 +164,25 @@ function App() {
     const html = document.documentElement;
     html.classList.add("theme-swap");
     html.setAttribute("data-theme", theme);
-    html.style.colorScheme = theme;
     try { localStorage.setItem("ot-theme", theme); } catch (e) {}
-    // When the Hub is embedded as the site's preview (same-origin iframe),
-    // propagate the theme UP to the parent site so its <html data-theme>,
-    // theme-dark/theme-light class, MutationObserver, and its own "theme" storage
-    // key stay in sync. Without this the Hub's own sun/moon toggle silently
-    // drifts from the site (the reported "click from the app vs site" bug).
+    /* @ot-embed-seam:start — the one genuinely web-only piece: when the Hub runs
+       inside the marketing site's full-chrome iframe (not embed mode), push its
+       own sun/moon toggle UP to the parent page so the site chrome stays in sync.
+       Guarded + try/caught, so it is a no-op standalone or in any non-iframe host
+       (e.g. a future desktop shell never triggers it). */
     try {
       if (!embed && window.parent && window.parent !== window) {
-        const p = window.parent.document.documentElement;
-        p.setAttribute("data-theme", theme);
-        p.classList.remove("theme-dark", "theme-light");
-        p.classList.add(theme === "dark" ? "theme-dark" : "theme-light");
-        p.style.colorScheme = theme;
+        const pdoc = window.parent.document.documentElement;
+        pdoc.setAttribute("data-theme", theme);
+        pdoc.classList.remove("theme-dark", "theme-light");
+        pdoc.classList.add(theme === "dark" ? "theme-dark" : "theme-light");
+        pdoc.style.colorScheme = theme;
         window.parent.localStorage.setItem("theme", theme);
       }
     } catch (e) {}
+    /* @ot-embed-seam:end */
     // remove the disable-transitions class after the swap commits
     requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove("theme-swap")));
-  }, [theme]);
-
-  // Keep React theme state in sync when the parent site drives the Hub's theme
-  // (HubWindow sets data-theme on this iframe's <html> directly). This keeps the
-  // Hub's toggle direction correct after the site toggles.
-  React.useEffect(() => {
-    const html = document.documentElement;
-    const obs = new MutationObserver(() => {
-      const ext = html.getAttribute("data-theme");
-      if ((ext === "dark" || ext === "light") && ext !== theme) setTheme(ext);
-    });
-    obs.observe(html, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => obs.disconnect();
   }, [theme]);
 
   // Global ⌘K / Ctrl+K opens the command palette.
@@ -281,6 +280,7 @@ function App() {
     else if (id === "capsules")  setView("capsules");
     else if (id === "alerts")    setView("alerts");
     else if (id === "improving") setView("improving");
+    else if (id === "settings")  setView("settings");
   };
   const openTrace = (id) => {
     setActiveTraceId(id);
@@ -336,6 +336,8 @@ function App() {
 
   return (
     <div className="app-shell" data-embed={embed ? "1" : "0"} data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
+      {/* @ot-embed-seam: chrome is suppressed in embed mode so each /hub iframe
+          shows only its feature panel. Standalone (embed=false) renders both. */}
       {!embed && (
       <Sidebar
         collapsed={sidebarCollapsed}
@@ -399,10 +401,17 @@ function App() {
           {view === "capsules"  && <CapsulesPage onSelectTrace={openTrace} />}
           {view === "alerts"    && <AlertsPage />}
           {view === "improving" && <SelfImprovingPage onSelectRepo={(id) => openRepo(id, "overview")} />}
+          {view === "settings"  && <GlobalSettingsPage onSelectRepo={(id) => openRepo(id, "settings")} />}
           {view === "repo" && activeRepoId && (
-            activeRepoChild === "pulls"
-              ? <RepoPullsPage repoId={activeRepoId} initialPullId={HUB_INIT.pullId} />
-              : <RepoLanding repoId={activeRepoId} onSelectTrace={openTrace} />
+            activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} />
+            : activeRepoChild === "traces" ? <RepoTracesPage repoId={activeRepoId} onSelectTrace={openTrace} />
+            : activeRepoChild === "settings" ? <RepoSettingsPage repoId={activeRepoId} />
+            : <RepoOverview
+                repoId={activeRepoId}
+                onSelectTrace={openTrace}
+                onSelectChild={(c) => openRepo(activeRepoId, c)}
+                onSelectDataset={(id) => openDataset(id, "overview")}
+              />
           )}
           {view === "dataset" && activeDatasetId && (
             <DatasetLanding datasetId={activeDatasetId} child={activeDatasetChild} onSelectTrace={openTrace} onSelectChild={(c) => openDataset(activeDatasetId, c)} />

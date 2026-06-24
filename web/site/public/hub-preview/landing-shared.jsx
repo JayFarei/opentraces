@@ -1,7 +1,18 @@
 // Shared visual primitives for landing pages: minimap fingerprint + agent glyph
 
-// Tiny minimap fingerprint — same color system as the trace minimap, scalable size.
+// Tiny minimap fingerprint — quiet-barcode redesign.
+// Adjacent steps of the same kind merge into one run (width ∝ steps), so
+// machine work reads as calm gray texture of varying width and lightness.
+// Only the meaningful moments carry color: user turns are full-height
+// accent ticks, write/edit runs keep a muted tint. Same shape vocabulary
+// as the trace minimap, but legible at 14–28px.
 function Fingerprint({ classes, height = 18, gap = 1, className = "", title }) {
+  const runs = [];
+  for (const c of classes) {
+    const last = runs[runs.length - 1];
+    if (last && last.c === c) last.n += 1;
+    else runs.push({ c, n: 1 });
+  }
   return (
     <div
       className={"fingerprint " + className}
@@ -9,8 +20,8 @@ function Fingerprint({ classes, height = 18, gap = 1, className = "", title }) {
       title={title}
       aria-label={title}
     >
-      {classes.map((c, i) => (
-        <span key={i} className={"fp-seg " + c} />
+      {runs.map((r, i) => (
+        <span key={i} className={"fp-seg " + r.c} style={{ flexGrow: r.n }} />
       ))}
     </div>
   );

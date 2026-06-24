@@ -11,7 +11,10 @@
 
 /* ─────────  Shared primitives  ───────── */
 
-/* Fingerprint = horizontal mini-strip mirroring the trace minimap */
+/* Fingerprint = horizontal mini-strip mirroring the trace minimap.
+   Quiet-barcode scheme: machine work is a neutral ramp (think dimmest →
+   exec brightest), centered at partial height; user turns are full-height
+   accent ticks; write runs carry the only other hue, muted. */
 .fingerprint {
   display: flex;
   align-items: stretch;
@@ -21,15 +24,24 @@
 .fingerprint .fp-seg {
   flex: 1 1 0;
   min-width: 1px;
-  border-radius: 999px;
-  opacity: 0.92;
+  border-radius: 1px;
+  /* machine-work bars sit at 58% height, vertically centered */
+  height: 58%;
+  align-self: center;
 }
-.fingerprint .fp-seg.user  { background: var(--c-user); }
-.fingerprint .fp-seg.plan  { background: var(--c-plan); }
-.fingerprint .fp-seg.think { background: var(--c-think); }
-.fingerprint .fp-seg.read  { background: var(--c-read); }
-.fingerprint .fp-seg.exec  { background: var(--c-exec); }
-.fingerprint .fp-seg.write { background: var(--c-write); }
+.fingerprint .fp-seg.think { background: color-mix(in oklch, var(--fg) 16%, transparent); }
+.fingerprint .fp-seg.read  { background: color-mix(in oklch, var(--fg) 26%, transparent); }
+.fingerprint .fp-seg.exec  { background: color-mix(in oklch, var(--fg) 38%, transparent); }
+.fingerprint .fp-seg.plan  { background: color-mix(in oklch, var(--c-plan) 40%, transparent); }
+.fingerprint .fp-seg.write { background: color-mix(in oklch, var(--c-write) 48%, transparent); }
+.fingerprint .fp-seg.user {
+  background: var(--c-user);
+  height: 100%;
+  align-self: stretch;
+  min-width: 2px;
+  max-width: 3px;
+  border-radius: 999px;
+}
 
 /* Agent glyph */
 .agent-glyph {
@@ -228,7 +240,9 @@
   box-shadow: var(--shadow-card);
   --hm-cell: 7px;
   --hm-gap: 1px;
-  overflow: hidden;
+  /* was overflow:hidden — it clipped the hover tooltip (.hm-tip), which sits
+   * above the grid, so the key appeared to slide under the cards above. */
+  overflow: visible;
 }
 .heatmap-card .heatmap-wrap { display: flex; flex-direction: column; align-items: center; }
 .heatmap-card .hm-grid { justify-content: center; }
@@ -307,7 +321,7 @@
   bottom: calc(100% + 6px);
   right: 0;
   min-width: 180px;
-  z-index: 5;
+  z-index: 20;
   pointer-events: none;
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
@@ -1330,7 +1344,7 @@ button.pipe-node:hover { border-color: var(--border-strong); background: color-m
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  overflow: hidden;
+  overflow-x: auto;
 }
 .ds-sample {
   width: 100%;
@@ -1902,6 +1916,44 @@ button.pipe-node:hover { border-color: var(--border-strong); background: color-m
   color: var(--fg-mute);
   cursor: default;
 }
+
+/* HF sync toggle — looks like a real on/off switch */
+.ot-hf-toggle {
+  position: relative;
+  display: inline-flex; align-items: center;
+  width: 38px; height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  text-decoration: none;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.ot-hf-knob {
+  position: absolute; top: 50%; left: 2px;
+  width: 18px; height: 18px;
+  margin-top: -9px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,.28);
+  transition: transform 170ms cubic-bezier(.34,.12,.28,1.25);
+}
+.ot-hf-mark { width: 13px; height: 13px; display: block; }
+.ot-hf-toggle.on {
+  background: #FFD21E;
+  border: 1px solid color-mix(in oklch, #FFD21E 35%, #ffffff);
+}
+.ot-hf-toggle.on .ot-hf-knob { transform: translateX(16px); }
+.ot-hf-toggle.on:hover { background: color-mix(in oklch, #FFD21E 88%, #fff); }
+.ot-hf-toggle.off {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  cursor: default;
+}
+.ot-hf-toggle.off .ot-hf-knob {
+  transform: translateX(0);
+  background: color-mix(in oklch, var(--fg-mute) 14%, #fff);
+}
+.ot-hf-toggle.off .ot-hf-mark { filter: invert(58%); opacity: 0.85; }
 .ot-hf-link .ot-hf-repo {
   font-size: 10.5px;
   white-space: nowrap;
@@ -2047,40 +2099,8 @@ button.pipe-node:hover { border-color: var(--border-strong); background: color-m
 /* Reset per-view: when not on trace view, the .main height/scroll is the wrapper */
 .main { height: calc(100vh - 56px); overflow-y: auto; }
 
-/* ── Workflow → Security & privacy panel ── */
-.wf-sec-head { display: flex; align-items: center; gap: 10px; }
-.wf-sec-count {
-  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--c-git); border: 1px solid color-mix(in srgb, var(--c-git) 40%, var(--border));
-  border-radius: 999px; padding: 2px 8px; align-self: center; margin-top: 24px;
-}
-.wf-sec-note { color: var(--fg-mute); font-size: 12.5px; line-height: 1.5; margin: 6px 0 12px; }
-.wf-sec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.wf-sec-tool {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-}
-.wf-sec-tool[data-on="1"] { border-color: color-mix(in srgb, var(--c-git) 40%, var(--border)); }
-.wf-sec-dot {
-  margin-top: 4px; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--fg-mute); flex-shrink: 0;
-}
-.wf-sec-tool[data-on="1"] .wf-sec-dot {
-  background: var(--c-git);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-git) 20%, transparent);
-}
-.wf-sec-main { flex: 1; min-width: 0; }
-.wf-sec-name { font-size: 13px; font-weight: 600; color: var(--fg); }
-.wf-sec-desc { font-size: 11.5px; color: var(--fg-mute); line-height: 1.4; margin-top: 2px; }
-.wf-sec-state {
-  font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--fg-mute);
-  border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px;
-  flex-shrink: 0; white-space: nowrap;
-}
-.wf-sec-tool[data-on="1"] .wf-sec-state {
-  color: var(--c-git); border-color: color-mix(in srgb, var(--c-git) 40%, var(--border));
-}
+/* ─────────────  Polish pass — overview stats + heatmap labels  ───────────── */
+.ov-stat .k, .ov-stat .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hm-title { flex-wrap: nowrap; }
+.hm-label { white-space: nowrap; }
+.hm-leg-item { white-space: nowrap; }

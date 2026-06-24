@@ -72,7 +72,7 @@ function AlertsPage() {
       </div>
 
       <div className="alerts-foot rail-card">
-        <div className="rail-h">Slack integration</div>
+        <div className="rail-h">Integrations</div>
         <div className="alerts-slack">
           <div className="as-conn">
             <div className="as-icon"><Icon name="external" size={14} /></div>
@@ -83,6 +83,19 @@ function AlertsPage() {
           </div>
           <div className="as-actions">
             <ToolBtn icon="settings" label="Manage channels" />
+            <ToolBtn icon="x" label="Disconnect" />
+          </div>
+        </div>
+        <div className="alerts-slack">
+          <div className="as-conn">
+            <div className="as-icon as-icon-openclaw"><img src="assets/openclaw-lobster.svg" alt="OpenClaw" width="22" height="22" /></div>
+            <div>
+              <div className="as-h">OpenClaw · Telegram</div>
+              <div className="as-s mono">connected · 2 alerts piped · last delivery 18m ago</div>
+            </div>
+          </div>
+          <div className="as-actions">
+            <ToolBtn icon="settings" label="Manage chats" />
             <ToolBtn icon="x" label="Disconnect" />
           </div>
         </div>

@@ -1508,3 +1508,8 @@
   .va-control { width: 100%; justify-content: flex-start; margin-top: 10px; }
   .ev-sealed { grid-template-columns: 1fr; }
 }
+
+/* ─────────────  Polish pass — segmented controls + chips stay on one line  ───────────── */
+.cap-dir, .cap-chip { white-space: nowrap; }
+.aud-name, .aud-who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct-sub .repo-label .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

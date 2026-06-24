@@ -234,7 +234,9 @@ function ContributionHeatmap({ data, mode, onMode }) {
       const m = w[0].date.getUTCMonth();
       if (!seen.has(m)) { seen.add(m); labels.push({ col: i, label: mo[m] }); }
     });
-    return labels;
+    // Drop a label when the next month starts within 2 columns — the leading
+    // partial month otherwise collides with its neighbour ("ApMay").
+    return labels.filter((l, i) => !labels[i + 1] || labels[i + 1].col - l.col >= 3);
   }, [data]);
 
   const total = React.useMemo(() => {
@@ -346,8 +348,8 @@ function OverviewStats({ traces }) {
     HEATMAP.forEach(week => week.forEach(c => { totalTraces += c.count; }));
     return {
       traces: totalTraces,
-      tokensIn: totalIn,
-      tokensOut: totalOut,
+      tokensIn: totalOut,
+      tokensOut: totalIn,
       projects: Object.keys(REPO_DEFS).length,
       datasets: Object.keys(DATASET_DEFS).length,
     };
@@ -449,20 +451,24 @@ function DatasetTiles({ onSelectDataset }) {
                 <span className="ot-name mono">{d.name}</span>
                 {hasRemote && (
                   <a
-                    className="ot-hf-link"
+                    className="ot-hf-toggle on"
                     href={d.remote_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
-                    title={`Open ${d.remote_repo} on Hugging Face`}
+                    title={`Synced to Hugging Face · ${d.remote_repo}`}
+                    aria-label={`Synced to Hugging Face — open ${d.remote_repo}`}
                   >
-                    <HuggingFaceLogo size={13} />
-                    <Icon name="external" size={10} className="ot-hf-ext" />
+                    <span className="ot-hf-knob"><img className="ot-hf-mark" src="assets/hf-logo.svg" alt="Hugging Face" /></span>
                   </a>
                 )}
                 {!hasRemote && (
-                  <span className="ot-hf-link local-only" title="Local only — no remote">
-                    <span className="ot-hf-localdot" />
+                  <span
+                    className="ot-hf-toggle off"
+                    title="Local only — not synced to Hugging Face"
+                    aria-label="Local only — not synced to Hugging Face"
+                  >
+                    <span className="ot-hf-knob"><img className="ot-hf-mark" src="assets/hf-logo-mono.svg" alt="Hugging Face" /></span>
                   </span>
                 )}
               </div>

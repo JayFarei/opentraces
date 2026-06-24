@@ -51,6 +51,10 @@ const Icon = ({ name, size = 16, className = "" }) => {
     case "globe": return <svg {...props}><circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/></svg>;
     case "alert": return <svg {...props}><path d="M12 3.5l9.5 16.5H2.5z"/><line x1="12" y1="10" x2="12" y2="14.5"/><circle cx="12" cy="17.5" r="0.7" fill="currentColor" stroke="none"/></svg>;
     case "replay": return <svg {...props}><path d="M3 12a9 9 0 1 0 2.6-6.3"/><polyline points="3 3.5 3 9 8.5 9"/></svg>;
+    case "refresh": return <svg {...props}><path d="M21 12a9 9 0 1 1-2.6-6.3"/><polyline points="21 3.5 21 9 15.5 9"/></svg>;
+    case "monitor": return <svg {...props}><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><line x1="9" y1="20.5" x2="15" y2="20.5"/><line x1="12" y1="17" x2="12" y2="20.5"/></svg>;
+    case "server": return <svg {...props}><rect x="3.5" y="4" width="17" height="7" rx="1.5"/><rect x="3.5" y="13" width="17" height="7" rx="1.5"/><circle cx="7.5" cy="7.5" r="0.8" fill="currentColor" stroke="none"/><circle cx="7.5" cy="16.5" r="0.8" fill="currentColor" stroke="none"/></svg>;
+    case "trash": return <svg {...props}><polyline points="4 7 20 7"/><path d="M6.5 7l1 13h9l1-13"/><path d="M9.5 7V4.5h5V7"/><line x1="10.5" y1="11" x2="10.5" y2="16.5"/><line x1="13.5" y1="11" x2="13.5" y2="16.5"/></svg>;
     case "issue": return <svg {...props}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.3" fill="currentColor" stroke="none"/></svg>;
     case "file": return <svg {...props}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/></svg>;
     case "box": return <svg {...props}><path d="M21 8.5l-9-5-9 5v7l9 5 9-5z"/><polyline points="3 8.5 12 13.5 21 8.5"/><line x1="12" y1="13.5" x2="12" y2="21"/></svg>;
