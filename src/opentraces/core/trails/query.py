@@ -266,7 +266,21 @@ class TrailQueryProjection:
         # passing the SAME list object across rows lets ``_auto_batch_ctx`` share
         # one cat-file pipe + ancestry set. Survival is still computed at the
         # current head, so the rows stay deep-equal to the unbounded builder.
-        trail = sync_patch(self.repo, trace_patch_id, events=events)
+        #
+        # The global ``(trace_patch_id, head)`` survival cache is BYPASSED on the
+        # scoped path (``events`` provided): READING it could serve a row computed
+        # from a different (live) anchor set with ``trail_limitations`` stripped
+        # (the cache fast-return returns ``[]``); WRITING it from a snapshot-scoped
+        # companion list could POISON later live reads. The default live path
+        # (``events is None``) keeps the cache fast-path untouched.
+        cache_on = events is None
+        trail = sync_patch(
+            self.repo,
+            trace_patch_id,
+            events=events,
+            use_cache=cache_on,
+            write_cache=cache_on,
+        )
         current = trail.get("current_survival") or {}
         out["current_survival"] = current
         out["survival_state"] = current.get("survival_state") or "unknown"

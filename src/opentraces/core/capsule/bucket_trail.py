@@ -31,26 +31,31 @@ from ..trails.query import (
 def _read_trail_companion(slug: str, trace_id: str) -> list[TrailEvent] | None:
     """Parse the trace's ``trail.jsonl.gz`` companion into TrailEvents.
 
-    Returns ``None`` when the companion file does not exist (so the caller falls
-    back to the live read); returns ``[]`` for a present-but-empty companion (a
-    captured trace that produced no trail events — distinct from "no companion").
+    Returns ``None`` when the companion file does not exist OR cannot be fully
+    parsed, so the caller falls back to the live read; returns ``[]`` for a
+    present-but-empty companion (a captured trace that produced no trail events —
+    distinct from "no companion").
+
+    Parsing is ALL-OR-NOTHING: a single corrupt gzip / JSON / model line distrusts
+    the whole companion and triggers the live fallback, rather than silently
+    dropping a real anchor and returning an incomplete-but-plausible result.
     """
     path = trace_v1_trail_path(slug, trace_id)
     if not path.exists():
         return None
-    events: list[TrailEvent] = []
     try:
         body = gzip.open(path, "rb").read().decode("utf-8")
-    except Exception:  # pragma: no cover - corrupt companion ⇒ live fallback
+    except Exception:  # pragma: no cover - corrupt gzip ⇒ live fallback
         return None
+    events: list[TrailEvent] = []
     for line in body.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             events.append(TrailEvent.model_validate(json.loads(line)))
-        except Exception:  # noqa: BLE001 — skip an unparseable line, keep the rest
-            continue
+        except Exception:  # noqa: BLE001 — a single bad line ⇒ distrust the whole companion
+            return None
     return events
 
 

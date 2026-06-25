@@ -154,3 +154,49 @@ def test_missing_companion_returns_none(tmp_path: Path) -> None:
 
     slug = get_project_dir(repo).name
     assert trail_anchors_from_bucket(repo, slug, "nonexistent-trace") is None
+
+
+def test_corrupt_companion_falls_back_to_live(tmp_path: Path) -> None:
+    """Adversarial-review fix: a single unparseable line distrusts the WHOLE
+    companion (all-or-nothing) → None → live fallback, never a silently-truncated
+    anchor set."""
+    import gzip
+
+    from opentraces.core.bucket_layout import trace_v1_trail_path
+    from opentraces.core.capsule.bucket_trail import trail_anchors_from_bucket
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    trace_id = _seed_anchored_trace(repo)
+    slug = _write_companion(repo, trace_id)
+
+    path = trace_v1_trail_path(slug, trace_id)
+    lines = gzip.open(path, "rb").read().decode("utf-8").splitlines()
+    assert lines  # the companion has content
+    lines[-1] = "{ this is not valid json"  # corrupt one line; gzip stays valid
+    with gzip.open(path, "wb") as fh:
+        fh.write(("\n".join(lines) + "\n").encode("utf-8"))
+
+    assert trail_anchors_from_bucket(repo, slug, trace_id) is None
+
+
+def test_companion_path_does_not_poison_survival_cache(tmp_path: Path) -> None:
+    """Adversarial-review fix: companion-sourced survival is computed FRESH with
+    the global ``(patch, head)`` cache bypassed, so a (possibly stale) companion
+    can never queue a ``patch_survival_cached`` event that later poisons a live
+    read."""
+    from opentraces.core.capsule.bucket_trail import trail_anchors_from_bucket
+    from opentraces.core.trails.event_log import read_events_scoped
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    trace_id = _seed_anchored_trace(repo)
+    slug = _write_companion(repo, trace_id)
+
+    rows = trail_anchors_from_bucket(repo, slug, trace_id)
+    assert rows is not None and len(rows) == 1
+    cached = read_events_scoped(repo, event_types={"patch_survival_cached"})
+    assert cached == [], (
+        "companion-sourced survival wrote the global survival cache — a stale "
+        "companion would poison later live reads"
+    )
