@@ -1506,6 +1506,107 @@ def trace_slice_cmd(
         )
 
 
+@trace_group.command("partition", cls=OpentracesCommand)
+@click.argument("ref")
+@click.option(
+    "--by",
+    "slicer",
+    type=click.Choice(["s1", "s2", "s3", "s4"]),
+    required=True,
+    help="Slicer: s1 user-turn, s2 change-burst (deterministic); s3 milestone, s4 subgoal (cheap-LLM).",
+)
+@click.option(
+    "--answers",
+    "answers_file",
+    default=None,
+    help="JSON file of cheap-LLM JudgmentAnswers ({\"answers\": [{id, decision, confidence}]}).",
+)
+@click.option(
+    "--judge",
+    type=click.Choice(["deterministic", "agent", "provider", "human"]),
+    default="agent",
+    show_default=True,
+    help="Judge backend for the cheap-LLM step (S3/S4). 'agent' uses the rc=10 handshake.",
+)
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    help="Read the trace from a HuggingFace bucket repo instead of the local bucket.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the opentraces.slicing.v1 envelope as JSON.")
+def trace_partition_cmd(
+    ref: str,
+    slicer: str,
+    answers_file: str | None,
+    judge: str,
+    remote: str | None,
+    as_json: bool,
+) -> None:
+    """Partition a trace into a tiling array of Trajectories (opentraces.slicing.v1).
+
+    ``slice(trace, slicer) -> Trajectory[]`` — the array tiles the whole trace.
+    For the cheap-LLM slicers (s3/s4) with ``--judge agent`` (the default), if
+    judgments are needed and none are supplied the command prints the
+    JudgmentRequests + an instruction and exits ``rc=10``; answer them, write an
+    ``--answers`` file, and re-run for the final tiled result at ``rc=0``.
+    """
+    from ..core import slicing
+
+    trace_id = _trace_id_from_ref(ref)
+    try:
+        if remote:
+            record = _read_trace_record_via_backend(trace_id, remote)
+        else:
+            record = _try_load_trace_record(trace_id)
+    except _BackendUnavailable as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+    if record is None:
+        click.echo(f"Trace not found: {ref}", err=True)
+        sys.exit(6)
+
+    answers = None
+    if answers_file:
+        try:
+            answers = slicing.load_answers(answers_file)
+        except (OSError, ValueError, KeyError) as exc:
+            click.echo(f"Could not read --answers file: {exc}", err=True)
+            sys.exit(2)
+
+    rc, env = slicing.partition_trace(
+        trace_id=record.trace_id,
+        slicer_name=slicer,
+        steps=record.steps,
+        judge=judge,
+        answers=answers,
+    )
+
+    if as_json:
+        click.echo(_dump_json(env))
+        sys.exit(rc)
+
+    if rc == slicing.RC_NEEDS_JUDGMENT:
+        click.echo(
+            f"needs-judgment: {slicer} needs {len(env['judgment_requests'])} cheap-LLM "
+            f"judgment(s) to finalize boundaries (trace {short_trace_id(record.trace_id)}).",
+            err=True,
+        )
+        for r in env["judgment_requests"]:
+            click.echo(f"  [{r['id']}] {r['kind']} @step {r['candidate_step']}: {r['prompt']}", err=True)
+        click.echo("\n" + env["instruction"], err=True)
+        sys.exit(rc)
+
+    t = env["tiling"]
+    click.echo(
+        f"{slicer} ({env['tier']}): {len(env['trajectories'])} trajectories over "
+        f"{env['total_steps']} steps — coverage {t['coverage']} gaps {t['gaps']} overlaps {t['overlaps']}"
+    )
+    for traj in env["trajectories"]:
+        click.echo(f"  [{traj['start']:>4}..{traj['end']:<4}] {traj['kind']:12} {traj['label']}")
+    sys.exit(rc)
+
+
 @trace_group.command("get", cls=OpentracesCommand)
 @click.argument("ref")
 @click.option(
