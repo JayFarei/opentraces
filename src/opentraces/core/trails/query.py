@@ -244,43 +244,20 @@ class TrailQueryProjection:
         rows = self.anchors_by_trace.get(trace_id, [])
         return _copy_rows(rows)
 
-    def anchors_for_trace_with_survival(
-        self, trace_id: str, *, events: list[TrailEvent] | None = None
-    ) -> list[dict[str, Any]]:
-        return [
-            self.with_current_survival(row, events=events)
-            for row in self.anchors_for_trace(trace_id)
-        ]
+    def anchors_for_trace_with_survival(self, trace_id: str) -> list[dict[str, Any]]:
+        return [self.with_current_survival(row) for row in self.anchors_for_trace(trace_id)]
 
-    def with_current_survival(
-        self, row: dict[str, Any], *, events: list[TrailEvent] | None = None
-    ) -> dict[str, Any]:
+    def with_current_survival(self, row: dict[str, Any]) -> dict[str, Any]:
         out = copy.deepcopy(row)
         trace_patch_id = out.get("trace_patch_id")
         if not trace_patch_id:
             return enrich_trail_row(out)
-        # #137 HB#1: thread the caller's pre-loaded events into sync_patch so
-        # survival is computed WITHOUT a per-row full ``read_events`` re-walk (the
-        # ``_sync`` slow path does ``read_events(repo)`` on a cache miss — once per
-        # anchor row). When ``events`` is None this is byte-identical to before;
-        # passing the SAME list object across rows lets ``_auto_batch_ctx`` share
-        # one cat-file pipe + ancestry set. Survival is still computed at the
-        # current head, so the rows stay deep-equal to the unbounded builder.
-        #
-        # The global ``(trace_patch_id, head)`` survival cache is BYPASSED on the
-        # scoped path (``events`` provided): READING it could serve a row computed
-        # from a different (live) anchor set with ``trail_limitations`` stripped
-        # (the cache fast-return returns ``[]``); WRITING it from a snapshot-scoped
-        # companion list could POISON later live reads. The default live path
-        # (``events is None``) keeps the cache fast-path untouched.
-        cache_on = events is None
-        trail = sync_patch(
-            self.repo,
-            trace_patch_id,
-            events=events,
-            use_cache=cache_on,
-            write_cache=cache_on,
-        )
+        # LIVE survival: recomputes current liveness against the repo (reachability
+        # -bearing). This is the consumer/gate operation (``trail track``), NOT the
+        # capsule export path — a capsule is a carried, zero-reachability snapshot,
+        # so sealing it must not bake a live recompute into a frozen projection
+        # (see ``bucket_trail.recorded_anchor_rows`` / ``--live-survival``).
+        trail = sync_patch(self.repo, trace_patch_id)
         current = trail.get("current_survival") or {}
         out["current_survival"] = current
         out["survival_state"] = current.get("survival_state") or "unknown"

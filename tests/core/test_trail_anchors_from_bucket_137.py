@@ -1,14 +1,17 @@
 """HB#1 (#137): the capsule's companion-first Trail-anchor source.
 
-Two properties pinned:
+The capsule is a CARRIED, zero-reachability snapshot, so export carries the
+RECORDED anchor rows and does NOT recompute current liveness at seal time
+(current survival is a reachability-bearing consumer operation, ``trail track``).
+Properties pinned:
 
-1. FIDELITY: ``trail_anchors_from_bucket`` returns rows byte-identical to the
-   live ``build_trail_query_projection_for_trace(...).anchors_for_trace_with_survival``
-   — the companion path must not change the capsule's ``trail_anchors`` content.
-2. NO RE-WALK: it never calls the whole-log ``read_events`` — neither to build
-   the projection (it uses the companion) nor in the survival pass (the same
-   events are threaded into ``sync_patch``, so ``_sync`` never hits its
-   ``read_events(repo)`` cache-miss slow path that ran once PER anchor row).
+1. RECORDED, NOT RECOMPUTED: ``trail_anchors_from_bucket`` returns the projection's
+   ``anchors_for_trace`` rows (companion-sourced) stamped
+   ``survival_recomputed_at_export=False`` + the ``survival_not_recomputed_at_export``
+   limitation + a ``survival_as_of`` — equal to ``recorded_anchor_rows`` over the
+   live projection, and it never runs ``sync_patch`` (no per-anchor live walk).
+2. NO RE-WALK: it never calls the whole-log ``read_events`` (it uses the
+   companion) and never the per-anchor survival walk.
 """
 from __future__ import annotations
 
@@ -102,25 +105,37 @@ def _write_companion(repo: Path, trace_id: str) -> str:
     return slug
 
 
-def test_companion_anchors_are_byte_identical_to_live(tmp_path: Path) -> None:
+def test_companion_anchors_match_recorded_rows(tmp_path: Path) -> None:
+    """Companion-sourced rows equal the RECORDED rows over the live projection
+    (same anchors, no live survival recompute), and they are stamped
+    not-recomputed."""
     repo = tmp_path / "proj"
     repo.mkdir()
     trace_id = _seed_anchored_trace(repo)
     slug = _write_companion(repo, trace_id)
 
-    from opentraces.core.capsule.bucket_trail import trail_anchors_from_bucket
+    from opentraces.core.capsule.bucket_trail import (
+        recorded_anchor_rows,
+        trail_anchors_from_bucket,
+    )
 
-    live = build_trail_query_projection_for_trace(
-        repo, trace_id
-    ).anchors_for_trace_with_survival(trace_id)
+    live_recorded = recorded_anchor_rows(
+        build_trail_query_projection_for_trace(repo, trace_id), trace_id
+    )
     companion = trail_anchors_from_bucket(repo, slug, trace_id)
 
-    assert companion is not None  # the companion exists
-    assert len(companion) == 1  # one anchored patch
-    assert companion == [dict(r) for r in live], (
-        "companion-sourced trail anchors diverged from the live builder — the "
-        "capsule's trail_anchors content must not depend on which source resolved it"
+    assert companion is not None
+    assert len(companion) == 1  # one anchored patch carried
+    assert companion == live_recorded, (
+        "companion-sourced trail anchors diverged from the recorded rows — the "
+        "capsule's trail_anchors must not depend on which source resolved it"
     )
+    # Carried-snapshot contract: declared not-recomputed, no live-walked survival.
+    row = companion[0]
+    assert row["survival_recomputed_at_export"] is False
+    assert "survival_not_recomputed_at_export" in row["trail_limitations"]
+    assert "survival_as_of" in row
+    assert not row.get("current_survival")  # no live walk happened
 
 
 def test_companion_path_does_no_whole_log_read(tmp_path: Path, monkeypatch) -> None:
