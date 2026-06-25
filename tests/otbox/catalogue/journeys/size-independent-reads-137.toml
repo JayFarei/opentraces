@@ -1,0 +1,122 @@
+name = "size-independent-reads-137"
+description = """
+PRD #137 (GOLD) — the end-to-end gate that the single-key read floor is gone:
+the real CLI resolves one trace's lineage and exports a capsule without a
+whole-log walk, and a zero-match per-trace read returns cleanly instead of
+paying the ~12s mature-log byte-stream.
+
+This is the journey half of the #137 verifier; the portable half is the
+committed deterministic pytest (`tests/core/test_size_independent_reads_137.py`,
+the byte-stream-bounded checks + the opt-in mature-ref probe) plus the freeze
+lint (`tests/core/test_no_full_walk_lint_137.py`). Together they hold the
+property as a permanent gate so the next consumer that full-walks the log fails
+CI rather than becoming the next hang.
+
+  Step 1 (seed): write one deterministic trace into the captured world.
+  Step 2 (per-trace read, end-to-end): `ctx tree {trace} --json` → rc=0. The
+    Context Tree per-trace projection reads ONLY the trace's events through the
+    rebuildable OID index (build_context_tree_projection_for_trace ->
+    read_events_for_trace), never the whole canonical log.
+  Step 3 (zero-match, bounded): `ctx tree nonexistent-137-probe --json` → rc=0
+    with an EMPTY tree — a miss costs nothing and resolves cleanly instead of
+    scanning all of history (the headline #137 symptom: 12s for nothing).
+  Step 4 (capsule export, stub removed): `capsule export {trace} --json` → rc=0
+    — the export COMPLETES, proving the trail-anchor step now sources anchors
+    through the bounded, index-served per-trace projection
+    (build_trail_query_projection_for_trace) instead of the full builder that
+    made export wedge on a mature bucket.
+
+Tier 1 (opt-in) — the real-CLI gold gate; CI runs the committed pytest verifier
++ lint as the always-on portable gate.
+"""
+lane = "core"
+tier = 1
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+[[steps]]
+type = "shell"
+id = "seed-137-trace"
+argv = [
+  "{py_bin}",
+  "-c",
+  """
+from pathlib import Path
+import sys
+
+from opentraces_schema import Agent, Step, TraceRecord
+
+from opentraces.core.bucket_store import write_trace_record
+from opentraces.core.config import get_project_dir
+
+project = Path(sys.argv[1])
+trace_id = "size-independent-reads-137-trace"
+steps = [
+    Step(step_index=1, role="user", content="Make the per-trace read instant."),
+    Step(step_index=2, role="agent", content="Routed the read through the OID index."),
+]
+record = TraceRecord(
+    trace_id=trace_id,
+    session_id="size-independent-reads-137-session",
+    agent=Agent(name="otbox-seeded-agent", model="otbox/model"),
+    task=dict(description="Seed one trace for the #137 size-independence gate."),
+    dependencies=["opentraces"],
+    steps=steps,
+    outcome=dict(success=True, committed=False),
+)
+slug = get_project_dir(project).name
+write_trace_record(record, project_slug=slug, source_layer="capture")
+print(trace_id)
+  """,
+  "{project}",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "seed-137-trace"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 2 — per-trace read resolves end-to-end through the index (bounded).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-tree-known"
+argv = ["ctx", "tree", "size-independent-reads-137-trace", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-known"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 3 — a zero-match per-trace read returns cleanly (a miss costs nothing).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-tree-zero-match"
+argv = ["ctx", "tree", "nonexistent-137-probe-trace", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-zero-match"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 4 — capsule export completes end-to-end; the trail-anchor step is sourced
+# through the bounded per-trace projection (no whole-log walk).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "capsule-export-137"
+argv = ["capsule", "export", "size-independent-reads-137-trace", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-export-137"
+equals = 0

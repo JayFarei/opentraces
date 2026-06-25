@@ -166,12 +166,36 @@ def _intent_for_step(record: Any, trace_map: Any, step_index: int) -> dict[str, 
 
 
 def _trail_anchors(project_dir: Path, trace_id: str) -> list[dict[str, Any]]:
+    # #137 HB#1: source this trace's RECORDED Trail anchors for the carried
+    # snapshot. COMPANION-FIRST — read the trace's per-trace ``trail.jsonl.gz`` and
+    # build the projection from it; only a MISSING companion (uncaptured / foreign
+    # trace) falls back to a bounded live read of the trace's own events. Neither
+    # path recomputes CURRENT survival: a capsule is a carried, zero-reachability
+    # snapshot, so current anchor liveness (alive_on_path / reverted / lost), which
+    # needs a per-anchor live-repo walk, is left to the consumer/gate
+    # (``ot trail track``) and declared not-recomputed here. This is both correct
+    # (two seals of the same trace stay byte-stable) and fast (seconds, not the
+    # ~1000s a 46-anchor live recompute cost).
     try:
-        from ..trails.query import build_trail_query_projection
+        from ..config import get_project_dir
 
-        projection = build_trail_query_projection(project_dir)
-        rows = projection.anchors_for_trace_with_survival(trace_id)
-        return [dict(r) for r in rows]
+        slug = get_project_dir(project_dir).name
+        if slug:
+            from .bucket_trail import trail_anchors_from_bucket
+
+            companion = trail_anchors_from_bucket(project_dir, slug, trace_id)
+            if companion is not None:
+                return companion
+
+        # Bounded live fallback (no companion only): read the trace's own events
+        # and carry the recorded anchors (still no survival recompute).
+        from ..trails.event_log import read_events_for_trace
+        from ..trails.query import build_trail_query_projection_from_events
+        from .bucket_trail import recorded_anchor_rows
+
+        events = read_events_for_trace(project_dir, trace_id)
+        projection = build_trail_query_projection_from_events(project_dir, events)
+        return recorded_anchor_rows(projection, trace_id)
     except Exception:  # pragma: no cover - trail optional
         return []
 
@@ -350,14 +374,20 @@ def export_capsule(
 
         from .bucket_context import resume_packet_from_bucket
 
-        # Prefer the live event-log projection; fall back to the trace's own
-        # bucket companion (self-sufficient, resolves older captured traces the
-        # live ref no longer carries).
-        packet = context_resume_packet(project_dir, resolved_node)
+        # #137 HB#1: COMPANION-FIRST, mirroring the trail-anchor face. The trace's
+        # own per-trace bucket companion resolves the node self-sufficiently in
+        # ~ms, whereas the live ``context_resume_packet`` is the whole-log
+        # projection that WEDGES on a mature ref — the SECOND of capsule export's
+        # two live-first whole-log walks (the first, trail anchors, is already
+        # companion-first). ``context_resume_packet`` never raises, but a wedge is
+        # not an error, so live-first never reached the fallback. Try the
+        # companion first; fall back to the live read only when the companion
+        # cannot resolve the node (uncaptured / foreign trace).
+        packet = resume_packet_from_bucket(slug, trace_id, resolved_node)
         if packet.get("error"):
-            bucket_packet = resume_packet_from_bucket(slug, trace_id, resolved_node)
-            if not bucket_packet.get("error"):
-                packet = bucket_packet
+            live_packet = context_resume_packet(project_dir, resolved_node)
+            if not live_packet.get("error"):
+                packet = live_packet
         if packet.get("error"):
             limitations.append("context_node_unresolved")
         for lim in packet.get("limitations") or []:
@@ -410,6 +440,14 @@ def export_capsule(
     anchors = _trail_anchors(project_dir, trace_id)
     if not anchors:
         limitations.append("trail_anchors_unavailable")
+    else:
+        # Declare on the envelope that the carried anchors record their identity
+        # and capture-time evidence, but current liveness was NOT recomputed at
+        # seal time (it is a reachability-bearing consumer operation; run
+        # ``ot trail track`` against the repo). Keeps the capsule a true snapshot.
+        from .bucket_trail import SURVIVAL_NOT_RECOMPUTED
+
+        limitations.append(SURVIVAL_NOT_RECOMPUTED)
     repo_pin = _repo_pin(project_dir, record, trace_id, remote_url)
     if not repo_pin.get("commit_sha"):
         limitations.append("repo_pin_no_commit")
