@@ -314,6 +314,8 @@ from . import _captured_with_revert  # noqa: E402,F401  (registers c-captured-wi
 from . import _captured_with_secrets  # noqa: E402,F401  (registers c-captured-with-secrets)
 from . import _captured_multi_skill  # noqa: E402,F401  (registers c-captured-multi-skill)
 from . import _captured_with_pr_branch  # noqa: E402,F401  (registers c-captured-with-pr-branch)
+# Issue #141 Trace Slicer Library — deterministic fixture for the conformance journey.
+from . import _captured_slicer_fixture  # noqa: E402,F401  (registers c-captured-slicer-fixture)
 # Plan 083 Codex lane scaffold — artifact-preferred, inert without captures.
 from . import _captured_codex_real_session  # noqa: E402,F401  (registers c-captured-codex-real-session)
 from . import _captured_codex_bash_session  # noqa: E402,F401  (registers c-captured-codex-bash-session)
