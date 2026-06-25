@@ -1,0 +1,580 @@
+{
+  "count": 36,
+  "by_project": {
+    "2026-02-05-test-usage-via-cli-b1ecc6ea": 3,
+    "2026-03-18-thinking-board-789ddd99": 3,
+    "2026-03-19-envrunai-673a19af": 2,
+    "2026-03-24-envrun-landing-86e199f7": 1,
+    "2026-03-26-analytics-agents-ecd38529": 4,
+    "2026-03-26-chinese-alpha-9e519851": 1,
+    "2026-03-27-community-traces-hf-24eb286b": 7,
+    "2026-03-27-community-traces-hf-2a8b9ee6": 1,
+    "2026-03-27-community-traces-hf-421ba2f9": 1,
+    "2026-03-27-community-traces-hf-ea9a52be": 1,
+    "2026-05-01-hackathon-76420f2c": 5,
+    "2026-06-04-workflowshop-fdf0493d": 1,
+    "2026-06-09-teach-2b195e5c": 2,
+    "2026-06-17-scenario2030-781d38d6": 1,
+    "app-8b7dc36b": 3
+  },
+  "by_agent": {
+    "claude-code": 20,
+    "codex-cli": 15,
+    "pi": 1
+  },
+  "by_length_bucket": {
+    "huge": 3,
+    "medium": 13,
+    "tiny": 20
+  },
+  "nasty_flag_coverage": {
+    "autonomous": 17,
+    "error_heavy": 4,
+    "no_edits": 14,
+    "subagent_heavy": 4,
+    "resume": 3,
+    "control_leak": 11
+  },
+  "traces": [
+    {
+      "trace_id": "19f1a2f4-4fc6-48bc-ad10-84306fb2b268",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 189,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "b178570e-93b4-4ba1-8897-36893b5373a8",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "4a41455f-a93c-448c-93f3-f81f83b8793d",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 4,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "161724d7-8cac-4639-99eb-dd7a59ee8187",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 34,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0006e1e2-7a25-4243-9e9d-6bc115067860",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 28,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "470f86a1-7dbc-4e87-ae68-4dc3fdc25261",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 8,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "028ced2d-5e25-4fb2-8df5-24826746fcf5",
+      "project": "2026-03-19-envrunai-673a19af",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 10,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "50c0b1a2-004d-4c31-beb9-2220dc4cb0e4",
+      "project": "2026-03-19-envrunai-673a19af",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 40,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "67204cda-73d4-41de-be33-5f8dc34d01d0",
+      "project": "2026-03-24-envrun-landing-86e199f7",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "05a4ba55-0938-4cae-9f7a-9a35631072f5",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 37,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "01cac7df-8eea-46fe-a596-8cdcf8b3f3e4",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 14,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "469ef199-636e-44fd-86f1-d8fae95492ef",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 70,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "7d3c1bde-2af7-40dc-8444-9cedc65b7545",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "39cca3ad-72d2-4719-b6f1-a42f1ae8b45e",
+      "project": "2026-03-26-chinese-alpha-9e519851",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 25,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "07c68b23-0d0e-4729-96c5-d60eb998091f",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1490,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "00eec9af-3d6e-4252-8a8e-32af5735f318",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 69,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "02511912-5b20-40bc-9f0c-ff93e18853ee",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 20,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0ba8f840-7d49-41e8-9323-f62e9858c970",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "huge",
+      "n_steps": 1044,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "00416c26-20dc-4811-9f37-d1096f2460e5",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 139,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "010034bf-a461-4b8e-b0b4-a35280470d2f",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 23,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "e174e2d7-78bc-40e0-9728-008d31a998d3",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "pi",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "55644589-0aa1-42ce-9896-0ba5bb62f646",
+      "project": "2026-03-27-community-traces-hf-2a8b9ee6",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 11,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "54d7d4ef-3fd2-44e2-8f4f-54f8909b6417",
+      "project": "2026-03-27-community-traces-hf-421ba2f9",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 26,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0e157ea2-5400-4231-835a-9a9787063b4a",
+      "project": "2026-03-27-community-traces-hf-ea9a52be",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 49,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "417c4f06-122f-438c-8a72-51abf3bfdfe6",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1421,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "03eae497-a4c0-493e-9a60-a8ad36eae9a0",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 131,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "09504e8b-720a-4b08-a7e4-b7460df7ac34",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0484f99d-e9d2-48eb-84a7-3b2a2000b5cd",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 88,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "049b6679-5f46-4bb6-a05d-8b1c2d54a22d",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "1a2f2ec5-bb63-48b9-aeae-7a5afc3a2510",
+      "project": "2026-06-04-workflowshop-fdf0493d",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "ecb84bc9-12bc-4362-9423-1ddbd49c6811",
+      "project": "2026-06-09-teach-2b195e5c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 98,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "15a19ab1-2480-4176-9f7a-0db784a85890",
+      "project": "2026-06-09-teach-2b195e5c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 5,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0887bb84-fd2a-4ecc-a1a1-b0faea84e2d1",
+      "project": "2026-06-17-scenario2030-781d38d6",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 103,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "832bba15-6cf3-4838-9e1b-010f35de1468",
+      "project": "app-8b7dc36b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 368,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "cbe567da-66b4-4504-beed-fa71814f2aed",
+      "project": "app-8b7dc36b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "192f60a1-ce4f-4eb5-8515-b53dc4abaf55",
+      "project": "app-8b7dc36b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    }
+  ]
+}

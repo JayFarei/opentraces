@@ -1,0 +1,3057 @@
+{
+  "count": 200,
+  "by_project": {
+    "2026-02-05-test-usage-via-cli-b1ecc6ea": 7,
+    "2026-03-18-thinking-board-789ddd99": 15,
+    "2026-03-19-envrunai-673a19af": 5,
+    "2026-03-24-envrun-landing-86e199f7": 3,
+    "2026-03-26-analytics-agents-ecd38529": 19,
+    "2026-03-26-chinese-alpha-9e519851": 2,
+    "2026-03-27-community-traces-hf-24eb286b": 32,
+    "2026-03-27-community-traces-hf-2a8b9ee6": 1,
+    "2026-03-27-community-traces-hf-421ba2f9": 1,
+    "2026-03-27-community-traces-hf-ea9a52be": 1,
+    "2026-05-01-hackathon-76420f2c": 21,
+    "2026-06-04-workflowshop-fdf0493d": 3,
+    "2026-06-09-teach-2b195e5c": 3,
+    "2026-06-17-scenario2030-781d38d6": 1,
+    "app-8b7dc36b": 8,
+    "calibre-3165988a": 1,
+    "client-humandur": 1,
+    "community-traces-capsule-64726388": 1,
+    "community-traces-issue-65-heavy-tick-145054c5": 5,
+    "demo-recordon": 1,
+    "dotfiles-44443a26": 8,
+    "kb-15a50d63": 24,
+    "prerel-54-55ec9877": 1,
+    "prerel-55-1d4e1816": 1,
+    "prerel-57-70a9b215": 1,
+    "prerel-61-7b1f760a": 1,
+    "project2030-e7fc8aa6": 1,
+    "prolog-ff983fdf": 17,
+    "report-3731436e": 1,
+    "research-a1994f66": 8,
+    "resume-69f36509": 4,
+    "svc-client-convert-": 2
+  },
+  "by_agent": {
+    "claude-code": 111,
+    "codex-cli": 87,
+    "pi": 2
+  },
+  "by_length_bucket": {
+    "huge": 16,
+    "medium": 75,
+    "tiny": 109
+  },
+  "nasty_flag_coverage": {
+    "autonomous": 79,
+    "error_heavy": 26,
+    "no_edits": 79,
+    "subagent_heavy": 33,
+    "resume": 10,
+    "control_leak": 62
+  },
+  "traces": [
+    {
+      "trace_id": "19f1a2f4-4fc6-48bc-ad10-84306fb2b268",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 189,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "b178570e-93b4-4ba1-8897-36893b5373a8",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "4a41455f-a93c-448c-93f3-f81f83b8793d",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 4,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "161724d7-8cac-4639-99eb-dd7a59ee8187",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 34,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0006e1e2-7a25-4243-9e9d-6bc115067860",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 28,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "470f86a1-7dbc-4e87-ae68-4dc3fdc25261",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 8,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "028ced2d-5e25-4fb2-8df5-24826746fcf5",
+      "project": "2026-03-19-envrunai-673a19af",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 10,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "50c0b1a2-004d-4c31-beb9-2220dc4cb0e4",
+      "project": "2026-03-19-envrunai-673a19af",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 40,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "67204cda-73d4-41de-be33-5f8dc34d01d0",
+      "project": "2026-03-24-envrun-landing-86e199f7",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "05a4ba55-0938-4cae-9f7a-9a35631072f5",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 37,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "01cac7df-8eea-46fe-a596-8cdcf8b3f3e4",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 14,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "469ef199-636e-44fd-86f1-d8fae95492ef",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 70,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "7d3c1bde-2af7-40dc-8444-9cedc65b7545",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "39cca3ad-72d2-4719-b6f1-a42f1ae8b45e",
+      "project": "2026-03-26-chinese-alpha-9e519851",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 25,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "07c68b23-0d0e-4729-96c5-d60eb998091f",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1490,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "00eec9af-3d6e-4252-8a8e-32af5735f318",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 69,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "02511912-5b20-40bc-9f0c-ff93e18853ee",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 20,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0ba8f840-7d49-41e8-9323-f62e9858c970",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "huge",
+      "n_steps": 1044,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "00416c26-20dc-4811-9f37-d1096f2460e5",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 139,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "010034bf-a461-4b8e-b0b4-a35280470d2f",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 23,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "e174e2d7-78bc-40e0-9728-008d31a998d3",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "pi",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "55644589-0aa1-42ce-9896-0ba5bb62f646",
+      "project": "2026-03-27-community-traces-hf-2a8b9ee6",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 11,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "54d7d4ef-3fd2-44e2-8f4f-54f8909b6417",
+      "project": "2026-03-27-community-traces-hf-421ba2f9",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 26,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0e157ea2-5400-4231-835a-9a9787063b4a",
+      "project": "2026-03-27-community-traces-hf-ea9a52be",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 49,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "417c4f06-122f-438c-8a72-51abf3bfdfe6",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1421,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "03eae497-a4c0-493e-9a60-a8ad36eae9a0",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 131,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "09504e8b-720a-4b08-a7e4-b7460df7ac34",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0484f99d-e9d2-48eb-84a7-3b2a2000b5cd",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 88,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "049b6679-5f46-4bb6-a05d-8b1c2d54a22d",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "1a2f2ec5-bb63-48b9-aeae-7a5afc3a2510",
+      "project": "2026-06-04-workflowshop-fdf0493d",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "ecb84bc9-12bc-4362-9423-1ddbd49c6811",
+      "project": "2026-06-09-teach-2b195e5c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 98,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "15a19ab1-2480-4176-9f7a-0db784a85890",
+      "project": "2026-06-09-teach-2b195e5c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 5,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0887bb84-fd2a-4ecc-a1a1-b0faea84e2d1",
+      "project": "2026-06-17-scenario2030-781d38d6",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 103,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "832bba15-6cf3-4838-9e1b-010f35de1468",
+      "project": "app-8b7dc36b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 368,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "cbe567da-66b4-4504-beed-fa71814f2aed",
+      "project": "app-8b7dc36b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "192f60a1-ce4f-4eb5-8515-b53dc4abaf55",
+      "project": "app-8b7dc36b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "92fa7ba8-fd0a-45fd-ba4e-545ff5eac674",
+      "project": "calibre-3165988a",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 63,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "ea9e17db-a291-4c8b-b4e9-442d9c683faf",
+      "project": "client-humandur",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 4,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "7e024a87-c014-4652-bb72-b4931ba9acdf",
+      "project": "community-traces-capsule-64726388",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "3b802416-c6a2-440a-84bc-a5b0c99ab868",
+      "project": "community-traces-issue-65-heavy-tick-145054c5",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "03c529c7-818e-45f5-b4fd-9ab63a336d8d",
+      "project": "demo-recordon",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 4,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "35b5c2b9-cc29-4392-a4b7-2524ba6e053f",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 47,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "29706489-e07c-4342-975f-e96d2d5d45b8",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 27,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "55ef8f51-6bd5-4a6e-8435-bb2307a7b839",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1031,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "072c93d8-8b7d-434a-a049-a8ed1667db9a",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 313,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "29a1f180-def9-4381-b18d-761d06c6ac46",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "6a10b5a1-a2ff-4444-8c00-410409e4eec9",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 506,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "2e111942-50c8-4c69-b6b3-d70fd186aa58",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "d150c9d9-6768-424e-9b86-67a82a818b4b",
+      "project": "prerel-54-55ec9877",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "8365a6fd-e7b5-4437-ab54-aca1387f885b",
+      "project": "prerel-55-1d4e1816",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 18,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "da42c609-1b3a-4db7-8975-b0f567e1c503",
+      "project": "prerel-57-70a9b215",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 27,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "d26afda8-5fe1-4f2a-ae60-0fc3526bf046",
+      "project": "prerel-61-7b1f760a",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 22,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "d3575256-c83a-4151-ab6e-66b5826a7856",
+      "project": "project2030-e7fc8aa6",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 185,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "163ceea2-6cdf-4114-9041-a8899b5cbe9a",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 151,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "03c87670-6597-4ec2-a27a-fd416afa033f",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "2f2a2baa-9f97-49ed-978b-3b959a9ae8d6",
+      "project": "prolog-ff983fdf",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 30,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "31a0f0fa-e8a6-4a8a-b595-c565e649f0a3",
+      "project": "prolog-ff983fdf",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "380c73c1-523f-4486-98b7-69b57c105241",
+      "project": "report-3731436e",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 18,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "02c39774-6a65-4066-b111-d22f8c4ff9f7",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 215,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0f487b60-3e24-4b2b-8d99-5558b80f891b",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 18,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "74ea4e9e-2e50-4751-bbe7-f5ee1f773b73",
+      "project": "resume-69f36509",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 48,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "6674701d-b578-4dc6-acd9-732df5c460fc",
+      "project": "resume-69f36509",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 18,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "3ffc1b88-92cf-4e61-9959-6dec050e1056",
+      "project": "svc-client-convert-",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 4,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "20654090-4769-45bf-b18f-94cf63f46265",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 30,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "37e7dafa-65ee-4228-87f4-9d32cececbe7",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 160,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "078aadaf-7467-4d38-9264-e11d71904dcb",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 8,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "4a69c889-73fa-4f52-9144-0b47560a44f0",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "44c6d467-bb32-400e-ad26-2e11c0034c1c",
+      "project": "2026-03-19-envrunai-673a19af",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "7f9a335c-ab46-4d5f-92af-aa12158b24f0",
+      "project": "2026-03-24-envrun-landing-86e199f7",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 18,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "08572f05-8eb2-4115-a5fa-0f3beb0beb2a",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 127,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "3e2fae3e-f990-4e4c-b5c1-65c2e77d1a7d",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 24,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "53982a90-fe30-4013-add3-2d1bbf37727d",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 38,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "8c90fbbf-a976-4c24-8a9e-0cc546e16c56",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "57ea4e8e-79df-42c2-b9f5-6a14088745bc",
+      "project": "2026-03-26-chinese-alpha-9e519851",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "38f0a34e-9627-4377-b09e-f1743e6e4797",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 811,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "00febd8d-4acb-4172-ba23-3b4b55537918",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 102,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "06ed22c4-cbe0-4bdb-8daa-cf5f1cb364de",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 8,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "239519b4-6890-4343-a810-8676f453d095",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "huge",
+      "n_steps": 2529,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0119a3e8-2eba-44b8-9458-57d68c914079",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 751,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0155f348-3de6-4e64-8026-ced8f182ea48",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 13,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "ebba058c-7901-4503-910e-dbefe4335cc7",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "pi",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "04ba9de7-c2ac-445b-abc0-6ac946d07479",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 166,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0e568de5-afa4-4fa2-9360-51f82147980f",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "1acc4f94-cdc6-4e09-97e4-77fed2fd8165",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 40,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "06d527a9-e5a6-4605-9b0e-f2592bbd97aa",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 24,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "7e35a0ff-4378-4095-8f09-345fe8e47de3",
+      "project": "2026-06-04-workflowshop-fdf0493d",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "2553db7a-f17c-4d25-adcd-ac4da454a226",
+      "project": "2026-06-09-teach-2b195e5c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 5,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "ef0d9c51-3d52-46aa-81fc-e8e057677b20",
+      "project": "app-8b7dc36b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 5,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "2d76bce3-a251-4ee9-bd74-201c84a38b64",
+      "project": "app-8b7dc36b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 23,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "56aebf2c-9cfd-4b54-b6d4-058b0d5546cc",
+      "project": "community-traces-issue-65-heavy-tick-145054c5",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "959b5cda-dd20-4fb6-8b0f-eb59040d3069",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 36,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "4e2ffc1a-18b6-4a60-9c5d-51b565de8a57",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "638c4c94-1410-4b27-9ace-4dedb47c3c7c",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1247,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "077724df-f87b-4bd6-bf18-6afb51c96868",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 214,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": true,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "3bb6aa5f-6f0c-4604-927c-89018edbc7eb",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "7ea8cb5d-b289-412c-9894-d012c0647d14",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 288,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "43992a7d-cea1-4793-b2ae-b4458a8e5513",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 4,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "1ddaee6c-de36-489b-be5d-4c964d51c3fd",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 92,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "68174e74-fb45-46fe-8ed6-346b15df29e9",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 29,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "406bb560-ab18-4129-b5af-88a895d38d33",
+      "project": "prolog-ff983fdf",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 82,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "3c4cccf2-9c86-4eeb-9d1d-3d637ad0f117",
+      "project": "prolog-ff983fdf",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "1e95f681-2edf-48ac-bb29-9afb78e555d1",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 533,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "12206b3e-bbe8-4a35-bb5a-b2dbbe7be0bb",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 10,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "be8eee5b-5ecd-4201-b6b2-e58fd8ed7257",
+      "project": "resume-69f36509",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 106,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "eee1ace7-537f-4639-bcbb-bea2e5411e46",
+      "project": "resume-69f36509",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 5,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "da835e6f-73f0-442f-a68a-15e9bed26055",
+      "project": "svc-client-convert-",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 4,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "8ef209a7-14ea-43d1-af11-d4d25b58608e",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 167,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "39308e53-70e7-459b-b15d-03bd7cfd9a44",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 149,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "221baf84-a3a2-4045-83b0-a91462b298b2",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 20,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "82d7e182-2eab-4761-bced-fc9ec4afcc7b",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "5b23e1c4-0627-4a55-a7b7-a9e40122ddac",
+      "project": "2026-03-19-envrunai-673a19af",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "c49549d5-535c-4116-a88c-bfd5cf473805",
+      "project": "2026-03-24-envrun-landing-86e199f7",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "09b9cf35-c785-49b5-96a2-09e580c82d4d",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 139,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "51cedec5-6fb3-425e-974e-c51838e28c5d",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 8,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "a7dbd74f-e926-4a92-8b1d-ce9cf5c849dc",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 72,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "a26da573-2a04-4da7-8a65-b8d456aae34b",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "3a9a06a1-9718-4a15-9b2a-4ce463e3c8df",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 2123,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0146d89d-ca9c-4546-bdce-29e0d5f805b2",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 115,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0e9865e6-43a0-4ea9-b946-39fab0a6082e",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 17,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "35192fd2-4f90-4e75-89a8-d908d105bd95",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "huge",
+      "n_steps": 972,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "01b84873-19ac-4963-b6a8-d1b7e82664e5",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 41,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "01790448-606c-49dd-8e8a-8e0dcff92999",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 23,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "07d876bd-c7ce-4641-b624-ae4c3f66a0d6",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 422,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": true,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "62345580-d96d-4564-a19c-4a85dba550a3",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 15,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "22f0ad03-a4d3-4cf4-ad46-cb1d785300d3",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 51,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0daabbd7-6be1-4dd0-90e0-9799780ff2da",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 10,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "b3627513-06b2-4ec0-8931-95a5d1b272be",
+      "project": "2026-06-04-workflowshop-fdf0493d",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "46fba5bc-0d17-428e-8a35-b239d19767c2",
+      "project": "app-8b7dc36b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 11,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "7d3445e3-60fc-4457-b983-6771b4caa433",
+      "project": "community-traces-issue-65-heavy-tick-145054c5",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "c179a4e2-f032-4bb4-ad2d-411b49fc40ea",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 55,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "64b5071e-d233-45ed-93ad-975028d74d5d",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "95b263ad-15f0-4ba2-8583-25508ba894b8",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1253,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "0a0f32c2-0327-468a-b098-31e488be26e8",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 106,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "b860356a-b91e-4d54-8aff-a67f88d2f76a",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 21,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "8d830b68-1066-42c5-b4e5-b684d676613f",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 55,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "5b80ce43-6d0b-4ff9-8f5b-49693b1f7235",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "61240bc8-9b06-4c08-8aac-65610c786152",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 151,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "8e5fffdb-5219-4b6a-b3d0-1727e8393e99",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 29,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "79889cd6-a8cf-4171-83ca-0b99f36fa945",
+      "project": "prolog-ff983fdf",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 108,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "543ecb9b-41c7-43fd-9193-107975a6bba8",
+      "project": "prolog-ff983fdf",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 27,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "36299c40-b29a-4f1e-9e51-4a00cbd6798d",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 261,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "1a3a7ebe-17ea-448b-b5fd-c64b7e1770ed",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 19,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "b2584c9c-e63a-48cb-8085-e1bed6c376fc",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 236,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "4714508d-f272-40e9-ac0b-17e2999d384c",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 49,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "22228c0c-e4a9-4d4d-8403-5bf5edbd4fa7",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 17,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "9e8f1d8d-3088-4b5f-928f-ef4015436776",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 12,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "d8c0b16f-3e6d-4321-8826-bac11b15ded7",
+      "project": "2026-03-19-envrunai-673a19af",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "09f70415-4097-4beb-b557-ff9296b71f6a",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 66,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "cbb33310-9c40-42de-92be-574163512249",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 14,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "b91da822-73d2-4287-acee-2216e3d42fe3",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 68,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "af7cb660-2346-4452-bfcf-f067207e3387",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 11,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "47c1487e-2e14-4a6e-beb9-9d0b8432accc",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 821,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "02847c0c-105d-4b62-b116-812e5871e53d",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 382,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "15e7fc34-473f-47de-9e56-aeb96e161516",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 17,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "42cf09f5-2083-4871-bf2f-b8e10e8e20bb",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "huge",
+      "n_steps": 2529,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "01d2ac59-acff-451e-8c5b-c3a8a314c1eb",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 32,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "01da186b-5b12-40ef-87f6-97983a452b83",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "091aacc0-72f3-4173-9198-c2441c04c7b4",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 51,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "b416b4bc-dc84-41ab-9898-3ed45e604cb1",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 15,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "2aae4116-621e-423d-8515-da1a0b677375",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 129,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "125d73ae-7bec-45ac-bc52-6e288783588f",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 10,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "aefd31a6-acf4-4540-b2dc-7e51ba8b2d27",
+      "project": "app-8b7dc36b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "d58be42a-fa8a-4ece-83cf-cc402706c394",
+      "project": "community-traces-issue-65-heavy-tick-145054c5",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 16,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "6bb8a85f-16a1-4fa2-980b-537bd1765fb4",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 28,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "a2976bd6-1790-4df0-9f19-56f4d08ad66a",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1046,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "13030d8d-63a6-4cef-a038-ab7604495800",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 180,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "dc01b230-d1ae-485f-a887-d677a6ec2bc1",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "a1b13af7-231a-4373-9b1f-022cab5f2d78",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 275,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "67998977-e549-4cc4-9e08-cc8803cc7e60",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 24,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "a0b88c9b-d58e-4bde-88e6-7110ab18d8aa",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 114,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "ba27eb90-8c10-428d-a26c-b5a80ae56a89",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 25,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "9285ca96-5920-42a2-9d1c-0998330ebe6a",
+      "project": "prolog-ff983fdf",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 61,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "3b50064c-f021-4edc-86de-26af10ff3c3e",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 51,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "46dbb45b-f12e-4bef-ad42-32e87610e7c9",
+      "project": "research-a1994f66",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 14,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "c42f3bae-d209-49c6-afde-75755bff318d",
+      "project": "2026-02-05-test-usage-via-cli-b1ecc6ea",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 304,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "51f9bb72-425e-481c-9655-c4c699f764e6",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 38,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "239a754c-1b44-439c-87db-ebe7884575e0",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 28,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "ae6678cc-44ab-4717-974b-19fb7f244093",
+      "project": "2026-03-18-thinking-board-789ddd99",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0ccfb0a4-2c44-455e-876b-b72e921f7ff3",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 66,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "d6fa1b39-cb7c-4b9c-b13d-09a29cc98587",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "f636885b-18df-4acb-9d32-bb07dac71ff2",
+      "project": "2026-03-26-analytics-agents-ecd38529",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 54,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "77646328-9ce0-4d92-9ed0-6c17c25724b2",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 2123,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "02efe024-0c18-4af4-bcbf-49c6b833ea07",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 153,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "196558e2-d1f6-4fed-aedd-b878d6885021",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 6,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "73bb76e2-9baf-4fbb-bbc0-b5d8be07f59f",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "huge",
+      "n_steps": 2529,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "02bd1889-5a57-4643-b964-a5858ea9388d",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 44,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0273a455-9cc1-4f03-9fa9-cba4722fbaeb",
+      "project": "2026-03-27-community-traces-hf-24eb286b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 11,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "0ba3fe2d-bfc3-4a11-8a07-ae2da82cad21",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 34,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "baf58232-4e90-44c1-8edb-ff138e5b4a40",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 23,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "2ca34907-1237-4ccf-b3cb-387dc91a16d3",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 90,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": true,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "1e52dc9e-81ef-4790-91dd-8967ca27d11f",
+      "project": "2026-05-01-hackathon-76420f2c",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 9,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "c1e53f6b-7b9f-4544-a148-6464da3abfb1",
+      "project": "app-8b7dc36b",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "f25ebc10-4deb-4246-b735-76e470bb61ee",
+      "project": "community-traces-issue-65-heavy-tick-145054c5",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 19,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "715e86f9-beec-4708-abcd-d95c1c35e7e2",
+      "project": "dotfiles-44443a26",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 18,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "c1c56b73-96b2-4d10-9f27-7d32d26aeb63",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "huge",
+      "n_steps": 1061,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "17e186bf-7c3a-4f70-bd93-b93189fdf6b3",
+      "project": "kb-15a50d63",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 309,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": true,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "e013add3-c0a3-4777-a366-9f6e5292cc84",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "medium",
+      "n_steps": 74,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": true,
+        "resume": false,
+        "control_leak": true
+      }
+    },
+    {
+      "trace_id": "6a647c86-acad-4f7e-92ac-a65b94395e52",
+      "project": "kb-15a50d63",
+      "agent": "codex-cli",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": true,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "a8fae748-bdb0-4219-8261-9c9f8f70d843",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "medium",
+      "n_steps": 151,
+      "flags": {
+        "autonomous": false,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    },
+    {
+      "trace_id": "f85f5806-5939-4b7f-acc6-dea2161cef6d",
+      "project": "prolog-ff983fdf",
+      "agent": "claude-code",
+      "length_bucket": "tiny",
+      "n_steps": 7,
+      "flags": {
+        "autonomous": true,
+        "error_heavy": false,
+        "no_edits": false,
+        "subagent_heavy": false,
+        "resume": false,
+        "control_leak": false
+      }
+    }
+  ]
+}
