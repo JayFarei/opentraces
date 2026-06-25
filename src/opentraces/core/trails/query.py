@@ -244,15 +244,29 @@ class TrailQueryProjection:
         rows = self.anchors_by_trace.get(trace_id, [])
         return _copy_rows(rows)
 
-    def anchors_for_trace_with_survival(self, trace_id: str) -> list[dict[str, Any]]:
-        return [self.with_current_survival(row) for row in self.anchors_for_trace(trace_id)]
+    def anchors_for_trace_with_survival(
+        self, trace_id: str, *, events: list[TrailEvent] | None = None
+    ) -> list[dict[str, Any]]:
+        return [
+            self.with_current_survival(row, events=events)
+            for row in self.anchors_for_trace(trace_id)
+        ]
 
-    def with_current_survival(self, row: dict[str, Any]) -> dict[str, Any]:
+    def with_current_survival(
+        self, row: dict[str, Any], *, events: list[TrailEvent] | None = None
+    ) -> dict[str, Any]:
         out = copy.deepcopy(row)
         trace_patch_id = out.get("trace_patch_id")
         if not trace_patch_id:
             return enrich_trail_row(out)
-        trail = sync_patch(self.repo, trace_patch_id)
+        # #137 HB#1: thread the caller's pre-loaded events into sync_patch so
+        # survival is computed WITHOUT a per-row full ``read_events`` re-walk (the
+        # ``_sync`` slow path does ``read_events(repo)`` on a cache miss — once per
+        # anchor row). When ``events`` is None this is byte-identical to before;
+        # passing the SAME list object across rows lets ``_auto_batch_ctx`` share
+        # one cat-file pipe + ancestry set. Survival is still computed at the
+        # current head, so the rows stay deep-equal to the unbounded builder.
+        trail = sync_patch(self.repo, trace_patch_id, events=events)
         current = trail.get("current_survival") or {}
         out["current_survival"] = current
         out["survival_state"] = current.get("survival_state") or "unknown"
@@ -386,6 +400,21 @@ def build_trail_query_projection_for_trace(
     repo = repo.resolve()
     events = read_events_for_trace(repo, trace_id)
     return _build_projection_from_events(repo, events)
+
+
+def build_trail_query_projection_from_events(
+    repo: Path, events: list[TrailEvent]
+) -> TrailQueryProjection:
+    """Build a Trail Query projection from a pre-loaded event list (#137 HB#1).
+
+    Used by the capsule's per-trace bucket companion path: the trace's
+    ``trail.jsonl.gz`` events are read once and fed here, so neither the row
+    construction NOR the survival sourcing (when the same list is passed to
+    ``anchors_for_trace_with_survival(..., events=events)``) re-reads the whole
+    canonical log. Row construction is identical to the canonical builders; the
+    caller owns the event set's scope.
+    """
+    return _build_projection_from_events(repo.resolve(), list(events))
 
 
 def _build_projection_from_events(

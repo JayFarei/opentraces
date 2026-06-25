@@ -166,14 +166,26 @@ def _intent_for_step(record: Any, trace_map: Any, step_index: int) -> dict[str, 
 
 
 def _trail_anchors(project_dir: Path, trace_id: str) -> list[dict[str, Any]]:
-    # #137: source this trace's Trail anchors through the bounded, index-served
-    # per-trace projection — it reads only the trace's own event blobs instead of
-    # byte-streaming the whole canonical log (the full-walk that made
-    # ``ot capsule export`` wedge on a mature ref; HB#1 removes that read floor).
-    # ``anchors_for_trace_with_survival`` is byte-identical to the full builder's
-    # for the trace (see ``build_trail_query_projection_for_trace``), so the
-    # capsule's ``trail_anchors`` are unchanged in content, only fast to produce.
+    # #137 HB#1: source this trace's Trail anchors COMPANION-FIRST — read the
+    # trace's per-trace ``trail.jsonl.gz`` and feed the shared builder, threading
+    # the same events into the survival pass so ``sync_patch`` does no per-row
+    # full ``read_events`` re-walk (mirrors the already-fast context face). When
+    # there is no companion (uncaptured / foreign trace) fall back to the bounded,
+    # index-served live read — which reads only the trace's own event blobs
+    # instead of byte-streaming the whole canonical log (the full-walk that made
+    # ``ot capsule export`` wedge on a mature ref). Both paths produce the same
+    # ``anchors_for_trace_with_survival`` row shape, only fast to produce.
     try:
+        from ..config import get_project_dir
+
+        slug = get_project_dir(project_dir).name
+        if slug:
+            from .bucket_trail import trail_anchors_from_bucket
+
+            companion = trail_anchors_from_bucket(project_dir, slug, trace_id)
+            if companion is not None:
+                return companion
+
         from ..trails.query import build_trail_query_projection_for_trace
 
         projection = build_trail_query_projection_for_trace(project_dir, trace_id)
