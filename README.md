@@ -42,7 +42,7 @@ opentraces splits every session into three linked records, each defined by the q
 |-----------|-------------------------|------------------|
 | **Capture** | Inbound boundary: agent hooks, the attribution watcher, optional OTLP receiver | `setup`, `init`, `capture-otlp` |
 | **Bucket** | Private, local-first store of raw captured evidence (one self-sufficient unit per trace) | `bucket`, `ctx list/info` |
-| **Trace** | What the agent did — the step-by-step spine, with search/skill inventory/map/slice projections | `trace query/skills/map/slice/get` |
+| **Trace** | What the agent did — the step-by-step spine, with search/skill inventory/map/slice/partition projections | `trace query/skills/map/slice/partition/get` |
 | **Trace Intelligence** | Deterministic signals about how a run went: context waste, run signals, run compare | `trace --waste/--run-intel`, `trace compare` |
 | **Trail** | What changed and whether it survived: VCS-anchored lineage from a patch to the commit that accepted it | `trail blame/graph/track` |
 | **Context Tree** | What the model saw at each step (system, messages, tools, runtime state) | `ctx tree/show/reads/writes/...` |
@@ -244,6 +244,7 @@ The trace surface returns bounded projections over a local lexical + concept Tra
 
 - `trace query` returns bounded candidate packets; `trace skills` lists observed skills ranked by snapshot-backed invocation usage; `trace map` returns a deterministic Trace Map; `trace get` resolves a trace, trace unit, map node, or `ot://` Trail resource.
 - `trace slice <trace-id> --template bursts` materializes one deterministic slice per detected change burst. Manual `--from-step/--to-step`, `--around-step`, and `--around-patch` windows are available when a workflow needs an explicit range. A Trace Slice is context for audit and later dataset projection, not a training datum by itself.
+- `trace partition <trace-id> --by <s1|s2|s3|s4> --json` runs the Trace Slicer Library: one operation `slice(trace, slicer) -> Trajectory[]` that decomposes a session into a tiling array of trajectories (`opentraces.slicing.v1`). S1 user-turn and S2 change-burst are deterministic; S3 milestone and S4 subgoal are cheap-LLM, resolved by a pluggable judge (default `agent`: needs-judgment exits `rc=10` with structured `JudgmentRequest`s, you answer and re-run with `--answers <file>` for the final tiling at `rc=0`). Derive-on-demand; no schema bump.
 - `trace index --json` refreshes and reports the local search snapshot with stage telemetry; `trace teleport` moves a trace and its retained Git evidence between workspaces.
 
 A *trace patch* is one Edit/Write tool call (roughly one hunk on one file). A *change burst* clusters nearby patches by step proximity.

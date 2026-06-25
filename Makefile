@@ -3,6 +3,7 @@
        lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
        otbox-matrix otbox-inventory otbox-gc otbox-agent-session otbox-live-hf release-gate \
+       slicer-soft-evidence \
        capture-refresh \
        capture-refresh-check capture-refresh-all \
        otbox-acceptance \
@@ -87,6 +88,12 @@ OTBOX_PY := $(shell test -x .venv/bin/python && echo .venv/bin/python || echo py
 
 otbox-slice:
 	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py::test_vertical_slice -v
+
+# Trace Slicer Library (issue #141) soft-evidence — advisory conformance +
+# 3-persona utility over real bucket traces. NOT a CI gate. Add LLM=1 for the
+# optional per-persona scoring pass (needs a detect_provider() backend).
+slicer-soft-evidence:
+	$(OTBOX_PY) examples/trace-slicer/soft_evidence.py --sample $(or $(SAMPLE),40) $(if $(LLM),--llm,)
 
 otbox-journeys:
 	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py -v -ra
