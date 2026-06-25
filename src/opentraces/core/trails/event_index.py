@@ -20,21 +20,27 @@ A reader resolves a key to its sequences, maps those to blob OIDs, and reads
 ONLY those blobs via a targeted ``cat-file --batch`` — O(result), not O(log).
 
 Discipline (the #89 lesson): this index carries NO authoritative data, only
-locations into the canonical event log. It is **digest-excluded** (it lives
-under the repo's git dir, never inside a ref, the working tree, or the bucket,
-so neither the event-ref OID nor the cross-machine bucket digest changes) and
-**rebuildable** (any time it is missing, stale, or unreadable a read falls back
-to the full scan and is slow-but-correct; ``rebuild_event_index`` /
+locations into the canonical event log. It is **digest-excluded** (it lives under
+the repo's git dir, never inside a ref, the working tree, or the bucket, so
+neither the event-ref OID nor the cross-machine bucket digest changes) and
+**rebuildable** (any time it is missing, stale, or unreadable a read rebuilds it
+or falls back to the full scan and is slow-but-correct; ``rebuild_event_index`` /
 ``bucket repair`` can discard and regenerate it). It is therefore an accelerator,
 never a source of truth.
 
-Maintenance is incremental and append-friendly. The sole appender
-(``append_event_batch``) calls :func:`extend_after_append` with the K new
-events; that appends K postings to a ``pending.jsonl`` sidecar (O(K)) and stamps
-the new head — no whole-index rewrite. The pending sidecar is folded into the
-pickled base only once it crosses :data:`_FOLD_THRESHOLD`, amortizing the
-base rewrite to O(1) per event. ``apply`` is idempotent (a sequence already
-present is ignored), so a crash mid-fold can only ever replay, never double-count.
+Persistence is a SINGLE atomic pickle (``base.pkl``) carrying ``{head, postings}``
+together, written via ``os.replace`` (atomic). There is deliberately no separate
+head file and no append-only delta sidecar: head and postings can never diverge,
+so a reader either sees a self-consistent index at some head or extends/rebuilds
+it — there is no window in which the recorded head outruns the postings. Two
+concurrent appenders simply last-writer-win on the atomic replace; a base left
+lagging the ref is detected by head-equality and caught up by reading only the
+``base.head..ref_head`` delta (O(delta)). The tradeoff is that an append
+re-persists the whole base (O(total) bytes, like the existing event-log snapshot
+with its refresh threshold); an O(K) append-only sidecar was prototyped but
+reintroduced a fold-vs-append race (a recorded head outrunning its postings), so
+correctness was chosen over append-write size — the O(K) sidecar is a deferred
+hardening that needs a proper cross-process lock.
 """
 from __future__ import annotations
 
@@ -51,11 +57,7 @@ from .models import TrailEvent
 
 # Bump when the on-disk index format changes so a stale sidecar is discarded
 # rather than mis-read.
-_INDEX_FORMAT = 1
-
-# Fold ``pending.jsonl`` into the pickled base once it reaches this many events.
-# Keeps per-read pending replay bounded and the base rewrite amortized O(1)/event.
-_FOLD_THRESHOLD = 4000
+_INDEX_FORMAT = 2
 
 # In-process memo of the loaded index keyed by (repo, head). A per-trace loop
 # caller (e.g. context-tree fan-in) reads many keys against one head; this lets
@@ -70,14 +72,20 @@ _INDEX_MEMO: dict[tuple[str, str], "EventIndex"] = {}
 
 
 def _collect_hexes(value: Any, out: set[str]) -> None:
-    """Collect every typed Git object ``hex`` (a ``{algo, hex}`` shape) nested in
-    ``value``. Over-inclusive by design: a commit-scoped read intersects this
+    """Collect every nested ``hex`` string under a dict that carries one.
+
+    Deliberately matches the read_events_scoped post-parse filter EXACTLY, which
+    accepts ``payload[key].get("hex")`` for ANY shape — including a bare
+    ``{"hex": sha}`` with no ``algo`` (e.g. a v2 ``search_head`` built without the
+    typed GitObjectID, see tests/capture/test_watcher_sweep.py). Requiring
+    ``algo`` here would make ``by_commit`` MISS such events while the post-parse
+    filter still accepts them, so the index path would return fewer events than
+    the full scan. Over-inclusive by design: a commit-scoped read intersects this
     with the wanted shas and post-parse-filters on the exact payload key, so a
     stray tree/blob oid here only ever widens candidates, never misses one."""
     if isinstance(value, dict):
         h = value.get("hex")
-        a = value.get("algo")
-        if isinstance(h, str) and isinstance(a, str):
+        if isinstance(h, str) and h:
             out.add(h)
         for child in value.values():
             _collect_hexes(child, out)
@@ -158,7 +166,7 @@ class EventIndex:
 
     def apply(self, posting: dict[str, Any]) -> None:
         """Add one posting. Idempotent: a sequence already indexed is ignored, so
-        replaying a pending line that was already folded never double-counts."""
+        re-applying an already-folded sequence never double-counts."""
         seq = posting["s"]
         if seq in self.seq_to_oid:
             return
@@ -220,7 +228,7 @@ class EventIndex:
 
 
 # --------------------------------------------------------------------------- #
-# Persistence
+# Persistence — a single atomic base.pkl ({head, postings})
 # --------------------------------------------------------------------------- #
 
 
@@ -243,123 +251,61 @@ def _index_dir(cwd: Path) -> Path | None:
     return git_dir / "opentraces" / "event_index"
 
 
-def _paths(cwd: Path) -> tuple[Path, Path, Path] | None:
+def _base_path(cwd: Path) -> Path | None:
     base = _index_dir(cwd)
-    if base is None:
-        return None
-    return base / "base.pkl", base / "pending.jsonl", base / "head"
-
-
-def _persisted_head(cwd: Path) -> str | None:
-    paths = _paths(cwd)
-    if paths is None:
-        return None
-    _base, _pending, head_path = paths
-    try:
-        return head_path.read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
-
-
-def _load_base(base_path: Path) -> EventIndex:
-    blob = pickle.loads(base_path.read_bytes())
-    if not isinstance(blob, dict) or blob.get("format") != _INDEX_FORMAT:
-        raise ValueError("incompatible event-index base format")
-    idx = EventIndex(head=blob.get("head"))
-    idx.seq_to_oid = blob["seq_to_oid"]
-    idx.by_trace = blob["by_trace"]
-    idx.by_commit = blob["by_commit"]
-    idx.by_type = blob["by_type"]
-    idx.by_patch = blob["by_patch"]
-    return idx
-
-
-def _replay_pending(idx: EventIndex, pending_path: Path) -> None:
-    try:
-        raw = pending_path.read_text(encoding="utf-8")
-    except OSError:
-        return
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            idx.apply(json.loads(line))
-        except (ValueError, KeyError, TypeError):
-            # A torn final line (crash mid-append) — stop; the head gate already
-            # forces a rebuild whenever the persisted head != the ref head.
-            break
+    return None if base is None else base / "base.pkl"
 
 
 def _load_persisted(cwd: Path) -> EventIndex | None:
-    """Load base + replay pending into one in-memory index, or None if there is
-    no usable persisted index."""
-    paths = _paths(cwd)
-    if paths is None:
-        return None
-    base_path, pending_path, head_path = paths
-    head = _persisted_head(cwd)
-    if head is None:
+    """Load the persisted index, or None if missing/corrupt. Head and postings
+    are loaded together from one atomic file, so they are always consistent."""
+    base_path = _base_path(cwd)
+    if base_path is None or not base_path.is_file():
         return None
     try:
-        idx = _load_base(base_path) if base_path.exists() else EventIndex(head=head)
+        blob = pickle.loads(base_path.read_bytes())
+        if not isinstance(blob, dict) or blob.get("format") != _INDEX_FORMAT:
+            return None
+        idx = EventIndex(head=blob.get("head"))
+        idx.seq_to_oid = blob["seq_to_oid"]
+        idx.by_trace = blob["by_trace"]
+        idx.by_commit = blob["by_commit"]
+        idx.by_type = blob["by_type"]
+        idx.by_patch = blob["by_patch"]
+        return idx
     except Exception:  # noqa: BLE001 — any corruption ⇒ no usable index
         return None
-    _replay_pending(idx, pending_path)
-    idx.head = head
-    return idx
 
 
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
-def _write_head(head_path: Path, head: str) -> None:
-    _atomic_write_bytes(head_path, (head + "\n").encode())
-
-
-def _persist_base(cwd: Path, idx: EventIndex) -> None:
-    paths = _paths(cwd)
-    if paths is None:
+def _persist(cwd: Path, idx: EventIndex) -> None:
+    """Atomically write the index. Best-effort; an accelerator never fatal."""
+    base_path = _base_path(cwd)
+    if base_path is None:
         return
-    base_path, pending_path, head_path = paths
-    payload = pickle.dumps(
-        {
-            "format": _INDEX_FORMAT,
-            "head": idx.head,
-            "seq_to_oid": idx.seq_to_oid,
-            "by_trace": idx.by_trace,
-            "by_commit": idx.by_commit,
-            "by_type": idx.by_type,
-            "by_patch": idx.by_patch,
-        },
-        protocol=pickle.HIGHEST_PROTOCOL,
-    )
-    _atomic_write_bytes(base_path, payload)
-    # The base now covers every folded sequence; truncate pending. ``apply``'s
-    # idempotency makes a crash between these two writes a harmless replay.
     try:
-        pending_path.unlink()
-    except OSError:
-        pass
-    if idx.head:
-        _write_head(head_path, idx.head)
-
-
-def _pending_line_count(pending_path: Path) -> int:
-    try:
-        with pending_path.open("rb") as fh:
-            return sum(1 for _ in fh)
-    except OSError:
-        return 0
+        payload = pickle.dumps(
+            {
+                "format": _INDEX_FORMAT,
+                "head": idx.head,
+                "seq_to_oid": idx.seq_to_oid,
+                "by_trace": idx.by_trace,
+                "by_commit": idx.by_commit,
+                "by_type": idx.by_type,
+                "by_patch": idx.by_patch,
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        base_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(base_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
+            os.replace(tmp, base_path)  # atomic: head + postings swap together
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except Exception:  # noqa: BLE001 — cache is an optimization, never fatal
+        return
 
 
 # --------------------------------------------------------------------------- #
@@ -367,31 +313,25 @@ def _pending_line_count(pending_path: Path) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _extend_to_head(cwd: Path, idx: EventIndex, ref_head: str) -> EventIndex | None:
-    """Catch a lagging index up to ``ref_head`` by reading ONLY the delta commits
-    (``idx.head..ref_head``), O(delta). Returns the fresh index, or None when the
-    persisted head is not an ancestor of ``ref_head`` (history rewrite / import /
-    supersede) so the caller can full-rebuild.
-
-    This makes a read self-healing under an advancing ref (another worktree or a
-    capture append moved the shared ref) without re-walking the whole log."""
-    from .event_log import (  # lazy import breaks the cycle
+def _apply_delta(cwd: Path, idx: EventIndex, since: str | None, head: str) -> bool:
+    """Apply the event postings in ``since..head`` (or all of ``head`` when
+    ``since`` is None) into ``idx``. Returns False on a git failure so the caller
+    can fall back to a rebuild. Reads only the delta commits' event blobs."""
+    from .event_log import (  # lazy import breaks the cycle with event_log
         _event_blob_entries,
-        _is_ancestor,
         _iter_blobs_batch,
     )
 
-    if idx.head is None or not _is_ancestor(cwd, idx.head, ref_head):
-        return None
+    spec = f"{since}..{head}" if since else head
     proc = subprocess.run(
-        ["git", "rev-list", "--reverse", f"{idx.head}..{ref_head}"],
+        ["git", "rev-list", "--reverse", spec],
         cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
     )
     if proc.returncode != 0:
-        return None
+        return False
     commits = proc.stdout.split()
     entries = _event_blob_entries(cwd, commits)
     for (path, oid), raw in zip(entries, _iter_blobs_batch(cwd, entries)):
@@ -403,34 +343,47 @@ def _extend_to_head(cwd: Path, idx: EventIndex, ref_head: str) -> EventIndex | N
         except ValueError:
             continue
         idx.apply(_posting_from_doc(seq, oid, doc))
-    idx.head = ref_head
-    _persist_base(cwd, idx)
-    return idx
+    return True
+
+
+def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=cwd,
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def fresh_index_for_read(cwd: Path, ref_head: str) -> EventIndex | None:
     """Return an index current at ``ref_head``, or None if none is available.
 
     Loads the persisted index; if it lags ``ref_head`` but its head is an
-    ancestor, it is extended by the delta only (O(delta)) and re-persisted. None
-    means the caller must rebuild or full-scan (slow-but-correct) — the index is
-    an accelerator, never required for correctness. The (repo, head) memo lets a
+    ancestor, it is caught up by reading only the ``base.head..ref_head`` delta
+    (O(delta)) and re-persisted. Because head and postings are persisted together
+    atomically, a loaded index is always self-consistent — there is no
+    "recorded head outran its postings" window to guard against. None means the
+    caller must rebuild or full-scan (slow-but-correct) — the index is an
+    accelerator, never required for correctness. The (repo, head) memo lets a
     per-trace loop in one process share a single load.
     """
     key = (str(Path(cwd).resolve()), ref_head)
     memo = _INDEX_MEMO.get(key)
     if memo is not None:
         return memo
-    persisted_head = _persisted_head(cwd)
-    if persisted_head is None:
-        return None
     idx = _load_persisted(cwd)
-    if idx is None:
+    if idx is None or idx.head is None:
         return None
     if idx.head != ref_head:
-        idx = _extend_to_head(cwd, idx, ref_head)
-        if idx is None:
+        if not _is_ancestor(cwd, idx.head, ref_head):
+            return None  # history rewrite / import / supersede → rebuild
+        if not _apply_delta(cwd, idx, idx.head, ref_head):
             return None
+        idx.head = ref_head
+        _persist(cwd, idx)
     _INDEX_MEMO.clear()  # only ever cache one head at a time
     _INDEX_MEMO[key] = idx
     return idx
@@ -444,27 +397,25 @@ def extend_after_append(
     new_entries: list[tuple[str, str]],
     events: list[TrailEvent],
 ) -> None:
-    """Maintain the index for K just-appended events — O(K), best-effort.
+    """Maintain the index for K just-appended events — best-effort.
 
     Called by the sole appender AFTER the ref advanced ``previous_head ->
-    new_head``. Appends K postings to ``pending.jsonl`` and stamps ``new_head``
-    when the persisted index is exactly one batch behind (its head ==
-    ``previous_head``); otherwise it leaves the index stale (a later read /
-    ``rebuild_event_index`` regenerates it). Never raises: a failed index update
-    must never fail an append.
+    new_head``. Extends the persisted index with the K new events (using the new
+    commit's own tree OIDs) and atomically re-persists it, but ONLY when the
+    persisted index sits exactly at the pre-append head (this includes the
+    fresh-repo case: persisted None and previous_head None). Any other state
+    (missing on a pre-existing log, lagging by more than one batch, diverged) is
+    left for a read / ``rebuild_event_index`` to regenerate. Never raises: a
+    failed index update must never fail an append.
     """
     try:
-        paths = _paths(cwd)
-        if paths is None:
+        idx = _load_persisted(cwd)
+        persisted_head = idx.head if idx is not None else None
+        # Extend only from exactly the pre-append head; else leave for rebuild.
+        if persisted_head != previous_head:
             return
-        base_path, pending_path, head_path = paths
-        persisted = _persisted_head(cwd)
-        # Extend only when the index sits exactly at the pre-append head (this
-        # includes the fresh-repo case: persisted is None and previous_head is
-        # None). Any other state (missing on a pre-existing log, lagging by more
-        # than one batch, diverged) is left for a rebuild — keeps append O(K).
-        if persisted != previous_head:
-            return
+        if idx is None:
+            idx = EventIndex(head=None)
 
         oid_by_seq: dict[int, str] = {}
         for path, oid in new_entries:
@@ -472,7 +423,6 @@ def extend_after_append(
             if seq is not None:
                 oid_by_seq[seq] = oid
 
-        lines: list[str] = []
         for event in events:
             oid = oid_by_seq.get(event.event_sequence)
             if oid is None:
@@ -480,27 +430,14 @@ def extend_after_append(
                 # would be incomplete, so bail to a rebuild rather than persist a
                 # gap.
                 return
-            posting = _posting_from_doc(
-                event.event_sequence, oid, event.model_dump(mode="json")
+            idx.apply(
+                _posting_from_doc(
+                    event.event_sequence, oid, event.model_dump(mode="json")
+                )
             )
-            lines.append(json.dumps(posting, separators=(",", ":"), sort_keys=True))
-
-        base_path.parent.mkdir(parents=True, exist_ok=True)
-        if base_path.exists() is False and persisted is None:
-            # First append on a fresh repo: seed an empty base so future reads
-            # have a base to load even before the first fold.
-            _persist_base(cwd, EventIndex(head=None))
-        with pending_path.open("a", encoding="utf-8") as fh:
-            for line in lines:
-                fh.write(line + "\n")
-        _write_head(head_path, new_head)
+        idx.head = new_head
+        _persist(cwd, idx)
         _INDEX_MEMO.clear()
-
-        if _pending_line_count(pending_path) >= _FOLD_THRESHOLD:
-            idx = _load_persisted(cwd)
-            if idx is not None:
-                idx.head = new_head
-                _persist_base(cwd, idx)
     except Exception:  # noqa: BLE001 — index maintenance never breaks an append
         return
 
@@ -514,8 +451,7 @@ def rebuild_event_index(cwd: Path, head: str | None = None) -> EventIndex | None
     ``bucket repair`` regenerate path. It is the one O(log) operation here; every
     subsequent read is O(result).
     """
-    # Lazy import avoids an import cycle with event_log (which imports this).
-    from .event_log import _iter_blobs_batch, _list_event_blob_entries, _ref_head
+    from .event_log import _ref_head  # lazy import breaks the cycle
 
     cwd = cwd.resolve()
     if head is None:
@@ -523,18 +459,10 @@ def rebuild_event_index(cwd: Path, head: str | None = None) -> EventIndex | None
     if head is None:
         return None
     try:
-        entries = _list_event_blob_entries(cwd, head)
         idx = EventIndex(head=head)
-        for (path, oid), raw in zip(entries, _iter_blobs_batch(cwd, entries)):
-            seq = _seq_from_path(path)
-            if seq is None:
-                continue
-            try:
-                doc = json.loads(raw)
-            except ValueError:
-                continue
-            idx.apply(_posting_from_doc(seq, oid, doc))
-        _persist_base(cwd, idx)
+        if not _apply_delta(cwd, idx, None, head):
+            return None
+        _persist(cwd, idx)
         _INDEX_MEMO.clear()
         _INDEX_MEMO[(str(cwd), head)] = idx
         return idx
