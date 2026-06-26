@@ -11,6 +11,8 @@ export interface HubFeature {
   bullets: string[];
   /** Logical canvas height (px) for the chromeless view, tuned per feature. */
   height: number;
+  /** Renders a bespoke stage component instead of the chromeless iframe embed. */
+  custom?: "slicer";
   // Embed params:
   view: string;
   repo?: string;
@@ -72,6 +74,16 @@ export const HUB_FEATURE_GROUPS: HubFeatureGroup[] = [
         height: 620,
         view: "trace",
         tab: "trail",
+      },
+      {
+        id: "decomposition",
+        kicker: "inside a trace",
+        heading: "One Trace, Sliced Four Ways",
+        body: "A long session is the sum of several trajectories. The Hub cuts it into usable units with a small library of slicers — a cheap deterministic default plus richer optional grains — over the trace viewer's own step pipe.",
+        bullets: ["user-turn + change-burst, deterministic", "milestone + subgoal, one cheap call each", "every cut is a gap-free tiling"],
+        height: 0,
+        view: "decomposition",
+        custom: "slicer",
       },
       {
         id: "pulls",

@@ -2739,8 +2739,10 @@ tr:hover td { background: var(--surface-hover); }
   .hub-feature-bullets { flex-direction: row; flex-wrap: wrap; text-align: left; gap: 6px 18px; }
   .hub-feature-bullets li { padding-right: 0; padding-left: 13px; }
   .hub-feature-bullets li::after { right: auto; left: 0; }
-  /* No live frames on phones — keep the readable feature copy, drop the iframes. */
+  /* No live frames on phones — keep the readable feature copy, drop the iframes.
+   * The slicer stage is static + responsive, so it stays visible. */
   .hub-feature-stage { display: none; }
+  .hub-feature-stage--slicer { display: block; margin-top: 14px; }
   .hub-feature-list { gap: 26px; }
   .hub-mobile-note {
     display: block;

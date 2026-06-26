@@ -6,6 +6,7 @@ import HubWindow from "@/components/HubWindow";
 import HubFeatureFrame from "@/components/HubFeatureFrame";
 import HubTourNav from "@/components/HubTourNav";
 import EarlyAccessForm from "@/components/EarlyAccessForm";
+import TraceSlicerCompare from "@/components/TraceSlicerCompare";
 import { HUB_FEATURE_GROUPS, type HubFeature } from "@/lib/hub-features";
 
 export const metadata: Metadata = {
@@ -31,17 +32,23 @@ function FeatureCard({ feature }: { feature: HubFeature }) {
           </ul>
         )}
       </div>
-      <div className="hub-feature-stage">
-        <HubFeatureFrame
-          view={feature.view}
-          repo={feature.repo}
-          dataset={feature.dataset}
-          child={feature.child}
-          tab={feature.tab}
-          pr={feature.pr}
-          height={feature.height}
-          label={feature.heading}
-        />
+      <div
+        className={`hub-feature-stage${feature.custom === "slicer" ? " hub-feature-stage--slicer" : ""}`}
+      >
+        {feature.custom === "slicer" ? (
+          <TraceSlicerCompare />
+        ) : (
+          <HubFeatureFrame
+            view={feature.view}
+            repo={feature.repo}
+            dataset={feature.dataset}
+            child={feature.child}
+            tab={feature.tab}
+            pr={feature.pr}
+            height={feature.height}
+            label={feature.heading}
+          />
+        )}
       </div>
     </article>
   );
