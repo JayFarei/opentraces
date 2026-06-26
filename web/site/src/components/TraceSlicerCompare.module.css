@@ -111,28 +111,56 @@
   display: flex; gap: 1px; height: 42px; padding: 3px; overflow: hidden;
   background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
 }
-.pp { flex: 1 1 0; min-width: 0; border-radius: 2px; opacity: 0.92; }
+.pp { flex: 1 1 0; min-width: 0; border-radius: 2px; opacity: 0.92; transition: opacity 170ms ease; }
+.ppDim { opacity: 0.16; }
 
+/* The trajectory row is a click-to-expand accordion (design-tournament winner).
+ * overflow:hidden is the hard guarantee it never spills past the card; the open
+ * card grows and wraps its FULL label vertically, siblings collapse to thin
+ * shrinkable T-id tabs that always stay inside the row. */
 .bar2 {
-  display: flex; height: 54px; overflow: hidden;
+  display: flex; min-height: 54px; box-sizing: border-box; overflow: hidden;
   background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  align-items: stretch;
 }
 .seg {
-  flex-grow: 1; flex-basis: 0; min-width: 0; overflow: hidden;
-  padding: 5px 8px; display: flex; flex-direction: column; justify-content: center;
-  border-left: 2px solid var(--sig);
+  appearance: none; -webkit-appearance: none; font: inherit; text-align: left; color: inherit;
+  border: 0; border-left: 2px solid var(--sig); cursor: pointer;
+  flex: 1 1 0; min-width: 0; overflow: hidden; position: relative;
+  padding: 6px 9px 9px; display: flex; flex-direction: column; justify-content: center; gap: 2px;
   background: color-mix(in oklch, var(--sig) 12%, var(--surface));
-  transition: background 120ms ease;
+  transition: flex-grow 190ms cubic-bezier(.4,0,.2,1), flex-basis 190ms cubic-bezier(.4,0,.2,1),
+              background 140ms ease;
 }
 .seg:first-child { border-left: 0; }
 .segAlt { background: color-mix(in oklch, var(--sig) 20%, var(--surface)); }
-.seg:hover { background: color-mix(in oklch, var(--sig) 34%, var(--surface)); }
-.sidx { font-family: var(--fontMono); font-size: 9.5px; font-weight: 700; color: var(--sig); opacity: 0.95; }
+.bar2:not(.bar2Open) .seg:hover { background: color-mix(in oklch, var(--sig) 34%, var(--surface)); }
+.seg:focus-visible { outline: none; box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--sig) 62%, transparent); }
+
+/* expanded: take the space, reveal the full label wrapped across lines */
+.segOpen {
+  flex: 6 1 0; border-left-width: 3px;
+  background: color-mix(in oklch, var(--sig) 26%, var(--surface));
+}
+.segOpen .slbl { -webkit-line-clamp: 4; white-space: normal; }
+/* collapsed siblings of an open card -> thin shrinkable T-id tabs (no min-width
+ * floor, so even 20+ trajectories stay inside the row). */
+.bar2Open .seg:not(.segOpen) { flex: 0 1 34px; padding: 6px; }
+.bar2Open .seg:not(.segOpen) .slbl,
+.bar2Open .seg:not(.segOpen) .sspan,
+.bar2Open .seg:not(.segOpen) .sUnder { display: none; }
+
+.sidx { font-family: var(--fontMono); font-size: 9.5px; font-weight: 700; color: var(--sig); opacity: 0.95; white-space: nowrap; }
+.sspan { color: var(--fg-mute); font-weight: 400; }
 .slbl {
-  font-size: 10.5px; line-height: 1.2; color: var(--fg-dim); margin-top: 1px;
+  font-size: 10.5px; line-height: 1.25; color: var(--fg-dim);
   overflow: hidden; text-overflow: ellipsis;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
+/* proportional size cue: an underline whose width = this trajectory's step share */
+.sUnder { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--sig); opacity: 0.4; }
+
+@media (prefers-reduced-motion: reduce) { .seg, .pp { transition: none; } }
 
 @media (max-width: 760px) {
   .row { grid-template-columns: 1fr; gap: 5px; }

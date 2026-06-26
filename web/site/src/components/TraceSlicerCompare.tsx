@@ -28,15 +28,19 @@ const CODE_TO_ACTION: Record<string, string> = {
   w: "write",
 };
 
-function Pipe({ trace }: { trace: DemoTrace }) {
+// The colored step spine. `hi` (a [start,end] range, set when a trajectory card
+// is expanded) dims every step outside that span, so opening a card "lights up
+// the steps it covers".
+function Pipe({ trace, hi }: { trace: DemoTrace; hi: [number, number] | null }) {
   return (
     <div className={styles.pipe} aria-hidden>
       {trace.steps.split("").map((code, i) => {
         const action = CODE_TO_ACTION[code] ?? "think";
+        const dim = hi !== null && (i < hi[0] || i > hi[1]);
         return (
           <i
             key={i}
-            className={styles.pp}
+            className={`${styles.pp}${dim ? " " + styles.ppDim : ""}`}
             style={{ background: `var(--c-${action})` }}
             title={`step ${i}: ${action}`}
           />
@@ -46,22 +50,63 @@ function Pipe({ trace }: { trace: DemoTrace }) {
   );
 }
 
-function SlicerBar({ trace, sliceKey, sig }: { trace: DemoTrace; sliceKey: SlicerKey; sig: string }) {
+// One slicer's trajectory row, as a click-to-expand accordion (design tournament
+// winner). Resting: equal-flex cards with a one-line label. Click a card and it
+// expands, wrapping its FULL label across lines (never growing off-screen) while
+// its siblings collapse to thin T-id tabs; the row is overflow-guarded so it
+// always fits. Each row keeps its own open card (per-row, not cross-row), and
+// reports the open span up so the trace spine highlights those steps.
+function SlicerBar({
+  trace,
+  sliceKey,
+  sig,
+  onHighlight,
+}: {
+  trace: DemoTrace;
+  sliceKey: SlicerKey;
+  sig: string;
+  onHighlight: (range: [number, number] | null) => void;
+}) {
   const slices = trace.slicers[sliceKey];
+  const [open, setOpen] = useState<number | null>(null);
+
+  const toggle = (i: number, s: { s: number; e: number }) => {
+    const next = open === i ? null : i;
+    setOpen(next);
+    onHighlight(next === null ? null : [s.s, s.e]);
+  };
+
   return (
-    <div className={styles.bar2} style={{ ["--sig" as string]: `var(--c-${sig})` }}>
+    <div
+      className={`${styles.bar2}${open !== null ? " " + styles.bar2Open : ""}`}
+      style={{ ["--sig" as string]: `var(--c-${sig})` }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && open !== null) {
+          setOpen(null);
+          onHighlight(null);
+        }
+      }}
+    >
       {slices.map((s, i) => {
         const n = s.e - s.s + 1;
+        const isOpen = open === i;
+        const frac = Math.max(6, Math.round((n / Math.max(trace.total, 1)) * 100));
         return (
-          <div
+          <button
             key={i}
-            className={`${styles.seg}${i % 2 ? " " + styles.segAlt : ""}`}
-            style={{ flexGrow: n }}
-            title={`S${i}  steps ${s.s}–${s.e} (${n})  ${s.k}: ${s.l}`}
+            type="button"
+            aria-expanded={isOpen}
+            aria-label={`T${i}, steps ${s.s} to ${s.e}: ${s.l}`}
+            className={`${styles.seg}${i % 2 ? " " + styles.segAlt : ""}${isOpen ? " " + styles.segOpen : ""}`}
+            onClick={() => toggle(i, s)}
           >
-            <span className={styles.sidx}>S{i}</span>
+            <span className={styles.sidx}>
+              T{i}
+              <span className={styles.sspan}> · {s.s}–{s.e}</span>
+            </span>
             <span className={styles.slbl}>{s.l}</span>
-          </div>
+            <span className={styles.sUnder} style={{ width: `${frac}%` }} aria-hidden />
+          </button>
         );
       })}
     </div>
@@ -85,7 +130,17 @@ function FigHead({ traceId, trace, open }: { traceId: string; trace: DemoTrace; 
 
 // The trace spine — the colored step pipe. Shown whether a figure is open or
 // collapsed; an open figure adds the four slicer rows beneath it.
-function Spine({ traceId, trace, open }: { traceId: string; trace: DemoTrace; open: boolean }) {
+function Spine({
+  traceId,
+  trace,
+  open,
+  hi,
+}: {
+  traceId: string;
+  trace: DemoTrace;
+  open: boolean;
+  hi: [number, number] | null;
+}) {
   return (
     <>
       <FigHead traceId={traceId} trace={trace} open={open} />
@@ -94,7 +149,7 @@ function Spine({ traceId, trace, open }: { traceId: string; trace: DemoTrace; op
           <span className={`${styles.rname} ${styles.rnameTrace}`}>trace</span>
           <span className={styles.rsub}>{trace.total} steps · colored by action</span>
         </div>
-        <Pipe trace={trace} />
+        <Pipe trace={trace} hi={hi} />
       </div>
     </>
   );
@@ -110,19 +165,22 @@ function Figure({
   onOpen: () => void;
 }) {
   const trace = SLICER_DEMO[traceId];
+  // The trajectory span currently expanded (in any row) drives the spine
+  // highlight. Reset when the figure collapses.
+  const [hi, setHi] = useState<[number, number] | null>(null);
 
   if (!open) {
     // Collapsed: just the spine, as one big click target that opens it.
     return (
       <button type="button" className={`${styles.fig} ${styles.figBtn}`} onClick={onOpen} aria-expanded={false}>
-        <Spine traceId={traceId} trace={trace} open={false} />
+        <Spine traceId={traceId} trace={trace} open={false} hi={null} />
       </button>
     );
   }
 
   return (
     <div className={`${styles.fig} ${styles.figOpen}`}>
-      <Spine traceId={traceId} trace={trace} open />
+      <Spine traceId={traceId} trace={trace} open hi={hi} />
       {SLICER_META.map((m) => (
         <div className={styles.row} key={m.key}>
           <div className={styles.rlab}>
@@ -133,17 +191,17 @@ function Figure({
               {m.tier}
             </span>
             <span className={styles.rsub}>
-              {trace.slicers[m.key].length} slices · {m.desc}
+              {trace.slicers[m.key].length} trajectories · {m.desc}
             </span>
           </div>
-          <SlicerBar trace={trace} sliceKey={m.key} sig={m.sig} />
+          <SlicerBar trace={trace} sliceKey={m.key} sig={m.sig} onHighlight={setHi} />
         </div>
       ))}
     </div>
   );
 }
 
-const TRACE_IDS = ["T1", "T2"];
+const TRACE_IDS = ["T3"];
 
 function SlicerViewer() {
   // Accordion: exactly one trace is decomposed at a time. Opening the other
