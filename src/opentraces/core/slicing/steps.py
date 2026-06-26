@@ -31,6 +31,24 @@ CONTINUATION_RE = re.compile(r"^\s*(continue|keep going|Continue\b.*)\s*$", re.I
 # trajectory in S3 (the drain), unlike S1 which absorbs it.
 NOTIFICATION_RE = re.compile(r"^\s*<([a-zA-Z_-]*notification|task-notification)\b")
 
+# v1.1 blocklist widening (issue #141 follow-up): additional non-genuine user
+# step families the LOCKED v1 rule did not cover. A user step is a pseudo-turn
+# (absorbed, never opens an S1 trajectory) when it is ENTIRELY attachment/marker
+# noise with no substantive text — e.g. an image-only paste `[Image: source: …]`,
+# a `[Request interrupted…]` notice, or a `<system-reminder>` injection. The
+# emptiness test means an image referenced INLINE in a real ask (`can you
+# [Image #1] fix this`) still opens a trajectory — only attachment-ONLY steps
+# are absorbed.
+_ATTACHMENT_RE = re.compile(r"\[Image(\s*#\d+|:[^\]]*)\]")
+_PSEUDO_PREFIX_RE = re.compile(r"^\s*(\[Request interrupted|<system-reminder)\b")
+
+
+def is_pseudo_turn(text: str) -> bool:
+    """True when a user step is attachment/marker-only (absorbed by S1)."""
+    if _PSEUDO_PREFIX_RE.match(text):
+        return True
+    return _ATTACHMENT_RE.sub("", text).strip() == ""
+
 # Unambiguous test/build PASS signal (S3 remediation, issue #141 Phase-0): we
 # require a clear pass token and separately exclude failure tokens, so an output
 # like "3 passed, 1 failed" is NOT treated as a deliverable-completing success.
@@ -122,6 +140,29 @@ def is_unambiguous_pass(step: Any) -> bool:
     return bool(_PASS_RE.search(text)) and not _FAIL_RE.search(text)
 
 
+def narration(step: Any, *, maxlen: int = 72) -> str:
+    """The agent's own narration for a step — its first substantive sentence —
+    used to give S3 milestones / S4 sub-goals a descriptive label instead of a
+    bare artifact path. Deterministic; empty when the step has no agent prose."""
+    txt = (content(step) or "").strip()
+    if not txt:
+        return ""
+    # take the first sentence/line, collapse whitespace
+    first = re.split(r"(?<=[.!?])\s|\n", txt, maxsplit=1)[0]
+    first = " ".join(first.split())
+    return first[:maxlen]
+
+
+def first_narration(steps: list[Any], lo: int, hi: int) -> str:
+    """First substantive agent narration in the span ``[lo, hi]``."""
+    for i in range(lo, min(hi, len(steps) - 1) + 1):
+        if role(steps[i]) == "agent":
+            n = narration(steps[i])
+            if n:
+                return n
+    return ""
+
+
 def step_preview(step: Any, idx: int, *, maxlen: int = 88) -> str:
     """A compact one-line grounding for a step, embedded into S3/S4 judgment
     prompts so a judge can decide without re-fetching the trace (issue #141
@@ -178,6 +219,8 @@ def human_ask_starts(steps: list[Any]) -> list[int]:
             if TAG_BLOCK_RE.match(t):
                 continue
             if CONTINUATION_RE.match(t):
+                continue
+            if is_pseudo_turn(t):  # v1.1: image-only / interrupt / system-reminder
                 continue
         starts.append(i)
     return starts

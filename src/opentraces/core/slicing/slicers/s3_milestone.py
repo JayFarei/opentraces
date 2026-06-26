@@ -112,14 +112,23 @@ def slice(steps: list[Any], *, answers: dict | None = None) -> SliceResult:
 
     succ_by_close = {idx: art for idx, art in succ}
 
+    def _artifact_tag(art: str) -> str:
+        if art.startswith("<"):  # <answer> / <test> / <subagent> / <apply_patch>
+            return art.strip("<>")
+        return art.split("/")[-1]  # basename of a file path
+
     def label(a: int, b: int) -> str:
         if b in succ_by_close:
-            return f"milestone: {succ_by_close[b]}"
+            # Prefer the agent's own narration of what closed the milestone;
+            # fall back to the artifact tag.
+            tag = _artifact_tag(succ_by_close[b])
+            narr = S.narration(steps[b]) or S.first_narration(steps, a, b)
+            return f"✓ {narr} · {tag}" if narr else f"milestone: {tag}"
         if S.role(steps[a]) == "user":
             t = S.content(steps[a]).strip().replace("\n", " ")
             if t:
                 return t[:80]
-        return "(work)"
+        return S.first_narration(steps, a, b) or "(work)"
 
     trajs = trajectories_from_boundaries(boundaries, total, "milestone", label)
     return SliceResult(trajectories=trajs, requests=requests)

@@ -77,7 +77,9 @@ def slice(steps: list[Any], *, answers: dict | None = None) -> SliceResult:
             t = S.content(steps[a]).strip().replace("\n", " ")
             if t:
                 return t[:80]
-        return "(work)"
+        # a pivot-opened span has no user ask at its head — name it by the
+        # agent's narration of what it set out to do.
+        return S.first_narration(steps, a, b) or "(work)"
 
     trajs = trajectories_from_boundaries(boundaries, total, "subgoal", label)
     return SliceResult(trajectories=trajs, requests=requests)
