@@ -274,6 +274,11 @@ def isolated_env(
         if key == "CLAUDECODE" or key.startswith(("CLAUDE_", "CODEX_")):
             env.pop(key)
     env["HOME"] = str(box.home)
+    # Hermetic by default: a deterministic journey must never reach a real LLM
+    # (e.g. the slicer's on-demand trajectory labeler shelling out to `claude`).
+    # The box inherits the host PATH, so claude/codex may be present; force the
+    # provider off unless the host explicitly opted into a live-LLM lane.
+    env.setdefault("OT_LLM_PROVIDER", "none")
     if live_hf:
         # Live lane: do NOT strip credentials or set the fake-remote seams.
         # Inject the real token (config._resolve_hf_token checks HF_TOKEN first).

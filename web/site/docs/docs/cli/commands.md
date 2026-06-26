@@ -36,6 +36,7 @@ opentraces [--json] <command> ...
 | `trace index` | Refresh and inspect local search projections |
 | `trace map` | Show a deterministic Trace Map or burst projection |
 | `trace slice` | Extract bounded Trace Slices for workflows |
+| `trace partition` | Decompose a trace into a tiling array of Trajectories (`opentraces.slicing.v1`) |
 | `trace get` | Resolve a trace, trace unit, map node, or `ot://` resource |
 | `trace compare` | Compare two traces: metrics, quality, burst/error, and security deltas |
 | `trace teleport` | Move a trace and retained Git evidence between workspaces |
@@ -222,6 +223,8 @@ opentraces trace skills --skill opentraces --json
 opentraces trace index --json
 opentraces trace map <trace-id> --bursts --json
 opentraces trace slice <trace-id> --template bursts --json
+opentraces trace partition <trace-id> --by s1 --json
+opentraces trace partition <trace-id> --by s3 --judge agent --answers answers.json --json
 opentraces trace get <trace-id> --bursts --json
 opentraces trace get <trace-id> --remote-bucket
 opentraces trace get <trace-id> --remote owner/private-bucket
@@ -244,6 +247,41 @@ raw scan happened. To search remote traces, first `opentraces bucket remote
 pull` and then refresh the snapshot with `opentraces trace index --json`.
 (`trace get --remote-bucket` / `--remote
 owner/repo` remain the per-trace remote-read path.)
+
+### `trace partition` — the Trace Slicer Library
+
+`opentraces trace partition <trace> --by <s1|s2|s3|s4> --json` runs one
+operation, `slice(trace, slicer) -> Trajectory[]`, that decomposes a captured
+session into an array of trajectories which **tiles** the whole trace (every
+step in exactly one trajectory). It emits the frozen `opentraces.slicing.v1`
+envelope (`trace_id`, `slicer`, `tier`, `total_steps`, `trajectories[]`,
+`tiling`); a `Trajectory` is `{start, end, kind, label}` with an end-inclusive
+step-index span. It is derive-on-demand (no captured-schema change, no
+`SCHEMA_VERSION` bump), like `--waste` / `--run-intel` / `trace compare`.
+
+| Slicer | `--by` | Tier | What it isolates |
+|---|---|---|---|
+| user-turn | `s1` | deterministic | one genuine human ask plus the work serving it |
+| change-burst | `s2` | deterministic | a coherent code-change burst (reuses the burst gap, 35) with its read/verify |
+| milestone | `s3` | cheap-LLM | a span ending on a verified outcome (no over-segmenting same-artifact successes) |
+| subgoal | `s4` | cheap-LLM | one coherent sub-goal with one deliverable |
+
+The cheap-LLM slicers (`s3`, `s4`) resolve their judgment through a pluggable
+`--judge deterministic|agent|provider|human` (default `agent`). With the agent
+judge, if judgments are needed and none are supplied the command computes the
+`JudgmentRequest`s, prints them with an instruction, and exits `rc=10`
+(`opentraces.slicing.needs_judgment.v1`). Answer each request, write
+`{"answers": [{"id": "...", "decision": "...", "confidence": 0.9}]}` to a file,
+and re-run with `--answers <file>` for the final tiling at `rc=0`. `slice` is a
+pure function of `(trace, answers)` — same inputs, byte-identical output. The
+`provider` judge resolves the same requests unattended via the detected LLM
+backend; `--remote <repo>` reads the trace from a HuggingFace bucket.
+
+Each S3 milestone / S4 sub-goal trajectory is given a short, outcome-first
+**label** so a sliced session reads as a legible map. When a model is reachable
+(the detected `claude` CLI / API) the labels are model-authored in one batched
+call per trace; with no model they fall back to the agent's own narration. Labels
+never affect the boundaries — tiling stays deterministic.
 
 Explicit maintenance commands that can run for minutes accept a shared
 `--progress auto|plain|json|never` flag (starting with `opentraces trace index

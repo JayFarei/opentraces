@@ -25,6 +25,11 @@ SITES = frozenset(
         "maturation-returns-unknown",   # anchor maturation degrades to unknown
         "schema-compare-inverted",      # remote-schema version comparison flips
         "redaction-skipped",            # sanitize_record returns input unchanged
+        # Trace Slicer Library (issue #141) — the three red-capability mutants
+        # the conformance journey must catch (loopcraft step 5).
+        "slicer-boundary-off-by-one",   # one slicer boundary shifted by +1
+        "slicer-drop-continuation",     # S1 control/continuation heuristic disabled
+        "slicer-self-report-valid-gap", # envelope drops a trajectory but claims valid
     }
 )
 

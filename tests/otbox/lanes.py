@@ -80,6 +80,7 @@ SENTINEL_JOURNEYS = (
     "security-sanitize-captured-content",
     "agent-session-to-published-dataset",
     "dataset-security-required-rejection",
+    "slicer-conformance",
 )
 
 

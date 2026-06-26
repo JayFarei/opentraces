@@ -1,0 +1,1590 @@
+{
+  "per_trace": [
+    {
+      "trace_id": "19f1a2f4-4fc6-48bc-ad10-84306fb2b268",
+      "s1": {
+        "conformance": 0.92,
+        "utility_ml": 0.75,
+        "utility_obs": 0.78,
+        "utility_eval": 0.8,
+        "note": "S1 correctly tiles all 4 genuine user turns with no control-message leaks, but the [5,166] trajectory is 162 steps mixing audit exploration, multi-file fixes, a new tmux-tracking feature, PR creation, and CI debugging, which limits ML composability.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.28,
+        "utility_ml": 0.28,
+        "utility_obs": 0.32,
+        "utility_eval": 0.28,
+        "note": "The [82,166] trajectory is an 85-step mis-cut that lumps at least four distinct change bursts, an initial fix wave (82-93), a test-repair loop (97-129), a new tmux-session-tracking feature (130-145), and a CI fail-fast fix (158-163), into a single label despite clear explore gaps between them.",
+        "worst_case": true
+      },
+      "s3": {
+        "conformance": 0.5,
+        "utility_ml": 0.55,
+        "utility_obs": 0.6,
+        "utility_eval": 0.52,
+        "note": "Trajectory [102,105] ends at step 105 on a confirmed test failure ('3 pass 1 fail') rather than a verified outcome, directly violating s3's core sentiment, and trajectory [5,32] ends mid-exploration labeled '<test>' with no milestone artifact matching what the agent actually produced.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.28,
+        "utility_ml": 0.22,
+        "utility_obs": 0.3,
+        "utility_eval": 0.25,
+        "note": "S4 is identical to S1 despite the trace containing at least three genuine agent pivots within [5,166]: the audit-to-implementation pivot at step 76, a new unplanned tmux-session-tracking feature at step 130, and a CI-debugging pivot at step 150, none of which the conservative default judge detected.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "b178570e-93b4-4ba1-8897-36893b5373a8",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.9,
+        "utility_obs": 0.9,
+        "utility_eval": 0.9,
+        "note": "The single trajectory [0,5] correctly captures the one genuine human ask at step 0 through the final synthesized answer at step 5, with no control messages present to leak and no over-segmentation of the exploration phase.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.85,
+        "utility_ml": 0.82,
+        "utility_obs": 0.85,
+        "utility_eval": 0.82,
+        "note": "The slicer correctly identifies the no-edit trace as a single pure-explore span but uses kind='change_burst' for what the sentiment requires to be labeled as an explore trajectory, creating a semantic inconsistency in the kind field even though the label 'explore' compensates.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.95,
+        "utility_ml": 0.9,
+        "utility_obs": 0.9,
+        "utility_eval": 0.9,
+        "note": "The single milestone [0,5] correctly ends on the verified answered-question outcome at step 5, with no over-segmentation of the multi-file read sub-steps, though the label 'milestone: <final>' is generic rather than descriptive of the release-readiness assessment outcome.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.9,
+        "utility_ml": 0.8,
+        "utility_obs": 0.8,
+        "utility_eval": 0.8,
+        "note": "s4 is identical to s1, which is correct for this conservative judge on a 6-step trace with no internal agent pivots - the explore-then-synthesize pattern does not merit a subgoal split, and a good judge would agree, so the conservative default is appropriate here and not a failure.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "4a41455f-a93c-448c-93f3-f81f83b8793d",
+      "s1": {
+        "conformance": 0.3,
+        "utility_ml": 0.3,
+        "utility_obs": 0.4,
+        "utility_eval": 0.3,
+        "note": "The single trajectory spans 0-3 including the turn_aborted control message at step 3, directly violating s1's rule that control messages must never be part of a work trajectory; compounding this, no genuine human ask anchors the trajectory since steps 0-2 are all agent exec_command steps with no visible user turn.",
+        "worst_case": true
+      },
+      "s2": {
+        "conformance": 0.65,
+        "utility_ml": 0.55,
+        "utility_obs": 0.6,
+        "utility_eval": 0.5,
+        "note": "The 'explore' label is structurally accurate for a no_edits trace of three exec_commands, but the turn_aborted control message at step 3 leaks into the explore burst span rather than acting as a clean session boundary.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.2,
+        "utility_ml": 0.25,
+        "utility_obs": 0.35,
+        "utility_eval": 0.25,
+        "note": "The single milestone trajectory 0-3 ends on a turn_aborted user interrupt rather than a verified outcome, making the milestone framing actively incorrect; no verified patch, test pass, render, or answered question was produced.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.55,
+        "utility_ml": 0.4,
+        "utility_obs": 0.45,
+        "utility_eval": 0.35,
+        "note": "The conservative judge correctly avoids false pivots on three near-identical exec_command steps, but the single subgoal 0-3 ends in turn_aborted with no deliverable, and a well-calibrated judge should at minimum flag the absence of any outcome rather than labeling it '(work)'.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "161724d7-8cac-4639-99eb-dd7a59ee8187",
+      "s1": {
+        "conformance": 0.82,
+        "utility_ml": 0.75,
+        "utility_obs": 0.78,
+        "utility_eval": 0.8,
+        "note": "Step 5 (task-notification control message) is correctly absorbed inside the [0,9] trajectory opened by the genuine user ask at step 0, not opening a new trajectory; however, step 17 ('Check on workflow wu7scwos0') is treated as a genuine human ask even though the agent explicitly labels it 'a leftover scheduled check from earlier', which is ambiguous given the control_leak flag.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.68,
+        "utility_ml": 0.22,
+        "utility_obs": 0.22,
+        "utility_eval": 0.22,
+        "note": "With no_edits=true the slicer degrades into a copy of s1 with uniform 'explore' labels and identical span boundaries, producing zero change-burst signal and making no distinction between code-exploration spans (steps 22-24, agent reads codebase) and pure-discussion spans (steps 26-33).",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.42,
+        "utility_ml": 0.48,
+        "utility_obs": 0.38,
+        "utility_eval": 0.45,
+        "note": "Trajectory [21,24] ends at step 24 (a Bash code-read of inverse_blame.py), which is not a verified outcome; the actual milestone is step 25 (agent synthesis and upgraded answer), leaving a pathological single-step trajectory [25,25] labeled '(work)'; additionally the JudgmentRequest fabricates a shared artifact '<test>' attributed to steps 8, 23, and 24, none of which report success on any named artifact.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.75,
+        "utility_ml": 0.7,
+        "utility_obs": 0.7,
+        "utility_eval": 0.7,
+        "note": "S4 is identical to s1 due to the conservative default judge; the JudgmentRequest at candidate_step 24 (reading inverse-blame code within the repo-exploration turn) correctly resolves to 'stay', so the [21,25] grouping is appropriate and no meaningful pivot is missed in this conversational, no-edit trace.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "0006e1e2-7a25-4243-9e9d-6bc115067860",
+      "s1": {
+        "conformance": 0.95,
+        "utility_ml": 0.8,
+        "utility_obs": 0.75,
+        "utility_eval": 0.8,
+        "note": "Clean two-trajectory split honoring both genuine user turns; step 10's AskUserQuestion tool result (embedded clarification response) is correctly absorbed into trajectory [0,25] rather than opening a spurious new turn.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.7,
+        "utility_ml": 0.75,
+        "utility_obs": 0.68,
+        "utility_eval": 0.7,
+        "note": "Trajectory [24,25] is labeled 'explore' but step 24 is a Bash git-commit operation (staged deletions visible in preview), which is a burst-finalize/verify action that belongs appended to the preceding write burst [14,23], not a new pure-explore span.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.28,
+        "utility_ml": 0.22,
+        "utility_obs": 0.38,
+        "utility_eval": 0.28,
+        "note": "Steps 15, 16, 17, and 18 are each isolated as single-Write milestones for individual project files, violating the 'intermediate successes on the SAME artifact should not over-segment' rule since all four serve the single bootstrapped-project deliverable; additionally the label 'milestone: <test>' on trajectory [0,8] maps to nothing in the trace (those steps are pure research and vault-querying, not a test outcome).",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.55,
+        "utility_ml": 0.5,
+        "utility_obs": 0.58,
+        "utility_eval": 0.52,
+        "note": "The conservative default judge added no pivots so s4 is identical to s1, but the trace contains a clear sub-goal boundary at step 14 where the agent transitions from multi-step research/elicitation (steps 1-13) to active file creation (steps 14-23), a pivot a good judge should have cut on.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "470f86a1-7dbc-4e87-ae68-4dc3fdc25261",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.9,
+        "utility_obs": 0.85,
+        "utility_eval": 0.9,
+        "note": "Single user-turn [0,7] is mechanically perfect: step 0 is the only genuine human ask, steps 1-7 are all work serving it, and no control/loop/notification message opens the trajectory.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 1,
+        "utility_ml": 0.85,
+        "utility_obs": 0.8,
+        "utility_eval": 0.85,
+        "note": "With no_edits=true the single 'explore' label on [0,7] is mechanically correct -- there is no change burst to isolate and every exec_command step is read-only exploration of the repo, so one pure-explore trajectory is the right answer.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.88,
+        "utility_ml": 0.78,
+        "utility_obs": 0.72,
+        "utility_eval": 0.78,
+        "note": "The [0,7] trajectory ending on the 'answered question' at step 7 is the right cut, but the generic label 'milestone: <final>' does not name the verified outcome (a delivered technical-review finding), adding little discriminative signal beyond s1.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.5,
+        "utility_ml": 0.45,
+        "utility_obs": 0.45,
+        "utility_eval": 0.45,
+        "note": "The conservative judge correctly mirrors s1 exactly, but this trace contains at least two internal agent pivots a good subgoal judge should cut: after step 4 (plan docs located and read, pivot to supporting internal article) and between steps 6 and 7 (evidence gathered, pivot to synthesis/delivery), so s4 should have produced three trajectories rather than one.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "028ced2d-5e25-4fb2-8df5-24826746fcf5",
+      "s1": {
+        "conformance": 0.97,
+        "utility_ml": 0.85,
+        "utility_obs": 0.85,
+        "utility_eval": 0.85,
+        "note": "Single user turn at step 0 correctly owns all 10 steps with no control-message leakage; the single trajectory is the only valid cut for this trace.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.78,
+        "utility_ml": 0.65,
+        "utility_obs": 0.72,
+        "utility_eval": 0.6,
+        "note": "The slicer assigns kind='change_burst' but label='explore' for a session where no_edits=true and zero edits occur, creating a semantic mismatch between the kind field and the actual trajectory content.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.88,
+        "utility_ml": 0.72,
+        "utility_obs": 0.75,
+        "utility_eval": 0.78,
+        "note": "Correct to emit a single milestone trajectory since the only verified outcome is the final synthesis delivered at step 9 and no intermediate confirmed deliverables exist that would justify splitting.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.9,
+        "utility_ml": 0.72,
+        "utility_obs": 0.75,
+        "utility_eval": 0.78,
+        "note": "s4 is identical to s1 here, which is correct for this trace since all 10 steps serve the single sub-goal of project orientation and there are no internal agent pivots a good judge should cut on.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "50c0b1a2-004d-4c31-beb9-2220dc4cb0e4",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.9,
+        "utility_obs": 0.85,
+        "utility_eval": 0.9,
+        "note": "Textbook 3-turn decomposition with perfect tiling: every trajectory opens on a genuine user step (0, 10, 22) and no control or notification message leaked a boundary open.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.9,
+        "utility_ml": 0.85,
+        "utility_obs": 0.85,
+        "utility_eval": 0.85,
+        "note": "The pre-patch prep [22,24] is correctly extracted as explore and the interleaved patch+verify cycle [25,35] is correctly held together as one burst; no defensible mis-cut.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.28,
+        "utility_ml": 0.28,
+        "utility_obs": 0.3,
+        "utility_eval": 0.2,
+        "note": "Steps 30-35 are atomized into six single-step trajectories (e.g. [30,30] labeled 'milestone: test' for one exec_command consistency-pass read) despite being intermediate steps on the same KB-doc artifact, directly violating the 'intermediate successes on the SAME artifact should not over-segment' rule.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.68,
+        "utility_ml": 0.7,
+        "utility_obs": 0.65,
+        "utility_eval": 0.68,
+        "note": "Conservative judge correctly decided 'stay' throughout, but [22,39] contains a plausible internal pivot at step 30 where the agent shifts from the agreed main patch wave to a self-directed consistency cleanup, a sub-deliverable boundary a less conservative judge should have caught.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "67204cda-73d4-41de-be33-5f8dc34d01d0",
+      "s1": {
+        "conformance": 0.97,
+        "utility_ml": 0.85,
+        "utility_obs": 0.85,
+        "utility_eval": 0.9,
+        "note": "Both trajectories cleanly cover exactly one user ask each (steps 0-11 analytics change, steps 12-15 kb/readme task), with no control messages incorrectly opening a trajectory and no steps left unassigned.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.48,
+        "utility_ml": 0.5,
+        "utility_obs": 0.45,
+        "utility_eval": 0.5,
+        "note": "Steps 4-11 are mislabeled 'explore' despite containing a failed deploy (step 5), a forced npm CLI upgrade (step 7), a successful deploy (step 8), and live-site verification (step 10) -- none of which are pure exploration -- leaving the isolated 1-step burst (step 3) with no accompanying verify tail.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.5,
+        "utility_ml": 0.6,
+        "utility_obs": 0.65,
+        "utility_eval": 0.55,
+        "note": "The cut at step 3 (the Edit) treats the file write as a milestone before deployment and live verification are done, which is an intermediate-success over-segmentation on the same artifact (the analytics URL in index.html) that the s3 sentiment explicitly forbids; the single analytics task should be one trajectory ending at the verified live deployment shown in step 10.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.83,
+        "utility_ml": 0.8,
+        "utility_obs": 0.8,
+        "utility_eval": 0.8,
+        "note": "s4 correctly stays on a single analytics trajectory through the deployment error and CLI upgrade recovery at steps 5-7, which are continuations of the same sub-goal rather than pivots, and the JudgmentRequest at candidate step 4 was implicitly answered 'stay' which is the right call given 'Now deploying' is clearly the same objective.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "05a4ba55-0938-4cae-9f7a-9a35631072f5",
+      "s1": {
+        "conformance": 0.9,
+        "utility_ml": 0.82,
+        "utility_obs": 0.85,
+        "utility_eval": 0.8,
+        "note": "Step 8 is a task-notification control message (user role but not a genuine human ask) and is correctly absorbed inside trajectory [0-12] rather than opening a new trajectory, cleanly honoring the control_leak flag.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.72,
+        "utility_ml": 0.78,
+        "utility_obs": 0.68,
+        "utility_eval": 0.72,
+        "note": "Trajectory [24-27] is labeled 'explore' despite being the commit-and-push turn, because no Edit/Write tool calls occur \u2014 the semantic write happens via Bash git commands, producing a misleading label for a non-trivial change operation.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.38,
+        "utility_ml": 0.38,
+        "utility_obs": 0.4,
+        "utility_eval": 0.35,
+        "note": "Trajectory [8-11] opens on step 8, a task-notification control message (not a verified outcome), and trajectory [0-2] cuts at step 2 which is purely exploratory tool use (checking CLI structure), producing four fragmented trajectories for a single README rewrite that should end in one milestone.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.75,
+        "utility_ml": 0.75,
+        "utility_obs": 0.75,
+        "utility_eval": 0.75,
+        "note": "Within trajectory [0-12] the agent pivots at step 5 (README written, launching async verification workflow) and again at step 9 (applying audit fixes from notification) \u2014 two distinct internal sub-goals a non-conservative judge should have separated but the default judge missed.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "01cac7df-8eea-46fe-a596-8cdcf8b3f3e4",
+      "s1": {
+        "conformance": 0.85,
+        "utility_ml": 0.55,
+        "utility_obs": 0.65,
+        "utility_eval": 0.6,
+        "note": "S1 correctly keeps all 14 steps in one trajectory under the single genuine human ask at step 0 and does not let the task-notification control message at step 9 (control_leak=true) open a new trajectory, which is the correct behavior per the sentiment.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.87,
+        "utility_ml": 0.45,
+        "utility_obs": 0.58,
+        "utility_eval": 0.5,
+        "note": "With no_edits=true the single 'explore' trajectory spanning all 14 steps is mechanically correct, but the workflow-launch events at steps 3 and 12 are qualitatively different from pure read/explore and blur the label without any sub-span differentiation.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.58,
+        "utility_ml": 0.7,
+        "utility_obs": 0.65,
+        "utility_eval": 0.62,
+        "note": "Trajectory 2 (steps 9-13) is labeled with the raw task-notification control text from step 9 rather than a milestone description, and both trajectories end on ScheduleWakeup suspension points rather than verified outcomes such as a subagent return or answered question.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.38,
+        "utility_ml": 0.4,
+        "utility_obs": 0.42,
+        "utility_eval": 0.35,
+        "note": "S4 degenerates to s1 despite a clear pivot at step 9 where the task-notification triggers a shift from information-gathering/parallel-read to result-processing and implementation-launch, a meaningful subgoal boundary a competent judge should have cut on.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "469ef199-636e-44fd-86f1-d8fae95492ef",
+      "s1": {
+        "conformance": 0.5,
+        "utility_ml": 0.5,
+        "utility_obs": 0.6,
+        "utility_eval": 0.45,
+        "note": "Steps 37 and 53 are `<codex_internal_context source='goal'>` loop-control signals injected by the Codex system, not genuine human asks, so trajectories [37,52] and [53,67] open on control messages in direct violation of s1's core rule; only step 68 ('remind me the goal?') is a genuine human ask.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.5,
+        "utility_ml": 0.45,
+        "utility_obs": 0.5,
+        "utility_eval": 0.45,
+        "note": "Trajectory [11,36] lumps the core 0.2.0 implementation burst (apply_patch steps 11-17), a separate docs-update burst (steps 24-26), and a run-log entry patch (step 33) together with 15 intervening verification steps into one 26-step trajectory, when s2 should have isolated each coherent change burst with its own surrounding read/verify.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.68,
+        "utility_ml": 0.7,
+        "utility_obs": 0.72,
+        "utility_eval": 0.72,
+        "note": "Trajectory [27,28] is labeled 'milestone: <test>' but contains only lockfile regeneration (npm install --package-lock-only), not test execution; additionally, [19,26] conflates five passing-verification exec_commands with two docs-patching steps, mixing different outcome types in one milestone.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.2,
+        "utility_ml": 0.25,
+        "utility_obs": 0.3,
+        "utility_eval": 0.2,
+        "note": "S4 is byte-identical to s1 (same 4 spans, same labels) because the conservative default judge added zero pivots; trajectory [0,36] collapses at least five distinct sub-goals (exploration, core feature implementation, testing gate, docs update, blocked-deploy documentation) into one 37-step 'subgoal', completely missing the internal agent pivots a correct judge should cut on.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "7d3c1bde-2af7-40dc-8444-9cedc65b7545",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.8,
+        "utility_obs": 0.7,
+        "utility_eval": 0.8,
+        "note": "Single trajectory [0,5] is a mechanically correct cut: exactly one human ask at step 0 (architectural review request) drives all agent work through the final verdict at step 5, with no control or notification messages anywhere in the trace.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 1,
+        "utility_ml": 0.45,
+        "utility_obs": 0.6,
+        "utility_eval": 0.45,
+        "note": "Correctly identifies the entire trace as one pure-explore span (no_edits=true flag confirmed), but the 'change_burst' kind label on an all-explore trajectory is semantically contradictory and will confuse downstream consumers expecting code-change content.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.3,
+        "utility_ml": 0.3,
+        "utility_obs": 0.35,
+        "utility_eval": 0.25,
+        "note": "The cut at step 3 creating 'milestone: <test>' is a clear s3 conformance defect: step 3 ('The main problems are becoming clear') is intermediate analysis synthesis, not a verified outcome; the sole verified outcome in this trace is the delivered verdict at step 5, so the correct s3 segmentation is one trajectory [0,5].",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.85,
+        "utility_ml": 0.75,
+        "utility_obs": 0.7,
+        "utility_eval": 0.75,
+        "note": "Conservative judge correctly chose 'stay' at all three candidate pivot points (steps 2, 3, 4) - the agent maintains one coherent sub-goal throughout (produce an architectural review) with the verdict at step 5 as its single deliverable, matching s4 sentiment well.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "39cca3ad-72d2-4719-b6f1-a42f1ae8b45e",
+      "s1": {
+        "conformance": 0.92,
+        "utility_ml": 0.82,
+        "utility_obs": 0.78,
+        "utility_eval": 0.85,
+        "note": "S1 correctly suppresses the task-notification at step 12 (control_leak flag) from opening a new trajectory, keeping it inside the [8-22] span that started with the genuine user ask at step 8; all four genuine human asks cleanly open trajectories as required.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.52,
+        "utility_ml": 0.58,
+        "utility_obs": 0.52,
+        "utility_eval": 0.58,
+        "note": "The syntax-verification Bash steps at 19-22 are labeled a separate 'explore' trajectory rather than being folded into the [17-18] burst as surrounding-verify, separating the burst from the evidence that it succeeded, which violates s2's 'surrounding read/verify' sentiment.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.33,
+        "utility_ml": 0.42,
+        "utility_obs": 0.38,
+        "utility_eval": 0.4,
+        "note": "Trajectory [8-11] ends at 'workflow is live and running in the background' rather than the verified completion at step 14 (AskUserQuestion confirming end-to-end success), and [12-17] then conflates the control notification, result-reading, and the first Write edit into one ungainly span that spans two distinct activities.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.55,
+        "utility_ml": 0.52,
+        "utility_obs": 0.58,
+        "utility_eval": 0.52,
+        "note": "The agent pivots at step 15 from presenting workflow results (deliverable complete, step 14 AskUserQuestion) to unilaterally initiating permanent code changes without a new user ask, a clear subgoal boundary a good judge should cut on, but the conservative default keeps [8-22] as one undifferentiated trajectory identical to s1.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "07c68b23-0d0e-4729-96c5-d60eb998091f",
+      "s1": {
+        "conformance": 0.55,
+        "utility_ml": 0.6,
+        "utility_obs": 0.65,
+        "utility_eval": 0.63,
+        "note": "Trajectories at steps 204, 230, 525, 530, 537, 745, 748, 753, 1001, 1008, and 1013 all open on '#/loop' control messages (~23% of the 47 trajectories), directly violating the rule that control/loop/notification messages must never open a trajectory; genuine user-turn boundaries are otherwise well-placed.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.78,
+        "utility_ml": 0.75,
+        "utility_obs": 0.82,
+        "utility_eval": 0.7,
+        "note": "Burst/explore segmentation is mechanically correct but the 40-step post-burst segment [282,322] after the bucket_store.py burst is labeled 'explore' rather than 'verify', and single-step burst [8,8] for a run-log write adds minor noise, but the file-group isolation is otherwise sound.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.38,
+        "utility_ml": 0.33,
+        "utility_obs": 0.48,
+        "utility_eval": 0.4,
+        "note": "Steps [184], [185], [186], [187] each form isolated single-step milestone trajectories for individual file edits within Track 4's Outcome.patch removal sweep where no independent verification occurred until steps 191-192, and run-log updates (steps 39, 207, 215, 228, 564, 765, 1018) each get their own milestone trajectory, systematically violating the 'intermediate successes on the same artifact should not over-segment' rule.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.38,
+        "utility_ml": 0.2,
+        "utility_obs": 0.2,
+        "utility_eval": 0.2,
+        "note": "S4 is byte-identical to s1 (47 trajectories, same spans) despite the trace containing clear internal agent pivots that a good judge should cut: trajectory [9,52] spans adversarial review, plan amendment (step 38), and Phase A execution setup (steps 40-51), and trajectory [204,229] spans Phase A gate completion through Phase B dispatch, yet the conservative default judge added zero pivots.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "00eec9af-3d6e-4252-8a8e-32af5735f318",
+      "s1": {
+        "conformance": 0.4,
+        "utility_ml": 0.4,
+        "utility_obs": 0.5,
+        "utility_eval": 0.4,
+        "note": "Trajectory [0,0] captures only the first user message with zero agent work; steps 2-44 that respond to that ask are bundled under trajectory [1,68] which also carries the second user task, so the first user turn's work is entirely mis-attributed to the second turn's trajectory.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.65,
+        "utility_ml": 0.6,
+        "utility_obs": 0.65,
+        "utility_eval": 0.6,
+        "note": "Burst [16,64] conflates first-round edits (16-23), browser verification screenshots (24-44), and a distinct second-round edit pass (45-64) that was driven by a separate user ask; splitting at the pivot around step 45 would yield two cleaner, tighter bursts.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.58,
+        "utility_ml": 0.63,
+        "utility_obs": 0.63,
+        "utility_eval": 0.62,
+        "note": "Trajectory [24,52] incorrectly merges first-pass browser verification (steps 24-44) with the second user ask's InfraDiagram.tsx edits (steps 45-52); step 45's explicit 'first task complete, user sent subsequent instructions' signal should have closed a milestone and opened a new one.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.3,
+        "utility_ml": 0.25,
+        "utility_obs": 0.28,
+        "utility_eval": 0.25,
+        "note": "The conservative judge added zero pivots and produced only [0,0]+[1,68], collapsing the entire 68-step session into one trajectory despite a clear agent-acknowledged task boundary at step 45 ('I've completed and verified the first task, the user has now sent subsequent instructions') that a minimally functional subgoal judge must cut on.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "02511912-5b20-40bc-9f0c-ff93e18853ee",
+      "s1": {
+        "conformance": 0.97,
+        "utility_ml": 0.86,
+        "utility_obs": 0.88,
+        "utility_eval": 0.87,
+        "note": "Both trajectories correctly open on genuine user messages (step 0 and step 4's terminal command), no control or notification message opens a trajectory, and every step falls into exactly one span.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.78,
+        "utility_ml": 0.8,
+        "utility_obs": 0.82,
+        "utility_eval": 0.8,
+        "note": "Steps 9-11 are direct pre-burst reconnaissance (reading settings.json to plan the edits) and should be part of the burst trajectory [12-14] under the 'surrounding read' sentiment, but are instead stranded in the prior explore span [4-11].",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.55,
+        "utility_ml": 0.58,
+        "utility_obs": 0.58,
+        "utility_eval": 0.52,
+        "note": "Trajectory [4-5] ends at step 5 mid-investigation where the agent has only just declared 'let me review', not on a verified outcome, violating the core milestone requirement.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.62,
+        "utility_ml": 0.5,
+        "utility_obs": 0.54,
+        "utility_eval": 0.5,
+        "note": "A real internal pivot exists at step 9 where the agent transitions from bug diagnosis and user confirmation (steps 4-8) to executing the uninstall cleanup (steps 9-19), but the conservative judge emitted no pivot, making s4 identical to s1 and losing a valuable deliverable boundary.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "0ba8f840-7d49-41e8-9323-f62e9858c970",
+      "s1": {
+        "conformance": 0.5,
+        "utility_ml": 0.45,
+        "utility_obs": 0.6,
+        "utility_eval": 0.5,
+        "note": "Trajectories [13-251] and [252-660] open on `<goal_context>` automated loop injection messages at steps 13 and 252 (corroborated by control_leak:true flag), violating the rule that control/loop/notification messages must never open a trajectory.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.2,
+        "utility_ml": 0.25,
+        "utility_obs": 0.3,
+        "utility_eval": 0.3,
+        "note": "Trajectory [22-251] is a 229-step mega-burst that collapses all six U0-U5 feature implementations (each with its own read/patch/verify cycle, separated by plan updates at steps 53, 87, 103, 141, 185) into one undifferentiated blob, defeating the core isolation purpose of change-burst slicing.",
+        "worst_case": true
+      },
+      "s3": {
+        "conformance": 0.4,
+        "utility_ml": 0.5,
+        "utility_obs": 0.5,
+        "utility_eval": 0.5,
+        "note": "Single-step trajectory [66-66] (labeled 'milestone: <test>') contains only an agent summary statement, not a verified outcome, and the 78-trajectory output violates the 'intermediate successes on the same artifact should not over-segment' rule by cutting every individual patch application and test run within a single feature's implementation loop into separate trajectories.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.15,
+        "utility_ml": 0.2,
+        "utility_obs": 0.3,
+        "utility_eval": 0.2,
+        "note": "The judge added zero pivots producing output identical to s1, leaving trajectory [13-251] as a 238-step undifferentiated blob spanning six distinct deliverables (U0-U5) each with verified plan-update completions at approximately steps 52, 87, 103, 141, and 185 that a correct judge would cut on.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "00416c26-20dc-4811-9f37-d1096f2460e5",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.4,
+        "utility_obs": 0.35,
+        "utility_eval": 0.45,
+        "note": "Correctly produces a single [0, 138] user-turn for this single-iteration autonomous session (step 0 is the loop injection carrying the objective, not a content-free notification); no sub-task granularity is a utility limitation, not a conformance defect.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.4,
+        "utility_ml": 0.45,
+        "utility_obs": 0.5,
+        "utility_eval": 0.45,
+        "note": "Burst trajectory [27, 92] conflates 7+ distinct edit-test cycles with fully interleaved test/verify spans (e.g., steps 32-37, 51-67, 74-80) into one 66-step block instead of isolating each coherent change burst with just its surrounding verify, while those inter-burst test spans should be separate explore trajectories per s2 sentiment.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.65,
+        "utility_ml": 0.82,
+        "utility_obs": 0.78,
+        "utility_eval": 0.8,
+        "note": "Trajectory [93, 135] ends at step 135 (exit code 1, test failure) rather than the preceding successful verification exit at step 113, violating the s3 requirement that each trajectory ends on a verified outcome; the agent then continued and succeeded at step 138.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.45,
+        "utility_ml": 0.28,
+        "utility_obs": 0.28,
+        "utility_eval": 0.3,
+        "note": "Despite 36 pivot-judgment requests surfaced over clear internal phase boundaries (exploration 0-26, iterative-fix cycles 27-92, long-running verify 93-135, completion 136-138), the conservative judge adds zero pivots and produces one trajectory identical to s1, losing all subgoal structure for a 139-step autonomous session.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "010034bf-a461-4b8e-b0b4-a35280470d2f",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.65,
+        "utility_obs": 0.6,
+        "utility_eval": 0.7,
+        "note": "Mechanically correct: exactly one user turn at step 0 drives all 22 subsequent agent steps, and no control/loop message opens a trajectory; the single-trajectory output is the only defensible result for this one-turn trace.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.88,
+        "utility_ml": 0.55,
+        "utility_obs": 0.5,
+        "utility_eval": 0.6,
+        "note": "The all-explore single span is the right choice for a no_edits trace, but the container kind is emitted as 'change_burst' rather than a dedicated explore kind, which is semantically misleading and will confuse downstream consumers expecting a burst of edits.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.28,
+        "utility_ml": 0.22,
+        "utility_obs": 0.22,
+        "utility_eval": 0.22,
+        "note": "The cut at step 19 (a bare 'Chunk ID: 363ee1 ... exit code 0' exec_command result) is not a verified outcome milestone; the real milestones are the live-repo discovery at step 12 and the final findings at step 22, making the resulting 3-step 'milestone: <final>' trajectory [20-22] incoherent and the label 'milestone: <test>' for [0-19] uninformative.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.68,
+        "utility_ml": 0.55,
+        "utility_obs": 0.58,
+        "utility_eval": 0.58,
+        "note": "The conservative judge correctly declined to cut on the exec_command chunk-result steps (4, 5, 9) but the step 12 preview explicitly flags a live-repo discrepancy ('codex-parity-linear.toml has changed while the checkpoint was built on...'), which is a genuine investigation pivot that a good judge should have cut on to open a new subgoal.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "e174e2d7-78bc-40e0-9728-008d31a998d3",
+      "s1": {
+        "conformance": 0.95,
+        "utility_ml": 0.85,
+        "utility_obs": 0.75,
+        "utility_eval": 0.88,
+        "note": "Single trajectory [0,15] is mechanically correct: one genuine user ask at step 0, no control or loop messages, all investigation steps 1-14 serve the single ask, and the final answer lands at step 15.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.92,
+        "utility_ml": 0.8,
+        "utility_obs": 0.68,
+        "utility_eval": 0.74,
+        "note": "Single 'explore' trajectory is the correct output for a no_edits=true trace - there are no code-change bursts to isolate, so the entire read-only investigation correctly collapses to one pure-explore span.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.82,
+        "utility_ml": 0.75,
+        "utility_obs": 0.65,
+        "utility_eval": 0.78,
+        "note": "The cut at step 15 (answered question) is the right milestone boundary, but the label 'milestone: <final>' is too generic - the concrete verified outcome is 'skill conflict diagnosed as non-fatal warning', and the requests array is empty which suggests the cheap-LLM never generated a judgment request for this trace.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.52,
+        "utility_ml": 0.45,
+        "utility_obs": 0.42,
+        "utility_eval": 0.48,
+        "note": "s4 collapses to s1's single trajectory [0,15] despite a clear internal pivot at step 9\u219210 where the agent shifts from reading pi's skill-loading source code (steps 1-9) to examining the specific user installation environment (steps 10-14) - a good judge should produce at least two sub-goals here, making this output informationally identical to s1.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "55644589-0aa1-42ce-9896-0ba5bb62f646",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.85,
+        "utility_obs": 0.75,
+        "utility_eval": 0.85,
+        "note": "Single trajectory [0,10] is correct: exactly one genuine user ask at step 0 with all subsequent agent exec_command steps serving it, and no control/loop/notification message opens any trajectory.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.75,
+        "utility_ml": 0.55,
+        "utility_obs": 0.65,
+        "utility_eval": 0.65,
+        "note": "Trajectory [0,10] carries kind='change_burst' despite no_edits=true for this session; the label field correctly says 'explore' but the kind field is a mislabel that will confuse any downstream consumer routing on kind to distinguish edit bursts from pure-explore spans.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.5,
+        "utility_ml": 0.5,
+        "utility_obs": 0.45,
+        "utility_eval": 0.5,
+        "note": "Trajectory [0,6] labeled 'milestone: <test>' cuts at step 6 ('The precedence itself is defensible for installed package managers') which is an intermediate analysis sub-conclusion, not a verified outcome per s3 sentiment; the only unambiguous verified outcome is the VERDICT at step 10, making a single [0,10] trajectory the more principled choice.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.9,
+        "utility_ml": 0.8,
+        "utility_obs": 0.75,
+        "utility_eval": 0.82,
+        "note": "Conservative judge correctly produced one trajectory since all four pivot candidates (steps 4-7) are evidence-gathering exec_command steps within the single 'adversarial review of PR#81' subgoal and no genuine direction change occurs across the trace.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "54d7d4ef-3fd2-44e2-8f4f-54f8909b6417",
+      "s1": {
+        "conformance": 0.85,
+        "utility_ml": 0.55,
+        "utility_obs": 0.5,
+        "utility_eval": 0.5,
+        "note": "The single [0,25] trajectory is structurally correct for a one-user-turn trace, but step 0 is an automated routine trigger (flags.autonomous=true, label 'Automation ID: daily-bug-scan'), not a genuine human ask - the s1 sentiment says control/loop/notification messages must never open a trajectory, yet this one does.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.7,
+        "utility_ml": 0.75,
+        "utility_obs": 0.78,
+        "utility_eval": 0.7,
+        "note": "The burst trajectory [16,24] merges two semantically distinct apply_patch operations - the `_scan` code fix at steps 16-17 and the automation-memory write at step 24 - with intervening test runs (18-20) and a plan update (21) inside the burst, which violates the sentiment that pure-verify spans should not be buried inside a change burst.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.52,
+        "utility_ml": 0.65,
+        "utility_obs": 0.65,
+        "utility_eval": 0.6,
+        "note": "Trajectory [0,3] is labeled 'milestone: <test>' but the exec_commands in that span are git-audit operations (diff, log) with no tests run; additionally trajectory [4,17] conflates 10+ steps of failed bug-reproduction exploration with the eventual apply_patch, which is exactly the over-bundling the milestone slicer should prevent.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.22,
+        "utility_ml": 0.2,
+        "utility_obs": 0.2,
+        "utility_eval": 0.18,
+        "note": "The trace contains at least four clear agent pivots a good subgoal judge would cut - commit audit (0-3), bug reproduction and confirmation (4-14), `_scan` code fix and test verify (15-20), automation memory update (21-24) - but the conservative default judge produced a single [0,25] trajectory identical to s1, making s4 useless as a subgoal decomposition for this session.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "0e157ea2-5400-4231-835a-9a9787063b4a",
+      "s1": {
+        "conformance": 0.3,
+        "utility_ml": 0.4,
+        "utility_obs": 0.4,
+        "utility_eval": 0.3,
+        "note": "Step 0 is an automation control message ('Automation: Daily bug scan Automation ID: daily-bug-scan') which opens the sole [0-48] trajectory, directly violating the s1 rule that control/notification messages must never open a trajectory; for fully autonomous traces s1 produces a degenerate single blob with no genuine human-ask anchor.",
+        "worst_case": true
+      },
+      "s2": {
+        "conformance": 0.6,
+        "utility_ml": 0.7,
+        "utility_obs": 0.75,
+        "utility_eval": 0.65,
+        "note": "The burst [23-25] correctly isolates the three apply_patch calls but excludes the immediate post-fix verification run (steps 26-32), leaving it in a 23-step 'explore' trajectory when s2 requires bursts to include surrounding verify context; 'explore' is also a misleading label for [26-48] which is verification plus memory-writing, not exploration.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.75,
+        "utility_ml": 0.75,
+        "utility_obs": 0.75,
+        "utility_eval": 0.8,
+        "note": "The four cuts are well-motivated: the same-outcome queries correctly collapsed multiple test-success signals in [0-20] and [26-47] into single milestone trajectories; the only minor tension is that [21-25] mixes bug-discovery (step 22) with patching (steps 23-25), though they form one defensible logical unit.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.2,
+        "utility_ml": 0.2,
+        "utility_obs": 0.2,
+        "utility_eval": 0.2,
+        "note": "The trace has at least three clear internal subgoal pivots a real judge should cut on: step 23 (investigate-to-fix), step 26 (fix-to-verify), and step 39 (verify-to-report-writing); the conservative default judge answered 'stay' to all 13 pivot-check requests and produced a single [0-48] trajectory identical to s1, adding no value.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "417c4f06-122f-438c-8a72-51abf3bfdfe6",
+      "s1": {
+        "conformance": 0.05,
+        "utility_ml": 0.2,
+        "utility_obs": 0.3,
+        "utility_eval": 0.15,
+        "note": "399 of 414 trajectories are opened by Stop hook feedback (390), /loop control messages (8, including step 642 '# /loop'), or the session-scope activation notice (step 0), directly violating the rule that control/notification messages must never open a trajectory; only 15 of 414 trajectories are opened by genuine human asks.",
+        "worst_case": true
+      },
+      "s2": {
+        "conformance": 0.5,
+        "utility_ml": 0.35,
+        "utility_obs": 0.4,
+        "utility_eval": 0.35,
+        "note": "S2 correctly isolates 13 code-change bursts (e.g. [72,119] 'burst: audit-autoinvoke.mts, runtime.ts...') but shreds the iter2 probe monitoring section (steps 536-640+) into 50+ separate 2-step 'explore' fragments that are control-turn interrupts rather than coherent exploration spans, mirroring S1's control-tick segmentation for the monitoring-heavy majority of the trace.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.4,
+        "utility_ml": 0.4,
+        "utility_obs": 0.5,
+        "utility_eval": 0.45,
+        "note": "S3 produces 31 single-step and 367 two-step trajectories (79.8% of all 499, mean size 2.8 steps), including [75,75] (one test-run step) and [76,76] (one edit step) as separate milestones within the same TDD cycle on runtime.ts, violating the rule that intermediate successes on the same artifact should not over-segment.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.1,
+        "utility_ml": 0.15,
+        "utility_obs": 0.2,
+        "utility_eval": 0.15,
+        "note": "S4 is byte-identical to S1 (programmatically confirmed: S1==S4: True), and the first trajectory [0,138] merges codebase exploration, VFS hook registry implementation, auto-invoke feature implementation, unit test writing, and integration eval launch into a single sub-goal despite clear internal pivot points a correct judge would have cut on.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "03eae497-a4c0-493e-9a60-a8ad36eae9a0",
+      "s1": {
+        "conformance": 0.7,
+        "utility_ml": 0.5,
+        "utility_obs": 0.6,
+        "utility_eval": 0.55,
+        "note": "Step 5 '[Request interrupted by user for tool use]' is a system control/notification message that opens its own 1-step trajectory [5,5], directly violating the s1 rule that control messages must never open a trajectory (the trace flag control_leak=true confirms this is a structural defect, not an edge case).",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.18,
+        "utility_ml": 0.1,
+        "utility_obs": 0.12,
+        "utility_eval": 0.1,
+        "note": "Trajectory [9,129] spans 121 steps and collapses at least four distinct change bursts (merge conflict resolution, demo relocation+adaptation, post-adversarial-review fixes, user-requested header edits) plus multiple pure-exploration and browser-QA phases into a single burst labeled only by the first three files touched, completely defeating the slicer's purpose.",
+        "worst_case": true
+      },
+      "s3": {
+        "conformance": 0.57,
+        "utility_ml": 0.65,
+        "utility_obs": 0.67,
+        "utility_eval": 0.67,
+        "note": "Trajectory [52,77] is labeled '(work)' and bundles 25 steps spanning browser QA review, adversarial workflow launch, and multi-screenshot capture into one unlabeled block, indicating the LLM judge found no clean milestone cut across the full review phase, which should have produced at least two distinct verified-outcome trajectories.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.35,
+        "utility_ml": 0.28,
+        "utility_obs": 0.32,
+        "utility_eval": 0.28,
+        "note": "Trajectory [6,130] at 125 steps bundles at least five coherent sub-goals (merge conflict resolution, demo build+adaptation, browser QA, post-review fixes, user-feedback edits+deploy) that a real subgoal judge should have cut on; the 23 s4-pivot judgment requests confirm the judge identified candidate pivots at steps 10, 13, 35, 40, 45, 47, 85-91, 104-110 but the conservative default returned 'stay' for all of them.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "09504e8b-720a-4b08-a7e4-b7460df7ac34",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.8,
+        "utility_obs": 0.7,
+        "utility_eval": 0.8,
+        "note": "Perfect conformance: the single genuine user turn at step 0 opens exactly one trajectory [0,11] with no control or notification messages incorrectly starting a boundary.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.75,
+        "utility_ml": 0.5,
+        "utility_obs": 0.6,
+        "utility_eval": 0.65,
+        "note": "Grouping the entire no-edits trace into one explore span is correct, but kind='change_burst' contradicts the 'explore' label -- a downstream consumer sees a conflicting type signal on what is plainly a pure-read session.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.3,
+        "utility_ml": 0.35,
+        "utility_obs": 0.35,
+        "utility_eval": 0.3,
+        "note": "The cut at step 9 invents a milestone where only another Read call occurs and the '<test>' label is a template artifact -- there are no tests in this trace (no_edits=true, no test runner steps), so [0,9] labeled 'milestone: <test>' is a mis-cut with a misleading artifact label; the only real verified outcome is the answered question at step 11.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.85,
+        "utility_ml": 0.75,
+        "utility_obs": 0.7,
+        "utility_eval": 0.75,
+        "note": "The conservative judge correctly produced no pivots: all four candidate pivot steps (4, 7, 9, 10) are sequential reads within a single coherent repo-exploration-to-prompt-synthesis subgoal, and a good judge would agree they are all 'stay' decisions.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "0484f99d-e9d2-48eb-84a7-3b2a2000b5cd",
+      "s1": {
+        "conformance": 0.5,
+        "utility_ml": 0.58,
+        "utility_obs": 0.55,
+        "utility_eval": 0.5,
+        "note": "Trajectories [3-72], [75-86], and [87-87] all open on codex_internal_context source='goal' control messages, which per s1 must never open a trajectory; three of five trajectory-openers are control/loop signals, not genuine human asks.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.62,
+        "utility_ml": 0.45,
+        "utility_obs": 0.58,
+        "utility_eval": 0.52,
+        "note": "Trajectory [22-68] collapses at least four distinct edit-verify sub-cycles (initial implementation at step 22, pack-check pass at step 29, P4-T1 fix rebuild at step 37, R7 final pass at step 53) into one 47-step burst, failing to isolate coherent change bursts as the slicer intends.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.52,
+        "utility_ml": 0.58,
+        "utility_obs": 0.63,
+        "utility_eval": 0.56,
+        "note": "Trajectory [3-17] ends at step 17 (an exec_command planning step, not a verified outcome), the natural 'R7 passed' milestone at step 53 is buried inside the 40-step [18-57] trajectory, and trajectory [58-58] is a single exec_command step with no outcome signal.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.22,
+        "utility_ml": 0.18,
+        "utility_obs": 0.28,
+        "utility_eval": 0.22,
+        "note": "Trajectory [3-72] spans 70 steps and contains at least four clear agent pivots (exploration to implementation at step 22, pack generation complete at step 29, P4-T1 fix committed at step 36, R7 final pass at step 53) that the conservative default judge failed to cut on, producing an output identical to s1 with no sub-goal granularity.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "049b6679-5f46-4bb6-a05d-8b1c2d54a22d",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.9,
+        "utility_obs": 0.85,
+        "utility_eval": 0.9,
+        "note": "Single trajectory [0,6] is mechanically correct: one user turn (step 0 image upload), all agent steps serve it, no control or loop messages present.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.95,
+        "utility_ml": 0.85,
+        "utility_obs": 0.82,
+        "utility_eval": 0.85,
+        "note": "Correctly labels the entire session as a single 'explore' trajectory given no_edits=true; the sentiment says pure-explore spans are their own trajectories and that is exactly what this trace is.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.3,
+        "utility_ml": 0.25,
+        "utility_obs": 0.25,
+        "utility_eval": 0.2,
+        "note": "Trajectory [0,2] is labeled 'milestone: <test>' which is a template misfire on a no-edit exploration trace (no tests ran); step 2 is an intermediate research finding not a verified outcome, and splitting one continuous research session at step 2 violates the anti-over-segmentation rule for the same artifact.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.88,
+        "utility_ml": 0.82,
+        "utility_obs": 0.82,
+        "utility_eval": 0.82,
+        "note": "The conservative judge correctly answered 'stay' at candidate step 3 since steps 3-5 continue the same research subgoal (read datafetch docs, read OmniFS README) with no change of objective; s4 matching s1 is appropriate here as the trace contains no genuine internal pivots.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "1a2f2ec5-bb63-48b9-aeae-7a5afc3a2510",
+      "s1": {
+        "conformance": 0.88,
+        "utility_ml": 0.85,
+        "utility_obs": 0.8,
+        "utility_eval": 0.85,
+        "note": "All 5 user turns cleanly segmented with no control messages opening trajectories; 'please do' at step 16 correctly opens a new trajectory because it initiates a concrete write operation distinct from the prior text-only exchange.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.76,
+        "utility_ml": 0.8,
+        "utility_obs": 0.8,
+        "utility_eval": 0.76,
+        "note": "Step 18 (the agent's post-write confirmation 'Saved to kb/docs/concept-jit-harnesses-generic.md') is split off as its own single-step 'explore' trajectory [18-18] rather than being included in the preceding write burst [16-17] as a post-burst verification step, violating the 'surrounding read/verify' part of the sentiment.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.38,
+        "utility_ml": 0.38,
+        "utility_obs": 0.42,
+        "utility_eval": 0.32,
+        "note": "Trajectory [0-2] labeled 'milestone: <test>' closes at step 2 where the agent has only announced 'I'll fetch both URLs now' and issued the Bash call, not after any verified outcome, making it a clear mis-cut on the core rule; additionally, splitting each paired Write into individual single-step trajectories ([8-8], [12-12]) over-segments intermediate successes on the same artifact.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.82,
+        "utility_ml": 0.8,
+        "utility_obs": 0.75,
+        "utility_eval": 0.8,
+        "note": "The conservative judge correctly produced no additional pivots, matching s1, because no genuine intra-turn agent pivots exist in this trace; all three pending pivot-questions (steps 3, 8, 12) are continuations of the same sub-goal, so 'stay' is the right answer and the identical-to-s1 result is appropriate rather than a failure of the judge.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "ecb84bc9-12bc-4362-9423-1ddbd49c6811",
+      "s1": {
+        "conformance": 0.45,
+        "utility_ml": 0.5,
+        "utility_obs": 0.55,
+        "utility_eval": 0.4,
+        "note": "Trajectories [20,22] and [23,25] are opened by explicit coordinator notification messages ('The coordinator sent a message while you were working'), and trajectories [12,19], [26,33], [34,58] are opened by subagent-injected 'I am building a curated resource list' prompts, all of which are control/coordinator messages that must never open a trajectory per s1 sentiment \u2014 approximately 5 of 14 trajectories are mis-cut.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.65,
+        "utility_ml": 0.65,
+        "utility_obs": 0.7,
+        "utility_eval": 0.6,
+        "note": "The macro explore/burst distinction is correctly applied (research phases as explore, write phases as burst), but within lesson trajectories [59,69] and [70,79] the pure-explore subagent dispatch and task-notification wait steps (59-63, 70-73) are not isolated from the write bursts (64-69, 74-79) as the slicer's own sentiment requires.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.2,
+        "utility_ml": 0.15,
+        "utility_obs": 0.35,
+        "utility_eval": 0.2,
+        "note": "The workspace build phase (steps 42-57) is catastrophically over-segmented into 12 single-step trajectories one per Write call (MISSION.md, RESOURCES.md, GLOSSARY.md, etc.), and each lesson then generates 4-6 singleton trajectories, yielding 51 total for a 98-step trace and violating the core rule that intermediate successes on the same artifact should not over-segment.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.45,
+        "utility_ml": 0.45,
+        "utility_obs": 0.5,
+        "utility_eval": 0.45,
+        "note": "The conservative default judge chooses 'stay' for every pivot candidate, producing output identical to s1 and missing the clear research-to-write pivot at step 42 within trajectory [34,58] where the agent shifts from WebSearch/WebFetch/subagent grounding to writing 16 workspace files \u2014 a subgoal boundary a good judge would cut on \u2014 while also inheriting all of s1's control-leak trajectory openings.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "15a19ab1-2480-4176-9f7a-0db784a85890",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.8,
+        "utility_obs": 0.8,
+        "utility_eval": 0.8,
+        "note": "Perfect single-turn cut: step 0 is the one genuine user ask and steps 1-4 are all work serving it, with no control-message leaks opening a spurious second trajectory.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.75,
+        "utility_ml": 0.5,
+        "utility_obs": 0.65,
+        "utility_eval": 0.55,
+        "note": "The single-span result is defensible for a no_edits=true session, but kind='change_burst' contradicts label='explore', creating schema ambiguity for any downstream consumer that branches on the kind field; a pure-explore trajectory should carry kind='explore'.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.2,
+        "utility_ml": 0.2,
+        "utility_obs": 0.25,
+        "utility_eval": 0.2,
+        "note": "Trajectory [0,1] labeled 'milestone: <test>' is a clear mis-cut: step 1 is the agent planning and issuing its first exec_command, not a verified outcome, and the placeholder label '<test>' does not correspond to any confirmed artifact, violating the 'verified outcome' requirement and over-segmenting a single-task trace.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.9,
+        "utility_ml": 0.75,
+        "utility_obs": 0.75,
+        "utility_eval": 0.78,
+        "note": "Correctly mirrors s1 with one subgoal [0,4]; the s4-pivot-2 judgment request at step 2 (layout discovery) is a sensible candidate that the conservative default judge correctly classifies as 'stay', since the agent is still executing the same install subgoal throughout.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "0887bb84-fd2a-4ecc-a1a1-b0faea84e2d1",
+      "s1": {
+        "conformance": 0.78,
+        "utility_ml": 0.8,
+        "utility_obs": 0.75,
+        "utility_eval": 0.85,
+        "note": "Trajectory [0,0] contains only the text portion of a multi-part user opening (step 0), while all 40+ steps of agent work land in trajectory [1,42] opened by the image attachment (step 1), leaving the first trajectory with no deliverable and splitting what is semantically one user turn across two trajectories.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.85,
+        "utility_ml": 0.85,
+        "utility_obs": 0.8,
+        "utility_eval": 0.8,
+        "note": "The explore/burst distinction is sound and the control-message (step 13 task-notification) correctly falls inside [1,18] explore without opening a new trajectory, though labeling the workflow-launch steps 10-12 as pure explore slightly understates the action density of that span.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.55,
+        "utility_ml": 0.45,
+        "utility_obs": 0.55,
+        "utility_eval": 0.5,
+        "note": "Trajectory [67,67] is labeled 'milestone: <test>' but step 67 is a [Read] preparation step ('Now let me wire this into article-to-infographic.js'), not a completed outcome; the broader pattern of 28 trajectories for a 103-step medium trace, including singletons at steps 40, 47, 64, 67, 81, violates the anti-over-segment constraint.",
+        "worst_case": true
+      },
+      "s4": {
+        "conformance": 0.5,
+        "utility_ml": 0.6,
+        "utility_obs": 0.65,
+        "utility_eval": 0.58,
+        "note": "The 42-step trajectory [1,42] spans at least three distinct sub-goals (article research and workflow launch, adversarial revision and assembler fixing, final validation and memory recording) that a good subgoal judge should have cut on; the conservative default judge's refusal to pivot on any of the 30 candidate steps in its requests leaves s4 identical to s1 and non-conformant with its own sentiment.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "832bba15-6cf3-4838-9e1b-010f35de1468",
+      "s1": {
+        "conformance": 0.8,
+        "utility_ml": 0.5,
+        "utility_obs": 0.62,
+        "utility_eval": 0.6,
+        "note": "The massive [31-254] trajectory (224 steps) merges plan exploration, plan approval (step 54 ExitPlanMode), and all 10 implementation phases into one user-turn, making it far too coarse for ML or fine-grained eval, though the slicer is mechanically correct at the role boundary.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.22,
+        "utility_ml": 0.18,
+        "utility_obs": 0.18,
+        "utility_eval": 0.14,
+        "note": "S2 trajectory [48-247] is labeled 'burst: soft-painting-cray.md, MEMORY.md, feedback_security_tools_no_tiers.md' (3 plan/memory files) but actually spans all 10 implementation phases - walker, 6 tool wrappers, pipeline rewiring, CLI, tests, legacy deletion, version bump, and privacy-filter - completely defeating the 'isolate a coherent code-change burst' invariant.",
+        "worst_case": true
+      },
+      "s3": {
+        "conformance": 0.33,
+        "utility_ml": 0.4,
+        "utility_obs": 0.28,
+        "utility_eval": 0.38,
+        "note": "S3 produces 100 trajectories by cutting at every individual file Write; Phase 2's 6 tool-wrapper files (steps 79-95) each become their own 1-3 step micro-trajectory instead of one 'Phase 2 complete' milestone, directly violating the 'intermediate successes on the SAME artifact should not over-segment' criterion.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.45,
+        "utility_ml": 0.42,
+        "utility_obs": 0.5,
+        "utility_eval": 0.5,
+        "note": "S4 is identical to s1 despite the trace containing a clear internal pivot at step 54 (ExitPlanMode plan approval to 200-step implementation), which the conservative judge explicitly considered via s4-pivot-53 but defaulted to 'stay', leaving [31-254] as a 224-step monolith that a correct subgoal judge would split at the planning-to-implementation boundary.",
+        "worst_case": false
+      }
+    },
+    {
+      "trace_id": "cbe567da-66b4-4504-beed-fa71814f2aed",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.9,
+        "utility_obs": 0.9,
+        "utility_eval": 0.9,
+        "note": "Single trajectory [0,11] is correct: step 0 is the one genuine human ask and steps 1-11 are all work serving it; no control/loop message opened the trajectory.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.95,
+        "utility_ml": 0.82,
+        "utility_obs": 0.8,
+        "utility_eval": 0.8,
+        "note": "Correctly labels [0,11] as a pure 'explore' burst since no_edits=true; the entire session is reconnaissance with no code-change burst to isolate, so one explore trajectory is the right answer.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.82,
+        "utility_ml": 0.7,
+        "utility_obs": 0.68,
+        "utility_eval": 0.7,
+        "note": "Single [0,11] milestone is correctly placed at step 11 (the only verified outcome - the final synthesized answer), but the generic label 'milestone: <final>' conveys nothing about what was verified and hurts downstream utility.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.38,
+        "utility_ml": 0.28,
+        "utility_obs": 0.28,
+        "utility_eval": 0.28,
+        "note": "The conservative judge produced a single [0,11] trajectory identical to s1, but the trace contains at least three clear internal sub-goal pivots a good judge should cut on: component location (steps 1-3), trigger tracing (steps 4-7), and dispatch-chain tracing (steps 8-10), each with a distinct deliverable.",
+        "worst_case": true
+      }
+    },
+    {
+      "trace_id": "192f60a1-ce4f-4eb5-8515-b53dc4abaf55",
+      "s1": {
+        "conformance": 1,
+        "utility_ml": 0.5,
+        "utility_obs": 0.5,
+        "utility_eval": 0.6,
+        "note": "Correct single-trajectory result for a single-user-ask trace with no control messages; the entire 9-step session is one genuine user turn, so the output is mechanically right but provides no sub-structure useful for any downstream consumer.",
+        "worst_case": false
+      },
+      "s2": {
+        "conformance": 0.55,
+        "utility_ml": 0.5,
+        "utility_obs": 0.6,
+        "utility_eval": 0.45,
+        "note": "Steps 6-8 (the post-patch verification shell, its exit-0 output, and the final summary) are labeled 'explore' rather than being included with the burst at step 5, directly violating the slicer sentiment that each burst trajectory should include its surrounding read/verify; the verification is not exploration.",
+        "worst_case": false
+      },
+      "s3": {
+        "conformance": 0.65,
+        "utility_ml": 0.7,
+        "utility_obs": 0.7,
+        "utility_eval": 0.72,
+        "note": "Milestone 1 closes at step 5 (apply_patch) before the verification shell runs in steps 6-7, so the first milestone endpoint is the file write, not a verified outcome, which violates the 'verified outcome' gate in the slicer sentiment.",
+        "worst_case": false
+      },
+      "s4": {
+        "conformance": 0.9,
+        "utility_ml": 0.5,
+        "utility_obs": 0.5,
+        "utility_eval": 0.55,
+        "note": "The conservative default correctly answers 'stay' for the JudgmentRequest at step 6 (the agent is verifying the same sub-goal, not pivoting), producing one correct trajectory; however s4 is structurally identical to s1 here, adding no value for ML/obs/eval consumers.",
+        "worst_case": false
+      }
+    }
+  ],
+  "aggregates": {
+    "s1": {
+      "n": 36,
+      "mean_conformance": 0.799,
+      "mean_utility_ml": 0.676,
+      "mean_utility_obs": 0.68,
+      "mean_utility_eval": 0.684,
+      "worst_cases": [
+        {
+          "trace_id": "4a41455f-a93c-448c-93f3-f81f83b8793d",
+          "note": "The single trajectory spans 0-3 including the turn_aborted control message at step 3, directly violating s1's rule that control messages must never be part of a work trajectory; compounding this, no genuine human ask anchors the trajectory since steps 0-2 are all agent exec_command steps with no visible user turn.",
+          "conformance": 0.3
+        },
+        {
+          "trace_id": "0e157ea2-5400-4231-835a-9a9787063b4a",
+          "note": "Step 0 is an automation control message ('Automation: Daily bug scan Automation ID: daily-bug-scan') which opens the sole [0-48] trajectory, directly violating the s1 rule that control/notification messages must never open a trajectory; for fully autonomous traces s1 produces a degenerate single blob with no genuine human-ask anchor.",
+          "conformance": 0.3
+        },
+        {
+          "trace_id": "417c4f06-122f-438c-8a72-51abf3bfdfe6",
+          "note": "399 of 414 trajectories are opened by Stop hook feedback (390), /loop control messages (8, including step 642 '# /loop'), or the session-scope activation notice (step 0), directly violating the rule that control/notification messages must never open a trajectory; only 15 of 414 trajectories are opened by genuine human asks.",
+          "conformance": 0.05
+        }
+      ],
+      "lowest_conformance": [
+        {
+          "trace_id": "417c4f06-122f-438c-8a72-51abf3bfdfe6",
+          "conformance": 0.05,
+          "note": "399 of 414 trajectories are opened by Stop hook feedback (390), /loop control messages (8, including step 642 '# /loop'), or the session-scope activation notice (step 0), directly violating the rule that control/notification messages must never open a trajectory; only 15 of 414 trajectories are opened by genuine human asks."
+        },
+        {
+          "trace_id": "4a41455f-a93c-448c-93f3-f81f83b8793d",
+          "conformance": 0.3,
+          "note": "The single trajectory spans 0-3 including the turn_aborted control message at step 3, directly violating s1's rule that control messages must never be part of a work trajectory; compounding this, no genuine human ask anchors the trajectory since steps 0-2 are all agent exec_command steps with no visible user turn."
+        },
+        {
+          "trace_id": "0e157ea2-5400-4231-835a-9a9787063b4a",
+          "conformance": 0.3,
+          "note": "Step 0 is an automation control message ('Automation: Daily bug scan Automation ID: daily-bug-scan') which opens the sole [0-48] trajectory, directly violating the s1 rule that control/notification messages must never open a trajectory; for fully autonomous traces s1 produces a degenerate single blob with no genuine human-ask anchor."
+        },
+        {
+          "trace_id": "00eec9af-3d6e-4252-8a8e-32af5735f318",
+          "conformance": 0.4,
+          "note": "Trajectory [0,0] captures only the first user message with zero agent work; steps 2-44 that respond to that ask are bundled under trajectory [1,68] which also carries the second user task, so the first user turn's work is entirely mis-attributed to the second turn's trajectory."
+        },
+        {
+          "trace_id": "ecb84bc9-12bc-4362-9423-1ddbd49c6811",
+          "conformance": 0.45,
+          "note": "Trajectories [20,22] and [23,25] are opened by explicit coordinator notification messages ('The coordinator sent a message while you were working'), and trajectories [12,19], [26,33], [34,58] are opened by subagent-injected 'I am building a curated resource list' prompts, all of which are control/coordinator messages that must never open a trajectory per s1 sentiment \u2014 approximately 5 of 14 trajectories are mis-cut."
+        },
+        {
+          "trace_id": "469ef199-636e-44fd-86f1-d8fae95492ef",
+          "conformance": 0.5,
+          "note": "Steps 37 and 53 are `<codex_internal_context source='goal'>` loop-control signals injected by the Codex system, not genuine human asks, so trajectories [37,52] and [53,67] open on control messages in direct violation of s1's core rule; only step 68 ('remind me the goal?') is a genuine human ask."
+        }
+      ]
+    },
+    "s2": {
+      "n": 36,
+      "mean_conformance": 0.676,
+      "mean_utility_ml": 0.581,
+      "mean_utility_obs": 0.608,
+      "mean_utility_eval": 0.577,
+      "worst_cases": [
+        {
+          "trace_id": "19f1a2f4-4fc6-48bc-ad10-84306fb2b268",
+          "note": "The [82,166] trajectory is an 85-step mis-cut that lumps at least four distinct change bursts, an initial fix wave (82-93), a test-repair loop (97-129), a new tmux-session-tracking feature (130-145), and a CI fail-fast fix (158-163), into a single label despite clear explore gaps between them.",
+          "conformance": 0.28
+        },
+        {
+          "trace_id": "0ba8f840-7d49-41e8-9323-f62e9858c970",
+          "note": "Trajectory [22-251] is a 229-step mega-burst that collapses all six U0-U5 feature implementations (each with its own read/patch/verify cycle, separated by plan updates at steps 53, 87, 103, 141, 185) into one undifferentiated blob, defeating the core isolation purpose of change-burst slicing.",
+          "conformance": 0.2
+        },
+        {
+          "trace_id": "03eae497-a4c0-493e-9a60-a8ad36eae9a0",
+          "note": "Trajectory [9,129] spans 121 steps and collapses at least four distinct change bursts (merge conflict resolution, demo relocation+adaptation, post-adversarial-review fixes, user-requested header edits) plus multiple pure-exploration and browser-QA phases into a single burst labeled only by the first three files touched, completely defeating the slicer's purpose.",
+          "conformance": 0.18
+        },
+        {
+          "trace_id": "832bba15-6cf3-4838-9e1b-010f35de1468",
+          "note": "S2 trajectory [48-247] is labeled 'burst: soft-painting-cray.md, MEMORY.md, feedback_security_tools_no_tiers.md' (3 plan/memory files) but actually spans all 10 implementation phases - walker, 6 tool wrappers, pipeline rewiring, CLI, tests, legacy deletion, version bump, and privacy-filter - completely defeating the 'isolate a coherent code-change burst' invariant.",
+          "conformance": 0.22
+        }
+      ],
+      "lowest_conformance": [
+        {
+          "trace_id": "03eae497-a4c0-493e-9a60-a8ad36eae9a0",
+          "conformance": 0.18,
+          "note": "Trajectory [9,129] spans 121 steps and collapses at least four distinct change bursts (merge conflict resolution, demo relocation+adaptation, post-adversarial-review fixes, user-requested header edits) plus multiple pure-exploration and browser-QA phases into a single burst labeled only by the first three files touched, completely defeating the slicer's purpose."
+        },
+        {
+          "trace_id": "0ba8f840-7d49-41e8-9323-f62e9858c970",
+          "conformance": 0.2,
+          "note": "Trajectory [22-251] is a 229-step mega-burst that collapses all six U0-U5 feature implementations (each with its own read/patch/verify cycle, separated by plan updates at steps 53, 87, 103, 141, 185) into one undifferentiated blob, defeating the core isolation purpose of change-burst slicing."
+        },
+        {
+          "trace_id": "832bba15-6cf3-4838-9e1b-010f35de1468",
+          "conformance": 0.22,
+          "note": "S2 trajectory [48-247] is labeled 'burst: soft-painting-cray.md, MEMORY.md, feedback_security_tools_no_tiers.md' (3 plan/memory files) but actually spans all 10 implementation phases - walker, 6 tool wrappers, pipeline rewiring, CLI, tests, legacy deletion, version bump, and privacy-filter - completely defeating the 'isolate a coherent code-change burst' invariant."
+        },
+        {
+          "trace_id": "19f1a2f4-4fc6-48bc-ad10-84306fb2b268",
+          "conformance": 0.28,
+          "note": "The [82,166] trajectory is an 85-step mis-cut that lumps at least four distinct change bursts, an initial fix wave (82-93), a test-repair loop (97-129), a new tmux-session-tracking feature (130-145), and a CI fail-fast fix (158-163), into a single label despite clear explore gaps between them."
+        },
+        {
+          "trace_id": "00416c26-20dc-4811-9f37-d1096f2460e5",
+          "conformance": 0.4,
+          "note": "Burst trajectory [27, 92] conflates 7+ distinct edit-test cycles with fully interleaved test/verify spans (e.g., steps 32-37, 51-67, 74-80) into one 66-step block instead of isolating each coherent change burst with just its surrounding verify, while those inter-burst test spans should be separate explore trajectories per s2 sentiment."
+        },
+        {
+          "trace_id": "67204cda-73d4-41de-be33-5f8dc34d01d0",
+          "conformance": 0.48,
+          "note": "Steps 4-11 are mislabeled 'explore' despite containing a failed deploy (step 5), a forced npm CLI upgrade (step 7), a successful deploy (step 8), and live-site verification (step 10) -- none of which are pure exploration -- leaving the isolated 1-step burst (step 3) with no accompanying verify tail."
+        }
+      ]
+    },
+    "s3": {
+      "n": 36,
+      "mean_conformance": 0.495,
+      "mean_utility_ml": 0.506,
+      "mean_utility_obs": 0.524,
+      "mean_utility_eval": 0.5,
+      "worst_cases": [
+        {
+          "trace_id": "4a41455f-a93c-448c-93f3-f81f83b8793d",
+          "note": "The single milestone trajectory 0-3 ends on a turn_aborted user interrupt rather than a verified outcome, making the milestone framing actively incorrect; no verified patch, test pass, render, or answered question was produced.",
+          "conformance": 0.2
+        },
+        {
+          "trace_id": "161724d7-8cac-4639-99eb-dd7a59ee8187",
+          "note": "Trajectory [21,24] ends at step 24 (a Bash code-read of inverse_blame.py), which is not a verified outcome; the actual milestone is step 25 (agent synthesis and upgraded answer), leaving a pathological single-step trajectory [25,25] labeled '(work)'; additionally the JudgmentRequest fabricates a shared artifact '<test>' attributed to steps 8, 23, and 24, none of which report success on any named artifact.",
+          "conformance": 0.42
+        },
+        {
+          "trace_id": "0006e1e2-7a25-4243-9e9d-6bc115067860",
+          "note": "Steps 15, 16, 17, and 18 are each isolated as single-Write milestones for individual project files, violating the 'intermediate successes on the SAME artifact should not over-segment' rule since all four serve the single bootstrapped-project deliverable; additionally the label 'milestone: <test>' on trajectory [0,8] maps to nothing in the trace (those steps are pure research and vault-querying, not a test outcome).",
+          "conformance": 0.28
+        },
+        {
+          "trace_id": "50c0b1a2-004d-4c31-beb9-2220dc4cb0e4",
+          "note": "Steps 30-35 are atomized into six single-step trajectories (e.g. [30,30] labeled 'milestone: test' for one exec_command consistency-pass read) despite being intermediate steps on the same KB-doc artifact, directly violating the 'intermediate successes on the SAME artifact should not over-segment' rule.",
+          "conformance": 0.28
+        },
+        {
+          "trace_id": "05a4ba55-0938-4cae-9f7a-9a35631072f5",
+          "note": "Trajectory [8-11] opens on step 8, a task-notification control message (not a verified outcome), and trajectory [0-2] cuts at step 2 which is purely exploratory tool use (checking CLI structure), producing four fragmented trajectories for a single README rewrite that should end in one milestone.",
+          "conformance": 0.38
+        },
+        {
+          "trace_id": "7d3c1bde-2af7-40dc-8444-9cedc65b7545",
+          "note": "The cut at step 3 creating 'milestone: <test>' is a clear s3 conformance defect: step 3 ('The main problems are becoming clear') is intermediate analysis synthesis, not a verified outcome; the sole verified outcome in this trace is the delivered verdict at step 5, so the correct s3 segmentation is one trajectory [0,5].",
+          "conformance": 0.3
+        },
+        {
+          "trace_id": "39cca3ad-72d2-4719-b6f1-a42f1ae8b45e",
+          "note": "Trajectory [8-11] ends at 'workflow is live and running in the background' rather than the verified completion at step 14 (AskUserQuestion confirming end-to-end success), and [12-17] then conflates the control notification, result-reading, and the first Write edit into one ungainly span that spans two distinct activities.",
+          "conformance": 0.33
+        },
+        {
+          "trace_id": "07c68b23-0d0e-4729-96c5-d60eb998091f",
+          "note": "Steps [184], [185], [186], [187] each form isolated single-step milestone trajectories for individual file edits within Track 4's Outcome.patch removal sweep where no independent verification occurred until steps 191-192, and run-log updates (steps 39, 207, 215, 228, 564, 765, 1018) each get their own milestone trajectory, systematically violating the 'intermediate successes on the same artifact should not over-segment' rule.",
+          "conformance": 0.38
+        },
+        {
+          "trace_id": "010034bf-a461-4b8e-b0b4-a35280470d2f",
+          "note": "The cut at step 19 (a bare 'Chunk ID: 363ee1 ... exit code 0' exec_command result) is not a verified outcome milestone; the real milestones are the live-repo discovery at step 12 and the final findings at step 22, making the resulting 3-step 'milestone: <final>' trajectory [20-22] incoherent and the label 'milestone: <test>' for [0-19] uninformative.",
+          "conformance": 0.28
+        },
+        {
+          "trace_id": "09504e8b-720a-4b08-a7e4-b7460df7ac34",
+          "note": "The cut at step 9 invents a milestone where only another Read call occurs and the '<test>' label is a template artifact -- there are no tests in this trace (no_edits=true, no test runner steps), so [0,9] labeled 'milestone: <test>' is a mis-cut with a misleading artifact label; the only real verified outcome is the answered question at step 11.",
+          "conformance": 0.3
+        },
+        {
+          "trace_id": "049b6679-5f46-4bb6-a05d-8b1c2d54a22d",
+          "note": "Trajectory [0,2] is labeled 'milestone: <test>' which is a template misfire on a no-edit exploration trace (no tests ran); step 2 is an intermediate research finding not a verified outcome, and splitting one continuous research session at step 2 violates the anti-over-segmentation rule for the same artifact.",
+          "conformance": 0.3
+        },
+        {
+          "trace_id": "1a2f2ec5-bb63-48b9-aeae-7a5afc3a2510",
+          "note": "Trajectory [0-2] labeled 'milestone: <test>' closes at step 2 where the agent has only announced 'I'll fetch both URLs now' and issued the Bash call, not after any verified outcome, making it a clear mis-cut on the core rule; additionally, splitting each paired Write into individual single-step trajectories ([8-8], [12-12]) over-segments intermediate successes on the same artifact.",
+          "conformance": 0.38
+        },
+        {
+          "trace_id": "ecb84bc9-12bc-4362-9423-1ddbd49c6811",
+          "note": "The workspace build phase (steps 42-57) is catastrophically over-segmented into 12 single-step trajectories one per Write call (MISSION.md, RESOURCES.md, GLOSSARY.md, etc.), and each lesson then generates 4-6 singleton trajectories, yielding 51 total for a 98-step trace and violating the core rule that intermediate successes on the same artifact should not over-segment.",
+          "conformance": 0.2
+        },
+        {
+          "trace_id": "15a19ab1-2480-4176-9f7a-0db784a85890",
+          "note": "Trajectory [0,1] labeled 'milestone: <test>' is a clear mis-cut: step 1 is the agent planning and issuing its first exec_command, not a verified outcome, and the placeholder label '<test>' does not correspond to any confirmed artifact, violating the 'verified outcome' requirement and over-segmenting a single-task trace.",
+          "conformance": 0.2
+        },
+        {
+          "trace_id": "0887bb84-fd2a-4ecc-a1a1-b0faea84e2d1",
+          "note": "Trajectory [67,67] is labeled 'milestone: <test>' but step 67 is a [Read] preparation step ('Now let me wire this into article-to-infographic.js'), not a completed outcome; the broader pattern of 28 trajectories for a 103-step medium trace, including singletons at steps 40, 47, 64, 67, 81, violates the anti-over-segment constraint.",
+          "conformance": 0.55
+        }
+      ],
+      "lowest_conformance": [
+        {
+          "trace_id": "4a41455f-a93c-448c-93f3-f81f83b8793d",
+          "conformance": 0.2,
+          "note": "The single milestone trajectory 0-3 ends on a turn_aborted user interrupt rather than a verified outcome, making the milestone framing actively incorrect; no verified patch, test pass, render, or answered question was produced."
+        },
+        {
+          "trace_id": "ecb84bc9-12bc-4362-9423-1ddbd49c6811",
+          "conformance": 0.2,
+          "note": "The workspace build phase (steps 42-57) is catastrophically over-segmented into 12 single-step trajectories one per Write call (MISSION.md, RESOURCES.md, GLOSSARY.md, etc.), and each lesson then generates 4-6 singleton trajectories, yielding 51 total for a 98-step trace and violating the core rule that intermediate successes on the same artifact should not over-segment."
+        },
+        {
+          "trace_id": "15a19ab1-2480-4176-9f7a-0db784a85890",
+          "conformance": 0.2,
+          "note": "Trajectory [0,1] labeled 'milestone: <test>' is a clear mis-cut: step 1 is the agent planning and issuing its first exec_command, not a verified outcome, and the placeholder label '<test>' does not correspond to any confirmed artifact, violating the 'verified outcome' requirement and over-segmenting a single-task trace."
+        },
+        {
+          "trace_id": "0006e1e2-7a25-4243-9e9d-6bc115067860",
+          "conformance": 0.28,
+          "note": "Steps 15, 16, 17, and 18 are each isolated as single-Write milestones for individual project files, violating the 'intermediate successes on the SAME artifact should not over-segment' rule since all four serve the single bootstrapped-project deliverable; additionally the label 'milestone: <test>' on trajectory [0,8] maps to nothing in the trace (those steps are pure research and vault-querying, not a test outcome)."
+        },
+        {
+          "trace_id": "50c0b1a2-004d-4c31-beb9-2220dc4cb0e4",
+          "conformance": 0.28,
+          "note": "Steps 30-35 are atomized into six single-step trajectories (e.g. [30,30] labeled 'milestone: test' for one exec_command consistency-pass read) despite being intermediate steps on the same KB-doc artifact, directly violating the 'intermediate successes on the SAME artifact should not over-segment' rule."
+        },
+        {
+          "trace_id": "010034bf-a461-4b8e-b0b4-a35280470d2f",
+          "conformance": 0.28,
+          "note": "The cut at step 19 (a bare 'Chunk ID: 363ee1 ... exit code 0' exec_command result) is not a verified outcome milestone; the real milestones are the live-repo discovery at step 12 and the final findings at step 22, making the resulting 3-step 'milestone: <final>' trajectory [20-22] incoherent and the label 'milestone: <test>' for [0-19] uninformative."
+        }
+      ]
+    },
+    "s4": {
+      "n": 36,
+      "mean_conformance": 0.552,
+      "mean_utility_ml": 0.488,
+      "mean_utility_obs": 0.506,
+      "mean_utility_eval": 0.494,
+      "worst_cases": [
+        {
+          "trace_id": "19f1a2f4-4fc6-48bc-ad10-84306fb2b268",
+          "note": "S4 is identical to S1 despite the trace containing at least three genuine agent pivots within [5,166]: the audit-to-implementation pivot at step 76, a new unplanned tmux-session-tracking feature at step 130, and a CI-debugging pivot at step 150, none of which the conservative default judge detected.",
+          "conformance": 0.28
+        },
+        {
+          "trace_id": "01cac7df-8eea-46fe-a596-8cdcf8b3f3e4",
+          "note": "S4 degenerates to s1 despite a clear pivot at step 9 where the task-notification triggers a shift from information-gathering/parallel-read to result-processing and implementation-launch, a meaningful subgoal boundary a competent judge should have cut on.",
+          "conformance": 0.38
+        },
+        {
+          "trace_id": "469ef199-636e-44fd-86f1-d8fae95492ef",
+          "note": "S4 is byte-identical to s1 (same 4 spans, same labels) because the conservative default judge added zero pivots; trajectory [0,36] collapses at least five distinct sub-goals (exploration, core feature implementation, testing gate, docs update, blocked-deploy documentation) into one 37-step 'subgoal', completely missing the internal agent pivots a correct judge should cut on.",
+          "conformance": 0.2
+        },
+        {
+          "trace_id": "07c68b23-0d0e-4729-96c5-d60eb998091f",
+          "note": "S4 is byte-identical to s1 (47 trajectories, same spans) despite the trace containing clear internal agent pivots that a good judge should cut: trajectory [9,52] spans adversarial review, plan amendment (step 38), and Phase A execution setup (steps 40-51), and trajectory [204,229] spans Phase A gate completion through Phase B dispatch, yet the conservative default judge added zero pivots.",
+          "conformance": 0.38
+        },
+        {
+          "trace_id": "00eec9af-3d6e-4252-8a8e-32af5735f318",
+          "note": "The conservative judge added zero pivots and produced only [0,0]+[1,68], collapsing the entire 68-step session into one trajectory despite a clear agent-acknowledged task boundary at step 45 ('I've completed and verified the first task, the user has now sent subsequent instructions') that a minimally functional subgoal judge must cut on.",
+          "conformance": 0.3
+        },
+        {
+          "trace_id": "0ba8f840-7d49-41e8-9323-f62e9858c970",
+          "note": "The judge added zero pivots producing output identical to s1, leaving trajectory [13-251] as a 238-step undifferentiated blob spanning six distinct deliverables (U0-U5) each with verified plan-update completions at approximately steps 52, 87, 103, 141, and 185 that a correct judge would cut on.",
+          "conformance": 0.15
+        },
+        {
+          "trace_id": "54d7d4ef-3fd2-44e2-8f4f-54f8909b6417",
+          "note": "The trace contains at least four clear agent pivots a good subgoal judge would cut - commit audit (0-3), bug reproduction and confirmation (4-14), `_scan` code fix and test verify (15-20), automation memory update (21-24) - but the conservative default judge produced a single [0,25] trajectory identical to s1, making s4 useless as a subgoal decomposition for this session.",
+          "conformance": 0.22
+        },
+        {
+          "trace_id": "417c4f06-122f-438c-8a72-51abf3bfdfe6",
+          "note": "S4 is byte-identical to S1 (programmatically confirmed: S1==S4: True), and the first trajectory [0,138] merges codebase exploration, VFS hook registry implementation, auto-invoke feature implementation, unit test writing, and integration eval launch into a single sub-goal despite clear internal pivot points a correct judge would have cut on.",
+          "conformance": 0.1
+        },
+        {
+          "trace_id": "0484f99d-e9d2-48eb-84a7-3b2a2000b5cd",
+          "note": "Trajectory [3-72] spans 70 steps and contains at least four clear agent pivots (exploration to implementation at step 22, pack generation complete at step 29, P4-T1 fix committed at step 36, R7 final pass at step 53) that the conservative default judge failed to cut on, producing an output identical to s1 with no sub-goal granularity.",
+          "conformance": 0.22
+        },
+        {
+          "trace_id": "cbe567da-66b4-4504-beed-fa71814f2aed",
+          "note": "The conservative judge produced a single [0,11] trajectory identical to s1, but the trace contains at least three clear internal sub-goal pivots a good judge should cut on: component location (steps 1-3), trigger tracing (steps 4-7), and dispatch-chain tracing (steps 8-10), each with a distinct deliverable.",
+          "conformance": 0.38
+        }
+      ],
+      "lowest_conformance": [
+        {
+          "trace_id": "417c4f06-122f-438c-8a72-51abf3bfdfe6",
+          "conformance": 0.1,
+          "note": "S4 is byte-identical to S1 (programmatically confirmed: S1==S4: True), and the first trajectory [0,138] merges codebase exploration, VFS hook registry implementation, auto-invoke feature implementation, unit test writing, and integration eval launch into a single sub-goal despite clear internal pivot points a correct judge would have cut on."
+        },
+        {
+          "trace_id": "0ba8f840-7d49-41e8-9323-f62e9858c970",
+          "conformance": 0.15,
+          "note": "The judge added zero pivots producing output identical to s1, leaving trajectory [13-251] as a 238-step undifferentiated blob spanning six distinct deliverables (U0-U5) each with verified plan-update completions at approximately steps 52, 87, 103, 141, and 185 that a correct judge would cut on."
+        },
+        {
+          "trace_id": "469ef199-636e-44fd-86f1-d8fae95492ef",
+          "conformance": 0.2,
+          "note": "S4 is byte-identical to s1 (same 4 spans, same labels) because the conservative default judge added zero pivots; trajectory [0,36] collapses at least five distinct sub-goals (exploration, core feature implementation, testing gate, docs update, blocked-deploy documentation) into one 37-step 'subgoal', completely missing the internal agent pivots a correct judge should cut on."
+        },
+        {
+          "trace_id": "0e157ea2-5400-4231-835a-9a9787063b4a",
+          "conformance": 0.2,
+          "note": "The trace has at least three clear internal subgoal pivots a real judge should cut on: step 23 (investigate-to-fix), step 26 (fix-to-verify), and step 39 (verify-to-report-writing); the conservative default judge answered 'stay' to all 13 pivot-check requests and produced a single [0-48] trajectory identical to s1, adding no value."
+        },
+        {
+          "trace_id": "54d7d4ef-3fd2-44e2-8f4f-54f8909b6417",
+          "conformance": 0.22,
+          "note": "The trace contains at least four clear agent pivots a good subgoal judge would cut - commit audit (0-3), bug reproduction and confirmation (4-14), `_scan` code fix and test verify (15-20), automation memory update (21-24) - but the conservative default judge produced a single [0,25] trajectory identical to s1, making s4 useless as a subgoal decomposition for this session."
+        },
+        {
+          "trace_id": "0484f99d-e9d2-48eb-84a7-3b2a2000b5cd",
+          "conformance": 0.22,
+          "note": "Trajectory [3-72] spans 70 steps and contains at least four clear agent pivots (exploration to implementation at step 22, pack generation complete at step 29, P4-T1 fix committed at step 36, R7 final pass at step 53) that the conservative default judge failed to cut on, producing an output identical to s1 with no sub-goal granularity."
+        }
+      ]
+    }
+  }
+}

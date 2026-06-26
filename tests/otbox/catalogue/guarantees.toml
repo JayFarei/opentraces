@@ -35,3 +35,27 @@ guards = ["agent-session-to-published-dataset"]
 # investigation; until it FIRES, no entry here (a kill that cannot fail is
 # exactly what this layer exists to forbid). The 4 world-fault kills above
 # already prove the machinery end-to-end (one earned gold).
+
+# Trace Slicer Library (issue #141) — the three red-capability mutants the
+# conformance journey must catch (loopcraft step 5). Each is a product
+# faultpoint (faultpoints.py SITES) armed before the world builds; the journey
+# pins trajectory SPANS (recompute), never the envelope's tiling.valid, so the
+# self-report-valid-gap mutant is caught by the recompute and not the self-grade.
+
+[[guarantees]]
+guarantee = "A slicer's trajectory boundaries are exact (no off-by-one)"
+fault = "faultpoint:slicer-boundary-off-by-one"
+checkpoint = "c-captured-slicer-fixture"
+guards = ["slicer-conformance"]
+
+[[guarantees]]
+guarantee = "Control/continuation messages never open an S1 trajectory"
+fault = "faultpoint:slicer-drop-continuation"
+checkpoint = "c-captured-slicer-fixture"
+guards = ["slicer-conformance"]
+
+[[guarantees]]
+guarantee = "Tiling is recomputed from trajectories[], not the envelope's self-report"
+fault = "faultpoint:slicer-self-report-valid-gap"
+checkpoint = "c-captured-slicer-fixture"
+guards = ["slicer-conformance"]

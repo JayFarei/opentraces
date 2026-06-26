@@ -1,0 +1,212 @@
+name = "slicer-conformance"
+description = """
+Trace Slicer Library conformance gate (issue #141). Partitions one deterministic
+captured trace with all four slicers and pins the trajectory tiling SPANS — not
+the envelope's self-reported tiling.valid — so a wrong tiling breaks a pinned
+assertion. This is the recompute: trajectories[0].start, each boundary, the
+length, and the last .end are pinned against the parsed fixture.
+
+The fixture (c-captured-slicer-fixture) carries the control messages
+(<task-notification> + a bare `continue`) the S1 continuation-heuristic must
+absorb, so the three slicer faultpoints each break a pinned assertion:
+  * slicer-boundary-off-by-one   -> trajectories.0.end / trajectories.1.start shift
+  * slicer-drop-continuation     -> control messages open trajectories (length up)
+  * slicer-self-report-valid-gap -> a trajectory is dropped (length down; last .end gone)
+
+S3's cheap-LLM step is exercised both ways: the rc=10 needs-judgment handshake,
+then a committed recorded-answers replay that returns rc=0 with a pinned tiling.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-slicer-fixture"]
+status = "synthetic"
+
+[preconditions]
+min_captured_traces = 1
+
+# --- deterministic partitions (judge=deterministic -> rc=0, no answers) ---
+[[steps]]
+type = "cli"
+id = "s1"
+argv = ["trace", "partition", "{trace_id}", "--by", "s1", "--judge", "deterministic", "--json"]
+
+[[steps]]
+type = "cli"
+id = "s2"
+argv = ["trace", "partition", "{trace_id}", "--by", "s2", "--judge", "deterministic", "--json"]
+
+[[steps]]
+type = "cli"
+id = "s3det"
+argv = ["trace", "partition", "{trace_id}", "--by", "s3", "--judge", "deterministic", "--json"]
+
+[[steps]]
+type = "cli"
+id = "s4det"
+argv = ["trace", "partition", "{trace_id}", "--by", "s4", "--judge", "deterministic", "--json"]
+
+# --- S1 idempotence (byte-identical re-run) ---
+[[steps]]
+type = "cli"
+id = "s1again"
+argv = ["trace", "partition", "{trace_id}", "--by", "s1", "--judge", "deterministic", "--json"]
+
+# --- S3 agent-loop: rc=10 needs-judgment handshake ---
+[[steps]]
+type = "cli"
+id = "s3needs"
+argv = ["trace", "partition", "{trace_id}", "--by", "s3", "--judge", "agent", "--json"]
+expect_returncode = 10
+
+# --- recorded-answers replay -> rc=0 + pinned tiling ---
+[[steps]]
+type = "write_file"
+id = "answers"
+path = "slicer-answers.json"
+content = '{"answers": [{"id": "s3-same-outcome-0", "decision": "one_outcome", "confidence": 1.0}]}'
+
+[[steps]]
+type = "cli"
+id = "s3replay"
+argv = ["trace", "partition", "{trace_id}", "--by", "s3", "--judge", "agent", "--answers", "slicer-answers.json", "--json"]
+
+# ============================ assertions ============================
+
+# S1 — frozen envelope + pinned boundary tiling (the mutation-kill carrier).
+[[assertions]]
+kind = "returncode"
+step = "s1"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "s1"
+path = "schema_version"
+equals = "opentraces.slicing.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "s1"
+path = "total_steps"
+equals = 9
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "s1"
+path = "trajectories"
+equals = 4
+
+[[assertions]]
+kind = "stdout_json"
+step = "s1"
+path = "trajectories.0.start"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "s1"
+path = "trajectories.0.end"
+equals = 2
+
+[[assertions]]
+kind = "stdout_json"
+step = "s1"
+path = "trajectories.1.start"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "s1"
+path = "trajectories.3.start"
+equals = 8
+
+[[assertions]]
+kind = "stdout_json"
+step = "s1"
+path = "trajectories.3.end"
+equals = 8
+
+# S2 — change-burst tiling (cuts the first edit out of the lead-in).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "s2"
+path = "trajectories"
+equals = 5
+
+[[assertions]]
+kind = "stdout_json"
+step = "s2"
+path = "trajectories.1.start"
+equals = 1
+
+# S3 deterministic — same-artifact cluster collapses to one milestone close.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "s3det"
+path = "trajectories"
+equals = 5
+
+# S4 deterministic — the S1 spine (no pivots without the judge).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "s4det"
+path = "trajectories"
+equals = 4
+
+# Idempotence — same inputs -> identical trajectories[].
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "s1again"
+path = "trajectories"
+equals_var = "s1:trajectories"
+
+# S3 agent loop — call 1 is the rc=10 handshake with a well-formed request.
+[[assertions]]
+kind = "returncode"
+step = "s3needs"
+equals = 10
+
+[[assertions]]
+kind = "stdout_json"
+step = "s3needs"
+path = "status"
+equals = "needs_judgment"
+
+[[assertions]]
+kind = "stdout_json"
+step = "s3needs"
+path = "schema_version"
+equals = "opentraces.slicing.needs_judgment.v1"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "s3needs"
+path = "judgment_requests"
+equals = 1
+
+[[assertions]]
+kind = "stdout_json"
+step = "s3needs"
+path = "judgment_requests.0.kind"
+equals = "same_outcome"
+
+# S3 recorded-answers replay — call 2 returns rc=0 with the pinned tiling.
+[[assertions]]
+kind = "returncode"
+step = "s3replay"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "s3replay"
+path = "schema_version"
+equals = "opentraces.slicing.v1"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "s3replay"
+path = "trajectories"
+equals = 5
