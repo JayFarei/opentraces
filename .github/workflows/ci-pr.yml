@@ -178,3 +178,14 @@ jobs:
             tests/otbox/test_jtbd_ssot.py -q
       - name: otbox vertical slice
         run: make otbox-slice
+      # Trace Slicer Library (issue #141) conformance gate. SENTINEL journey +
+      # its 3 mutation kills. Lives here (not nightly-only) because the nightly
+      # lane is an unreliable gate; this is fast (~25s, ~4 box builds) and
+      # hermetic (OT_LLM_PROVIDER=none in tests/otbox/env.py keeps the slicer's
+      # labeler from shelling out to a host `claude`).
+      - name: Slicer conformance gate (journey + 3 mutation kills)
+        run: |
+          python -m pytest \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[slicer-conformance]" \
+            tests/otbox/test_mutation_kills.py \
+            -k "slicer or coherent" -q
