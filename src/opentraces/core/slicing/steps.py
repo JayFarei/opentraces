@@ -122,6 +122,38 @@ def is_unambiguous_pass(step: Any) -> bool:
     return bool(_PASS_RE.search(text)) and not _FAIL_RE.search(text)
 
 
+def step_preview(step: Any, idx: int, *, maxlen: int = 88) -> str:
+    """A compact one-line grounding for a step, embedded into S3/S4 judgment
+    prompts so a judge can decide without re-fetching the trace (issue #141
+    follow-up). Deterministic: derived only from the record."""
+    r = role(step)
+    tools = ",".join(sorted(set(tool_names(step))))[:26]
+    txt = (content(step) or obs_text(step) or "").strip().replace("\n", " ")
+    if not txt:
+        files = edit_files(step)
+        if files:
+            txt = "(edit " + files[0].split("/")[-1] + ")"
+    head = f"{r}/{tools}" if tools else r
+    return f"step {idx} ({head}): {txt[:maxlen]}"
+
+
+def cluster_context(steps: list[Any], indices: list[int], *, cap: int = 5) -> str:
+    """Render a bounded multi-line context block for a set of step indices.
+
+    Elides the middle when there are more than ``cap`` so the envelope stays
+    bounded even on huge traces with many same-artifact successes."""
+    idxs = list(indices)
+    if len(idxs) > cap:
+        idxs = idxs[: cap - 2] + [-1] + idxs[-1:]
+    lines = []
+    for i in idxs:
+        if i == -1:
+            lines.append("  … (intermediate successes elided) …")
+        else:
+            lines.append("  " + step_preview(steps[i], i))
+    return "\n".join(lines)
+
+
 def human_ask_starts(steps: list[Any]) -> list[int]:
     """Step indices that are genuine human asks per the LOCKED S1 rule.
 

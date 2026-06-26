@@ -84,6 +84,7 @@ def slice(steps: list[Any], *, answers: dict | None = None) -> SliceResult:
                 boundaries.add(close + 1)
             continue
         rid = f"s3-same-outcome-{ci}"
+        ctx = S.cluster_context(steps, [c[0] for c in cl])
         requests.append(
             JudgmentRequest(
                 id=rid,
@@ -92,8 +93,9 @@ def slice(steps: list[Any], *, answers: dict | None = None) -> SliceResult:
                 candidate_step=cl[-1][0],
                 prompt=(
                     f"Steps {[c[0] for c in cl]} all report success on artifact "
-                    f"{cl[0][1]!r}. Do they form ONE outcome (only the last closes a "
-                    f"trajectory) or DISTINCT outcomes (each closes one)?"
+                    f"{cl[0][1]!r}. Context:\n{ctx}\n"
+                    f"Do they form ONE outcome (only the last closes a trajectory) or "
+                    f"DISTINCT outcomes (each closes one)?"
                 ),
                 answer_schema={"decision": ["one_outcome", "distinct"], "confidence": "float 0..1"},
             )

@@ -37,6 +37,15 @@ Follow-up to issue #141. 10 diverse real bucket traces (claude + codex; 23 → 1
 3. Artifact placeholders (`<answer>` / `<test>` / `<apply_patch>`) are cryptic until cross-referenced (5 mentions).
 4. Minor: cross-surface step-count mismatch (`trace map`/`get` model nodes vs the slicer's atomic step indices) confused grounding once.
 
-## Top recommended follow-up (v1.1)
+## Top follow-up — LANDED + A/B validated
 
-Make the S3/S4 `prompt` self-grounding by inlining the candidate step's files + a short preview, so the agent does not need a separate `trace map` fetch to judge. The `prompt` is already a free-text field, so this needs no `JudgmentRequest` schema change. Pair with an escape hatch reminder: `--judge deterministic` returns a valid tiling instantly with default judgments, skipping the loop entirely when a quick split is enough.
+Made the S3/S4 `prompt` self-grounding by inlining a bounded preview of the relevant steps (S3: each same-artifact success in the cluster; S4: prior-outcome / candidate / next). The `prompt` is a free-text field, so this needed **no `JudgmentRequest` schema change**; tiling, idempotence, the otbox journey, and the mutation kills are all unchanged/green, and the huge-trace envelope stays bounded (164 KB / 216 requests).
+
+A/B — 8 agents judging from the rc=10 envelope ALONE (no trace access), bare vs enriched:
+
+| condition | "could judge from envelope alone" | mean confidence |
+|---|---|---|
+| bare (old) | 0/4 | 0.526 |
+| enriched (new) | 3/4 | 0.744 |
+
+Every enriched agent beat its bare counterpart; S4 (pivot) benefits most (0.42→0.82, 0.50→0.76, both flip to self-sufficient). Honest residual: S3 can still want more when the artifact is an opaque `<answer>` placeholder or successes are far apart with hidden intervening steps — a smaller v1.2 refinement. Escape hatch unchanged: `--judge deterministic` returns a valid tiling instantly, skipping the loop when a quick split is enough.

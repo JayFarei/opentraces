@@ -46,6 +46,13 @@ def slice(steps: list[Any], *, answers: dict | None = None) -> SliceResult:
     requests: list[JudgmentRequest] = []
     for cand in pivot_candidates(steps):
         rid = f"s4-pivot-{cand}"
+        ctx_lines = []
+        if cand - 1 >= 0:
+            ctx_lines.append("  prior outcome — " + S.step_preview(steps[cand - 1], cand - 1))
+        ctx_lines.append("  -> candidate    — " + S.step_preview(steps[cand], cand))
+        if cand + 1 < total:
+            ctx_lines.append("  next            — " + S.step_preview(steps[cand + 1], cand + 1))
+        ctx = "\n".join(ctx_lines)
         requests.append(
             JudgmentRequest(
                 id=rid,
@@ -53,9 +60,10 @@ def slice(steps: list[Any], *, answers: dict | None = None) -> SliceResult:
                 window=[max(0, cand - 3), min(total - 1, cand + 3)],
                 candidate_step=cand,
                 prompt=(
-                    f"At step {cand} the prior outcome is complete. Is the agent now "
-                    f"driving a DIFFERENT outcome (pivot -> open a new trajectory) or "
-                    f"continuing the same sub-goal (retry/verify/spawn-collect -> stay)?"
+                    f"At step {cand} the prior outcome is complete. Context:\n{ctx}\n"
+                    f"Is the agent now driving a DIFFERENT outcome (pivot -> open a new "
+                    f"trajectory) or continuing the same sub-goal (retry/verify/"
+                    f"spawn-collect -> stay)?"
                 ),
                 answer_schema={"decision": ["pivot", "stay"], "confidence": "float 0..1"},
             )
