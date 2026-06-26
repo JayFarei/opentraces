@@ -140,22 +140,44 @@ def is_unambiguous_pass(step: Any) -> bool:
     return bool(_PASS_RE.search(text)) and not _FAIL_RE.search(text)
 
 
-def narration(step: Any, *, maxlen: int = 72) -> str:
-    """The agent's own narration for a step — its first substantive sentence —
-    used to give S3 milestones / S4 sub-goals a descriptive label instead of a
-    bare artifact path. Deterministic; empty when the step has no agent prose."""
-    txt = (content(step) or "").strip()
+# Leading filler agents prefix a wrap-up with ("Done. <the actual summary>"),
+# stripped so a label keeps the substantive part rather than "Done.".
+_FILLER_RE = re.compile(
+    r"^\s*(✓+|done|ok(?:ay)?|got it|great|perfect|sure|alright|all set|nice)"
+    r"[\s.!:,;—-]+",
+    re.IGNORECASE,
+)
+
+
+def narration(step: Any, *, maxlen: int = 76) -> str:
+    """The agent's own narration for a step — used to give S3 milestones / S4
+    sub-goals a descriptive label instead of a bare artifact path. Strips a
+    leading filler prefix and collapses whitespace. Deterministic; empty when
+    the step has no agent prose."""
+    txt = " ".join((content(step) or "").split())
     if not txt:
         return ""
-    # take the first sentence/line, collapse whitespace
-    first = re.split(r"(?<=[.!?])\s|\n", txt, maxsplit=1)[0]
-    first = " ".join(first.split())
-    return first[:maxlen]
+    stripped = _FILLER_RE.sub("", txt).strip()
+    txt = stripped or txt  # keep the filler if it was the whole message
+    return txt[:maxlen]
 
 
 def first_narration(steps: list[Any], lo: int, hi: int) -> str:
     """First substantive agent narration in the span ``[lo, hi]``."""
     for i in range(lo, min(hi, len(steps) - 1) + 1):
+        if role(steps[i]) == "agent":
+            n = narration(steps[i])
+            if n:
+                return n
+    return ""
+
+
+def last_narration(steps: list[Any], lo: int, hi: int) -> str:
+    """Last substantive agent narration in the span — the wrap-up / deliverable
+    statement, used to label an S4 sub-goal by what it produced rather than by
+    the ask that triggered it."""
+    hi = min(hi, len(steps) - 1)
+    for i in range(hi, lo - 1, -1):
         if role(steps[i]) == "agent":
             n = narration(steps[i])
             if n:

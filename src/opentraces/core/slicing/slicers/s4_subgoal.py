@@ -73,12 +73,17 @@ def slice(steps: list[Any], *, answers: dict | None = None) -> SliceResult:
             boundaries.add(cand)
 
     def label(a: int, b: int) -> str:
+        # A sub-goal is named by its DELIVERABLE, not the ask that triggered it
+        # (that's what distinguishes S4 from the S1 user-turn). Prefer the
+        # agent's wrap-up narration; fall back to its opening intent, then to
+        # the user ask.
+        outcome = S.last_narration(steps, a, b)
+        if outcome:
+            return outcome
         if S.role(steps[a]) == "user":
             t = S.content(steps[a]).strip().replace("\n", " ")
             if t:
                 return t[:80]
-        # a pivot-opened span has no user ask at its head — name it by the
-        # agent's narration of what it set out to do.
         return S.first_narration(steps, a, b) or "(work)"
 
     trajs = trajectories_from_boundaries(boundaries, total, "subgoal", label)
