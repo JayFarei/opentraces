@@ -9,9 +9,15 @@ build/
 node_modules/
 **/node_modules/
 **/.next/
+# Next.js TEST build output (web/site/.next-test, ~98M / 1000+ files) — the
+# **/.next/ glob above does NOT catch the "-test" suffix.
+.next-test/
+**/.next-test/
 **/dist/
 **/build/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .git/
 .gstack/
 .claude/
@@ -19,7 +25,18 @@ node_modules/
 .context/
 .opentraces/
 .desloppify/
+.agent-trace/
+# otbox snapshot tarballs + test envs (~613M) — the single biggest leak; never
+# read by the marketing-site build.
+.otbox/
 kb/
+# Repo-root scratch / research dirs (anchored with a leading slash so we do NOT
+# also drop web/site/docs, which the site renders).
+/docs/
+/examples/
+/experiments/
+/firstmate/
+/runs/
 # Keep src/opentraces/__init__.py for version detection (next.config.ts reads it)
 src/opentraces/cli.py
 src/opentraces/parsers/
@@ -38,3 +55,8 @@ tmp/
 web/coming-soon/
 web/viewer/
 web/metrics-worker/
+# web/site local artifacts (not part of the deployed app)
+web/site/screenshots/
+web/site/seo-snapshots/
+web/site/test-results/
+web/site/.data/
