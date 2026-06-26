@@ -1574,12 +1574,15 @@ def trace_partition_cmd(
             click.echo(f"Could not read --answers file: {exc}", err=True)
             sys.exit(2)
 
+    from ..core.slicing.labeler import provider_labeler
+
     rc, env = slicing.partition_trace(
         trace_id=record.trace_id,
         slicer_name=slicer,
         steps=record.steps,
         judge=judge,
         answers=answers,
+        labeler=provider_labeler(),  # model-authored S3/S4 labels when a model is reachable
     )
 
     if as_json:

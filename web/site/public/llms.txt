@@ -754,6 +754,12 @@ pure function of `(trace, answers)` — same inputs, byte-identical output. The
 `provider` judge resolves the same requests unattended via the detected LLM
 backend; `--remote <repo>` reads the trace from a HuggingFace bucket.
 
+Each S3 milestone / S4 sub-goal trajectory is given a short, outcome-first
+**label** so a sliced session reads as a legible map. When a model is reachable
+(the detected `claude` CLI / API) the labels are model-authored in one batched
+call per trace; with no model they fall back to the agent's own narration. Labels
+never affect the boundaries — tiling stays deterministic.
+
 Explicit maintenance commands that can run for minutes accept a shared
 `--progress auto|plain|json|never` flag (starting with `opentraces trace index
 rebuild`). Progress and heartbeat events go to **stderr** so the final `--json`

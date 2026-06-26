@@ -81,6 +81,7 @@ def partition_trace(
     steps: list[Any],
     judge: str = judges.DEFAULT_JUDGE,
     answers: dict | None = None,
+    labeler: Any | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Run the full slicing operation.
 
@@ -88,6 +89,11 @@ def partition_trace(
       - ``(0, opentraces.slicing.v1)`` when complete.
       - ``(10, opentraces.slicing.needs_judgment.v1)`` when the agent/human judge
         needs answers it cannot supply inline (the rc=10 handshake).
+
+    ``labeler`` (optional, internal plumbing — not a user flag) upgrades the
+    final trajectory labels via a model when one is reachable; the deterministic
+    labels stand otherwise. Only applied on the rc=0 path; never affects
+    boundaries/tiling.
     """
     slicer = registry.get(slicer_name)
     tier = slicer.TIER
@@ -119,12 +125,20 @@ def partition_trace(
     else:
         final = first
 
+    trajectories = final.trajectories
+    if labeler is not None and trajectories:
+        from .labeler import apply_labels
+
+        labels = labeler(slicer_name, steps, trajectories)
+        if labels and len(labels) == len(trajectories):
+            trajectories = apply_labels(trajectories, labels)
+
     env = build_envelope(
         trace_id=trace_id,
         slicer=slicer_name,
         tier=tier,
         total_steps=total,
-        trajectories=final.trajectories,
+        trajectories=trajectories,
         judge=judge,
     )
     return 0, env

@@ -270,3 +270,45 @@ def test_mutant_self_report_valid_gap_is_caught_by_recompute(monkeypatch):
 def test_no_schema_version_bump():
     assert SCHEMA_VERSION == "0.7.0", "Trace Slicer Library is derive-on-demand; do not bump SCHEMA_VERSION"
     assert slicing.SLICING_SCHEMA_VERSION == "opentraces.slicing.v1"
+
+
+# --------------------------------------------------------------------------
+# trajectory labeling — upgrades labels without touching boundaries/tiling
+# --------------------------------------------------------------------------
+def test_labeler_replaces_labels_but_not_boundaries():
+    rec = CORPUS["multi_turn"]
+    base = slicing.partition_trace(trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic")[1]
+
+    seen = {}
+
+    def fake_labeler(slicer_name, steps, trajectories):
+        seen["n"] = len(trajectories)
+        return [f"LABEL-{i}" for i in range(len(trajectories))]
+
+    rc, env = slicing.partition_trace(
+        trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic", labeler=fake_labeler
+    )
+    assert rc == 0
+    # boundaries identical, labels replaced
+    assert [(t["start"], t["end"]) for t in env["trajectories"]] == [(t["start"], t["end"]) for t in base["trajectories"]]
+    assert [t["label"] for t in env["trajectories"]] == [f"LABEL-{i}" for i in range(seen["n"])]
+    assert _independent_recompute(env["trajectories"], env["total_steps"])["valid"]
+
+
+def test_labeler_failure_falls_back_to_deterministic():
+    rec = CORPUS["multi_turn"]
+    base = slicing.partition_trace(trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic")[1]
+
+    def bad_labeler(slicer_name, steps, trajectories):
+        return None  # provider unavailable / malformed -> keep deterministic
+
+    env = slicing.partition_trace(
+        trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic", labeler=bad_labeler
+    )[1]
+    assert [t["label"] for t in env["trajectories"]] == [t["label"] for t in base["trajectories"]]
+
+
+def test_provider_labeler_is_none_when_provider_disabled(monkeypatch):
+    monkeypatch.setenv("OT_LLM_PROVIDER", "none")
+    from opentraces.core.slicing.labeler import provider_labeler
+    assert provider_labeler() is None
