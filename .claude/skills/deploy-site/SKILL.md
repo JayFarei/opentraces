@@ -108,20 +108,34 @@ Phase 3  Triage           any red? fix in source -> back to Phase 0
 
 Deploy from the **repo root** (not `web/site/`), because Vercel resolves the
 root directory from its project settings (`rootDirectory=web/site`). Running
-from inside `web/site/` double-nests the path. Always pin to the latest CLI and
-use `--archive=tgz`: the brew-installed `vercel` (41.x) fails with
-`Error: Upload aborted` against the current deploy endpoint, which requires
-v47.2.2+.
+from inside `web/site/` double-nests the path. Always pin to the latest CLI
+(`npx vercel@latest`).
 
 ```bash
 cd /path/to/repo/root
-rm -rf web/site/.next kb/app/.next   # not in .vercelignore; bloats the archive
-npx vercel@latest --prod --yes --archive=tgz
+rm -rf web/site/.next kb/app/.next   # stale build output; bloats the upload
+npx vercel@latest --prod --yes
 ```
 
-`--archive=tgz` uploads one tarball instead of file-by-file, which also avoids a
-class of transient "Upload aborted" failures. Capture the deployment URL/id from
-the output; you'll reference it in the verify report.
+**Do NOT use `--archive=tgz`** (measured 2026-06-26, CLI 54.x). `--archive=tgz`
+tars the whole working tree and **bypasses `.vercelignore`**, so it hauls up
+`.git`-minus-nothing-else plus `kb/`, `.otbox/`, `web/site/.next-test/`, etc. —
+a **~3 GB / 1998-file** upload that takes minutes and once **hung for ~20 min at
+"Extracting deployment files"** on the build machine (a real prod stall we hit).
+The default **file-by-file** path on `vercel@latest` instead:
+
+- **respects `.vercelignore`** → ~628 files / ~40 MB,
+- uploads in **~2 s** and reaches READY in **~60 s end-to-end**,
+- does **not** hit the `Error: Upload aborted` that `--archive=tgz` was
+  originally added to dodge (that was a *brew 41.x* endpoint bug; `vercel@latest`
+  fixed it, so the workaround is now net-negative).
+
+If a future CLI regresses the file-by-file path and you must fall back to
+`--archive=tgz`, expect the ~3 GB archive and a multi-minute (occasionally
+stalling) extraction — retry the deploy if it hangs at extraction.
+
+Capture the deployment URL/id from the output; you'll reference it in the verify
+report.
 
 > Tip: you can verify a Vercel **preview** deploy first (omit `--prod`) and run
 > Phase 2 against the preview URL before promoting. This keeps email-capture
@@ -245,13 +259,32 @@ Record each iteration in the running log so the loop is auditable.
 
 ## .vercelignore
 
-The repo uses a positive-ignore `.vercelignore` (explicitly listing directories
-to exclude, not a `*` catch-all with negations). This matters because:
+**Location matters: the effective file is the repo-root `.vercelignore`.** Even
+though the project's Root Directory is `web/site`, the whole repo is uploaded
+(the build reads `../../src/opentraces/__init__.py` and `../../skill/SKILL.md`),
+and the **only** `.vercelignore` the file-by-file upload honors is the one at the
+**repo root** — patterns are matched relative to the repo root. A
+`web/site/.vercelignore` is **ignored**; do not add one (verified 2026-06-26 via
+`npx vercel@latest --debug`).
 
-- **Negation patterns (`*` then `!web/`) are fragile** and break across Vercel
-  CLI versions. Avoid them.
-- The Vercel CLI merges `.gitignore` rules into `.vercelignore`, which can cause
-  unexpected exclusions with negation patterns.
+It is a positive-ignore list (explicitly enumerated directories, **not** a `*`
+catch-all with `!` negations — negations are fragile and break across CLI
+versions). Without it the upload includes the heavy repo trees. The big ones it
+must exclude (each was a real leak we fixed):
+
+- `kb/` (~2.4 G), `.claude/` (~1.5 G), `tests/` (~1.4 G), `.venv*/` (~0.8 G)
+- `.otbox/` (~613 M of snapshot tarballs)
+- `web/site/.next-test/` (~98 M / 1000+ files — note `**/.next/` does **not**
+  match the `-test` suffix, so `.next-test/` needs its own rule)
+- `web/viewer/`, `web/coming-soon/`, `web/metrics-worker/`
+
+> Caveat: `.vercelignore` only filters the **file-by-file** upload path. The
+> `--archive=tgz` flag bypasses it (see Phase 1 — another reason not to use it).
+
+To sanity-check what would upload after editing `.vercelignore`, run
+`npx vercel@latest --debug` from the repo root and read the
+`Found N files … M required to upload` line, then Ctrl-C — no full deploy needed.
+A healthy site deploy is **~628 files**, not ~2000.
 
 Files that must NOT be ignored (the build reads them at build time):
 
@@ -285,8 +318,10 @@ directly from the store (Upstash `ZREM`). Store is Upstash Redis
 
 | Issue | Fix |
 |-------|-----|
-| `Error: Upload aborted` repeating across many files | Brew-installed `vercel` CLI is too old. Use `npx vercel@latest --prod --yes --archive=tgz` |
-| `Your Vercel CLI version is outdated. This endpoint requires version 47.2.2 or later` | Same: switch to `vercel@latest` |
+| Deploy hangs for minutes at `Extracting deployment files` (and upload showed `(…/3GB)`) | You used `--archive=tgz`, which bypasses `.vercelignore` and uploads a ~3 GB / 1998-file archive. Drop the flag: `npx vercel@latest --prod --yes` → ~628 files, ~60 s. If already hung, `vercel remove <stuck-url> --yes` and redeploy without the flag |
+| `Error: Upload aborted` repeating across many files | Old brew CLI bug. `npx vercel@latest --prod --yes` (file-by-file on 54.x no longer aborts; do **not** reach for `--archive=tgz`) |
+| `Your Vercel CLI version is outdated. This endpoint requires version 47.2.2 or later` | Switch to `npx vercel@latest` |
+| Upload is ~3 GB / ~2000 files when it should be ~40 M / ~628 | Either `--archive=tgz` is set (drop it) or a heavy dir leaked into the repo-root `.vercelignore`. Check with `npx vercel@latest --debug` and add the dir (common: `.otbox/`, `.next-test/`) |
 | "provided path does not exist" (e.g. `web/site/web/site`) | You ran `vercel` from `web/site/`. Deploy from repo root (the project has `rootDirectory=web/site` server-side) |
 | "Root Directory does not exist" | `.vercelignore` is excluding `web/site/`. Check ignore patterns, avoid `*` catch-all with negations |
 | Build fails on `version.json` | `next.config.ts` generates it at build time; check `src/opentraces/__init__.py` is not in `.vercelignore` |
