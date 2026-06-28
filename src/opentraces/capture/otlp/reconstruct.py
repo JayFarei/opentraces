@@ -42,11 +42,6 @@ logger = logging.getLogger("opentraces.otlp.reconstruct")
 # serializers space it) so the match is robust to formatting.
 _SESSION_RE = re.compile(rb'session_id\\"\s*:\s*\\"([0-9a-fA-F-]{8,})')
 
-# Bodies above this size are skipped during the cheap session-filter scan;
-# they are still loaded fully once a file is confirmed to belong to the
-# target session.
-_SCAN_MAX_BYTES = 8_000_000
-
 
 @dataclass
 class ReconstructedStep:
@@ -88,14 +83,6 @@ def _scan_request_files_for_session(
             name = entry.name
             if not name.endswith(".request.json"):
                 continue
-            try:
-                size = entry.stat().st_size
-            except OSError:
-                continue
-            if size > _SCAN_MAX_BYTES:
-                # Still parse — large bodies are legitimate late-conversation
-                # requests — but read once and reuse.
-                pass
             try:
                 raw = Path(entry.path).read_bytes()
             except OSError:

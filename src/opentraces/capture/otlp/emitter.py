@@ -573,16 +573,22 @@ def _join_trace_spine(
 ) -> bool:
     """Stamp the trace's bucket envelope with the OTel context-tree linkage.
 
-    Mirrors ``ingest._emit_context_tree`` (sets ``Step.context_node_id`` from
-    the step->node map and ``TraceRecord.context_tree_summary``) but operates
-    on the already-persisted ``trace.json`` envelope, so OTel-flushed context
-    becomes visible to ``trace get`` / ``trace map``. Returns False (no-op)
-    when the trace has no envelope yet — the ctx nodes still carry ``trace_id``
-    + ``step_index`` so the cross-substrate key is shared regardless.
+    Sets only ``TraceRecord.context_tree_summary`` on the already-persisted
+    ``trace.json`` envelope, so OTel-flushed context becomes visible to
+    ``trace get`` / ``trace map``. Returns False (no-op) when the trace has no
+    envelope yet — the ctx nodes still carry ``trace_id`` + ``step_index`` so
+    the cross-substrate key is shared regardless.
 
-    Both fields written here (``context_tree_summary``, ``Step.context_node_id``)
-    are OUTSIDE the per-trace ``digest_material`` (bucket_envelope.py), so this
-    rewrite is bucket_digest-invariant. Serialization matches
+    ``Step.context_node_id`` is intentionally NOT stamped here: the OTel
+    reconstruction ``step_index`` is a per-llm-request ordinal that does not
+    share the JSONL ``Step.step_index`` domain, so a raw-equality stamp would
+    attach OTel nodes to unrelated steps and clobber the authoritative JSONL
+    spine link set at ingest time. The forward join (ctx nodes carry
+    ``trace_id`` + ``step_index``) is unaffected.
+
+    The field written here (``context_tree_summary``) is OUTSIDE the per-trace
+    ``digest_material`` (bucket_envelope.py), so this rewrite is
+    bucket_digest-invariant. Serialization matches
     ``_write_per_trace_envelope`` (``record.model_dump(mode="json")`` via
     ``_atomic_write_json``) so the bytes stay canonical.
     """
@@ -602,11 +608,6 @@ def _join_trace_spine(
     except (OSError, ValueError):
         return False
 
-    step_node = {n.step_index: n.node_id for n in nodes if n.step_index is not None}
-    for step in getattr(record, "steps", []) or []:
-        node_id = step_node.get(getattr(step, "step_index", None))
-        if node_id is not None:
-            step.context_node_id = node_id
     summary = dict(getattr(record, "context_tree_summary", None) or {})
     summary.update(
         {

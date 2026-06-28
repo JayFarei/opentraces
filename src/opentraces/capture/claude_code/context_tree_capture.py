@@ -333,7 +333,7 @@ def _materialize_jsonl_message_blobs(
     except Exception:
         return
     payloads = [
-        rec.raw.get("message", {})
+        rec.raw.get("message", {}) or {}
         for rec in active_path
         if rec.record_type in ("user", "assistant")
     ]
