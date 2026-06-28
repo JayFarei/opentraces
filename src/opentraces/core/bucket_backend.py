@@ -42,9 +42,9 @@ try:  # pragma: no cover - exercised by tests through monkeypatching.
 except Exception:  # pragma: no cover
     hf_hub_download = None  # type: ignore[assignment]
 
-from . import paths
 from .bucket_layout import (
     blobs_v1_context_path,
+    blobs_v1_raw_path,
     bucket_manifest_path,
     events_v1_index_path,
     trace_v1_context_path,
@@ -150,6 +150,28 @@ class BucketBackend(abc.ABC):
         Raises :class:`BucketRemoteError` if the blob is missing.
         """
 
+    @abc.abstractmethod
+    def get_raw_message_blob(
+        self, content_hash: str, project_slug: str
+    ) -> bytes | None:
+        """Return the DECOMPRESSED canonical-JSON bytes behind ``content_hash``.
+
+        The blob path is content-addressed by ``content_hash``:
+        ``blobs/v1/<project>/raw/<hh>/<hash>.json.gz`` (issue #158). These
+        per-message raw blobs are the materialized text behind a Context
+        Tree ``messages`` manifest entry, and they ride the bucket's
+        lazy-on-pull blob transport — so ``ctx show --full --remote`` reaches
+        here to hydrate the message text the local cache does not yet hold.
+
+        Unlike :meth:`get_layer_blob` this returns RAW bytes, not parsed
+        JSON: the ``content_hash`` is taken over the exact canonical bytes,
+        so callers re-hash the returned bytes to prove the round trip
+        (``"sha256:" + sha256(bytes).hexdigest() == content_hash``).
+
+        Returns ``None`` when the blob is absent (message-text hydration is
+        best-effort, not a hard error like a missing layer blob).
+        """
+
     # ------------------------------------------------------------------
     # Helpers shared by both backends
     # ------------------------------------------------------------------
@@ -252,6 +274,17 @@ class LocalBucketBackend(BucketBackend):
                 f"context layer blob is not JSON: {path}: {exc}"
             ) from exc
 
+    def get_raw_message_blob(
+        self, content_hash: str, project_slug: str
+    ) -> bytes | None:
+        path = blobs_v1_raw_path(project_slug, content_hash, suffix=".json.gz")
+        if not path.exists():
+            return None
+        try:
+            return gzip.decompress(path.read_bytes())
+        except (OSError, gzip.BadGzipFile):
+            return None
+
 
 # ---------------------------------------------------------------------------
 # Remote HuggingFace Hub backend
@@ -327,6 +360,22 @@ class RemoteHubBackend(BucketBackend):
     def get_layer_blob(self, layer_id: str, project_slug: str) -> dict[str, Any]:
         filename = _hf_layer_blob_path(project_slug, layer_id)
         return self._fetch_gzipped_json(filename)
+
+    def get_raw_message_blob(
+        self, content_hash: str, project_slug: str
+    ) -> bytes | None:
+        filename = _hf_raw_blob_path(project_slug, content_hash)
+        try:
+            path = self._download(filename)
+        except BucketRemoteError:
+            # An absent message blob is normal (lazy-on-pull, may never have
+            # been pushed). Mirror the JSONL-companion behavior: return None
+            # rather than raise — hydration is best-effort.
+            return None
+        try:
+            return gzip.decompress(path.read_bytes())
+        except (OSError, gzip.BadGzipFile):
+            return None
 
     # ------------------------------------------------------------------
     # Internals
@@ -580,6 +629,22 @@ def _hf_layer_blob_path(project_slug: str, layer_id: str) -> str:
     digest_hex = layer_id.split(":", 1)[1] if ":" in layer_id else layer_id
     return (
         f"blobs/v1/{_hf_path_part(project_slug)}/context/"
+        f"{digest_hex[:2]}/{digest_hex}.json.gz"
+    )
+
+
+def _hf_raw_blob_path(project_slug: str, content_hash: str) -> str:
+    """Build the in-repo path for a content-addressed per-message raw blob.
+
+    Mirrors :func:`bucket_layout.blobs_v1_raw_path` shape:
+    ``blobs/v1/<project>/raw/<hh>/<hash>.json.gz`` (issue #158).
+    """
+
+    digest_hex = (
+        content_hash.split(":", 1)[1] if ":" in content_hash else content_hash
+    )
+    return (
+        f"blobs/v1/{_hf_path_part(project_slug)}/raw/"
         f"{digest_hex[:2]}/{digest_hex}.json.gz"
     )
 

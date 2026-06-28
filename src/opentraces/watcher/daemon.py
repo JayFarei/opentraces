@@ -100,6 +100,9 @@ class TickReport:
     bucket_sync_state: str | None = None
     bucket_sync_digest: str | None = None
     bucket_sync_error: str | None = None
+    # Zero-touch OTel auto-flush (#158 B): count of OTel staging sessions this
+    # tick moved into the canonical event log. 0 on idle/unchanged ticks.
+    otel_sessions_flushed: int = 0
 
 
 # --- helpers ---------------------------------------------------------------
@@ -377,6 +380,18 @@ def _run_trace_trails_runtime(
         if changed:
             from ..core.config import get_project_dir
             project_slug = get_project_dir(project_cwd).name
+            # Zero-touch OTel auto-flush (#158 B): move this project's active
+            # OTel staging snapshots into the canonical event log BEFORE the
+            # trail export + Context Tree projection below, so the freshly
+            # appended context_* events are exported and projected the SAME
+            # tick. Bounded + best-effort (reads only per-session snapshots,
+            # never the raw-bodies corpus) and never crashes the tick.
+            try:
+                report.otel_sessions_flushed = _auto_flush_otel_sessions(project_cwd)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "OTel auto-flush sweep failed for %s", project_cwd, exc_info=True
+                )
             try:
                 from ..core.bucket_store import sync_trail_events_from_repo
 
@@ -498,6 +513,175 @@ def _stamp_ctx_watermark(wm_path: Path | None, head: str | None) -> None:
         tmp.replace(wm_path)
     except OSError:
         logger.debug("failed to stamp context projection watermark", exc_info=True)
+
+
+# --- OTel zero-touch auto-flush (#158 B) -----------------------------------
+
+
+def _otel_autoflush_watermark_path(project_cwd: Path) -> Path | None:
+    """Per-session OTel auto-flush watermark, beside the ctx-projection one."""
+    base = _ctx_projection_watermark_path(project_cwd)
+    if base is None:
+        return None
+    return base.parent / "otel_autoflush_watermark.json"
+
+
+def _load_autoflush_watermark(wm_path: Path | None) -> dict:
+    if wm_path is None or not wm_path.is_file():
+        return {}
+    try:
+        data = json.loads(wm_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stamp_autoflush_watermark(wm_path: Path | None, watermark: dict) -> None:
+    if wm_path is None:
+        return
+    try:
+        wm_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = wm_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(watermark, sort_keys=True))
+        tmp.replace(wm_path)
+    except OSError:
+        logger.debug("failed to stamp OTel auto-flush watermark", exc_info=True)
+
+
+def _otel_snapshot_signature(snapshot: dict) -> dict:
+    """Cheap per-session activity fingerprint for the auto-flush watermark.
+
+    Advances when the live receiver records new body-ref log events (the
+    per-llm-request path) or refreshes the snapshot, so an unchanged snapshot
+    on a later tick compares equal — that cross-tick equality is what marks the
+    session idle (stable) and therefore eligible for its single flush.
+    """
+    return {
+        "last_envelope_at": snapshot.get("last_envelope_at"),
+        "body_ref_count": len(snapshot.get("body_ref_events") or []),
+        "node_count": len(snapshot.get("nodes_by_prompt") or {}),
+    }
+
+
+def _auto_flush_otel_sessions(project_cwd: Path) -> int:
+    """Move this project's active OTel staging snapshots into the event log.
+
+    Zero-touch (#158 B): nothing else advances OTel-captured sessions into the
+    bucket without a manual ``opentraces capture-otlp flush``. The watcher tick
+    calls this from inside the ``changed`` gate (a live Claude Code session also
+    writes its JSONL, so the tick is active and ``changed`` when OTel data is
+    flowing), so per-step OTel context lands automatically.
+
+    Bounded + best-effort:
+
+      * Common no-OTel path is a single ``is_dir`` check (the staging dir is
+        absent), so idle/most-project ticks do no work.
+      * Only flushes sessions that BELONG to this project: the JSONL ingest
+        minted and stored the session's ``trace_id`` in its latest generation,
+        so the SAME value is reused here and OTel ctx lands on the JSONL trace.
+        A staging session with no generation in this project's state is another
+        project's (or not yet JSONL-ingested) and is skipped — no fresh
+        trace_id is ever minted here.
+      * Reads only the per-session staging snapshot's body-refs (cheap); never
+        scans the multi-GB raw-bodies corpus.
+      * Each session is flushed AT MOST ONCE per generation, and only once its
+        snapshot signature has gone STABLE — equal to the signature recorded at
+        the prior tick (the session has gone idle). The watermark persists both
+        the last-seen signature (to detect cross-tick stability) and a permanent
+        per-session ``flushed`` flag, so a once-flushed session is NEVER
+        re-flushed regardless of later snapshot growth. A still-growing live
+        session is simply not flushed until it goes stable. This stops the
+        append-only event log from growing O(steps^2) over a live session's
+        lifetime (``append_event_batch`` has no cross-batch dedup).
+
+    Returns the number of sessions actually flushed this tick. Never raises.
+    """
+    try:
+        staging = _paths.otel_staging_dir()
+    except Exception:  # noqa: BLE001
+        return 0
+    if not staging.is_dir():
+        return 0
+    snap_paths = sorted(staging.glob("*.json"))
+    if not snap_paths:
+        return 0
+
+    try:
+        state = StateManager(state_path=get_project_state_path(project_cwd))
+    except Exception:  # noqa: BLE001
+        return 0
+
+    wm_path = _otel_autoflush_watermark_path(project_cwd)
+    watermark = _load_autoflush_watermark(wm_path)
+    dirty = False
+    flushed = 0
+
+    from ..capture.otlp.emitter import (
+        flush_session_to_project,
+        load_snapshot_from_disk,
+    )
+
+    for snap_path in snap_paths:
+        session_id = snap_path.stem
+        try:
+            gen = state.latest_generation(session_id)
+        except Exception:  # noqa: BLE001
+            gen = None
+        trace_id = getattr(gen, "trace_id", None) if gen is not None else None
+        if not trace_id:
+            # Not this project's session, or its JSONL has not been ingested
+            # yet (no trace_id minted). Skip — never mint a fresh one here.
+            continue
+        entry = watermark.get(session_id)
+        if not isinstance(entry, dict):
+            entry = {}
+        if entry.get("flushed"):
+            # Permanent marker: this session was already flushed once. Never
+            # re-flush, regardless of any later snapshot growth — re-flushing
+            # re-appends every prior context event (no cross-batch dedup).
+            continue
+        try:
+            snapshot = load_snapshot_from_disk(snap_path)
+        except Exception:  # noqa: BLE001
+            continue
+        signature = _otel_snapshot_signature(snapshot)
+        if entry.get("signature") != signature:
+            # First observation, or the snapshot is still advancing. Record the
+            # current signature and wait for it to stabilise across a tick
+            # before flushing — a live session is not flushed until it goes idle.
+            watermark[session_id] = {"signature": signature, "flushed": False}
+            dirty = True
+            continue
+        try:
+            report = flush_session_to_project(
+                project_dir=project_cwd,
+                trace_id=trace_id,
+                session_id=session_id,
+                snapshot=snapshot,
+                # The session may still be live; never delete the captain's
+                # raw bodies out from under a future tick. The watcher's TTL
+                # sweep enforces raw-body retention separately.
+                raw_body_retention="keep_forever",
+                # The bounded, watermark-gated _project_context_tree_bounded
+                # runs right after this in the same tick and lands the freshly
+                # appended events in the bucket; skip flush's own unbounded
+                # full read_events projection walk (#65/plan-087).
+                project_to_bucket=False,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "OTel auto-flush failed for session %s in %s",
+                session_id, project_cwd, exc_info=True,
+            )
+            continue
+        if report.get("ok"):
+            watermark[session_id] = {"signature": signature, "flushed": True}
+            dirty = True
+            flushed += 1
+
+    if dirty:
+        _stamp_autoflush_watermark(wm_path, watermark)
+    return flushed
 
 
 def _bucket_reconcile_once(*, reason: str) -> dict:
@@ -1131,6 +1315,7 @@ def _cli_entry(argv: list[str]) -> int:
             "bucket_sync_state": r.bucket_sync_state,
             "bucket_sync_digest": r.bucket_sync_digest,
             "bucket_sync_error": r.bucket_sync_error,
+            "otel_sessions_flushed": r.otel_sessions_flushed,
             "error": r.error,
         }, indent=2))
         return 1 if r.error else 0

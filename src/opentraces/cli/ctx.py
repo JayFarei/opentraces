@@ -206,6 +206,187 @@ def _project_slug_for_node(node: Any, *, remote: str | None = None) -> str | Non
     return None
 
 
+# --------------------------------------------------------------------------- #
+# Bucket-backed reads (issue #158 W4): resolve nodes + layers + per-message
+# text straight from the bucket companion, so ctx reads survive a hidden git
+# event ref (DoD#5) and surface the message TEXT behind each content_hash.
+# --------------------------------------------------------------------------- #
+
+
+def _bucket_slug_for_project(project_dir: Path | None) -> str | None:
+    """Canonical context bucket slug for a project dir (matches ingest/flush)."""
+    try:
+        from ..core.config import get_project_dir
+
+        target = Path(project_dir) if project_dir else Path.cwd()
+        return get_project_dir(target).name
+    except Exception:
+        return None
+
+
+def _read_bucket_nodes(slug: str, trace_id: str) -> list[Any]:
+    """Read a trace's ContextNodes from the bucket companion (nodes.jsonl)."""
+    from ..core.bucket_layout import context_tree_nodes_path
+    from ..core.context_tree.models import ContextNode
+
+    path = context_tree_nodes_path(slug, trace_id)
+    if not path.exists():
+        return []
+    out: list[Any] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            out.append(ContextNode.model_validate(json.loads(line)))
+        except (ValueError, json.JSONDecodeError):
+            continue
+    return out
+
+
+def _read_bucket_layer(slug: str, layer_id: str) -> Any:
+    """Read one layer blob from the bucket companion -> ContextLayer or None."""
+    if not slug or not layer_id:
+        return None
+    import gzip
+
+    from ..core.bucket_layout import blobs_v1_context_path
+    from ..core.context_tree.models import ContextLayer
+
+    path = blobs_v1_context_path(slug, layer_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(gzip.decompress(path.read_bytes()))
+        return ContextLayer.model_validate(payload)
+    except (ValueError, OSError, json.JSONDecodeError):
+        return None
+
+
+def _find_node_in_bucket(slug: str, node_id: str) -> Any:
+    """Scan a project's bucket context trees for ``node_id`` -> ContextNode."""
+    from urllib.parse import unquote
+
+    from ..core.bucket_layout import _path_part, contexts_root
+
+    base = contexts_root() / _path_part(slug)
+    if not base.exists():
+        return None
+    for trace_dir in base.iterdir():
+        if not trace_dir.is_dir():
+            continue
+        for node in _read_bucket_nodes(slug, unquote(trace_dir.name)):
+            if node.node_id == node_id:
+                return node
+    return None
+
+
+def _prefer_otel_node(nodes: list[Any], slug: str) -> Any:
+    """Pick the OTel-captured node when several nodes share a step.
+
+    A trace can carry both JSONL (``transcript_reconstruction``, approximated)
+    and OTel (``otel``, full per-step) context. The OTel node is higher fidelity
+    so it is the one ctx presents (issue #158 W4).
+    """
+    if not nodes:
+        return None
+    for node in nodes:
+        layer = _read_bucket_layer(slug, node.messages_layer_id)
+        if layer is not None and getattr(layer, "capture_method", None) == "otel":
+            return node
+    return nodes[0]
+
+
+def _flatten_message_text(payload: Any) -> str:
+    """Best-effort human-readable text for a message payload (deref result)."""
+    if isinstance(payload, str):
+        return payload
+    if not isinstance(payload, dict):
+        return ""
+    content = payload.get("content")
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                if isinstance(block.get("text"), str):
+                    parts.append(block["text"])
+                elif block.get("type") and isinstance(block.get("content"), str):
+                    parts.append(block["content"])
+            elif isinstance(block, str):
+                parts.append(block)
+    return "\n".join(parts)
+
+
+def _hydrate_messages_content(
+    content: dict[str, Any],
+    slug: str | None,
+    *,
+    remote: str | None = None,
+    node: Any = None,
+) -> dict[str, Any]:
+    """Resolve each manifest ``content_hash`` to its message text from raw/ blobs.
+
+    Returns a copy of the messages-layer content with every entry gaining a
+    ``content`` (the parsed message payload) and ``text`` (flattened) field when
+    its blob resolves. ``hydrated`` records how many resolved — the agent-facing
+    proof that content_hash is no longer a dangling pointer (issue #158).
+
+    Local resolution always tries the LOCAL raw/ blob cache first. When
+    ``remote`` is set (and not ``--offline``), any ``content_hash`` the local
+    cache lacks is lazy-fetched from the remote backend — mirroring
+    ``_lazy_fetch_layer_blob`` for layer blobs. The raw/ message blobs are
+    lazy-on-pull (``bucket_remote._is_lazy_blob_path`` classifies
+    ``blobs/v1/<slug>/raw/**`` as fetched on demand by ``ctx show``), so this
+    is the path that actually fetches them. The fetched bytes are verified
+    against their ``content_hash`` and written into the LOCAL cache so a later
+    ``--offline`` read resolves from disk.
+    """
+    if not slug or not isinstance(content, dict):
+        return content
+    from ..core.context_tree.raw_blobs import deref_message_payload
+
+    entries = content.get("messages")
+    if not isinstance(entries, list):
+        return content
+
+    # Resolve the remote backend's project_slug once (issue #158 track C).
+    # The local deref + local cache write key off ``slug``; the remote fetch
+    # keys off the slug the remote bucket stores the blob under (same in the
+    # symmetric local/remote model, but resolved from the node to mirror
+    # ``_lazy_fetch_layer_blob`` exactly).
+    remote_slug: str | None = None
+    if remote and node is not None:
+        remote_slug = _project_slug_for_node(node, remote=remote) or slug
+
+    out = dict(content)
+    new_entries: list[Any] = []
+    resolved = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            new_entries.append(entry)
+            continue
+        e = dict(entry)
+        ch = e.get("content_hash")
+        if ch:
+            payload = deref_message_payload(slug, ch)
+            if payload is None and remote and remote_slug:
+                payload = _lazy_fetch_message_blob(
+                    remote=remote,
+                    content_hash=ch,
+                    local_slug=slug,
+                    remote_slug=remote_slug,
+                )
+            if payload is not None:
+                e["content"] = payload
+                e["text"] = _flatten_message_text(payload)
+                resolved += 1
+        new_entries.append(e)
+    out["messages"] = new_entries
+    out["hydrated"] = {"resolved": resolved, "total": len(entries)}
+    return out
+
+
 def _cache_read_layer_blob(*, node: Any, layer_id: str) -> Any:
     """Read a layer blob from the LOCAL bucket cache (no network).
 
@@ -316,6 +497,62 @@ def _lazy_fetch_layer_blob(
 
         return ContextLayer.model_validate(payload)
     except Exception:
+        return None
+
+
+def _lazy_fetch_message_blob(
+    *,
+    remote: str,
+    content_hash: str,
+    local_slug: str,
+    remote_slug: str,
+) -> Any:
+    """Lazy-fetch one per-message raw blob from the remote backend.
+
+    Issue #158 (track C) — the raw/ message-content sibling of
+    ``_lazy_fetch_layer_blob``. ``ctx show --full --remote`` reaches here when
+    the LOCAL raw/ cache lacks a ``content_hash``. The fetched bytes are the
+    exact canonical-JSON bytes the ``content_hash`` was taken over, so we
+    re-hash to prove the round trip, write them into the LOCAL bucket cache
+    (deterministic gzip, ``mtime=0`` — so a later ``--offline`` read hits the
+    cache), and return the parsed message payload. Returns ``None`` on a miss,
+    a corrupt blob, or a hash mismatch (best-effort, never raises).
+    """
+    try:
+        backend = _cached_backend(remote)
+    except ImportError:
+        # --remote requires the D1 backend module; for message-text
+        # hydration this is best-effort, so degrade silently rather than
+        # aborting the whole `ctx show`.
+        return None
+    try:
+        raw = backend.get_raw_message_blob(content_hash, remote_slug)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    # Round-trip: the blob is content-addressed by ``content_hash`` over the
+    # exact bytes. A mismatch means a corrupt or forged blob — skip it.
+    import hashlib
+
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != content_hash:
+        return None
+    # Persist into the LOCAL cache so the next ``--offline`` deref resolves
+    # from disk (same deterministic gzip writer the layer-blob cache uses).
+    try:
+        from ..core._bucket_io import _atomic_write_gzip
+        from ..core.bucket_layout import blobs_v1_raw_path
+
+        local_blob = blobs_v1_raw_path(local_slug, content_hash, suffix=".json.gz")
+        if not local_blob.exists():
+            _atomic_write_gzip(local_blob, raw)
+    except Exception:
+        # Caching is best-effort; the parsed payload is still returned so the
+        # current call hydrates even if the cache write fails.
+        pass
+    try:
+        return json.loads(raw)
+    except (ValueError, json.JSONDecodeError):
         return None
 
 
@@ -644,7 +881,9 @@ def ctx_tree_cmd(
         _emit(payload)
         return
     # Indented text rendering of the active path
-    short = lambda nid: (nid[:18] + "…") if nid and len(nid) > 18 else (nid or "-")
+    def short(nid):
+        return (nid[:18] + "…") if nid and len(nid) > 18 else (nid or "-")
+
     for depth_i, node in enumerate(active_path):
         prefix = "  " * depth_i
         step = f"step={node.step_index}" if node.step_index is not None else "step=-"
@@ -731,6 +970,7 @@ def ctx_show_cmd(
     )
 
     repo = _project_repo(project_dir)
+    bucket_slug = _bucket_slug_for_project(project_dir)
     # Issue #121: bound the read — resolve the owning trace via a scoped
     # (context_node_observed-only) event read, then project just that trace,
     # instead of materialising the whole event log. Byte-identical output:
@@ -743,6 +983,11 @@ def ctx_show_cmd(
         else None
     )
     node = projection.nodes_by_id.get(node_id) if projection is not None else None
+    # Issue #158 W4 / DoD#5: when the git event ref is unavailable (hidden or
+    # never written), resolve the node from the bucket companion so ctx reads
+    # are bucket-backed, not git-replay-backed.
+    if node is None and bucket_slug:
+        node = _find_node_in_bucket(bucket_slug, node_id)
     if node is None:
         if as_json:
             _emit(_empty_state(
@@ -768,7 +1013,7 @@ def ctx_show_cmd(
     for layer_type, layer_id in layer_pairs:
         if keep_types is not None and layer_type not in keep_types:
             continue
-        layer = projection.layers_by_id.get(layer_id)
+        layer = projection.layers_by_id.get(layer_id) if projection is not None else None
         # Plan 080 §7 — provenance: "local" if the projection already
         # has it, "cache" if we resolved it from the local bucket cache,
         # "remote" if we lazy-fetched from the remote backend.
@@ -784,6 +1029,14 @@ def ctx_show_cmd(
             if cached is not None:
                 layer = cached
                 fetched_from = "cache"
+        # Issue #158 W4: bucket-companion rung, keyed by the project-derived
+        # slug (works even when the manifest has no row for the trace yet, and
+        # when the git event ref is hidden — DoD#5).
+        if layer is None and layer_id and bucket_slug:
+            from_bucket = _read_bucket_layer(bucket_slug, layer_id)
+            if from_bucket is not None:
+                layer = from_bucket
+                fetched_from = "bucket"
         # Plan 080 §7 lazy-fetch path. With ``--remote`` we fetch
         # missing blobs from the remote. ``--offline`` is the HARD
         # opt-out: never contact the network, fail rc=4 with a clean
@@ -834,7 +1087,20 @@ def ctx_show_cmd(
         if fetched_from is not None:
             entry["fetched_from"] = fetched_from
         if as_full and layer is not None:
-            entry["content"] = layer.content
+            content = layer.content
+            # Issue #158 W4 / DoD#1: hydrate the messages manifest — resolve
+            # each content_hash to its message text from the raw/ blobs. With
+            # ``--remote`` the missing raw/ blobs are lazy-fetched (track C);
+            # ``--offline`` blocks the network exactly like the layer-blob
+            # path above (passing remote=None keeps the read local-only).
+            if layer_type == "messages":
+                content = _hydrate_messages_content(
+                    content,
+                    bucket_slug,
+                    remote=None if offline else remote,
+                    node=node,
+                )
+            entry["content"] = content
         layers_out[layer_type] = entry
         if fetched_from is not None:
             layer_provenance[layer_type] = fetched_from
@@ -924,8 +1190,15 @@ def ctx_step_cmd(
     from ..core.context_tree.query import build_context_tree_projection_for_trace
 
     repo = _project_repo(project_dir)
+    bucket_slug = _bucket_slug_for_project(project_dir)
     projection = build_context_tree_projection_for_trace(repo, trace_id)
     node = projection.node_for_step(trace_id, step_index)
+    # Issue #158 W4 / DoD#5: bucket-companion fallback when the git event ref
+    # is unavailable. Prefer the OTel (full) node when both capture methods
+    # left a node at this step.
+    if node is None and bucket_slug:
+        bnodes = [n for n in _read_bucket_nodes(bucket_slug, trace_id) if n.step_index == step_index]
+        node = _prefer_otel_node(bnodes, bucket_slug) if bnodes else None
     if node is None:
         if as_json:
             _emit(_empty_state(
@@ -946,10 +1219,14 @@ def ctx_step_cmd(
         ("tool_registry", node.tool_registry_layer_id),
         ("runtime_state", node.runtime_state_layer_id),
     )
-    layers_out = {
-        lt: _summarize_layer(projection.layers_by_id.get(lid))
-        for lt, lid in layer_pairs
-    }
+
+    def _layer(lid: str) -> Any:
+        layer = projection.layers_by_id.get(lid)
+        if layer is None and bucket_slug:
+            layer = _read_bucket_layer(bucket_slug, lid)
+        return layer
+
+    layers_out = {lt: _summarize_layer(_layer(lid)) for lt, lid in layer_pairs}
     payload = {
         "schema_version": CONTEXT_TREE_SCHEMA_VERSION,
         "node_id": node.node_id,
@@ -1542,7 +1819,7 @@ def ctx_resume_cmd(
     for lim in packet.get("capture_limitations") or []:
         click.echo(f"  limitation: {lim}")
     click.echo("# Suggested:")
-    click.echo(f"#   claude --resume <session-id-from-ctx-prune>")
+    click.echo("#   claude --resume <session-id-from-ctx-prune>")
 
 
 # --------------------------------------------------------------------------- #

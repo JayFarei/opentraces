@@ -74,10 +74,16 @@ opentraces setup capture-otlp
 opentraces capture-otlp start
 opentraces capture-otlp status --json
 opentraces capture-otlp flush --session <session-id> --project <repo> --trace-id <trace-id>
+opentraces capture-otlp flush --from-raw-bodies --session <session-id> --project <repo> --trace-id <trace-id>
 ```
 
 The OTLP receiver feeds OTel events and raw API-body files into the same
 Context Tree substrate. If the receiver is down, agent traffic is not blocked.
+`flush` lands the captured context in the bucket and joins it to the trace
+spine, so `ctx show` / `ctx step` can read it; the watcher tick auto-flushes a
+project's active OTel sessions once each goes idle (zero-touch), so you usually
+need not run it by hand. `--from-raw-bodies` reconstructs an already-captured
+session per-step from the raw bodies with no live receiver.
 
 ## Enrichment
 

@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **OTel context now lands in the bucket and is usable via `ctx` (#158).** `opentraces capture-otlp flush --from-raw-bodies --session <id> --project <repo> --trace-id <id>` reconstructs an already-captured session per-step directly from the raw request/response bodies (paired by `session_id` + the `diagnostics.previous_message_id` chain), with no live receiver required — the full-fidelity path that supersedes the daemon snapshot. It keys one ContextNode per llm-request (not per-turn), materializes per-message content blobs once (un-dangling `content_hash`), projects nodes into the bucket companion, and stamps `Step.context_node_id` + `TraceRecord.context_tree_summary` for the spine join. `ctx show` / `ctx step` now resolve and hydrate node content from the bucket, so reads work even with the Git event ref hidden.
+- **`opentraces doctor --json` is now pure JSON** (no `---OPENTRACES_JSON---` preamble under an explicit `--json`), and `doctor` reports `context_tree.coverage` (wire `captures_total` vs `context_nodes_in_bucket`) so a green receiver is no longer mistaken for usable data. `capture-otlp status` lists captured sessions.
+
+### Added
+
+- **Zero-touch OTel context capture (#158).** The watcher tick now auto-flushes a project's active OTel-captured Context Tree sessions into the bucket once each session goes idle (watermark-gated, at most once per session, reads only the cheap per-session snapshot), so live captures land on the trace with no manual `capture-otlp flush`. The OTLP receiver buffer captures per-llm-request body refs so the live daemon snapshot path produces one full ContextNode per llm-request (not a collapsed per-turn node), and `ctx show --full --remote` lazy-fetches missing message blobs from the remote backend (verifying the `content_hash` round-trip and warming the local cache).
+
 ## [0.4.8] - 2026-06-22
 
 ### Fixed

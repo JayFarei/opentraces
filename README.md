@@ -277,7 +277,7 @@ The Context Tree captures what the LLM actually saw at each step of a session: `
 
 `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step` navigate it. `ctx list` and `ctx info` read the bucket manifest with zero blob loads.
 
-Two capture sources feed the same substrate. The JSONL parser (harness-side) ships shared session-level layers per node — walk-back to "what did the LLM see at step 7" is a session-level approximation in that path. The OTLP receiver (`setup capture-otlp`) closes the assembled-system-prompt, tool-schema, and sampling-params gaps for sessions captured over OpenTelemetry. See the [Context Tree docs](https://opentraces.ai/docs/workflow/context-tree).
+Two capture sources feed the same substrate. The JSONL parser (harness-side) ships shared session-level layers per node — walk-back to "what did the LLM see at step 7" is a session-level approximation in that path. The OTLP receiver (`setup capture-otlp`) closes the assembled-system-prompt, tool-schema, and sampling-params gaps for sessions captured over OpenTelemetry. The watcher auto-flushes live OTel sessions into the bucket once they go idle (zero-touch), and `capture-otlp flush --from-raw-bodies --session <id> --project <repo> --trace-id <id>` reconstructs an already-captured OTel session per-step (one node per llm-request) straight from the raw bodies — no live receiver — lands the nodes in the bucket, and joins them to the trace spine so `ctx show` / `ctx step` can read them. See the [Context Tree docs](https://opentraces.ai/docs/workflow/context-tree).
 
 ## Bucket
 

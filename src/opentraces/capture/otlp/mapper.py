@@ -34,6 +34,11 @@ class MapperResult:
     session_id: str | None = None
     prompt_id: str | None = None
     request_id: str | None = None
+    # One ``api_request_body`` / ``api_response_body`` body-ref log event. The
+    # emitter accumulates these per session so the live snapshot path can pair
+    # request+response bodies per-llm-request (issue #158 W3) instead of per
+    # per-turn ``prompt.id``.
+    body_ref_event: dict[str, Any] | None = None
 
 
 # --- OTLP AnyValue + attribute helpers ------------------------------------- #
@@ -64,6 +69,17 @@ def _otlp_attr(attrs: list[dict[str, Any]] | None, name: str) -> Any | None:
     for entry in attrs or []:
         if entry.get("key") == name:
             return _unwrap_any(entry.get("value", {}) or {})
+    return None
+
+
+def _as_int(value: Any) -> int | None:
+    """Coerce an OTLP attribute value to int when it cleanly is one, else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.lstrip("-").isdigit():
+        return int(value)
     return None
 
 
@@ -184,16 +200,34 @@ def _apply_log(result: MapperResult, attrs: list[dict[str, Any]], record: dict[s
         rid = _otlp_attr(attrs, "request_id")
         if rid:
             result.request_id = rid
+        # The request body carries no request_id (verified, issue #158); the
+        # paired response supplies it. Record the request file path + sequence
+        # so the emitter can pair per-llm-request by (prompt.id, sequence).
+        result.body_ref_event = {
+            "kind": "request",
+            "body_ref": ref,
+            "sequence": _as_int(_otlp_attr(attrs, "event.sequence")),
+        }
         return
     if event == "api_response_body":
         rid = _otlp_attr(attrs, "request_id") or _otlp_attr(attrs, "gen_ai.response.id")
         if rid:
             result.request_id = rid
+        ref = _otlp_attr(attrs, "body_ref")
         result.node_observation = {
             "transcript_uuid": rid,
             "session_id": result.session_id,
             "prompt_id": result.prompt_id,
-            "response_body_ref": _otlp_attr(attrs, "body_ref"),
+            "response_body_ref": ref,
+        }
+        # The response body log is the only place request_id appears; record it
+        # alongside the response file path + sequence so the emitter pairs this
+        # response to the preceding request within the same prompt.id.
+        result.body_ref_event = {
+            "kind": "response",
+            "body_ref": ref,
+            "request_id": rid,
+            "sequence": _as_int(_otlp_attr(attrs, "event.sequence")),
         }
         return
     keys = _LIFECYCLE_KEYS.get(event)

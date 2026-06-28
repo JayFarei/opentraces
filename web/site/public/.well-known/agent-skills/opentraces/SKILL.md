@@ -310,7 +310,16 @@ opentraces setup capture-otlp
 opentraces capture-otlp start
 opentraces capture-otlp status --json
 opentraces capture-otlp flush --session <session_id> --project <repo> --trace-id <trace_id>
+opentraces capture-otlp flush --from-raw-bodies --session <session_id> --project <repo> --trace-id <trace_id>
 ```
+
+`flush` lands the captured context in the bucket (one node per llm-request) and
+joins it to the trace spine, so `ctx show` / `ctx step` can read it. You usually
+do not need to run it by hand: the watcher tick auto-flushes a project's active
+OTel sessions once each goes idle (zero-touch). `--from-raw-bodies` reconstructs
+an already-captured session per-step from the raw request/response bodies with
+no live receiver — the full-fidelity, retroactive path. `capture-otlp status`
+lists the captured session ids you can flush.
 
 ## Dataset Workflows
 

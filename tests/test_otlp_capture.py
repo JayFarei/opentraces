@@ -604,6 +604,128 @@ def test_full_chain_layers_have_full_completeness(
         watcher.shutdown()
 
 
+def test_live_body_ref_events_produce_per_llm_request_nodes(
+    buffer: OTLPCaptureBuffer,
+    raw_bodies_dir: Path,
+    tmp_project: Path,
+):
+    """Issue #158 W3: the live snapshot path keys nodes per-llm-request via the
+    OTel ``api_*_body`` body-ref log events — NOT per-turn ``prompt.id``.
+
+    One session, TWO prompt.ids, each with TWO (api_request_body,
+    api_response_body) pairs => 4 llm-requests => 4 ContextNodes. Each request
+    body carries distinct messages so the per-step messages manifests differ,
+    and every manifest ``content_hash`` derefs to its text via the raw/ blob.
+    """
+    import hashlib
+
+    from opentraces.capture.otlp.emitter import _project_slug_for
+    from opentraces.core.context_tree.raw_blobs import deref_message_content
+
+    session_id = "11111111-2222-3333-4444-555555555555"
+
+    def _log_env(event_name: str, attrs: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "signal": "logs",
+            "received_at": time.time(),
+            "body": {"resourceLogs": [{
+                "resource": {"attributes": [_attr("session.id", session_id)]},
+                "scopeLogs": [{"logRecords": [{
+                    "attributes": [_attr("event.name", event_name)] + attrs,
+                }]}],
+            }]},
+        }
+
+    # 4 llm-requests across 2 turns, each with distinct user messages so the
+    # per-step manifests (and thus messages-layer ids) differ.
+    # (prompt_id, request_stem, request_id, req_seq, resp_seq, user_text)
+    specs = [
+        ("turn-A", "uuidA1", "req_A1", 1, 2, "turn A request one"),
+        ("turn-A", "uuidA2", "req_A2", 3, 4, "turn A request two"),
+        ("turn-B", "uuidB1", "req_B1", 5, 6, "turn B request one"),
+        ("turn-B", "uuidB2", "req_B2", 7, 8, "turn B request two"),
+    ]
+    for prompt_id, stem, rid, req_seq, resp_seq, text in specs:
+        req_path = raw_bodies_dir / f"{stem}.request.json"
+        req_path.write_text(json.dumps({
+            "model": "claude-opus-4-7",
+            "system": [{"type": "text", "text": f"system for {stem}"}],
+            "messages": [{"role": "user", "content": text}],
+            "tools": [{"name": "Read", "input_schema": {"type": "object",
+                       "properties": {"file_path": {"type": "string"}}}}],
+            "max_tokens": 64000, "stream": True,
+        }))
+        resp_path = raw_bodies_dir / f"{rid}.response.json"
+        resp_path.write_text(json.dumps({
+            "id": f"msg_{rid}", "type": "message", "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 100 + req_seq, "output_tokens": 5},
+        }))
+        # api_request_body carries body_ref (request file) + sequence, NO request_id.
+        buffer.handle_envelope(_log_env("api_request_body", [
+            _attr("session.id", session_id),
+            _attr("prompt.id", prompt_id),
+            _attr("body_ref", str(req_path)),
+            _attr("event.sequence", req_seq),
+        ]))
+        # api_response_body carries body_ref (response file) + request_id + sequence.
+        buffer.handle_envelope(_log_env("api_response_body", [
+            _attr("session.id", session_id),
+            _attr("prompt.id", prompt_id),
+            _attr("body_ref", str(resp_path)),
+            _attr("request_id", rid),
+            _attr("event.sequence", resp_seq),
+        ]))
+
+    snap = buffer.snapshot_session(session_id)
+    assert snap is not None
+    # 8 body-ref log events accumulated (4 request + 4 response).
+    assert len(snap["body_ref_events"]) == 8, snap["body_ref_events"]
+
+    report = flush_session_to_project(
+        project_dir=tmp_project,
+        trace_id="trace-bodyref-0001",
+        session_id=session_id,
+        snapshot=snap,
+        steps=None,
+        raw_bodies_dir=raw_bodies_dir,
+    )
+    assert report["ok"], report
+    # 4 llm-requests => 4 nodes, NOT 2 per-prompt nodes (the per-turn bug).
+    assert report["nodes_count"] == 4, report
+
+    events = read_events(tmp_project)
+    node_events = [e for e in events if e.event_type == CONTEXT_NODE_OBSERVED]
+    assert len(node_events) == 4
+
+    # Per-step messages manifests differ: each node points at a distinct
+    # (content-addressed) messages layer.
+    msg_layer_ids = {e.payload["messages_layer_id"] for e in node_events}
+    assert len(msg_layer_ids) == 4, msg_layer_ids
+
+    # Every manifest content_hash derefs to its text via the raw/ blob, and the
+    # round-trip holds (sha256 of the stored bytes reproduces the content_hash).
+    slug = _project_slug_for(tmp_project)
+    messages_layers = [
+        e.payload for e in events
+        if e.event_type == CONTEXT_LAYER_CAPTURED
+        and e.payload.get("layer_type") == "messages"
+    ]
+    assert len(messages_layers) == 4
+    checked = 0
+    for layer in messages_layers:
+        for entry in (layer.get("content") or {}).get("messages", []):
+            ch = entry.get("content_hash")
+            assert ch
+            raw = deref_message_content(slug, ch)
+            assert raw is not None, ch
+            assert "sha256:" + hashlib.sha256(raw).hexdigest() == ch
+            assert len(raw.decode("utf-8").strip()) > 2
+            checked += 1
+    assert checked == 4  # one distinct user message per step
+
+
 def test_install_autostart_uses_shim_and_threads_flags(tmp_path, monkeypatch):
     """0.4.5: the launchd/systemd unit points at a SHIM (not the binary), so an
     unsigned binary loads on Ventura+ with NO signing gate; port/bind/raw-dir are
