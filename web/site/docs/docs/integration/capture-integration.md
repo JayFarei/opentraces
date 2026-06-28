@@ -382,6 +382,8 @@ All of this lands in `refs/opentraces/local/events/v1` as an append-only Git ref
 
 The watcher daemon (`src/opentraces/watcher/daemon.py`) is mostly agent-agnostic. It polls per-project, runs an mtime probe over registered parser session files, and calls `core.ingest.scan_project` on activity.
 
+On an active tick the watcher also auto-flushes the project's active OTel-captured Context Tree sessions into the bucket (`_auto_flush_otel_sessions`, #158 B). It is zero-touch and best-effort: the common no-OTel path is a single `is_dir` check, it reads only the cheap per-session staging snapshot (never the raw-bodies corpus), and it flushes each session at most once per generation and only once the session's snapshot signature has gone stable (idle). So per-step OTel context lands automatically without a manual `opentraces capture-otlp flush`.
+
 The default path uses `capture.discover_project_sessions(project_cwd)`. For non-Claude agents, implement `ProjectSessionDiscoverer.discover_project_sessions(project_dir)` so the registry can map the repo to native session files. To add special recursive probes for nested sidecar files that should wake the watcher but are not independently parseable:
 
 1. Add a per-agent directory resolver.

@@ -993,10 +993,12 @@ The receiver feeds Claude Code OTel events and raw API bodies into Context
 Tree events. If the receiver is down, agent traffic is not blocked.
 
 `flush` lands the captured context in the bucket and joins it to the trace
-spine, so `ctx show` / `ctx step` can read it. `--from-raw-bodies`
-reconstructs an already-captured session per-step straight from the raw
-request/response bodies with no live receiver running — the full-fidelity
-path. `capture-otlp status` lists the captured session ids you can flush.
+spine, so `ctx show` / `ctx step` can read it. You usually do not need to run it
+by hand: the watcher tick auto-flushes a project's active OTel sessions once
+each goes idle (zero-touch). `--from-raw-bodies` reconstructs an
+already-captured session per-step straight from the raw request/response bodies
+with no live receiver running — the full-fidelity, retroactive path.
+`capture-otlp status` lists the captured session ids you can flush.
 
 ## Advanced
 
@@ -1414,9 +1416,10 @@ opentraces capture-otlp flush --from-raw-bodies --session <session-id> --project
 The OTLP receiver feeds OTel events and raw API-body files into the same
 Context Tree substrate. If the receiver is down, agent traffic is not blocked.
 `flush` lands the captured context in the bucket and joins it to the trace
-spine, so `ctx show` / `ctx step` can read it; `--from-raw-bodies`
-reconstructs an already-captured session per-step from the raw bodies with no
-live receiver.
+spine, so `ctx show` / `ctx step` can read it; the watcher tick auto-flushes a
+project's active OTel sessions once each goes idle (zero-touch), so you usually
+need not run it by hand. `--from-raw-bodies` reconstructs an already-captured
+session per-step from the raw bodies with no live receiver.
 
 ## Enrichment
 
@@ -1945,6 +1948,13 @@ spine via `Step.context_node_id` and `TraceRecord.context_tree_summary`, so
 reconstructs an already-captured session per-step straight from the raw
 request/response bodies with no live receiver — the full-fidelity path.
 `capture-otlp status` lists the captured session ids available to flush.
+
+You usually do not need to run `flush` by hand: the watcher tick auto-flushes a
+project's active OTel sessions into the bucket once each session goes idle
+(zero-touch, watermark-gated, at most once per session), so live captures land
+on the trace automatically. Run `flush` explicitly only to land a session
+immediately or to reconstruct an already-captured session retroactively with
+`--from-raw-bodies`.
 
 If the receiver is down, agent traffic is not blocked. Claude Code's OTel
 emission is fire-and-forget.

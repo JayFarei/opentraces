@@ -516,10 +516,12 @@ The receiver feeds Claude Code OTel events and raw API bodies into Context
 Tree events. If the receiver is down, agent traffic is not blocked.
 
 `flush` lands the captured context in the bucket and joins it to the trace
-spine, so `ctx show` / `ctx step` can read it. `--from-raw-bodies`
-reconstructs an already-captured session per-step straight from the raw
-request/response bodies with no live receiver running — the full-fidelity
-path. `capture-otlp status` lists the captured session ids you can flush.
+spine, so `ctx show` / `ctx step` can read it. You usually do not need to run it
+by hand: the watcher tick auto-flushes a project's active OTel sessions once
+each goes idle (zero-touch). `--from-raw-bodies` reconstructs an
+already-captured session per-step straight from the raw request/response bodies
+with no live receiver running — the full-fidelity, retroactive path.
+`capture-otlp status` lists the captured session ids you can flush.
 
 ## Advanced
 

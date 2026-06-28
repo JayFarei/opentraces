@@ -86,6 +86,13 @@ request/response bodies (paired by `session_id` and the message chain) with no
 live receiver — the full-fidelity path. `capture-otlp status` lists the
 captured session ids available to flush.
 
+You usually do not need to run `flush` by hand: the watcher tick auto-flushes a
+project's active OTel sessions into the bucket once each session goes idle
+(zero-touch, watermark-gated, at most once per session), so live captures land
+on the trace automatically. Run `flush` explicitly only to land a session
+immediately or to reconstruct an already-captured session retroactively with
+`--from-raw-bodies`.
+
 If the receiver is down, agent traffic is not blocked. Claude Code's OTel
 emission is fire-and-forget.
 
