@@ -2136,6 +2136,7 @@ def _context_tree_coverage(
     if cwd is None:
         return coverage
     try:
+        from .bucket_context_store import read_context_tree_head
         from .bucket_layout import _path_part, contexts_root
         from .config import get_project_dir
 
@@ -2144,12 +2145,29 @@ def _context_tree_coverage(
         if base.exists():
             nodes = traces = 0
             for trace_dir in base.iterdir():
-                np = trace_dir / "nodes.jsonl"
-                if np.exists():
-                    traces += 1
-                    nodes += sum(
-                        1 for line in np.read_text(encoding="utf-8").splitlines() if line.strip()
+                if not trace_dir.is_dir():
+                    continue
+                # Prefer the tiny head.json ``node_count`` (O(traces) small
+                # reads) over reading every trace's full nodes.jsonl, so the
+                # diagnostic stays size-independent (plan-087/#87).
+                node_count: int | None = None
+                head = read_context_tree_head(slug, trace_dir.name)
+                if head is not None and head.get("node_count") is not None:
+                    try:
+                        node_count = int(head["node_count"])
+                    except (TypeError, ValueError):
+                        node_count = None
+                if node_count is None:
+                    np = trace_dir / "nodes.jsonl"
+                    if not np.exists():
+                        continue
+                    node_count = sum(
+                        1
+                        for line in np.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
                     )
+                traces += 1
+                nodes += node_count
             coverage["context_nodes_in_bucket"] = nodes
             coverage["context_traces_in_bucket"] = traces
             coverage["landed"] = nodes > 0

@@ -324,12 +324,33 @@ def test_doctor_coverage_counts_bucket_nodes(tmp_path, monkeypatch):
     nodes_path = bucket_layout.context_tree_nodes_path(slug, "trace-cov")
     nodes_path.parent.mkdir(parents=True, exist_ok=True)
     nodes_path.write_text("\n".join(json.dumps({"node_id": f"n{i}"}) for i in range(3)))
+    # head.json is the size-independent count source (plan-087/#87); coverage
+    # must read ``node_count`` from it rather than walking nodes.jsonl bytes.
+    from opentraces.core.bucket_context_store import CONTEXT_TREE_BUCKET_SCHEMA
+
+    head_path = bucket_layout.context_tree_head_path(slug, "trace-cov")
+    head_path.write_text(
+        json.dumps(
+            {
+                "schema_version": CONTEXT_TREE_BUCKET_SCHEMA,
+                "project_slug": slug,
+                "trace_id": "trace-cov",
+                "node_count": 3,
+            }
+        )
+    )
 
     cov = doctor._context_tree_coverage(proj, {"captures_total": 50})
     assert cov["context_nodes_in_bucket"] == 3
     assert cov["context_traces_in_bucket"] == 1
     assert cov["landed"] is True
     assert cov["captures_total"] == 50
+
+    # head.json missing → fall back to bounded nodes.jsonl line count.
+    head_path.unlink()
+    cov_fallback = doctor._context_tree_coverage(proj, {"captures_total": 50})
+    assert cov_fallback["context_nodes_in_bucket"] == 3
+    assert cov_fallback["context_traces_in_bucket"] == 1
 
 
 def test_doctor_json_is_pure_json_no_sentinel():
