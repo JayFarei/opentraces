@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable
+from typing import Any
 
 from ...core.context_tree import CAPTURE_METHOD_OTEL
 from ...core.context_tree.raw_blobs import (

@@ -1142,7 +1142,7 @@ def _materialize_nodes_for_active_path(
     All nodes point at the same four session-level layers in v1;
     per-step layer differentiation lands in a follow-up Phase 3 task.
     """
-    system_id, messages_id, tool_id, runtime_id = (l.layer_id for l in layers)
+    system_id, messages_id, tool_id, runtime_id = (layer.layer_id for layer in layers)
     nodes: list[ContextNode] = []
     uuid_to_node_id: dict[str, str] = {}
 

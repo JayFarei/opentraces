@@ -42,7 +42,6 @@ try:  # pragma: no cover - exercised by tests through monkeypatching.
 except Exception:  # pragma: no cover
     hf_hub_download = None  # type: ignore[assignment]
 
-from . import paths
 from .bucket_layout import (
     blobs_v1_context_path,
     blobs_v1_raw_path,

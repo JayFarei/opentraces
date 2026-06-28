@@ -881,7 +881,9 @@ def ctx_tree_cmd(
         _emit(payload)
         return
     # Indented text rendering of the active path
-    short = lambda nid: (nid[:18] + "…") if nid and len(nid) > 18 else (nid or "-")
+    def short(nid):
+        return (nid[:18] + "…") if nid and len(nid) > 18 else (nid or "-")
+
     for depth_i, node in enumerate(active_path):
         prefix = "  " * depth_i
         step = f"step={node.step_index}" if node.step_index is not None else "step=-"
@@ -1817,7 +1819,7 @@ def ctx_resume_cmd(
     for lim in packet.get("capture_limitations") or []:
         click.echo(f"  limitation: {lim}")
     click.echo("# Suggested:")
-    click.echo(f"#   claude --resume <session-id-from-ctx-prune>")
+    click.echo("#   claude --resume <session-id-from-ctx-prune>")
 
 
 # --------------------------------------------------------------------------- #

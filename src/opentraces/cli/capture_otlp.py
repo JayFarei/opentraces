@@ -440,7 +440,7 @@ def capture_otlp_start_cmd(
         payload["ok"] = False
         payload["error"] = "start_did_not_confirm"
         payload["next_steps"] = [
-            f"Check ~/.opentraces/logs/otlp-receiver.err for the bind failure.",
+            "Check ~/.opentraces/logs/otlp-receiver.err for the bind failure.",
         ]
         payload["next_command"] = None
     if as_json:
@@ -726,7 +726,7 @@ def capture_otlp_status_cmd(as_json: bool) -> None:
         _emit(payload)
         return
     if payload["enabled"]:
-        click.echo(f"enabled:           true")
+        click.echo("enabled:           true")
         click.echo(f"pid:               {payload['pid']}")
         click.echo(f"port:              {payload['port']}")
         click.echo(f"bind:              {payload['bind']}")
