@@ -553,7 +553,8 @@ def _otel_snapshot_signature(snapshot: dict) -> dict:
 
     Advances when the live receiver records new body-ref log events (the
     per-llm-request path) or refreshes the snapshot, so an unchanged snapshot
-    on a later tick compares equal and is skipped.
+    on a later tick compares equal — that cross-tick equality is what marks the
+    session idle (stable) and therefore eligible for its single flush.
     """
     return {
         "last_envelope_at": snapshot.get("last_envelope_at"),
@@ -583,8 +584,15 @@ def _auto_flush_otel_sessions(project_cwd: Path) -> int:
         trace_id is ever minted here.
       * Reads only the per-session staging snapshot's body-refs (cheap); never
         scans the multi-GB raw-bodies corpus.
-      * A per-session watermark skips sessions whose snapshot has not advanced,
-        so a second changed tick with no new activity is a no-op.
+      * Each session is flushed AT MOST ONCE per generation, and only once its
+        snapshot signature has gone STABLE — equal to the signature recorded at
+        the prior tick (the session has gone idle). The watermark persists both
+        the last-seen signature (to detect cross-tick stability) and a permanent
+        per-session ``flushed`` flag, so a once-flushed session is NEVER
+        re-flushed regardless of later snapshot growth. A still-growing live
+        session is simply not flushed until it goes stable. This stops the
+        append-only event log from growing O(steps^2) over a live session's
+        lifetime (``append_event_batch`` has no cross-batch dedup).
 
     Returns the number of sessions actually flushed this tick. Never raises.
     """
@@ -624,13 +632,26 @@ def _auto_flush_otel_sessions(project_cwd: Path) -> int:
             # Not this project's session, or its JSONL has not been ingested
             # yet (no trace_id minted). Skip — never mint a fresh one here.
             continue
+        entry = watermark.get(session_id)
+        if not isinstance(entry, dict):
+            entry = {}
+        if entry.get("flushed"):
+            # Permanent marker: this session was already flushed once. Never
+            # re-flush, regardless of any later snapshot growth — re-flushing
+            # re-appends every prior context event (no cross-batch dedup).
+            continue
         try:
             snapshot = load_snapshot_from_disk(snap_path)
         except Exception:  # noqa: BLE001
             continue
         signature = _otel_snapshot_signature(snapshot)
-        if watermark.get(session_id) == signature:
-            continue  # no new snapshot activity since the last flush
+        if entry.get("signature") != signature:
+            # First observation, or the snapshot is still advancing. Record the
+            # current signature and wait for it to stabilise across a tick
+            # before flushing — a live session is not flushed until it goes idle.
+            watermark[session_id] = {"signature": signature, "flushed": False}
+            dirty = True
+            continue
         try:
             report = flush_session_to_project(
                 project_dir=project_cwd,
@@ -641,6 +662,11 @@ def _auto_flush_otel_sessions(project_cwd: Path) -> int:
                 # raw bodies out from under a future tick. The watcher's TTL
                 # sweep enforces raw-body retention separately.
                 raw_body_retention="keep_forever",
+                # The bounded, watermark-gated _project_context_tree_bounded
+                # runs right after this in the same tick and lands the freshly
+                # appended events in the bucket; skip flush's own unbounded
+                # full read_events projection walk (#65/plan-087).
+                project_to_bucket=False,
             )
         except Exception:  # noqa: BLE001
             logger.warning(
@@ -649,7 +675,7 @@ def _auto_flush_otel_sessions(project_cwd: Path) -> int:
             )
             continue
         if report.get("ok"):
-            watermark[session_id] = signature
+            watermark[session_id] = {"signature": signature, "flushed": True}
             dirty = True
             flushed += 1
 

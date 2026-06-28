@@ -434,7 +434,9 @@ def _steps_from_body_ref_events(
     ``api_response_body`` log carries the canonical ``request_id`` and the
     per-step ``usage``. Events are grouped by ``prompt.id`` (per-turn) and
     ordered by ``event.sequence`` within the turn; each request pairs with the
-    NEXT response in that ordering. The full request / response bodies are read
+    first not-yet-consumed response after it in that ordering (a response is
+    consumed on match, so two requests can never bind to the same response).
+    The full request / response bodies are read
     off disk from their ``body_ref`` paths (defensively: a missing body file
     yields an empty body for that side).
 
@@ -451,12 +453,18 @@ def _steps_from_body_ref_events(
     collected: list[tuple[tuple[int, int], dict[str, Any]]] = []
     for group in groups.values():
         ordered = sorted(group, key=lambda e: _seq_key(e.get("sequence")))
+        consumed: set[int] = set()
         for idx, ev in enumerate(ordered):
             if ev.get("kind") != "request":
                 continue
-            response = next(
-                (f for f in ordered[idx + 1:] if f.get("kind") == "response"), None
-            )
+            response = None
+            for resp_idx in range(idx + 1, len(ordered)):
+                if resp_idx in consumed:
+                    continue
+                if ordered[resp_idx].get("kind") == "response":
+                    response = ordered[resp_idx]
+                    consumed.add(resp_idx)
+                    break
             request_body = _read_json_file(
                 _resolve_body_path(ev.get("body_ref"), raw_bodies_dir)
             )

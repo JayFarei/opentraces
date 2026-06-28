@@ -8,11 +8,18 @@ project's OTel staging snapshots and flushes the ones whose snapshot advanced,
 reusing the JSONL-minted ``trace_id`` so the OTel context lands on the same
 trace spine.
 
+A session is flushed AT MOST ONCE per generation, and only once its snapshot
+signature has gone STABLE across ticks (the session has gone idle). The
+watermark persists both the last-seen signature and a permanent per-session
+``flushed`` flag, so a once-flushed session is never re-flushed regardless of
+later snapshot growth — that is what stops the append-only event log growing
+O(steps^2) over a live session's lifetime.
+
 These tests drive the tick's trace-trails runtime (the exact code path that
-contains the auto-flush) against a synthetic per-llm-request staging snapshot
-and assert context_* events land for the resolved trace_id WITHOUT a manual
-flush, then assert a second changed tick with no new snapshot activity is a
-no-op (the per-session watermark holds — no duplicate events).
+contains the auto-flush) against a synthetic per-llm-request staging snapshot:
+the first tick records the signature (no flush), the second tick (snapshot
+stable) flushes once, and a third post-flush tick is a no-op (the permanent
+``flushed`` marker holds — no duplicate re-append).
 """
 from __future__ import annotations
 
@@ -177,13 +184,25 @@ def _node_events(project_dir: Path):
             if e.event_type == CONTEXT_NODE_OBSERVED]
 
 
+def _drive_tick(project_dir: Path) -> daemon.TickReport:
+    report = daemon.TickReport(project_cwd=project_dir, started_at=daemon._utcnow())
+    daemon._run_trace_trails_runtime(project_dir, report, force_maturation=True)
+    return report
+
+
 def test_watcher_auto_flushes_otel_session_without_manual_flush(tmp_path: Path):
     project_dir, _snap = _setup_project_with_session(tmp_path)
 
     # Drive the tick's trace-trails runtime (active tick => changed) — the code
     # path that hosts the auto-flush. NO manual `capture-otlp flush` is called.
-    report = daemon.TickReport(project_cwd=project_dir, started_at=daemon._utcnow())
-    daemon._run_trace_trails_runtime(project_dir, report, force_maturation=True)
+    # First tick only RECORDS the snapshot signature (the session is treated as
+    # still live until its signature stabilises across a tick), so no flush yet.
+    report1 = _drive_tick(project_dir)
+    assert report1.otel_sessions_flushed == 0, vars(report1)
+    assert _node_events(project_dir) == []
+
+    # Second tick: snapshot unchanged => signature stable => flush exactly once.
+    report = _drive_tick(project_dir)
 
     assert report.otel_sessions_flushed == 1, vars(report)
 
@@ -212,41 +231,63 @@ def test_watcher_auto_flushes_otel_session_without_manual_flush(tmp_path: Path):
     assert derefs == 4, derefs
 
 
-def test_watcher_auto_flush_second_tick_is_noop(tmp_path: Path):
+def test_watcher_auto_flush_is_once_per_session(tmp_path: Path):
     project_dir, _snap = _setup_project_with_session(tmp_path)
 
-    report1 = daemon.TickReport(project_cwd=project_dir, started_at=daemon._utcnow())
-    daemon._run_trace_trails_runtime(project_dir, report1, force_maturation=True)
-    assert report1.otel_sessions_flushed == 1, vars(report1)
+    # Tick 1 records the signature (no flush); tick 2 flushes once.
+    assert _drive_tick(project_dir).otel_sessions_flushed == 0
+    report_flush = _drive_tick(project_dir)
+    assert report_flush.otel_sessions_flushed == 1, vars(report_flush)
     first_count = len(_node_events(project_dir))
     assert first_count == 4
 
-    # Second changed tick, snapshot unchanged: the per-session watermark must
-    # skip the flush — no second flush, no duplicate context events.
-    report2 = daemon.TickReport(project_cwd=project_dir, started_at=daemon._utcnow())
-    daemon._run_trace_trails_runtime(project_dir, report2, force_maturation=True)
-    assert report2.otel_sessions_flushed == 0, vars(report2)
+    # Post-flush tick, snapshot unchanged: the permanent ``flushed`` marker must
+    # skip the flush — no second flush, no duplicate re-append of context events.
+    report3 = _drive_tick(project_dir)
+    assert report3.otel_sessions_flushed == 0, vars(report3)
     assert len(_node_events(project_dir)) == first_count
 
-    # The watermark file records the session signature for next-tick skipping.
+    # Even if the live session later grows, a flushed session is never
+    # re-flushed: bump the snapshot signature on disk and drive another tick.
+    staging = _paths.otel_staging_dir()
+    snap_path = staging / f"{SESSION_ID}.json"
+    grown = json.loads(snap_path.read_text())
+    grown["last_envelope_at"] = "2099-01-01T00:00:00Z"
+    snap_path.write_text(json.dumps(grown, default=str))
+    report4 = _drive_tick(project_dir)
+    assert report4.otel_sessions_flushed == 0, vars(report4)
+    assert len(_node_events(project_dir)) == first_count
+
+    # The watermark file records the session with its permanent flushed marker.
     wm_path = daemon._otel_autoflush_watermark_path(project_dir)
     assert wm_path is not None and wm_path.is_file()
     wm = json.loads(wm_path.read_text())
-    assert SESSION_ID in wm, wm
+    assert wm.get(SESSION_ID, {}).get("flushed") is True, wm
 
 
 def test_watcher_run_once_auto_flushes_end_to_end(tmp_path: Path):
-    """The real ``run_once`` tick entry auto-flushes on an active tick.
+    """The real ``run_once`` tick entry auto-flushes once the session is idle.
 
     A fresh enlisted repo with an unbackfilled commit is an active tick, which
-    always invokes the trace-trails runtime; the OTel session is flushed with
-    no manual ``capture-otlp flush``.
+    always invokes the trace-trails runtime. The first active tick records the
+    snapshot signature; the second active tick (signature stable) flushes the
+    OTel session with no manual ``capture-otlp flush``.
     """
     project_dir, _snap = _setup_project_with_session(tmp_path)
 
-    report = daemon.run_once(project_dir)
-    assert report.error is None, report.error
-    assert report.otel_sessions_flushed == 1, vars(report)
+    report1 = daemon.run_once(project_dir)
+    assert report1.error is None, report1.error
+    assert report1.otel_sessions_flushed == 0, vars(report1)
+
+    # A new unbackfilled commit keeps the next tick active (so auto-flush runs);
+    # the staging snapshot is untouched, so its signature is now stable.
+    (project_dir / "next.txt").write_text("more\n")
+    subprocess.run(["git", "add", "next.txt"], cwd=project_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "more"], cwd=project_dir, check=True)
+
+    report2 = daemon.run_once(project_dir)
+    assert report2.error is None, report2.error
+    assert report2.otel_sessions_flushed == 1, vars(report2)
 
     node_events = _node_events(project_dir)
     assert len(node_events) == 4
