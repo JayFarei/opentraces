@@ -73,8 +73,18 @@ opentraces setup capture-otlp
 opentraces capture-otlp start
 opentraces capture-otlp status --json
 opentraces capture-otlp flush --session <session-id> --project <repo> --trace-id <trace-id>
+opentraces capture-otlp flush --from-raw-bodies --session <session-id> --project <repo> --trace-id <trace-id>
 opentraces capture-otlp stop
 ```
+
+`flush` reconstructs the session into Context Tree nodes (one node per
+llm-request), lands them in the bucket companion, and joins them to the trace
+spine via `Step.context_node_id` and `TraceRecord.context_tree_summary`, so
+`ctx show` / `ctx step` can hydrate the captured context. `--from-raw-bodies`
+reconstructs an already-captured session per-step straight from the raw
+request/response bodies (paired by `session_id` and the message chain) with no
+live receiver — the full-fidelity path. `capture-otlp status` lists the
+captured session ids available to flush.
 
 If the receiver is down, agent traffic is not blocked. Claude Code's OTel
 emission is fire-and-forget.
