@@ -2107,11 +2107,55 @@ def _context_tree_status(cwd: Path | None = None) -> dict[str, Any]:
 
     return {
         "otel_receiver": otel_receiver,
+        "coverage": _context_tree_coverage(cwd, otel_receiver),
         "last_reconciled_at": last_reconciled_at,
         "capture_limitations_by_trace": capture_limitations_by_trace,
         "scan_skipped": context_scan_skip_reason is not None,
         "skip_reason": context_scan_skip_reason,
     }
+
+
+def _context_tree_coverage(
+    cwd: Path | None, otel_receiver: dict[str, Any]
+) -> dict[str, Any]:
+    """End-to-end OTel coverage: wire captures vs context nodes in the bucket.
+
+    Plan 078 B4 cure — the receiver can report thousands of wire captures while
+    ZERO context reached the bucket (the issue-#158 failure). This surfaces the
+    gap honestly: ``captures_total`` (OTLP spans the receiver saw) alongside
+    ``context_nodes_in_bucket`` (nodes that actually landed for THIS project),
+    so a green ``enabled`` is no longer mistaken for "data is usable".
+    """
+    captures_total = otel_receiver.get("captures_total")
+    coverage: dict[str, Any] = {
+        "captures_total": captures_total,
+        "context_nodes_in_bucket": 0,
+        "context_traces_in_bucket": 0,
+        "landed": False,
+    }
+    if cwd is None:
+        return coverage
+    try:
+        from .bucket_layout import _path_part, contexts_root
+        from .config import get_project_dir
+
+        slug = get_project_dir(Path(cwd)).name
+        base = contexts_root() / _path_part(slug)
+        if base.exists():
+            nodes = traces = 0
+            for trace_dir in base.iterdir():
+                np = trace_dir / "nodes.jsonl"
+                if np.exists():
+                    traces += 1
+                    nodes += sum(
+                        1 for line in np.read_text(encoding="utf-8").splitlines() if line.strip()
+                    )
+            coverage["context_nodes_in_bucket"] = nodes
+            coverage["context_traces_in_bucket"] = traces
+            coverage["landed"] = nodes > 0
+    except Exception:  # noqa: BLE001 - coverage is a best-effort diagnostic
+        pass
+    return coverage
 
 
 def _scan_context_tree_reconciled(cwd: Path) -> tuple[str | None, dict[str, list[str]]]:

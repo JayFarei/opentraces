@@ -313,6 +313,36 @@ def build_system_layer(
     )
 
 
+def _materialize_jsonl_message_blobs(
+    project_dir: Path, active_path: list[JsonlRecord]
+) -> None:
+    """Write per-message content blobs for the JSONL messages manifest.
+
+    The messages layer stores only ``{role, uuid, parent_uuid, content_hash}``;
+    this persists the message payload behind each ``content_hash`` to
+    ``blobs/v1/<slug>/raw/`` (issue #158, the one missing write). Hashing here
+    is byte-identical to ``build_messages_layer``'s ``_sha256(json.dumps(...))``,
+    so the blob name equals the manifest's ``content_hash``. Best-effort: a
+    non-opted-in project (no slug) or disk hiccup never fails capture.
+    """
+    try:
+        from ...core.config import get_project_dir
+        from ...core.context_tree.raw_blobs import materialize_message_blobs
+
+        slug = get_project_dir(project_dir).name
+    except Exception:
+        return
+    payloads = [
+        rec.raw.get("message", {})
+        for rec in active_path
+        if rec.record_type in ("user", "assistant")
+    ]
+    try:
+        materialize_message_blobs(slug, payloads)
+    except Exception:  # noqa: BLE001
+        logger.debug("jsonl message-blob materialization failed", exc_info=True)
+
+
 def build_messages_layer(
     *,
     active_path: list[JsonlRecord],
@@ -981,6 +1011,11 @@ def emit_context_tree_events_from_record(
             append_system_prompt_override=None,
         )
         messages_layer = build_messages_layer(active_path=active_path)
+        # Issue #158 W2 (both paths): materialize the per-message content blobs
+        # that back this manifest's content_hashes, so ctx can resolve the text
+        # (un-dangle the JSONL pointer). Same canonicalization as
+        # build_messages_layer, so the blob name == the manifest content_hash.
+        _materialize_jsonl_message_blobs(project_dir, active_path)
         tool_registry_layer = build_tool_registry_layer(
             init_record=init_record,
             on_disk_mcp_servers={},

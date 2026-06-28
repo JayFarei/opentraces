@@ -28,6 +28,10 @@ from threading import Lock
 from typing import Any, Callable
 
 from ...core.context_tree import CAPTURE_METHOD_OTEL
+from ...core.context_tree.raw_blobs import (
+    materialize_message_blobs,
+    message_content_hash,
+)
 from .mapper import map_otlp_envelope, map_raw_request_body
 
 logger = logging.getLogger("opentraces.otlp.emitter")
@@ -166,77 +170,136 @@ class OTLPCaptureBuffer:
 # --------------------------------------------------------------------------- #
 
 
-def _build_otel_layers_and_nodes(
-    snapshot: dict[str, Any], *, trace_id: str
-) -> tuple[list[Any], list[Any]]:
-    """Build ContextLayer + ContextNode objects from a session snapshot.
+def _estimate_context_tokens(usage: dict[str, Any], messages: list[Any]) -> int:
+    """Per-step context-size estimate: prefer wire usage, fall back to chars.
 
-    Per-prompt layer differentiation: every prompt_id gets its OWN
-    four-layer set materialized from the raw body paired to its
-    request_id. When the raw body is missing the layers fall back to
-    the session-level snapshot fields and label themselves
-    ``approximated``. Content-addressed dedup in ``append_event_batch``
-    collapses identical layer payloads naturally.
+    The wire ``usage`` block on the response is the authoritative count of
+    what the model actually saw (input + both cache tiers). When no response
+    paired, fall back to the JSONL-path heuristic (``len(text)//4``).
+    """
+    if usage:
+        total = 0
+        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            v = usage.get(key)
+            if isinstance(v, (int, float)):
+                total += int(v)
+        if total:
+            return total
+    chars = 0
+    for msg in messages:
+        try:
+            chars += len(json.dumps(msg, ensure_ascii=False))
+        except (TypeError, ValueError):
+            continue
+    return chars // 4
+
+
+def _build_messages_manifest(messages: list[Any]) -> tuple[list[dict[str, Any]], str, str]:
+    """Build the per-step messages manifest (JSONL-parity shape).
+
+    Each entry is ``{role, uuid, parent_uuid, content_hash}``. The wire has no
+    per-message uuids, so we use the message's own ``content_hash`` as ``uuid``
+    and the prior entry's as ``parent_uuid`` — deterministic, content-addressed,
+    and chainable. ``content_hash`` is the load-bearing field: it indexes the
+    raw/ content blob materialized alongside.
+    """
+    entries: list[dict[str, Any]] = []
+    prev_hash: str | None = None
+    for msg in messages:
+        content_hash = message_content_hash(msg)
+        entries.append(
+            {
+                "role": msg.get("role") if isinstance(msg, dict) else None,
+                "uuid": content_hash,
+                "parent_uuid": prev_hash,
+                "content_hash": content_hash,
+            }
+        )
+        prev_hash = content_hash
+    span_first = entries[0]["uuid"] if entries else ""
+    span_last = entries[-1]["uuid"] if entries else ""
+    return entries, span_first, span_last
+
+
+def _build_layers_and_nodes_from_steps(
+    steps: list[dict[str, Any]],
+    *,
+    trace_id: str,
+    project_slug: str,
+) -> tuple[list[Any], list[Any], dict[str, Any]]:
+    """Build per-llm-request ContextLayer + ContextNode objects + raw blobs.
+
+    ``steps`` is an ordered list of per-llm-request dicts (one node each), each
+    carrying ``request_body`` (system / tools / messages the model saw) and an
+    optional ``response_body`` (usage / output). This is the per-step shape both
+    the raw-body reconstruction path and the live buffer produce — keying by
+    llm-request (not per-turn ``prompt.id``) so two steps in one turn become two
+    distinct nodes with distinct message manifests.
+
+    Materializes per-message raw content blobs under ``project_slug`` so each
+    manifest ``content_hash`` resolves to its text (content-addressed, deduped
+    across steps). Returns ``(layers, nodes, blob_report)``.
     """
     from ...core.context_tree import build_layer, build_node
 
     layers: list[Any] = []
     nodes: list[Any] = []
-    plugins = snapshot["plugins"]
-    mcp_servers = snapshot["mcp_servers"]
-    hooks = snapshot["hooks"]
-    runtime_state = snapshot["runtime_state"]
-    system_hint = snapshot["system_hint"] or {}
-
-    prompts = list(snapshot["nodes_by_prompt"].items())
-    if not prompts:
-        return layers, nodes
-
-    raw_bodies = snapshot["raw_bodies_by_request"]
+    all_message_payloads: list[Any] = []
+    if not steps:
+        return layers, nodes, {"written": 0, "deduped": 0}
 
     parent_id: str | None = None
-    for idx, (prompt_id, draft) in enumerate(prompts):
-        request_id = draft.get("request_id")
-        body = raw_bodies.get(request_id, {}).get("decomposed") if request_id else None
-        has_body = body is not None
-        tools = (body or {}).get("tools") or []
+    for idx, step in enumerate(steps):
+        request_body = step.get("request_body") or {}
+        response_body = step.get("response_body") or {}
+        has_body = bool(request_body)
+        system_blocks = request_body.get("system") or []
+        messages = request_body.get("messages") or []
+        tools = request_body.get("tools") or []
+        usage = (response_body or {}).get("usage") or {}
+        all_message_payloads.extend(messages)
 
-        runtime_state_content = {
-            **runtime_state,
-            "mcp_servers": mcp_servers,
-            "hooks": hooks,
+        manifest, span_first, span_last = _build_messages_manifest(messages)
+
+        runtime_state_content: dict[str, Any] = {
+            "model": request_body.get("model"),
+            "max_tokens": request_body.get("max_tokens"),
+            "stream": request_body.get("stream"),
+            "temperature": request_body.get("temperature"),
+            "top_p": request_body.get("top_p"),
+            "top_k": request_body.get("top_k"),
+            "usage": usage,
         }
-        if has_body and "runtime_params" in body:
-            runtime_state_content.update(body["runtime_params"])
 
-        # Table-driven layer build: (layer_type, content, "full" gate).
         layer_specs = (
             (
                 "system",
                 {
-                    "assembled_prompt_bytes": (body or {}).get("system"),
-                    "static_core_ref": system_hint.get("static_core_ref"),
+                    "assembled_prompt": system_blocks,
+                    "block_count": len(system_blocks),
                 },
-                bool(has_body and (body or {}).get("system")),
+                bool(has_body and system_blocks),
             ),
             (
                 "messages",
                 {
-                    "messages": (body or {}).get("messages") or [],
-                    "finish_reasons": draft.get("finish_reasons") or [],
+                    "messages": manifest,
+                    "total_token_estimate": _estimate_context_tokens(usage, messages),
+                    "span_first_uuid": span_first,
+                    "span_last_uuid": span_last,
+                    "is_summary": False,
+                    "summary_of_span": None,
+                    "finish_reasons": step.get("finish_reasons") or [],
                 },
-                bool(has_body and (body or {}).get("messages")),
+                bool(has_body and manifest),
             ),
             (
                 "tool_registry",
                 {
                     "tools": tools,
                     "tool_names": [t.get("name") for t in tools if isinstance(t, dict)],
-                    "plugins": plugins,
-                    "plugin_names": [
-                        p.get("name") or p.get("plugin.name")
-                        for p in plugins if isinstance(p, dict)
-                    ],
+                    "plugins": [],
+                    "plugin_names": [],
                 },
                 bool(has_body and tools),
             ),
@@ -261,9 +324,9 @@ def _build_otel_layers_and_nodes(
             parent_node_id=parent_id,
             branch_type="root" if parent_id is None else "linear",
             trace_id=trace_id,
-            transcript_uuid=draft.get("transcript_uuid") or prompt_id,
+            transcript_uuid=step.get("transcript_uuid") or f"otel-step-{idx}",
             transcript_offset=idx,
-            step_index=idx,
+            step_index=step.get("step_index", idx),
             system_layer_id=built["system"].layer_id,
             messages_layer_id=built["messages"].layer_id,
             tool_registry_layer_id=built["tool_registry"].layer_id,
@@ -273,7 +336,45 @@ def _build_otel_layers_and_nodes(
         nodes.append(node)
         parent_id = node.node_id
 
-    return layers, nodes
+    # Materialize per-message content blobs (the one missing write): each
+    # manifest content_hash now resolves to its text, deduped across steps.
+    blob_report = materialize_message_blobs(project_slug, all_message_payloads)
+    return layers, nodes, blob_report
+
+
+def _steps_from_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Adapt a legacy buffer snapshot (per-prompt) into per-step inputs.
+
+    Used for the in-process buffer / staging-snapshot path. The legacy snapshot
+    keyed nodes by ``prompt.id`` (per-turn) with bodies in
+    ``raw_bodies_by_request``; when bodies are absent the steps reconstruct as
+    ``approximated`` (the honest empty-capture state). The live receiver fix
+    (W3) populates per-step body refs so this path also becomes per-llm-request.
+    """
+    raw_bodies = snapshot.get("raw_bodies_by_request") or {}
+    steps: list[dict[str, Any]] = []
+    for idx, (prompt_id, draft) in enumerate(snapshot.get("nodes_by_prompt", {}).items()):
+        request_id = draft.get("request_id")
+        decomposed = raw_bodies.get(request_id, {}).get("decomposed") if request_id else None
+        request_body: dict[str, Any] = {}
+        if decomposed:
+            request_body = {
+                "system": decomposed.get("system"),
+                "messages": decomposed.get("messages"),
+                "tools": decomposed.get("tools"),
+                **(decomposed.get("runtime_params") or {}),
+            }
+        steps.append(
+            {
+                "step_index": idx,
+                "transcript_uuid": draft.get("transcript_uuid") or prompt_id,
+                "request_id": request_id,
+                "request_body": request_body,
+                "response_body": None,
+                "finish_reasons": draft.get("finish_reasons") or [],
+            }
+        )
+    return steps
 
 
 # --------------------------------------------------------------------------- #
@@ -293,8 +394,10 @@ def flush_session_to_project(
     session_id: str,
     buffer: OTLPCaptureBuffer | None = None,
     snapshot: dict[str, Any] | None = None,
+    steps: list[dict[str, Any]] | None = None,
     raw_bodies_dir: Path | None = None,
     raw_body_retention: str | None = None,
+    project_to_bucket: bool = True,
 ) -> dict[str, Any]:
     """Append context_* events for one OTel session into project_dir's event log.
 
@@ -323,14 +426,23 @@ def flush_session_to_project(
     from ...core.trails.event_log import append_event_batch
     from ...core.trails.models import TrailEventDraft
 
-    if snapshot is None:
-        if buffer is None:
-            return {"ok": False, "reason": "no-buffer-or-snapshot", "session_id": session_id}
-        snapshot = buffer.snapshot_session(session_id)
-    if snapshot is None:
-        return {"ok": False, "reason": "no-such-session", "session_id": session_id}
+    # Resolve the per-step inputs from whichever source was supplied:
+    #   steps=     explicit per-llm-request list (raw-body reconstruction, W1)
+    #   snapshot=  cross-process staging snapshot (live daemon)
+    #   buffer=    in-process accumulator
+    if steps is None:
+        if snapshot is None:
+            if buffer is None:
+                return {"ok": False, "reason": "no-source", "session_id": session_id}
+            snapshot = buffer.snapshot_session(session_id)
+        if snapshot is None:
+            return {"ok": False, "reason": "no-such-session", "session_id": session_id}
+        steps = _steps_from_snapshot(snapshot)
 
-    layers, nodes = _build_otel_layers_and_nodes(snapshot, trace_id=trace_id)
+    project_slug = _project_slug_for(project_dir)
+    layers, nodes, blob_report = _build_layers_and_nodes_from_steps(
+        steps, trace_id=trace_id, project_slug=project_slug
+    )
     if not nodes:
         return {
             "ok": False,
@@ -380,15 +492,46 @@ def flush_session_to_project(
 
     appended = append_event_batch(project_dir, drafts, writer="otlp-receiver")
 
+    # Project the just-appended events into the bucket companion so ctx reads
+    # are bucket-backed (and survive a hidden git ref — issue #158 W4/DoD#5).
+    # The watcher's own projection is watermark- AND change-gated and can skip
+    # an OTel-only change, so flush projects directly. Best-effort.
+    projected = False
+    if project_to_bucket:
+        try:
+            from ...core.bucket_store import project_context_tree_to_bucket
+
+            project_context_tree_to_bucket(
+                Path(project_dir), project_slug=project_slug, trace_id=trace_id
+            )
+            projected = True
+        except Exception:  # noqa: BLE001 - projection failure must not lose events
+            logger.warning("bucket projection after flush failed", exc_info=True)
+
+    # Cross-substrate spine join (W4): stamp context_tree_summary +
+    # Step.context_node_id on the target trace's bucket envelope when it
+    # exists. No-op when the trace has no JSONL-side envelope yet.
+    spine_joined = False
+    try:
+        spine_joined = _join_trace_spine(
+            project_slug=project_slug,
+            trace_id=trace_id,
+            session_id=session_id,
+            nodes=nodes,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("spine join after flush failed", exc_info=True)
+
     # Plan 080 §5: delete raw-body source files on success when
-    # retention policy is "delete" (default). Keep policies defer to
-    # the watcher's periodic sweep.
+    # retention policy is "delete" (default). Only the live snapshot path
+    # records request_ids; the raw-body reconstruction path never deletes
+    # the captain's captured bodies.
     resolved_dir = Path(raw_bodies_dir) if raw_bodies_dir is not None else _default_raw_bodies_dir()
     resolved_policy = _resolve_retention_policy(raw_body_retention)
     raw_bodies_deleted = 0
     raw_bodies_kept = 0
-    if resolved_dir is not None:
-        request_ids = sorted(snapshot.get("raw_bodies_by_request", {}).keys())
+    request_ids = sorted((snapshot or {}).get("raw_bodies_by_request", {}).keys())
+    if resolved_dir is not None and request_ids:
         if resolved_policy == "delete":
             raw_bodies_deleted = _delete_raw_body_pairs(resolved_dir, request_ids)
         else:
@@ -401,10 +544,85 @@ def flush_session_to_project(
         "layers_count": len(seen_layer_ids),
         "nodes_count": len(nodes),
         "drafts_appended": len(appended),
+        "message_blobs_written": blob_report.get("written", 0),
+        "message_blobs_deduped": blob_report.get("deduped", 0),
+        "projected_to_bucket": projected,
+        "spine_joined": spine_joined,
         "raw_bodies_deleted": raw_bodies_deleted,
         "raw_bodies_kept": raw_bodies_kept,
         "raw_body_retention": resolved_policy,
     }
+
+
+def _project_slug_for(project_dir: Path) -> str:
+    """Project slug used for context bucket paths (matches ingest.py:446)."""
+    try:
+        from ...core.config import get_project_dir
+
+        return get_project_dir(Path(project_dir)).name
+    except Exception:  # noqa: BLE001
+        return Path(project_dir).name
+
+
+def _join_trace_spine(
+    *,
+    project_slug: str,
+    trace_id: str,
+    session_id: str,
+    nodes: list[Any],
+) -> bool:
+    """Stamp the trace's bucket envelope with the OTel context-tree linkage.
+
+    Mirrors ``ingest._emit_context_tree`` (sets ``Step.context_node_id`` from
+    the step->node map and ``TraceRecord.context_tree_summary``) but operates
+    on the already-persisted ``trace.json`` envelope, so OTel-flushed context
+    becomes visible to ``trace get`` / ``trace map``. Returns False (no-op)
+    when the trace has no envelope yet — the ctx nodes still carry ``trace_id``
+    + ``step_index`` so the cross-substrate key is shared regardless.
+
+    Both fields written here (``context_tree_summary``, ``Step.context_node_id``)
+    are OUTSIDE the per-trace ``digest_material`` (bucket_envelope.py), so this
+    rewrite is bucket_digest-invariant. Serialization matches
+    ``_write_per_trace_envelope`` (``record.model_dump(mode="json")`` via
+    ``_atomic_write_json``) so the bytes stay canonical.
+    """
+    import json as _json
+
+    from opentraces_schema import TraceRecord
+
+    from ...core._bucket_io import _atomic_write_json
+    from ...core.bucket_layout import trace_v1_json_path
+
+    path = trace_v1_json_path(project_slug, trace_id)
+    if not path.exists():
+        return False
+    try:
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+        record = TraceRecord.model_validate(raw)
+    except (OSError, ValueError):
+        return False
+
+    step_node = {n.step_index: n.node_id for n in nodes if n.step_index is not None}
+    for step in getattr(record, "steps", []) or []:
+        node_id = step_node.get(getattr(step, "step_index", None))
+        if node_id is not None:
+            step.context_node_id = node_id
+    summary = dict(getattr(record, "context_tree_summary", None) or {})
+    summary.update(
+        {
+            "otel_node_count": len(nodes),
+            "otel_active_path_leaf_id": nodes[-1].node_id if nodes else None,
+            "session_id": session_id,
+            "otel_flushed": True,
+        }
+    )
+    methods = list(summary.get("capture_methods") or [])
+    if CAPTURE_METHOD_OTEL not in methods:
+        methods.append(CAPTURE_METHOD_OTEL)
+    summary["capture_methods"] = methods
+    record.context_tree_summary = summary
+    _atomic_write_json(path, record.model_dump(mode="json"))
+    return True
 
 
 def _default_raw_bodies_dir() -> Path | None:

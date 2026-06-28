@@ -98,6 +98,18 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
     # interactive terminal (TTY, no ``--json``) still gets clean human output.
     json_only = _doctor_json_only()
 
+    def _emit_doctor(payload: dict) -> None:
+        # L3 (epic #129) / issue #158 B6: under an EXPLICIT ``--json`` emit pure
+        # JSON, no ``---OPENTRACES_JSON---`` preamble, so ``doctor --json`` is
+        # valid JSON to ``json.loads``. The non-TTY auto-JSON path keeps the
+        # sentinel for backward-compatible consumers that split on it.
+        if as_json:
+            import json as _json
+
+            click.echo(_json.dumps(payload, indent=2))
+        else:
+            _cli.emit_json(payload)
+
     if security_only:
         if not json_only:
             _render_doctor_security(report)
@@ -109,7 +121,7 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
             "schema_version": report.get("schema_version"),
             "security": report["security"],
         }
-        _cli.emit_json({"status": "ok", "doctor": trimmed})
+        _emit_doctor({"status": "ok", "doctor": trimmed})
     else:
         if not json_only:
             _render_doctor_human(report)
@@ -118,7 +130,7 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
         # When a newer CLI is available (or deployed glue has drifted), make
         # the action the agent should take explicit and machine-readable.
         envelope = {"status": "ok", "doctor": report, **_upgrade_directive(report)}
-        _cli.emit_json(envelope)
+        _emit_doctor(envelope)
 
     code = doctor.exit_code(report)
     if code:

@@ -226,6 +226,14 @@ def _build_status_payload(verb: str) -> dict[str, Any]:
     payload["uptime_seconds"] = status_data.get("uptime_seconds")
     payload["captures_total"] = status_data.get("captures_total")
     payload["last_capture_at"] = status_data.get("last_capture_at")
+    # Issue #158 B5/W3: surface the accumulated session ids so an agent can
+    # discover what is flushable without guessing. The daemon writes this
+    # list every status-file refresh; staging snapshots are the durable form.
+    sessions = status_data.get("sessions")
+    if not sessions and SESSIONS_DIR.exists():
+        sessions = sorted(p.stem for p in SESSIONS_DIR.glob("*.json"))
+    payload["sessions"] = sessions or []
+    payload["sessions_count"] = len(payload["sessions"])
 
     raw_body_dir = status_data.get("raw_body_dir")
     if raw_body_dir:
@@ -727,6 +735,7 @@ def capture_otlp_status_cmd(as_json: bool) -> None:
         click.echo(f"last_capture_at:   {payload['last_capture_at']}")
         click.echo(f"raw_body_dir:      {payload['raw_body_dir']}")
         click.echo(f"raw_body_dir_size: {payload['raw_body_dir_size_bytes']}")
+        click.echo(f"sessions:          {payload.get('sessions_count', 0)}")
         if payload.get("stale"):
             click.echo("status:            stale (status file is old)")
     else:
@@ -835,42 +844,38 @@ def capture_otlp_restart_cmd(
     "--trace-id", "trace_id", required=True,
     help="Trace ID to attach to the emitted events.",
 )
+@click.option(
+    "--from-raw-bodies", "from_raw_bodies", is_flag=True,
+    help="Reconstruct the session per-step from the raw-bodies dir (content/metadata "
+         "pairing) instead of the daemon snapshot. Flushes already-captured sessions "
+         "with no live receiver.",
+)
+@click.option(
+    "--raw-bodies-dir", "raw_bodies_dir_opt",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path), default=None,
+    help="Raw-bodies dir for --from-raw-bodies (default: ~/.opentraces/raw-bodies/).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def capture_otlp_flush_cmd(
-    session: str, project: Path, trace_id: str, as_json: bool,
+    session: str, project: Path, trace_id: str,
+    from_raw_bodies: bool, raw_bodies_dir_opt: Path | None, as_json: bool,
 ) -> None:
     """Emit accumulated OTel session state as Context Tree events.
 
-    Reads the per-session snapshot the foreground daemon writes to
-    ``~/.opentraces/staging/otel/<session_id>.json``, builds
-    ContextLayer / ContextNode shapes, and appends ``context_*``
-    events to ``project``'s canonical event log with
-    ``capture_method=["otel"]``. Cross-process: the receiver daemon
-    populates the snapshot, this verb consumes it.
-    """
-    safe = session.replace("/", "_").replace("\\", "_")
-    snapshot_path = SESSIONS_DIR / f"{safe}.json"
-    if not snapshot_path.exists():
-        payload = {
-            "ok": False,
-            "verb": "flush",
-            "error": "no-such-session",
-            "session": session,
-            "available_sessions": sorted(
-                p.stem for p in SESSIONS_DIR.glob("*.json")
-            ) if SESSIONS_DIR.exists() else [],
-            "next_steps": [
-                "Run 'opentraces capture-otlp status --json' to list available sessions.",
-                "Make sure the foreground daemon has had time to snapshot (~5s).",
-            ],
-            "next_command": "opentraces capture-otlp status --json",
-        }
-        if as_json:
-            _emit(payload)
-        else:
-            click.echo(f"error: no snapshot for session {session!r}", err=True)
-        sys.exit(7)
+    Two sources:
 
+    \b
+      default            Read the per-session snapshot the foreground daemon
+                         writes to ``~/.opentraces/staging/otel/<id>.json``.
+      --from-raw-bodies  Reconstruct per-step directly from the raw request /
+                         response body files (paired by content/metadata), so
+                         already-captured sessions flush with no live receiver.
+
+    Builds ContextLayer / ContextNode shapes (one node per llm-request), writes
+    per-message content blobs, appends ``context_*`` events with
+    ``capture_method=["otel"]``, projects into the bucket companion, and joins
+    the trace spine.
+    """
     # Deferred imports so missing modules surface as structured envelopes,
     # not import-time crashes.
     try:
@@ -889,13 +894,66 @@ def capture_otlp_flush_cmd(
             click.echo(f"error: {exc}", err=True)
         sys.exit(5)
 
-    snap = load_snapshot_from_disk(snapshot_path)
-    report = flush_session_to_project(
-        project_dir=project,
-        trace_id=trace_id,
-        session_id=session,
-        snapshot=snap,
-    )
+    if from_raw_bodies:
+        from ..capture.otlp.reconstruct import reconstruct_steps_from_raw_bodies
+
+        rb_dir = (raw_bodies_dir_opt or DEFAULT_RAW_BODIES_DIR).expanduser()
+        recon = reconstruct_steps_from_raw_bodies(session, rb_dir)
+        if not recon:
+            payload = {
+                "ok": False,
+                "verb": "flush",
+                "error": "no-raw-bodies-for-session",
+                "session": session,
+                "raw_bodies_dir": str(rb_dir),
+                "next_steps": [
+                    "Confirm the session_id appears in request bodies' metadata.user_id.",
+                    f"Confirm request files exist under {rb_dir}.",
+                ],
+                "next_command": None,
+            }
+            if as_json:
+                _emit(payload)
+            else:
+                click.echo(f"error: no raw bodies for session {session!r}", err=True)
+            sys.exit(7)
+        report = flush_session_to_project(
+            project_dir=project,
+            trace_id=trace_id,
+            session_id=session,
+            steps=[s.to_snapshot_step() for s in recon],
+        )
+    else:
+        safe = session.replace("/", "_").replace("\\", "_")
+        snapshot_path = SESSIONS_DIR / f"{safe}.json"
+        if not snapshot_path.exists():
+            payload = {
+                "ok": False,
+                "verb": "flush",
+                "error": "no-such-session",
+                "session": session,
+                "available_sessions": sorted(
+                    p.stem for p in SESSIONS_DIR.glob("*.json")
+                ) if SESSIONS_DIR.exists() else [],
+                "next_steps": [
+                    "Run 'opentraces capture-otlp status --json' to list available sessions.",
+                    "Make sure the foreground daemon has had time to snapshot (~5s).",
+                    "Or pass --from-raw-bodies to reconstruct from the raw-bodies dir.",
+                ],
+                "next_command": "opentraces capture-otlp status --json",
+            }
+            if as_json:
+                _emit(payload)
+            else:
+                click.echo(f"error: no snapshot for session {session!r}", err=True)
+            sys.exit(7)
+        snap = load_snapshot_from_disk(snapshot_path)
+        report = flush_session_to_project(
+            project_dir=project,
+            trace_id=trace_id,
+            session_id=session,
+            snapshot=snap,
+        )
     payload = {
         "ok": bool(report.get("ok")),
         "verb": "flush",
