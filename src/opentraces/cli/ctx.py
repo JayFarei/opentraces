@@ -318,13 +318,29 @@ def _flatten_message_text(payload: Any) -> str:
     return "\n".join(parts)
 
 
-def _hydrate_messages_content(content: dict[str, Any], slug: str | None) -> dict[str, Any]:
+def _hydrate_messages_content(
+    content: dict[str, Any],
+    slug: str | None,
+    *,
+    remote: str | None = None,
+    node: Any = None,
+) -> dict[str, Any]:
     """Resolve each manifest ``content_hash`` to its message text from raw/ blobs.
 
     Returns a copy of the messages-layer content with every entry gaining a
     ``content`` (the parsed message payload) and ``text`` (flattened) field when
     its blob resolves. ``hydrated`` records how many resolved — the agent-facing
     proof that content_hash is no longer a dangling pointer (issue #158).
+
+    Local resolution always tries the LOCAL raw/ blob cache first. When
+    ``remote`` is set (and not ``--offline``), any ``content_hash`` the local
+    cache lacks is lazy-fetched from the remote backend — mirroring
+    ``_lazy_fetch_layer_blob`` for layer blobs. The raw/ message blobs are
+    lazy-on-pull (``bucket_remote._is_lazy_blob_path`` classifies
+    ``blobs/v1/<slug>/raw/**`` as fetched on demand by ``ctx show``), so this
+    is the path that actually fetches them. The fetched bytes are verified
+    against their ``content_hash`` and written into the LOCAL cache so a later
+    ``--offline`` read resolves from disk.
     """
     if not slug or not isinstance(content, dict):
         return content
@@ -333,6 +349,16 @@ def _hydrate_messages_content(content: dict[str, Any], slug: str | None) -> dict
     entries = content.get("messages")
     if not isinstance(entries, list):
         return content
+
+    # Resolve the remote backend's project_slug once (issue #158 track C).
+    # The local deref + local cache write key off ``slug``; the remote fetch
+    # keys off the slug the remote bucket stores the blob under (same in the
+    # symmetric local/remote model, but resolved from the node to mirror
+    # ``_lazy_fetch_layer_blob`` exactly).
+    remote_slug: str | None = None
+    if remote and node is not None:
+        remote_slug = _project_slug_for_node(node, remote=remote) or slug
+
     out = dict(content)
     new_entries: list[Any] = []
     resolved = 0
@@ -344,6 +370,13 @@ def _hydrate_messages_content(content: dict[str, Any], slug: str | None) -> dict
         ch = e.get("content_hash")
         if ch:
             payload = deref_message_payload(slug, ch)
+            if payload is None and remote and remote_slug:
+                payload = _lazy_fetch_message_blob(
+                    remote=remote,
+                    content_hash=ch,
+                    local_slug=slug,
+                    remote_slug=remote_slug,
+                )
             if payload is not None:
                 e["content"] = payload
                 e["text"] = _flatten_message_text(payload)
@@ -464,6 +497,62 @@ def _lazy_fetch_layer_blob(
 
         return ContextLayer.model_validate(payload)
     except Exception:
+        return None
+
+
+def _lazy_fetch_message_blob(
+    *,
+    remote: str,
+    content_hash: str,
+    local_slug: str,
+    remote_slug: str,
+) -> Any:
+    """Lazy-fetch one per-message raw blob from the remote backend.
+
+    Issue #158 (track C) — the raw/ message-content sibling of
+    ``_lazy_fetch_layer_blob``. ``ctx show --full --remote`` reaches here when
+    the LOCAL raw/ cache lacks a ``content_hash``. The fetched bytes are the
+    exact canonical-JSON bytes the ``content_hash`` was taken over, so we
+    re-hash to prove the round trip, write them into the LOCAL bucket cache
+    (deterministic gzip, ``mtime=0`` — so a later ``--offline`` read hits the
+    cache), and return the parsed message payload. Returns ``None`` on a miss,
+    a corrupt blob, or a hash mismatch (best-effort, never raises).
+    """
+    try:
+        backend = _cached_backend(remote)
+    except ImportError:
+        # --remote requires the D1 backend module; for message-text
+        # hydration this is best-effort, so degrade silently rather than
+        # aborting the whole `ctx show`.
+        return None
+    try:
+        raw = backend.get_raw_message_blob(content_hash, remote_slug)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    # Round-trip: the blob is content-addressed by ``content_hash`` over the
+    # exact bytes. A mismatch means a corrupt or forged blob — skip it.
+    import hashlib
+
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != content_hash:
+        return None
+    # Persist into the LOCAL cache so the next ``--offline`` deref resolves
+    # from disk (same deterministic gzip writer the layer-blob cache uses).
+    try:
+        from ..core._bucket_io import _atomic_write_gzip
+        from ..core.bucket_layout import blobs_v1_raw_path
+
+        local_blob = blobs_v1_raw_path(local_slug, content_hash, suffix=".json.gz")
+        if not local_blob.exists():
+            _atomic_write_gzip(local_blob, raw)
+    except Exception:
+        # Caching is best-effort; the parsed payload is still returned so the
+        # current call hydrates even if the cache write fails.
+        pass
+    try:
+        return json.loads(raw)
+    except (ValueError, json.JSONDecodeError):
         return None
 
 
@@ -998,9 +1087,17 @@ def ctx_show_cmd(
         if as_full and layer is not None:
             content = layer.content
             # Issue #158 W4 / DoD#1: hydrate the messages manifest — resolve
-            # each content_hash to its message text from the raw/ blobs.
+            # each content_hash to its message text from the raw/ blobs. With
+            # ``--remote`` the missing raw/ blobs are lazy-fetched (track C);
+            # ``--offline`` blocks the network exactly like the layer-blob
+            # path above (passing remote=None keeps the read local-only).
             if layer_type == "messages":
-                content = _hydrate_messages_content(content, bucket_slug)
+                content = _hydrate_messages_content(
+                    content,
+                    bucket_slug,
+                    remote=None if offline else remote,
+                    node=node,
+                )
             entry["content"] = content
         layers_out[layer_type] = entry
         if fetched_from is not None:

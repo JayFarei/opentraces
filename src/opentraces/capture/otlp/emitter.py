@@ -54,6 +54,11 @@ class _SessionState:
     system_hint: dict[str, Any] | None = None
     nodes_by_prompt: dict[str, dict[str, Any]] = field(default_factory=dict)
     raw_bodies_by_request: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Ordered ``api_request_body`` / ``api_response_body`` body-ref log events
+    # (issue #158 W3). Each carries kind / body_ref / sequence / prompt_id (and
+    # request_id on responses) so the flush can pair request+response bodies
+    # per-llm-request, producing one node per llm-request instead of per turn.
+    body_ref_events: list[dict[str, Any]] = field(default_factory=list)
     last_envelope_at: float = field(default_factory=time.time)
 
 
@@ -112,6 +117,10 @@ class OTLPCaptureBuffer:
                     self._request_index[result.request_id] = (
                         result.session_id, result.prompt_id,
                     )
+            if result.body_ref_event:
+                state.body_ref_events.append(
+                    {**result.body_ref_event, "prompt_id": result.prompt_id}
+                )
 
     def handle_body_pair(
         self, request_id: str, request_body: dict[str, Any], response_body: dict[str, Any]
@@ -161,6 +170,7 @@ class OTLPCaptureBuffer:
                 "system_hint": dict(state.system_hint) if state.system_hint else None,
                 "nodes_by_prompt": {k: dict(v) for k, v in state.nodes_by_prompt.items()},
                 "raw_bodies_by_request": {k: dict(v) for k, v in state.raw_bodies_by_request.items()},
+                "body_ref_events": [dict(e) for e in state.body_ref_events],
                 "last_envelope_at": state.last_envelope_at,
             }
 
@@ -377,6 +387,125 @@ def _steps_from_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return steps
 
 
+def _read_json_file(path: Path | None) -> Any | None:
+    """Defensively read+parse one raw-body JSON file. Missing/invalid -> None."""
+    if path is None:
+        return None
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _resolve_body_path(body_ref: Any, raw_bodies_dir: Path | None) -> Path | None:
+    """Resolve a body_ref (absolute path or bare filename) to an existing file.
+
+    Claude Code's ``OTEL_LOG_RAW_API_BODIES=file:<dir>`` emits ``body_ref`` as a
+    path. Prefer it verbatim when absolute and present; otherwise resolve its
+    filename against ``raw_bodies_dir`` (the dir the receiver is configured for).
+    """
+    if not body_ref:
+        return None
+    p = Path(str(body_ref))
+    if p.is_absolute() and p.exists():
+        return p
+    if raw_bodies_dir is not None:
+        cand = Path(raw_bodies_dir) / p.name
+        if cand.exists():
+            return cand
+    if p.exists():
+        return p
+    return None
+
+
+def _seq_key(value: Any) -> tuple[int, int]:
+    """Sort key for an ``event.sequence``; missing sequences sort last, stably."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return (0, value)
+    return (1, 0)
+
+
+def _steps_from_body_ref_events(
+    events: list[dict[str, Any]], raw_bodies_dir: Path | None
+) -> list[dict[str, Any]]:
+    """Build per-llm-request steps from OTel api_*_body body-ref log events (W3).
+
+    Each ``api_request_body`` log marks one llm-request (one node); the matching
+    ``api_response_body`` log carries the canonical ``request_id`` and the
+    per-step ``usage``. Events are grouped by ``prompt.id`` (per-turn) and
+    ordered by ``event.sequence`` within the turn; each request pairs with the
+    NEXT response in that ordering. The full request / response bodies are read
+    off disk from their ``body_ref`` paths (defensively: a missing body file
+    yields an empty body for that side).
+
+    Steps are globally ordered by request ``event.sequence`` (session-monotonic)
+    so ``step_index`` reflects true chronological per-llm-request order. The
+    returned dicts match ``ReconstructedStep.to_snapshot_step``'s shape, so they
+    feed ``_build_layers_and_nodes_from_steps`` unchanged — turning the live
+    snapshot path into per-llm-request capture instead of per-turn.
+    """
+    groups: dict[Any, list[dict[str, Any]]] = {}
+    for ev in events:
+        groups.setdefault(ev.get("prompt_id"), []).append(ev)
+
+    collected: list[tuple[tuple[int, int], dict[str, Any]]] = []
+    for group in groups.values():
+        ordered = sorted(group, key=lambda e: _seq_key(e.get("sequence")))
+        for idx, ev in enumerate(ordered):
+            if ev.get("kind") != "request":
+                continue
+            response = next(
+                (f for f in ordered[idx + 1:] if f.get("kind") == "response"), None
+            )
+            request_body = _read_json_file(
+                _resolve_body_path(ev.get("body_ref"), raw_bodies_dir)
+            )
+            if not isinstance(request_body, dict):
+                request_body = {}
+            response_body = None
+            request_id = None
+            if response is not None:
+                request_id = response.get("request_id")
+                response_body = _read_json_file(
+                    _resolve_body_path(response.get("body_ref"), raw_bodies_dir)
+                )
+                if not isinstance(response_body, dict):
+                    response_body = None
+            finish_reasons: list[str] = []
+            if response_body and response_body.get("stop_reason"):
+                finish_reasons = [response_body["stop_reason"]]
+            ref_name = Path(str(ev.get("body_ref") or "")).name
+            transcript_uuid = (
+                ref_name[: -len(".request.json")]
+                if ref_name.endswith(".request.json")
+                else (request_id or ref_name or None)
+            )
+            previous_message_id = (request_body.get("diagnostics") or {}).get(
+                "previous_message_id"
+            )
+            collected.append(
+                (
+                    _seq_key(ev.get("sequence")),
+                    {
+                        "step_index": 0,  # reassigned after global ordering
+                        "transcript_uuid": transcript_uuid,
+                        "request_id": request_id,
+                        "request_body": request_body,
+                        "response_body": response_body,
+                        "previous_message_id": previous_message_id,
+                        "finish_reasons": finish_reasons,
+                    },
+                )
+            )
+
+    collected.sort(key=lambda t: t[0])
+    steps: list[dict[str, Any]] = []
+    for step_index, (_key, step) in enumerate(collected):
+        step["step_index"] = step_index
+        steps.append(step)
+    return steps
+
+
 # --------------------------------------------------------------------------- #
 # Public flush — write accumulated OTel state to a project's event log
 # --------------------------------------------------------------------------- #
@@ -437,7 +566,20 @@ def flush_session_to_project(
             snapshot = buffer.snapshot_session(session_id)
         if snapshot is None:
             return {"ok": False, "reason": "no-such-session", "session_id": session_id}
-        steps = _steps_from_snapshot(snapshot)
+        # Per-llm-request capture (W3): when the live receiver recorded
+        # api_*_body body-ref log events, pair request+response bodies per
+        # llm-request so one turn with N llm-requests becomes N distinct nodes.
+        # Otherwise fall back to the legacy per-prompt snapshot adaptation.
+        body_ref_events = snapshot.get("body_ref_events") or []
+        if body_ref_events:
+            resolved_raw_dir = (
+                Path(raw_bodies_dir)
+                if raw_bodies_dir is not None
+                else _default_raw_bodies_dir()
+            )
+            steps = _steps_from_body_ref_events(body_ref_events, resolved_raw_dir)
+        else:
+            steps = _steps_from_snapshot(snapshot)
 
     project_slug = _project_slug_for(project_dir)
     layers, nodes, blob_report = _build_layers_and_nodes_from_steps(

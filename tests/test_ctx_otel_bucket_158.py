@@ -73,6 +73,92 @@ def test_deref_missing_returns_none():
 
 
 # --------------------------------------------------------------------------- #
+# track C: ctx show --full --remote hydrates message text from a remote bucket
+# --------------------------------------------------------------------------- #
+
+
+class _FakeNode:
+    """Minimal ContextNode stand-in carrying the join keys hydration needs."""
+
+    def __init__(self, project_slug: str, trace_id: str) -> None:
+        self.project_slug = project_slug
+        self.trace_id = trace_id
+
+
+def _write_remote_message_blob(remote_root: Path, slug: str, msg: dict) -> str:
+    """Lay a content-addressed message blob into a DirectoryHubBackend tree.
+
+    Writes ``<root>/blobs/v1/<slug>/raw/<hh>/<hash>.json.gz`` holding the
+    deterministic gzip of the EXACT canonical-JSON bytes the content_hash was
+    taken over — the byte-exact shape a real ``bucket remote push`` produces.
+    Returns the ``content_hash``.
+    """
+    from opentraces.core._bucket_io import _atomic_write_gzip
+
+    ch = message_content_hash(msg)
+    digest_hex = ch.split(":", 1)[1]
+    text = json.dumps(msg, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    blob = (
+        remote_root
+        / "blobs"
+        / "v1"
+        / slug
+        / "raw"
+        / digest_hex[:2]
+        / f"{digest_hex}.json.gz"
+    )
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_gzip(blob, text)
+    return ch
+
+
+def test_hydrate_messages_content_lazy_fetches_from_remote(tmp_path):
+    """The raw/ message blobs are lazy-on-pull; a remote hydrate must fetch.
+
+    Mirrors ``ctx show --full --remote``: the LOCAL bucket starts WITHOUT the
+    blob, the remote carries it, and hydration must fetch it, verify the
+    content_hash round-trip, write it into the LOCAL cache, and resolve the
+    text. ``--offline`` (remote=None) must NOT fetch.
+    """
+    from opentraces.cli import ctx as ctx_mod
+    from opentraces.cli.ctx import _hydrate_messages_content
+
+    ctx_mod._BACKEND_CACHE.clear()  # don't inherit a backend from a prior test
+
+    slug = "proj-remote-hydrate"
+    msg = {"role": "user", "content": [{"type": "text", "text": "remote héllo"}]}
+    remote_root = tmp_path / "remote-bucket"
+    ch = _write_remote_message_blob(remote_root, slug, msg)
+
+    # The LOCAL bucket starts WITHOUT the blob.
+    assert deref_message_content(slug, ch) is None
+
+    content = {"messages": [{"role": "user", "content_hash": ch}]}
+    node = _FakeNode(project_slug=slug, trace_id="trace-remote")
+
+    # --offline equivalent: remote not passed -> nothing fetched, nothing resolved.
+    offline_out = _hydrate_messages_content(content, slug)
+    assert offline_out["hydrated"] == {"resolved": 0, "total": 1}
+    assert "content" not in offline_out["messages"][0]
+    assert deref_message_content(slug, ch) is None  # still local-empty
+
+    # --remote: lazy-fetch resolves the text into the local-empty bucket.
+    out = _hydrate_messages_content(
+        content, slug, remote=f"file://{remote_root}", node=node
+    )
+    assert out["hydrated"] == {"resolved": 1, "total": 1}
+    assert out["messages"][0]["content"] == msg
+    assert "remote héllo" in out["messages"][0]["text"]
+
+    # The blob is now in the LOCAL cache and the round-trip hash holds, so a
+    # later offline deref resolves from disk (cache warmed).
+    cached = deref_message_content(slug, ch)
+    assert cached is not None
+    assert "sha256:" + hashlib.sha256(cached).hexdigest() == ch
+    assert deref_message_payload(slug, ch) == msg
+
+
+# --------------------------------------------------------------------------- #
 # reconstruct: pair by content/metadata, not filename
 # --------------------------------------------------------------------------- #
 
