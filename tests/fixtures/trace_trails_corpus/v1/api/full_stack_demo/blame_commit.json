@@ -29,22 +29,6 @@
       },
       "commit_sha": "<git-commit:02>",
       "containing_segment_id": "<hex64:02>",
-      "current_state": {
-        "firmness": "firm_observed",
-        "label": "unknown",
-        "limitations": [],
-        "observed_at_commit": "<git-commit:02>",
-        "observed_at_ref": null,
-        "path": "src/generated.py",
-        "ranges": [
-          {
-            "end_line": 2,
-            "path": "src/generated.py",
-            "side": "current",
-            "start_line": 1
-          }
-        ]
-      },
       "event_log_ref": "refs/opentraces/local/events/v1",
       "event_time": "<timestamp>",
       "evidence": {
