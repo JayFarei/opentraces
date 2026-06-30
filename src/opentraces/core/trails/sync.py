@@ -8,11 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from . import survival_cache_store
 from .event_log import (
     EVENT_LOG_REF,
-    append_survival_cache_events,
     build_survival_cache_index,
-    make_survival_cache_draft,
     read_events,
 )
 from .ids import id_from_payload, normalize_id
@@ -243,13 +242,14 @@ class BatchSyncContext:
       per call.
     * ``head_sha`` — the cached HEAD sha at batch start, so survival rows
       key against a stable HEAD even if a writer advances HEAD mid-batch.
-    * ``pending_cache_drafts`` — unflushed ``patch_survival_cached`` event
-      drafts. Coalescing the writes amortizes the ``git update-ref`` cost
-      across the batch (one transaction instead of N).
+    * ``pending_store_entries`` — unflushed survival rows destined for the
+      local evictable store (issue #116 A). Coalescing the writes amortizes
+      the JSON read-modify-write across the batch (one write instead of N).
+      Survival rows are no longer appended to the canonical event log.
 
     The context is best-used inside a ``with`` block; ``close()`` flushes
-    cache drafts then shuts the cat-file pipe down. Forgetting to close
-    leaves the cat-file subprocess and unflushed cache drafts dangling
+    queued cache rows then shuts the cat-file pipe down. Forgetting to close
+    leaves the cat-file subprocess and unflushed cache rows dangling
     until ``atexit`` cleans them up.
     """
 
@@ -258,7 +258,9 @@ class BatchSyncContext:
     _ancestry: set[str] | None = None
     _ancestry_failed: bool = False
     _cat_file: _CatFilePipe | None = None
-    pending_cache_drafts: list[Any] = field(default_factory=list)
+    pending_store_entries: dict[tuple[str, str], dict[str, Any]] = field(
+        default_factory=dict
+    )
     # In-process cache index — populated from the events list at first
     # cache lookup and updated as writes are queued. Lets later sync_patch
     # calls in the same batch hit the cache for rows we just computed.
@@ -303,37 +305,43 @@ class BatchSyncContext:
     def cache_index(self, events: list[Any] | None) -> dict[tuple[str, str], dict[str, Any]]:
         """Lazily build (and cache) a survival-cache lookup table.
 
-        ``events`` is the caller-provided event list; we read it once
-        and project to ``{(patch_id, head_sha): payload}``. Subsequent
-        calls return the same dict, which we mutate as writes are queued
-        so within-batch lookups for freshly-computed rows hit the cache.
+        ``events`` is the caller-provided event list; we read it once and
+        project to ``{(patch_id, head_sha): payload}``, then overlay the local
+        evictable store (issue #116 A) so freshly-cached rows that live only in
+        the store — plus any legacy on-ref rows the projection surfaces — are
+        both visible. The store wins on key collisions (it is the live write
+        target; the on-ref index is back-compat only). Subsequent calls return
+        the same dict, which we mutate as writes are queued so within-batch
+        lookups for freshly-computed rows hit the cache.
         """
         if self._cache_index is None:
-            self._cache_index = build_survival_cache_index(events or [])
+            index = build_survival_cache_index(events or [])
+            index.update(survival_cache_store.load_index(self.repo))
+            self._cache_index = index
         return self._cache_index
 
-    def queue_cache_write(self, draft: Any, payload_key_value: dict[str, Any]) -> None:
-        """Queue a cache event for the end-of-batch flush.
+    def queue_cache_write(self, entries: dict[tuple[str, str], dict[str, Any]]) -> None:
+        """Queue survival rows for the end-of-batch local-store flush.
 
-        ``payload_key_value`` is the ``{(patch_id, head_sha): survival}``
-        entry that should be visible to subsequent in-batch lookups so we
+        ``entries`` maps ``(patch_id, head_sha)`` to the native survival row.
+        Each row is also made visible to subsequent in-batch lookups so we
         don't recompute the same row twice in one loop.
         """
-        self.pending_cache_drafts.append(draft)
-        self.calls["cache_writes_queued"] += 1
+        self.calls["cache_writes_queued"] += len(entries)
         if self._cache_index is None:
             self._cache_index = {}
-        for key, survival in payload_key_value.items():
+        for key, survival in entries.items():
             self._cache_index[key] = survival
+            self.pending_store_entries[key] = survival
 
     def flush_cache(self) -> None:
-        """Persist all queued cache events as one append batch."""
-        if not self.pending_cache_drafts:
+        """Persist all queued survival rows to the local evictable store."""
+        if not self.pending_store_entries:
             return
-        flushed = list(self.pending_cache_drafts)
-        self.pending_cache_drafts.clear()
+        flushed = dict(self.pending_store_entries)
+        self.pending_store_entries.clear()
         try:
-            append_survival_cache_events(self.repo, flushed)
+            survival_cache_store.write_entries(self.repo, flushed)
         except Exception:
             # Best-effort: cache writes never block the caller.
             return
@@ -1411,6 +1419,9 @@ def sync_patch(
             cache_index = (
                 build_survival_cache_index(events) if events is not None else {}
             )
+            # Overlay the local evictable store (issue #116 A): the live cache
+            # write target. The on-ref index above stays for legacy rows.
+            cache_index = {**cache_index, **survival_cache_store.load_index(repo)}
         cached = cache_index.get((normalized_patch_id, head_sha))
         if cached is not None:
             if batch_ctx is not None:
@@ -1447,10 +1458,12 @@ def sync_patch(
         batch_ctx=batch_ctx,
     )
 
-    # Cluster G — P2: persist the freshly-computed row so the next call
-    # against the same HEAD can short-circuit. Inside a batch we queue
-    # the draft on the context for one coalesced flush at close-time;
-    # in the per-call (no-batch) path we append immediately.
+    # Cluster G — P2 / issue #116 A: persist the freshly-computed row so the
+    # next call against the same HEAD can short-circuit. The row now lands in
+    # the LOCAL evictable store (``<git-common-dir>/opentraces/``), NOT the
+    # append-only canonical event ref. Inside a batch we queue the row on the
+    # context for one coalesced store write at close-time; in the per-call
+    # (no-batch) path we write immediately.
     if (
         write_cache
         and head_sha
@@ -1464,18 +1477,11 @@ def sync_patch(
             and isinstance(survival, dict)
             and survival.get("survival_state") not in (None,)
         ):
-            draft = make_survival_cache_draft(
-                trace_patch_id=result_patch_id,
-                observed_head_sha=head_sha,
-                survival=survival,
-            )
+            entry = {(result_patch_id, head_sha): survival}
             if batch_ctx is not None:
-                batch_ctx.queue_cache_write(
-                    draft,
-                    {(result_patch_id, head_sha): survival},
-                )
+                batch_ctx.queue_cache_write(entry)
             else:
-                append_survival_cache_events(repo, [draft])
+                survival_cache_store.write_entries(repo, entry)
 
     if isinstance(result, dict):
         result.setdefault(
