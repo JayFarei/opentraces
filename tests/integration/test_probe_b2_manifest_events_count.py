@@ -130,21 +130,25 @@ def _sweep() -> int:
     if not witness_slug:
         _guard(f"witness {WITNESS} row has no project_slug")
 
-    targets = sorted(
-        tid
-        for tid, r in rows.items()
-        if r.get("project_slug") == witness_slug
-        and (r.get("summary") or {}).get("anchored_count", 0) > 0
-    )
-    if WITNESS not in targets:
-        _guard("witness is not among nonzero-anchored in-repo rows")
+    inrepo = [tid for tid, r in rows.items() if r.get("project_slug") == witness_slug]
+    nonzero = [
+        tid for tid in inrepo
+        if (rows[tid].get("summary") or {}).get("anchored_count", 0) > 0
+    ]
+    # ALWAYS check the witness explicitly. A correct events-derived repair drops
+    # the witness anchored_count to 0 (its 3 phantom patches de-attribute, RIGHT
+    # stays 0), so the witness leaves the nonzero set — but it must still satisfy
+    # left<=right, and excluding it would let over-attribution hide post-repair
+    # AND would BLOCK the suite forever after the real fix (codex review #1).
+    check_set = sorted(set(nonzero) | {WITNESS})
 
     overcount = []   # LEFT > RIGHT  -> hard RED (the defeater)
     undercount = []  # LEFT < RIGHT  -> reported only (possible benign lag)
     checked = 0
     witness_checked = False
+    canonical_anchor_rows = 0   # rows whose canonical RIGHT>0 (reader-works proof)
 
-    for tid in targets:
+    for tid in check_set:
         left = (rows[tid].get("summary") or {}).get("anchored_count", 0)
         seen, right = _anchor_patch_count(tid)
         if seen == 0:
@@ -153,6 +157,8 @@ def _sweep() -> int:
         checked += 1
         if tid == WITNESS:
             witness_checked = True
+        if right > 0:
+            canonical_anchor_rows += 1
         marker = "==" if left == right else (">" if left > right else "<")
         print(
             f"  {tid}: manifest.anchored_count={left} {marker} "
@@ -168,8 +174,18 @@ def _sweep() -> int:
             "witness trace not re-observable (events_seen==0); result would be "
             "vacuous — read path failed"
         )
+    # Reader-works guard: the canonical git_anchor_created reader must surface
+    # real creations in at least one checked row, else 'no over-count' is vacuous.
+    # After a correct repair the witness is 0/0, but genuinely-anchored in-repo
+    # rows still carry RIGHT>0 (e.g. the B1 positive control 4f0e4e98), so this
+    # holds on both main and the fix — and blocks a delete/empty-everything fake.
+    if canonical_anchor_rows == 0:
+        _guard(
+            "no canonical git_anchor_created anchors re-observed in any checked "
+            "row (reader vacuous)"
+        )
     if checked == 0:
-        _guard("no nonzero-anchored rows re-observable (vacuous-pass guard)")
+        _guard("no rows re-observable (vacuous-pass guard)")
 
     if undercount:
         print(
