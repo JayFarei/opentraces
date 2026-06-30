@@ -31,7 +31,7 @@
     "git_anchor_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.git_anchor.v1",
-      "display_id": "<display-ref:04>",
+      "display_id": "<display-ref:05>",
       "id": "<git-anchor:01>",
       "id_format": "digest",
       "kind": "git_anchor",
@@ -64,7 +64,7 @@
       "git_anchor_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.git_anchor.v1",
-        "display_id": "<display-ref:04>",
+        "display_id": "<display-ref:05>",
         "id": "<git-anchor:01>",
         "id_format": "digest",
         "kind": "git_anchor",
@@ -79,12 +79,12 @@
       }
     }
   ],
-  "git_clean_hash": "<content-hash:07>",
+  "git_clean_hash": "<content-hash:08>",
   "limitations": [
     "hook_only"
   ],
   "patch_status": "patched",
-  "raw_authored_hash": "<content-hash:08>",
+  "raw_authored_hash": "<content-hash:09>",
   "relation": "anchored_in_git",
   "resource_refs": {
     "file_line_origin": "ot://file/src/generated.py/line/1/origin",
@@ -96,16 +96,16 @@
       "capture_method": [
         "hook_pretooluse"
       ],
-      "event_id": "<trail-event:03>",
-      "event_sequence": 3,
+      "event_id": "<trail-event:04>",
+      "event_sequence": 4,
       "event_type": "trace_snapshot_created"
     },
     {
       "capture_method": [
         "hook_posttooluse"
       ],
-      "event_id": "<trail-event:04>",
-      "event_sequence": 4,
+      "event_id": "<trail-event:05>",
+      "event_sequence": 5,
       "event_type": "trace_snapshot_created"
     },
     {
@@ -114,16 +114,16 @@
         "hook_pretooluse",
         "watcher_backstop"
       ],
-      "event_id": "<trail-event:08>",
-      "event_sequence": 8,
+      "event_id": "<trail-event:09>",
+      "event_sequence": 9,
       "event_type": "trace_patch_created"
     },
     {
       "capture_method": [
         "trail_maturation"
       ],
-      "event_id": "<trail-event:17>",
-      "event_sequence": 17,
+      "event_id": "<trail-event:18>",
+      "event_sequence": 18,
       "event_type": "git_anchor_created"
     }
   ],
@@ -134,7 +134,7 @@
   "trace_patch_ref": {
     "algorithm": "sha256",
     "canonicalization": "opentraces.trace_patch.v1",
-    "display_id": "<display-ref:03>",
+    "display_id": "<display-ref:04>",
     "id": "<trace-patch:01>",
     "id_format": "digest",
     "kind": "trace_patch",
@@ -145,7 +145,7 @@
     "containing_segment_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_slice.v1",
-      "display_id": "<display-ref:06>",
+      "display_id": "<display-ref:07>",
       "id": "<hex64:02>",
       "id_format": "digest",
       "kind": "trace_slice",
@@ -158,7 +158,7 @@
     "git_anchor_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.git_anchor.v1",
-      "display_id": "<display-ref:04>",
+      "display_id": "<display-ref:05>",
       "id": "<git-anchor:01>",
       "id_format": "digest",
       "kind": "git_anchor",
@@ -173,7 +173,7 @@
     "trace_patch_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_patch.v1",
-      "display_id": "<display-ref:03>",
+      "display_id": "<display-ref:04>",
       "id": "<trace-patch:01>",
       "id_format": "digest",
       "kind": "trace_patch",
@@ -194,15 +194,15 @@
     "limitations": [
       "hook_only"
     ],
-    "snapshot_id": "<snapshot:02>",
+    "snapshot_id": "<snapshot:03>",
     "snapshot_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_snapshot.v1",
-      "display_id": "<display-ref:02>",
-      "id": "<snapshot:02>",
+      "display_id": "<display-ref:03>",
+      "id": "<snapshot:03>",
       "id_format": "digest",
       "kind": "trace_snapshot",
-      "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
+      "ref": "ot://trace-snapshot/sha256/<snapshot:03>"
     },
     "snapshot_role": "after",
     "tool_call_id": "toolu_trace_trails_full_stack_bash",
@@ -223,15 +223,15 @@
       "hex": "<git-object:02>"
     },
     "limitations": [],
-    "snapshot_id": "<snapshot:01>",
+    "snapshot_id": "<snapshot:02>",
     "snapshot_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_snapshot.v1",
-      "display_id": "<display-ref:01>",
-      "id": "<snapshot:01>",
+      "display_id": "<display-ref:02>",
+      "id": "<snapshot:02>",
       "id_format": "digest",
       "kind": "trace_snapshot",
-      "ref": "ot://trace-snapshot/sha256/<snapshot:01>"
+      "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
     },
     "snapshot_role": "before",
     "tool_call_id": "toolu_trace_trails_full_stack_bash",

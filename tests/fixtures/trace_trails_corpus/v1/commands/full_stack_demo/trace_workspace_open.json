@@ -1,9 +1,9 @@
 {
-  "event_count": 16,
+  "event_count": 17,
   "event_log_ref": "refs/opentraces/local/events/v1",
   "project": "<run-root>/opened-workspace",
   "schema_version": "opentraces.trace_workspace.v1",
-  "snapshot_count": 2,
+  "snapshot_count": 3,
   "status": "ok",
   "trace_id": "<trace:01>",
   "workspace_source": {

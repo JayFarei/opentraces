@@ -6,8 +6,8 @@
       "capture_method": [
         "trail_maturation"
       ],
-      "event_id": "<trail-event:16>",
-      "event_sequence": 16,
+      "event_id": "<trail-event:17>",
+      "event_sequence": 17,
       "event_time": "<timestamp>",
       "event_type": "git_anchor_search_completed",
       "result": "anchored",
@@ -17,8 +17,8 @@
       "capture_method": [
         "trail_maturation"
       ],
-      "event_id": "<trail-event:17>",
-      "event_sequence": 17,
+      "event_id": "<trail-event:18>",
+      "event_sequence": 18,
       "event_type": "git_anchor_created"
     }
   ],
@@ -36,7 +36,7 @@
       "git_anchor_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.git_anchor.v1",
-        "display_id": "<display-ref:04>",
+        "display_id": "<display-ref:05>",
         "id": "<git-anchor:01>",
         "id_format": "digest",
         "kind": "git_anchor",
@@ -49,7 +49,7 @@
         "git_anchor": "ot://git-anchor/sha256/<git-anchor:01>",
         "trace_patch_trail": "ot://trace-patch/sha256/<trace-patch:01>/trail"
       },
-      "source_event_id": "<trail-event:08>",
+      "source_event_id": "<trail-event:09>",
       "step_id": "step_2",
       "step_index": 2,
       "trace_id": "<trace:01>",
@@ -57,7 +57,7 @@
       "trace_patch_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.trace_patch.v1",
-        "display_id": "<display-ref:03>",
+        "display_id": "<display-ref:04>",
         "id": "<trace-patch:01>",
         "id_format": "digest",
         "kind": "trace_patch",
@@ -68,7 +68,7 @@
         "containing_segment_ref": {
           "algorithm": "sha256",
           "canonicalization": "opentraces.trace_slice.v1",
-          "display_id": "<display-ref:06>",
+          "display_id": "<display-ref:07>",
           "id": "<hex64:02>",
           "id_format": "digest",
           "kind": "trace_slice",
@@ -81,7 +81,7 @@
         "git_anchor_ref": {
           "algorithm": "sha256",
           "canonicalization": "opentraces.git_anchor.v1",
-          "display_id": "<display-ref:04>",
+          "display_id": "<display-ref:05>",
           "id": "<git-anchor:01>",
           "id_format": "digest",
           "kind": "git_anchor",
@@ -96,7 +96,7 @@
         "trace_patch_ref": {
           "algorithm": "sha256",
           "canonicalization": "opentraces.trace_patch.v1",
-          "display_id": "<display-ref:03>",
+          "display_id": "<display-ref:04>",
           "id": "<trace-patch:01>",
           "id_format": "digest",
           "kind": "trace_patch",
