@@ -200,6 +200,71 @@ def _trail_matches_repo(repo: Path, hook_entry: dict[str, Any]) -> bool:
     return repo_common is not None and repo_common == hook_common
 
 
+def _empty_blob(repo: Path) -> str:
+    """Write (if absent) and return the repo's empty-blob object id.
+
+    ``-w`` ensures the object exists in the DB so a creation diff
+    (``empty_blob`` → after_blob) can be produced.
+    """
+    proc = subprocess.run(
+        ["git", "hash-object", "-w", "-t", "blob", "--stdin"],
+        cwd=repo,
+        input="",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.stdout.strip()
+
+
+def reconstruct_authored_text(
+    repo: Path,
+    *,
+    after_blob_id: Any,
+    before_blob_id: Any = None,
+    affected_range: dict[str, Any] | None = None,
+) -> str | None:
+    """Reconstruct a patch's ``authored_text`` from its pinned content blobs.
+
+    ``authored_text`` is the concatenation of ONLY the ``+`` lines of a hunk;
+    those lines can be non-contiguous inside ``affected_range``, so extracting
+    ``after_blob[start:end]`` is lossy. The faithful path re-diffs the pinned
+    ``before_blob`` → ``after_blob`` with the SAME hunk parser that produced
+    the field, then selects the hunk by ``affected_range``. Both blobs are
+    pinned in the canonical event log (see ``event_log._write_batch_tree``
+    retained blobs), so this works offline against the bucket's events mirror —
+    no harness, no network.
+
+    Returns the exact ``authored_text`` the dropped field would have held, or
+    ``None`` when the blobs cannot disambiguate the hunk (multi-hunk file with
+    no matching ``affected_range``). This is the P3 reconstruction primitive;
+    it is NOT yet wired into the live survival/anchor/maturation readers.
+    """
+    repo = repo.resolve()
+    after = _as_object_id(after_blob_id)
+    if after is None or _object_type(repo, after["hex"]) != "blob":
+        return None
+    before = _as_object_id(before_blob_id)
+    before_hex = before["hex"] if before is not None else _empty_blob(repo)
+
+    diff = _git_raw(repo, ["diff", "--no-color", before_hex, after["hex"]])
+    hunks = [
+        hunk
+        for file_hunks in _parse_diff_hunks_with_content(diff).values()
+        for hunk in file_hunks
+    ]
+    if not hunks:
+        return ""
+    if affected_range is not None:
+        want = (affected_range.get("start_line"), affected_range.get("end_line"))
+        for hunk in hunks:
+            if (hunk.get("added_start"), hunk.get("added_end")) == want:
+                return hunk.get("added_text") or ""
+    if len(hunks) == 1:
+        return hunks[0].get("added_text") or ""
+    return None
+
+
 def _snapshot_id(
     *,
     trace_id: str,

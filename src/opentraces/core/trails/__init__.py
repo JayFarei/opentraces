@@ -77,6 +77,7 @@ from .snapshots import (
     emit_origin_snapshot,
     emit_step_window_events_from_record,
     open_step_window,
+    reconstruct_authored_text,
     reconstruct_origin_tree,
     write_worktree_tree,
 )
@@ -117,6 +118,7 @@ __all__ = [
     "diff_step_snapshots",
     "emit_origin_snapshot",
     "emit_step_window_events_from_record",
+    "reconstruct_authored_text",
     "reconstruct_origin_tree",
     "OriginReconstructResult",
     "ORIGIN_STEP_INDEX",
