@@ -1,6 +1,7 @@
 """Append-only Git event log for Trace Trails."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pickle
@@ -700,6 +701,14 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
     head = _ref_head(cwd)
     if head is None or not trace_id:
         return []
+    # Reuse the per-trace parsed-events snapshot when it matches the current
+    # head: a trace whose footprint is dominated by large v2 anchor-search
+    # summaries costs seconds to JSON-validate, so reloading the parsed objects
+    # keeps a warm ``trail track <trace>`` interactive. Head-keyed, so a stale
+    # snapshot is never served.
+    cached = _load_trace_events_cache(cwd, trace_id, head)
+    if cached is not None:
+        return cached
     from . import event_index
 
     idx = event_index.fresh_index_for_read(cwd, head)
@@ -715,6 +724,7 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
         for raw in _iter_blobs_batch(cwd, entries)
     ]
     matched.sort(key=lambda event: event.event_sequence)
+    _save_trace_events_cache(cwd, trace_id, head, matched)
     return matched
 
 
@@ -926,6 +936,82 @@ def _save_event_snapshot(cwd: Path, head: str, events: list[TrailEvent]) -> None
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = pickle.dumps(
             {"format": _EVENT_CACHE_FORMAT, "head": head, "events": events},
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except Exception:  # noqa: BLE001 — cache is an optimization, never fatal
+        return
+
+
+def _trace_events_cache_path(cwd: Path, trace_id: str) -> Path | None:
+    """Per-(repo, trace) parsed-events snapshot path inside the git dir.
+
+    Sibling of :func:`_event_cache_path`; the trace id is hashed so any id shape
+    (UUID, ``ot://`` ref, legacy hex) yields a filesystem-safe name.
+    """
+    snap = _event_cache_path(cwd)
+    if snap is None:
+        return None
+    digest = hashlib.sha256(trace_id.encode("utf-8")).hexdigest()[:32]
+    return snap.with_name(f"trace_events_{digest}.pkl")
+
+
+def _load_trace_events_cache(
+    cwd: Path, trace_id: str, head: str
+) -> list[TrailEvent] | None:
+    """Load this trace's parsed events from the per-trace snapshot, or None.
+
+    Keyed by ``(trace_id, head)`` so it self-invalidates the moment the event
+    log ref advances — a stale cache is never served.
+    """
+    path = _trace_events_cache_path(cwd, trace_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        blob = pickle.loads(path.read_bytes())
+        if (
+            not isinstance(blob, dict)
+            or blob.get("format") != _EVENT_CACHE_FORMAT
+            or blob.get("head") != head
+            or blob.get("trace_id") != trace_id
+            or not isinstance(blob.get("events"), list)
+        ):
+            return None
+        return blob["events"]
+    except Exception:  # noqa: BLE001 — any corruption ⇒ fall back to fresh read
+        return None
+
+
+def _save_trace_events_cache(
+    cwd: Path, trace_id: str, head: str, events: list[TrailEvent]
+) -> None:
+    """Atomically persist one trace's parsed events keyed by ``(trace_id, head)``.
+
+    Best-effort. Parsing a trace whose footprint is dominated by large v2
+    anchor-search summaries (hundreds of MB) costs seconds; this lets a repeat
+    read at the same head reload the parsed objects (~pickle speed) instead of
+    re-validating every blob, which is what keeps ``trail track <trace>``
+    interactive on a mature log.
+    """
+    path = _trace_events_cache_path(cwd, trace_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = pickle.dumps(
+            {
+                "format": _EVENT_CACHE_FORMAT,
+                "head": head,
+                "trace_id": trace_id,
+                "events": events,
+            },
             protocol=pickle.HIGHEST_PROTOCOL,
         )
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
