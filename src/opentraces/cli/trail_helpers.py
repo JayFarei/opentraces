@@ -299,7 +299,12 @@ def _load_trace_step_summaries(repo: Path, trace_id: str) -> dict[str, str]:
     except Exception:
         return {}
     paths = [traces_dir / f"{trace_id}.jsonl"]
-    paths.extend(sorted(path for path in traces_dir.glob("*.jsonl") if path not in paths))
+    # Per-id filename + prefix fast path instead of a full-dir scan: a present
+    # trace is reached directly, and a miss returns empty rather than reading
+    # every file in the traces dir.
+    paths.extend(
+        sorted(path for path in traces_dir.glob(f"{trace_id}*.jsonl") if path not in paths)
+    )
     for path in paths:
         if not path.exists():
             continue

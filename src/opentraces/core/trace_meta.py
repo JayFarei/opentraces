@@ -206,8 +206,29 @@ def _resolve_cached(project_root_str: str, id_prefix: str) -> TraceMeta | None:
         tid = str(rec.get("trace_id") or "")
         if sid.startswith(p) or tid.startswith(p):
             return _build_meta(rec)
-    # Slow path: full scan (trace_id != session_id case).
-    for path in sorted(traces_dir.glob("*.jsonl")):
+    # Slow path: the fast-path prefix glob missed (the prefix matches an id that
+    # is not the on-disk filename — e.g. queried by session_id while files are
+    # named by trace_id). Resolve through the project's staging-state id index
+    # first (a single state.json read, no directory scan), so the hot
+    # present-trace path never scans the whole traces dir. Fall back to a
+    # directory scan only for index-less stores (the index resolves a present
+    # trace in a real store, so that hot path stays scan-free). Candidate paths
+    # are read in sorted order to preserve the prior sorted-glob resolution.
+    from .state import StateManager
+
+    try:
+        session = StateManager(traces_dir.parent / "state.json").get_session(p)
+    except Exception:
+        session = None
+    if session is not None:
+        candidate_paths = sorted(
+            traces_dir / f"{gen.trace_id}.jsonl"
+            for gen in session.generations
+            if gen.trace_id
+        )
+    else:
+        candidate_paths = sorted(traces_dir.glob("*.jsonl"))
+    for path in candidate_paths:
         rec = _first_line(path)
         if rec is None:
             continue
@@ -305,14 +326,9 @@ def resolve_trace_id_prefix(project_cwd: Path, prefix: str) -> str | None:
         elif sid and sid.lower().startswith(p):
             matches.add(tid)  # NB: trace_id, not sid — abstraction boundary
 
-    # First pass: filename starts with prefix (cheap).
+    # Filename starts with prefix (cheap, bounded). A miss returns None rather
+    # than falling through to a full-dir scan of every file in the traces dir.
     for path in traces_dir.glob(f"{p}*.jsonl"):
-        rec = _first_line(path)
-        if rec is None:
-            continue
-        _consider(rec)
-    # Second pass: scan all trace records (session_id != trace_id).
-    for path in traces_dir.glob("*.jsonl"):
         rec = _first_line(path)
         if rec is None:
             continue
