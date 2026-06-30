@@ -216,8 +216,9 @@ def _resolve_cached(project_root_str: str, id_prefix: str) -> TraceMeta | None:
     # are read in sorted order to preserve the prior sorted-glob resolution.
     from .state import StateManager
 
+    state_path = traces_dir.parent / "state.json"
     try:
-        session = StateManager(traces_dir.parent / "state.json").get_session(p)
+        session = StateManager(state_path).get_session(p)
     except Exception:
         session = None
     if session is not None:
@@ -226,8 +227,19 @@ def _resolve_cached(project_root_str: str, id_prefix: str) -> TraceMeta | None:
             for gen in session.generations
             if gen.trace_id
         )
-    else:
+    elif not state_path.exists():
+        # Bare, index-less store (no staging state.json): a small dev/test store
+        # may be content-scanned to resolve a prefix against a file named by the
+        # OTHER id. #169 keeps the full-dir scan ONLY for this index-less case.
         candidate_paths = sorted(traces_dir.glob("*.jsonl"))
+    else:
+        # Real store whose staging index does not know this id: it is not a
+        # tracked present trace here. Return None instead of opening + JSON-
+        # decoding the whole ~1.5k-file traces dir (#169 site-3: never a full-dir
+        # glob — the prior glob-all is the blame/track interactivity killer,
+        # ~7.6s on the live store). Callers degrade gracefully (e.g. blame shows
+        # the short trace_id with no friendly-name/model decoration).
+        return None
     for path in candidate_paths:
         rec = _first_line(path)
         if rec is None:

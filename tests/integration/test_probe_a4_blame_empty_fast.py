@@ -77,6 +77,28 @@ FAST_GUARD = 3   # Phase 2 warm fast gate
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
 
+def _project_dir() -> Path | None:
+    """The opted-in opentraces project that owns this checkout's shared event
+    log: the parent of the COMMON git dir (works from the main checkout or a
+    linked worktree, regardless of the worktree's basename). Returns None when
+    that project is not opted in. Location-relative; aligns A4 with A3/A7/A8 so
+    blame runs against the provisioned project that carries the commit's
+    attribution — never the un-provisioned grader worktree itself."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=str(REPO), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return None
+    if not out:
+        return None
+    proj = Path(out).resolve().parent
+    if (proj / ".opentraces.json").is_file() or (proj / ".opentraces").is_dir():
+        return proj
+    return None
+
+
 def _git_full_sha() -> str | None:
     """Independent cross-check anchor: resolve the pinned sha through Git in
     THIS repo. Returns the full 40-char sha, or None if the commit is absent."""
@@ -271,7 +293,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
         pass
 
 
-def _blame(timeout: int) -> tuple[bool, int, str]:
+def _blame(timeout: int, project: Path) -> tuple[bool, int, str]:
     """Run the shipped blame command under ``timeout`` seconds. Redirects stdout
     to a temp FILE (never a pipe) and launches in its own session/process group,
     so a hang is bounded the way the forge's ``timeout ... >file`` was: on
@@ -282,8 +304,8 @@ def _blame(timeout: int) -> tuple[bool, int, str]:
     try:
         with open(out_path, "wb") as out_f:
             proc = subprocess.Popen(
-                [str(OT), "trail", "blame", "commit", SHA, "--project", str(REPO), "--json"],
-                cwd=str(REPO),
+                [str(OT), "trail", "blame", "commit", SHA, "--project", str(project), "--json"],
+                cwd=str(project),
                 stdout=out_f,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
@@ -331,20 +353,22 @@ def _run() -> int:
         print(f"[SETUP-INVALID] pinned commit is NOT 0-anchor here: oracle={oracle} git_anchor_created rows")
         return 2
 
-    # SETUP VALIDITY: --project REPO must resolve to the attribution that lets
-    # blame reach the trail-evidence path; otherwise it bails rc=1 (empty cache)
-    # before the buggy walk and no RED/GREEN verdict is meaningful.
-    if not _ensure_resolvable():
+    # SETUP VALIDITY: resolve the opted-in opentraces project that owns this
+    # checkout's shared event log (the git-common-dir parent), and run blame
+    # --project against it — exactly as A3/A7/A8 do. A linked grader worktree is
+    # itself un-provisioned; the shared canonical event log + bucket live with
+    # the owning project, so the address/empty answer is identical there.
+    project = _project_dir()
+    if project is None:
         print(
-            "[SETUP-INVALID] this REPO does not resolve to attribution for "
-            f"{SHA[:12]}; blame cannot exercise the trail-evidence path here. "
-            "Run the probe in the provisioned project worktree."
+            "[SETUP-INVALID] no opted-in opentraces project owns this checkout's "
+            "git-common-dir; blame cannot exercise the trail-evidence path here."
         )
         return 2
 
     # PHASE 1 — HANG gate (30s). A timeout is the glob-fallthrough whole-log
     # survival-walk hang (RED on main); any non-zero rc is also RED.
-    t1_timed_out, rc1, _ = _blame(HANG_GUARD)
+    t1_timed_out, rc1, _ = _blame(HANG_GUARD, project)
     if t1_timed_out:
         print(
             f"RED: hang-on-empty -- blame commit on 0-anchor {SHA[:12]} did not finish "
@@ -356,7 +380,7 @@ def _run() -> int:
         return 1
 
     # PHASE 2 — warm measured FAST run under the tight probe budget.
-    t2_timed_out, rc2, out2 = _blame(FAST_GUARD)
+    t2_timed_out, rc2, out2 = _blame(FAST_GUARD, project)
     if t2_timed_out:
         print(
             f"RED: not-fast -- warm blame commit on 0-anchor {SHA[:12]} exceeded "
