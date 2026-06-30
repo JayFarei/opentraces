@@ -1,14 +1,47 @@
 {
-  "event_count": 16,
+  "event_count": 17,
   "event_log_ref": "refs/opentraces/local/events/v1",
   "limitations": [],
   "schema_version": "opentraces.trail_timeline.v1",
   "timeline": [
     {
+      "base_commit": {
+        "algo": "sha1",
+        "hex": "<git-object:02>"
+      },
       "capture_method": [
         "hook_pretooluse"
       ],
+      "capture_status": "captured",
       "event_sequence": 2,
+      "event_time": "<timestamp>",
+      "event_type": "trace_snapshot_created",
+      "generation_index": 1,
+      "limitations": [],
+      "snapshot_id": "<snapshot:01>",
+      "snapshot_ref": {
+        "algorithm": "sha256",
+        "canonicalization": "opentraces.trace_snapshot.v1",
+        "display_id": "<display-ref:01>",
+        "id": "<snapshot:01>",
+        "id_format": "digest",
+        "kind": "trace_snapshot",
+        "ref": "ot://trace-snapshot/sha256/<snapshot:01>"
+      },
+      "snapshot_role": "origin",
+      "step_id": "s-1",
+      "step_index": -1,
+      "trace_id": "<trace:01>",
+      "tree_id": {
+        "algo": "sha1",
+        "hex": "<git-object:03>"
+      }
+    },
+    {
+      "capture_method": [
+        "hook_pretooluse"
+      ],
+      "event_sequence": 3,
       "event_time": "<timestamp>",
       "event_type": "trace_step_window_opened",
       "generation_index": 1,
@@ -25,20 +58,20 @@
         "hook_pretooluse"
       ],
       "capture_status": "captured",
-      "event_sequence": 3,
+      "event_sequence": 4,
       "event_time": "<timestamp>",
       "event_type": "trace_snapshot_created",
       "generation_index": 1,
       "limitations": [],
-      "snapshot_id": "<snapshot:01>",
+      "snapshot_id": "<snapshot:02>",
       "snapshot_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.trace_snapshot.v1",
-        "display_id": "<display-ref:01>",
-        "id": "<snapshot:01>",
+        "display_id": "<display-ref:02>",
+        "id": "<snapshot:02>",
         "id_format": "digest",
         "kind": "trace_snapshot",
-        "ref": "ot://trace-snapshot/sha256/<snapshot:01>"
+        "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
       },
       "snapshot_role": "before",
       "step_id": "s2",
@@ -58,22 +91,22 @@
         "hook_posttooluse"
       ],
       "capture_status": "hook_only",
-      "event_sequence": 4,
+      "event_sequence": 5,
       "event_time": "<timestamp>",
       "event_type": "trace_snapshot_created",
       "generation_index": 1,
       "limitations": [
         "hook_only"
       ],
-      "snapshot_id": "<snapshot:02>",
+      "snapshot_id": "<snapshot:03>",
       "snapshot_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.trace_snapshot.v1",
-        "display_id": "<display-ref:02>",
-        "id": "<snapshot:02>",
+        "display_id": "<display-ref:03>",
+        "id": "<snapshot:03>",
         "id_format": "digest",
         "kind": "trace_snapshot",
-        "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
+        "ref": "ot://trace-snapshot/sha256/<snapshot:03>"
       },
       "snapshot_role": "after",
       "step_id": "s2",
@@ -88,7 +121,7 @@
       "capture_method": [
         "hook_posttooluse"
       ],
-      "event_sequence": 5,
+      "event_sequence": 6,
       "event_time": "<timestamp>",
       "event_type": "trace_step_window_closed",
       "generation_index": 1,
@@ -101,7 +134,7 @@
         "hook_pretooluse",
         "hook_posttooluse"
       ],
-      "event_sequence": 6,
+      "event_sequence": 7,
       "event_time": "<timestamp>",
       "event_type": "trace_patch_created",
       "file_path": "src/generated.py",
@@ -109,8 +142,8 @@
       "limitations": [
         "hook_only"
       ],
-      "snapshot_after_id": "<snapshot:02>",
-      "snapshot_before_id": "<snapshot:01>",
+      "snapshot_after_id": "<snapshot:03>",
+      "snapshot_before_id": "<snapshot:02>",
       "step_id": "s2",
       "step_index": 2,
       "trace_id": "<trace:01>",
@@ -118,7 +151,7 @@
       "trace_patch_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.trace_patch.v1",
-        "display_id": "<display-ref:03>",
+        "display_id": "<display-ref:04>",
         "id": "<trace-patch:01>",
         "id_format": "digest",
         "kind": "trace_patch",
@@ -129,7 +162,7 @@
       "capture_method": [
         "hook_stop"
       ],
-      "event_sequence": 7,
+      "event_sequence": 8,
       "event_time": "<timestamp>",
       "event_type": "trace_session_closed",
       "generation_index": 1,
@@ -143,7 +176,7 @@
         "hook_pretooluse",
         "watcher_backstop"
       ],
-      "event_sequence": 8,
+      "event_sequence": 9,
       "event_time": "<timestamp>",
       "event_type": "trace_patch_created",
       "file_path": "src/generated.py",
@@ -151,8 +184,8 @@
       "limitations": [
         "hook_only"
       ],
-      "snapshot_after_id": "<snapshot:02>",
-      "snapshot_before_id": "<snapshot:01>",
+      "snapshot_after_id": "<snapshot:03>",
+      "snapshot_before_id": "<snapshot:02>",
       "step_id": "s2",
       "step_index": 2,
       "trace_id": "<trace:01>",
@@ -160,7 +193,7 @@
       "trace_patch_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.trace_patch.v1",
-        "display_id": "<display-ref:03>",
+        "display_id": "<display-ref:04>",
         "id": "<trace-patch:01>",
         "id_format": "digest",
         "kind": "trace_patch",
@@ -171,24 +204,12 @@
       "capture_method": [
         "watcher_backstop"
       ],
-      "event_sequence": 9,
+      "event_sequence": 10,
       "event_time": "<timestamp>",
       "event_type": "watcher_observation_attributed",
       "generation_index": 1,
       "step_id": "s2",
       "step_index": 2,
-      "trace_id": "<trace:01>"
-    },
-    {
-      "capture_method": [
-        "context_tree_capture"
-      ],
-      "event_sequence": 10,
-      "event_time": "<timestamp>",
-      "event_type": "context_layer_captured",
-      "generation_index": 0,
-      "step_id": null,
-      "step_index": null,
       "trace_id": "<trace:01>"
     },
     {
@@ -233,6 +254,18 @@
       ],
       "event_sequence": 14,
       "event_time": "<timestamp>",
+      "event_type": "context_layer_captured",
+      "generation_index": 0,
+      "step_id": null,
+      "step_index": null,
+      "trace_id": "<trace:01>"
+    },
+    {
+      "capture_method": [
+        "context_tree_capture"
+      ],
+      "event_sequence": 15,
+      "event_time": "<timestamp>",
       "event_type": "context_node_observed",
       "generation_index": 0,
       "step_id": "s0",
@@ -243,7 +276,7 @@
       "capture_method": [
         "context_tree_capture"
       ],
-      "event_sequence": 15,
+      "event_sequence": 16,
       "event_time": "<timestamp>",
       "event_type": "context_tree_reconciled",
       "generation_index": 0,
@@ -255,7 +288,7 @@
       "capture_method": [
         "trail_maturation"
       ],
-      "event_sequence": 16,
+      "event_sequence": 17,
       "event_time": "<timestamp>",
       "event_type": "git_anchor_search_completed",
       "generation_index": 0,
@@ -271,7 +304,7 @@
         "algo": "sha1",
         "hex": "<git-object:05>"
       },
-      "event_sequence": 17,
+      "event_sequence": 18,
       "event_time": "<timestamp>",
       "event_type": "git_anchor_created",
       "evidence_firmness": "firm",

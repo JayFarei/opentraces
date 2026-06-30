@@ -53,7 +53,7 @@
                   "hex": "<git-object:05>"
                 },
                 "anchor_descendant_count": 0,
-                "anchor_event_sequence": 17,
+                "anchor_event_sequence": 18,
                 "anchor_trail_index": 0,
                 "evidence_firmness": "firm",
                 "evidence_tier": "exact_range_hash",
@@ -107,7 +107,7 @@
               "git_anchor_ref": {
                 "algorithm": "sha256",
                 "canonicalization": "opentraces.git_anchor.v1",
-                "display_id": "<display-ref:04>",
+                "display_id": "<display-ref:05>",
                 "id": "<git-anchor:01>",
                 "id_format": "digest",
                 "kind": "git_anchor",
@@ -140,7 +140,7 @@
                 "ref": {
                   "algorithm": "sha256",
                   "canonicalization": "opentraces.git_anchor.v1",
-                  "display_id": "<display-ref:04>",
+                  "display_id": "<display-ref:05>",
                   "id": "<git-anchor:01>",
                   "id_format": "digest",
                   "kind": "git_anchor",
@@ -189,7 +189,7 @@
                 "git_anchor": {
                   "algorithm": "sha256",
                   "canonicalization": "opentraces.git_anchor.v1",
-                  "display_id": "<display-ref:04>",
+                  "display_id": "<display-ref:05>",
                   "id": "<git-anchor:01>",
                   "id_format": "digest",
                   "kind": "git_anchor",
@@ -206,7 +206,7 @@
                   "ref": "ot://trace/<trace:01>/steps/step_2"
                 },
                 "trace": {
-                  "display_id": "<display-ref:05>",
+                  "display_id": "<display-ref:06>",
                   "id": "<trace:01>",
                   "id_format": "uuid",
                   "kind": "trace",
@@ -215,7 +215,7 @@
                 "trace_patch": {
                   "algorithm": "sha256",
                   "canonicalization": "opentraces.trace_patch.v1",
-                  "display_id": "<display-ref:03>",
+                  "display_id": "<display-ref:04>",
                   "id": "<trace-patch:01>",
                   "id_format": "digest",
                   "kind": "trace_patch",
@@ -237,7 +237,7 @@
                 "step_id": "step_2",
                 "step_index": 2,
                 "trace": {
-                  "display_id": "<display-ref:05>",
+                  "display_id": "<display-ref:06>",
                   "id": "<trace:01>",
                   "id_format": "uuid",
                   "kind": "trace",
@@ -277,8 +277,8 @@
                     "hook_pretooluse",
                     "watcher_backstop"
                   ],
-                  "event_id": "<trail-event:08>",
-                  "event_sequence": 8,
+                  "event_id": "<trail-event:09>",
+                  "event_sequence": 9,
                   "event_time": "<timestamp>",
                   "event_type": "trace_patch_created"
                 },
@@ -286,18 +286,18 @@
                   "capture_method": [
                     "trail_maturation"
                   ],
-                  "event_id": "<trail-event:17>",
-                  "event_sequence": 17,
+                  "event_id": "<trail-event:18>",
+                  "event_sequence": 18,
                   "event_time": "<timestamp>",
                   "event_type": "git_anchor_created"
                 }
               ],
               "source_refs": {
                 "event_log_ref": "refs/opentraces/local/events/v1",
-                "git_anchor_event_id": "<trail-event:17>",
-                "git_anchor_event_sequence": 17,
-                "trace_patch_event_id": "<trail-event:08>",
-                "trace_patch_event_sequence": 8
+                "git_anchor_event_id": "<trail-event:18>",
+                "git_anchor_event_sequence": 18,
+                "trace_patch_event_id": "<trail-event:09>",
+                "trace_patch_event_sequence": 9
               },
               "step_id": "step_2",
               "step_index": 2,
@@ -330,7 +330,7 @@
                 "ref": {
                   "algorithm": "sha256",
                   "canonicalization": "opentraces.trace_patch.v1",
-                  "display_id": "<display-ref:03>",
+                  "display_id": "<display-ref:04>",
                   "id": "<trace-patch:01>",
                   "id_format": "digest",
                   "kind": "trace_patch",
@@ -346,7 +346,7 @@
                 "containing_segment_ref": {
                   "algorithm": "sha256",
                   "canonicalization": "opentraces.trace_slice.v1",
-                  "display_id": "<display-ref:06>",
+                  "display_id": "<display-ref:07>",
                   "id": "<hex64:02>",
                   "id_format": "digest",
                   "kind": "trace_slice",
@@ -359,7 +359,7 @@
                 "git_anchor_ref": {
                   "algorithm": "sha256",
                   "canonicalization": "opentraces.git_anchor.v1",
-                  "display_id": "<display-ref:04>",
+                  "display_id": "<display-ref:05>",
                   "id": "<git-anchor:01>",
                   "id_format": "digest",
                   "kind": "git_anchor",
@@ -374,7 +374,7 @@
                 "trace_patch_ref": {
                   "algorithm": "sha256",
                   "canonicalization": "opentraces.trace_patch.v1",
-                  "display_id": "<display-ref:03>",
+                  "display_id": "<display-ref:04>",
                   "id": "<trace-patch:01>",
                   "id_format": "digest",
                   "kind": "trace_patch",

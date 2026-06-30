@@ -6,5 +6,5 @@
   "scenario": "full_stack_demo",
   "schema_version": "opentraces.trace_trails_corpus.dataset.v1",
   "trace_record_count": 1,
-  "trail_event_count": 24
+  "trail_event_count": 18
 }

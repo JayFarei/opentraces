@@ -9,7 +9,7 @@
     "git_anchor_search_completed": 1,
     "trace_patch_created": 2,
     "trace_session_closed": 1,
-    "trace_snapshot_created": 2,
+    "trace_snapshot_created": 3,
     "trace_step_window_closed": 1,
     "trace_step_window_opened": 1,
     "watcher_observation_attributed": 1
@@ -20,7 +20,7 @@
   "opentraces_home": "<run-root>/home/.opentraces",
   "post_commit_before_ingest_anchors": 0,
   "repo": "<run-root>/mock-project",
-  "snapshot_ref": "ot://trace-snapshot/sha256/<snapshot:02>",
+  "snapshot_ref": "ot://trace-snapshot/sha256/<snapshot:03>",
   "source_repo_unavailable": "<run-root>/source-repo-unavailable",
   "source_state_unavailable": "<run-root>/home/.opentraces/projects/mock-project-trace-tr-unavailable",
   "status": "ok",
@@ -28,6 +28,6 @@
   "trace_id": "<trace:01>",
   "trace_patch_id": "<trace-patch:01>",
   "transcript": "<run-root>/mock-project/.claude_projects_fake/sess-trace-trails-full-stack-demo.jsonl",
-  "watcher_attribution_event_id": "<trail-event:09>",
+  "watcher_attribution_event_id": "<trail-event:10>",
   "workspace": "<run-root>/exported.trace-workspace"
 }

@@ -30,19 +30,19 @@
       "hook_only"
     ],
     "role": "after",
-    "snapshot_id": "<snapshot:02>",
+    "snapshot_id": "<snapshot:03>",
     "snapshot_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_snapshot.v1",
-      "display_id": "<display-ref:02>",
-      "id": "<snapshot:02>",
+      "display_id": "<display-ref:03>",
+      "id": "<snapshot:03>",
       "id_format": "digest",
       "kind": "trace_snapshot",
-      "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
+      "ref": "ot://trace-snapshot/sha256/<snapshot:03>"
     },
     "source_event": {
-      "event_id": "<trail-event:04>",
-      "event_sequence": 4,
+      "event_id": "<trail-event:05>",
+      "event_sequence": 5,
       "event_type": "trace_snapshot_created"
     },
     "step_id": "s2",
@@ -53,7 +53,7 @@
       "hex": "<git-object:04>"
     }
   },
-  "snapshot_id": "<snapshot:02>",
+  "snapshot_id": "<snapshot:03>",
   "tree_id": {
     "algo": "sha1",
     "hex": "<git-object:04>"
