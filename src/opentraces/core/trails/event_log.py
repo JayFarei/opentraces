@@ -845,12 +845,17 @@ def read_events_scoped(
 
 
 def _event_cache_path(cwd: Path) -> Path | None:
-    """Per-repo snapshot path inside the git dir (cross-process, repo-local).
+    """Per-repo snapshot path inside the COMMON git dir (cross-process,
+    cross-worktree, repo-local).
+
+    Uses ``--git-common-dir`` (not ``--git-dir``) so N linked worktrees of the
+    same repo resolve to the ONE shared snapshot under the common git dir,
+    instead of a per-worktree copy each (the 22-copy duplication bug, #169 C).
 
     Returns None when the git dir can't be resolved (callers fall back to a
     full read).
     """
-    proc = _git(cwd, ["rev-parse", "--git-dir"], check=False)
+    proc = _git(cwd, ["rev-parse", "--git-common-dir"], check=False)
     if proc.returncode != 0:
         return None
     git_dir = Path(proc.stdout.strip())
@@ -924,14 +929,19 @@ def _save_event_snapshot(cwd: Path, head: str, events: list[TrailEvent]) -> None
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = pickle.dumps(
-            {"format": _EVENT_CACHE_FORMAT, "head": head, "events": events},
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        # FIXED reusable tmp name (not a fresh random mkstemp): a hard kill that
+        # skips the `finally` unlink overwrites the same tmp on the next save
+        # rather than stranding a new ~2 GB orphan each time (#169 C). Streaming
+        # pickle.dump avoids materializing the full payload in memory (no peak
+        # RSS doubling on the ~2 GB snapshot).
+        tmp = path.with_name(path.name + ".tmp")
         try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(payload)
+            with open(tmp, "wb") as fh:
+                pickle.dump(
+                    {"format": _EVENT_CACHE_FORMAT, "head": head, "events": events},
+                    fh,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
             os.replace(tmp, path)
         finally:
             if os.path.exists(tmp):
@@ -941,19 +951,19 @@ def _save_event_snapshot(cwd: Path, head: str, events: list[TrailEvent]) -> None
 
 
 def _events_contiguous(events: list[TrailEvent]) -> bool:
-    """O(1) sanity check that a sorted event list is the gap-free 1..N chain.
+    """True iff the event sequences form the exact gap-free 1..N chain.
 
-    The log is monotonic + gap-free from sequence 1, so a correct sorted stream
-    has ``events[0].event_sequence == 1`` and ``events[-1].event_sequence ==
-    len(events)``. A dropped/duplicated event breaks the length/last-sequence
-    identity. Used to self-heal a corrupt snapshot rather than serve it.
+    The log is monotonic + gap-free from sequence 1, so a correct stream is
+    exactly ``1..len(events)``. The old endpoint check (``first==1 and
+    last==len``) is fooled by a *balanced* dup-plus-gap snapshot where one
+    duplicate offsets one gap so ``max_seq == len`` (e.g. ``[1,1,3]``); such a
+    snapshot is silently served as valid. This computes the true sorted-1..N
+    verdict so the dup+gap class is rejected and self-healed instead (#169 C).
     """
     if not events:
         return True
-    return (
-        events[0].event_sequence == 1
-        and events[-1].event_sequence == len(events)
-    )
+    seqs = sorted(e.event_sequence for e in events)
+    return seqs == list(range(1, len(seqs) + 1))
 
 
 def _read_events_incremental(cwd: Path, head: str) -> list[TrailEvent]:
