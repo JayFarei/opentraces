@@ -13,6 +13,7 @@ from .event_log import (
     EVENT_LOG_REF,
     build_survival_cache_index,
     read_events,
+    read_events_scoped,
 )
 from .ids import id_from_payload, normalize_id
 from .models import GitObjectID
@@ -265,6 +266,17 @@ class BatchSyncContext:
     # cache lookup and updated as writes are queued. Lets later sync_patch
     # calls in the same batch hit the cache for rows we just computed.
     _cache_index: dict[tuple[str, str], dict[str, Any]] | None = None
+    # Memoized git-derived values shared across every anchor observed in this
+    # context. ``_commit_oid_cache`` collapses the per-observation
+    # ``git rev-parse <ref>`` to one call per distinct ref; ``_commits_walk_cache``
+    # collapses the per-anchor descendant walk to one call per distinct
+    # ``(anchor_commit, history_limit)``. On a patch whose N anchors all share
+    # one commit (the legacy multi-anchor case) this turns an
+    # O(anchors x descendant-commits) git-subprocess storm into O(distinct refs).
+    _commit_oid_cache: dict[str, dict[str, str] | None] | None = None
+    _commits_walk_cache: dict[
+        tuple[str, int], tuple[list[tuple[str, int | None]], int | None, list[str]]
+    ] | None = None
     # ``calls`` counts batched operations. Tests use these to assert
     # amortization (e.g. ancestry_uncached_probes==0 means batching worked).
     calls: dict[str, int] = field(default_factory=lambda: {
@@ -378,6 +390,49 @@ class BatchSyncContext:
         self.calls["ancestry_uncached_probes"] += 1
         return _git_ok(self.repo, "merge-base", "--is-ancestor", commit_sha, "HEAD")
 
+    # -- memoized git-derived values ------------------------------------
+    def commit_oid(self, ref: str) -> dict[str, str] | None:
+        """Memoized ``git rev-parse <ref>`` → object-id dict, one call per ref.
+
+        ``observed_commit_id`` is otherwise recomputed for every observation;
+        across many anchors that resolve the same handful of refs (HEAD plus a
+        shared anchor commit) this collapses thousands of ``rev-parse`` spawns
+        to one per distinct ref. Safe because the ref→oid mapping is stable for
+        the lifetime of a single batch (which already pins HEAD).
+        """
+        if self._commit_oid_cache is None:
+            self._commit_oid_cache = {}
+        if ref not in self._commit_oid_cache:
+            # A full commit sha resolves to itself — the descendant walk already
+            # produced verified ``git log --format=%H`` shas, so building the oid
+            # directly avoids a ``git rev-parse`` per observation (the dominant
+            # cost across a deep trail). Symbolic refs ("HEAD") still rev-parse.
+            if _is_full_commit_sha(ref):
+                self._commit_oid_cache[ref] = _oid(ref)
+            else:
+                self._commit_oid_cache[ref] = _commit_id(self.repo, ref)
+        return self._commit_oid_cache[ref]
+
+    def commits_from_anchor(
+        self, anchor_commit: str, history_limit: int
+    ) -> tuple[list[tuple[str, int | None]], int | None, list[str]]:
+        """Memoized :func:`_commits_from_anchor_to_head`, one walk per
+        ``(anchor_commit, history_limit)``.
+
+        Many anchors of one patch can share a single anchor commit (the legacy
+        multi-anchor case); without this each anchor re-runs the same
+        ``rev-list``/``git log`` walk. The returned lists are treated as
+        read-only by callers, so sharing one instance across anchors is sound.
+        """
+        if self._commits_walk_cache is None:
+            self._commits_walk_cache = {}
+        key = (anchor_commit, history_limit)
+        if key not in self._commits_walk_cache:
+            self._commits_walk_cache[key] = _commits_from_anchor_to_head(
+                self.repo, anchor_commit, history_limit=history_limit
+            )
+        return self._commits_walk_cache[key]
+
     # -- cat-file pipe ---------------------------------------------------
     def show_file(self, ref: str, path: str) -> str | None:
         """Read ``ref:path`` via the long-lived cat-file pipe.
@@ -414,6 +469,21 @@ def _oid(hex_value: str | None) -> dict[str, str] | None:
         return GitObjectID(hex=hex_value.strip()).model_dump(mode="json")
     except Exception:
         return None
+
+
+_HEX = frozenset("0123456789abcdef")
+
+
+def _is_full_commit_sha(ref: str | None) -> bool:
+    """True for a full lowercase git commit sha (sha1 = 40, sha256 = 64 hex).
+
+    Such a ref resolves to itself, so the oid can be built without a
+    ``git rev-parse`` round-trip. Symbolic refs (``HEAD``), short shas, and
+    anything else return False and take the resolving path.
+    """
+    if not ref:
+        return False
+    return len(ref) in (40, 64) and all(c in _HEX for c in ref)
 
 
 def _source_event(event) -> dict[str, Any]:
@@ -673,8 +743,13 @@ def _compute_survival(
     lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
     batch_ctx: BatchSyncContext | None = None,
     skip_ancestry_check: bool = False,
+    detect_repaired: bool = True,
 ) -> dict[str, Any]:
-    observed_commit_id = _commit_id(repo, observed_ref)
+    observed_commit_id = (
+        batch_ctx.commit_oid(observed_ref)
+        if batch_ctx is not None
+        else _commit_id(repo, observed_ref)
+    )
     if head_id is None:
         head_id = _head_id(repo)
     if observed_commit_time is None and observed_commit_id is not None:
@@ -855,17 +930,26 @@ def _compute_survival(
             }
         if len(current_lines) >= start:
             range_exists = True
-            anchor_email = _commit_author_email(repo, anchor_commit)
-            range_committers = _committers_in_range(
-                repo,
-                ref=observed_ref,
-                path=path,
-                start=start,
-                end=end,
-            )
-            non_anchor_committers = (
-                range_committers - {anchor_email} if anchor_email else range_committers
-            )
+            # ``repaired`` (a human edited the anchored range) needs a per-ref
+            # ``git blame`` + ``git log`` — the dominant O(descendant-commits)
+            # cost on a deep trail. It only changes the *current* verdict (the
+            # aggregate reads the terminal per-anchor observation), so resolve it
+            # only for that observation; intermediate points fall through to the
+            # cheaper alive_transformed / partially_preserved classification.
+            if detect_repaired:
+                anchor_email = _commit_author_email(repo, anchor_commit)
+                range_committers = _committers_in_range(
+                    repo,
+                    ref=observed_ref,
+                    path=path,
+                    start=start,
+                    end=end,
+                )
+                non_anchor_committers = (
+                    range_committers - {anchor_email} if anchor_email else range_committers
+                )
+            else:
+                non_anchor_committers = set()
             if non_anchor_committers:
                 repaired_fraction = _retention_fraction(
                     preserved, len(authored_lines)
@@ -1067,8 +1151,10 @@ def _anchor_observations(
         observation["anchor_descendant_count"] = None
         return [observation], None, []
 
-    commits, descendant_count, limitations = _commits_from_anchor_to_head(
-        repo, anchor_commit, history_limit=history_limit
+    commits, descendant_count, limitations = (
+        batch_ctx.commits_from_anchor(anchor_commit, history_limit)
+        if batch_ctx is not None
+        else _commits_from_anchor_to_head(repo, anchor_commit, history_limit=history_limit)
     )
     # Cluster G — P3: when ``descendant_count is not None`` the helper
     # already proved the anchor is reachable from HEAD and the returned
@@ -1079,7 +1165,35 @@ def _anchor_observations(
     # unreachable from HEAD"; we keep the per-observation probe so
     # ``orphan_branch`` etc. still classify correctly.
     skip_per_obs_ancestry = descendant_count is not None
+
+    # Bound the O(anchors x descendant-commits) recompute on patches with no
+    # authored text: with nothing to track through history, every observation
+    # in the trail resolves to the same verdict (``missing_authored_text`` when
+    # reachable, ``orphan_branch`` otherwise). The historical replay is then
+    # pure cost with zero information, so emit only the terminal (HEAD)
+    # observation — the ``current_survival`` aggregate and the per-anchor
+    # verdict are byte-identical, but a legacy multi-anchor patch drops from
+    # O(descendants) observations per anchor to one.
+    if commits and not _authored_lines(patch):
+        terminal_index = len(commits) - 1
+        commit_sha, commit_time = commits[terminal_index]
+        observation = _compute_survival(
+            repo,
+            patch=patch,
+            anchor=anchor,
+            observed_ref=commit_sha,
+            head_id=head_id,
+            observed_commit_time=commit_time,
+            lost_attribution_cache=lost_attribution_cache,
+            batch_ctx=batch_ctx,
+            skip_ancestry_check=skip_per_obs_ancestry,
+        )
+        observation["anchor_trail_index"] = terminal_index
+        observation["anchor_descendant_count"] = descendant_count
+        return [observation], descendant_count, limitations
+
     observations: list[dict[str, Any]] = []
+    last_index = len(commits) - 1
     for index, (commit_sha, commit_time) in enumerate(commits):
         observation = _compute_survival(
             repo,
@@ -1091,6 +1205,9 @@ def _anchor_observations(
             lost_attribution_cache=lost_attribution_cache,
             batch_ctx=batch_ctx,
             skip_ancestry_check=skip_per_obs_ancestry,
+            # Resolve the costly human-repair blame only for the terminal
+            # observation — the one the aggregate current_survival reads.
+            detect_repaired=index == last_index,
         )
         observation["anchor_trail_index"] = index
         observation["anchor_descendant_count"] = descendant_count
@@ -1130,7 +1247,16 @@ def _sync(
     effective_limit = history_limit if history_limit is not None else PATCH_TRAIL_COMMIT_LIMIT
     head_id = _head_id(repo)
     if events is None:
-        events = read_events(repo)
+        # Survival only consults ``trace_patch_created`` (the patch + its
+        # authored text) and ``git_anchor_created`` (the anchors). A full
+        # ``read_events`` over a mature log pays the whole ~600k-event history
+        # (the ~520k ``git_anchor_search_completed`` events alone wedge the read
+        # for >80s) before this loop even starts. Scope the read to exactly the
+        # two types this function reads so ``track --patch``/``--anchor`` is
+        # interactive; the result is byte-identical to filtering the full read.
+        events = read_events_scoped(
+            repo, event_types={"trace_patch_created", "git_anchor_created"}
+        )
     patches: dict[str, tuple[dict[str, Any], Any]] = {}
     anchors: list[tuple[dict[str, Any], Any]] = []
     if trace_patch_id:
@@ -1154,14 +1280,20 @@ def _sync(
         if anchors and trace_patch_id is None:
             trace_patch_id = id_from_payload(anchors[0][0], "trace_patch")
     elif trace_patch_id:
+        # Match anchors by the canonical ``trace_patch`` ref AND by the legacy
+        # flat ``patch_id`` field. Older anchors are grouped under a 40-hex
+        # ``patch_id`` while each carries its own sha256 ``trace_patch`` ref, so
+        # ``track --patch <legacy-id>`` would otherwise resolve to zero anchors.
+        # Additive: a sha256 input never collides with a 40-hex ``patch_id``.
         anchors = [
             (anchor, event)
             for anchor, event in anchors
             if id_from_payload(anchor, "trace_patch") == trace_patch_id
+            or normalize_id(anchor.get("patch_id")) == trace_patch_id
         ]
 
     patch_pair = patches.get(trace_patch_id or "")
-    if patch_pair is None:
+    if patch_pair is None and not anchors:
         return {
             "trace_patch_id": trace_patch_id,
             "git_anchor_id": git_anchor_id,
@@ -1179,8 +1311,19 @@ def _sync(
             "source_events": [],
         }
 
-    patch, patch_event = patch_pair
-    if not anchors:
+    if patch_pair is not None:
+        patch, patch_event = patch_pair
+    else:
+        # Legacy ``patch_id``: anchors reference this id via the flat field but
+        # no ``trace_patch_created`` event carries it (the authored text lives
+        # on the per-anchor sha256 patches). Observe the anchors against a
+        # minimal patch context so survival resolves to the head-keyed
+        # ``missing_authored_text`` / ``orphan_branch`` verdict instead of
+        # dropping the anchors on the floor as ``no_trace_patch_event``.
+        patch = {"trace_patch_id": trace_patch_id}
+        patch_event = None
+
+    if patch_pair is not None and not anchors:
         # Cluster C-2: a Trace Patch with no Git Anchor is one of two
         # things — ``never_committed`` if the file the patch claimed to
         # touch still exists in HEAD (the patch was authored, then
@@ -1224,25 +1367,37 @@ def _sync(
     current_observations: list[tuple[int, dict[str, Any]]] = []
     trail_limitations: list[str] = []
     sorted_anchors = sorted(anchors, key=lambda item: item[1].event_sequence)
-    for anchor, event in sorted_anchors:
-        anchor_observations, _descendant_count, anchor_limitations = _anchor_observations(
-            repo,
-            patch=patch,
-            anchor=anchor,
-            head_id=head_id,
-            history_limit=effective_limit,
-            lost_attribution_cache=lost_attribution_cache,
-            batch_ctx=batch_ctx,
-        )
-        trail_limitations.extend(anchor_limitations)
-        for observation in anchor_observations:
-            observation["anchor_event_sequence"] = event.event_sequence
-        start_index = len(observations)
-        observations.extend(anchor_observations)
-        if anchor_observations:
-            current_observations.append(
-                (start_index + len(anchor_observations) - 1, anchor_observations[-1])
+    # When no batch context was threaded in (the single ``--patch``/``--anchor``
+    # path), create one for this loop so the cat-file pipe, ancestry-from-HEAD
+    # set, and the memoized commit-walk / commit-oid lookups amortize across
+    # every anchor of this patch. Without it each anchor pays its own git
+    # subprocess storm — the O(anchors x descendant-commits) blow-up. A
+    # context we own is closed once observations are built.
+    owns_batch_ctx = batch_ctx is None
+    loop_ctx = batch_ctx if batch_ctx is not None else BatchSyncContext(repo=repo)
+    try:
+        for anchor, event in sorted_anchors:
+            anchor_observations, _descendant_count, anchor_limitations = _anchor_observations(
+                repo,
+                patch=patch,
+                anchor=anchor,
+                head_id=head_id,
+                history_limit=effective_limit,
+                lost_attribution_cache=lost_attribution_cache,
+                batch_ctx=loop_ctx,
             )
+            trail_limitations.extend(anchor_limitations)
+            for observation in anchor_observations:
+                observation["anchor_event_sequence"] = event.event_sequence
+            start_index = len(observations)
+            observations.extend(anchor_observations)
+            if anchor_observations:
+                current_observations.append(
+                    (start_index + len(anchor_observations) - 1, anchor_observations[-1])
+                )
+    finally:
+        if owns_batch_ctx:
+            loop_ctx.close()
 
     for sequence, observation in enumerate(observations):
         observation["observation_sequence"] = sequence
@@ -1266,7 +1421,9 @@ def _sync(
         "event_log_ref": EVENT_LOG_REF,
         "phase4_survival_states": PHASE4_SURVIVAL_STATES,
         "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
-        "source_events": [_source_event(patch_event)]
+        "source_events": (
+            [_source_event(patch_event)] if patch_event is not None else []
+        )
         + [_source_event(event) for _anchor, event in sorted_anchors],
     }
 
