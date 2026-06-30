@@ -88,24 +88,32 @@ def _guard(msg: str) -> None:
     raise _Guard(msg)
 
 
-def _anchor_patch_count(trace_id: str) -> tuple[int, int]:
-    """(events_seen, distinct git_anchor_created patch_ids) from the canonical log.
+def _build_anchor_maps() -> tuple[dict, set]:
+    """At a SINGLE pinned head, build (a) per-trace distinct git_anchor_created
+    patch-id sets and (b) the set of traces present in this repo's canonical log.
 
-    Reads the oracle the same way the forge does: read_events_for_trace over this
-    REPO's canonical event ref, counting distinct trace_patch_ids structurally
-    parsed from real git_anchor_created events.
+    Two scoped reads (git_anchor_created + trace_patch_created) instead of one
+    ``read_events_for_trace`` per manifest row: on an actively-capturing live log
+    the HEAD advances between per-trace reads, forcing a full index rebuild each
+    call (~7s x N rows). Pinned scoped reads are O(matching events), head-stable,
+    and structurally identical (distinct trace_patch_ids carried by real
+    git_anchor_created events).
     """
-    from opentraces.core.trails.event_log import read_events_for_trace
+    from opentraces.core.trails.event_log import read_events_scoped
     from opentraces.core.trails.ids import id_from_payload
 
-    evs = read_events_for_trace(REPO, trace_id)
-    pids = set()
-    for e in evs:
-        if e.event_type == "git_anchor_created":
-            pid = id_from_payload(e.payload, "trace_patch")
-            if pid:
-                pids.add(pid)
-    return len(evs), len(pids)
+    anchor_by_trace: dict[str, set] = {}
+    for e in read_events_scoped(REPO, event_types={"git_anchor_created"}):
+        pid = id_from_payload(e.payload, "trace_patch")
+        if e.trace_id and pid:
+            anchor_by_trace.setdefault(e.trace_id, set()).add(pid)
+    present = {
+        e.trace_id
+        for e in read_events_scoped(REPO, event_types={"trace_patch_created"})
+        if e.trace_id
+    }
+    present |= set(anchor_by_trace)
+    return anchor_by_trace, present
 
 
 def _sweep() -> int:
@@ -142,6 +150,9 @@ def _sweep() -> int:
     # AND would BLOCK the suite forever after the real fix (codex review #1).
     check_set = sorted(set(nonzero) | {WITNESS})
 
+    # Pinned scoped maps, built ONCE (head-stable; avoids per-row index rebuilds).
+    anchor_by_trace, present_traces = _build_anchor_maps()
+
     overcount = []   # LEFT > RIGHT  -> hard RED (the defeater)
     undercount = []  # LEFT < RIGHT  -> reported only (possible benign lag)
     checked = 0
@@ -150,7 +161,8 @@ def _sweep() -> int:
 
     for tid in check_set:
         left = (rows[tid].get("summary") or {}).get("anchored_count", 0)
-        seen, right = _anchor_patch_count(tid)
+        right = len(anchor_by_trace.get(tid, set()))
+        seen = 1 if tid in present_traces else 0
         if seen == 0:
             print(f"skip {tid}: not re-observable in this repo's canonical log")
             continue
