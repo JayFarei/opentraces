@@ -170,7 +170,18 @@ class TrailQueryProjection:
             "last_event_id": self.last_event_id,
             "projection_digest": self.projection_digest,
             "patch_count": len(self.patches_by_id),
-            "anchor_count": len(self.anchors_by_id),
+            # Count DISTINCT anchored patch ids (epic #169 B-attr): the canonical
+            # anchor set is per-patch, so an amend / multi-commit patch carrying
+            # several ``git_anchor_created`` events (one ``anchors_by_id`` row
+            # each) still counts once. For the common single-anchor-per-patch
+            # shape this equals ``len(self.anchors_by_id)``.
+            "anchor_count": len(
+                {
+                    anchor.get("trace_patch_id")
+                    for anchor in self.anchors_by_id.values()
+                    if anchor.get("trace_patch_id")
+                }
+            ),
             "limitations": self.limitations,
         }
 

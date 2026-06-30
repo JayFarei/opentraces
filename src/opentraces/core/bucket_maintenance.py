@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,286 @@ from .bucket_store import (
 from .bucket_trace_records import iter_trace_record_objects
 
 
-def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
+def _canonical_anchor_maps(
+    slugs: set[str],
+) -> tuple[
+    dict[str, dict[str, list[tuple]]],
+    dict[str, set[str]],
+    set[str],
+]:
+    """Read the canonical ``git_anchor_created`` events for the opted-in repos
+    backing ``slugs`` and project them into per-trace anchor maps.
+
+    Returns ``(anchors_by_trace_patch, distinct_anchored_by_trace,
+    resolved_slugs)`` where:
+
+    * ``anchors_by_trace_patch[trace_id][patch_id]`` is the list of
+      ``(event_sequence, commit_hex, evidence_tier, evidence_firmness, path,
+      event_time)`` tuples (one per ``git_anchor_created`` event for that patch);
+    * ``distinct_anchored_by_trace[trace_id]`` is the set of patch ids the trace
+      has ANY anchor event for (the single-source anchored count);
+    * ``resolved_slugs`` is the subset of ``slugs`` whose project repo was found
+      on this machine (only those traces can be re-derived from canonical data).
+
+    The canonical event log is the per-repo Git ref ``refs/opentraces/local/
+    events/v1`` — shared across worktrees — so this reads truth, never the
+    lagging bucket companions.
+    """
+
+    from .trails.event_log import read_events_scoped
+
+    slug_repo = {slug: path for path, slug in _iter_opted_in_projects()}
+    anchors_by_trace_patch: dict[str, dict[str, list[tuple]]] = {}
+    distinct_anchored_by_trace: dict[str, set[str]] = {}
+    resolved_slugs: set[str] = set()
+    seen_repos: set[Path] = set()
+
+    for slug in slugs:
+        repo = slug_repo.get(slug)
+        if repo is None:
+            continue
+        resolved_slugs.add(slug)
+        # One scoped read per distinct repo (a repo may back several slugs).
+        if repo in seen_repos:
+            continue
+        seen_repos.add(repo)
+        try:
+            events = read_events_scoped(repo, event_types={"git_anchor_created"})
+        except Exception:
+            continue
+        for event in events:
+            payload = event.payload or {}
+            trace_id = event.trace_id
+            patch_id = payload.get("trace_patch_id")
+            commit_hex = (payload.get("commit_id") or {}).get("hex")
+            if not (trace_id and patch_id and commit_hex):
+                continue
+            anchors_by_trace_patch.setdefault(trace_id, {}).setdefault(
+                patch_id, []
+            ).append(
+                (
+                    event.event_sequence,
+                    commit_hex,
+                    payload.get("evidence_tier"),
+                    payload.get("evidence_firmness"),
+                    payload.get("path"),
+                    event.event_time,
+                )
+            )
+            distinct_anchored_by_trace.setdefault(trace_id, set()).add(patch_id)
+
+    return anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs
+
+
+def rederive_bucket_anchors(
+    bucket_root: Path, *, dry_run: bool = False
+) -> dict[str, Any]:
+    """Rebuild persisted ``trace.json`` patch anchors + manifest
+    ``anchored_count`` from the canonical ``git_anchor_created`` events.
+
+    Epic #169 (B-attr) single-source-of-truth: ``Patch.anchor``, the manifest
+    ``summary.anchored_count`` and the lineage surface must all DERIVE from the
+    canonical per-patch anchor events (written by
+    ``core/trails/anchors.reconcile_commit_anchors``), never from standalone
+    correlator stamps. For every per-trace envelope under ``bucket_root``:
+
+    * a patch is ``anchor.found = True`` ONLY when a ``git_anchor_created`` event
+      exists for its ``patch_id``, with ``commit_sha`` taken from that event
+      (file-membership-correct by construction — the canonical writer only
+      anchors a patch into a commit that genuinely changed its file); a patch
+      with no backing event is DE-ATTRIBUTED (``found = False``, or left
+      un-anchored when it never carried an anchor);
+    * a patch that genuinely appears in several commits (amend / cherry-pick /
+      repeated content) is surfaced as ONE patch row per distinct anchor commit,
+      so the per-trace lineage surface set EXACTLY equals the canonical anchor
+      set (the latest commit stays the primary ``anchor``; older commits also
+      ride ``superseded_by`` newest-first);
+    * the manifest row ``summary.anchored_count`` is set to the number of
+      DISTINCT anchored patch ids for the trace.
+
+    Idempotent: every written value is drawn from canonical data (commit hex +
+    the event's own ``event_time``), so a second run is byte-identical, and a
+    trace whose anchors already match the canonical set is left untouched (so
+    ``bucket_digest`` is unchanged for already-correct traces).
+
+    Reads events from the live opted-in project that shares each trace's slug;
+    traces whose slug has no resolvable project on this machine are skipped
+    (their canonical events are not reachable here). NEVER mutates the canonical
+    event log — it is read-only over Git and write-only over ``bucket_root``.
+    """
+
+    bucket_root = Path(bucket_root)
+    traces_root = bucket_root / "traces" / "v1"
+    manifest_path = bucket_root / "manifest.json"
+
+    manifest: dict[str, Any] | None = None
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            manifest = None
+
+    # Slugs whose per-trace envelopes are actually present on disk. We read the
+    # canonical anchor events ONLY for these slugs (one scoped read per backing
+    # repo), so a bucket COPY holding a handful of fixture traces costs a handful
+    # of reads, never one per project in the full registry. Manifest rows for a
+    # present slug are still all re-derived (so every row of that project gets a
+    # single-source anchored_count); rows for absent slugs are left untouched.
+    present_slugs: set[str] = set()
+    if traces_root.is_dir():
+        for child in traces_root.iterdir():
+            if child.is_dir() and any(child.glob("*/trace.json")):
+                present_slugs.add(child.name)
+
+    anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs = (
+        _canonical_anchor_maps(present_slugs)
+    )
+
+    traces_rewritten = 0
+    patches_deattributed = 0
+    patches_anchored = 0
+    if traces_root.is_dir():
+        for trace_json in sorted(traces_root.glob("*/*/trace.json")):
+            slug = trace_json.parent.parent.name
+            trace_id = trace_json.parent.name
+            if slug not in resolved_slugs:
+                continue
+            try:
+                doc = json.loads(trace_json.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            patch_anchors = anchors_by_trace_patch.get(trace_id, {})
+            # Collapse any prior one-row-per-anchor expansion back to one base
+            # patch per patch_id (first occurrence wins) BEFORE re-expanding —
+            # this keeps the re-derive idempotent (a second run on an already-
+            # expanded surface reproduces the same rows, never compounding
+            # duplicates).
+            base_patches: list[dict[str, Any]] = []
+            seen_patch_ids: set[str] = set()
+            for patch in doc.get("patches") or []:
+                pid = patch.get("patch_id")
+                if pid in seen_patch_ids:
+                    continue
+                seen_patch_ids.add(pid)
+                base = dict(patch)
+                # Keep ``anchor`` (the de-attribute path reuses its prior
+                # last_searched_at for idempotency); drop only the expansion-
+                # specific ``superseded_by`` so re-expansion starts clean.
+                base.pop("superseded_by", None)
+                base_patches.append(base)
+            new_patches: list[dict[str, Any]] = []
+            for patch in base_patches:
+                patch_id = patch.get("patch_id")
+                events_for_patch = patch_anchors.get(patch_id)
+                if events_for_patch:
+                    # Distinct anchor commits, oldest-first by event sequence.
+                    ordered: list[tuple] = []
+                    seen_commits: set[str] = set()
+                    for seq, commit_hex, tier, firm, path, etime in sorted(
+                        events_for_patch
+                    ):
+                        if commit_hex in seen_commits:
+                            continue
+                        seen_commits.add(commit_hex)
+                        ordered.append((commit_hex, tier, firm, path, etime))
+                    all_commits = [commit_hex for commit_hex, *_ in ordered]
+                    patches_anchored += 1
+                    # One surface row per distinct anchor commit; the LAST
+                    # (latest) commit is the primary row, older commits also
+                    # ride superseded_by (newest-first) on every row.
+                    for commit_hex, tier, firm, path, etime in ordered:
+                        row = dict(patch)
+                        row["anchor"] = {
+                            "last_searched_at": etime,
+                            "found": True,
+                            "commit_sha": commit_hex,
+                            "path": path or patch.get("file_path"),
+                            "blob_sha": None,
+                            "git_patch_id": None,
+                            "evidence_tier": tier or "exact_range_hash",
+                            "evidence_firmness": firm or "firm_observed",
+                        }
+                        row["superseded_by"] = [
+                            c for c in reversed(all_commits) if c != commit_hex
+                        ]
+                        new_patches.append(row)
+                else:
+                    # No backing event -> de-attribute. Preserve a prior search
+                    # timestamp (idempotent); leave never-anchored patches None.
+                    prev = patch.get("anchor")
+                    row = dict(patch)
+                    if isinstance(prev, dict) and prev.get("found"):
+                        patches_deattributed += 1
+                    if isinstance(prev, dict) and prev.get("last_searched_at"):
+                        row["anchor"] = {
+                            "last_searched_at": prev.get("last_searched_at"),
+                            "found": False,
+                            "commit_sha": None,
+                            "path": None,
+                            "blob_sha": None,
+                            "git_patch_id": None,
+                            "evidence_tier": None,
+                            "evidence_firmness": None,
+                        }
+                    else:
+                        row["anchor"] = None
+                    row["superseded_by"] = []
+                    new_patches.append(row)
+            if new_patches != (doc.get("patches") or []):
+                doc["patches"] = new_patches
+                if not dry_run:
+                    _atomic_write_bytes(
+                        trace_json,
+                        (
+                            json.dumps(
+                                doc,
+                                ensure_ascii=False,
+                                indent=2,
+                                sort_keys=True,
+                            )
+                            + "\n"
+                        ).encode("utf-8"),
+                    )
+                traces_rewritten += 1
+
+    manifest_rows_updated = 0
+    if isinstance(manifest, dict):
+        for row in manifest.get("traces") or []:
+            slug = row.get("project_slug")
+            trace_id = row.get("trace_id")
+            if slug not in resolved_slugs:
+                continue
+            correct = len(distinct_anchored_by_trace.get(trace_id, set()))
+            summary = row.setdefault("summary", {})
+            if summary.get("anchored_count") != correct:
+                summary["anchored_count"] = correct
+                manifest_rows_updated += 1
+        if manifest_rows_updated and not dry_run:
+            _atomic_write_bytes(
+                manifest_path,
+                (
+                    json.dumps(
+                        manifest, ensure_ascii=False, indent=2, sort_keys=True
+                    )
+                    + "\n"
+                ).encode("utf-8"),
+            )
+
+    return {
+        "bucket_root": str(bucket_root),
+        "dry_run": dry_run,
+        "resolved_slugs": sorted(resolved_slugs),
+        "unresolved_slugs": sorted(present_slugs - resolved_slugs),
+        "traces_rewritten": traces_rewritten,
+        "patches_anchored": patches_anchored,
+        "patches_deattributed": patches_deattributed,
+        "manifest_rows_updated": manifest_rows_updated,
+    }
+
+
+def bucket_repair(
+    *, dry_run: bool = False, bucket_root: Path | None = None
+) -> dict[str, Any]:
     """Full rebuild from canonical (event log + blob store).
 
     Plan 080 §9 / Resolution G — the documented crash-recovery primitive.
@@ -77,7 +357,36 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
     :func:`_atomic_write_*` helpers that skip same-bytes writes; the
     manifest digest excludes the volatile ``generated_at`` / ``updated_at``
     fields per Resolution H).
+
+    Epic #169 (B-attr): when ``bucket_root`` is given (a bucket COPY), repair
+    runs ONLY the canonical anchor re-derive (:func:`rederive_bucket_anchors`) —
+    it rebuilds ``trace.json`` patch anchors + manifest ``anchored_count`` from
+    the canonical ``git_anchor_created`` events (the single source of truth, so
+    no standalone correlator stamp survives without a backing event) and does
+    NOT re-project the full project set into a partial copy. This is what makes
+    ``opentraces bucket repair --bucket-root <copy>`` the safe way to re-derive a
+    bucket COPY without touching the live ``~/.opentraces`` bucket. The default
+    (no ``bucket_root``) keeps the documented live-bucket re-projection
+    behaviour unchanged.
     """
+
+    # ``bucket_root`` given: focused anchor re-derive over the copy's existing
+    # envelopes (no full re-projection — the copy is a partial subset).
+    if bucket_root is not None:
+        rederive = rederive_bucket_anchors(Path(bucket_root), dry_run=dry_run)
+        return {
+            "schema_version": BUCKET_MANIFEST_SCHEMA,
+            "status": "ok",
+            "dry_run": dry_run,
+            "mode": "rederive_anchors",
+            "traces_projected": rederive["traces_rewritten"],
+            "bucket_sourced_traces": 0,
+            "events_mirrored": 0,
+            "manifest_regenerated": bool(rederive["manifest_rows_updated"]),
+            "projects_walked": len(rederive["resolved_slugs"]),
+            "rederive": rederive,
+            "errors": [],
+        }
 
     errors: list[dict[str, Any]] = []
     traces_projected = 0
@@ -231,6 +540,12 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
                 {"kind": "manifest", "project_slug": None, "detail": str(exc)}
             )
 
+    # Epic #169 (B-attr): the canonical anchor re-derive runs ONLY in the
+    # explicit ``--bucket-root`` mode (above), against a bucket COPY. The default
+    # live-bucket repair keeps its documented re-projection behaviour byte-for-
+    # byte — re-deriving the whole live bucket from canonical here would both
+    # contradict "never repair the live bucket" and risk de-attributing a trace
+    # whose canonical events are not reachable on the local machine.
     status = "ok" if not errors else "partial"
     return {
         "schema_version": BUCKET_MANIFEST_SCHEMA,
