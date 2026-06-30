@@ -629,14 +629,32 @@ def bucket_rebuild_cmd(substrate: str, as_json: bool) -> None:
 
 
 @bucket_group.command("repair", cls=OpentracesCommand)
+@click.option(
+    "--bucket-root",
+    "bucket_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Repair a specific bucket layout instead of the live "
+        "~/.opentraces/bucket. When given (a COPY), repair runs ONLY the "
+        "canonical anchor re-derive over the envelopes present there — never "
+        "the live bucket."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_repair_cmd(as_json: bool) -> None:
+def bucket_repair_cmd(bucket_root: Path | None, as_json: bool) -> None:
     """Re-project the full bucket from canonical (event log + blob store).
 
     Per plan 080 §20 Resolution G, ``bucket repair`` is the documented
     crash-recovery primitive: it regenerates per-trace envelopes and
     ``manifest.json`` from the canonical event log + blob store. The
     operation is idempotent — safe to re-run, never drops user data.
+
+    Epic #169 (B-attr): repair also re-derives ``trace.json`` patch anchors and
+    the manifest ``anchored_count`` from the canonical ``git_anchor_created``
+    events (the single source of truth). ``--bucket-root <dir>`` targets a
+    bucket COPY so the re-derive can be verified without mutating the live
+    bucket.
     """
     try:
         from ..core.bucket_store import bucket_repair
@@ -646,7 +664,7 @@ def bucket_repair_cmd(as_json: bool) -> None:
         ) from exc
 
     try:
-        result = bucket_repair()
+        result = bucket_repair(bucket_root=bucket_root)
     except NotImplementedError as exc:
         raise click.ClickException(
             f"Phase B Track B1 stub: bucket_repair not yet implemented ({exc})"

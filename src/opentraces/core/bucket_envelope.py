@@ -460,8 +460,20 @@ def _per_trace_v2_summary(
         step_count = len(record.steps or [])
         patches = record.patches or []
         patch_count = len(patches)
-        anchored_count = sum(
-            1 for p in patches if p.anchor is not None and p.anchor.found
+        # Count DISTINCT anchored patch ids, not raw found stamps (epic #169
+        # B-attr): the canonical anchor set is keyed by trace_patch_id, so a
+        # patch surfaced once per anchor commit (the re-derived lineage surface
+        # for amend / multi-commit patches) must still contribute one to the
+        # anchored count. Digest-safe: for every record whose patches carry
+        # distinct patch_ids (the normal shape) this equals the prior
+        # ``sum(... found)``, so ``bucket_digest`` is unchanged for already-
+        # correct traces.
+        anchored_count = len(
+            {
+                p.patch_id
+                for p in patches
+                if p.anchor is not None and p.anchor.found
+            }
         )
         title = (record.task.description if record.task else None) or None
         lifecycle = record.lifecycle

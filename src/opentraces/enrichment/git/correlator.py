@@ -103,6 +103,28 @@ def _edit_touches_hunks(
     return False
 
 
+def patch_file_in_commit(
+    file_path: str, hunks: dict[str, list[dict]] | None
+) -> bool:
+    """True iff ``file_path`` is one of the files the commit actually changed.
+
+    Epic #169 (B-attr) over-attribution cure: ``correlate`` matches a trace to a
+    commit at the TRACE level, and the post-commit writer must not fan that one
+    match across patches whose own file the commit never touched. The commit's
+    real changed-file set is exactly ``hunks.keys()`` (the parsed
+    ``git diff-tree`` / ``git show`` output), so a patch is eligible to anchor to
+    this commit ONLY when its ``file_path`` is a member here — the same
+    ``_path_matches`` rule ``correlate`` already uses to relate edits to hunks
+    (abs/rel + foreign-prefix tolerant). No file, or no hunks, is never a match.
+    """
+    if not file_path or not hunks:
+        return False
+    for hunk_path in hunks:
+        if _path_matches(file_path, hunk_path):
+            return True
+    return False
+
+
 def correlate(
     trace: TraceRecord,
     revision: str,
