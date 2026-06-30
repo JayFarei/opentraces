@@ -25,11 +25,39 @@ from .ids import (
 from .models import GitObjectID, TrailEvent, TrailEventDraft, sha256_text
 
 
+#: Reserved step index for the session-open baseline snapshot (#130). Real
+#: tool-call steps are ``>= 0``; the origin sits one before the first step so
+#: ``ctx``/``trail`` readers can ask for "what did the session start from"
+#: without colliding with any captured step.
+ORIGIN_STEP_INDEX = -1
+#: ``snapshot_role`` value for the session-open baseline (#130). Distinct from
+#: the per-step ``before``/``after`` roles so a reader can select it directly.
+SNAPSHOT_ROLE_ORIGIN = "origin"
+
+
 @dataclass(frozen=True)
 class SnapshotResult:
     snapshot_id: str
     tree_id: dict[str, str]
     ref: str
+
+
+@dataclass(frozen=True)
+class OriginReconstructResult:
+    """Outcome of reconstructing the session-open world from the #130 baseline.
+
+    ``recomputed_tree_id`` is the Git tree obtained by applying the derived
+    start diff to ``public_base`` (or the empty tree when there is no public
+    base). ``exact`` is ``True`` iff that tree id equals the captured
+    ``start_tree_id`` — i.e. the baseline reconstructs the session-open
+    worktree byte-for-byte.
+    """
+
+    recomputed_tree_hex: str
+    start_tree_hex: str
+    base_tree_hex: str
+    exact: bool
+    start_diff: str
 
 
 @dataclass(frozen=True)
@@ -607,6 +635,256 @@ def close_step_window_with_snapshot(
     return SnapshotResult(snapshot_id=snapshot_id, tree_id=tree_id, ref=ref)
 
 
+def _as_object_id(value: Any) -> dict[str, str] | None:
+    """Coerce a hex string or ``{algo, hex}`` mapping into a typed GitObjectID."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value:
+            return None
+        try:
+            return GitObjectID(hex=value).model_dump(mode="json")
+        except Exception:
+            return None
+    if isinstance(value, dict):
+        try:
+            return GitObjectID.model_validate(value).model_dump(mode="json")
+        except Exception:
+            return None
+    return None
+
+
+def _empty_tree(repo: Path) -> str:
+    """Return the repo's empty-tree object id (hash-algo agnostic)."""
+    with tempfile.TemporaryDirectory(prefix="opentraces-empty-tree-") as td:
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = str(Path(td) / "index")
+        _git(repo, ["read-tree", "--empty"], env=env)
+        return _git(repo, ["write-tree"], env=env)
+
+
+def _resolve_base_tree_hex(repo: Path, public_base: Any) -> str:
+    """Resolve ``public_base`` (commit oid / hex / None) to its tree object id.
+
+    ``None`` (no public base — e.g. a session opened on a repo with no
+    commits) resolves to the empty tree, so the derived start diff is the
+    whole session-open worktree.
+    """
+    base = _as_object_id(public_base)
+    if base is None:
+        return _empty_tree(repo)
+    obj_type = _object_type(repo, base["hex"])
+    if obj_type == "tree":
+        return base["hex"]
+    # A commit (or tag) resolves to its tree; anything unexpected falls back to
+    # the empty tree rather than raising, keeping reconstruction best-effort.
+    resolved = _git(repo, ["rev-parse", "--verify", f"{base['hex']}^{{tree}}"], check=False)
+    return resolved or _empty_tree(repo)
+
+
+def _git_raw(repo: Path, args: list[str], *, env: dict[str, str] | None = None) -> str:
+    """Run git and return stdout verbatim (no stripping).
+
+    ``git apply`` rejects a patch whose trailing newline has been stripped, so
+    the diff used for reconstruction must keep git's exact byte output.
+    """
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    return proc.stdout
+
+
+def derive_origin_start_diff(repo: Path, *, public_base: Any, start_tree_id: dict[str, str]) -> str:
+    """Derive the #130 start diff: ``public_base`` tree → session-open tree.
+
+    This is the change set already present in the worktree when the session
+    opened (uncommitted local edits on top of the public base). It is derived
+    on read from the captured baseline, never stored. Returned verbatim so it
+    re-applies cleanly (preserves the trailing newline + binary chunks).
+    """
+    repo = repo.resolve()
+    base_tree_hex = _resolve_base_tree_hex(repo, public_base)
+    start_hex = start_tree_id["hex"]
+    return _git_raw(repo, ["diff", "--no-color", "--binary", base_tree_hex, start_hex])
+
+
+def reconstruct_origin_tree(
+    repo: Path,
+    *,
+    public_base: Any,
+    start_tree_id: dict[str, str],
+) -> OriginReconstructResult:
+    """Reconstruct the session-open world from the #130 baseline and verify it.
+
+    Derives the start diff (``public_base`` → ``start_tree_id``), applies it to
+    the public base tree in a throwaway index, writes the resulting tree, and
+    reports whether it equals ``start_tree_id`` exactly. This is the #130
+    tripwire: it proves the captured baseline reconstructs the session-open
+    worktree byte-for-byte (no rename/binary/whitespace loss).
+    """
+    repo = repo.resolve()
+    base_tree_hex = _resolve_base_tree_hex(repo, public_base)
+    start_hex = start_tree_id["hex"]
+    diff = _git_raw(repo, ["diff", "--no-color", "--binary", base_tree_hex, start_hex])
+
+    with tempfile.TemporaryDirectory(prefix="opentraces-origin-reconstruct-") as td:
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = str(Path(td) / "index")
+        _git(repo, ["read-tree", base_tree_hex], env=env)
+        if diff.strip():
+            proc = subprocess.run(
+                ["git", "apply", "--cached", "--binary", "--whitespace=nowarn"],
+                cwd=repo,
+                input=diff,
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    "git apply (origin reconstruct) failed: "
+                    f"{proc.stderr.strip() or proc.stdout.strip()}"
+                )
+        recomputed = _git(repo, ["write-tree"], env=env)
+
+    return OriginReconstructResult(
+        recomputed_tree_hex=recomputed,
+        start_tree_hex=start_hex,
+        base_tree_hex=base_tree_hex,
+        exact=(recomputed == start_hex),
+        start_diff=diff,
+    )
+
+
+def _origin_snapshot_id(*, trace_id: str, generation_index: int, tree_id: dict[str, str]) -> str:
+    return _snapshot_id(
+        trace_id=trace_id,
+        generation_index=generation_index,
+        step_index=ORIGIN_STEP_INDEX,
+        tree_id=tree_id,
+        role=SNAPSHOT_ROLE_ORIGIN,
+    )
+
+
+def _origin_snapshot_draft(
+    *,
+    trace_id: str,
+    generation_index: int,
+    start_tree_id: dict[str, str],
+    start_git_head: dict[str, str] | None,
+    public_base: dict[str, str] | None,
+    capture_method: list[str],
+    event_time: str | None = None,
+    limitations: list[str] | None = None,
+) -> TrailEventDraft:
+    """Build the #130 session-open baseline snapshot event draft.
+
+    ``snapshot_role='origin'`` / ``step_index=-1`` reserve the baseline slot.
+    The payload carries ``start_git_head`` + ``public_base_sha`` +
+    ``start_tree_id``; the start diff is derived on read (never stored). All
+    three are typed ``{algo, hex}`` Git object ids. Absent-tolerant: a log
+    written before #130 simply has no origin snapshot.
+    """
+    snapshot_id = _origin_snapshot_id(
+        trace_id=trace_id,
+        generation_index=generation_index,
+        tree_id=start_tree_id,
+    )
+    payload: dict[str, Any] = {
+        "snapshot_id": snapshot_id,
+        "snapshot_ref": trace_snapshot_ref(snapshot_id),
+        "snapshot_role": SNAPSHOT_ROLE_ORIGIN,
+        "tree_id": start_tree_id,
+        "start_tree_id": start_tree_id,
+        "git_head": start_git_head,
+        "start_git_head": start_git_head,
+        "base_commit": public_base,
+        "public_base_sha": public_base,
+        "capture_status": "captured",
+        "limitations": sorted(set(limitations or [])),
+    }
+    return TrailEventDraft(
+        event_type="trace_snapshot_created",
+        trace_id=trace_id,
+        generation_index=generation_index,
+        step_index=ORIGIN_STEP_INDEX,
+        event_time=event_time,
+        capture_method=capture_method,
+        payload={key: value for key, value in payload.items() if value is not None},
+    )
+
+
+def emit_origin_snapshot(
+    repo: Path,
+    *,
+    trace_id: str,
+    start_tree_id: dict[str, str],
+    start_git_head: dict[str, str] | None = None,
+    public_base: dict[str, str] | None = None,
+    capture_method: list[str],
+    writer: str = "capture-claude-code",
+    generation_index: int = 0,
+    event_time: str | None = None,
+    limitations: list[str] | None = None,
+) -> SnapshotResult:
+    """Append the #130 session-open baseline snapshot to the canonical log.
+
+    Idempotent by content address: re-emitting the same baseline is a no-op
+    (the origin ``snapshot_id`` already present in the log is reused). The
+    standalone entry point for callers (e.g. a future SessionStart hook) that
+    know the true session-open baseline independently of the first tool call.
+    """
+    repo = repo.resolve()
+    start_tree_id = _as_object_id(start_tree_id) or start_tree_id
+    start_git_head = _as_object_id(start_git_head)
+    public_base = _as_object_id(public_base)
+    snapshot_id = _origin_snapshot_id(
+        trace_id=trace_id,
+        generation_index=generation_index,
+        tree_id=start_tree_id,
+    )
+    ref = (
+        f"refs/opentraces/local/traces/{trace_id}/{generation_index}/snapshots/origin"
+    )
+
+    from .event_log import read_events
+
+    already = any(
+        event.event_type == "trace_snapshot_created"
+        and event.payload.get("snapshot_id") == snapshot_id
+        for event in read_events(repo, verify=False)
+    )
+    if not already:
+        append_event_batch(
+            repo,
+            [
+                _origin_snapshot_draft(
+                    trace_id=trace_id,
+                    generation_index=generation_index,
+                    start_tree_id=start_tree_id,
+                    start_git_head=start_git_head,
+                    public_base=public_base,
+                    capture_method=capture_method,
+                    event_time=event_time,
+                    limitations=limitations,
+                )
+            ],
+            writer=writer,
+        )
+    _create_snapshot_ref(repo, ref, start_tree_id["hex"])
+    return SnapshotResult(snapshot_id=snapshot_id, tree_id=start_tree_id, ref=ref)
+
+
 def emit_step_window_events_from_record(
     repo: Path,
     record: TraceRecord,
@@ -670,6 +948,8 @@ def emit_step_window_events_from_record(
 
     drafts: list[TrailEventDraft] = []
     snapshot_refs: list[tuple[str, str]] = []
+    origin_draft: TrailEventDraft | None = None
+    origin_considered = False
     skipped = 0
     skipped_reasons: dict[str, int] = {}
 
@@ -708,6 +988,38 @@ def emit_step_window_events_from_record(
             declared_command = _declared_command(tool_name, tool_input)
             generation_index = record.generation_index
             agent_step_id = f"step_{step.step_index}"
+
+            # #130 session-open baseline. The first PreToolUse fires before the
+            # agent's first tool call, so its tree is the session-open worktree
+            # in the JSONL path. Emit an origin snapshot (role=origin,
+            # step_index=-1) from it once, idempotently — readers get a stable
+            # "what did the session start from" anchor distinct from step 0's
+            # ``before`` snapshot. The true session-open baseline from a
+            # dedicated SessionStart hook is deferred (see emit_origin_snapshot).
+            if not origin_considered:
+                origin_considered = True
+                origin_snapshot_id = _origin_snapshot_id(
+                    trace_id=record.trace_id,
+                    generation_index=generation_index,
+                    tree_id=pre_tree_id,
+                )
+                if origin_snapshot_id not in existing_snapshots:
+                    existing_snapshots.add(origin_snapshot_id)
+                    origin_draft = _origin_snapshot_draft(
+                        trace_id=record.trace_id,
+                        generation_index=generation_index,
+                        start_tree_id=pre_tree_id,
+                        start_git_head=pre_git_head,
+                        public_base=pre_git_head,
+                        capture_method=["hook_pretooluse"],
+                        event_time=pre.get("timestamp"),
+                    )
+                    origin_ref = (
+                        f"refs/opentraces/local/traces/{record.trace_id}"
+                        f"/{generation_index}/snapshots/origin"
+                    )
+                    snapshot_refs.append((origin_ref, pre_tree_id["hex"]))
+
             before_snapshot_id = _snapshot_id(
                 trace_id=record.trace_id,
                 generation_index=generation_index,
@@ -936,6 +1248,8 @@ def emit_step_window_events_from_record(
         )
         existing_trace_events.add(incomplete_key)
 
+    if origin_draft is not None:
+        drafts.insert(0, origin_draft)
     emitted = append_event_batch(repo, drafts, writer=writer)
     for ref, tree_hex in snapshot_refs:
         _create_snapshot_ref(repo, ref, tree_hex)
