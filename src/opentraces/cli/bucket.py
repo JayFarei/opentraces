@@ -661,6 +661,56 @@ def bucket_repair_cmd(as_json: bool) -> None:
         click.echo(f"  {key}: {value}")
 
 
+@bucket_group.command("reclaim", cls=OpentracesCommand)
+@click.option(
+    "--repo",
+    "repo",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Git repository to scan (defaults to the current directory).",
+)
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    help="Actually remove the listed cruft. Without it, this is print-only.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
+    """Reclaim leaked Trace Trails cruft under ``.git/**/opentraces/``.
+
+    Lists leaked ``*.tmp`` files and orphan/duplicate accelerator pickles
+    (per-worktree ``event_log_snapshot.pkl`` / ``event_index`` copies left by
+    the pre-#169-C duplication bug) with per-candidate byte counts and a total.
+
+    DRY-RUN BY DEFAULT: a plain run deletes nothing and leaves the file set
+    byte-for-byte unchanged. ``--apply`` removes the listed cruft and NEVER
+    touches the live ``event_log_snapshot.pkl``, the live ``event_index/base.pkl``,
+    the canonical event ref, or anything under the bucket.
+    """
+    from ..core.bucket_reclaim import reclaim_repo
+
+    target = Path(repo) if repo is not None else Path.cwd()
+    report = reclaim_repo(target, apply=apply)
+    payload = {"status": "ok", "reclaim": report.as_dict()}
+    if as_json:
+        click.echo(_dump_json(payload))
+        return
+
+    data = report.as_dict()
+    click.echo(f"Bucket reclaim (apply={apply}):")
+    click.echo(f"  repo: {data['repo']}")
+    click.echo(f"  candidates: {data['candidate_count']} ({data['total_bytes']} bytes)")
+    for cand in data["candidates"]:
+        click.echo(f"    - [{cand['category']}] {cand['bytes']:>10} B  {cand['path']}")
+    if apply:
+        click.echo(f"  removed: {data['removed_count']} ({data['removed_bytes']} bytes)")
+    else:
+        click.echo("  (dry run — nothing deleted; pass --apply to reclaim)")
+    for err in data["errors"]:
+        click.echo(f"  error: {err}", err=True)
+
+
 @bucket_group.command("verify", cls=OpentracesCommand)
 @click.option(
     "--sample",
