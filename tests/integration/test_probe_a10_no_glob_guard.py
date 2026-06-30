@@ -352,27 +352,32 @@ def _drive(config_mod, trail_helpers, trails_query, trace_meta) -> int:
             resolved = str(self.resolve())
         except Exception:
             resolved = str(self)
-        if resolved in known_traces_dirs and isinstance(pattern, str) and pattern.endswith(".jsonl"):
+        # ANY rglob of the traces dir is a full-subtree scan (the flat traces dir
+        # has no legitimate bounded recursive lookup), incl. rglob("*")+filter.
+        if resolved in known_traces_dirs:
             offenders.append(("?", "rglob", str(pattern), _caller_site()))
         return _real_rglob(self, pattern, *a, **k)
 
-    def _globmod_site(pathname):
+    def _globmod_offender(pathname) -> bool:
+        s = str(pathname)
+        # recursive glob (``**``, e.g. glob.glob(..., recursive=True)) anywhere
+        # under a known traces dir is a full-subtree scan.
+        if "**" in s and any(s.startswith(kd) for kd in known_traces_dirs):
+            return True
         try:
             d = str(Path(os.fspath(pathname)).parent.resolve())
             base = Path(os.fspath(pathname)).name
         except Exception:
-            return None, ""
-        return d, base
+            return False
+        return d in known_traces_dirs and _is_fulldir_pattern(base)
 
     def _instrumented_globmod(pathname, *a, **k):
-        d, base = _globmod_site(pathname)
-        if d in known_traces_dirs and _is_fulldir_pattern(base):
+        if _globmod_offender(pathname):
             offenders.append(("?", "glob.glob", str(pathname), _caller_site()))
         return _real_globmod(pathname, *a, **k)
 
     def _instrumented_iglob(pathname, *a, **k):
-        d, base = _globmod_site(pathname)
-        if d in known_traces_dirs and _is_fulldir_pattern(base):
+        if _globmod_offender(pathname):
             offenders.append(("?", "glob.iglob", str(pathname), _caller_site()))
         return _real_iglob(pathname, *a, **k)
 
