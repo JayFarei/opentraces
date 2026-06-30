@@ -267,6 +267,18 @@ def _drive(config_mod, trail_helpers, trails_query, trace_meta) -> int:
     _real_iterdir = pathlib.Path.iterdir
     _real_scandir = os.scandir
     _real_listdir = os.listdir
+    _real_rglob = pathlib.Path.rglob
+    _real_globmod = _glob_mod.glob
+    _real_iglob = _glob_mod.iglob
+
+    def _is_fulldir_pattern(pattern) -> bool:
+        """A pattern that enumerates the WHOLE traces dir (not a bounded per-id
+        prefix): bare ``*.jsonl``/``*``, any ``*``-leading pattern, or any
+        recursive ``**`` pattern. A bounded fast-path is ``<id>.jsonl`` or
+        ``<id>*.jsonl`` (does not start with ``*``, not recursive)."""
+        if not isinstance(pattern, str):
+            return False
+        return pattern in ("*.jsonl", "*") or pattern.startswith("*") or "**" in pattern
 
     def _resolved_str(p):
         """Best-effort absolute string for a path-like; None for fds/garbage."""
@@ -306,10 +318,10 @@ def _drive(config_mod, trail_helpers, trails_query, trace_meta) -> int:
         except Exception:
             resolved = str(self)
         if resolved in known_traces_dirs:
-            if pattern == "*.jsonl":
-                offenders.append(("?", "glob", pattern, _caller_site()))
-            elif isinstance(pattern, str) and pattern.endswith("*.jsonl"):
-                benign_prefix.append(pattern)
+            if _is_fulldir_pattern(pattern):
+                offenders.append(("?", "glob", str(pattern), _caller_site()))
+            elif isinstance(pattern, str) and pattern.endswith(".jsonl"):
+                benign_prefix.append(pattern)  # bounded per-id prefix glob
         return _real_glob(self, pattern, *a, **k)
 
     def _instrumented_iterdir(self, *a, **k):
@@ -333,6 +345,37 @@ def _drive(config_mod, trail_helpers, trails_query, trace_meta) -> int:
             offenders.append(("?", "listdir", resolved, _caller_site()))
         return _real_listdir(path, *a, **k)
 
+    def _instrumented_rglob(self, pattern, *a, **k):
+        # rglob is ALWAYS recursive -> any *.jsonl rglob of the traces dir is a
+        # full-subtree scan, never a bounded per-id lookup (#169 codex review #2).
+        try:
+            resolved = str(self.resolve())
+        except Exception:
+            resolved = str(self)
+        if resolved in known_traces_dirs and isinstance(pattern, str) and pattern.endswith(".jsonl"):
+            offenders.append(("?", "rglob", str(pattern), _caller_site()))
+        return _real_rglob(self, pattern, *a, **k)
+
+    def _globmod_site(pathname):
+        try:
+            d = str(Path(os.fspath(pathname)).parent.resolve())
+            base = Path(os.fspath(pathname)).name
+        except Exception:
+            return None, ""
+        return d, base
+
+    def _instrumented_globmod(pathname, *a, **k):
+        d, base = _globmod_site(pathname)
+        if d in known_traces_dirs and _is_fulldir_pattern(base):
+            offenders.append(("?", "glob.glob", str(pathname), _caller_site()))
+        return _real_globmod(pathname, *a, **k)
+
+    def _instrumented_iglob(pathname, *a, **k):
+        d, base = _globmod_site(pathname)
+        if d in known_traces_dirs and _is_fulldir_pattern(base):
+            offenders.append(("?", "glob.iglob", str(pathname), _caller_site()))
+        return _real_iglob(pathname, *a, **k)
+
     def _tag(start: int, label: str) -> list[str]:
         """Tag offenders accrued since `start` with the site label; return sites."""
         sites = []
@@ -349,6 +392,9 @@ def _drive(config_mod, trail_helpers, trails_query, trace_meta) -> int:
     pathlib.Path.iterdir = _instrumented_iterdir
     os.scandir = _instrumented_scandir
     os.listdir = _instrumented_listdir
+    pathlib.Path.rglob = _instrumented_rglob
+    _glob_mod.glob = _instrumented_globmod
+    _glob_mod.iglob = _instrumented_iglob
     try:
         # ---- SITE 1: trail_helpers._load_trace_step_summaries (present trace_id)
         start = len(offenders)
@@ -394,6 +440,9 @@ def _drive(config_mod, trail_helpers, trails_query, trace_meta) -> int:
         pathlib.Path.iterdir = _real_iterdir
         os.scandir = _real_scandir
         os.listdir = _real_listdir
+        pathlib.Path.rglob = _real_rglob
+        _glob_mod.glob = _real_globmod
+        _glob_mod.iglob = _real_iglob
 
     # --- verdict --------------------------------------------------------------
     print("project_dir:", project_dir)

@@ -575,20 +575,30 @@ def _trail_trace_id_for_prefix(project_cwd: Path, prefix: str) -> str | None:
     return projection.resolve_trace_prefix(prefix)
 
 
+# Survival-semantic containers/keys that must never surface in attribution-only
+# blame output. ``current_state`` is the per-anchor survival projection
+# (``enrich_trail_row`` fills it with a ``survival_state`` placeholder plus a
+# ``label`` verdict + ``observed_at_*`` head-keying); stripping only the literal
+# ``survival_state`` key would still leak the survival-shaped container, so the
+# whole container is dropped. Live survival is reachable only through ``trail track``.
+_SURVIVAL_CONTAINER_KEYS = frozenset({"current_state"})
+
+
 def _strip_survival_fields(value: Any) -> Any:
-    """Recursively drop any dict key whose name carries survival vocabulary.
+    """Recursively drop any dict key carrying survival vocabulary, plus the
+    survival-shaped ``current_state`` container.
 
     ``blame`` is the attribution-only seam (#169): the enriched anchor row carries
-    a static ``current_state.survival_state`` placeholder from
-    ``enrich_trail_row``, but blame never recomputes live survival, so that field
-    must not surface in blame output where a consumer could read it as a live
-    verdict. Live survival is reachable only through ``trail track``.
+    a static survival projection from ``enrich_trail_row`` (``current_state`` with
+    a ``survival_state`` placeholder, a ``label`` verdict, and ``observed_at_*``
+    head-keying), but blame never recomputes live survival, so none of it must
+    surface in blame output where a consumer could read it as a live verdict.
     """
     if isinstance(value, dict):
         return {
             k: _strip_survival_fields(v)
             for k, v in value.items()
-            if "survival" not in str(k).lower()
+            if "survival" not in str(k).lower() and str(k) not in _SURVIVAL_CONTAINER_KEYS
         }
     if isinstance(value, list):
         return [_strip_survival_fields(item) for item in value]
@@ -1547,9 +1557,11 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
         )
         if simulate_leak:
             # Hidden, test-only: prove the survival-leak guard is red-capable by
-            # injecting a survival-named key the normal attribution path never
-            # emits. Not a user-facing surface (see --simulate-leak, hidden).
+            # injecting BOTH a survival-named key AND the survival-shaped
+            # ``current_state`` container the attribution-only path never emits.
+            # Not a user-facing surface (see --simulate-leak, hidden).
             payload["simulated_survival_state"] = "reverted"
+            payload["current_state"] = {"label": "reverted", "observed_at_commit": "deadbeef"}
         click.echo(_json.dumps(payload, indent=2))
         return
 

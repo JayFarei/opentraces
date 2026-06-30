@@ -280,6 +280,16 @@ def _run(argv: list[str] | None = None) -> int:
     rows = payload["trailEvidence"]
     want_steps = sorted({r.get("step_index") for r in rows if r.get("trace_id") == WANT})
     matched_step = WANT_STEP in want_steps
+    # LOAD-BEARING (codex review #2): the pinned raw-log fact (WANT, WANT_STEP=1085)
+    # must actually be present in the blame address set, not merely corroborated.
+    # This grounds the probe on an immutable git_anchor_created fact independent of
+    # whether the shared anchors_for_commit projection is later refactored.
+    if not matched_step:
+        print(
+            f"RED: pinned address ({WANT[:8]}, step {WANT_STEP}) ABSENT from blame "
+            f"trailEvidence (got steps={want_steps} for {WANT[:8]})"
+        )
+        return 1
     n_traces = len({r.get("trace_id") for r in rows if r.get("trace_id")})
     print(
         f"GREEN: blame interactive; trailEvidence rows={len(rows)} over {n_traces} traces, "

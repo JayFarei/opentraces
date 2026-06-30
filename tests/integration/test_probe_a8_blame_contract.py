@@ -87,7 +87,11 @@ ATTRIBUTION_KEY_WHITELIST = frozenset({
     # ---- trailEvidence rows (flat anchor fields) ----
     "affected_range", "anchor_relation", "call_type", "capture_method",
     "commit_id", "commit_ref", "commit_sha", "containing_segment_id",
-    "containing_segment_ref", "content_status", "current_state", "display_id",
+    # NOTE: ``current_state`` is DELIBERATELY NOT whitelisted (codex review #2):
+    # it is the survival-shaped projection container (``label``/``observed_at_*``)
+    # that must never surface in attribution-only blame, so any ``current_state``
+    # key anywhere in the payload is flagged by _non_whitelisted_keys -> RED.
+    "containing_segment_ref", "content_status", "display_id",
     "event_id", "event_log_ref", "event_sequence", "event_time", "event_type",
     "evidence", "evidence_firmness", "evidence_refs", "evidence_tier",
     "file_path", "firmness", "generation_index", "git_anchor",
@@ -193,23 +197,30 @@ def _initialized_project():
     it is initialized, else the primary worktree = parent of the common git dir)
     reads the very same 951 anchors. No path is hardcoded.
     """
-    candidates = [REPO]
+    candidates = []
     try:
         cg = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
             cwd=str(REPO), capture_output=True, text=True,
         )
         if cg.returncode == 0 and cg.stdout.strip():
+            # Primary opted-in checkout FIRST (a linked grader worktree is itself
+            # un-provisioned; the canonical event log + opt-in live with the parent).
             candidates.append(Path(cg.stdout.strip()).parent)
     except Exception:  # noqa: BLE001
         pass
+    candidates.append(REPO)  # fall back to this worktree if it IS the primary checkout
     seen = set()
     for c in candidates:
         c = c.resolve()
         if c in seen:
             continue
         seen.add(c)
-        if (c / ".opentraces.json").exists() or (c / ".opentraces").is_dir():
+        # Require the real opt-in marker FILE. A bare `.opentraces/` working dir
+        # (a side-effect of running any command in a grader worktree) is NOT an
+        # opt-in; matching it picks an un-provisioned dir and blame rejects with
+        # rc=2 "not opted in" (codex review #2 follow-up).
+        if (c / ".opentraces.json").is_file():
             return c
     return None
 

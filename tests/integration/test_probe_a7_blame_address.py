@@ -312,6 +312,14 @@ def _run() -> int:
                 f"(blame={len(blame_addrs)} oracle={len(oracle_addrs)}; "
                 f"only_in_blame={only_blame}; only_in_oracle={only_oracle})"
             )
+        # LOAD-BEARING (codex review #2): the pinned raw-log address fact
+        # (WANT, WANT_STEP=1085) must be present on BOTH sides, grounding the
+        # probe on an immutable git_anchor_created fact, not just set-equality.
+        pinned = (WANT, WANT_STEP)
+        if pinned not in oracle_addrs:
+            fail.append(f"PIN_MISSING_ORACLE: ({WANT[:8]}, step {WANT_STEP}) not in event-log oracle")
+        if pinned not in blame_addrs:
+            fail.append(f"PIN_MISSING_BLAME: ({WANT[:8]}, step {WANT_STEP}) absent from blame address set")
 
     if fail:
         print("VERIFIER_RESULT=RED")
