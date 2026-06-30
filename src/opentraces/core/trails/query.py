@@ -313,6 +313,13 @@ _PROJECTION_EVENT_TYPES = {
     "git_anchor_created",
     "git_anchor_search_completed",
 }
+# The commit-keyed subset (everything except the un-gated ``trace_patch_created``).
+# Read first by the commit-scoped builder to decide whether any anchor rows will
+# be surfaced before paying for the whole-corpus ``trace_patch_created`` read.
+_PROJECTION_ANCHOR_EVENT_TYPES = {
+    "git_anchor_created",
+    "git_anchor_search_completed",
+}
 # Maps each commit-keyed event type to the payload key whose nested ``hex``
 # must equal a wanted commit sha (used by read_events_scoped's commit_filter).
 _PROJECTION_COMMIT_FILTER = {
@@ -357,6 +364,29 @@ def build_trail_query_projection_for_commits(
     The canonical event log is unchanged; this is a rebuildable read accelerator.
     """
     repo = repo.resolve()
+    # Phase 1: read only the commit-keyed anchor/search events, gated to the
+    # wanted commits (bounded by the commit-sha prefilter, not by history). The
+    # commit-scoped contract only surfaces ``anchors_by_commit[sha]``;
+    # ``trace_patch_created`` events are read solely to drive the step-hierarchy
+    # decoration of those anchor rows.
+    anchor_events = read_events_scoped(
+        repo,
+        event_types=_PROJECTION_ANCHOR_EVENT_TYPES,
+        commit_filter=_PROJECTION_COMMIT_FILTER,
+        commit_shas=commit_shas,
+    )
+    # When no anchor events reference the wanted commits there are no anchor rows
+    # to surface or decorate, so skip both the whole-corpus (un-gated)
+    # ``trace_patch_created`` read and the step-metadata decoration entirely.
+    # ``anchors_by_commit`` is empty either way, so the byte-identity boundary
+    # above holds (only the off-contract ``patches_by_id`` differs).
+    if not any(e.event_type == "git_anchor_created" for e in anchor_events):
+        return _build_projection_from_events(
+            repo, anchor_events, decorate_step_hierarchy=False
+        )
+    # Phase 2: anchors exist — read the full projection event set (incl.
+    # ``trace_patch_created``) and decorate exactly as the full builder does, so
+    # the surfaced anchor rows stay deep-equal.
     events = read_events_scoped(
         repo,
         event_types=_PROJECTION_EVENT_TYPES,
@@ -409,7 +439,10 @@ def build_trail_query_projection_from_events(
 
 
 def _build_projection_from_events(
-    repo: Path, events: list[TrailEvent]
+    repo: Path,
+    events: list[TrailEvent],
+    *,
+    decorate_step_hierarchy: bool = True,
 ) -> TrailQueryProjection:
     projection = TrailQueryProjection(
         repo=repo,
@@ -650,7 +683,8 @@ def _build_projection_from_events(
             )
         projection.patches_by_id[patch_id] = patch_row
 
-    _decorate_projection_with_step_hierarchy(projection)
+    if decorate_step_hierarchy:
+        _decorate_projection_with_step_hierarchy(projection)
 
     for rows in projection.anchors_by_commit.values():
         rows.sort(
@@ -800,7 +834,22 @@ def _load_step_metadata(
 
     metadata: dict[tuple[str, int, int], _StepMetadata] = {}
     remaining = set(wanted)
-    for path in sorted(traces_dir.glob("*.jsonl")):
+    # Per-id filename + prefix fast path instead of a full-dir scan: each wanted
+    # trace is reached directly via its own filename, and a miss returns empty
+    # rather than reading every file in the traces dir.
+    candidate_paths: list[Path] = []
+    seen_paths: set[Path] = set()
+    for trace_id in sorted(wanted):
+        for path in (
+            traces_dir / f"{trace_id}.jsonl",
+            *sorted(traces_dir.glob(f"{trace_id}*.jsonl")),
+        ):
+            if path not in seen_paths:
+                seen_paths.add(path)
+                candidate_paths.append(path)
+    for path in candidate_paths:
+        if not path.exists():
+            continue
         record = _read_trace_record(path)
         if not record:
             continue

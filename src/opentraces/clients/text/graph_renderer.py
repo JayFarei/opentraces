@@ -648,6 +648,36 @@ def render(commits: list[Commit], opts: RenderOptions) -> str:
     return _render_commit_primary(commits, opts)
 
 
+def bound_output(text: str, *, max_lines: int = 40, max_bytes: int = 8192) -> str:
+    """Bound the default (non ``--full``) human graph to a scannable size.
+
+    Returns ``text`` unchanged when it is already within both budgets — so small
+    graphs stay byte-identical — otherwise keeps the leading lines that fit
+    under the line AND byte budget and appends a one-line hint pointing at
+    ``--full`` for the complete graph. ``--full`` callers pass the unbounded
+    ``render`` output and so always get a strictly larger view on a graph that
+    overflowed the budget.
+    """
+    lines = text.splitlines()
+    if len(lines) <= max_lines and len(text.encode("utf-8")) <= max_bytes:
+        return text
+    footer_template = "… {n} more line{s} — run with --full for the complete graph"
+    # Reserve the footer's worst-case byte cost (full line count) so the bounded
+    # output never exceeds max_bytes once the hint is appended.
+    reserve = len(footer_template.format(n=len(lines), s="s").encode("utf-8")) + 1
+    kept: list[str] = []
+    used = 0
+    for line in lines[: max_lines - 1]:
+        add = len(line.encode("utf-8")) + 1
+        if used + add + reserve > max_bytes:
+            break
+        kept.append(line)
+        used += add
+    omitted = len(lines) - len(kept)
+    kept.append(footer_template.format(n=omitted, s="" if omitted == 1 else "s"))
+    return "\n".join(kept) + "\n"
+
+
 # --------------------------------------------------------------------------- #
 # Manifesto reference rendering — byte-identical to Appendix A snapshot
 # --------------------------------------------------------------------------- #
@@ -932,12 +962,13 @@ def load_commits_from_repo(project_cwd: Path, opts: RenderOptions) -> list[Commi
     contribution. For commit-primary mode, returns the paginated window.
     """
     commits = _git_log(project_cwd, opts)
-    commits = _attach_attribution(commits, project_cwd,
-                                  show_entities=opts.show_entities)
     if opts.mode == "trace" and opts.pivot_trace_id:
-        # Trace-primary: the pivot filter must see trail-events-sourced traces
-        # too, so attach trail evidence BEFORE filtering. The window is the
-        # pivot-matching commits (bounded by the pivot, not by history).
+        # Trace-primary: attribution + trail evidence must see ALL commits so the
+        # pivot filter is correct (the pivot can match anywhere in history), so
+        # attach BEFORE filtering. The window is the pivot-matching commits
+        # (bounded by the pivot, not by history).
+        commits = _attach_attribution(commits, project_cwd,
+                                      show_entities=opts.show_entities)
         commits = _attach_trail_evidence(commits, project_cwd)
         pivot = opts.pivot_trace_id
         commits = [c for c in commits
@@ -945,8 +976,11 @@ def load_commits_from_repo(project_cwd: Path, opts: RenderOptions) -> list[Commi
                            t.trace_id.startswith(pivot))
                           for t in c.traces)]
         return _paginate(commits, opts)
-    # Commit-primary: attach trail evidence to the paginated window only, so the
-    # commit-scoped projection reads a bounded SHA set (plan 120, #120) instead
-    # of every commit in history.
+    # Commit-primary: paginate FIRST, then attach attribution and trail evidence
+    # to the bounded window only, so --limit bounds the attribution WORK (not
+    # just the output) and the commit-scoped projection reads a bounded SHA set
+    # (plan 120, #120) instead of every commit in history.
     commits = _paginate(commits, opts)
+    commits = _attach_attribution(commits, project_cwd,
+                                  show_entities=opts.show_entities)
     return _attach_trail_evidence(commits, project_cwd)

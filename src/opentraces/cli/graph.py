@@ -38,7 +38,7 @@ from ..clients.text import graph_renderer as _gr
     option_groups=[
         ("Pagination", ["limit", "page", "show_all"]),
         ("Scope", ["trace_id", "since_ref", "until_ref", "project_dir"]),
-        ("Output", ["show_entities", "as_json", "no_color"]),
+        ("Output", ["show_entities", "full", "as_json", "no_color"]),
     ],
 )
 @click.option("--limit", type=int, default=20, show_default=True,
@@ -55,6 +55,9 @@ from ..clients.text import graph_renderer as _gr
               help="Disable pagination (alias for a large --limit).")
 @click.option("--entities", "show_entities", is_flag=True,
               help="Include entity-change suffixes (requires entity cache).")
+@click.option("--full", "full", is_flag=True,
+              help="Print the complete per-commit graph; default output is "
+                   "bounded to a scannable summary.")
 @click.option("--json", "as_json", is_flag=True,
               help="Emit structured JSON instead of text.")
 @click.option("--no-color", "no_color", is_flag=True,
@@ -62,8 +65,8 @@ from ..clients.text import graph_renderer as _gr
 @project_dir_option
 def graph_cmd(limit: int, page: int, trace_id: str | None,
               since_ref: str | None, until_ref: str | None,
-              show_all: bool, show_entities: bool, as_json: bool, no_color: bool,
-              project_dir: Path | None) -> None:
+              show_all: bool, show_entities: bool, full: bool, as_json: bool,
+              no_color: bool, project_dir: Path | None) -> None:
     """Render commit + trace history.
 
     Commit-primary by default: the git log is the spine and each commit
@@ -99,34 +102,39 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
             if resolved:
                 trace_id = resolved
 
-    # Cache presence check — first run guidance.
-    try:
-        from ..core.cache import AttributionCache
-        cache = AttributionCache(cwd)
-        has_any = bool(cache.list_attributed_shas())
-    except Exception:
-        has_any = False
-    has_trail_events = False
-    try:
-        # Plan 120 (#120): bounded whole-log presence probe. The hint only
-        # gates a stderr message, so a cheap existence check over the anchor
-        # event type (parses only git_anchor_created blobs, <1% of the log)
-        # is behaviour-equivalent to building the full projection and testing
-        # .anchors_by_id, without the per-invocation whole-log walk.
-        from ..core.trails import read_events_scoped
-
-        has_trail_events = bool(
-            read_events_scoped(cwd, event_types={"git_anchor_created"})
-        )
-    except Exception:
+    # Cache presence check — first-run guidance for the interactive renderer
+    # only. It writes an advisory stderr hint, never stdout, so it is pure noise
+    # for `--json` consumers; skip it on the JSON path so the structured output
+    # stays bounded by the page (the presence read is whole-log, un-gated by the
+    # paginated window, and would dominate an otherwise page-bounded request).
+    if not as_json:
+        try:
+            from ..core.cache import AttributionCache
+            cache = AttributionCache(cwd)
+            has_any = bool(cache.list_attributed_shas())
+        except Exception:
+            has_any = False
         has_trail_events = False
-    if not has_any and not has_trail_events:
-        click.echo(
-            "Attribution cache is empty. "
-            "Run `ot backfill` (or wait for the watcher).",
-            err=True,
-        )
-        # Still render the commit graph without attribution info.
+        try:
+            # Plan 120 (#120): bounded whole-log presence probe. The hint only
+            # gates a stderr message, so a cheap existence check over the anchor
+            # event type (parses only git_anchor_created blobs, <1% of the log)
+            # is behaviour-equivalent to building the full projection and testing
+            # .anchors_by_id, without the per-invocation whole-log walk.
+            from ..core.trails import read_events_scoped
+
+            has_trail_events = bool(
+                read_events_scoped(cwd, event_types={"git_anchor_created"})
+            )
+        except Exception:
+            has_trail_events = False
+        if not has_any and not has_trail_events:
+            click.echo(
+                "Attribution cache is empty. "
+                "Run `ot backfill` (or wait for the watcher).",
+                err=True,
+            )
+            # Still render the commit graph without attribution info.
 
     opts = _gr.RenderOptions(
         width=80,
@@ -178,4 +186,10 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
         }
         click.echo(_dump_json(payload))
         return
-    click.echo(_gr.render(commits, opts), nl=False)
+    out = _gr.render(commits, opts)
+    if not full:
+        # Default human output is bounded to a quick, scannable view; --full
+        # prints the complete per-commit graph. Small graphs are within budget
+        # and so render byte-identically with or without --full.
+        out = _gr.bound_output(out)
+    click.echo(out, nl=False)
