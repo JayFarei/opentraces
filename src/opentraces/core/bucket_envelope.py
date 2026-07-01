@@ -200,12 +200,242 @@ def _context_events_for_trace_readonly(
     return context_events
 
 
+# ---------------------------------------------------------------------------
+# Epic #169 / #172 GAP 1 — canonical single-source anchor re-derive.
+#
+# These three helpers are the SINGLE implementation the LIVE per-trace
+# projection (:func:`_write_per_trace_envelope`) and the ``--bucket-root`` COPY
+# repair (:func:`bucket_maintenance.rederive_bucket_anchors`) both call, so the
+# shipped surface and the copy-repair surface are single-source-by-construction
+# and can never drift from the canonical ``git_anchor_created`` oracle the
+# grader probes read.
+# ---------------------------------------------------------------------------
+
+
+def canonical_anchor_maps(
+    slugs: set[str],
+) -> tuple[
+    dict[str, dict[str, list[tuple]]],
+    dict[str, set[str]],
+    set[str],
+]:
+    """Read canonical ``git_anchor_created`` events for the opted-in repos
+    backing ``slugs`` and project them into per-trace anchor maps.
+
+    Returns ``(anchors_by_trace_patch, distinct_anchored_by_trace,
+    resolved_slugs)`` where:
+
+    * ``anchors_by_trace_patch[trace_id][patch_id]`` is the list of
+      ``(event_sequence, commit_hex, evidence_tier, evidence_firmness, path,
+      event_time)`` tuples (one per ``git_anchor_created`` event for that patch);
+    * ``distinct_anchored_by_trace[trace_id]`` is the set of patch ids the trace
+      has ANY anchor event for (the single-source anchored count);
+    * ``resolved_slugs`` is the subset of ``slugs`` whose project repo was found
+      on this machine (only those traces can be re-derived from canonical data).
+
+    The map is keyed by ``id_from_payload(payload, 'trace_patch')`` — the
+    NORMALIZED patch id, byte-identical to the shipped ``Patch.patch_id`` and the
+    B3/B4 probe oracle. Keying by the raw ``payload['trace_patch_id']`` instead
+    would under-project the fraction of events carrying a ``tracepatch-sha256:``
+    prefix (raw != normalized), fabricating false de-attributions.
+
+    The canonical event log is the per-repo Git ref ``refs/opentraces/local/
+    events/v1`` — shared across worktrees — so this reads truth, never the
+    lagging bucket companions. Read-only over Git.
+    """
+
+    from .trails.event_log import read_events_scoped
+    from .trails.ids import id_from_payload
+
+    slug_repo = {slug: path for path, slug in _iter_opted_in_projects()}
+    anchors_by_trace_patch: dict[str, dict[str, list[tuple]]] = {}
+    distinct_anchored_by_trace: dict[str, set[str]] = {}
+    resolved_slugs: set[str] = set()
+    seen_repos: set[Path] = set()
+
+    for slug in slugs:
+        repo = slug_repo.get(slug)
+        if repo is None:
+            continue
+        resolved_slugs.add(slug)
+        # One scoped read per distinct repo (a repo may back several slugs).
+        if repo in seen_repos:
+            continue
+        seen_repos.add(repo)
+        try:
+            events = read_events_scoped(repo, event_types={"git_anchor_created"})
+        except Exception:
+            continue
+        for event in events:
+            payload = event.payload or {}
+            trace_id = event.trace_id
+            patch_id = id_from_payload(payload, "trace_patch")
+            commit_hex = (payload.get("commit_id") or {}).get("hex")
+            if not (trace_id and patch_id and commit_hex):
+                continue
+            anchors_by_trace_patch.setdefault(trace_id, {}).setdefault(
+                patch_id, []
+            ).append(
+                (
+                    event.event_sequence,
+                    commit_hex,
+                    payload.get("evidence_tier"),
+                    payload.get("evidence_firmness"),
+                    payload.get("path"),
+                    event.event_time,
+                )
+            )
+            distinct_anchored_by_trace.setdefault(trace_id, set()).add(patch_id)
+
+    return anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs
+
+
+def anchor_map_from_trail_events(
+    trail_events: list[Any],
+) -> dict[str, list[tuple]]:
+    """Build the per-patch anchor map for a SINGLE trace from its own trail
+    events (no extra event read).
+
+    Hot per-trace projection path (#172 GAP 1): the trace's ``git_anchor_created``
+    events are ALREADY inside the ``trail_events`` computed by
+    :func:`_events_for_trace_from_iter` (they are trail-type and already
+    trace-filtered), so this reuses them instead of re-scanning the log. Mirrors
+    the inner map of :func:`canonical_anchor_maps` exactly — same tuple shape,
+    same ``id_from_payload`` key form — so a trace healed on the live path and the
+    same trace re-derived by ``--bucket-root`` repair produce identical rows.
+    """
+
+    from .trails.ids import id_from_payload
+
+    patch_anchors: dict[str, list[tuple]] = {}
+    for event in trail_events:
+        if getattr(event, "event_type", None) != "git_anchor_created":
+            continue
+        payload = getattr(event, "payload", None) or {}
+        patch_id = id_from_payload(payload, "trace_patch")
+        commit_hex = (payload.get("commit_id") or {}).get("hex")
+        if not (patch_id and commit_hex):
+            continue
+        patch_anchors.setdefault(patch_id, []).append(
+            (
+                event.event_sequence,
+                commit_hex,
+                payload.get("evidence_tier"),
+                payload.get("evidence_firmness"),
+                payload.get("path"),
+                event.event_time,
+            )
+        )
+    return patch_anchors
+
+
+def _rederive_patch_rows(
+    base_patches: list[dict[str, Any]],
+    patch_anchors: dict[str, list[tuple]],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Single-source a trace's patch rows from its canonical per-patch anchor map.
+
+    Epic #169 / #172 GAP 1 — the shared re-derive body used by BOTH the live
+    per-trace projection (:func:`_write_per_trace_envelope`) and the
+    ``--bucket-root`` COPY repair (:func:`bucket_maintenance.rederive_bucket_anchors`).
+    Given a trace's base patch dicts and its ``{patch_id: [(seq, commit_hex,
+    tier, firm, path, etime), ...]}`` map:
+
+    * a patch WITH backing events is surfaced as ONE row per distinct anchor
+      commit (``found=True``, ``commit_sha`` from the event — file-membership
+      correct by construction; the newest commit is the primary row and older
+      commits ride ``superseded_by`` newest-first on every row);
+    * a patch with NO backing event is DE-ATTRIBUTED (``found=False`` preserving
+      any prior ``last_searched_at`` for idempotency, else ``anchor=None``).
+
+    Returns ``(new_patches, n_anchored, n_deattributed)`` where ``n_anchored`` is
+    the DISTINCT anchored patch count. Idempotent: an already-expanded surface is
+    first collapsed to one base row per patch_id (dropping the expansion-only
+    ``superseded_by``) before re-expanding, so rows never compound.
+    """
+
+    # Collapse any prior one-row-per-anchor expansion back to one base patch per
+    # patch_id (first occurrence wins) BEFORE re-expanding.
+    collapsed: list[dict[str, Any]] = []
+    seen_patch_ids: set[str] = set()
+    for patch in base_patches:
+        pid = patch.get("patch_id")
+        if pid in seen_patch_ids:
+            continue
+        seen_patch_ids.add(pid)
+        base = dict(patch)
+        base.pop("superseded_by", None)
+        collapsed.append(base)
+
+    new_patches: list[dict[str, Any]] = []
+    n_anchored = 0
+    n_deattributed = 0
+    for patch in collapsed:
+        patch_id = patch.get("patch_id")
+        events_for_patch = patch_anchors.get(patch_id)
+        if events_for_patch:
+            # Distinct anchor commits, oldest-first by event sequence.
+            ordered: list[tuple] = []
+            seen_commits: set[str] = set()
+            for seq, commit_hex, tier, firm, path, etime in sorted(
+                events_for_patch
+            ):
+                if commit_hex in seen_commits:
+                    continue
+                seen_commits.add(commit_hex)
+                ordered.append((commit_hex, tier, firm, path, etime))
+            all_commits = [commit_hex for commit_hex, *_ in ordered]
+            n_anchored += 1
+            # One surface row per distinct anchor commit; every row carries the
+            # OTHER commits (newest-first) on superseded_by.
+            for commit_hex, tier, firm, path, etime in ordered:
+                row = dict(patch)
+                row["anchor"] = {
+                    "last_searched_at": etime,
+                    "found": True,
+                    "commit_sha": commit_hex,
+                    "path": path or patch.get("file_path"),
+                    "blob_sha": None,
+                    "git_patch_id": None,
+                    "evidence_tier": tier or "exact_range_hash",
+                    "evidence_firmness": firm or "firm_observed",
+                }
+                row["superseded_by"] = [
+                    c for c in reversed(all_commits) if c != commit_hex
+                ]
+                new_patches.append(row)
+        else:
+            # No backing event -> de-attribute. Preserve a prior search
+            # timestamp (idempotent); leave never-anchored patches None.
+            prev = patch.get("anchor")
+            row = dict(patch)
+            if isinstance(prev, dict) and prev.get("found"):
+                n_deattributed += 1
+            if isinstance(prev, dict) and prev.get("last_searched_at"):
+                row["anchor"] = {
+                    "last_searched_at": prev.get("last_searched_at"),
+                    "found": False,
+                    "commit_sha": None,
+                    "path": None,
+                    "blob_sha": None,
+                    "git_patch_id": None,
+                    "evidence_tier": None,
+                    "evidence_firmness": None,
+                }
+            else:
+                row["anchor"] = None
+            row["superseded_by"] = []
+            new_patches.append(row)
+    return new_patches, n_anchored, n_deattributed
+
+
 def _write_per_trace_envelope(
     project_slug: str,
     trace_id: str,
     record: TraceRecord | None,
     trail_events: list[Any],
     context_events: list[Any],
+    patch_anchors: dict[str, list[tuple]] | None = None,
 ) -> dict[str, Any]:
     """File-writing tail of :func:`project_per_trace_exports` (issue #31 step B).
 
@@ -243,6 +473,19 @@ def _write_per_trace_envelope(
         record = existing.record if existing is not None else None
     if record is not None:
         payload = record.model_dump(mode="json")
+        # #172 GAP 1 — single-source the persisted patch anchors from the
+        # canonical ``git_anchor_created`` events (``patch_anchors``) instead of
+        # echoing the stored ``Patch.anchor`` verbatim. When ``patch_anchors`` is
+        # None the project was not resolvable at projection time (cross-machine
+        # restore): the on-disk ``record`` IS the already-healed upstream
+        # artifact, so it is trusted verbatim — the honest fallback that keeps
+        # the cross-machine digest identical. Healing BOTH directions: a phantom
+        # over-attributed patch is de-attributed, an under-projected patch is
+        # anchored to its backing commit.
+        if patch_anchors is not None:
+            payload["patches"], _n_anchored, _n_deattr = _rederive_patch_rows(
+                payload.get("patches") or [], patch_anchors
+            )
         _atomic_write_json(trace_v1_json_path(project_slug, trace_id), payload)
 
     return {
@@ -328,8 +571,23 @@ def project_per_trace_exports(
                 mirror_events, trace_id
             )
 
+    # #172 GAP 1 — build the trace's per-patch anchor map from its own trail
+    # events (already in hand — no second read) so the persisted trace.json
+    # single-sources ``Patch.anchor`` from the canonical ``git_anchor_created``
+    # events. Honest fallback: when the project is not resolvable (``repo is
+    # None`` — cross-machine restore), pass None so the already-healed on-disk
+    # record is written verbatim rather than fabricated / stripped.
+    patch_anchors = (
+        anchor_map_from_trail_events(trail_events) if repo is not None else None
+    )
+
     return _write_per_trace_envelope(
-        project_slug, trace_id, record, trail_events, context_events
+        project_slug,
+        trace_id,
+        record,
+        trail_events,
+        context_events,
+        patch_anchors=patch_anchors,
     )
 
 
@@ -409,6 +667,8 @@ def _per_trace_v2_summary(
     *,
     assume_envelope_present: bool = False,
     record_envelope: dict[str, Any] | None = None,
+    distinct_anchored: set[str] | None = None,
+    anchors_resolved: bool = False,
 ) -> dict[str, Any]:
     """Compute the manifest summary block for one per-trace envelope.
 
@@ -468,13 +728,25 @@ def _per_trace_v2_summary(
         # distinct patch_ids (the normal shape) this equals the prior
         # ``sum(... found)``, so ``bucket_digest`` is unchanged for already-
         # correct traces.
-        anchored_count = len(
-            {
-                p.patch_id
-                for p in patches
-                if p.anchor is not None and p.anchor.found
-            }
-        )
+        #
+        # #172 GAP 1 — when the caller resolved the trace's project and threaded
+        # the canonical ``distinct_anchored`` set (from ``canonical_anchor_maps``),
+        # single-source ``anchored_count`` straight from the canonical
+        # ``git_anchor_created`` events. This heals a manifest row whose on-disk
+        # trace.json still carries phantom over-attributed (or under-projected)
+        # anchors, independent of a trace.json re-projection. When the project is
+        # NOT resolvable (``anchors_resolved`` False) fall back to the
+        # record-derived count — the honest fallback == today's behaviour.
+        if anchors_resolved:
+            anchored_count = len(distinct_anchored or set())
+        else:
+            anchored_count = len(
+                {
+                    p.patch_id
+                    for p in patches
+                    if p.anchor is not None and p.anchor.found
+                }
+            )
         title = (record.task.description if record.task else None) or None
         lifecycle = record.lifecycle
         if record.agent is not None:
@@ -566,6 +838,7 @@ def iter_traces_v2(
     project_slug: str | None = None,
     *,
     record_envelopes: dict[tuple[str, str], dict[str, Any]] | None = None,
+    anchor_maps: tuple[dict[str, set[str]], set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Yield per-trace summary rows from the v2 layout (plan 080 §4).
 
@@ -577,6 +850,13 @@ def iter_traces_v2(
     so each row's ``status`` block is sourced without a second object-store read
     (avoids doubling the sweep's per-trace I/O). When a pair is absent (or no map
     is given), fall back to :func:`_resolve_record_envelope` (one read).
+
+    #172 GAP 1 — ``anchor_maps`` is an OPTIONAL ``(distinct_anchored_by_trace,
+    resolved_slugs)`` pair (built ONCE by :func:`canonical_anchor_maps` in the
+    manifest sweep — never a per-trace event read). When given, a row whose
+    project is resolved single-sources ``anchored_count`` from the canonical
+    ``git_anchor_created`` events; an unresolved-project row keeps the
+    record-derived count (the honest fallback).
     """
 
     root = traces_v1_root()
@@ -601,8 +881,19 @@ def iter_traces_v2(
             envelope = record_envelopes.get((proj_slug, tid))
         if envelope is None:
             envelope = _resolve_record_envelope(proj_slug, tid, record)
+        anchors_resolved = anchor_maps is not None and proj_slug in anchor_maps[1]
+        distinct_anchored = (
+            anchor_maps[0].get(tid) if anchor_maps is not None else None
+        )
         rows.append(
-            _per_trace_v2_summary(proj_slug, tid, record, record_envelope=envelope)
+            _per_trace_v2_summary(
+                proj_slug,
+                tid,
+                record,
+                record_envelope=envelope,
+                distinct_anchored=distinct_anchored,
+                anchors_resolved=anchors_resolved,
+            )
         )
     rows.sort(key=lambda item: (item["project_slug"], item["trace_id"]))
     return rows

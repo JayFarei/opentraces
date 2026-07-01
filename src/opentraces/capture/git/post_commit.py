@@ -85,7 +85,7 @@ def _apply_anchor_to_patches(
     revision: str,
     *,
     now_iso: str,
-    hunks: dict[str, list[dict]] | None = None,
+    hunks: dict[str, list[dict]] | None,
 ) -> bool:
     """Update ``Patch.anchor`` on every eligible patch in ``trace``.
 
@@ -121,13 +121,15 @@ def _apply_anchor_to_patches(
         firmness = None
 
     for patch in trace.patches:
-        # Per-patch file-membership gate (#169): the trace-level tier only
-        # anchors THIS patch if the commit's real diff touched the patch's own
-        # file. ``hunks=None`` keeps the legacy trace-level behaviour for callers
-        # that have not yet threaded the changed-file set.
-        patch_matched = matched_tier and (
-            hunks is None
-            or patch_file_in_commit(patch.file_path, hunks)
+        # Per-patch file-membership gate (#169 / #172 GAP 2): the trace-level
+        # tier anchors THIS patch ONLY when the commit's real diff touched the
+        # patch's own file. There is no ``hunks is None`` bypass — a missing or
+        # empty changed-file set is "no per-patch evidence", so nothing anchors
+        # (``patch_file_in_commit`` already returns False for ``hunks`` in
+        # ``(None, {})``). This closes the over-attribution hatch that fanned one
+        # trace-level match across every patch (the #139 symptom).
+        patch_matched = matched_tier and patch_file_in_commit(
+            patch.file_path, hunks
         )
         prev = patch.anchor
         # Re-search only patches that are unanchored OR previously not found.

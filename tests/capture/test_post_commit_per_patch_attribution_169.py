@@ -75,14 +75,18 @@ def test_apply_anchor_gates_each_patch_on_file_membership():
     assert untouched.commit_sha is None
 
 
-def test_apply_anchor_legacy_behaviour_when_hunks_unknown():
-    """``hunks=None`` keeps the pre-#169 trace-level behaviour for callers that
-    have not threaded the changed-file set (back-compat guard)."""
+def test_apply_anchor_no_fanout_when_hunks_absent():
+    """#172 GAP 2: with no changed-file set there is no per-patch evidence, so
+    NOTHING anchors — the pre-#169 trace-level fan-out hatch is closed. A
+    missing/empty ``hunks`` can never stamp ``found=True`` on any patch."""
     trace = _trace_with_patches("a.py", "b.py")
-    _apply_anchor_to_patches(
+    any_found = _apply_anchor_to_patches(
         trace, "tool_emitted", "c0ffee" * 6, now_iso="t", hunks=None,
     )
-    assert all(p.anchor is not None and p.anchor.found for p in trace.patches)
+    assert any_found is False
+    assert all(
+        p.anchor is not None and p.anchor.found is False for p in trace.patches
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -172,7 +176,7 @@ def test_rederive_found_implies_backing_event(tmp_path, monkeypatch):
     dummy_repo = tmp_path / "proj"
     dummy_repo.mkdir()
     monkeypatch.setattr(
-        "opentraces.core.bucket_maintenance._iter_opted_in_projects",
+        "opentraces.core.bucket_envelope._iter_opted_in_projects",
         lambda: [(dummy_repo, slug)],
     )
     monkeypatch.setattr(
@@ -240,7 +244,7 @@ def test_rederive_surfaces_one_row_per_anchor_commit(tmp_path, monkeypatch):
     dummy_repo = tmp_path / "proj"
     dummy_repo.mkdir()
     monkeypatch.setattr(
-        "opentraces.core.bucket_maintenance._iter_opted_in_projects",
+        "opentraces.core.bucket_envelope._iter_opted_in_projects",
         lambda: [(dummy_repo, slug)],
     )
     monkeypatch.setattr(
@@ -264,3 +268,9 @@ def test_rederive_surfaces_one_row_per_anchor_commit(tmp_path, monkeypatch):
     manifest = json.loads((root / "manifest.json").read_text())
     # DISTINCT patch count, not surface-row count.
     assert manifest["traces"][0]["summary"]["anchored_count"] == 1
+    # #172 (c) self-certifying digest guard: even with the patch RE-EXPANDED
+    # across 2 anchor-commit rows, anchored_count == the DISTINCT found-patch
+    # count (never the surface-row count) — exactly the digest-safe invariant
+    # bucket_envelope derives, so a 0/361-dup bucket re-digests byte-identically.
+    distinct_found = len({pid_ for (pid_, _sha) in surface})
+    assert manifest["traces"][0]["summary"]["anchored_count"] == distinct_found

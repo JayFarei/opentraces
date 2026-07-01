@@ -35,7 +35,9 @@ from .bucket_envelope import (
     _events_for_export_loop,
     _is_legacy_read_in_place_mirror,
     _iter_opted_in_projects,
+    _rederive_patch_rows,
     _trace_ids_for_project,
+    canonical_anchor_maps,
     project_per_trace_exports,
 )
 from .bucket_events import BUCKET_EVENTS_INDEX_SCHEMA, sync_events_mirror
@@ -62,77 +64,6 @@ from .bucket_store import (
     bucket_manifest,
 )
 from .bucket_trace_records import iter_trace_record_objects
-
-
-def _canonical_anchor_maps(
-    slugs: set[str],
-) -> tuple[
-    dict[str, dict[str, list[tuple]]],
-    dict[str, set[str]],
-    set[str],
-]:
-    """Read the canonical ``git_anchor_created`` events for the opted-in repos
-    backing ``slugs`` and project them into per-trace anchor maps.
-
-    Returns ``(anchors_by_trace_patch, distinct_anchored_by_trace,
-    resolved_slugs)`` where:
-
-    * ``anchors_by_trace_patch[trace_id][patch_id]`` is the list of
-      ``(event_sequence, commit_hex, evidence_tier, evidence_firmness, path,
-      event_time)`` tuples (one per ``git_anchor_created`` event for that patch);
-    * ``distinct_anchored_by_trace[trace_id]`` is the set of patch ids the trace
-      has ANY anchor event for (the single-source anchored count);
-    * ``resolved_slugs`` is the subset of ``slugs`` whose project repo was found
-      on this machine (only those traces can be re-derived from canonical data).
-
-    The canonical event log is the per-repo Git ref ``refs/opentraces/local/
-    events/v1`` — shared across worktrees — so this reads truth, never the
-    lagging bucket companions.
-    """
-
-    from .trails.event_log import read_events_scoped
-
-    slug_repo = {slug: path for path, slug in _iter_opted_in_projects()}
-    anchors_by_trace_patch: dict[str, dict[str, list[tuple]]] = {}
-    distinct_anchored_by_trace: dict[str, set[str]] = {}
-    resolved_slugs: set[str] = set()
-    seen_repos: set[Path] = set()
-
-    for slug in slugs:
-        repo = slug_repo.get(slug)
-        if repo is None:
-            continue
-        resolved_slugs.add(slug)
-        # One scoped read per distinct repo (a repo may back several slugs).
-        if repo in seen_repos:
-            continue
-        seen_repos.add(repo)
-        try:
-            events = read_events_scoped(repo, event_types={"git_anchor_created"})
-        except Exception:
-            continue
-        for event in events:
-            payload = event.payload or {}
-            trace_id = event.trace_id
-            patch_id = payload.get("trace_patch_id")
-            commit_hex = (payload.get("commit_id") or {}).get("hex")
-            if not (trace_id and patch_id and commit_hex):
-                continue
-            anchors_by_trace_patch.setdefault(trace_id, {}).setdefault(
-                patch_id, []
-            ).append(
-                (
-                    event.event_sequence,
-                    commit_hex,
-                    payload.get("evidence_tier"),
-                    payload.get("evidence_firmness"),
-                    payload.get("path"),
-                    event.event_time,
-                )
-            )
-            distinct_anchored_by_trace.setdefault(trace_id, set()).add(patch_id)
-
-    return anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs
 
 
 def rederive_bucket_anchors(
@@ -196,7 +127,7 @@ def rederive_bucket_anchors(
                 present_slugs.add(child.name)
 
     anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs = (
-        _canonical_anchor_maps(present_slugs)
+        canonical_anchor_maps(present_slugs)
     )
 
     traces_rewritten = 0
@@ -213,82 +144,16 @@ def rederive_bucket_anchors(
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
             patch_anchors = anchors_by_trace_patch.get(trace_id, {})
-            # Collapse any prior one-row-per-anchor expansion back to one base
-            # patch per patch_id (first occurrence wins) BEFORE re-expanding —
-            # this keeps the re-derive idempotent (a second run on an already-
-            # expanded surface reproduces the same rows, never compounding
-            # duplicates).
-            base_patches: list[dict[str, Any]] = []
-            seen_patch_ids: set[str] = set()
-            for patch in doc.get("patches") or []:
-                pid = patch.get("patch_id")
-                if pid in seen_patch_ids:
-                    continue
-                seen_patch_ids.add(pid)
-                base = dict(patch)
-                # Keep ``anchor`` (the de-attribute path reuses its prior
-                # last_searched_at for idempotency); drop only the expansion-
-                # specific ``superseded_by`` so re-expansion starts clean.
-                base.pop("superseded_by", None)
-                base_patches.append(base)
-            new_patches: list[dict[str, Any]] = []
-            for patch in base_patches:
-                patch_id = patch.get("patch_id")
-                events_for_patch = patch_anchors.get(patch_id)
-                if events_for_patch:
-                    # Distinct anchor commits, oldest-first by event sequence.
-                    ordered: list[tuple] = []
-                    seen_commits: set[str] = set()
-                    for seq, commit_hex, tier, firm, path, etime in sorted(
-                        events_for_patch
-                    ):
-                        if commit_hex in seen_commits:
-                            continue
-                        seen_commits.add(commit_hex)
-                        ordered.append((commit_hex, tier, firm, path, etime))
-                    all_commits = [commit_hex for commit_hex, *_ in ordered]
-                    patches_anchored += 1
-                    # One surface row per distinct anchor commit; the LAST
-                    # (latest) commit is the primary row, older commits also
-                    # ride superseded_by (newest-first) on every row.
-                    for commit_hex, tier, firm, path, etime in ordered:
-                        row = dict(patch)
-                        row["anchor"] = {
-                            "last_searched_at": etime,
-                            "found": True,
-                            "commit_sha": commit_hex,
-                            "path": path or patch.get("file_path"),
-                            "blob_sha": None,
-                            "git_patch_id": None,
-                            "evidence_tier": tier or "exact_range_hash",
-                            "evidence_firmness": firm or "firm_observed",
-                        }
-                        row["superseded_by"] = [
-                            c for c in reversed(all_commits) if c != commit_hex
-                        ]
-                        new_patches.append(row)
-                else:
-                    # No backing event -> de-attribute. Preserve a prior search
-                    # timestamp (idempotent); leave never-anchored patches None.
-                    prev = patch.get("anchor")
-                    row = dict(patch)
-                    if isinstance(prev, dict) and prev.get("found"):
-                        patches_deattributed += 1
-                    if isinstance(prev, dict) and prev.get("last_searched_at"):
-                        row["anchor"] = {
-                            "last_searched_at": prev.get("last_searched_at"),
-                            "found": False,
-                            "commit_sha": None,
-                            "path": None,
-                            "blob_sha": None,
-                            "git_patch_id": None,
-                            "evidence_tier": None,
-                            "evidence_firmness": None,
-                        }
-                    else:
-                        row["anchor"] = None
-                    row["superseded_by"] = []
-                    new_patches.append(row)
+            # #172 GAP 1 — the collapse + re-expansion is now the shared
+            # ``_rederive_patch_rows`` body (single source with the LIVE per-trace
+            # projection). It collapses any prior one-row-per-anchor expansion to
+            # one base patch per patch_id, then re-expands from the canonical
+            # events, so a second run is byte-identical.
+            new_patches, n_anchored, n_deattributed = _rederive_patch_rows(
+                doc.get("patches") or [], patch_anchors
+            )
+            patches_anchored += n_anchored
+            patches_deattributed += n_deattributed
             if new_patches != (doc.get("patches") or []):
                 doc["patches"] = new_patches
                 if not dry_run:
