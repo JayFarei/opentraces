@@ -99,16 +99,14 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
     json_only = _doctor_json_only()
 
     def _emit_doctor(payload: dict) -> None:
-        # L3 (epic #129) / issue #158 B6: under an EXPLICIT ``--json`` emit pure
-        # JSON, no ``---OPENTRACES_JSON---`` preamble, so ``doctor --json`` is
-        # valid JSON to ``json.loads``. The non-TTY auto-JSON path keeps the
-        # sentinel for backward-compatible consumers that split on it.
-        if as_json:
-            import json as _json
-
-            click.echo(_json.dumps(payload, indent=2))
-        else:
-            _cli.emit_json(payload)
+        # L3 (epic #129) / issue #158 B6: ``emit_json`` now owns the split —
+        # under an EXPLICIT ``--json`` (``_json_mode`` set above) it emits pure
+        # JSON with no ``---OPENTRACES_JSON---`` preamble so ``doctor --json``
+        # is valid ``json.loads`` input, while the auto non-TTY path
+        # (``doctor | cat``) keeps the sentinel for backward-compatible
+        # consumers that split on it. So ``doctor --json`` and ``doctor | cat``
+        # are each internally self-consistent.
+        _cli.emit_json(payload)
 
     if security_only:
         if not json_only:

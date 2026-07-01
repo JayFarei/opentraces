@@ -85,12 +85,14 @@ def _auth_status_impl() -> None:
     cfg = _cli.load_config()
     identity = _cli._auth_identity(cfg.hf_token)
     if identity is None:
-        click.echo("Not authenticated.")
+        # L3 (epic #129): human text is suppressed under explicit --json so the
+        # emitted stdout is pure JSON.
+        _cli.human_echo("Not authenticated.")
         _cli.emit_json({"status": "needs_action", "authenticated": False, "next_command": "opentraces auth login"})
         return
 
     username = identity.get("name", "unknown")
-    click.echo(f"Authenticated as {username}.")
+    _cli.human_echo(f"Authenticated as {username}.")
     _cli.emit_json({"status": "ok", "authenticated": True, "username": username})
 
 
