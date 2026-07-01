@@ -17,7 +17,7 @@
     "git_anchor_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.git_anchor.v1",
-      "display_id": "<display-ref:04>",
+      "display_id": "<display-ref:05>",
       "id": "<git-anchor:01>",
       "id_format": "digest",
       "kind": "git_anchor",
@@ -38,7 +38,7 @@
     "trace_patch_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_patch.v1",
-      "display_id": "<display-ref:03>",
+      "display_id": "<display-ref:04>",
       "id": "<trace-patch:01>",
       "id_format": "digest",
       "kind": "trace_patch",
@@ -56,8 +56,8 @@
       "capture_method": [
         "trail_maturation"
       ],
-      "event_id": "<trail-event:17>",
-      "event_sequence": 17,
+      "event_id": "<trail-event:18>",
+      "event_sequence": 18,
       "event_type": "git_anchor_created"
     }
   ],
@@ -84,7 +84,7 @@
     "trace_patch_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_patch.v1",
-      "display_id": "<display-ref:03>",
+      "display_id": "<display-ref:04>",
       "id": "<trace-patch:01>",
       "id_format": "digest",
       "kind": "trace_patch",
@@ -96,7 +96,7 @@
     "containing_segment_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_slice.v1",
-      "display_id": "<display-ref:06>",
+      "display_id": "<display-ref:07>",
       "id": "<hex64:02>",
       "id_format": "digest",
       "kind": "trace_slice",
@@ -109,7 +109,7 @@
     "git_anchor_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.git_anchor.v1",
-      "display_id": "<display-ref:04>",
+      "display_id": "<display-ref:05>",
       "id": "<git-anchor:01>",
       "id_format": "digest",
       "kind": "git_anchor",
@@ -124,7 +124,7 @@
     "trace_patch_ref": {
       "algorithm": "sha256",
       "canonicalization": "opentraces.trace_patch.v1",
-      "display_id": "<display-ref:03>",
+      "display_id": "<display-ref:04>",
       "id": "<trace-patch:01>",
       "id_format": "digest",
       "kind": "trace_patch",

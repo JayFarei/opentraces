@@ -295,6 +295,9 @@ class TestIngestOneSession:
             if event.event_type.startswith("trace_")
         ]
         assert [event.event_type for event in trail_events] == [
+            # #130: the session-open baseline (snapshot_role=origin, step_index=-1)
+            # leads the log, before the first step window.
+            "trace_snapshot_created",
             "trace_step_window_opened",
             "trace_snapshot_created",
             "trace_snapshot_created",
@@ -306,6 +309,14 @@ class TestIngestOneSession:
             "trace_patch_created",
             "trace_session_closed",
         ]
+        origin_snapshots = [
+            event for event in events
+            if event.event_type == "trace_snapshot_created"
+            and event.payload.get("snapshot_role") == "origin"
+        ]
+        assert len(origin_snapshots) == 1
+        assert origin_snapshots[0].step_index == -1
+        assert origin_snapshots[0].payload["tree_id"] == before_tree
         snapshots = [
             event for event in events
             if event.event_type == "trace_snapshot_created"

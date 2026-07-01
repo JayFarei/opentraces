@@ -166,6 +166,7 @@ from .bucket_envelope import (
     _resolve_trace_record_pointer,
     _trace_ids_for_project,
     _write_per_trace_envelope,
+    canonical_anchor_maps,
     iter_trace_record_objects,
     iter_trace_record_pointers,
     iter_traces_v2,
@@ -438,7 +439,23 @@ def bucket_manifest(
     _record_envelopes = {
         (obj.project_slug, obj.trace_id): obj.envelope for obj in record_objects
     }
-    traces_v2_rows = iter_traces_v2(record_envelopes=_record_envelopes)
+    # #172 GAP 1 — build the canonical per-trace anchor maps ONCE (one scoped
+    # ``git_anchor_created`` read per backing repo, NOT per trace) so every row's
+    # ``anchored_count`` single-sources from the canonical events rather than the
+    # possibly-phantom on-disk trace.json. Bounded to the slugs actually present
+    # in the object store. Building it here (not per-row) avoids the
+    # O(traces x full-log-walk) trap.
+    _present_slugs = {obj.project_slug for obj in record_objects}
+    try:
+        _, _distinct_anchored_by_trace, _resolved_slugs = canonical_anchor_maps(
+            _present_slugs
+        )
+    except Exception:
+        _distinct_anchored_by_trace, _resolved_slugs = {}, set()
+    _anchor_maps = (_distinct_anchored_by_trace, _resolved_slugs)
+    traces_v2_rows = iter_traces_v2(
+        record_envelopes=_record_envelopes, anchor_maps=_anchor_maps
+    )
 
     # Issue #31 — read-side reconcile. On a restored / cross-machine world the
     # TraceRecord object store can hold traces that have no per-trace v2
@@ -481,6 +498,8 @@ def bucket_manifest(
                     obj.record,
                     assume_envelope_present=True,
                     record_envelope=obj.envelope,
+                    distinct_anchored=_distinct_anchored_by_trace.get(obj.trace_id),
+                    anchors_resolved=obj.project_slug in _resolved_slugs,
                 )
             )
             _existing_pairs.add(pair)
@@ -503,6 +522,8 @@ def bucket_manifest(
                     obj.trace_id,
                     obj.record,
                     record_envelope=obj.envelope,
+                    distinct_anchored=_distinct_anchored_by_trace.get(obj.trace_id),
+                    anchors_resolved=obj.project_slug in _resolved_slugs,
                 )
             )
             _existing_pairs.add(pair)
@@ -519,6 +540,10 @@ def bucket_manifest(
                         obj.trace_id,
                         obj.record,
                         record_envelope=obj.envelope,
+                        distinct_anchored=_distinct_anchored_by_trace.get(
+                            obj.trace_id
+                        ),
+                        anchors_resolved=obj.project_slug in _resolved_slugs,
                     )
                 )
                 _existing_pairs.add(pair)
@@ -794,11 +819,24 @@ def upsert_manifest_trace_row(
     # authoritative trace-record OBJECT envelope (the same source every other
     # row-producing path uses), so an upsert-maintained row matches a full
     # sweep and re-heals stay idempotent.
+    #
+    # #172 GAP 1 — single-source ``anchored_count`` from the canonical
+    # ``git_anchor_created`` events for this ONE trace (bounded to its own slug,
+    # one scoped read) so the upsert-maintained row matches the full-sweep row
+    # byte-for-byte. At capture time anchors are pre-commit (0 == 0); after
+    # post-commit re-projection the events exist and this catches the row up. When
+    # the project is not resolvable, fall back to record-derived (== today).
+    try:
+        _, _distinct_by_trace, _resolved = canonical_anchor_maps({project_slug})
+    except Exception:
+        _distinct_by_trace, _resolved = {}, set()
     row = _per_trace_v2_summary(
         project_slug,
         trace_id,
         record,
         record_envelope=_resolve_record_envelope(project_slug, trace_id, record),
+        distinct_anchored=_distinct_by_trace.get(trace_id),
+        anchors_resolved=project_slug in _resolved,
     )
 
     manifest_path = bucket_manifest_path()

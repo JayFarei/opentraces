@@ -26,18 +26,18 @@
       "snapshot_resume_contract": "opentraces.snapshot_resume.v1"
     }
   },
-  "event_count": 16,
+  "event_count": 17,
   "event_log_ref": "refs/opentraces/local/events/v1",
   "events": [
     {
       "event_id": "<trail-event:02>",
       "event_sequence": 2,
-      "event_type": "trace_step_window_opened"
+      "event_type": "trace_snapshot_created"
     },
     {
       "event_id": "<trail-event:03>",
       "event_sequence": 3,
-      "event_type": "trace_snapshot_created"
+      "event_type": "trace_step_window_opened"
     },
     {
       "event_id": "<trail-event:04>",
@@ -47,32 +47,32 @@
     {
       "event_id": "<trail-event:05>",
       "event_sequence": 5,
-      "event_type": "trace_step_window_closed"
+      "event_type": "trace_snapshot_created"
     },
     {
       "event_id": "<trail-event:06>",
       "event_sequence": 6,
-      "event_type": "trace_patch_created"
+      "event_type": "trace_step_window_closed"
     },
     {
       "event_id": "<trail-event:07>",
       "event_sequence": 7,
-      "event_type": "trace_session_closed"
+      "event_type": "trace_patch_created"
     },
     {
       "event_id": "<trail-event:08>",
       "event_sequence": 8,
-      "event_type": "trace_patch_created"
+      "event_type": "trace_session_closed"
     },
     {
       "event_id": "<trail-event:09>",
       "event_sequence": 9,
-      "event_type": "watcher_observation_attributed"
+      "event_type": "trace_patch_created"
     },
     {
       "event_id": "<trail-event:10>",
       "event_sequence": 10,
-      "event_type": "context_layer_captured"
+      "event_type": "watcher_observation_attributed"
     },
     {
       "event_id": "<trail-event:11>",
@@ -92,21 +92,26 @@
     {
       "event_id": "<trail-event:14>",
       "event_sequence": 14,
-      "event_type": "context_node_observed"
+      "event_type": "context_layer_captured"
     },
     {
       "event_id": "<trail-event:15>",
       "event_sequence": 15,
-      "event_type": "context_tree_reconciled"
+      "event_type": "context_node_observed"
     },
     {
       "event_id": "<trail-event:16>",
       "event_sequence": 16,
-      "event_type": "git_anchor_search_completed"
+      "event_type": "context_tree_reconciled"
     },
     {
       "event_id": "<trail-event:17>",
       "event_sequence": 17,
+      "event_type": "git_anchor_search_completed"
+    },
+    {
+      "event_id": "<trail-event:18>",
+      "event_sequence": 18,
       "event_type": "git_anchor_created"
     }
   ],
@@ -126,7 +131,7 @@
         "hex": "<git-object:02>"
       },
       "limitations": [],
-      "role": "before",
+      "role": "origin",
       "snapshot_id": "<snapshot:01>",
       "snapshot_ref": {
         "algorithm": "sha256",
@@ -138,8 +143,44 @@
         "ref": "ot://trace-snapshot/sha256/<snapshot:01>"
       },
       "source_event": {
-        "event_id": "<trail-event:03>",
-        "event_sequence": 3,
+        "event_id": "<trail-event:02>",
+        "event_sequence": 2,
+        "event_type": "trace_snapshot_created"
+      },
+      "step_id": "s-1",
+      "step_index": -1,
+      "trace_id": "<trace:01>",
+      "tree_id": {
+        "algo": "sha1",
+        "hex": "<git-object:03>"
+      }
+    },
+    {
+      "base_commit": {
+        "algo": "sha1",
+        "hex": "<git-object:02>"
+      },
+      "capture_status": "captured",
+      "generation_index": 1,
+      "git_head": {
+        "algo": "sha1",
+        "hex": "<git-object:02>"
+      },
+      "limitations": [],
+      "role": "before",
+      "snapshot_id": "<snapshot:02>",
+      "snapshot_ref": {
+        "algorithm": "sha256",
+        "canonicalization": "opentraces.trace_snapshot.v1",
+        "display_id": "<display-ref:02>",
+        "id": "<snapshot:02>",
+        "id_format": "digest",
+        "kind": "trace_snapshot",
+        "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
+      },
+      "source_event": {
+        "event_id": "<trail-event:04>",
+        "event_sequence": 4,
         "event_type": "trace_snapshot_created"
       },
       "step_id": "s2",
@@ -165,19 +206,19 @@
         "hook_only"
       ],
       "role": "after",
-      "snapshot_id": "<snapshot:02>",
+      "snapshot_id": "<snapshot:03>",
       "snapshot_ref": {
         "algorithm": "sha256",
         "canonicalization": "opentraces.trace_snapshot.v1",
-        "display_id": "<display-ref:02>",
-        "id": "<snapshot:02>",
+        "display_id": "<display-ref:03>",
+        "id": "<snapshot:03>",
         "id_format": "digest",
         "kind": "trace_snapshot",
-        "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
+        "ref": "ot://trace-snapshot/sha256/<snapshot:03>"
       },
       "source_event": {
-        "event_id": "<trail-event:04>",
-        "event_sequence": 4,
+        "event_id": "<trail-event:05>",
+        "event_sequence": 5,
         "event_type": "trace_snapshot_created"
       },
       "step_id": "s2",

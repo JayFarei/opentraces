@@ -233,11 +233,14 @@ class EventIndex:
 
 
 def _index_dir(cwd: Path) -> Path | None:
-    """``$GIT_DIR/opentraces/event_index`` — repo-local, never inside a ref, the
-    working tree, or the bucket (so the ref OID and bucket digest are untouched).
-    Returns None when the git dir can't be resolved (caller full-scans)."""
+    """``$GIT_COMMON_DIR/opentraces/event_index`` — repo-local, never inside a
+    ref, the working tree, or the bucket (so the ref OID and bucket digest are
+    untouched). Uses ``--git-common-dir`` (not ``--git-dir``) so N linked
+    worktrees share the ONE index under the common git dir instead of a
+    per-worktree copy each (#169 C). Returns None when the git dir can't be
+    resolved (caller full-scans)."""
     proc = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
+        ["git", "rev-parse", "--git-common-dir"],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -283,23 +286,25 @@ def _persist(cwd: Path, idx: EventIndex) -> None:
     if base_path is None:
         return
     try:
-        payload = pickle.dumps(
-            {
-                "format": _INDEX_FORMAT,
-                "head": idx.head,
-                "seq_to_oid": idx.seq_to_oid,
-                "by_trace": idx.by_trace,
-                "by_commit": idx.by_commit,
-                "by_type": idx.by_type,
-                "by_patch": idx.by_patch,
-            },
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
         base_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(base_path.parent), suffix=".tmp")
+        # FIXED reusable tmp name + streaming dump (see event_log._save_event_snapshot):
+        # a hard kill cannot strand a fresh random orphan each save (#169 C).
+        tmp = base_path.with_name(base_path.name + ".tmp")
         try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(payload)
+            with open(tmp, "wb") as fh:
+                pickle.dump(
+                    {
+                        "format": _INDEX_FORMAT,
+                        "head": idx.head,
+                        "seq_to_oid": idx.seq_to_oid,
+                        "by_trace": idx.by_trace,
+                        "by_commit": idx.by_commit,
+                        "by_type": idx.by_type,
+                        "by_patch": idx.by_patch,
+                    },
+                    fh,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
             os.replace(tmp, base_path)  # atomic: head + postings swap together
         finally:
             if os.path.exists(tmp):

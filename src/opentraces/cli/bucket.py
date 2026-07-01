@@ -629,14 +629,32 @@ def bucket_rebuild_cmd(substrate: str, as_json: bool) -> None:
 
 
 @bucket_group.command("repair", cls=OpentracesCommand)
+@click.option(
+    "--bucket-root",
+    "bucket_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Repair a specific bucket layout instead of the live "
+        "~/.opentraces/bucket. When given (a COPY), repair runs ONLY the "
+        "canonical anchor re-derive over the envelopes present there — never "
+        "the live bucket."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_repair_cmd(as_json: bool) -> None:
+def bucket_repair_cmd(bucket_root: Path | None, as_json: bool) -> None:
     """Re-project the full bucket from canonical (event log + blob store).
 
     Per plan 080 §20 Resolution G, ``bucket repair`` is the documented
     crash-recovery primitive: it regenerates per-trace envelopes and
     ``manifest.json`` from the canonical event log + blob store. The
     operation is idempotent — safe to re-run, never drops user data.
+
+    Epic #169 (B-attr): repair also re-derives ``trace.json`` patch anchors and
+    the manifest ``anchored_count`` from the canonical ``git_anchor_created``
+    events (the single source of truth). ``--bucket-root <dir>`` targets a
+    bucket COPY so the re-derive can be verified without mutating the live
+    bucket.
     """
     try:
         from ..core.bucket_store import bucket_repair
@@ -646,7 +664,7 @@ def bucket_repair_cmd(as_json: bool) -> None:
         ) from exc
 
     try:
-        result = bucket_repair()
+        result = bucket_repair(bucket_root=bucket_root)
     except NotImplementedError as exc:
         raise click.ClickException(
             f"Phase B Track B1 stub: bucket_repair not yet implemented ({exc})"
@@ -659,6 +677,56 @@ def bucket_repair_cmd(as_json: bool) -> None:
     click.echo("Bucket repair:")
     for key, value in result.items():
         click.echo(f"  {key}: {value}")
+
+
+@bucket_group.command("reclaim", cls=OpentracesCommand)
+@click.option(
+    "--repo",
+    "repo",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Git repository to scan (defaults to the current directory).",
+)
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    help="Actually remove the listed cruft. Without it, this is print-only.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
+    """Reclaim leaked Trace Trails cruft under ``.git/**/opentraces/``.
+
+    Lists leaked ``*.tmp`` files and orphan/duplicate accelerator pickles
+    (per-worktree ``event_log_snapshot.pkl`` / ``event_index`` copies left by
+    the pre-#169-C duplication bug) with per-candidate byte counts and a total.
+
+    DRY-RUN BY DEFAULT: a plain run deletes nothing and leaves the file set
+    byte-for-byte unchanged. ``--apply`` removes the listed cruft and NEVER
+    touches the live ``event_log_snapshot.pkl``, the live ``event_index/base.pkl``,
+    the canonical event ref, or anything under the bucket.
+    """
+    from ..core.bucket_reclaim import reclaim_repo
+
+    target = Path(repo) if repo is not None else Path.cwd()
+    report = reclaim_repo(target, apply=apply)
+    payload = {"status": "ok", "reclaim": report.as_dict()}
+    if as_json:
+        click.echo(_dump_json(payload))
+        return
+
+    data = report.as_dict()
+    click.echo(f"Bucket reclaim (apply={apply}):")
+    click.echo(f"  repo: {data['repo']}")
+    click.echo(f"  candidates: {data['candidate_count']} ({data['total_bytes']} bytes)")
+    for cand in data["candidates"]:
+        click.echo(f"    - [{cand['category']}] {cand['bytes']:>10} B  {cand['path']}")
+    if apply:
+        click.echo(f"  removed: {data['removed_count']} ({data['removed_bytes']} bytes)")
+    else:
+        click.echo("  (dry run — nothing deleted; pass --apply to reclaim)")
+    for err in data["errors"]:
+        click.echo(f"  error: {err}", err=True)
 
 
 @bucket_group.command("verify", cls=OpentracesCommand)

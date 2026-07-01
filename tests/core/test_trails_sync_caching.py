@@ -1,14 +1,21 @@
-"""Cluster G — P2: ``patch_survival_cached`` event-keyed cache.
+"""Cluster G — P2 / issue #116 A: survival KV-cache (now local + evictable).
 
-These tests pin the contract for the event-log-backed survival cache:
+These tests pin the contract for the survival cache after #116 A relocated the
+WRITE off the append-only canonical event log into a local evictable store
+under ``<git-common-dir>/opentraces/`` (``survival_cache_store``):
 
-* ``sync_patch`` writes a ``patch_survival_cached`` event after a fresh
-  compute.
-* On a second call against the same HEAD the row is served from cache
+* ``sync_patch`` writes the freshly-computed row to the LOCAL store after a
+  fresh compute — and appends NO ``patch_survival_cached`` event to the ref.
+* On a second call against the same HEAD the row is served from the store
   without recomputing.
 * When HEAD moves the cache key changes and the cached row is no longer
-  served — the next call recomputes and writes a new cache event.
+  served — the next call recomputes and writes a new local-store row (still no
+  ref growth).
 * A 100-patch warm batch completes in <5s.
+
+Back-compat for legacy on-ref ``patch_survival_cached`` events is covered by
+``test_build_survival_cache_index_returns_latest`` below, which still reads the
+on-ref projection.
 """
 from __future__ import annotations
 
@@ -105,8 +112,12 @@ def _count_cache_events(repo: Path) -> int:
     )
 
 
-def test_sync_patch_writes_cache_event(tmp_path: Path) -> None:
-    """First ``sync_patch`` against a HEAD writes a cache event."""
+def test_sync_patch_writes_to_local_store_not_ref(tmp_path: Path) -> None:
+    """First ``sync_patch`` against a HEAD writes the row to the LOCAL store
+    and appends NO ``patch_survival_cached`` event to the canonical ref
+    (issue #116 A)."""
+    from opentraces.core.trails import survival_cache_store
+
     _init_repo(tmp_path)
     (tmp_path / "a.py").write_text("alpha\nline\n")
     head = _commit(tmp_path, "seed")
@@ -120,9 +131,18 @@ def test_sync_patch_writes_cache_event(tmp_path: Path) -> None:
     )
 
     assert _count_cache_events(tmp_path) == 0
-    result = sync_patch(tmp_path, f"tracepatch-sha256:abc12345")
+    assert survival_cache_store.load_index(tmp_path) == {}
+    result = sync_patch(tmp_path, "tracepatch-sha256:abc12345")
     assert result["current_survival"]["survival_state"] == "alive_on_path"
-    assert _count_cache_events(tmp_path) == 1
+
+    # No ref growth — the append-only log gains no survival-cache events.
+    assert _count_cache_events(tmp_path) == 0
+    # The row landed in the local evictable store, keyed by (patch, HEAD).
+    store_index = survival_cache_store.load_index(tmp_path)
+    assert len(store_index) == 1
+    (patch_id, head_sha), survival = next(iter(store_index.items()))
+    assert head_sha == head
+    assert survival["survival_state"] == "alive_on_path"
 
 
 def test_sync_patch_reads_cache_when_head_unchanged(tmp_path: Path) -> None:
@@ -152,7 +172,10 @@ def test_sync_patch_reads_cache_when_head_unchanged(tmp_path: Path) -> None:
 
 def test_sync_patch_invalidates_when_head_moves(tmp_path: Path) -> None:
     """When HEAD advances the cache key changes; sync_patch recomputes
-    fresh and writes a new cache entry against the new HEAD."""
+    fresh and writes a new local-store row against the new HEAD — still
+    appending nothing to the canonical ref (issue #116 A)."""
+    from opentraces.core.trails import survival_cache_store
+
     _init_repo(tmp_path)
     (tmp_path / "a.py").write_text("alpha\nline\n")
     head_a = _commit(tmp_path, "seed")
@@ -166,22 +189,27 @@ def test_sync_patch_invalidates_when_head_moves(tmp_path: Path) -> None:
     )
 
     sync_patch(tmp_path, "tracepatch-sha256:abc12345")
-    cache_events_at_head_a = _count_cache_events(tmp_path)
+    store_keys_at_head_a = set(survival_cache_store.load_index(tmp_path).keys())
+    assert any(h == head_a for (_p, h) in store_keys_at_head_a)
+    assert _count_cache_events(tmp_path) == 0
 
     # Advance HEAD by an unrelated commit.
     (tmp_path / "b.py").write_text("beta\n")
     head_b = _commit(tmp_path, "second")
     assert head_a != head_b
 
-    # Re-sync — old cache is keyed by head_a, miss, recompute, new entry.
+    # Re-sync — old cache is keyed by head_a, miss, recompute, new store row.
     result = sync_patch(tmp_path, "tracepatch-sha256:abc12345")
     assert result.get("cache", {}).get("hit") is False
-    cache_events_at_head_b = _count_cache_events(tmp_path)
-    assert cache_events_at_head_b > cache_events_at_head_a, (
-        "expected a new cache event after HEAD moved"
+    # Still no ref growth.
+    assert _count_cache_events(tmp_path) == 0
+    store_keys_at_head_b = set(survival_cache_store.load_index(tmp_path).keys())
+    assert any(h == head_b for (_p, h) in store_keys_at_head_b), (
+        "expected a new local-store row after HEAD moved"
     )
+    assert store_keys_at_head_b > store_keys_at_head_a
 
-    # And a third call against head_b should now hit the cache.
+    # And a third call against head_b should now hit the cache (from the store).
     events = read_events(tmp_path, verify=False)
     third = sync_patch(tmp_path, "tracepatch-sha256:abc12345", events=events)
     assert third.get("cache", {}).get("hit") is True

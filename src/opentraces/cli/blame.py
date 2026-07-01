@@ -575,6 +575,36 @@ def _trail_trace_id_for_prefix(project_cwd: Path, prefix: str) -> str | None:
     return projection.resolve_trace_prefix(prefix)
 
 
+# Survival-semantic containers/keys that must never surface in attribution-only
+# blame output. ``current_state`` is the per-anchor survival projection
+# (``enrich_trail_row`` fills it with a ``survival_state`` placeholder plus a
+# ``label`` verdict + ``observed_at_*`` head-keying); stripping only the literal
+# ``survival_state`` key would still leak the survival-shaped container, so the
+# whole container is dropped. Live survival is reachable only through ``trail track``.
+_SURVIVAL_CONTAINER_KEYS = frozenset({"current_state"})
+
+
+def _strip_survival_fields(value: Any) -> Any:
+    """Recursively drop any dict key carrying survival vocabulary, plus the
+    survival-shaped ``current_state`` container.
+
+    ``blame`` is the attribution-only seam (#169): the enriched anchor row carries
+    a static survival projection from ``enrich_trail_row`` (``current_state`` with
+    a ``survival_state`` placeholder, a ``label`` verdict, and ``observed_at_*``
+    head-keying), but blame never recomputes live survival, so none of it must
+    surface in blame output where a consumer could read it as a live verdict.
+    """
+    if isinstance(value, dict):
+        return {
+            k: _strip_survival_fields(v)
+            for k, v in value.items()
+            if "survival" not in str(k).lower() and str(k) not in _SURVIVAL_CONTAINER_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_survival_fields(item) for item in value]
+    return value
+
+
 def _trail_evidence_for_commit(
     project_cwd: Path,
     sha: str,
@@ -583,14 +613,20 @@ def _trail_evidence_for_commit(
     projection = _trail_projection_for_commits(project_cwd, {sha})
     if projection is None:
         return []
-    rows = projection.anchors_for_commit_with_survival(sha)
+    # Attribution-only read (#169): ``anchors_for_commit`` resolves the committed
+    # git-anchor attribution WITHOUT the per-anchor live-reachability recompute
+    # (``anchors_for_commit_with_survival`` -> ``sync_patch`` -> ``_compute_survival``)
+    # that turns blame into an hours-long walk on a heavily-anchored commit.
+    # Survival belongs to ``trail track``; here we carry trace_id, step_index,
+    # trace_patch_id and git_anchor_id and strip every survival-named field.
+    rows = projection.anchors_for_commit(sha)
     if scope_file:
         rows = [
             row
             for row in rows
             if row.get("file_path") == scope_file or row.get("path") == scope_file
         ]
-    return rows
+    return [_strip_survival_fields(row) for row in rows]
 
 
 def _projection_disagreements(
@@ -639,10 +675,15 @@ def _projection_disagreements(
     return disagreements, limitations
 
 
+_TRAIL_EVIDENCE_SUMMARY_ROWS = 5
+
+
 def _render_trail_evidence_section(
     trail_rows: list[dict],
     sha: str,
     color: bool,
+    *,
+    full: bool = False,
 ) -> list[str]:
     if not trail_rows:
         return []
@@ -653,7 +694,10 @@ def _render_trail_evidence_section(
         + paint(Role.DIM, "(canonical event log evidence)", use_color=color)
     )
     out.append("")
-    for row in trail_rows:
+    # Default human output is a bounded summary; ``--full`` shows every anchor.
+    # ``--json`` is unaffected and always carries the complete attribution.
+    shown = trail_rows if full else trail_rows[:_TRAIL_EVIDENCE_SUMMARY_ROWS]
+    for row in shown:
         trace = render_handle("t", row.get("trace_id") or "?", use_color=color)
         patch_id = row.get("trace_patch_id") or "?"
         anchor_id = row.get("git_anchor_id") or "?"
@@ -665,6 +709,14 @@ def _render_trail_evidence_section(
         out.append(f"  {trace}  {path}:{start}  {evidence} ({firmness})")
         out.append(f"    Trace Patch: {patch_id}")
         out.append(f"    Git Anchor:  {anchor_id}")
+    if not full and len(trail_rows) > _TRAIL_EVIDENCE_SUMMARY_ROWS:
+        hidden = len(trail_rows) - _TRAIL_EVIDENCE_SUMMARY_ROWS
+        traces = len({row.get("trace_id") for row in trail_rows if row.get("trace_id")})
+        out.append("")
+        out.append(
+            f"  {len(trail_rows)} anchor rows across {traces} trace(s); "
+            f"{hidden} more not shown — rerun with --full for every row."
+        )
     out.append("")
     out.append(f"  explain: otd trail explain --commit {sha}")
     return out
@@ -709,7 +761,8 @@ def _render_hook_linked_section(
 def _render_default(meta: tuple[str, str, str], data: dict,
                     project_cwd: Path, scope_file: str | None,
                     color: bool, *, show_entities: bool = False,
-                    trail_rows: list[dict] | None = None) -> str:
+                    trail_rows: list[dict] | None = None,
+                    full: bool = False) -> str:
     files = data.get("files") or {}
     traces = data.get("traces") or []
     lines: list[str] = []
@@ -731,7 +784,8 @@ def _render_default(meta: tuple[str, str, str], data: dict,
     if trail_rows is None:
         trail_rows = _trail_evidence_for_commit(project_cwd, meta[0], scope_file)
     if trail_rows:
-        lines.extend(_render_trail_evidence_section(trail_rows, meta[0], color))
+        lines.extend(_render_trail_evidence_section(trail_rows, meta[0], color,
+                                                    full=full))
 
     # Files block — simple, aligned, separated from the trace tree by a
     # dim horizontal rule so the two sections read as distinct groups.
@@ -814,10 +868,14 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
                         entity_data_raw: dict | None, cache: Any,
                         scope_file: str | None,
                         include_entities: bool,
-                        project_cwd: Path) -> dict:
+                        project_cwd: Path,
+                        trail_rows: list[dict] | None = None) -> dict:
     """Build JSON payload. Backward-compatible: keys ``commit``, ``coverage``,
     ``traces``, ``files`` stay stable. Add ``entity_contributions`` when
-    entity data is present (never drops existing keys)."""
+    entity data is present (never drops existing keys).
+
+    ``trail_rows`` lets the caller pass the already-resolved attribution rows so
+    the commit-scoped Trail projection is not rebuilt a second time per blame."""
     full_sha, subject, ts = meta
     attributed, total, ratio = _coverage_pct(data)
     files_out: dict = {}
@@ -844,7 +902,8 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
             {"trace_id": tid, "id": tid[:8]} for tid in hook_linked_ids
         ],
     }
-    trail_rows = _trail_evidence_for_commit(project_cwd, full_sha, scope_file)
+    if trail_rows is None:
+        trail_rows = _trail_evidence_for_commit(project_cwd, full_sha, scope_file)
     disagreements, projection_limitations = _projection_disagreements(
         data,
         hook_linked_ids,
@@ -1374,7 +1433,7 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
     option_groups=[
         ("Scope", ["show_lines", "show_entities", "project_dir",
                    "include_overlapping"]),
-        ("Output", ["as_json", "no_color"]),
+        ("Output", ["as_json", "no_color", "full"]),
     ],
 )
 @click.argument("sha", required=True)
@@ -1389,11 +1448,18 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
                    "not contribution).")
 @click.option("--json", "as_json", is_flag=True,
               help="Emit structured JSON instead of text.")
+@click.option("--full", "full", is_flag=True,
+              help="Show every per-anchor trail-evidence row. Default is a "
+                   "bounded summary; --json is always complete.")
 @click.option("--no-color", "no_color", is_flag=True,
               help="Disable ANSI colors.")
+@click.option("--simulate-leak", "simulate_leak", is_flag=True, hidden=True,
+              help="(test-only) inject a survival-named key into --json output "
+                   "to prove the survival-leak guard is red-capable.")
 @project_dir_option
 def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
-              include_overlapping: bool, as_json: bool, no_color: bool,
+              include_overlapping: bool, as_json: bool, full: bool,
+              no_color: bool, simulate_leak: bool,
               project_dir: Path | None) -> None:
     """Attribution between traces and commits.
 
@@ -1487,7 +1553,15 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
     if as_json:
         payload = _build_json_payload(
             meta, data, entity_data_raw, cache, path, show_entities, cwd,
+            trail_rows=trail_rows,
         )
+        if simulate_leak:
+            # Hidden, test-only: prove the survival-leak guard is red-capable by
+            # injecting BOTH a survival-named key AND the survival-shaped
+            # ``current_state`` container the attribution-only path never emits.
+            # Not a user-facing surface (see --simulate-leak, hidden).
+            payload["simulated_survival_state"] = "reverted"
+            payload["current_state"] = {"label": "reverted", "observed_at_commit": "deadbeef"}
         click.echo(_json.dumps(payload, indent=2))
         return
 
@@ -1499,7 +1573,7 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
         click.echo(
             _render_default(meta, data, cwd, path, color,
                             show_entities=False,
-                            trail_rows=trail_rows),
+                            trail_rows=trail_rows, full=full),
             nl=False,
         )
         click.echo("")
@@ -1509,7 +1583,7 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
     click.echo(
         _render_default(meta, data, cwd, path, color,
                         show_entities=show_entities,
-                        trail_rows=trail_rows),
+                        trail_rows=trail_rows, full=full),
         nl=False,
     )
 

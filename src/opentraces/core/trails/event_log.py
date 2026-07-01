@@ -1,6 +1,7 @@
 """Append-only Git event log for Trace Trails."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pickle
@@ -700,6 +701,14 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
     head = _ref_head(cwd)
     if head is None or not trace_id:
         return []
+    # Reuse the per-trace parsed-events snapshot when it matches the current
+    # head: a trace whose footprint is dominated by large v2 anchor-search
+    # summaries costs seconds to JSON-validate, so reloading the parsed objects
+    # keeps a warm ``trail track <trace>`` interactive. Head-keyed, so a stale
+    # snapshot is never served.
+    cached = _load_trace_events_cache(cwd, trace_id, head)
+    if cached is not None:
+        return cached
     from . import event_index
 
     idx = event_index.fresh_index_for_read(cwd, head)
@@ -715,6 +724,7 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
         for raw in _iter_blobs_batch(cwd, entries)
     ]
     matched.sort(key=lambda event: event.event_sequence)
+    _save_trace_events_cache(cwd, trace_id, head, matched)
     return matched
 
 
@@ -845,12 +855,17 @@ def read_events_scoped(
 
 
 def _event_cache_path(cwd: Path) -> Path | None:
-    """Per-repo snapshot path inside the git dir (cross-process, repo-local).
+    """Per-repo snapshot path inside the COMMON git dir (cross-process,
+    cross-worktree, repo-local).
+
+    Uses ``--git-common-dir`` (not ``--git-dir``) so N linked worktrees of the
+    same repo resolve to the ONE shared snapshot under the common git dir,
+    instead of a per-worktree copy each (the 22-copy duplication bug, #169 C).
 
     Returns None when the git dir can't be resolved (callers fall back to a
     full read).
     """
-    proc = _git(cwd, ["rev-parse", "--git-dir"], check=False)
+    proc = _git(cwd, ["rev-parse", "--git-common-dir"], check=False)
     if proc.returncode != 0:
         return None
     git_dir = Path(proc.stdout.strip())
@@ -924,8 +939,89 @@ def _save_event_snapshot(cwd: Path, head: str, events: list[TrailEvent]) -> None
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # FIXED reusable tmp name (not a fresh random mkstemp): a hard kill that
+        # skips the `finally` unlink overwrites the same tmp on the next save
+        # rather than stranding a new ~2 GB orphan each time (#169 C). Streaming
+        # pickle.dump avoids materializing the full payload in memory (no peak
+        # RSS doubling on the ~2 GB snapshot).
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            with open(tmp, "wb") as fh:
+                pickle.dump(
+                    {"format": _EVENT_CACHE_FORMAT, "head": head, "events": events},
+                    fh,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except Exception:  # noqa: BLE001 — cache is an optimization, never fatal
+        return
+
+
+def _trace_events_cache_path(cwd: Path, trace_id: str) -> Path | None:
+    """Per-(repo, trace) parsed-events snapshot path inside the git dir.
+
+    Sibling of :func:`_event_cache_path`; the trace id is hashed so any id shape
+    (UUID, ``ot://`` ref, legacy hex) yields a filesystem-safe name.
+    """
+    snap = _event_cache_path(cwd)
+    if snap is None:
+        return None
+    digest = hashlib.sha256(trace_id.encode("utf-8")).hexdigest()[:32]
+    return snap.with_name(f"trace_events_{digest}.pkl")
+
+
+def _load_trace_events_cache(
+    cwd: Path, trace_id: str, head: str
+) -> list[TrailEvent] | None:
+    """Load this trace's parsed events from the per-trace snapshot, or None.
+
+    Keyed by ``(trace_id, head)`` so it self-invalidates the moment the event
+    log ref advances — a stale cache is never served.
+    """
+    path = _trace_events_cache_path(cwd, trace_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        blob = pickle.loads(path.read_bytes())
+        if (
+            not isinstance(blob, dict)
+            or blob.get("format") != _EVENT_CACHE_FORMAT
+            or blob.get("head") != head
+            or blob.get("trace_id") != trace_id
+            or not isinstance(blob.get("events"), list)
+        ):
+            return None
+        return blob["events"]
+    except Exception:  # noqa: BLE001 — any corruption ⇒ fall back to fresh read
+        return None
+
+
+def _save_trace_events_cache(
+    cwd: Path, trace_id: str, head: str, events: list[TrailEvent]
+) -> None:
+    """Atomically persist one trace's parsed events keyed by ``(trace_id, head)``.
+
+    Best-effort. Parsing a trace whose footprint is dominated by large v2
+    anchor-search summaries (hundreds of MB) costs seconds; this lets a repeat
+    read at the same head reload the parsed objects (~pickle speed) instead of
+    re-validating every blob, which is what keeps ``trail track <trace>``
+    interactive on a mature log.
+    """
+    path = _trace_events_cache_path(cwd, trace_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = pickle.dumps(
-            {"format": _EVENT_CACHE_FORMAT, "head": head, "events": events},
+            {
+                "format": _EVENT_CACHE_FORMAT,
+                "head": head,
+                "trace_id": trace_id,
+                "events": events,
+            },
             protocol=pickle.HIGHEST_PROTOCOL,
         )
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
@@ -941,19 +1037,19 @@ def _save_event_snapshot(cwd: Path, head: str, events: list[TrailEvent]) -> None
 
 
 def _events_contiguous(events: list[TrailEvent]) -> bool:
-    """O(1) sanity check that a sorted event list is the gap-free 1..N chain.
+    """True iff the event sequences form the exact gap-free 1..N chain.
 
-    The log is monotonic + gap-free from sequence 1, so a correct sorted stream
-    has ``events[0].event_sequence == 1`` and ``events[-1].event_sequence ==
-    len(events)``. A dropped/duplicated event breaks the length/last-sequence
-    identity. Used to self-heal a corrupt snapshot rather than serve it.
+    The log is monotonic + gap-free from sequence 1, so a correct stream is
+    exactly ``1..len(events)``. The old endpoint check (``first==1 and
+    last==len``) is fooled by a *balanced* dup-plus-gap snapshot where one
+    duplicate offsets one gap so ``max_seq == len`` (e.g. ``[1,1,3]``); such a
+    snapshot is silently served as valid. This computes the true sorted-1..N
+    verdict so the dup+gap class is rejected and self-healed instead (#169 C).
     """
     if not events:
         return True
-    return (
-        events[0].event_sequence == 1
-        and events[-1].event_sequence == len(events)
-    )
+    seqs = sorted(e.event_sequence for e in events)
+    return seqs == list(range(1, len(seqs) + 1))
 
 
 def _read_events_incremental(cwd: Path, head: str) -> list[TrailEvent]:

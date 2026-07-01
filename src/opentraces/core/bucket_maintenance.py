@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,9 @@ from .bucket_envelope import (
     _events_for_export_loop,
     _is_legacy_read_in_place_mirror,
     _iter_opted_in_projects,
+    _rederive_patch_rows,
     _trace_ids_for_project,
+    canonical_anchor_maps,
     project_per_trace_exports,
 )
 from .bucket_events import BUCKET_EVENTS_INDEX_SCHEMA, sync_events_mirror
@@ -63,7 +66,149 @@ from .bucket_store import (
 from .bucket_trace_records import iter_trace_record_objects
 
 
-def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
+def rederive_bucket_anchors(
+    bucket_root: Path, *, dry_run: bool = False
+) -> dict[str, Any]:
+    """Rebuild persisted ``trace.json`` patch anchors + manifest
+    ``anchored_count`` from the canonical ``git_anchor_created`` events.
+
+    Epic #169 (B-attr) single-source-of-truth: ``Patch.anchor``, the manifest
+    ``summary.anchored_count`` and the lineage surface must all DERIVE from the
+    canonical per-patch anchor events (written by
+    ``core/trails/anchors.reconcile_commit_anchors``), never from standalone
+    correlator stamps. For every per-trace envelope under ``bucket_root``:
+
+    * a patch is ``anchor.found = True`` ONLY when a ``git_anchor_created`` event
+      exists for its ``patch_id``, with ``commit_sha`` taken from that event
+      (file-membership-correct by construction — the canonical writer only
+      anchors a patch into a commit that genuinely changed its file); a patch
+      with no backing event is DE-ATTRIBUTED (``found = False``, or left
+      un-anchored when it never carried an anchor);
+    * a patch that genuinely appears in several commits (amend / cherry-pick /
+      repeated content) is surfaced as ONE patch row per distinct anchor commit,
+      so the per-trace lineage surface set EXACTLY equals the canonical anchor
+      set (the latest commit stays the primary ``anchor``; older commits also
+      ride ``superseded_by`` newest-first);
+    * the manifest row ``summary.anchored_count`` is set to the number of
+      DISTINCT anchored patch ids for the trace.
+
+    Idempotent: every written value is drawn from canonical data (commit hex +
+    the event's own ``event_time``), so a second run is byte-identical, and a
+    trace whose anchors already match the canonical set is left untouched (so
+    ``bucket_digest`` is unchanged for already-correct traces).
+
+    Reads events from the live opted-in project that shares each trace's slug;
+    traces whose slug has no resolvable project on this machine are skipped
+    (their canonical events are not reachable here). NEVER mutates the canonical
+    event log — it is read-only over Git and write-only over ``bucket_root``.
+    """
+
+    bucket_root = Path(bucket_root)
+    traces_root = bucket_root / "traces" / "v1"
+    manifest_path = bucket_root / "manifest.json"
+
+    manifest: dict[str, Any] | None = None
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            manifest = None
+
+    # Slugs whose per-trace envelopes are actually present on disk. We read the
+    # canonical anchor events ONLY for these slugs (one scoped read per backing
+    # repo), so a bucket COPY holding a handful of fixture traces costs a handful
+    # of reads, never one per project in the full registry. Manifest rows for a
+    # present slug are still all re-derived (so every row of that project gets a
+    # single-source anchored_count); rows for absent slugs are left untouched.
+    present_slugs: set[str] = set()
+    if traces_root.is_dir():
+        for child in traces_root.iterdir():
+            if child.is_dir() and any(child.glob("*/trace.json")):
+                present_slugs.add(child.name)
+
+    anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs = (
+        canonical_anchor_maps(present_slugs)
+    )
+
+    traces_rewritten = 0
+    patches_deattributed = 0
+    patches_anchored = 0
+    if traces_root.is_dir():
+        for trace_json in sorted(traces_root.glob("*/*/trace.json")):
+            slug = trace_json.parent.parent.name
+            trace_id = trace_json.parent.name
+            if slug not in resolved_slugs:
+                continue
+            try:
+                doc = json.loads(trace_json.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            patch_anchors = anchors_by_trace_patch.get(trace_id, {})
+            # #172 GAP 1 — the collapse + re-expansion is now the shared
+            # ``_rederive_patch_rows`` body (single source with the LIVE per-trace
+            # projection). It collapses any prior one-row-per-anchor expansion to
+            # one base patch per patch_id, then re-expands from the canonical
+            # events, so a second run is byte-identical.
+            new_patches, n_anchored, n_deattributed = _rederive_patch_rows(
+                doc.get("patches") or [], patch_anchors
+            )
+            patches_anchored += n_anchored
+            patches_deattributed += n_deattributed
+            if new_patches != (doc.get("patches") or []):
+                doc["patches"] = new_patches
+                if not dry_run:
+                    _atomic_write_bytes(
+                        trace_json,
+                        (
+                            json.dumps(
+                                doc,
+                                ensure_ascii=False,
+                                indent=2,
+                                sort_keys=True,
+                            )
+                            + "\n"
+                        ).encode("utf-8"),
+                    )
+                traces_rewritten += 1
+
+    manifest_rows_updated = 0
+    if isinstance(manifest, dict):
+        for row in manifest.get("traces") or []:
+            slug = row.get("project_slug")
+            trace_id = row.get("trace_id")
+            if slug not in resolved_slugs:
+                continue
+            correct = len(distinct_anchored_by_trace.get(trace_id, set()))
+            summary = row.setdefault("summary", {})
+            if summary.get("anchored_count") != correct:
+                summary["anchored_count"] = correct
+                manifest_rows_updated += 1
+        if manifest_rows_updated and not dry_run:
+            _atomic_write_bytes(
+                manifest_path,
+                (
+                    json.dumps(
+                        manifest, ensure_ascii=False, indent=2, sort_keys=True
+                    )
+                    + "\n"
+                ).encode("utf-8"),
+            )
+
+    return {
+        "bucket_root": str(bucket_root),
+        "dry_run": dry_run,
+        "resolved_slugs": sorted(resolved_slugs),
+        "unresolved_slugs": sorted(present_slugs - resolved_slugs),
+        "traces_rewritten": traces_rewritten,
+        "patches_anchored": patches_anchored,
+        "patches_deattributed": patches_deattributed,
+        "manifest_rows_updated": manifest_rows_updated,
+    }
+
+
+def bucket_repair(
+    *, dry_run: bool = False, bucket_root: Path | None = None
+) -> dict[str, Any]:
     """Full rebuild from canonical (event log + blob store).
 
     Plan 080 §9 / Resolution G — the documented crash-recovery primitive.
@@ -77,7 +222,36 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
     :func:`_atomic_write_*` helpers that skip same-bytes writes; the
     manifest digest excludes the volatile ``generated_at`` / ``updated_at``
     fields per Resolution H).
+
+    Epic #169 (B-attr): when ``bucket_root`` is given (a bucket COPY), repair
+    runs ONLY the canonical anchor re-derive (:func:`rederive_bucket_anchors`) —
+    it rebuilds ``trace.json`` patch anchors + manifest ``anchored_count`` from
+    the canonical ``git_anchor_created`` events (the single source of truth, so
+    no standalone correlator stamp survives without a backing event) and does
+    NOT re-project the full project set into a partial copy. This is what makes
+    ``opentraces bucket repair --bucket-root <copy>`` the safe way to re-derive a
+    bucket COPY without touching the live ``~/.opentraces`` bucket. The default
+    (no ``bucket_root``) keeps the documented live-bucket re-projection
+    behaviour unchanged.
     """
+
+    # ``bucket_root`` given: focused anchor re-derive over the copy's existing
+    # envelopes (no full re-projection — the copy is a partial subset).
+    if bucket_root is not None:
+        rederive = rederive_bucket_anchors(Path(bucket_root), dry_run=dry_run)
+        return {
+            "schema_version": BUCKET_MANIFEST_SCHEMA,
+            "status": "ok",
+            "dry_run": dry_run,
+            "mode": "rederive_anchors",
+            "traces_projected": rederive["traces_rewritten"],
+            "bucket_sourced_traces": 0,
+            "events_mirrored": 0,
+            "manifest_regenerated": bool(rederive["manifest_rows_updated"]),
+            "projects_walked": len(rederive["resolved_slugs"]),
+            "rederive": rederive,
+            "errors": [],
+        }
 
     errors: list[dict[str, Any]] = []
     traces_projected = 0
@@ -107,7 +281,11 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
         # per head); the default per-call trace-scoped read would be
         # O(traces × full-log-walk) here.
         trace_ids = _trace_ids_for_project(project_path)
-        shared_events = _events_for_export_loop(project_path) if trace_ids else []
+        # #172 review fix — a FAILED shared read (read_ok False) must not be
+        # passed as authoritative empty events (that would de-attribute anchors).
+        shared_events, shared_ok = (
+            _events_for_export_loop(project_path) if trace_ids else ([], True)
+        )
         for trace_id in trace_ids:
             traces_projected += 1
             handled_pairs.add((project_slug, trace_id))
@@ -119,6 +297,7 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
                     project_slug=project_slug,
                     trace_id=trace_id,
                     events=shared_events,
+                    events_authoritative=shared_ok,
                 )
             except Exception as exc:
                 errors.append(
@@ -231,6 +410,12 @@ def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
                 {"kind": "manifest", "project_slug": None, "detail": str(exc)}
             )
 
+    # Epic #169 (B-attr): the canonical anchor re-derive runs ONLY in the
+    # explicit ``--bucket-root`` mode (above), against a bucket COPY. The default
+    # live-bucket repair keeps its documented re-projection behaviour byte-for-
+    # byte — re-deriving the whole live bucket from canonical here would both
+    # contradict "never repair the live bucket" and risk de-attributing a trace
+    # whose canonical events are not reachable on the local machine.
     status = "ok" if not errors else "partial"
     return {
         "schema_version": BUCKET_MANIFEST_SCHEMA,
@@ -768,7 +953,11 @@ def rebuild_bucket_traces() -> dict[str, Any]:
         project_envelopes = 0
         errors: list[dict[str, Any]] = []
         # #65: ONE shared full read for the whole loop (see repair loop).
-        shared_events = _events_for_export_loop(project_path) if trace_ids else []
+        # #172 review fix — thread read_ok so a failed shared read is not treated
+        # as authoritative empty events (which would de-attribute valid anchors).
+        shared_events, shared_ok = (
+            _events_for_export_loop(project_path) if trace_ids else ([], True)
+        )
         for tid in trace_ids:
             handled_pairs.add((project_slug, tid))
             try:
@@ -777,6 +966,7 @@ def rebuild_bucket_traces() -> dict[str, Any]:
                     project_slug=project_slug,
                     trace_id=tid,
                     events=shared_events,
+                    events_authoritative=shared_ok,
                 )
                 project_envelopes += 1
             except Exception as exc:

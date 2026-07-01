@@ -26,7 +26,7 @@ from ...core.trace_derived import (
 )
 from ...enrichment._shared import run_git
 from ...enrichment.git import jj_support, notes_store
-from ...enrichment.git.correlator import correlate
+from ...enrichment.git.correlator import correlate, patch_file_in_commit
 
 
 def _git(args: list[str], cwd: Path) -> tuple[int, str]:
@@ -85,12 +85,22 @@ def _apply_anchor_to_patches(
     revision: str,
     *,
     now_iso: str,
+    hunks: dict[str, list[dict]] | None,
 ) -> bool:
     """Update ``Patch.anchor`` on every eligible patch in ``trace``.
 
     Eligibility (per plan 080 §9 Writer 3): patches where ``anchor is None``
     or ``anchor.found is False``. Already-anchored patches are re-evaluated
     so ``git commit --amend`` chains correctly (Resolution L).
+
+    Epic #169 (B-attr) over-attribution cure: ``correlate`` matches a trace to a
+    commit at the TRACE level; without a per-patch gate the trace-level match was
+    fanned across EVERY patch, stamping ``found=True`` even on patches whose own
+    file the commit never touched (the witness #139 symptom: 3 harness-file
+    patches stamped to a web/site-only commit). ``hunks`` is the commit's parsed
+    changed-file set, so a patch is now anchored to this commit ONLY when its own
+    ``file_path`` is a member (:func:`patch_file_in_commit`). A patch whose file
+    the commit never touched is recorded ``found=False`` (searched, not matched).
 
     Returns True iff any patch was marked ``anchor.found = True`` (caller
     uses this to promote ``trace.lifecycle = "final"``). Pure mutation, no I/O.
@@ -111,14 +121,24 @@ def _apply_anchor_to_patches(
         firmness = None
 
     for patch in trace.patches:
+        # Per-patch file-membership gate (#169 / #172 GAP 2): the trace-level
+        # tier anchors THIS patch ONLY when the commit's real diff touched the
+        # patch's own file. There is no ``hunks is None`` bypass — a missing or
+        # empty changed-file set is "no per-patch evidence", so nothing anchors
+        # (``patch_file_in_commit`` already returns False for ``hunks`` in
+        # ``(None, {})``). This closes the over-attribution hatch that fanned one
+        # trace-level match across every patch (the #139 symptom).
+        patch_matched = matched_tier and patch_file_in_commit(
+            patch.file_path, hunks
+        )
         prev = patch.anchor
         # Re-search only patches that are unanchored OR previously not found.
         # An already-found patch at the SAME revision is a no-op; an already-
         # found patch at a DIFFERENT revision is a supersede event (amend).
         if prev is not None and prev.found:
-            if not matched_tier:
-                # Correlator didn't find the trace in this commit; preserve
-                # the existing anchor unchanged.
+            if not patch_matched:
+                # This commit did not touch the patch (or the correlator did not
+                # find the trace here); preserve the existing anchor unchanged.
                 continue
             if prev.commit_sha == revision:
                 # Idempotent re-run against the same commit; refresh
@@ -141,7 +161,7 @@ def _apply_anchor_to_patches(
             continue
 
         # Eligible: anchor is None or anchor.found is False.
-        if matched_tier:
+        if patch_matched:
             patch.anchor = GitAnchor(
                 last_searched_at=now_iso,
                 found=True,
@@ -236,7 +256,7 @@ def run(
         # for reader compatibility.
         if trace.patches:
             anchored_any = _apply_anchor_to_patches(
-                trace, tier, revision, now_iso=now_iso,
+                trace, tier, revision, now_iso=now_iso, hunks=hunks,
             )
             derive_outcome_and_git_links_from_patches(trace)
             if anchored_any:
@@ -661,7 +681,7 @@ def backfill(
             # eligible patches and re-derive git_links from patches.
             if trace.patches:
                 anchored_any = _apply_anchor_to_patches(
-                    trace, tier, revision, now_iso=now_iso,
+                    trace, tier, revision, now_iso=now_iso, hunks=hunks,
                 )
                 derive_outcome_and_git_links_from_patches(trace)
                 if anchored_any:
