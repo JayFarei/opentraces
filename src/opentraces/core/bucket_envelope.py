@@ -251,41 +251,51 @@ def canonical_anchor_maps(
     anchors_by_trace_patch: dict[str, dict[str, list[tuple]]] = {}
     distinct_anchored_by_trace: dict[str, set[str]] = {}
     resolved_slugs: set[str] = set()
-    seen_repos: set[Path] = set()
+    read_ok_repos: set[Path] = set()
+    read_failed_repos: set[Path] = set()
 
     for slug in slugs:
         repo = slug_repo.get(slug)
         if repo is None:
             continue
-        resolved_slugs.add(slug)
-        # One scoped read per distinct repo (a repo may back several slugs).
-        if repo in seen_repos:
-            continue
-        seen_repos.add(repo)
-        try:
-            events = read_events_scoped(repo, event_types={"git_anchor_created"})
-        except Exception:
-            continue
-        for event in events:
-            payload = event.payload or {}
-            trace_id = event.trace_id
-            patch_id = id_from_payload(payload, "trace_patch")
-            commit_hex = (payload.get("commit_id") or {}).get("hex")
-            if not (trace_id and patch_id and commit_hex):
+        # A slug is "resolved" ONLY after its backing repo's canonical event log
+        # has been AUTHORITATIVELY read (#172 review fix). Marking it resolved
+        # before the read — or on a read that RAISES (transient / corrupt-ref
+        # failure) — would make callers derive ``anchored_count = 0`` and
+        # de-attribute every patch instead of taking the record-derived fallback,
+        # a digest-moving, data-destructive outcome on a routine
+        # ``bucket_manifest(write=True)`` / repair. One scoped read per distinct
+        # repo (a repo may back several slugs); a failed read leaves EVERY slug
+        # on that repo unresolved.
+        if repo not in read_ok_repos and repo not in read_failed_repos:
+            try:
+                events = read_events_scoped(repo, event_types={"git_anchor_created"})
+            except Exception:
+                read_failed_repos.add(repo)
                 continue
-            anchors_by_trace_patch.setdefault(trace_id, {}).setdefault(
-                patch_id, []
-            ).append(
-                (
-                    event.event_sequence,
-                    commit_hex,
-                    payload.get("evidence_tier"),
-                    payload.get("evidence_firmness"),
-                    payload.get("path"),
-                    event.event_time,
+            read_ok_repos.add(repo)
+            for event in events:
+                payload = event.payload or {}
+                trace_id = event.trace_id
+                patch_id = id_from_payload(payload, "trace_patch")
+                commit_hex = (payload.get("commit_id") or {}).get("hex")
+                if not (trace_id and patch_id and commit_hex):
+                    continue
+                anchors_by_trace_patch.setdefault(trace_id, {}).setdefault(
+                    patch_id, []
+                ).append(
+                    (
+                        event.event_sequence,
+                        commit_hex,
+                        payload.get("evidence_tier"),
+                        payload.get("evidence_firmness"),
+                        payload.get("path"),
+                        event.event_time,
+                    )
                 )
-            )
-            distinct_anchored_by_trace.setdefault(trace_id, set()).add(patch_id)
+                distinct_anchored_by_trace.setdefault(trace_id, set()).add(patch_id)
+        if repo in read_ok_repos:
+            resolved_slugs.add(slug)
 
     return anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs
 
@@ -550,13 +560,23 @@ def project_per_trace_exports(
     # pass ``events`` (one shared full read) instead — a trace-scoped walk
     # per loop iteration is O(traces × full-log-walk).
     events_iter: list[Any] = []
+    # #172 review fix — track whether the canonical anchor source was
+    # AUTHORITATIVELY read. Only then may the per-trace projection single-source
+    # (and thus de-attribute) anchors; a read that RAISES must NOT be mistaken for
+    # "resolved with zero anchors" (that would strip valid anchors on a transient
+    # / corrupt-ref failure). ``events is not None`` == the loop caller's shared
+    # full read (already authoritative).
+    anchor_source_ok = False
     if events is not None:
         events_iter = events
+        anchor_source_ok = True
     elif repo is not None:
         try:
             events_iter = read_events_for_trace(repo, trace_id)
+            anchor_source_ok = True
         except Exception:
             events_iter = []
+            anchor_source_ok = False
     trail_events, context_events = _events_for_trace_from_iter(events_iter, trace_id)
 
     if not trail_events and not context_events:
@@ -574,11 +594,13 @@ def project_per_trace_exports(
     # #172 GAP 1 — build the trace's per-patch anchor map from its own trail
     # events (already in hand — no second read) so the persisted trace.json
     # single-sources ``Patch.anchor`` from the canonical ``git_anchor_created``
-    # events. Honest fallback: when the project is not resolvable (``repo is
-    # None`` — cross-machine restore), pass None so the already-healed on-disk
-    # record is written verbatim rather than fabricated / stripped.
+    # events. Honest fallback: when the anchor source was NOT authoritatively read
+    # (cross-machine restore with ``repo is None``, OR a live read that raised),
+    # pass None so the already-healed on-disk record is written verbatim rather
+    # than fabricated / stripped (#172 review fix — never de-attribute on a
+    # transient read failure).
     patch_anchors = (
-        anchor_map_from_trail_events(trail_events) if repo is not None else None
+        anchor_map_from_trail_events(trail_events) if anchor_source_ok else None
     )
 
     return _write_per_trace_envelope(
