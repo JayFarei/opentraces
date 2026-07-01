@@ -30,6 +30,13 @@
    "status"
   ]
  },
+ "bucket reclaim": {
+  "schema_version": null,
+  "top_level_keys": [
+   "reclaim",
+   "status"
+  ]
+ },
  "bucket remote diff": {
   "schema_version": null,
   "top_level_keys": [
