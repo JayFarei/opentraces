@@ -456,6 +456,23 @@ def bucket_verify(
     import random
 
     errors: list[dict[str, Any]] = []
+    # F0 hang cure (#87): when sampling (not --full and sample > 0), --sample is
+    # a TRUE work budget — every one of the three checks is bounded to the sample
+    # BEFORE any enumeration-heavy work runs. The dominant O(N) cost on a mature
+    # bucket is the whole-corpus events-mirror walk in check 2 (~51s on the live
+    # 54G bucket), so it runs only under --full; check 2's per-trace loop and
+    # check 3's manifest walk are each capped to a deterministic sample of the
+    # sample size. --full keeps the exhaustive walk.
+    sampling = not full and sample > 0
+
+    def _bounded(items: list[Any]) -> list[Any]:
+        """Deterministically down-sample ``items`` to ``sample`` when sampling."""
+        if not sampling or len(items) <= sample:
+            return items
+        rng = random.Random(",".join(str(i) for i in items))
+        picked = rng.sample(items, sample)
+        picked.sort()
+        return picked
 
     # --- 1. Blob content integrity --------------------------------------
     blob_files = list(_iter_context_blob_files())
@@ -483,12 +500,19 @@ def bucket_verify(
         )
 
     # --- 2. Dangling reference detection --------------------------------
-    referenced_layer_ids: set[str] = _layer_id_refs_from_events_mirror()
+    # The events-mirror walk reads every ``bucket/events/v1/batches/*.jsonl.gz``
+    # blob — the whole-corpus read that dominates verify on a mature bucket. It
+    # only feeds the events-mirror cross-check below (dangling refs that appear
+    # ONLY in the mirror, not in any trace), so under a sample budget it is
+    # skipped entirely; the sampled per-trace loop still checks its own refs.
+    referenced_layer_ids: set[str] = (
+        set() if sampling else _layer_id_refs_from_events_mirror()
+    )
 
-    # Walk per-trace context.jsonl.gz under traces/v1/.
+    # Walk per-trace context.jsonl.gz under traces/v1/, bounded to the sample.
     traces_root = traces_v1_root()
     if traces_root.exists():
-        for trace_json in sorted(traces_root.glob("*/*/trace.json")):
+        for trace_json in _bounded(sorted(traces_root.glob("*/*/trace.json"))):
             try:
                 proj_slug = unquote(trace_json.parent.parent.name)
                 tid = unquote(trace_json.parent.name)
@@ -522,8 +546,11 @@ def bucket_verify(
 
     # Events-mirror dangling check: walk every layer_id seen in mirror and
     # verify *some* project has a blob for it (we don't know the project
-    # context from the mirror alone, so we look across the blob root).
-    if referenced_layer_ids:
+    # context from the mirror alone, so we look across the blob root). Skipped
+    # under a sample budget: ``referenced_layer_ids`` is empty there (the mirror
+    # walk did not run), so the sampled traces' own refs were already checked
+    # per-trace above.
+    if not sampling and referenced_layer_ids:
         blob_root = blobs_v1_root()
         # Build a fast lookup of all blob filenames -> hash strings.
         on_disk_hashes: set[str] = set()
@@ -566,9 +593,22 @@ def bucket_verify(
             )
             manifest_doc = None
         if manifest_doc is not None:
-            for row in manifest_doc.get("traces") or []:
-                if not isinstance(row, dict):
-                    continue
+            manifest_rows = [
+                row
+                for row in (manifest_doc.get("traces") or [])
+                if isinstance(row, dict)
+            ]
+            # Sample the manifest ROWS (not the on-disk dirs): the point of
+            # check 3 is to catch a manifest row whose trace.json is missing, so
+            # sampling from existing dirs would never surface one. Sampling the
+            # rows keeps a missing-trace.json among the sampled set detectable
+            # while bounding the walk to the sample.
+            if sampling and len(manifest_rows) > sample:
+                rng = random.Random(
+                    ",".join(str(r.get("trace_path") or "") for r in manifest_rows)
+                )
+                manifest_rows = rng.sample(manifest_rows, sample)
+            for row in manifest_rows:
                 rel_trace_path = row.get("trace_path")
                 if not isinstance(rel_trace_path, str) or not rel_trace_path:
                     continue
