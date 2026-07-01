@@ -22,7 +22,9 @@ from pathlib import Path
 from typing import Any
 
 from .contract import CONTEXT_RESUME_SCHEMA_VERSION
-from .query import (
+# The sanctioned bounded entrypoints live behind the predicates-before-
+# projection seam; see core/trails/scoped_reads.py for the contract.
+from ..trails.scoped_reads import (
     build_context_tree_projection_for_trace,
     resolve_node_traces,
 )
