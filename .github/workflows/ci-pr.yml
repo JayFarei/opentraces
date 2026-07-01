@@ -176,6 +176,14 @@ jobs:
           python -m pytest tests/otbox/test_catalogue_lint.py \
             tests/otbox/test_journey_assertions.py \
             tests/otbox/test_jtbd_ssot.py -q
+      # Agent-contract lint (ADR-0007 L1-L6, epic #129). The mechanical gate
+      # that keeps the CLI's agent-facing contract (must-terminate,
+      # must-not-prompt, valid JSON, remote uniformity, uniform envelope,
+      # cross-sibling self-consistency) from regressing. Explicit named step
+      # here mirrors the slicer-conformance precedent; the file also runs for
+      # free in fast-premerge via the sharder (idempotent).
+      - name: Agent-contract lint gate (L1-L6)
+        run: python -m pytest tests/cli/test_agent_contract_lint.py -q
       - name: otbox vertical slice
         run: make otbox-slice
       # Trace Slicer Library (issue #141) conformance gate. SENTINEL journey +
