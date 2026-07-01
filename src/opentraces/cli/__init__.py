@@ -328,13 +328,23 @@ class GroupedGroup(OpentracesGroup):
 
 
 def emit_json(data: dict) -> None:
-    """Emit structured JSON after the sentinel for agent-native parsing.
+    """Emit structured JSON for agent-native parsing.
 
-    Emitted when ``--json`` is explicit OR when stdout is not a TTY
-    (piped into another tool, Click test runner, etc.). Suppressed
-    for interactive human sessions so the terminal stays clean.
+    Two emission conventions (ADR-0007 lint L3):
+
+    * **Explicit ``--json`` (``_json_mode``)** — emit PURE ``json.dumps``
+      with no ``---OPENTRACES_JSON---`` sentinel and no leading human text,
+      so ``opentraces --json <cmd> | jq`` is valid JSON.
+    * **Legacy auto-non-TTY (no ``--json`` flag, piped stdout)** — keep the
+      sentinel preamble so legacy consumers and otbox journey parsing that
+      split on it keep working.
+    * **Interactive human session (TTY, no ``--json``)** — suppressed so the
+      terminal stays clean.
     """
-    if not _json_mode and sys.stdout.isatty():
+    if _json_mode:
+        click.echo(json.dumps(data, indent=2))
+        return
+    if sys.stdout.isatty():
         return
     click.echo(f"\n{SENTINEL}")
     click.echo(json.dumps(data, indent=2))
@@ -367,6 +377,42 @@ def error_response(code: str, kind: str, message: str, hint: str | None = None, 
 
 def _is_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+# rc for a command that refused to prompt because it could not run
+# interactively (ADR-0007 lint L2). Distinct, documented exit code so an
+# agent can branch on "you must supply a flag" without parsing prose.
+RC_INTERACTIVE_REQUIRED = 2
+
+
+def require_interactive(command_name: str, hint: str) -> None:
+    """Refuse (zero prompt bytes) when we cannot prompt a human.
+
+    ADR-0007 lint L2: a command that would drop into an interactive
+    ``click.prompt``/``click.confirm`` must NOT do so under explicit
+    ``--json`` or on a non-interactive terminal (closed/piped stdin or
+    stdout). Instead it emits a structured ``INTERACTIVE_REQUIRED`` error
+    naming the explicit flags/subcommands that do the same work
+    non-interactively, and exits ``RC_INTERACTIVE_REQUIRED`` (2). Emits ZERO
+    prompt bytes.
+
+    A genuine interactive human session (real TTY, no ``--json``) returns
+    immediately so today's prompt behavior is unchanged.
+    """
+    if not _json_mode and _is_interactive_terminal():
+        return
+    payload = error_response(
+        "INTERACTIVE_REQUIRED",
+        command_name,
+        f"'{command_name}' needs an interactive terminal; refusing to prompt.",
+        hint=hint,
+    )
+    emit_json(payload)
+    if not _json_mode and sys.stdout.isatty():
+        # emit_json suppressed on a TTY-stdout / piped-stdin session; still
+        # surface a one-line refusal (no prompt bytes) so the human sees it.
+        click.echo(f"{command_name}: {hint}", err=True)
+    sys.exit(RC_INTERACTIVE_REQUIRED)
 
 
 def _masked_input(prompt: str = "Token: ") -> str:
@@ -883,7 +929,9 @@ def config_tracking_mode(mode: str | None) -> None:
     """
     cfg = load_config()
     if mode is None:
-        click.echo(cfg.capture.tracking_mode)
+        # L3 (epic #129): suppress the bare human value under explicit --json so
+        # stdout stays pure JSON.
+        human_echo(cfg.capture.tracking_mode)
         emit_json({"status": "ok", "tracking_mode": cfg.capture.tracking_mode})
         return
     cfg.capture.tracking_mode = mode
@@ -3189,6 +3237,12 @@ def remote_remove(repo: str | None, delete_remote: bool, confirmed: bool) -> Non
         sys.exit(2)
 
     if delete_remote and not confirmed:
+        # ADR-0007 lint L2: destructive confirm must not prompt under --json /
+        # non-TTY; refuse with a structured error naming the --yes bypass.
+        require_interactive(
+            "remote remove",
+            "pass --yes to confirm the irreversible remote deletion non-interactively",
+        )
         click.echo(f"About to delete {repo} on HuggingFace (irreversible).")
         if not click.confirm("Proceed?"):
             click.echo("Cancelled.")

@@ -111,8 +111,11 @@ class TestAuthSubcommands:
 
         assert result.exit_code == 3
         assert "Complete HuggingFace auth outside this agent session" in result.output
-        assert SENTINEL in result.output
-        payload = json.loads(result.output.split(SENTINEL, 1)[1].strip())
+        # L3 (epic #129): under explicit --json the JSON payload is emitted with
+        # no ---OPENTRACES_JSON--- sentinel. The out-of-band device flow still
+        # prints its human instructions first, so parse from the JSON object.
+        assert SENTINEL not in result.output
+        payload = json.loads(result.output[result.output.index("{"):])
         assert payload["status"] == "needs_action"
         assert payload["error"]["code"] == "AUTH_TIMEOUT"
         assert payload["authenticated"] is False

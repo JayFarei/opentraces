@@ -130,7 +130,9 @@ class TestPublicCommandTree:
         project_dir, runner = initialized_project
         result = runner.invoke(main, ["--json", "status"])
         assert result.exit_code == 0
-        assert "---OPENTRACES_JSON---" in result.output
+        # L3 (epic #129): explicit --json emits pure JSON, no sentinel preamble.
+        assert "---OPENTRACES_JSON---" not in result.output
+        json.loads(result.output.strip())
 
     def test_config_show(self, initialized_project):
         project_dir, runner = initialized_project
@@ -796,9 +798,9 @@ class TestHooksCommands:
         ])
         assert result.exit_code == 0
         from opentraces.cli import SENTINEL
-        assert SENTINEL in result.output
-        json_part = result.output.split(SENTINEL, 1)[1].strip()
-        data = json.loads(json_part)
+        # L3 (epic #129): explicit --json emits pure JSON, no sentinel preamble.
+        assert SENTINEL not in result.output
+        data = json.loads(result.output.strip())
         assert data["status"] == "ok"
         assert data["dry_run"] is True
         assert "plan" in data

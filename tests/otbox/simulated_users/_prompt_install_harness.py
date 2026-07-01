@@ -56,11 +56,12 @@ def _assert_path(path: Path) -> None:
 
 
 def _opentraces_json(stdout: str) -> dict:
+    # L3 (epic #129): explicit --json emits pure JSON with no
+    # ---OPENTRACES_JSON--- sentinel; the legacy auto-non-TTY path still
+    # prepends one. Tolerate both.
     marker = "---OPENTRACES_JSON---"
-    if marker not in stdout:
-        raise RuntimeError("opentraces output did not contain JSON sentinel")
-    payload = stdout.split(marker, 1)[1].strip()
-    return json.loads(payload)
+    payload = stdout.split(marker, 1)[1] if marker in stdout else stdout
+    return json.loads(payload.strip())
 
 
 def _verify_prompt_contract() -> None:
