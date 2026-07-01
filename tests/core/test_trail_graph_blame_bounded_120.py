@@ -314,3 +314,47 @@ def test_graph_commit_mode_joins_only_the_paginated_window(
         "bounded commit-scoped read is fed the full git history (the #120 "
         "flood regression)."
     )
+
+
+def test_graph_trace_pivot_joins_only_the_paginated_window(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """F0 hang cure (#110): trace-primary (``--trace``) ``trail graph`` must
+    bound the pivot to the PAGINATED window, mirroring commit mode.
+
+    The pre-cure pivot path attached attribution + trail evidence to EVERY
+    commit in history before filtering to the pivot — handing the commit-scoped
+    trail-evidence builder the full git-history SHA set and re-admitting the
+    ``git_anchor_search_completed`` flood the #120 scoping exists to avoid. This
+    pins the ordering: with pagination first, the join sees ``<= limit`` commits.
+    """
+    from opentraces.clients.text import graph_renderer
+
+    shas = _seed_multi_commit_world(tmp_path, n_commits=5)
+    assert len(shas) > 2  # the world spans more than one page
+
+    captured: dict = {}
+    real_attach = graph_renderer._attach_trail_evidence
+
+    def _spy(commits, project_cwd):
+        captured["count"] = len(commits)
+        return real_attach(commits, project_cwd)
+
+    monkeypatch.setattr(graph_renderer, "_attach_trail_evidence", _spy)
+
+    # ``t-4`` is the newest commit's trace, so it falls inside the recent window.
+    opts = graph_renderer.RenderOptions(
+        mode="trace", pivot_trace_id="t-4", limit=2, page=1
+    )
+    result = graph_renderer.load_commits_from_repo(tmp_path, opts)
+
+    assert "count" in captured, "the trail-evidence join was never invoked"
+    assert captured["count"] <= opts.limit, (
+        f"pivot trail-evidence join saw {captured['count']} commits but the "
+        f"paginated window is {opts.limit}; pagination MUST precede the join in "
+        "trace-pivot mode too, else the pivot re-admits the full git history."
+    )
+    # The pivot still resolves within the window.
+    assert any(
+        any(t.trace_id == "t-4" for t in c.traces) for c in result
+    )
