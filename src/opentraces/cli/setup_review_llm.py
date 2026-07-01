@@ -336,6 +336,12 @@ def setup_review_llm_cmd(
     any_flag = any(v is not None for v in (api_format, base_url, model, api_key_env, timeout))
 
     if not any_flag and not enable and not test_only and not no_interactive:
+        # ADR-0007 lint L2: the preset picker is interactive. Under --json /
+        # non-TTY, refuse with a structured error instead of prompting.
+        _cli.require_interactive(
+            "setup llm-review",
+            "pass --enable with --base-url/--model (see --help), or --no-interactive",
+        )
         api_format, base_url, model, api_key_env, timeout = _setup_review_llm_interactive()
 
     # Layer flag overrides on top of current config.

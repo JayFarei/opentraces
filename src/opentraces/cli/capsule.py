@@ -32,6 +32,7 @@ from pathlib import Path
 
 import click
 
+import opentraces.cli as _cli
 from ._progress import build_cli_progress, progress_option
 from .capsule_export_helpers import (
     _do_export,
@@ -85,6 +86,11 @@ def _confirm_egress(destinations, manifest, business_logic_findings, assume_yes)
 
     if assume_yes:
         return
+    # ADR-0007 lint L2: egress confirm must not prompt under --json / non-TTY.
+    _cli.require_interactive(
+        "capsule publish",
+        "pass --yes to approve the redacted egress non-interactively",
+    )
     manifest = manifest or {}
     dest_str = "; ".join(destinations) if destinations else "(no destination configured)"
     click.echo(
@@ -694,6 +700,12 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
         if bundle_path else f"an isolated checkout of `{target_ref}` in {repo}"
     )
     if not assume_yes:
+        # ADR-0007 lint L2: untrusted-command confirm must not prompt under
+        # --json / non-TTY; refuse with a structured error naming the bypass.
+        _cli.require_interactive(
+            "capsule run",
+            "pass --yes to trust and run the captured command non-interactively",
+        )
         sweep = f" across {matrix_name}={','.join(matrix_versions)}" if matrix else ""
         click.echo(
             f"About to RUN this captured (untrusted) command in {where}{sweep}:\n  $ {test['command']}",

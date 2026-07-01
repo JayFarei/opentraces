@@ -141,6 +141,12 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
                    "install_method": "already-installed"})
         return
 
+    # ADR-0007 lint L2: the installer picker is interactive. Under --json /
+    # non-TTY, refuse with a structured error instead of prompting.
+    _cli.require_interactive(
+        "setup trufflehog",
+        "pass --enable to install/enable non-interactively (or --disable / --verify)",
+    )
     chosen = _pick_install_method_interactive()
     if chosen is None:
         _cli.human_echo("")

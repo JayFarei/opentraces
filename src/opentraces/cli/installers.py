@@ -113,6 +113,16 @@ def _run_setup_wizard() -> None:
       6. security tool status             (trufflehog / llm-review, read-only)
       7. closing panel — point at `opentraces init` + `opentraces doctor`
     """
+    # ADR-0007 lint L2: bare ``opentraces setup`` is an interactive wizard. It
+    # must never prompt under ``--json`` or on a non-interactive terminal —
+    # refuse with a structured error naming the explicit subcommands instead.
+    _cli.require_interactive(
+        "setup",
+        "run a specific integration directly (e.g. 'opentraces setup claude-code', "
+        "'opentraces setup git', 'opentraces setup watcher install') instead of the "
+        "interactive wizard",
+    )
+
     from ..capture import get_hook_installers
     from ..security.trufflehog import find_trufflehog
     from ..watcher import installer as _winst
