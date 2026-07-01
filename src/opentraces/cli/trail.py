@@ -112,7 +112,11 @@ def trail_group() -> None:
     "limit",
     type=click.IntRange(min=1),
     default=None,
-    help="Batch: cap the number of patches emitted.",
+    help=(
+        "Batch: bound work to the N most recent patches (default 50 for "
+        "--all). Caps both enumeration and per-patch survival work, not just "
+        "the emitted rows; the oldest patches are the slowest to resolve."
+    ),
 )
 @click.option(
     "--warn-missing-patches",
@@ -221,23 +225,39 @@ def track_cmd(
             sys.exit(2)
 
         repo = Path(project_dir or Path.cwd()).resolve()
+        # F0 hang cure (#110): --limit bounds WORK, not just output. On a mature
+        # trail the oldest patches carry the longest git survival walk (44s for
+        # the oldest 10 vs 0.45s for the newest 10 on the live ~21k-patch log),
+        # so an unbounded --all — or even the pre-cure ``[:limit]`` head slice,
+        # which picked the SLOWEST/oldest patches — hangs. Default --all to the
+        # 50 most recent patches; the enumerated selectors take the tail (newest)
+        # so the per-patch survival loop is bounded to cheap, relevant patches.
+        _DEFAULT_ALL_LIMIT = 50
+        effective_limit = (
+            limit if limit is not None else (_DEFAULT_ALL_LIMIT if all_patches else None)
+        )
         try:
             if since is not None:
                 cutoff = _parse_track_since(since)
-                patch_ids = _collect_event_log_patch_ids(repo, since=cutoff)
+                patch_ids = _collect_event_log_patch_ids(
+                    repo, since=cutoff, limit=effective_limit
+                )
             elif patches_from is not None:
+                # An explicit id list is authoritative: honour its order and cap
+                # from the head only when --limit was passed.
                 patch_ids = _read_patches_from_file(patches_from)
+                if effective_limit is not None:
+                    patch_ids = patch_ids[:effective_limit]
             else:
-                patch_ids = _collect_event_log_patch_ids(repo)
+                patch_ids = _collect_event_log_patch_ids(
+                    repo, limit=effective_limit
+                )
         except ValueError as exc:
             click.echo(str(exc), err=True)
             sys.exit(2)
         except Exception as exc:
             click.echo(f"Unable to enumerate patches: {exc}", err=True)
             sys.exit(2)
-
-        if limit is not None:
-            patch_ids = patch_ids[:limit]
 
         if silent:
             return

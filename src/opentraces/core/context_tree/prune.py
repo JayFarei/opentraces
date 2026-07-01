@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from .contract import CONTEXT_RESUME_SCHEMA_VERSION
-from .query import build_context_tree_projection
+# The sanctioned bounded entrypoints live behind the predicates-before-
+# projection seam; see core/trails/scoped_reads.py for the contract.
+from ..trails.scoped_reads import (
+    build_context_tree_projection_for_trace,
+    resolve_node_traces,
+)
 
 
 def prune_session_to_node(
@@ -55,8 +60,19 @@ def prune_session_to_node(
             When omitted, an anonymous ``sess-<uuid4>`` id is minted.
         write: If True, actually write the new JSONL; default dry-run.
     """
-    projection = build_context_tree_projection(repo)
-    node = projection.nodes_by_id.get(node_id)
+    # Issue #121: bound the read. Resolve the owning trace via a scoped
+    # (context_node_observed-only) event read, then project just that trace —
+    # ``active_path`` is per-trace, so the pruned output is byte-identical to
+    # the whole-log projection while avoiding the full event-log walk that made
+    # ``ctx prune`` hang on a mature repo.
+    resolved = resolve_node_traces(repo, {node_id})
+    owner_trace = resolved.get(node_id)
+    projection = (
+        build_context_tree_projection_for_trace(repo, owner_trace)
+        if owner_trace is not None
+        else None
+    )
+    node = projection.nodes_by_id.get(node_id) if projection is not None else None
     if node is None:
         return {
             "schema_version": CONTEXT_RESUME_SCHEMA_VERSION,

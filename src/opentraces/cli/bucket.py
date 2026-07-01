@@ -266,13 +266,31 @@ def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def bucket_manifest_cmd(heal: bool, as_json: bool) -> None:
     """Print the local bucket manifest (read-only; pass --heal to materialize)."""
-    from ..core.bucket_store import bucket_manifest, bucket_manifest_path
+    from ..core.bucket_store import (
+        bucket_manifest,
+        bucket_manifest_path,
+        read_persisted_manifest_capped,
+    )
 
-    # Issue #55 — default is a pure read: compute + print the manifest (incl.
-    # an in-memory reconcile of record-only orphans) without writing any byte
-    # under the bucket. `--heal` restores the materializing behavior (write
-    # manifest.json + per-trace envelopes), idempotent on a no-op.
-    manifest = bucket_manifest(write=heal, heal=heal, include_objects=False)
+    # #87 F0 hang cure — a read (no --heal) SERVES the persisted manifest.json
+    # O(1) instead of recomputing it, exactly like ``bucket status`` /
+    # ``ctx list`` already do. The full O(N) recompute (which re-scans every
+    # trace record + raw source + trail/context substrate + a per-repo anchor
+    # read) is kept ONLY for --heal or when no usable persisted manifest exists
+    # (a fresh/empty world, or an unreadable/too-large file) — so small buckets
+    # and the empty-world CLI sweep behave exactly as before. The served file is
+    # the authoritative manifest a prior --heal / repair / push wrote; its
+    # top-level keys are byte-compatible with the recomputed shape.
+    manifest: dict[str, object] | None = None
+    if not heal:
+        state, persisted = read_persisted_manifest_capped()
+        if state == "ok" and isinstance(persisted, dict):
+            manifest = persisted
+    if manifest is None:
+        # Issue #55 — the recompute path is still a pure read when heal=False:
+        # it reconciles record-only orphans in memory without writing any byte
+        # under the bucket. `--heal` restores the materializing behavior.
+        manifest = bucket_manifest(write=heal, heal=heal, include_objects=False)
     if as_json:
         click.echo(_dump_json({"status": "ok", "manifest": manifest}))
         return

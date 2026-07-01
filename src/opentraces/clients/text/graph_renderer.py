@@ -714,6 +714,15 @@ def render_manifesto_reference() -> str:
 def _git_log(project_cwd: Path, opts: RenderOptions) -> list[Commit]:
     fmt = "%H%x1f%h%x1f%s%x1f%cI%x1f%P"
     cmd = ["git", "log", f"--pretty=format:{fmt}"]
+    # F0 hang cure (#110): bound the history read to the paginated window. Both
+    # the commit-primary path and (post-cure) the trace pivot only ever render
+    # ``commits[start:end]`` where ``end = page * limit``; reading the whole
+    # history on a deep repo is wasted work. ``-n`` keeps the most-recent N in
+    # ``git log`` order, so the subsequent ``_paginate`` slice is byte-identical
+    # to slicing the full list. ``--since``/``--until`` still range-filter first;
+    # ``-n`` then caps the most-recent N within that range.
+    if opts.limit and opts.limit > 0:
+        cmd.append(f"-n{opts.page * opts.limit}")
     if opts.since:
         cmd.append(f"{opts.since}..")
     if opts.until:
@@ -963,10 +972,15 @@ def load_commits_from_repo(project_cwd: Path, opts: RenderOptions) -> list[Commi
     """
     commits = _git_log(project_cwd, opts)
     if opts.mode == "trace" and opts.pivot_trace_id:
-        # Trace-primary: attribution + trail evidence must see ALL commits so the
-        # pivot filter is correct (the pivot can match anywhere in history), so
-        # attach BEFORE filtering. The window is the pivot-matching commits
-        # (bounded by the pivot, not by history).
+        # F0 hang cure (#110/#120): bound the pivot to the paginated window,
+        # mirroring the commit-primary path below. Attaching attribution + trail
+        # evidence to ALL of history before filtering handed the commit-scoped
+        # trail-evidence builder EVERY commit's SHA — re-admitting the whole
+        # ``git_anchor_search_completed`` flood the scoping exists to avoid (the
+        # unbounded pivot path). Paginate FIRST so ``--limit`` bounds the
+        # attribution WORK; the pivot filter now applies within the recent
+        # window rather than across all history.
+        commits = _paginate(commits, opts)
         commits = _attach_attribution(commits, project_cwd,
                                       show_entities=opts.show_entities)
         commits = _attach_trail_evidence(commits, project_cwd)
@@ -975,7 +989,7 @@ def load_commits_from_repo(project_cwd: Path, opts: RenderOptions) -> list[Commi
                    if any((t.trace_id == pivot or
                            t.trace_id.startswith(pivot))
                           for t in c.traces)]
-        return _paginate(commits, opts)
+        return commits
     # Commit-primary: paginate FIRST, then attach attribution and trail evidence
     # to the bounded window only, so --limit bounds the attribution WORK (not
     # just the output) and the commit-scoped projection reads a bounded SHA set
