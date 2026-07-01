@@ -77,6 +77,24 @@ FAST_GUARD = 3   # Phase 2 warm fast gate
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
 
+def _real_home() -> str:
+    """Resolve the real login HOME from the system passwd DB, INDEPENDENT of
+    ``$HOME``. The repo's autouse ``_isolate_opentraces_global_state`` fixture
+    (tests/conftest.py) redirects ``$HOME`` to an EMPTY tmp dir for every pytest;
+    the shipped ``opentraces`` blame subprocess would then resolve an empty
+    AttributionCache and bail rc=1 — a false RED unrelated to the fast/empty claim
+    (the #172 GAP 3 defect). Reading the passwd entry restores the real bucket for
+    the READ-ONLY blame subprocess, so the pytest run matches the known-good direct
+    run (both rc=0). Blame never writes, so no enlistment leaks into
+    ``~/.opentraces/projects/``."""
+    try:
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except Exception:  # noqa: BLE001
+        return os.path.expanduser("~")
+
+
 def _project_dir() -> Path | None:
     """The opted-in opentraces project that owns this checkout's shared event
     log: the parent of the COMMON git dir (works from the main checkout or a
@@ -306,6 +324,10 @@ def _blame(timeout: int, project: Path) -> tuple[bool, int, str]:
             proc = subprocess.Popen(
                 [str(OT), "trail", "blame", "commit", SHA, "--project", str(project), "--json"],
                 cwd=str(project),
+                # #172 GAP 3: pin the subprocess HOME to the real login home so the
+                # conftest ``$HOME`` isolation cannot empty the AttributionCache and
+                # turn the fast/empty claim into a false rc=1 RED. Read-only blame.
+                env={**os.environ, "HOME": _real_home()},
                 stdout=out_f,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
