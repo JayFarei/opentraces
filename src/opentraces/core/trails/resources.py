@@ -15,7 +15,7 @@ from .contract import (
     lineage_key,
     typed_limitations,
 )
-from .event_log import EVENT_LOG_REF, read_events
+from .event_log import EVENT_LOG_REF, read_events_scoped
 from .sync import sync_anchor, sync_patch
 from .ids import (
     git_anchor_ref,
@@ -135,6 +135,26 @@ def _index_events(
     for anchor_pairs in anchors_by_patch.values():
         anchor_pairs.sort(key=lambda pair: pair[1].event_sequence)
     return patches, anchors_by_id, anchors_by_patch
+
+
+# ``_index_events`` dispatches only on these two event types; a scoped read of
+# them is byte-identical to a filtered full ``read_events`` walk, just bounded.
+_RESOLVE_EVENT_TYPES = {"trace_patch_created", "git_anchor_created"}
+
+
+def _resolve_events(repo: Path) -> list[TrailEvent]:
+    """Bounded event read for the ``ot://`` resolvers.
+
+    Reads ONLY the ``trace_patch_created`` + ``git_anchor_created`` slice via
+    ``read_events_scoped`` (OID-indexed; raw-bytes prefilter fallback) instead of
+    materialising the whole canonical event log — the full-log walk that made
+    ``trail resolve`` / ``ctx resolve`` hang on a mature repo (issues #87 /
+    #121). ``read_events_scoped`` returns events in ``event_sequence`` order, so
+    the ``_index_events`` last-wins dicts and the ``reversed(events)``
+    latest-anchor scan in :func:`_resolve_file_line_origin` see the same order as
+    a full read — the resolved envelope is byte-identical.
+    """
+    return read_events_scoped(repo, event_types=_RESOLVE_EVENT_TYPES)
 
 
 def _unknown_resource(resource: str, resource_type: str, limitation: str) -> dict[str, Any]:
@@ -353,7 +373,7 @@ def _resolve_trace_patch_trail_by_id(
     trace_patch_id: str,
     expected_trace_id: str | None = None,
 ) -> dict[str, Any]:
-    events = read_events(repo)
+    events = _resolve_events(repo)
     patches, _anchors_by_id, anchors_by_patch = _index_events(events)
     patch_pair = patches.get(trace_patch_id)
     if patch_pair is None or (
@@ -411,7 +431,7 @@ def _resolve_git_anchor(repo: Path, resource: str, segments: list[str]) -> dict[
         git_anchor_id = normalize_id(raw_id)
     else:
         raise ValueError("git anchor resource must be ot://git-anchor/sha256/<git_anchor_id>")
-    events = read_events(repo)
+    events = _resolve_events(repo)
     patches, anchors_by_id, _anchors_by_patch = _index_events(events)
     anchor_pair = anchors_by_id.get(git_anchor_id)
     if anchor_pair is None:
@@ -473,7 +493,7 @@ def _parse_file_line_origin(segments: list[str]) -> tuple[str, int]:
 
 def _resolve_file_line_origin(repo: Path, resource: str, segments: list[str]) -> dict[str, Any]:
     path, line_no = _parse_file_line_origin(segments)
-    events = read_events(repo)
+    events = _resolve_events(repo)
     patches, _anchors_by_id, _anchors_by_patch = _index_events(events)
     for event in reversed(events):
         if event.event_type != "git_anchor_created":
@@ -651,11 +671,20 @@ def _resolve_context_node(
 ) -> dict[str, Any]:
     """``ot://context-node/sha256/<id>`` → ContextNode with inlined layers."""
     from ..context_tree.contract import CONTEXT_RESOLVE_SCHEMA_VERSION
-    from ..context_tree.query import build_context_tree_projection
+    from ..context_tree.query import (
+        build_context_tree_projection_for_trace,
+        resolve_node_traces,
+    )
 
     node_id = _context_hash_id(segments, "context-node")
-    projection = build_context_tree_projection(repo)
-    node = projection.nodes_by_id.get(node_id)
+    # Issue #121: bound the read to the owning trace instead of the whole log.
+    owner_trace = resolve_node_traces(repo, {node_id}).get(node_id)
+    projection = (
+        build_context_tree_projection_for_trace(repo, owner_trace)
+        if owner_trace is not None
+        else None
+    )
+    node = projection.nodes_by_id.get(node_id) if projection is not None else None
     if node is None:
         return _context_unknown(resource, "context_node", {"node_id": node_id})
     payload = _serialize_node_with_layers(node, projection.layers_by_id)
@@ -673,6 +702,10 @@ def _resolve_context_layer(
     from ..context_tree.query import build_context_tree_projection
 
     layer_id = _context_hash_id(segments, "context-layer")
+    # Residual whole-log read: a bare content-addressed layer_id carries no
+    # owning-trace predicate, so unlike context-node/context-tree there is no
+    # bounded scoped route without inventing a layer->trace index (out of scope
+    # for the Phase-0 hang cure). This hidden diagnostic stays whole-log.
     projection = build_context_tree_projection(repo)
     layer = projection.layers_by_id.get(layer_id)
     if layer is None:
@@ -695,7 +728,7 @@ def _resolve_context_tree(
     - ``ot://context-tree/<trace_id>/compaction/<index>`` -> compaction boundary with loss_diff
     """
     from ..context_tree.contract import CONTEXT_RESOLVE_SCHEMA_VERSION
-    from ..context_tree.query import build_context_tree_projection
+    from ..context_tree.query import build_context_tree_projection_for_trace
 
     if not segments:
         raise ValueError(
@@ -703,7 +736,9 @@ def _resolve_context_tree(
         )
     trace_id = segments[0]
     rest = segments[1:]
-    projection = build_context_tree_projection(repo)
+    # Issue #121: the trace_id is given directly — project only that trace
+    # instead of walking the whole event log (per-trace keyed projection).
+    projection = build_context_tree_projection_for_trace(repo, trace_id)
     if trace_id not in projection.nodes_by_trace:
         return _context_unknown(
             resource, "context_tree", {"trace_id": trace_id}
