@@ -136,9 +136,10 @@ class TestStatusGate:
 
             result = runner.invoke(main, ["--json", "status"])
             assert result.exit_code == 0, result.output
-            payload = json.loads(
-                result.output.split("---OPENTRACES_JSON---", 1)[1].strip()
-            )
+            # L3 (epic #129): explicit --json emits pure JSON, no sentinel.
+            out = result.output
+            blob = out.split("---OPENTRACES_JSON---", 1)[1] if "---OPENTRACES_JSON---" in out else out
+            payload = json.loads(blob.strip())
             assert payload["status"] == "ok"
             assert payload["excluded"] is True
 
