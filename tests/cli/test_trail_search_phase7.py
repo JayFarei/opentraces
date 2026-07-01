@@ -87,7 +87,7 @@ def _append_anchored_patch(
     return commit_sha, patch
 
 
-def _assert_same_anchor(expected: dict, actual: dict) -> None:
+def _assert_same_anchor(expected: dict, actual: dict, *, has_survival: bool = True) -> None:
     fields = (
         "trace_id",
         "step_id",
@@ -131,11 +131,22 @@ def _assert_same_anchor(expected: dict, actual: dict) -> None:
     assert "committed_range_hash_matches_trace_patch_range_hash" in actual["evidence"][
         "reason_codes"
     ]
-    assert actual["current_state"]["survival_state"] in {
-        "alive_on_path",
-        "reverted",
-    }
-    assert actual["current_state"]["observed_at_commit"]
+    # Commit-scoped ``blame commit <sha>`` is the attribution-only seam (#169 /
+    # probe A8): it can touch hundreds of anchors, so it resolves anchor identity
+    # WITHOUT the per-anchor survival recompute and never carries a live survival
+    # verdict. The survival-bearing consumers (search / graph / resolve, and the
+    # single-anchor ``blame commit <file>:<line>`` line address) keep the strict
+    # ``current_state`` check; commit-scoped blame passes ``has_survival=False``
+    # and asserts the survival container is absent instead.
+    if has_survival:
+        assert actual["current_state"]["survival_state"] in {
+            "alive_on_path",
+            "reverted",
+        }
+        assert actual["current_state"]["observed_at_commit"]
+    else:
+        assert "current_state" not in actual
+        assert "current_survival" not in actual
     assert actual["line_origin_refs"][0]["resource_ref"].startswith("ot://file/")
 
 
@@ -177,8 +188,10 @@ def test_lineage_consumers_and_search_read_same_trail_projection(tmp_path: Path)
     blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
     assert blame["projection_limitations"] == ["attribution_cache_missing_trail_events_used"]
     assert len(blame["trailEvidence"]) == 1
-    _assert_same_anchor(expected, blame["trailEvidence"][0])
+    _assert_same_anchor(expected, blame["trailEvidence"][0], has_survival=False)
 
+    # Line-address blame resolves a single anchor, so survival is cheap and is
+    # carried (unlike commit-scoped blame above).
     line_blame = _run_json(
         tmp_path,
         ["trail", "blame", "commit", f"{expected['file_path']}:{expected['affected_range']['start_line']}"],
@@ -366,8 +379,15 @@ def test_trail_search_finds_reverted_patch_trails(tmp_path: Path) -> None:
     assert payload["results"][0]["trace_patch_id"] == expected["trace_patch_id"]
     assert payload["results"][0]["current_survival"]["survival_state"] == "reverted"
 
+    # blame is attribution-only (#169 / probe A8): it resolves the reverted
+    # patch's anchor but never carries a live survival verdict. Live survival
+    # for this commit is owned by ``trail search`` (above) and ``trail graph``
+    # (below), which both recompute reachability.
     blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
-    assert blame["trailEvidence"][0]["current_survival"]["survival_state"] == "reverted"
+    blame_evidence = blame["trailEvidence"][0]
+    assert blame_evidence["trace_patch_id"] == expected["trace_patch_id"]
+    assert "current_survival" not in blame_evidence
+    assert "current_state" not in blame_evidence
 
     graph = _run_json(
         tmp_path,
