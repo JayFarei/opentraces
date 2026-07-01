@@ -24,6 +24,17 @@ from opentraces.core import bucket_envelope as be
 from opentraces.core import paths
 
 
+class _FakeEvent:
+    """Minimal dumpable stand-in for a TrailEvent (the projection writes
+    ``event.model_dump(mode=...)`` into the trail companion)."""
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+    def model_dump(self, *args, **kwargs):
+        return dict(self.__dict__)
+
+
 def _opt_in(monkeypatch, tmp_path, slug="proj-slug-172"):
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
@@ -135,3 +146,109 @@ def test_per_trace_summary_patch_count_vs_anchored_count_semantics(
     summary = be._per_trace_v2_summary(slug, tid, rec)["summary"]
     assert summary["patch_count"] == 2, "patch_count is the surface-row count"
     assert summary["anchored_count"] == 1, "anchored_count is the DISTINCT patch id"
+
+
+def test_events_for_export_loop_signals_read_failure(monkeypatch, tmp_path):
+    """The shared-loop reader returns ``([], False)`` when the underlying
+    ``read_events`` raises, so repair/rebuild callers can mark the empty event set
+    NON-authoritative (#172 review fix — a failed shared read must not be treated
+    as authoritative zero anchors)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("transient log read failure")
+
+    monkeypatch.setattr("opentraces.core.trails.read_events", _boom)
+    events, read_ok = be._events_for_export_loop(repo)
+    assert events == []
+    assert read_ok is False
+
+
+def test_project_per_trace_verbatim_when_shared_read_not_authoritative(
+    tmp_path, monkeypatch
+):
+    """The exact caller path codex flagged: trace ids are known but the shared
+    read FAILED (``events=[]`` with ``events_authoritative=False``). The live
+    projection must write the record's ``found=True`` anchor VERBATIM, never
+    de-attribute it from an authoritative-looking empty event set."""
+    monkeypatch.setattr(paths, "OPENTRACES_DIR", tmp_path / ".opentraces")
+    slug, tid, sha = "proj-slug-172", "trace-shared-fail-172", "c" * 40
+    rec = TraceRecord(
+        trace_id=tid,
+        session_id="sess-172",
+        agent=Agent(name="claude-code", model="anthropic/claude-opus-4-6"),
+        steps=[Step(step_index=1, role="user", content="task")],
+        patches=[
+            Patch(
+                patch_id="pid-shared",
+                file_path="a.py",
+                anchor=GitAnchor(last_searched_at="t", found=True, commit_sha=sha),
+            )
+        ],
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    # Simulate the repair loop passing a FAILED shared read: events=[] +
+    # events_authoritative=False. (read_events_for_trace is never consulted here
+    # because events is not None; the mirror is empty in this relocated bucket.)
+    be.project_per_trace_exports(
+        repo,
+        project_slug=slug,
+        trace_id=tid,
+        record=rec,
+        events=[],
+        events_authoritative=False,
+    )
+    tj = paths.bucket_dir() / "traces" / "v1" / slug / tid / "trace.json"
+    anchor = (json.loads(tj.read_text())["patches"][0].get("anchor")) or {}
+    assert anchor.get("found") is True, "anchor de-attributed on a failed shared read"
+    assert anchor.get("commit_sha") == sha
+
+
+def test_project_per_trace_derives_when_shared_read_authoritative(
+    tmp_path, monkeypatch
+):
+    """Control: with an AUTHORITATIVE shared read (events_authoritative=True) that
+    genuinely holds no git_anchor_created for the trace, an unbacked found=True
+    anchor IS correctly de-attributed (proves the fallback is not a blanket
+    'never de-attribute')."""
+    monkeypatch.setattr(paths, "OPENTRACES_DIR", tmp_path / ".opentraces")
+    slug, tid, sha = "proj-slug-172", "trace-shared-ok-172", "d" * 40
+    rec = TraceRecord(
+        trace_id=tid,
+        session_id="sess-172",
+        agent=Agent(name="claude-code", model="anthropic/claude-opus-4-6"),
+        steps=[Step(step_index=1, role="user", content="task")],
+        patches=[
+            Patch(
+                patch_id="pid-phantom",
+                file_path="a.py",
+                anchor=GitAnchor(last_searched_at="t", found=True, commit_sha=sha),
+            )
+        ],
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    # Authoritative shared read that contains events for the trace but NO
+    # git_anchor_created for pid-phantom -> single-source de-attributes it.
+    other = _FakeEvent(
+        event_type="trace_patch_created",
+        trace_id=tid,
+        event_sequence=1,
+        event_time="t",
+        payload={"trace_id": tid},
+    )
+    be.project_per_trace_exports(
+        repo,
+        project_slug=slug,
+        trace_id=tid,
+        record=rec,
+        events=[other],
+        events_authoritative=True,
+    )
+    tj = paths.bucket_dir() / "traces" / "v1" / slug / tid / "trace.json"
+    anchor = json.loads(tj.read_text())["patches"][0].get("anchor")
+    assert anchor is None or anchor.get("found") is False, (
+        "unbacked anchor should be de-attributed on an authoritative read"
+    )

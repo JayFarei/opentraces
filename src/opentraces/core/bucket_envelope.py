@@ -519,6 +519,7 @@ def project_per_trace_exports(
     trace_id: str,
     record: TraceRecord | None = None,
     events: list[Any] | None = None,
+    events_authoritative: bool = True,
 ) -> dict[str, Any]:
     """Write the per-trace envelope under ``bucket/traces/v1/<proj>/<trace>/``.
 
@@ -562,14 +563,16 @@ def project_per_trace_exports(
     events_iter: list[Any] = []
     # #172 review fix — track whether the canonical anchor source was
     # AUTHORITATIVELY read. Only then may the per-trace projection single-source
-    # (and thus de-attribute) anchors; a read that RAISES must NOT be mistaken for
-    # "resolved with zero anchors" (that would strip valid anchors on a transient
-    # / corrupt-ref failure). ``events is not None`` == the loop caller's shared
-    # full read (already authoritative).
+    # (and thus de-attribute) anchors; a read that RAISES / a failed shared read
+    # must NOT be mistaken for "resolved with zero anchors" (that would strip
+    # valid anchors on a transient / corrupt-ref failure). ``events`` is the loop
+    # caller's shared full read; ``events_authoritative=False`` flags a shared
+    # read that FAILED (``_events_for_export_loop`` returned ``([], False)``), so
+    # the empty list is NOT treated as authoritative.
     anchor_source_ok = False
     if events is not None:
         events_iter = events
-        anchor_source_ok = True
+        anchor_source_ok = events_authoritative
     elif repo is not None:
         try:
             events_iter = read_events_for_trace(repo, trace_id)
@@ -984,22 +987,28 @@ def _iter_opted_in_projects() -> list[tuple[Path, str]]:
     return out
 
 
-def _events_for_export_loop(repo: Path) -> list[Any]:
+def _events_for_export_loop(repo: Path) -> tuple[list[Any], bool]:
     """One full event read shared across a per-trace export loop (#65).
 
     ``read_events`` memoises per (repo, head), so repair/rebuild loops pay one
-    full read instead of one per trace. Returns [] on any failure — the
-    per-trace export then falls back to its own (mirror) sources.
+    full read instead of one per trace. Returns ``(events, read_ok)``: on any
+    failure ``([], False)`` so the caller can mark the shared events as
+    NON-authoritative (#172 review fix). A failed shared read must NOT be passed
+    to the per-trace projection as an authoritative empty event set — that would
+    de-attribute valid anchors on a transient / corrupt-ref failure. On success
+    ``(events, True)`` (a genuine empty log for a project with traces cannot
+    occur — trace ids are derived from the same log — so ``([], True)`` only
+    arises when the caller has no trace ids to project).
     """
 
     try:
         from .trails import read_events
     except Exception:
-        return []
+        return [], False
     try:
-        return list(read_events(repo, verify=False))
+        return list(read_events(repo, verify=False)), True
     except Exception:
-        return []
+        return [], False
 
 
 def _trace_ids_for_project(repo: Path) -> list[str]:

@@ -281,7 +281,11 @@ def bucket_repair(
         # per head); the default per-call trace-scoped read would be
         # O(traces × full-log-walk) here.
         trace_ids = _trace_ids_for_project(project_path)
-        shared_events = _events_for_export_loop(project_path) if trace_ids else []
+        # #172 review fix — a FAILED shared read (read_ok False) must not be
+        # passed as authoritative empty events (that would de-attribute anchors).
+        shared_events, shared_ok = (
+            _events_for_export_loop(project_path) if trace_ids else ([], True)
+        )
         for trace_id in trace_ids:
             traces_projected += 1
             handled_pairs.add((project_slug, trace_id))
@@ -293,6 +297,7 @@ def bucket_repair(
                     project_slug=project_slug,
                     trace_id=trace_id,
                     events=shared_events,
+                    events_authoritative=shared_ok,
                 )
             except Exception as exc:
                 errors.append(
@@ -948,7 +953,11 @@ def rebuild_bucket_traces() -> dict[str, Any]:
         project_envelopes = 0
         errors: list[dict[str, Any]] = []
         # #65: ONE shared full read for the whole loop (see repair loop).
-        shared_events = _events_for_export_loop(project_path) if trace_ids else []
+        # #172 review fix — thread read_ok so a failed shared read is not treated
+        # as authoritative empty events (which would de-attribute valid anchors).
+        shared_events, shared_ok = (
+            _events_for_export_loop(project_path) if trace_ids else ([], True)
+        )
         for tid in trace_ids:
             handled_pairs.add((project_slug, tid))
             try:
@@ -957,6 +966,7 @@ def rebuild_bucket_traces() -> dict[str, Any]:
                     project_slug=project_slug,
                     trace_id=tid,
                     events=shared_events,
+                    events_authoritative=shared_ok,
                 )
                 project_envelopes += 1
             except Exception as exc:
