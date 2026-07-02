@@ -73,7 +73,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **maintain-index** | 1 → 2 | 4 | `trace index rebuild` + `status` + `compact` |
 | **recreate-trace-environment** ★ | 1 → 2 | 3 + 6 | `trace teleport export` + `open` — reconstitutes the environment that produced a trace, for perturbation analysis, RL training, evaluation harnesses, or "rewind" features in OSS repos |
 | **commit-attribution-audit** | 1 → 3 | 4 (Trail) | `trail blame commit` + `trail graph` |
-| **pr-lineage-publish** | 1 → 3 | 4 | `trail blame pr render` → `create` → `update` |
+| **pr-lineage-publish** | 1 → 3 | 4 | `trail pr render` → `create` → `update` |
 | **survival-walk** | 2/3 | 4 | `trail track` |
 | **build-dataset-from-lineage** ★ | (utility) | 4 + 6 | Hidden `trail *` commands — load-bearing utilities for downstream dataset / consumer apps that need lineage primitives (`explain` for evidence chains, `resolve` for `ot://` URI deref, `sync` / `attach` / `mature` / `rebuild` for survival-state maintenance, `snapshots` / `snapshot checkout` for rewind, `timeline` / `search` / `diff` for structured lineage lookup). Hidden from end-user `--help` but **not power-user debugging only** — consumer apps depend on these. |
 | **inspect-private-storage** | 1 → 2 | 5 (Bucket) | `bucket status` + `manifest` |
@@ -224,9 +224,9 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 |---|---|---|---|---|
 | `trail blame commit` | Reviewer asks which traces contributed to a given commit so they can audit attribution | commit-attribution-audit (2/3) | `trail-blame-and-graph` | both |
 | `trail graph` | Developer scans commit + trace history as a GitButler-style ASCII graph to navigate which sessions touched which commits | commit-attribution-audit (1/3) | `trail-blame-and-graph` | both |
-| `trail blame pr render` | Developer previews the trace-lineage PR body for the current branch before pushing | pr-lineage-publish (1/3) | unowned | human |
-| `trail blame pr create` | Developer opens a GitHub PR whose body is sourced from trace lineage, so reviewers see what agent sessions produced each commit | pr-lineage-publish (2/3) | unowned | human |
-| `trail blame pr update` | Developer refreshes an existing PR body after new commits land so the lineage stays current | pr-lineage-publish (3/3) | unowned | human |
+| `trail pr render` | Developer previews the trace-lineage PR body for the current branch before pushing | pr-lineage-publish (1/3) | unowned | human |
+| `trail pr create` | Developer opens a GitHub PR whose body is sourced from trace lineage, so reviewers see what agent sessions produced each commit | pr-lineage-publish (2/3) | unowned | human |
+| `trail pr update` | Developer refreshes an existing PR body after new commits land so the lineage stays current | pr-lineage-publish (3/3) | unowned | human |
 | `trail track` | Agent or developer walks survival state for one trace or a batch of patches to confirm which edits survived into git | survival-walk (2/3) | unowned | both |
 | `trail snapshot checkout` (hidden) | Developer materializes a snapshot rewind point to replay or inspect a prior workspace state | build-dataset-from-lineage | unowned | human |
 | `trail snapshots` (hidden) | Developer lists rewind candidates for a trace before picking one to check out | build-dataset-from-lineage | unowned | human |

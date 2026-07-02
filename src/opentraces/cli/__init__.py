@@ -2600,13 +2600,14 @@ from .trail import trail_group as _trail_group  # noqa: E402
 _trail_group.add_command(_graph_cmd, name="graph")
 _trail_group.add_command(_blame_group, name="blame")
 
-# `trail blame pr` subgroup — PR body rendering driven by the
-# `pr-intent-summary-v1` workflow. First non-dataset workflow consumer.
-# Lives under `blame` because every consumer (PR, future Slack, dashboard,
-# CI) renders the same blame-shaped data for a different destination.
+# `trail pr` — the family's one gated GitHub write, lifted (#165) to a
+# top-level trail verb so the read verbs (`blame`/`track`/`graph`/bare `trail`)
+# stay pure projections. The pre-#165 `trail blame pr ...` path is kept as a
+# hidden compat alias so existing scripts and journeys keep working.
 from .trail_pr import attach as _attach_trail_pr  # noqa: E402
 
-_attach_trail_pr(_blame_group)
+_attach_trail_pr(_trail_group)
+_attach_trail_pr(_blame_group, hidden=True)
 
 main.add_command(_trail_group)
 

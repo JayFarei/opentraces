@@ -20,10 +20,201 @@ from .trail_helpers import (
     _render_trail_play_table,
 )
 
+# The survival scope (``trail track --patch`` / ``--anchor``) historically
+# emitted no ``schema_version``; #165 gives it the dotted house envelope so the
+# survival read is self-describing like every other trail read. Additive only.
+TRACK_SURVIVAL_SCHEMA_VERSION = "opentraces.trail.track.v1"
 
-@click.group("trail", cls=OpentracesGroup)
+
+class _TrailGroup(OpentracesGroup):
+    """Trail group with a bare-noun address front door.
+
+    ``trail <trace>`` / ``trail <trace>:<step>`` are per-trace projections that
+    mirror ctx's addressing. Because trail also owns cross-trace git-plane verbs
+    (``blame`` / ``track`` / ``graph`` / ``pr``), the bare-noun address can only
+    be a fallback: when the first token is a known subcommand it dispatches
+    normally; otherwise the token is treated as a trace address and routed to the
+    hidden ``_ref`` handler. This keeps every existing (and hidden-but-callable)
+    subcommand working untouched.
+    """
+
+    def resolve_command(self, ctx, args):  # type: ignore[override]
+        if (
+            args
+            and not args[0].startswith("-")
+            and args[0] not in self.commands
+        ):
+            args = ["_ref", *args]
+        return super().resolve_command(ctx, args)
+
+
+@click.group("trail", cls=_TrailGroup)
 def trail_group() -> None:
-    """Inspect and sync VCS-anchored Trace Trails."""
+    """Inspect VCS-anchored Trace Trails (bare ``trail <trace>[:step]``)."""
+
+
+@trail_group.command(
+    "_ref",
+    cls=OpentracesCommand,
+    hidden=True,
+)
+@click.argument("ref", required=True)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--full",
+    "full",
+    is_flag=True,
+    help="Include raw substrate (tree ids, snapshot ids) on the world read.",
+)
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    metavar="TEXT",
+    help="Read against a remote bucket (hf repo id) instead of the local project.",
+)
+@project_dir_option
+def trail_ref_cmd(
+    ref: str,
+    as_json: bool,
+    full: bool,
+    remote: str | None,
+    project_dir: Path | None,
+) -> None:
+    """Bare-noun trail address: ``trail <trace>`` or ``trail <trace>:<step>``.
+
+    * ``trail <trace>`` — bounded, survival-free lineage overview.
+    * ``trail <trace>:<step>`` — the world at that step (outcome + hunk).
+
+    Reached by typing ``trail <trace>...`` directly; ``_ref`` is the hidden
+    dispatch target and is not meant to be typed.
+    """
+    from ..core.trails import (
+        build_trail_lineage_card,
+        build_trail_world,
+        parse_trail_ref,
+    )
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    trace_id, step_index, span, reserved = parse_trail_ref(ref)
+
+    def _emit(payload: dict, *, rc: int = 0) -> None:
+        want_json = as_json or (not sys.stdout.isatty())
+        if want_json:
+            click.echo(_dump_json(payload))
+        else:
+            click.echo(_render_ref_human(payload))
+        if rc:
+            sys.exit(rc)
+
+    if reserved in ("span", "origin", "invalid"):
+        # The span (``A-B``) and session-open (``:origin``, #130) slots are
+        # reserved in the addressing grammar but not materialized in v1; degrade
+        # honestly instead of guessing.
+        note = {
+            "span": "span_form_deferred_v1_1",
+            "origin": "origin_slot_reserved_130",
+            "invalid": "unparseable_step_address",
+        }[reserved]
+        _emit(
+            {
+                "status": "error",
+                "schema_version": "opentraces.trail.world.v1",
+                "trace_id": trace_id,
+                "error": {
+                    "code": "UNSUPPORTED_ADDRESS",
+                    "kind": "trail_ref",
+                    "message": (
+                        f"trail address form not available in v1 ({note}); "
+                        f"use trail {trace_id} or trail {trace_id}:<step>"
+                    ),
+                },
+            },
+            rc=2,
+        )
+        return
+
+    if remote is not None:
+        # Remote reads share the read-verb symmetry seam with the rest of the
+        # family; the backend module is in flight (Track D1), so declare the
+        # uniform flag and refuse cleanly rather than silently reading local.
+        _emit(
+            {
+                "status": "error",
+                "schema_version": "opentraces.trail.lineage.v1",
+                "trace_id": trace_id,
+                "error": {
+                    "code": "REMOTE_UNAVAILABLE",
+                    "kind": "trail_ref",
+                    "message": "remote trail reads require the bucket backend module (Track D1)",
+                },
+            },
+            rc=3,
+        )
+        return
+
+    try:
+        if step_index is not None:
+            payload = build_trail_world(repo, trace_id, step_index, full=full)
+        else:
+            payload = build_trail_lineage_card(repo, trace_id)
+    except Exception as exc:  # pragma: no cover - defensive
+        _emit(
+            {
+                "status": "error",
+                "schema_version": "opentraces.trail.lineage.v1",
+                "trace_id": trace_id,
+                "error": {"code": "READ_FAILED", "kind": "trail_ref", "message": str(exc)},
+            },
+            rc=2,
+        )
+        return
+
+    rc = 6 if payload.get("status") == "error" else 0
+    _emit(payload, rc=rc)
+
+
+def _render_ref_human(payload: dict) -> str:
+    """Compact human rendering for the bare-noun trail address."""
+    if payload.get("status") == "error":
+        err = payload.get("error") or {}
+        return f"trail: {err.get('message') or 'error'}"
+    sv = payload.get("schema_version") or ""
+    trace_id = payload.get("trace_id")
+    lines: list[str] = []
+    if sv.endswith("world.v1"):
+        step = payload.get("step_index")
+        delta = payload.get("delta") or {}
+        base = payload.get("base_commit") or "?"
+        lines.append(f"trail {trace_id}:{step} · world @ step {step} · base {base}")
+        for f in (delta.get("files") or [])[:4]:
+            lines.append(f"  did    {f['path']} (+{f['added']} -{f['removed']})")
+        if delta.get("hunk"):
+            for hl in (delta["hunk"].splitlines())[:6]:
+                lines.append(f"         {hl}")
+        lines.append(f"  world  reconstruct -> {payload.get('world_ref')}")
+        pair = payload.get("next_steps") or []
+        if pair:
+            lines.append("  pair -> " + "    ".join(pair))
+    else:
+        pos = payload.get("position") or {}
+        fr = payload.get("freshness") or {}
+        lines.append(
+            f"trail {trace_id} · session lineage · "
+            f"{payload.get('patch_count')} patches / {payload.get('steps')} steps · "
+            f"{len(payload.get('files') or [])} files"
+        )
+        lines.append(
+            f"  landed   {pos.get('merged', 0)} merged · "
+            f"{pos.get('committed_unmerged', 0)} committed-unmerged · "
+            f"{pos.get('unanchored', 0)} unanchored"
+        )
+        files = payload.get("files") or []
+        if files:
+            shown = " · ".join(f"{f['path']} ({f['patches']})" for f in files[:3])
+            lines.append(f"  files    {shown}")
+        lines.append("  ask  ->  " + "    ".join(payload.get("next_steps") or []))
+    return "\n".join(lines)
 
 
 @trail_group.command(
@@ -295,9 +486,13 @@ def track_cmd(
     try:
         if trace_patch_id:
             payload = sync_patch(repo, trace_patch_id, history_limit=history_limit)
+            if isinstance(payload, dict):
+                payload.setdefault("schema_version", TRACK_SURVIVAL_SCHEMA_VERSION)
             renderer = _render_sync_summary
         elif git_anchor_id:
             payload = sync_anchor(repo, git_anchor_id, history_limit=history_limit)
+            if isinstance(payload, dict):
+                payload.setdefault("schema_version", TRACK_SURVIVAL_SCHEMA_VERSION)
             renderer = _render_sync_summary
         elif step_index is not None:
             payload = explain_trace_step(repo, trace_id, step_index)

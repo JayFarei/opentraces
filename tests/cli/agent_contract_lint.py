@@ -135,7 +135,9 @@ QUARANTINE: list[QuarantineEntry] = [
     # index *) were retired by the #163 trace slice: the dual --remote-bucket
     # flags are now hidden deprecated aliases, and skills / index are hidden
     # plumbing (no longer visible read verbs), so none of them surface a
-    # violation any more.
+    # violation any more. The #164 ctx slice retired `ctx list` and the #165
+    # trail slice retired `trail graph` (both adopted the uniform envelope), so
+    # only the status/bucket family entries (Wave B's debt) remain.
     QuarantineEntry("L5", "bucket status", "payload lacks a top-level schema_version header", "status"),
     QuarantineEntry("L5", "bucket manifest", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket reclaim", "payload lacks a top-level schema_version header", "bucket"),
@@ -144,7 +146,6 @@ QUARANTINE: list[QuarantineEntry] = [
     QuarantineEntry("L5", "bucket remote diff", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket remote status", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "doctor", "schema_version is nested in doctor.*, not promoted to top level", "status"),
-    QuarantineEntry("L5", "trail graph", "payload carries neither status/ok nor schema_version", "trail"),
 ]
 
 # Clauses F1 (this slice) is responsible for; they must have NO quarantine

@@ -1602,7 +1602,25 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
 # from the workflow runtime, just rendered for a different place and time.
 
 
-@click.group("blame", cls=OpentracesGroup)
+class _BlameGroup(OpentracesGroup):
+    """Blame group that resolves a bare ``trail blame <sha>`` directly.
+
+    ``trail blame <sha | trace:step | file:line>`` dispatches to the ``commit``
+    subcommand (the bidirectional attribution reader); ``trail blame commit
+    <sha>`` stays callable unchanged, and the ``pr`` subgroup resolves normally.
+    """
+
+    def resolve_command(self, ctx, args):  # type: ignore[override]
+        if (
+            args
+            and not args[0].startswith("-")
+            and args[0] not in self.commands
+        ):
+            args = ["commit", *args]
+        return super().resolve_command(ctx, args)
+
+
+@click.group("blame", cls=_BlameGroup)
 def blame_group() -> None:
     """Per-commit attribution and PR-shaped projections of trace lineage."""
 
