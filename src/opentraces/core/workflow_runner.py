@@ -50,7 +50,13 @@ from .datasets import (
     source_provenance_for_query,
     write_source_provenance,
 )
-from .workflows import WorkflowPackage, load_workflow, resolve_workflow_reference
+from .workflows import (
+    WorkflowIntegrityError,
+    WorkflowPackage,
+    load_workflow,
+    resolve_workflow_reference,
+    verify_workflow_digest,
+)
 
 
 class ExecutorUnavailableError(RuntimeError):
@@ -127,6 +133,7 @@ def run_dataset_workflow(
     scheduled: bool = False,
     privacy_tier: str | None = None,
     trail_freshness_policy: str = "warn",
+    strict: bool = False,
 ) -> DatasetRunResult:
     dataset = load_dataset(name)
     selected_executor = executor or (
@@ -167,6 +174,18 @@ def run_dataset_workflow(
         if selected_executor == "script"
         else None
     )
+    # Run-time integrity re-verify (#187): the recomputed digest of the package
+    # about to execute must match the digest the dataset pinned. Non-strict
+    # warns and proceeds; strict is fatal BEFORE any run artifact is written or
+    # the subprocess runs. current-agent resolves no package, so there is
+    # nothing to verify there.
+    if workflow_package is not None:
+        verify_workflow_digest(
+            workflow_package.digest,
+            dataset.manifest.workflow.digest,
+            workflow_name=dataset.manifest.workflow.skill,
+            strict=strict,
+        )
     # ONE versioned run packet (opentraces.workflow.run_packet.v1). The dataset
     # runner builds it as a SUPERSET: the versioned base shape plus the dataset
     # fields templates read (``scope`` is in the base; ``candidate_query`` is
@@ -251,6 +270,11 @@ def run_dataset_workflow(
             run_dir=run_dir,
             run_packet=run_packet,
             workflow_package=workflow_package,
+            strict=strict,
+            # The dataset runner already ran the authoritative digest verify
+            # above (against the manifest pin, before writing artifacts); do not
+            # re-verify inside the seam and double-warn.
+            verify_digest=False,
         )
         rows = _read_output_rows(output_path)
         with _dataset_lock(lock_path, run_id):
@@ -531,6 +555,8 @@ def execute_workflow(
     run_dir: Path | None = None,
     run_packet: dict[str, Any] | None = None,
     workflow_package: WorkflowPackage | None = None,
+    strict: bool = False,
+    verify_digest: bool = True,
 ) -> WorkflowExecutionResult:
     """Run a workflow's deterministic builder, write rows to ``output_path``.
 
@@ -567,6 +593,13 @@ def execute_workflow(
         ``workflow_package`` (which may resolve a config-pinned source, not
         just an installed name). Direct primitive callers leave these ``None``
         and get the minimal versioned packet written next to the output.
+    strict, verify_digest:
+        Run-time integrity controls (#187). When ``verify_digest`` and a
+        ``run_packet`` with a pinned ``workflow_digest`` are present, the bytes
+        about to execute are re-verified against that pin before the subprocess:
+        ``strict`` makes a mismatch fatal (:class:`WorkflowIntegrityError`),
+        otherwise it warns. The dataset runner sets ``verify_digest=False``
+        because it verifies against the manifest pin itself.
     """
 
     if executor != "script":
@@ -575,6 +608,19 @@ def execute_workflow(
         )
 
     workflow = workflow_package if workflow_package is not None else load_workflow(workflow_name)
+    # Run-time integrity re-verify (#187) at the single execution seam: when a
+    # caller supplies a run packet with a pinned ``workflow_digest``, the bytes
+    # about to run must recompute to it. Fatal under strict BEFORE the
+    # subprocess; warn otherwise. The dataset runner verifies against the
+    # manifest pin itself and passes ``verify_digest=False`` to avoid a
+    # double-warn. Pure primitive callers pass no run packet (nothing pinned).
+    if verify_digest and run_packet is not None:
+        verify_workflow_digest(
+            workflow.digest,
+            run_packet.get("workflow_digest"),
+            workflow_name=workflow.name,
+            strict=strict,
+        )
     output_path = output_path.expanduser()
     run_dir = run_dir if run_dir is not None else output_path.parent
     run_dir.mkdir(parents=True, exist_ok=True)

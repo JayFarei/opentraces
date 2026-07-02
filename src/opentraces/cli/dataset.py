@@ -52,7 +52,12 @@ from ..core.workflow_runner import (
     ExecutorUnavailableError,
     run_dataset_workflow,
 )
-from ..core.workflows import create_workflow, load_workflow, resolve_workflow_reference
+from ..core.workflows import (
+    WorkflowIntegrityError,
+    create_workflow,
+    load_workflow,
+    resolve_workflow_reference,
+)
 from ..core.schedules import (
     add_schedule,
     list_schedules,
@@ -1109,6 +1114,14 @@ def _create_manual_dataset(
 )
 @click.option("--verbose", is_flag=True, help="Include run artefact paths.")
 @click.option("--resume", default=None, help="Reserved run resume id.")
+@click.option(
+    "--strict/--no-strict",
+    default=False,
+    help=(
+        "Fail (non-zero) before execution if the installed workflow no longer "
+        "matches the digest it was pinned to; default warns and proceeds."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_run(
     name: str,
@@ -1128,6 +1141,7 @@ def dataset_run(
     publish_check_only: bool,
     verbose: bool,
     resume: str | None,
+    strict: bool,
     as_json: bool,
 ) -> None:
     """Run the dataset workflow in dry-run, current-agent, or script mode."""
@@ -1185,8 +1199,15 @@ def dataset_run(
             scheduled=scheduled,
             privacy_tier=privacy_tier,
             trail_freshness_policy=trail_freshness_policy,
+            strict=strict,
         )
-    except (FileNotFoundError, ValueError, ExecutorUnavailableError, DatasetRunLockError) as exc:
+    except (
+        FileNotFoundError,
+        ValueError,
+        ExecutorUnavailableError,
+        DatasetRunLockError,
+        WorkflowIntegrityError,
+    ) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
 

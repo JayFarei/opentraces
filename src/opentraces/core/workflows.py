@@ -20,6 +20,22 @@ from . import paths
 
 _WORKFLOW_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _BUILTIN_TEMPLATE_PACKAGE = "opentraces.workflow_templates"
+# A real integrity baseline is exactly what ``compute_workflow_digest`` emits.
+# Placeholder/unconfigured pins (``sha256:unconfigured``, ``sha256:manual``, or
+# any non-digest string) mean the dataset never recorded a real pinning event,
+# so there is nothing to honor and verification is skipped (never fabricated).
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+class WorkflowIntegrityError(RuntimeError):
+    """Raised when a workflow's on-disk bytes no longer match the digest bound
+    at pin time and integrity checking is strict.
+
+    The default (non-strict) run warns and proceeds; ``--strict`` makes the
+    mismatch fatal (non-zero) BEFORE execution. This is the run-time half of the
+    #187 ``digested == installed == executed`` invariant; the install-time half
+    is the dot-prefix reject in :func:`_reject_dotfiles`.
+    """
 
 
 @dataclass(frozen=True)
@@ -114,6 +130,7 @@ def install_workflow(source: Path, *, replace: bool = False) -> WorkflowPackage:
     source_skill = _workflow_entrypoint(source)
 
     _reject_symlinks(source)
+    _reject_dotfiles(source)
 
     metadata = _read_skill_frontmatter(source_skill)
     name = validate_workflow_name(str(metadata.get("name") or source.name))
@@ -147,6 +164,66 @@ def _reject_symlinks(source: Path) -> None:
                 "workflow contains symlink which would dereference outside the "
                 f"package on install: {entry.relative_to(source)}"
             )
+
+
+def _reject_dotfiles(source: Path) -> None:
+    """Reject dot-prefixed files/dirs at install so the installed tree equals the
+    digested set.
+
+    ``compute_workflow_digest`` hashes ``_workflow_files``, which excludes any
+    path with a dot-prefixed part. Install used to copy the whole tree, so a
+    planted ``scripts/.runtime/payload.py`` would land on disk and run yet stay
+    invisible to the digest — breaking ``digested == installed == executed``
+    (#187). Forbidding non-allowlisted dot-prefixed entries makes the installed
+    tree byte-identical to the digested set (bundled templates ship none, so the
+    allowlist is empty). Mirrors :func:`_reject_symlinks`: same rglob walk, same
+    ValueError-at-install shape, so nothing lands on disk when it fires.
+    """
+    for entry in source.rglob("*"):
+        relative = entry.relative_to(source)
+        if any(part.startswith(".") for part in relative.parts):
+            raise ValueError(
+                "workflow contains a non-allowlisted dot-prefixed entry which "
+                "would install undigested (invisible to the workflow digest): "
+                f"{relative.as_posix()}"
+            )
+
+
+def verify_workflow_digest(
+    computed_digest: str,
+    pinned_digest: str | None,
+    *,
+    workflow_name: str,
+    strict: bool = False,
+) -> bool:
+    """Compare the freshly recomputed workflow digest against the digest bound
+    at pin time.
+
+    Returns ``True`` when they match, when no pin is present, or when the pin is
+    not a well-formed digest baseline (a placeholder/unconfigured pin our own
+    digester could never have produced — nothing to verify). On a genuine
+    mismatch: warn to stderr and return ``False``; under ``strict`` raise
+    :class:`WorkflowIntegrityError` (fatal, before execution). This is the
+    run-time half of the #187 ``digested == installed == executed`` invariant —
+    it catches a package mutated (or swapped) after the run pinned its digest.
+    """
+    if (
+        not pinned_digest
+        or not _DIGEST_RE.fullmatch(pinned_digest)
+        or computed_digest == pinned_digest
+    ):
+        return True
+    message = (
+        f"workflow '{workflow_name}' digest mismatch: installed bytes recompute "
+        f"to {computed_digest} but the run is pinned to {pinned_digest} — the "
+        "package changed since it was pinned (digested != installed)."
+    )
+    if strict:
+        raise WorkflowIntegrityError(message)
+    import sys
+
+    print(f"warning: {message}", file=sys.stderr)
+    return False
 
 
 def load_workflow(name: str) -> WorkflowPackage:
@@ -276,6 +353,14 @@ def _traversable_has_workflow_entrypoint(path: Traversable) -> bool:
 def _copy_traversable_tree(source: Traversable, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     for item in source.iterdir():
+        # Same integrity floor as install (#187): a dot-prefixed entry would
+        # materialize undigested (invisible to compute_workflow_digest). Bundled
+        # templates ship none, so this only ever fires on a tampered package.
+        if item.name.startswith("."):
+            raise ValueError(
+                "workflow template contains a non-allowlisted dot-prefixed entry "
+                f"which would install undigested: {item.name}"
+            )
         target = destination / item.name
         if item.is_dir():
             _copy_traversable_tree(item, target)
