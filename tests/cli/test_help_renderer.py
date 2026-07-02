@@ -10,7 +10,7 @@ from click.testing import CliRunner
 from opentraces.cli import main
 
 
-GLOBAL_SETUP_VERBS = ["setup", "auth", "config", "completions"]
+GLOBAL_SETUP_VERBS = ["setup", "upgrade", "uninstall", "auth", "config", "completions"]
 PROJECT_SETUP_VERBS = ["init", "status", "doctor", "remove"]
 TRACE_VERBS = ["trace"]
 TRAIL_VERBS = ["trail"]
@@ -22,8 +22,12 @@ SECURITY_VERBS = ["security"]
 
 # Legacy/internal verbs still registered at the root but NOT advertised in
 # the journey-first sections.
+#
+# issue #160: `upgrade` graduated from a legacy-hidden verb to a real,
+# advertised root peer verb (the update leg of the in / update / out
+# triad beside `setup`) — see GLOBAL_SETUP_VERBS above instead.
 LEGACY_HIDDEN_VERBS = [
-    "commit", "login", "logout", "whoami", "review-llm", "upgrade",
+    "commit", "login", "logout", "whoami", "review-llm",
     "projects",
 ]
 
