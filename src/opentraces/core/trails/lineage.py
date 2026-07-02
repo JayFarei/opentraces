@@ -25,10 +25,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .event_log import EVENT_LOG_REF, read_events_for_trace
-from .ids import normalize_id
+from .event_log import EVENT_LOG_REF
 from .models import TrailEvent
-from .query import build_trail_query_projection_for_trace
+from .scoped_reads import (
+    build_trail_query_projection_for_trace,
+    read_events_for_trace,
+)
 from .search_records import summary_search_touches_trace
 
 LINEAGE_SCHEMA_VERSION = "opentraces.trail.lineage.v1"
