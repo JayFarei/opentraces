@@ -14,7 +14,7 @@ Skill-episode datasets can start from observed skill usage without writing a
 custom workflow:
 
 ```bash
-opentraces trace skills --json
+opentraces trace query --skill opentraces --json
 opentraces dataset new opentraces-episodes --from-skill opentraces
 ```
 

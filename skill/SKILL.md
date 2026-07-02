@@ -14,14 +14,16 @@ publishes reviewed dataset rows to HuggingFace remotes.
 
 ## Current Command Model
 
-- Global setup: `opentraces setup`, `opentraces auth login`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
-- Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
-- Trace retrieval and search: `opentraces trace query`, `opentraces trace skills`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace partition`, `opentraces trace get`, `opentraces trace teleport`
-- Trace Intelligence: `opentraces trace map|get --waste`, `opentraces trace map|get --run-intel`, `opentraces trace compare`
-- Trace slicing: `opentraces trace partition --by <s1|s2|s3|s4> --json` decomposes a trace into a tiling array of trajectories (`opentraces.slicing.v1`). S1 user-turn + S2 change-burst are deterministic; S3 milestone + S4 subgoal are cheap-LLM. With `--by s3|s4` and the default `--judge agent`, if judgments are needed the command exits `rc=10` printing `JudgmentRequest`s — answer them, write `{"answers": [{"id","decision","confidence"}]}` to a file, and re-run with `--answers <file>` for the final tiling at `rc=0`.
-- Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
-- Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
-- Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
+v7 CLI spine (PR #174, issues #160-#165): one command surface, progressively disclosed. Hidden never means removed — every demoted verb below stays fully callable and `--json`-scriptable; `--help` just stops advertising it.
+
+- Global setup: `opentraces setup`, `opentraces auth login`, `opentraces bucket connect` (was `setup bucket`), `opentraces setup skill`, `opentraces upgrade` (root peer verb, was `setup upgrade`), `opentraces uninstall` (root peer verb, the symmetric reverse-of-install), `opentraces auth`
+- Project setup: `opentraces init`, `opentraces status` (now the fleet bucket-safety dashboard), `opentraces doctor`, `opentraces remove`
+- Trace retrieval and search (8 -> 4 collapse): `opentraces trace query`, `opentraces trace get`, `opentraces trace map`, `opentraces trace slice`. Hidden-but-callable: `trace discover`, `trace skills` (folded into `trace query --skill`), `trace index` (folded into `query`/`map`/`get`'s self-maintaining snapshot), `trace partition` (folded into `trace slice --by`), `trace compare`, `trace teleport`.
+- Trace Intelligence: `opentraces trace map|get --waste`, `opentraces trace map|get --run-intel`, `opentraces trace compare` (hidden-but-callable)
+- Trace slicing: `opentraces trace slice <target> --by user-turn|change-burst|milestone|subgoal --json` decomposes a trace into a tiling array of trajectories (`opentraces.slicing.v1`); absorbs the former `trace partition --by s1|s2|s3|s4` (which stays hidden-but-callable under its old spelling). `user-turn` + `change-burst` are deterministic; `milestone` + `subgoal` are cheap-LLM. With `--by milestone|subgoal` and the default `--judge agent`, if judgments are needed the command exits `rc=10` printing `JudgmentRequest`s — answer them, write `{"answers": [{"id","decision","confidence"}]}` to a file, and re-run with `--answers <file>` for the final tiling at `rc=0`.
+- Trace Trails (visible surface): `opentraces trail blame commit <sha>` (also bare `opentraces trail blame <sha>`), `opentraces trail pr render|create|update` (lifted to a top-level sibling of `blame`; `trail blame pr ...` stays hidden-but-callable), `opentraces trail graph`, `opentraces trail track`, plus the bare address `opentraces trail <trace_id>[:step]`
+- Context Tree: the bare-noun read `opentraces ctx <trace_id>`, `opentraces ctx <trace_id>:<step>`, `opentraces ctx <trace_id>:last` (`--layer system|messages|tools|runtime`, `--full`, `--with-dropped`); the old subcommand surface (`tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `list/info`) stays callable, hidden from `--help`
+- Bucket (portable capture store): `opentraces bucket list`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket reclaim`, `opentraces bucket sync push/pull/diff/status`, `opentraces bucket connect`. Hidden-but-callable: `bucket status`, `bucket manifest`, `bucket remote push/pull/diff/status`, `bucket replay`, `bucket rebuild`, `bucket prune`, `bucket prefetch`
 - Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`, plus the internal `opentraces workflow skill-intelligence` eval over skill episodes
 - Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove/security`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`. Per-dataset egress security is `opentraces dataset security <name> [--tool <t> --enable|--disable] [--unsafe-override --reason <text>]`.
 - Skill verifier (trace-grounded reward for SkillOpt): `opentraces skill-verifier status/autoverify/align/score`
@@ -35,33 +37,67 @@ Trace Trails substrate commands (`trail explain`, `sync`, `timeline`,
 `snapshots`, `snapshot checkout`) remain callable for scripting and
 debugging but are hidden from `--help` after the CLI spine simplification.
 
+### Addressing and the agent contract
+
+`opentraces <trace-id>[:step | :last | :A-B]` root-dispatches to `trace get`;
+the same `trace:step` join key resolves across `trace get`, `ctx`, and
+`trail` — the "resume triple" of action, context, and world. Each substrate
+honors as much of the grammar as it has materialized: `trace get` the full
+`[:step | :last | :A-B]`, `ctx` `[:step | :last]`, and `trail` `[:step]`
+only (its `:last`/`:A-B` slots are reserved for v1.1). A bare
+token at the root only ever dispatches when no existing command name
+matches it, so no verb, hidden or visible, can be shadowed by a trace id.
+
+Under explicit `--json`, stdout is pure JSON — no `---OPENTRACES_JSON---`
+sentinel and no leading human text — so `opentraces --json <cmd> | jq` is
+always valid JSON (piped stdout without `--json` keeps the sentinel
+preamble for legacy consumers). A command that would otherwise drop into
+an interactive prompt refuses to do so under `--json` or on a
+non-interactive terminal: it emits a structured `INTERACTIVE_REQUIRED`
+error and exits `2`, with zero prompt bytes.
+
 ## Setup
 
 ```bash
 opentraces setup
 opentraces auth login
-opentraces setup bucket          # configure remote-by-default private bucket sync
+opentraces bucket connect        # configure remote-by-default private bucket sync (was `setup bucket`)
 opentraces setup codex-cli       # install terminal Codex CLI hooks in ~/.codex/hooks.json
 opentraces setup pi              # check/install the Pi package entry
 opentraces setup skill           # install the opentraces skill into agent harnesses
 opentraces setup skill --harness codex-cli
 opentraces setup skill --harness pi
-opentraces setup upgrade         # upgrade CLI + re-render installed integration glue + refresh project skill file
-opentraces setup upgrade --integrations-only  # re-render installed hooks/watchers without a CLI bump
-opentraces setup uninstall --dry-run  # reverse-of-install plan (recommended first); --integrations-only preserves data, --purge deletes it
+opentraces upgrade                # upgrade CLI + re-render installed integration glue + refresh project skill file (root peer verb, was `setup upgrade`)
+opentraces upgrade --integrations-only  # re-render installed hooks/watchers without a CLI bump
+opentraces upgrade --skill-only         # refresh only the skill file + hook, skip the CLI upgrade
+opentraces uninstall --dry-run   # reverse-of-install plan (recommended first); root peer verb, was `setup uninstall`
+opentraces uninstall --integrations-only  # default: reverse install-time patches + daemons, PRESERVE captured data
+opentraces uninstall --purge --yes        # also DELETE captured data + git refs (unrecoverable)
 opentraces config tracking-mode  # show; pass global|manual to set
+opentraces config get <key>      # single-key config read (opentraces.config.get.v1)
 opentraces auth whoami
 opentraces init
 opentraces init --agent codex-cli
 opentraces init --agent pi
 opentraces status
+opentraces status --short
 opentraces doctor
 ```
 
+`opentraces status` is the O(1) fleet bucket-safety dashboard (envelope
+`opentraces.bucket.status.v1`): scanned/unscanned trace counts across every
+registered project, with a "safe to sync" verdict that is structurally
+impossible while any trace is still unscanned. `--short` prints a stable
+one-line porcelain summary (`status=... traces=... unscanned=...
+not_cleared=... stale=...`), `--full` adds the per-project debugger detail,
+`--project <slug>` scopes every count and the verdict to one project. The
+former per-project capture inbox (stage counts, active remote, most recent
+traces) is now the hidden `opentraces status-inbox`.
+
 `opentraces --json doctor` exposes the agent-readable CLI freshness fields at
 `doctor.cli`: `{installed_version, latest_version, upgrade_available}`. When
-`upgrade_available` is true, run `opentraces setup upgrade`; when doctor reports
-integration drift, run `opentraces setup upgrade --integrations-only` to
+`upgrade_available` is true, run `opentraces upgrade`; when doctor reports
+integration drift, run `opentraces upgrade --integrations-only` to
 re-render already-installed glue without enabling new integrations. You do not
 need to inspect `doctor.cli` yourself: when an upgrade or repair is warranted,
 `opentraces --json doctor` also surfaces the action at the top-level
@@ -77,8 +113,10 @@ time a capture hook or the Pi extension fires there, so `init` is optional;
 opt-out: switch to `manual`, or set a per-project `excluded` marker /
 `opentraces remove`, to turn it off (raw provider bodies stay default-off
 regardless). `init` is project enrollment only; dataset remotes and review
-policy belong under `opentraces dataset ...`. Private bucket configuration belongs under `opentraces setup
-bucket` and `opentraces bucket remote`.
+policy belong under `opentraces dataset ...`. Private bucket configuration
+belongs under `opentraces bucket connect` (the rename of `setup bucket`,
+which stays callable, hidden) and `opentraces bucket sync` (the rename of
+`bucket remote`).
 
 `opentraces setup skill` writes one canonical skill copy under
 `~/.agents/skills/opentraces/` and symlinks supported harnesses to it. Current
@@ -116,32 +154,33 @@ transcripts.
 
 ```bash
 opentraces trace query --lex "bug fix failing test" --json
-opentraces trace query --cwd --json  # remote traces: opentraces bucket remote pull first
+opentraces trace query --cwd --json  # remote traces: opentraces bucket sync pull first
 opentraces trace query --skill grill-me --json
-opentraces trace skills --json
-opentraces trace skills --skill grill-me --json
-opentraces trace index --json
 opentraces trace map <trace_id> --candidate <unit_id> --json
 opentraces trace slice <trace_id> --template bursts --json
-opentraces trace partition <trace_id> --by s1 --json          # tiling Trajectory[] (opentraces.slicing.v1)
-opentraces trace partition <trace_id> --by s3 --json          # cheap-LLM: rc=10 -> answer -> --answers <file> -> rc=0
+opentraces trace slice <trace_id> --by user-turn --json       # tiling Trajectory[] (opentraces.slicing.v1)
+opentraces trace slice <trace_id> --by milestone --json       # cheap-LLM: rc=10 -> answer -> --answers <file> -> rc=0
 opentraces trace get <trace_id> --json
-opentraces trace get <trace_id> --remote-bucket --json
+opentraces trace get <trace_id> --remote me/opentraces-bucket --json
+opentraces trace get <trace_id>:last --json
 opentraces trace map <trace_id> --waste --json
 opentraces trace get <trace_id> --run-intel --json
-opentraces trace compare <trace_a> <trace_b> --json
-opentraces trace teleport export <trace_id> --output <dir>
 ```
 
 `trace query` returns bounded candidate packets over the local lexical +
-concept Trace Index (BM25 plus a bounded concept join, not embeddings).
-`trace skills` lists observed skills ranked by
-snapshot-backed invocation usage. `trace index --json` refreshes and reports
-the local search snapshot with stage telemetry.
-`trace map` returns a workflow-neutral evidence map or candidate slice.
-`trace slice` materialises deterministic Trace Slice packets for dataset
-workflows. `trace get` is the explicit full retrieval step. `trace
-teleport` moves a trace and its retained Git evidence between workspaces.
+concept Trace Index (BM25 plus a bounded concept join, not embeddings);
+skill filtering folds into `trace query --skill <name>` (the old `trace
+skills` command stays callable, hidden). `trace map` returns a
+workflow-neutral evidence map or candidate slice, and ends in a runnable
+`trace slice` handoff. `trace slice` materialises deterministic Trace Slice
+packets for dataset workflows and absorbs `trace partition --by` (now
+`--by user-turn|change-burst|milestone|subgoal`). `trace get` is the
+explicit full retrieval step and resolves the full `<id>:<step>` / `:last` /
+`:A-B` address grammar; `ctx` shares `<id>:<step>` / `:last` and `trail`
+shares `<id>:<step>` (their remaining selectors reserved for v1.1). The four visible
+verbs form a loop: query (search) -> get (pull up) -> map (dissect) ->
+slice (extract). `trace teleport` (hidden-but-callable) moves a trace and
+its retained Git evidence between workspaces.
 
 ### Bursts and intent
 
@@ -176,7 +215,7 @@ frozen JSON envelope. Three capabilities: context waste, run signals, run compar
 ```bash
 opentraces trace map <trace_id> --waste --json       # also: trace get --waste
 opentraces trace get <trace_id> --run-intel --json   # also: trace map --run-intel
-opentraces trace compare <trace_a> <trace_b> --json  # add --no-quality to skip persona scores
+opentraces trace compare <trace_a> <trace_b> --json  # hidden-but-callable; add --no-quality to skip persona scores
 ```
 
 - **Context waste** — `--waste` emits `opentraces.context_waste.v2`: `large_output`
@@ -204,16 +243,22 @@ receiver.
 
 Trace Trails are the Git-anchored evidence chain for what a trace changed and
 where that change lives now. The visible top-level surface is `trail blame`
-(now a group with `commit` and `pr` subcommands), `trail graph`, and
-`trail track`.
+(a group; `commit <sha>` is the point-scope subcommand and bare `trail
+blame <sha>` resolves the same way), `trail pr render|create|update`
+(lifted to a top-level sibling of `blame` — the family's one gated GitHub
+write, isolated from the read verbs; the old `trail blame pr ...` path
+stays callable as a hidden compat alias), `trail graph`, and `trail
+track`. A bare `trail <trace_id>[:step]` address projects the same
+per-trace view as `trace get` / `ctx`.
 
 ```bash
 # Visible surface
 opentraces trail blame commit <sha>             # which traces authored this commit
+opentraces trail blame <sha>                    # same, via the bare-address form
 opentraces trail blame commit t:<trace_id>      # which commits carry this trace
-opentraces trail blame pr render --base main    # PR body for the current branch
-opentraces trail blame pr create --base main    # gh pr create with the body
-opentraces trail blame pr update --base main    # idempotent update of existing PR
+opentraces trail pr render --base main          # PR body for the current branch
+opentraces trail pr create --base main          # gh pr create with the body
+opentraces trail pr update --base main          # idempotent update of existing PR
 opentraces trail graph
 opentraces trail graph --trace <trace_id>
 opentraces trail track <trace_id>
@@ -221,6 +266,8 @@ opentraces trail track --patch <trace_patch_id>
 opentraces trail track --anchor <git_anchor_id>
 opentraces trail track --since 12h --json
 opentraces trail track --all --json --limit 50
+opentraces trail <trace_id>                     # bare address: same projection as `trace get`/`ctx`
+opentraces trail <trace_id>:<step>
 
 # Hidden substrate commands (still callable from scripts and JSON automation)
 opentraces trail explain --trace <id> --step <n>
@@ -229,6 +276,7 @@ opentraces trail sync --patch <trace_patch_id>
 opentraces trail sync --anchor <git_anchor_id>
 opentraces trail timeline <trace_id>
 opentraces trail resume <trace_id>
+opentraces trail blame pr render --base main    # compat alias for `trail pr render`
 opentraces trail teleport export <trace_id> --output <dir>
 opentraces trail teleport open <bundle> --project <blank-dir>
 opentraces trail resolve ot://trace/<id>/patches/<id>/trail --json
@@ -243,8 +291,9 @@ current `HEAD` survival across all anchors, with batch JSONL output via
 synchronizes OpenTraces' current understanding of a Trace Patch or Git
 Anchor with the latest Git history. `trail timeline` shows the observed
 timeline of snapshots, patches, anchors, and survival observations.
-`trail teleport` moves a trace plus the retained Git evidence needed to
-inspect or resume it in a blank workspace.
+`trail teleport` (hidden-but-callable; superseded by `trace teleport`)
+moves a trace plus the retained Git evidence needed to inspect or resume
+it in a blank workspace.
 
 ## Bucket
 
@@ -252,14 +301,28 @@ The bucket is the private store of every captured trace. It keeps raw
 capture-time evidence under `~/.opentraces/bucket/`: per-trace envelopes,
 patch history, `trail.jsonl.gz`, `context.jsonl.gz`, `sources.jsonl.gz`,
 content-addressed blobs, an event-log mirror, and `manifest.json`. It is
-local-only until `opentraces setup bucket` configures a private HuggingFace
-bucket remote. Bucket sync is separate from dataset publication.
+local-only until `opentraces bucket connect` configures a private
+HuggingFace bucket remote. Bucket sync (`bucket sync push|pull|diff|status`)
+mirrors the whole raw substrate and is separate from dataset publication.
 
 ```bash
-opentraces bucket status --json
-opentraces bucket manifest --json
+opentraces bucket list --json
+opentraces bucket list --unsynced --json
 opentraces bucket verify --json
 opentraces bucket repair --json
+opentraces bucket reclaim --json                # dry-run by default
+opentraces bucket reclaim --apply --json
+opentraces bucket sync status --json
+opentraces bucket sync diff --json
+opentraces bucket sync push --dry-run --json    # preview the pushed[]/withheld[] partition; egresses nothing
+opentraces bucket sync push --json              # REFUSES (rc!=0, zero bytes) while any trace is withheld
+opentraces bucket sync pull --json
+opentraces bucket connect --json
+opentraces bucket connect --local-only
+
+# Hidden-but-callable (superseded by the verbs above)
+opentraces bucket status --json
+opentraces bucket manifest --json
 opentraces bucket rebuild --json
 opentraces bucket rebuild --substrate context-tree --json
 opentraces bucket prune --dry-run --json
@@ -272,10 +335,21 @@ opentraces bucket replay --repo <repo-dir>
 ```
 
 Buckets are distinct from datasets. A bucket holds raw captured traces; a
-dataset holds workflow-projected rows. `bucket rebuild` refreshes derived
-bucket projections from canonical state. `bucket replay` replays
-bucket-exported Trace Trails into a Git repository (useful when a teammate
-hands you a bucket and you need to materialise its evidence locally).
+dataset holds workflow-projected rows. `bucket list` is the bounded,
+paginated per-trace inventory (envelope `opentraces.bucket.list.v1`;
+`--count`/`--limit`/`--cursor` plus facet filters like `--unsynced`,
+`--unfiltered`, `--unscanned`) that supersedes the old O(N) `bucket
+manifest` hang. `bucket repair` re-projects the full bucket (envelopes +
+`manifest.json`) from canonical state — the target for `bucket status`'s
+freshness remediation, and where `bucket manifest --heal` / `bucket
+rebuild` now fold. `bucket reclaim` removes leaked Trace Trails cruft under
+`.git/**/opentraces/`; it is print-only until `--apply`. `bucket sync push`
+is the gated egress seal: it computes an auditable `pushed[]`/`withheld[]`
+partition and REFUSES — zero bytes egressed, non-zero exit — while any
+trace is not cleared for sync; `--dry-run` previews the same partition
+without egressing. `bucket connect` (the rename of `setup bucket`)
+configures the remote target; `bucket sync` moves data — they stay
+distinct verbs.
 
 ## Context Tree
 
@@ -284,6 +358,19 @@ the same canonical event log as Trace Trails and is addressed by
 `Step.context_node_id` in schema `0.5.0`.
 
 ```bash
+opentraces ctx <trace_id> --json                                # overview card: shape + capture method
+opentraces ctx <trace_id>:<step_index> --json                   # model input at that step
+opentraces ctx <trace_id>:last --json                            # the final / active step
+opentraces ctx <trace_id>:<step_index> --layer system --json     # one layer, readably
+opentraces ctx <trace_id>:<step_index> --layer messages --json
+opentraces ctx <trace_id>:<step_index> --layer tools --json
+opentraces ctx <trace_id>:<step_index> --layer runtime --json
+opentraces ctx <trace_id>:<step_index> --full --json             # full hydrated model input (the fork/eval-row packet)
+opentraces ctx <trace_id> --with-dropped --json                  # include compaction-dropped content
+opentraces ctx <trace_id> --remote me/opentraces-bucket --json   # read a remote bucket manifest
+
+# Old subcommand surface (still callable from scripts; hidden from --help,
+# including `list`/`info`)
 opentraces ctx list --json
 opentraces ctx info <trace_id> --json
 opentraces ctx tree <trace_id> --json
@@ -299,9 +386,11 @@ opentraces ctx resolve ot://context-node/<id> --json
 opentraces ctx anchor-for-step <trace_id> <step_index>
 ```
 
-`ctx list`, `ctx info`, and `ctx show` accept `--remote <hf-repo>` (`user/repo`)
-to read a remote bucket manifest (and lazy-fetch missing layer blobs for `ctx
-show`) with output bytewise-equal to the local read.
+`trace:step` is the universal address — the same token resolves across
+`ctx`, `trace get`, and `trail`. The bare `ctx <trace>` read and the
+hidden `ctx list` / `ctx info` / `ctx show` accept `--remote <hf-repo>`
+(`user/repo`) to read a remote bucket manifest (and lazy-fetch missing
+layer blobs) with output bytewise-equal to the local read.
 
 Claude/Codex JSONL capture gives a useful structural approximation. Codex uses
 `capture_method=transcript_reconstruction`, does not decrypt encrypted
@@ -345,7 +434,7 @@ opentraces dataset run <name> --executor script --json
 The bundled `skill-command-trajectory-eval-v1` template materialises a ready
 workflow that emits command-trajectory evaluation rows. `--from-skill` binds
 the built-in `skill-episodes-v1` workflow to a snapshot-backed skill query so
-agents can turn a ranked skill from `trace skills` into reviewable episode rows.
+agents can turn a ranked skill from `trace query --skill` into reviewable episode rows.
 
 ## Skill Verifier
 
@@ -423,14 +512,15 @@ printf '%s\n' '{"row":{"path":"/Users/alice/project"}}' | opentraces security sa
 printf '%s\n' '{"record":{...}}' | opentraces security sanitize --use-config
 opentraces setup trufflehog
 opentraces setup privacy-filter
-opentraces setup llm-review
 ```
 
 Registered inline tools are `regex`, `entropy`, `trufflehog`,
 `privacy_filter`, `llm_pii`, `business_logic`, `path_anonymizer`,
-`capsule_scope`, and `classifier`. Session-level LLM review is configured by
-`setup llm-review` but is a dataset publication reviewer, not part of the
-per-record sanitize registry.
+`capsule_scope`, and `classifier`. Session-level LLM review used to be
+configured by `setup llm-review`; that command is now hidden-but-callable
+(it's a dataset publication gate, not a per-record sanitize tool) — the
+canonical LLM row-review surface is `opentraces dataset review` /
+`opentraces dataset publish`.
 
 Security has two scopes. **Bucket security** (`opentraces bucket security`) is
 machine-wide bucket egress over global tool flags, applied before private bucket
@@ -460,16 +550,18 @@ opentraces dataset security <name> --json
 
 ## JSON Mode
 
-Prefer `--json` for agent automation:
+Prefer `--json` for agent automation. Under explicit `--json`, stdout is
+pure JSON — no `---OPENTRACES_JSON---` sentinel, no leading human text —
+so `opentraces --json <cmd> | jq` is always valid JSON:
 
 ```bash
 opentraces --json status
 opentraces --json trace query --skill grill-me
-opentraces --json trace skills --limit 20
 opentraces --json trace map <trace_id>
 opentraces --json trail track <trace_id>
-opentraces --json bucket status
-opentraces --json ctx tree <trace_id>
+opentraces --json bucket list
+opentraces --json ctx <trace_id>
+opentraces --json ctx <trace_id>:last
 opentraces security tools list --json
 opentraces --json dataset status <name>
 opentraces dataset security <name> --json
@@ -483,5 +575,5 @@ opentraces dataset security <name> --json
 | Auth missing | Run `opentraces auth login` |
 | No traces visible | Check `opentraces setup claude-code` / `setup codex-cli`; for Pi run `/ot-capture-status` or `opentraces setup pi --dry-run --json` and confirm capture is enabled (`tracking-mode global` and the repo not `excluded`, or an explicit `opentraces init --agent pi`); then `opentraces status` |
 | Trace Trail event log invalid | Run `opentraces doctor`; `opentraces trail rebuild` re-derives advisory projections |
-| Bucket not syncing | Run `opentraces setup bucket` to configure a remote, then `opentraces bucket remote status` |
+| Bucket not syncing | Run `opentraces bucket connect` to configure a remote, then `opentraces bucket sync status` |
 | Publish blocked | Run `opentraces dataset status <name> --json` and `opentraces dataset publish <name> --check-only` |

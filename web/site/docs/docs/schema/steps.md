@@ -147,8 +147,8 @@ When Context Tree capture is available, `context_node_id` points at the node
 that represents the model's visible context for the step. Resolve it with:
 
 ```bash
-opentraces ctx show <context-node-id> --json
-opentraces ctx step <trace-id> <step-index> --json
+opentraces ctx <trace-id>:<step-index> --json
+opentraces ctx <trace-id>:last --json
 opentraces ctx resume <context-node-id> --json
 ```
 

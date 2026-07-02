@@ -13,11 +13,11 @@ When capture hooks fire, opentraces:
 3. extracts tool calls, observations, steps, metrics, and environment data;
 4. records Trace Patch and Context Tree events where available;
 5. writes the trace envelope and companion files into the private bucket;
-6. updates search projections used by `trace query`, `trace skills`,
-   `trace map`, and `trace slice`.
+6. updates search projections used by `trace query` (including
+   `trace query --skill <name>`), `trace map`, and `trace slice`.
 
-The raw bucket is local-only unless you run `opentraces setup bucket` and sync
-with `opentraces bucket remote push`.
+The raw bucket is local-only unless you run `opentraces bucket connect` and sync
+with `opentraces bucket sync push`.
 
 ## Supported Live Sources
 

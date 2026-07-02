@@ -23,14 +23,15 @@ opentraces has four separate surfaces:
 opentraces setup                          # install capture hooks and optional integrations
 opentraces init                           # enroll a repo explicitly (optional under global tracking)
 opentraces init --agent pi                # enroll Pi explicitly (optional; auto under global tracking)
-opentraces bucket status                  # inspect private retained trace evidence
+opentraces status                         # fleet-wide bucket safety dashboard (safe-to-sync verdict)
+opentraces bucket list                    # bounded, paginated per-trace inventory
 opentraces trace query --since 7d         # search retained traces
-opentraces trace skills --json            # rank observed skills by usage
+opentraces trace query --skill opentraces --json  # rank observed skills by usage
 opentraces trace map <trace-id> --bursts  # deterministic edit/intent map
 opentraces trace get <trace-id> --run-intel    # resteer/recovery/loop signals
-opentraces trace slice <trace-id> --template bursts
+opentraces trace slice <trace-id> --by change-burst
 opentraces trail blame commit <sha>       # which traces contributed to a commit
-opentraces ctx tree <trace-id>            # what the agent saw across the trace
+opentraces ctx <trace-id>                 # what the agent saw across the trace
 opentraces workflow templates             # choose a row projection template
 opentraces dataset new my-dataset --workflow my-workflow
 opentraces dataset run my-dataset         # synthesize dataset rows from retained traces
@@ -67,9 +68,9 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Quick Start](/docs/getting-started/quickstart)** | Capture into a bucket, search traces, build and publish a dataset |
 | **[Commands](/docs/cli/commands)** | Current `opentraces` command reference |
 | **[Portable Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
-| **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace skills`, `trace map`, `trace slice`, `trace get`, `trace index`, plus `--waste` / `--run-intel` and `trace compare` |
+| **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query` (including `--skill`), `trace get`, `trace map`, `trace slice`, plus `--waste` / `--run-intel`; the Trace Index (BM25 + semantic) self-maintains behind `query` |
 | **[Trace Trails](/docs/workflow/blame)** | Git anchors, survival states, blame, graph, PR body generation |
-| **[Context Tree](/docs/workflow/context-tree)** | `ctx` commands and OTLP capture for what the agent saw |
+| **[Context Tree](/docs/workflow/context-tree)** | the bare-noun `ctx <trace>[:<step>|:last]` read and OTLP capture for what the agent saw |
 | **[Dataset Workflows](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |
 | **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
 | **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |

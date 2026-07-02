@@ -24,8 +24,9 @@ opentraces setup
   supported harnesses such as Claude Code, Codex CLI, and Pi.
 - **git hook** and **watcher**, which mature Trace Trails after commits land.
 - **bucket remote**, optional private HuggingFace sync for raw retained
-  evidence. `setup bucket` requires `opentraces auth login` first and prompts
-  for a bucket security policy before configuring remote sync.
+  evidence, configured with `bucket connect`. It requires `opentraces auth
+  login` first and prompts for a bucket security policy before configuring
+  remote sync.
 - **HuggingFace login**, needed for bucket sync and dataset remotes.
 - **optional security tools**, such as TruffleHog, privacy-filter, and
   LLM review. Per-record tools default off until a workflow or config enables
@@ -38,12 +39,11 @@ opentraces setup claude-code
 opentraces setup codex-cli
 opentraces setup pi
 opentraces setup git
-opentraces setup bucket
+opentraces bucket connect
 opentraces setup capture-otlp
 opentraces setup skill
 opentraces setup trufflehog
 opentraces setup privacy-filter
-opentraces setup llm-review
 ```
 
 For Codex, install and authenticate Codex CLI first. `setup codex-cli` wires
@@ -80,27 +80,27 @@ Captured traces land in the private bucket first. This is not a public dataset.
 
 ```bash
 opentraces bucket status
-opentraces bucket manifest --json
+opentraces bucket list --json
 opentraces bucket verify --sample 100
 ```
 
-To sync the raw bucket to a private remote, authenticate first. `setup bucket`
+To sync the raw bucket to a private remote, authenticate first. `bucket connect`
 exits with a `run 'opentraces auth login'` hint until you do, and it prompts for
 a bucket security policy that protects raw captured evidence before remote sync:
 
 ```bash
 opentraces auth login
-opentraces setup bucket
+opentraces bucket connect
 opentraces bucket security policy --policy recommended
-opentraces bucket remote push
-opentraces bucket remote status
+opentraces bucket sync push
+opentraces bucket sync status
 ```
 
 ## 5. Search, Map, And Slice Traces
 
 ```bash
 opentraces trace query --since 7d --cwd
-opentraces trace skills --json
+opentraces trace query --skill my-skill --json
 opentraces trace map <trace-id> --bursts
 opentraces trace slice <trace-id> --template bursts
 opentraces trace get <trace-id>
@@ -122,7 +122,7 @@ For commit-level provenance:
 
 ```bash
 opentraces trail blame commit <sha>
-opentraces trail blame pr render --base main
+opentraces trail pr render --base main
 opentraces trail graph
 opentraces trail track <trace-id>
 ```
@@ -130,8 +130,9 @@ opentraces trail track <trace-id>
 For model context at a decision point:
 
 ```bash
-opentraces ctx tree <trace-id>
-opentraces ctx step <trace-id> 7
+opentraces ctx <trace-id>
+opentraces ctx <trace-id>:7
+opentraces ctx <trace-id>:7 --layer messages
 opentraces ctx resume <context-node-id>
 ```
 
@@ -178,7 +179,7 @@ opentraces dataset publish my-dataset
 
 `dataset publish` uploads approved rows and contract files to the bound remote
 as new shards. It does not publish the raw bucket unless you separately run
-`bucket remote push`.
+`bucket sync push`.
 
 ## Next Steps
 
