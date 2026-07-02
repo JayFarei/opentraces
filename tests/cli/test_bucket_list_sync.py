@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 
 import pytest
+from click.testing import CliRunner
 
+from opentraces.cli import main
 from opentraces.core.bucket_list import build_bucket_list
 from opentraces.core.bucket_sync import push_withhold_partition, sync_push_partition
 
@@ -193,3 +195,193 @@ def test_sync_push_partition_withholds_manufactured_not_cleared_trace(
     assert {w["trace_id"] for w in part["withheld"]} == set(not_cleared)
     assert set(part["pushed"]).isdisjoint({w["trace_id"] for w in part["withheld"]})
     assert all(w["reason"] == "not_cleared_for_sync" for w in part["withheld"])
+
+
+# --------------------------------------------------------------------------
+# Egress safety (#162 hardening): the REAL push must REFUSE — zero bytes out —
+# when the fresh push-time partition still withholds any trace. Reproduces the
+# adversarial-review finding: a status_unknown (status.known=False) row does
+# NOT increment unfiltered_count, so the bucket-level sync.eligible flag passes
+# while the trace is reported withheld — yet it physically egressed.
+# --------------------------------------------------------------------------
+def _clear_bucket() -> None:
+    """Remove any bucket left by other seed helpers in the same test process."""
+    import shutil
+
+    from opentraces.core import paths
+
+    root = paths.bucket_dir()
+    if root.exists():
+        shutil.rmtree(root)
+
+
+def _write_cleared_trace(trace_id: str) -> None:
+    """A fully-cleared trace via the normal writer (object envelope syncable)."""
+    from opentraces.core.bucket_store import write_trace_record
+    from opentraces.security import SECURITY_VERSION
+    from opentraces_schema import Agent, Step, TraceRecord
+
+    rec = TraceRecord(
+        trace_id=trace_id,
+        session_id=f"session-{trace_id}",
+        agent=Agent(name="claude-code"),
+        task={"description": "cleared for sync"},
+        steps=[Step(step_index=1, role="user", content="x")],
+        outcome={"success": True, "committed": False},
+    )
+    rec.security.scanned = True
+    rec.security.classifier_version = SECURITY_VERSION
+    write_trace_record(
+        rec,
+        project_slug="egress-demo",
+        source_layer="canonical",
+        legacy_mirror=False,
+        privacy_tier="medium",
+    )
+
+
+def _write_bare_trace_json(trace_id: str, *, scanned: bool) -> None:
+    """Write a per-trace ``trace.json`` DIRECTLY with no object-store envelope.
+
+    A trace with no object-store envelope is invisible to unfiltered_count
+    (which scans the object store), so sync.eligible can stay True — while its
+    manifest row is derived from trace.json and lands ``syncable=False``
+    (unscanned) or ``status_unknown`` (unparseable).
+    """
+    from opentraces.core.bucket_envelope import trace_v1_json_path
+    from opentraces.security import SECURITY_VERSION
+    from opentraces_schema import Agent, Step, TraceRecord
+
+    path = trace_v1_json_path("egress-demo", trace_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if scanned is None:
+        # Unparseable -> record=None -> row status_unknown (known=False).
+        path.write_text(json.dumps({"not": "a valid trace record"}), encoding="utf-8")
+        return
+    rec = TraceRecord(
+        trace_id=trace_id,
+        session_id=f"session-{trace_id}",
+        agent=Agent(name="claude-code"),
+        task={"description": "unscanned"},
+        steps=[Step(step_index=1, role="user", content="x")],
+        outcome={"success": True, "committed": False},
+    )
+    if scanned:
+        rec.security.scanned = True
+        rec.security.classifier_version = SECURITY_VERSION
+    path.write_text(rec.model_dump_json(), encoding="utf-8")
+
+
+def _seed_eligible_but_withheld_bucket() -> None:
+    """Seed the reviewer's repro: sync.eligible True, but withheld non-empty.
+
+    One cleared trace (object-store syncable=True), one unscanned trace
+    (``syncable_false``), and one unparseable trace (``status_unknown``); the
+    latter two have no object envelope, so unfiltered_count stays 0 and the
+    bucket-level gate passes.
+    """
+    from opentraces.core.bucket_store import bucket_manifest
+
+    _clear_bucket()
+    _write_cleared_trace("cleared-1")
+    _write_bare_trace_json("unscanned-1", scanned=False)
+    _write_bare_trace_json("status-unknown-1", scanned=None)
+    bucket_manifest(write=True, heal=True)
+
+
+def _remote_trace_files(remote_root) -> list[str]:
+    from pathlib import Path
+
+    root = Path(remote_root)
+    if not root.exists():
+        return []
+    return sorted(
+        p.relative_to(root).as_posix()
+        for p in root.rglob("*")
+        if p.is_file() and p.name != "manifest.json"
+    )
+
+
+def _assert_refusal_and_zero_egress(result, remote_root) -> None:
+    assert result.exit_code != 0, result.output
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == "opentraces.bucket.sync_push.v1"
+    assert payload["status"] == "refused"
+    assert payload["pushed"] == []
+    withheld_ids = {w["trace_id"] for w in payload["withheld"]}
+    assert withheld_ids == {"unscanned-1", "status-unknown-1"}
+    assert all(w["reason"] == "not_cleared_for_sync" for w in payload["withheld"])
+    # The load-bearing property: NOT ONE trace file egressed.
+    assert _remote_trace_files(remote_root) == []
+
+
+def test_real_sync_push_refuses_and_egresses_nothing_when_withheld(
+    monkeypatch, tmp_path, _isolate_opentraces_global_state
+):
+    _seed_eligible_but_withheld_bucket()
+    remote_root = tmp_path / "fake-remote"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+
+    result = CliRunner().invoke(main, ["bucket", "sync", "push", "--json"])
+    _assert_refusal_and_zero_egress(result, remote_root)
+
+
+def test_hidden_bucket_remote_push_enforces_identically(
+    monkeypatch, tmp_path, _isolate_opentraces_global_state
+):
+    """The hidden ``bucket remote push`` alias shares the command object, so it
+    must refuse identically — hidden != a weaker egress contract."""
+    _seed_eligible_but_withheld_bucket()
+    remote_root = tmp_path / "fake-remote"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+
+    result = CliRunner().invoke(main, ["bucket", "remote", "push", "--json"])
+    _assert_refusal_and_zero_egress(result, remote_root)
+
+
+def test_fully_cleared_bucket_pushes_everything(
+    monkeypatch, tmp_path, _isolate_opentraces_global_state
+):
+    from opentraces.core.bucket_store import bucket_manifest
+
+    _clear_bucket()
+    _write_cleared_trace("cleared-1")
+    _write_cleared_trace("cleared-2")
+    bucket_manifest(write=True, heal=True)
+    remote_root = tmp_path / "fake-remote"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+
+    result = CliRunner().invoke(main, ["bucket", "sync", "push", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["withheld"] == []
+    assert set(payload["pushed"]) == {"cleared-1", "cleared-2"}
+    # Everything egressed: both trace.json spines landed on the remote.
+    egressed = _remote_trace_files(remote_root)
+    assert any("cleared-1/trace.json" in f for f in egressed)
+    assert any("cleared-2/trace.json" in f for f in egressed)
+
+
+def test_dry_run_and_real_push_agree_on_a_current_bucket(
+    monkeypatch, tmp_path, _isolate_opentraces_global_state
+):
+    """Consistency: --dry-run's persisted-manifest partition matches the fresh
+    push-time partition on a bucket whose manifest is current."""
+    _seed_eligible_but_withheld_bucket()
+    remote_root = tmp_path / "fake-remote"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+
+    dry = CliRunner().invoke(main, ["bucket", "sync", "push", "--dry-run", "--json"])
+    assert dry.exit_code == 0, dry.output
+    dry_payload = json.loads(dry.output)
+    assert dry_payload["dry_run"] is True
+    dry_withheld = {w["trace_id"] for w in dry_payload["withheld"]}
+    assert dry_withheld == {"unscanned-1", "status-unknown-1"}
+    # Nothing egressed by the dry-run either.
+    assert _remote_trace_files(remote_root) == []
+
+    real = CliRunner().invoke(main, ["bucket", "sync", "push", "--json"])
+    real_payload = json.loads(real.output)
+    assert real_payload["status"] == "refused"
+    assert {w["trace_id"] for w in real_payload["withheld"]} == dry_withheld

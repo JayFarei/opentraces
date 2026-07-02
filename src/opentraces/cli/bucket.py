@@ -526,15 +526,22 @@ def bucket_remote_push_cmd(
     ``syncable == true``; an absent row is withheld (conservative). The
     withhold reason is a PROCESS state (``not_cleared_for_sync``), never a
     content verdict. ``--dry-run`` computes the same partition without egressing.
+
+    Egress safety (the load-bearing property): the real (non-dry-run) push
+    REFUSES — ``status='refused'``, ``pushed=[]``, non-zero exit, ZERO bytes
+    egressed — whenever the fresh push-time partition still withholds any
+    trace. Enforcement runs against the SAME manifest the push egresses (the
+    push recomputes it after re-scanning local stores), so the envelope can
+    never claim a trace was withheld while its bytes actually left the machine.
     """
     from ..core.bucket_remote import BucketRemoteError, remote_push
-    from ..core.bucket_sync import sync_push_partition
-
-    # Predicates before egress: partition the bucket from the accelerator so the
-    # egress-safety property is provable from the envelope alone.
-    partition = sync_push_partition()
+    from ..core.bucket_sync import BucketPushWithheldError, sync_push_partition
 
     if dry_run:
+        # Advisory preview from the PERSISTED accelerator (O(1), no recompute,
+        # no egress). The real push enforces on a freshly-recomputed manifest;
+        # both use the same partition function, so they agree on a current bucket.
+        partition = sync_push_partition()
         payload = envelope(
             "opentraces.bucket.sync_push.v1",
             dry_run=True,
@@ -553,12 +560,40 @@ def bucket_remote_push_cmd(
         remote = remote_push(
             fake_root=remote_root, force=force, unsafe_push=unsafe_push
         )
+    except BucketPushWithheldError as exc:
+        # Refusal: nothing egressed. Emit the auditable partition so the caller
+        # knows exactly which traces are not cleared and how to clear them.
+        withheld = exc.partition.get("withheld") or []
+        payload = envelope(
+            "opentraces.bucket.sync_push.v1",
+            status="refused",
+            dry_run=False,
+            pushed=[],
+            withheld=withheld,
+            next_steps=[
+                "opentraces bucket security run --all",
+                "opentraces bucket sync push --dry-run  # re-audit the partition",
+            ],
+        )
+        if as_json:
+            click.echo(_dump_json(payload))
+        else:
+            click.echo(
+                f"Bucket sync push REFUSED — {len(withheld)} trace(s) not "
+                "cleared for sync; nothing egressed.",
+                err=True,
+            )
+            click.echo("  run 'opentraces bucket security run --all' to clear them", err=True)
+        sys.exit(2)
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
     except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
         from opentraces import cli as root_cli
         root_cli._fail_hf_or_reraise(exc, "")
+    # The push cleared: report the FRESH push-time partition (withheld is empty
+    # by construction — the gate refused otherwise), never the stale pre-read.
+    partition = remote.get("push_partition") or {"pushed": [], "withheld": []}
     payload = envelope(
         "opentraces.bucket.sync_push.v1",
         dry_run=False,

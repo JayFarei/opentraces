@@ -135,6 +135,16 @@ def fake_remote_push(remote_root: Path | None = None, *, force: bool = False) ->
                 else ""
             )
         )
+    # Egress gate (#162): refuse before copying a single byte if the FRESH
+    # manifest still withholds any trace. The bucket-level sync.eligible flag
+    # above is all-or-nothing and misses status_unknown rows (they do not
+    # increment unfiltered_count); this per-trace gate closes that hole so a
+    # not-cleared trace can never physically egress while being reported
+    # "withheld". Raises BucketPushWithheldError (carrying the partition) when
+    # withheld is non-empty.
+    from .bucket_sync import enforce_push_clearance
+
+    partition = enforce_push_clearance(manifest)
     status = fake_remote_status(root)
     if status.get("state") in {"remote_ahead", "diverged"} and not force:
         raise ValueError(
@@ -156,6 +166,7 @@ def fake_remote_push(remote_root: Path | None = None, *, force: bool = False) ->
         "remote_root": str(root),
         "digest": manifest.get("digest"),
         "files_copied": copied,
+        "push_partition": partition,
     }
 
 

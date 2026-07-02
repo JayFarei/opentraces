@@ -391,6 +391,15 @@ def _hf_push(
                 else ""
             )
         )
+    # Egress gate (#162): refuse before ANY network call if the FRESH manifest
+    # still withholds any trace. The bucket-level sync.eligible flag above is
+    # all-or-nothing and misses status_unknown rows (they do not increment
+    # unfiltered_count); this per-trace gate closes that hole so a not-cleared
+    # trace can never physically egress while being reported "withheld".
+    # Placed before _hf_status so a refusal touches zero bytes on the wire.
+    from .bucket_sync import enforce_push_clearance
+
+    partition = enforce_push_clearance(manifest)
     status = _hf_status(url, token)
     if status.get("state") in {"remote_ahead", "diverged"} and not force:
         raise BucketRemoteError(
@@ -463,6 +472,7 @@ def _hf_push(
         "context_tree_files_uploaded": context_tree_files_uploaded,
         "pass_counts": pass_counts,
         "verification": verification,
+        "push_partition": partition,
     }
 
 

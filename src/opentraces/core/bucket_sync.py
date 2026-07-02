@@ -28,6 +28,60 @@ from typing import Any
 WITHHOLD_REASON = "not_cleared_for_sync"
 
 
+class BucketPushWithheldError(Exception):
+    """A real bucket push would egress not-yet-cleared traces — refuse.
+
+    Egress safety (#162): ``sync push`` copies the raw substrate, so it must
+    NEVER egress a trace that is not positively cleared for sync. The
+    bucket-level ``sync.eligible`` flag is an all-or-nothing guard that misses
+    the ``status_unknown`` case (a row whose accelerator status is absent does
+    NOT increment ``unfiltered_count``), so a bucket could report
+    ``eligible == True`` while still holding withheld traces. When the FRESH
+    push-time manifest still partitions any trace into ``withheld`` this is
+    raised BEFORE a single byte leaves the machine, carrying the partition so
+    the CLI can emit the auditable ``status='refused'`` envelope.
+    """
+
+    def __init__(self, partition: dict[str, Any]) -> None:
+        self.partition = partition
+        withheld = partition.get("withheld") or []
+        super().__init__(
+            f"bucket push refused: {len(withheld)} trace(s) not cleared for sync"
+        )
+
+
+def partition_from_manifest(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    """Partition an in-hand manifest dict (the fresh push-time recompute).
+
+    Unlike :func:`sync_push_partition` (which re-reads the PERSISTED manifest),
+    this partitions a manifest the caller ALREADY holds. The push path calls it
+    on the manifest it just recomputed, so enforcement judges the SAME snapshot
+    it is about to egress — never a stale pre-read.
+    """
+
+    rows: list[dict[str, Any]] = []
+    if isinstance(manifest, dict):
+        rows = [r for r in (manifest.get("traces") or []) if isinstance(r, dict)]
+    return push_withhold_partition(rows)
+
+
+def enforce_push_clearance(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    """Refuse egress unless EVERY trace in ``manifest`` is cleared for sync.
+
+    Returns the partition (``pushed`` populated, ``withheld`` empty) when the
+    push may proceed. Raises :class:`BucketPushWithheldError` — carrying the
+    partition — when any trace is withheld, so ZERO bytes egress for a
+    not-cleared trace. This is the per-trace egress gate that the bucket-level
+    ``sync.eligible`` flag misses (``status_unknown`` rows do not increment
+    ``unfiltered_count``).
+    """
+
+    partition = partition_from_manifest(manifest)
+    if partition["withheld"]:
+        raise BucketPushWithheldError(partition)
+    return partition
+
+
 def push_withhold_partition(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Partition accelerator ``rows`` into ``pushed`` / ``withheld`` (pure).
 
