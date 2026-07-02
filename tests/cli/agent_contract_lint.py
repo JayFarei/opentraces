@@ -136,18 +136,15 @@ QUARANTINE: list[QuarantineEntry] = [
     # flags are now hidden deprecated aliases, and skills / index are hidden
     # plumbing (no longer visible read verbs), so none of them surface a
     # violation any more. The #164 ctx slice retired `ctx list` and the #165
-    # trail slice retired `trail graph` (both adopted the uniform envelope), so
-    # only the bucket-family entries (Wave B slice #162's debt) remain. The #161
-    # status slice adopted the uniform envelope on `bucket status` (now the
-    # opentraces.bucket.health.v1 header) and `doctor` (schema_version promoted to
-    # the top level), and the repurposed top-level `status` fleet dashboard emits
-    # the uniform header from birth, so the "status"-owned entries are gone.
-    QuarantineEntry("L5", "bucket manifest", "payload lacks a top-level schema_version header", "bucket"),
-    QuarantineEntry("L5", "bucket reclaim", "payload lacks a top-level schema_version header", "bucket"),
-    QuarantineEntry("L5", "bucket repair", "payload lacks a top-level schema_version header", "bucket"),
-    QuarantineEntry("L5", "bucket verify", "payload lacks a top-level schema_version header", "bucket"),
-    QuarantineEntry("L5", "bucket remote diff", "payload lacks a top-level schema_version header", "bucket"),
-    QuarantineEntry("L5", "bucket remote status", "payload lacks a top-level schema_version header", "bucket"),
+    # trail slice retired `trail graph` (both adopted the uniform envelope), and
+    # the #161 status slice adopted the uniform envelope on `bucket status` and
+    # `doctor`. The #162 bucket slice then emptied the last six bucket-family
+    # entries: `bucket verify`/`repair`/`reclaim` adopted cli/_envelope (uniform
+    # header), and `bucket manifest`/`bucket remote status`/`bucket remote diff`
+    # became hidden (the canonical surfaces are `bucket list` and the
+    # `bucket sync {status,diff}` mounts, which carry the header from birth), so
+    # none surface a visible-read-verb violation any more. The quarantine is now
+    # empty — every clause is enforced live outside it.
 ]
 
 # Clauses F1 (this slice) is responsible for; they must have NO quarantine

@@ -7,11 +7,15 @@
    "status"
   ]
  },
- "bucket manifest": {
-  "schema_version": null,
+ "bucket list": {
+  "schema_version": "opentraces.bucket.list.v1",
   "top_level_keys": [
-   "manifest",
-   "status"
+   "cursor",
+   "rows",
+   "schema_version",
+   "status",
+   "total",
+   "unknown_status_count"
   ]
  },
  "bucket prune": {
@@ -31,30 +35,18 @@
   ]
  },
  "bucket reclaim": {
-  "schema_version": null,
+  "schema_version": "opentraces.bucket.reclaim.v1",
   "top_level_keys": [
    "reclaim",
-   "status"
-  ]
- },
- "bucket remote diff": {
-  "schema_version": null,
-  "top_level_keys": [
-   "remote",
-   "status"
-  ]
- },
- "bucket remote status": {
-  "schema_version": null,
-  "top_level_keys": [
-   "remote",
+   "schema_version",
    "status"
   ]
  },
  "bucket repair": {
-  "schema_version": null,
+  "schema_version": "opentraces.bucket.repair.v1",
   "top_level_keys": [
    "repair",
+   "schema_version",
    "status"
   ]
  },
@@ -73,22 +65,29 @@
    "status"
   ]
  },
- "bucket status": {
-  "schema_version": "opentraces.bucket.health.v1",
+ "bucket sync diff": {
+  "schema_version": "opentraces.bucket.sync_diff.v1",
   "top_level_keys": [
-   "bucket",
-   "config",
-   "freshness",
+   "remote",
+   "schema_version",
+   "status"
+  ]
+ },
+ "bucket sync status": {
+  "schema_version": "opentraces.bucket.sync_status.v1",
+  "top_level_keys": [
+   "remote",
    "schema_version",
    "status"
   ]
  },
  "bucket verify": {
-  "schema_version": null,
+  "schema_version": "opentraces.bucket.verify.v1",
   "top_level_keys": [
    "errors",
    "ok",
    "sampled",
+   "schema_version",
    "status",
    "verify"
   ]
