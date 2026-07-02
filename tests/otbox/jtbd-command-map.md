@@ -211,8 +211,8 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `ctx writes` | Agent lists context writes for a trace so downstream consumers can identify what changed in the model-visible state | inspect-context-tree (5/9) | `context-tree-ctx-writes` | agent |
 | `ctx diff` | Agent compares two ContextNodes to see what layers changed between model steps | inspect-context-tree (6/9) | `context-tree-ctx-diff` | agent |
 | `ctx compactions` | Developer inspects compaction boundaries and loss summaries in a captured session | inspect-context-tree (7/9) | `context-tree-compaction` | both |
-| `ctx list` | Agent lists bucket-manifest Context Tree heads without loading every blob | inspect-context-tree (8/9) | unowned | agent |
-| `ctx info` | Agent inspects a single trace's Context Tree head and blob availability from the bucket manifest | inspect-context-tree (9/9) | unowned | agent |
+| `ctx list` (hidden) | Agent lists bucket-manifest Context Tree heads without loading every blob — cut from `ctx --help` per #164 (discovery is the trace spine; `bucket list` is the row surface); still callable | inspect-context-tree (8/9) | unowned | agent |
+| `ctx info` (hidden) | Agent inspects a single trace's Context Tree head and blob availability from the bucket manifest — cut from `ctx --help` per #164 (folds into the bare `ctx <trace>` overview); still callable | inspect-context-tree (9/9) | unowned | agent |
 | `ctx prune` | Agent materializes a pruned session up to a ContextNode for replay or resume-from-step workflows | resume-from-context (1/4) | `context-tree-ctx-prune` | agent |
 | `ctx resume` | Agent emits a compact resume packet for one ContextNode so another agent can continue with bounded context | resume-from-context (2/4) | `context-tree-ctx-resume` | agent |
 | `ctx resolve` | Agent resolves Context Tree resource identifiers to canonical payloads for replay, dashboards, or audits | resume-from-context (3/4) | `context-tree-ctx-resolve` | agent |
