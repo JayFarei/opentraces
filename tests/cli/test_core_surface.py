@@ -33,6 +33,12 @@ HIDDEN_PLUMBING = [
     "bucket prune",
     "bucket prefetch",
     "bucket security",
+    # v7 #162 — the fleet dashboard moved to the top-level `status` and the
+    # per-trace read side to `bucket list`; `--heal` folded into `bucket
+    # repair`, and `bucket sync` supersedes `bucket remote`. All stay callable.
+    "bucket status",
+    "bucket manifest",
+    "bucket remote",
     "trace teleport",
     "git-backfill",
     # Tier B — experimental / operator / internal feature groups + subcommands.
@@ -53,8 +59,9 @@ HIDDEN_PLUMBING = [
 ]
 
 CORE_VISIBLE = [
-    "bucket status",
-    "bucket manifest",
+    "bucket list",
+    "bucket connect",
+    "bucket sync",
     "bucket verify",
     "bucket repair",
     "ctx list",
