@@ -212,7 +212,14 @@ def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
     finally:
         reporter.done()
     if as_json:
-        click.echo(_dump_json(payload))
+        # L5 uniform envelope (ADR-0007): promote {status, schema_version} to the
+        # top level. The nested "bucket"/"config"/"freshness" blocks are unchanged,
+        # so existing consumers reading payload["bucket"][...] are unaffected. This
+        # is the bucket-HEALTH readout; the top-level `opentraces status` fleet
+        # dashboard is the distinct opentraces.bucket.status.v1 contract.
+        from ._envelope import envelope
+
+        click.echo(_dump_json(envelope("opentraces.bucket.health.v1", **payload)))
         return
     bucket = payload["bucket"]
     config = payload.get("config") or {}

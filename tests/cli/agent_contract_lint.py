@@ -137,15 +137,17 @@ QUARANTINE: list[QuarantineEntry] = [
     # plumbing (no longer visible read verbs), so none of them surface a
     # violation any more. The #164 ctx slice retired `ctx list` and the #165
     # trail slice retired `trail graph` (both adopted the uniform envelope), so
-    # only the status/bucket family entries (Wave B's debt) remain.
-    QuarantineEntry("L5", "bucket status", "payload lacks a top-level schema_version header", "status"),
+    # only the bucket-family entries (Wave B slice #162's debt) remain. The #161
+    # status slice adopted the uniform envelope on `bucket status` (now the
+    # opentraces.bucket.health.v1 header) and `doctor` (schema_version promoted to
+    # the top level), and the repurposed top-level `status` fleet dashboard emits
+    # the uniform header from birth, so the "status"-owned entries are gone.
     QuarantineEntry("L5", "bucket manifest", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket reclaim", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket repair", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket verify", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket remote diff", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket remote status", "payload lacks a top-level schema_version header", "bucket"),
-    QuarantineEntry("L5", "doctor", "schema_version is nested in doctor.*, not promoted to top level", "status"),
 ]
 
 # Clauses F1 (this slice) is responsible for; they must have NO quarantine

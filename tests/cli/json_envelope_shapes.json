@@ -74,11 +74,12 @@
   ]
  },
  "bucket status": {
-  "schema_version": null,
+  "schema_version": "opentraces.bucket.health.v1",
   "top_level_keys": [
    "bucket",
    "config",
    "freshness",
+   "schema_version",
    "status"
   ]
  },
@@ -171,9 +172,10 @@
   ]
  },
  "doctor": {
-  "schema_version": null,
+  "schema_version": "0.7.0",
   "top_level_keys": [
    "doctor",
+   "schema_version",
    "status"
   ]
  },
@@ -229,9 +231,10 @@
   ]
  },
  "setup doctor": {
-  "schema_version": null,
+  "schema_version": "0.7.0",
   "top_level_keys": [
    "doctor",
+   "schema_version",
    "status"
   ]
  },
@@ -372,6 +375,22 @@
   "top_level_keys": [
    "action",
    "status"
+  ]
+ },
+ "status": {
+  "schema_version": "opentraces.bucket.status.v1",
+  "top_level_keys": [
+   "fleet",
+   "freshness",
+   "next_steps",
+   "ok",
+   "ready",
+   "safety",
+   "schema_version",
+   "scope_project",
+   "security_version",
+   "store",
+   "sync"
   ]
  },
  "trace index compact": {

@@ -119,7 +119,13 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
             "schema_version": report.get("schema_version"),
             "security": report["security"],
         }
-        _emit_doctor({"status": "ok", "doctor": trimmed})
+        # L5 uniform envelope (ADR-0007): promote schema_version to the top level
+        # (kept nested in ``doctor.*`` too for back-compat).
+        _emit_doctor({
+            "status": "ok",
+            "schema_version": report.get("schema_version"),
+            "doctor": trimmed,
+        })
     else:
         if not json_only:
             _render_doctor_human(report)
@@ -127,7 +133,14 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
         # next_command / next_steps contract, not buried doctor.cli fields.
         # When a newer CLI is available (or deployed glue has drifted), make
         # the action the agent should take explicit and machine-readable.
-        envelope = {"status": "ok", "doctor": report, **_upgrade_directive(report)}
+        # L5 uniform envelope (ADR-0007): schema_version at the top level (also
+        # kept nested in ``doctor.schema_version`` for back-compat).
+        envelope = {
+            "status": "ok",
+            "schema_version": report.get("schema_version"),
+            "doctor": report,
+            **_upgrade_directive(report),
+        }
         _emit_doctor(envelope)
 
     code = doctor.exit_code(report)
