@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .egress_clearance import clearance_state
+
 WITHHOLD_REASON = "not_cleared_for_sync"
 
 
@@ -97,16 +99,19 @@ def push_withhold_partition(rows: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         trace_id = str(row.get("trace_id") or "")
         status = row.get("status") if isinstance(row.get("status"), dict) else None
-        known = bool(status and status.get("known"))
-        syncable = bool(status and status.get("syncable") is True)
-        if known and syncable:
+        # The shared egress predicate (#183) is the single source of clearance
+        # truth; translate its neutral three-way into Door A's envelope words.
+        state = clearance_state(status)
+        if state == "cleared":
             pushed.append(trace_id)
         else:
             withheld.append(
                 {
                     "trace_id": trace_id,
                     "reason": WITHHOLD_REASON,
-                    "sub_reason": "syncable_false" if known else "status_unknown",
+                    "sub_reason": (
+                        "syncable_false" if state == "not_cleared" else "status_unknown"
+                    ),
                 }
             )
     return {"pushed": pushed, "withheld": withheld}
