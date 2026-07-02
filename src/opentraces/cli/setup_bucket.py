@@ -157,6 +157,7 @@ def _configure_bucket_remote(
 
 @setup_group.command(
     "bucket",
+    hidden=True,
     examples=[
         "opentraces setup bucket",
         "opentraces setup bucket --local-only",
