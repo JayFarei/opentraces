@@ -186,16 +186,23 @@ def test_lineage_consumers_and_search_read_same_trail_projection(tmp_path: Path)
     } >= {"contains_step", "created_trace_patch", "anchored_in_git", "landed_in_commit"}
 
     blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
+    # Uniform L5 envelope header, additive alongside every pre-existing key.
+    assert blame["status"] == "ok"
+    assert blame["schema_version"] == "opentraces.trail.blame.v1"
     assert blame["projection_limitations"] == ["attribution_cache_missing_trail_events_used"]
     assert len(blame["trailEvidence"]) == 1
     _assert_same_anchor(expected, blame["trailEvidence"][0], has_survival=False)
 
     # Line-address blame resolves a single anchor, so survival is cheap and is
-    # carried (unlike commit-scoped blame above).
+    # carried (unlike commit-scoped blame above). Even via the ``commit``
+    # subcommand, a file:line target resolves to the file-line payload shape,
+    # so it carries the blame_line schema_version.
     line_blame = _run_json(
         tmp_path,
         ["trail", "blame", "commit", f"{expected['file_path']}:{expected['affected_range']['start_line']}"],
     )
+    assert line_blame["status"] == "ok"
+    assert line_blame["schema_version"] == "opentraces.trail.blame_line.v1"
     _assert_same_anchor(expected, line_blame["trailEvidence"][0])
 
     search = _run_json(tmp_path, ["trail", "search", "--commit", commit_sha])
@@ -220,6 +227,8 @@ def test_lineage_consumers_and_search_read_same_trail_projection(tmp_path: Path)
     assert commit_sha[:7] in graph_trace.output
 
     trace_blame = _run_json(tmp_path, ["trail", "blame", "commit", f"t:{expected['trace_id']}"])
+    assert trace_blame["status"] == "ok"
+    assert trace_blame["schema_version"] == "opentraces.trail.blame_trace.v1"
     assert trace_blame["commits"][0]["sha"] == commit_sha
     assert trace_blame["commits"][0]["source"] == "trail_events"
 

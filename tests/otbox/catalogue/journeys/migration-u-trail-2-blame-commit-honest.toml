@@ -60,6 +60,13 @@ kind = "returncode"
 step = "blame-new"
 equals = 0
 
+# Uniform L5 envelope header (additive alongside the legacy keys).
+[[assertions]]
+kind = "stdout_json"
+step = "blame-new"
+path = "schema_version"
+equals = "opentraces.trail.blame.v1"
+
 [[assertions]]
 kind = "stdout_json"
 step = "blame-new"

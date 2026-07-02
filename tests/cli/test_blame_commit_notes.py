@@ -134,6 +134,9 @@ class TestCommitModeNotes:
         code, out = _run([f"c:{sha}", "--json"], repo)
         assert code == 0, out
         payload = json.loads(out)
+        # Uniform L5 envelope header (additive; commit-mode shape version).
+        assert payload["status"] == "ok"
+        assert payload["schema_version"] == "opentraces.trail.blame.v1"
         assert "hookLinked" in payload
         hook_ids = [h["trace_id"] for h in payload["hookLinked"]]
         assert trace_id in hook_ids
