@@ -136,7 +136,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `completions uninstall` | Developer removes installed completions after uninstalling or switching shells | enable-shell-completions (3/3) | unowned | human |
 | `setup` (bare) | Developer walks an interactive wizard that covers every integration after init | onboard-integrations (1/1) | unowned | human |
 | `setup auth` (hidden) | Backwards-compatible alias for the canonical `auth login` command | connect-hf-identity (1/3) — alias | unowned | human |
-| `setup bucket` | Developer configures whether captured traces sync to a private HF remote or stay local-only | configure-bucket (1/1) | unowned | both |
+| `setup bucket` (hidden) | Developer configures whether captured traces sync to a private HF remote or stay local-only — renamed to `bucket connect` (issue #162); stays callable hidden | configure-bucket (1/1) | unowned | both |
 | `setup claude-code` | Developer installs the four Claude Code hooks (PreToolUse / PostToolUse / Stop / PostCompact) so sessions are captured | connect-agent-runtime (1/2) | `capture-safety-tracking-mode` | both |
 | `setup codex-cli` | Developer installs Codex CLI capture hooks so Codex sessions enter the same trace/bucket substrates as Claude Code | configure-codex-runtime (1/1) | `codex-full-parity-latest` | both |
 | `setup pi` | Developer installs the Pi extension package entry so Pi sessions auto-enroll into capture | connect-agent-runtime (2/2) | `pi-setup-dry-run` | both |
@@ -247,17 +247,24 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 
 | Command | JTBD one-liner | Action trajectory (n/N) | Owning journey | Persona |
 |---|---|---|---|---|
-| `bucket status` | Developer or agent checks bucket health + sync eligibility + trail freshness before deciding whether to push to the remote | inspect-private-storage (1/2) | `bucket-inspect` | both |
-| `bucket manifest` | Developer materializes + prints the bucket manifest to confirm every trace was written + get the current digest | inspect-private-storage (2/2) | `bucket-inspect` | both |
+| `bucket status` (hidden) | Lower-level bucket-health readout — the fleet dashboard moved to the top-level `status` (issue #162); stays callable hidden | inspect-private-storage (1/2) | `bucket-inspect` | both |
+| `bucket manifest` (hidden) | Prints the bucket manifest — read side moved to `bucket list`, `--heal` folded into `bucket repair` (issue #162); stays callable hidden | inspect-private-storage (2/2) | `bucket-inspect` | both |
+| `bucket list` | Agent or developer enumerates the per-trace bucket inventory — bounded, paginated, filterable (`--unsynced` / `--unscanned` / `--security-stale` / `--project` / `--since`), the hang-proof read the old `manifest` never was | inspect-private-storage (1/2) | `bucket-list-and-sync-withhold` | both |
+| `bucket connect` | Developer configures the private bucket remote target (the rename of `setup bucket`) — binds the HF remote before syncing | configure-bucket (1/1) | `bucket-list-and-sync-withhold` | both |
 | `bucket security policy` | Developer inspects or sets which security tools the bucket egress filter runs (off/basic/recommended/strict or a custom per-tool set) before private sync | configure-bucket (1/3) | `bucket-security-policy-basic` | both |
 | `bucket security run` | Developer applies the configured security filter over already-captured records so they become remote-sync eligible | configure-bucket (2/3) | `bucket-security-policy-basic` | both |
 | `bucket security status` | Developer or agent checks the bucket security posture + the exact remediation before a remote sync | configure-bucket (3/3) | `bucket-remote-status-filtered-eligible` | both |
-| `bucket remote status` | Developer compares the local bucket digest with the remote before deciding whether a push or pull is safe | compare-bucket-digests (1/1) | unowned | both |
-| `bucket remote diff` | Developer sees which objects diverge between local and remote manifests before committing to a push or pull | compare-bucket-digests (1/1) | unowned | both |
-| `bucket remote push` | Developer mirrors the local bucket to the configured HF remote so traces are backed up off-machine | backup-bucket-to-remote (1/1) | unowned | both |
-| `bucket remote pull` | Developer restores the local bucket from the configured HF remote on a new or wiped machine so the full trace corpus is available | restore-bucket-on-new-machine (1/1) | unowned | human |
+| `bucket sync status` | Developer compares the local bucket digest with the configured remote before deciding whether a push or pull is safe (was `bucket remote status`) | compare-bucket-digests (1/1) | `bucket-list-and-sync-withhold` | both |
+| `bucket sync diff` | Developer sees which objects diverge between the local and remote manifests before committing to a push or pull (was `bucket remote diff`) | compare-bucket-digests (1/1) | `bucket-list-and-sync-withhold` | both |
+| `bucket sync push` | Developer mirrors the local bucket to the configured remote — withholds every trace not yet cleared for sync; `--dry-run` computes the pushed/withheld partition without egressing (was `bucket remote push`) | backup-bucket-to-remote (1/1) | `bucket-list-and-sync-withhold` | both |
+| `bucket sync pull` | Developer restores the local bucket from the configured remote on a new or wiped machine (was `bucket remote pull`) | restore-bucket-on-new-machine (1/1) | `bucket-list-and-sync-withhold` | human |
+| `bucket remote status` (hidden) | Pre-#162 alias of `bucket sync status`; stays callable hidden | compare-bucket-digests (1/1) | unowned | both |
+| `bucket remote diff` (hidden) | Pre-#162 alias of `bucket sync diff`; stays callable hidden | compare-bucket-digests (1/1) | unowned | both |
+| `bucket remote push` (hidden) | Pre-#162 alias of `bucket sync push`; stays callable hidden | backup-bucket-to-remote (1/1) | unowned | both |
+| `bucket remote pull` (hidden) | Pre-#162 alias of `bucket sync pull`; stays callable hidden | restore-bucket-on-new-machine (1/1) | unowned | human |
 | `bucket replay` | Developer replays bucket-exported Trace Trails into a target Git repository after pulling to a new machine so trail lineage is reconstructed | restore-trail-lineage-to-repo (1/1) | unowned | both |
 | `bucket verify` | Developer checks bucket manifest, blob integrity, and dangling references before trusting or syncing the bucket | inspect-private-storage (2/2) | unowned | both |
+| `bucket reclaim` | Developer reclaims leaked Trace Trails cruft under `.git/**/opentraces/` (leaked tmp files + orphan accelerator pickles) — dry-run by default, `--apply` to remove | inspect-private-storage (maintenance) | `bucket-list-and-sync-withhold` | both |
 | `bucket repair` | Developer rebuilds the bucket from canonical event logs and blobs after detecting manifest drift | inspect-private-storage (maintenance) | unowned | human |
 | `bucket rebuild` | Developer rebuilds bucket projections after substrate changes or fixture refreshes | inspect-private-storage (maintenance) | unowned | human |
 | `bucket prune` | Developer removes unreachable bucket blobs in dry-run or confirmed mode without deleting trace/event history | inspect-private-storage (maintenance) | unowned | human |

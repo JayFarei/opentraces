@@ -1,0 +1,183 @@
+name = "bucket-list-and-sync-withhold"
+description = """
+Issue #162 acceptance — `bucket` is action-verbs-only and its reads are
+hang-proof + egress-safe.
+
+On a multi-trace bucket with a configured (fake) remote
+(`c-bucket-spine-v2-pushed-fake-remote`), this journey exercises the new
+canonical surface end to end:
+
+  - `bucket list --json` is the bounded, accelerator-backed per-trace
+    inventory (the hang-proof read the old `manifest` never was): it exits 0
+    with the `opentraces.bucket.list.v1` envelope, a bounded `rows[]`, a
+    `total`, and the sparsity-contract `unknown_status_count`.
+  - `bucket list --unscanned --count` short-circuits to just the matching
+    count (no rows materialized).
+  - `bucket sync diff` / `bucket sync status` are first-class peers of push:
+    they inspect the configured remote and exit 0.
+  - `bucket sync push --dry-run` partitions the bucket into `pushed[]`
+    (cleared for sync) and `withheld[]` (NOT cleared — `not_cleared_for_sync`)
+    WITHOUT egressing a byte, so the egress-safety decision is auditable first.
+  - `bucket connect` / `bucket sync pull` / `bucket reclaim` resolve as the
+    renamed/maintenance verbs (help surface).
+
+tier=1 (opt-in) pending PR-lane validation of the assertions against the
+checkpoint; the SSoT + catalogue gates already lock the surface.
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+trajectories = [
+    "inspect-private-storage",
+    "configure-bucket",
+    "compare-bucket-digests",
+    "backup-bucket-to-remote",
+    "restore-bucket-on-new-machine",
+]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-pushed-fake-remote"]
+
+[preconditions]
+min_captured_traces = 1
+pushed_to_fake_remote = true
+
+# ---------------------------------------------------------------------
+# `bucket list` — bounded, accelerator-backed per-trace inventory.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-list"
+argv = ["bucket", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-list"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-list"
+path = "schema_version"
+equals = "opentraces.bucket.list.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-list"
+path = "rows"
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-list"
+path = "total"
+min = 1
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-list"
+path = "unknown_status_count"
+min = 0
+
+# ---------------------------------------------------------------------
+# `bucket list --unscanned --count` — count short-circuit, no rows.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-list-count"
+argv = ["bucket", "list", "--unscanned", "--count", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-list-count"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-list-count"
+path = "count"
+min = 0
+
+# ---------------------------------------------------------------------
+# `bucket sync diff` / `status` — first-class inspect peers of push.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-sync-diff"
+argv = ["bucket", "sync", "diff", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-sync-diff"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "bucket-sync-status"
+argv = ["bucket", "sync", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-sync-status"
+equals = 0
+
+# ---------------------------------------------------------------------
+# `bucket sync push --dry-run` — the auditable egress-safety partition.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-sync-push-dry"
+argv = ["bucket", "sync", "push", "--dry-run", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-sync-push-dry"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-sync-push-dry"
+path = "dry_run"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-sync-push-dry"
+path = "pushed"
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-sync-push-dry"
+path = "withheld"
+
+# ---------------------------------------------------------------------
+# Renamed / maintenance verbs resolve (help surface).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-connect-help"
+argv = ["bucket", "connect", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-connect-help"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "bucket-sync-pull-help"
+argv = ["bucket", "sync", "pull", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-sync-pull-help"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "bucket-reclaim-help"
+argv = ["bucket", "reclaim", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-reclaim-help"
+equals = 0
