@@ -240,8 +240,43 @@ class GroupedGroup(OpentracesGroup):
     The banner + tagline + command-title bar are rendered by
     ``OpentracesGroup.format_help`` for every command and group; this
     subclass only overrides ``format_commands`` to swap the flat listing
-    for the curated sections defined in ``COMMAND_SECTIONS``.
+    for the curated sections defined in ``COMMAND_SECTIONS``, and
+    ``resolve_command`` for the v7 address-first dispatch below.
     """
+
+    def resolve_command(self, ctx, args):  # type: ignore[override]
+        # v7 F5 — address-first discovery: ``opentraces <ref>`` is the
+        # default action lens ``opentraces trace get <ref>``.
+        #
+        # KNOWN COMMANDS ALWAYS WIN: ``get_command`` is consulted before
+        # any address logic and returns hidden commands too, so no verb —
+        # present or future, visible or hidden — can ever be shadowed.
+        # Only a first token that would ALREADY error today ("No such
+        # command") and passes the conservative two-tier address gate in
+        # ``cli/_address.py`` is re-pointed at the registered ``trace
+        # get`` command, with the token as its REF and every remaining
+        # flag forwarded untouched. Everything else (typos, ``-`` flags,
+        # shell-completion resilient parsing) takes Click's unchanged
+        # path byte-identically, Did-you-mean suggestions included.
+        if args and not ctx.resilient_parsing:
+            cmd_name = click.utils.make_str(args[0])
+            if not cmd_name.startswith("-") and self.get_command(ctx, cmd_name) is None:
+                from ._address import root_dispatch_token
+
+                forwarded = root_dispatch_token(cmd_name)
+                if forwarded is not None:
+                    trace_grp = self.get_command(ctx, "trace")
+                    get_cmd = (
+                        trace_grp.get_command(ctx, "get")
+                        if isinstance(trace_grp, click.Group)
+                        else None
+                    )
+                    if get_cmd is not None:
+                        # info_name "trace get" makes downstream usage /
+                        # error text name the canonical verb:
+                        # "Usage: opentraces trace get [OPTIONS] REF".
+                        return "trace get", get_cmd, [forwarded, *args[1:]]
+        return super().resolve_command(ctx, args)
 
     def _style_rows(self, rows: list[tuple[str, str]], name_width: int) -> list[tuple[str, str]]:
         # Prefix each command with a dim-magenta "ot" shorthand, pad the
@@ -511,6 +546,9 @@ def _agent_placeholder() -> str:
     # the room they have. Children inherit ``max_content_width`` from
     # this root context.
     context_settings={"max_content_width": 10_000},
+    # v7 F5 discoverability line for the address-first dispatch handled
+    # by GroupedGroup.resolve_command above.
+    epilog="Address shortcut: ot <trace-id>[:<step>]  ->  ot trace get <ref>",
 )
 @click.version_option(version=__version__)
 @click.option("--json", "json_mode", is_flag=True, help="Emit only machine-readable JSON output")
