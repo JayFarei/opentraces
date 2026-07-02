@@ -29,10 +29,11 @@ from opentraces.core.state import StateManager, TraceStatus
 from opentraces.publish.huggingface.upload import verify_hf_token
 
 
-def test_security_version_is_0_7_0() -> None:
+def test_security_version_is_0_8_0() -> None:
     # Bumped 0.6.0 -> 0.7.0 by issue #84 (non-overridable dataset reader floor +
-    # the requested/effective/floor metadata shape change).
-    assert SECURITY_VERSION == "0.7.0"
+    # the requested/effective/floor metadata shape change); 0.7.0 -> 0.8.0 by the
+    # seal-family companion sanitizer (#143).
+    assert SECURITY_VERSION == "0.8.0"
 
 
 def test_full_stack_integration(monkeypatch, tmp_path) -> None:
