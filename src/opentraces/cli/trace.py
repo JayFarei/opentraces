@@ -1928,8 +1928,16 @@ def trace_get(
 ) -> None:
     """Resolve a trace, trace unit, map node, or ot:// Trail resource.
 
+    REF accepts the universal trace address: ``<trace>``,
+    ``<trace>:<step>``, ``<trace>:last``, or ``<trace>:<A>-<B>`` — the same
+    token ``ctx`` and ``trail`` resolve. ``<trace>:<step>`` returns a bounded
+    step card (the action lens, with the ``context_node_id`` join key);
+    ``<trace>:<A>-<B>`` returns the same slice object as
+    ``trace slice --from-step A --to-step B``.
+
     Pass ``--resume`` to hand control back to the native/upstream agent
-    runtime instead of printing the trace details. ``--at-step`` currently
+    runtime instead of printing the trace details (``<trace>:<N> --resume``
+    forks from step N). ``--at-step`` currently
     requires a Claude Code trace. Pass
     ``--bursts`` to return the change-burst summary for the trace
     without re-walking the full Trace Map. Pass ``--card`` to return a bounded
@@ -1944,6 +1952,79 @@ def trace_get(
     if as_card and remote:
         click.echo("--card cannot be combined with --remote yet.", err=True)
         sys.exit(2)
+
+    # ------------------------------------------------------------------
+    # v7 F1 — the universal trace:step address, resolved on trace get.
+    #
+    # Parse ORDER matters: refs with a known scheme prefix (ot://, tu:,
+    # tmn:, t:) take the EXISTING dispatch paths byte-unchanged — their
+    # embedded colons are scheme separators, never step selectors. Only a
+    # bare ref containing ':' is run through the SHARED step-address
+    # grammar (core.trails.lineage.parse_trail_ref — the single grammar
+    # oracle, pinned by tests/cli/test_trail_lineage_world.py). This block
+    # runs BEFORE the --remote branch below so `trace get <T>:<N> --remote`
+    # returns the record-only step card, not the whole-trace overview.
+    # ------------------------------------------------------------------
+    addr_trace: str | None = None
+    step_sel: int | None = None
+    last_sel = False
+    span_sel: tuple[int, int] | None = None
+    if ":" in ref and not ref.startswith(("ot://", "tu:", "tmn:", "t:")):
+        from ..core.trails.lineage import parse_trail_ref
+
+        addr_trace, parsed_step, parsed_span, reserved = parse_trail_ref(ref)
+        if reserved == "last":
+            last_sel = True
+        elif reserved == "span":
+            span_sel = parsed_span
+        elif reserved == "origin":
+            click.echo(
+                f"':origin' is reserved and not resolvable on trace get yet; "
+                f"use {addr_trace}, {addr_trace}:<N>, {addr_trace}:last, or "
+                f"{addr_trace}:<A>-<B>.",
+                err=True,
+            )
+            sys.exit(2)
+        elif reserved is not None:
+            click.echo(
+                f"Unparseable step address: {ref} "
+                f"(use <trace>, <trace>:<N>, <trace>:last, or <trace>:<A>-<B>).",
+                err=True,
+            )
+            sys.exit(2)
+        else:
+            step_sel = parsed_step
+    has_addr = step_sel is not None or last_sel or span_sel is not None
+
+    if has_addr:
+        for flag_name, flag_val in (
+            ("--bursts", as_bursts),
+            ("--card", as_card),
+            ("--waste", as_waste),
+            ("--run-intel", as_run_intel),
+        ):
+            if flag_val:
+                click.echo(
+                    f"{flag_name} operates on the whole trace; use the bare trace ref.",
+                    err=True,
+                )
+                sys.exit(2)
+        if span_sel is not None and resume:
+            click.echo(
+                "--resume needs a single step; use <trace>:<N> or <trace>:last.",
+                err=True,
+            )
+            sys.exit(2)
+        if span_sel is not None and remote:
+            click.echo(
+                "Span addresses need the local Trace Map; "
+                "--remote cannot serve <trace>:<A>-<B>.",
+                err=True,
+            )
+            sys.exit(2)
+        if resume and at_step:
+            click.echo("Pass either <trace>:<step> or --at-step, not both.", err=True)
+            sys.exit(2)
 
     remote_bucket_payload = None
     if remote_bucket:
@@ -1962,6 +2043,28 @@ def trace_get(
         sys.exit(2)
 
     if resume:
+        if has_addr:
+            # <trace>:<N> --resume closes the resume triple: the same token
+            # that names the step in ctx/trail is the fork point. The
+            # at_step contract is exactly 's<int>'
+            # (capture/claude_code/resume.py::_find_step).
+            assert addr_trace is not None
+            fork_step = step_sel
+            if last_sel:
+                from ..core.trace_index import get_trace_path as _get_trace_path
+
+                trace_path = _get_trace_path(_trace_id_from_ref(addr_trace))
+                if trace_path is None or not trace_path.exists():
+                    click.echo(f"Trace not found: {ref}", err=True)
+                    sys.exit(6)
+                record = _read_trace_record_from_path(trace_path)
+                indices = [s.step_index for s in record.steps]
+                if not indices:
+                    click.echo(f"Step not found: {ref} (trace has no steps)", err=True)
+                    sys.exit(6)
+                fork_step = max(indices)
+            _resume_trace_impl(addr_trace, f"s{fork_step}", dry_run, as_json)
+            return
         _resume_trace_impl(ref, at_step, dry_run, as_json)
         return
 
@@ -2007,7 +2110,7 @@ def trace_get(
         from ..core.bucket_remote import BucketRemoteError
         from ..core.bucket_store import BucketLayoutError
 
-        trace_id = _trace_id_from_ref(ref)
+        trace_id = _trace_id_from_ref(addr_trace if has_addr else ref)
         try:
             record = _read_trace_record_via_backend(trace_id, remote)
         except _BackendUnavailable as exc:
@@ -2019,6 +2122,23 @@ def trace_get(
         except FileNotFoundError:
             click.echo(f"Trace not found on remote {remote}: {ref}", err=True)
             sys.exit(6)
+        if step_sel is not None or last_sel:
+            # Record-only step card: the Trace Map lives in the LOCAL index,
+            # so map enrichment is silently skipped on --remote reads.
+            step = _select_step(record, step_sel, last_sel, ref)
+            payload = _envelope(
+                "opentraces.trace.get.v1",
+                trace_id=record.trace_id,
+                step=_step_card(record, step, trace_map=None),
+                next_steps=_step_next_steps(record.trace_id, step.step_index),
+            )
+            if remote_bucket_payload is not None:
+                payload["remote_bucket"] = remote_bucket_payload
+            if as_json:
+                click.echo(_dump_json(payload))
+                return
+            _echo_step_card_human(payload)
+            return
         # v7: bounded overview by default, symmetric with the local read path.
         payload = _envelope("opentraces.trace.get.v1", trace=_trace_overview(record))
         if remote_bucket_payload is not None:
@@ -2052,6 +2172,63 @@ def trace_get(
             click.echo(f"Trace Map node not found: {ref}", err=True)
             sys.exit(6)
         payload = _envelope("opentraces.trace.get.v1", map_node=node.model_dump(mode="json"))
+    elif span_sel is not None:
+        # SPAN lens — one primitive, two addresses: `trace get <T>:<A>-<B>`
+        # delegates to the exact engine behind `trace slice --from-step A
+        # --to-step B`, embedding the slice object byte-identically.
+        from ..core.trace_index import get_trace_map
+        from ..core.trace_slices import slice_by_steps
+
+        assert addr_trace is not None
+        span_trace_id = _trace_id_from_ref(addr_trace)
+        trace_map = get_trace_map(span_trace_id)
+        if trace_map is None:
+            click.echo(f"Trace Map not found: {ref}", err=True)
+            sys.exit(6)
+        record = _try_load_trace_record(span_trace_id)
+        try:
+            slice_obj = slice_by_steps(
+                trace_map,
+                record,
+                start_step_index=span_sel[0],
+                end_step_index=span_sel[1],
+            )
+        except ValueError as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(2)
+        payload = _envelope(
+            "opentraces.trace.get.v1",
+            trace_id=trace_map.trace_id,
+            span={
+                "from_step": slice_obj["start_step_index"],
+                "to_step": slice_obj["end_step_index"],
+            },
+            slice=slice_obj,
+        )
+    elif step_sel is not None or last_sel:
+        # STEP lens — the bounded, constant-size action card. Same loader +
+        # same rc=6 not-found contract as the bare form.
+        assert addr_trace is not None
+        trace_path = get_trace_path(_trace_id_from_ref(addr_trace))
+        if trace_path is None or not trace_path.exists():
+            click.echo(f"Trace not found: {ref}", err=True)
+            sys.exit(6)
+        record = _read_trace_record_from_path(trace_path)
+        step = _select_step(record, step_sel, last_sel, ref)
+        # Best-effort local-map enrichment; silently omitted when the Trace
+        # Index is absent.
+        try:
+            from ..core.trace_index import get_trace_map
+
+            trace_map = get_trace_map(record.trace_id)
+        except Exception:
+            trace_map = None
+        payload = _envelope(
+            "opentraces.trace.get.v1",
+            trace_id=record.trace_id,
+            step=_step_card(record, step, trace_map=trace_map),
+            next_steps=_step_next_steps(record.trace_id, step.step_index),
+        )
     else:
         trace_path = get_trace_path(_trace_id_from_ref(ref))
         if trace_path is None or not trace_path.exists():
@@ -2084,6 +2261,15 @@ def trace_get(
             shown = ", ".join(files)
             more = "" if total_files <= len(files) else f" (+{total_files - len(files)} more)"
             click.echo(f"  files:    {shown}{more}")
+    elif "step" in payload:
+        _echo_step_card_human(payload)
+    elif "slice" in payload:
+        # Same one-line-per-slice summary as `trace slice`.
+        item = payload["slice"]
+        click.echo(
+            f"{item['slice_id']}  steps {item['start_step_index']}..{item['end_step_index']}  "
+            f"nodes={len(item['map']['nodes'])}  patches={len(item['trace_patch_refs'])}"
+        )
     elif "unit" in payload:
         click.echo(payload["unit"]["unit_id"])
     elif "map_node" in payload:
@@ -2301,6 +2487,139 @@ def _trace_overview(record) -> dict:
             "card": f"ot://trace/{record.trace_id}/card",
         },
     }
+
+
+_STEP_CARD_CONTENT_PREVIEW_CHARS = 240
+_STEP_CARD_INPUT_PREVIEW_CHARS = 120
+_STEP_CARD_MAX_TOOL_CALLS = 8
+
+
+def _select_step(record, step_sel: int | None, last_sel: bool, ref: str):
+    """Resolve a step selector against a loaded TraceRecord, or exit 6.
+
+    Selection is an INDEX-FIELD match (``step.step_index == N``, mirroring
+    capture/claude_code/resume.py::_find_step), never a list position;
+    ``:last`` is the max step_index — the final action. Missing step is rc=6
+    for the whole address family (deliberate divergence from ctx's rc=3).
+    """
+    indices = [s.step_index for s in record.steps]
+    if not indices:
+        click.echo(f"Step not found: {ref} (trace has no steps)", err=True)
+        sys.exit(6)
+    wanted = max(indices) if last_sel else step_sel
+    step = next((s for s in record.steps if s.step_index == wanted), None)
+    if step is None:
+        click.echo(
+            f"Step not found: {ref} (trace has steps {min(indices)}..{max(indices)})",
+            err=True,
+        )
+        sys.exit(6)
+    return step
+
+
+def _step_card(record, step, *, trace_map=None) -> dict:
+    """Build the bounded, constant-size STEP CARD (the action lens).
+
+    Derived ONLY from the Step model (schema untouched) plus best-effort
+    local-map enrichment. Same audit-P2 discipline as ``_trace_overview``:
+    previews are truncated, tool_calls capped, observations summarized —
+    NEVER an O(step-content) dump.
+    """
+    content = step.content or ""
+    tool_calls = []
+    for tc in step.tool_calls[:_STEP_CARD_MAX_TOOL_CALLS]:
+        try:
+            input_preview = json.dumps(tc.input, default=str, sort_keys=True)
+        except (TypeError, ValueError):
+            input_preview = str(tc.input)
+        tool_calls.append(
+            {
+                "tool_name": tc.tool_name,
+                "tool_call_id": tc.tool_call_id,
+                "input_preview": input_preview[:_STEP_CARD_INPUT_PREVIEW_CHARS],
+            }
+        )
+    observations = {
+        "count": len(step.observations),
+        "total_chars": sum(len(o.content or "") for o in step.observations),
+        "first_error": next((o.error for o in step.observations if o.error), None),
+    }
+    token_usage = step.token_usage
+    card = {
+        "step_index": step.step_index,
+        "role": step.role,
+        "call_type": step.call_type,
+        "agent_role": step.agent_role,
+        "model": step.model,
+        "timestamp": step.timestamp,
+        "content_preview": content[:_STEP_CARD_CONTENT_PREVIEW_CHARS],
+        "content_chars": len(content),
+        "reasoning_present": bool(step.reasoning_content),
+        "tool_calls": tool_calls,
+        "tool_call_count": len(step.tool_calls),
+        "observations": observations,
+        "token_usage": (
+            token_usage.model_dump(mode="json")
+            if hasattr(token_usage, "model_dump")
+            else token_usage
+        ),
+        "context_node_id": step.context_node_id,
+    }
+    if trace_map is not None:
+        # A step usually projects to SEVERAL map nodes (agent_message +
+        # file_edit + tool_result ...). map_node_id is the first node covering
+        # the step; the file lists aggregate across all of them, deduped.
+        step_nodes = [n for n in trace_map.nodes if n.step_index == step.step_index]
+        if step_nodes:
+            card["map_node_id"] = step_nodes[0].node_id
+            files_modified: list[str] = []
+            files_read: list[str] = []
+            for node in step_nodes:
+                for fp in node.files_modified:
+                    if fp not in files_modified:
+                        files_modified.append(fp)
+                for fp in node.files_read:
+                    if fp not in files_read:
+                        files_read.append(fp)
+            card["files_modified"] = files_modified
+            card["files_read"] = files_read
+    return card
+
+
+def _step_next_steps(trace_id: str, step_index: int) -> list[str]:
+    """The closed cross-substrate triple for a resolved step address."""
+    return [
+        f"ctx {trace_id}:{step_index}",
+        f"trail {trace_id}:{step_index}",
+        f"trace slice {trace_id} --around-step {step_index} --radius 5",
+    ]
+
+
+def _echo_step_card_human(payload: dict) -> None:
+    """Compact human rendering of the step card envelope."""
+    card = payload["step"]
+    click.echo(
+        f"{payload['trace_id']}:{card['step_index']}  role={card['role']}  "
+        f"model={card.get('model') or '-'}"
+    )
+    if card.get("tool_calls"):
+        names = ", ".join(tc["tool_name"] for tc in card["tool_calls"])
+        suffix = ""
+        if card.get("tool_call_count", 0) > len(card["tool_calls"]):
+            suffix = f" (+{card['tool_call_count'] - len(card['tool_calls'])} more)"
+        click.echo(f"  tools:    {names}{suffix}")
+    if card.get("content_preview"):
+        click.echo(f"  content:  {card['content_preview']}")
+    obs = card.get("observations") or {}
+    if obs.get("count"):
+        line = f"  obs:      count={obs['count']} chars={obs['total_chars']}"
+        if obs.get("first_error"):
+            line += f" first_error={obs['first_error']}"
+        click.echo(line)
+    if card.get("context_node_id"):
+        click.echo(f"  ctx node: {card['context_node_id']}")
+    for hint in payload.get("next_steps", []):
+        click.echo(f"  next:     {hint}")
 
 
 def _map_span(trace_map) -> tuple[int, int]:

@@ -184,7 +184,10 @@ def test_world_read_missing_step_degrades_honestly(tmp_path):
 def test_reserved_address_forms_refuse_cleanly(tmp_path):
     _init_repo(tmp_path)
     _seed_patch(tmp_path, "tr-r", 1, "    return 'one'\n")
-    for addr in ("tr-r:1-1", "tr-r:origin"):
+    # ``:last`` is resolvable on trace get / ctx but deferred on trail — it
+    # must degrade honestly (rc=2) instead of silently falling through to the
+    # bare-trace lineage card (F1 required fix).
+    for addr in ("tr-r:1-1", "tr-r:origin", "tr-r:last"):
         res = _run(tmp_path, ["trail", addr, "--json"])
         assert res.exit_code == 2, (addr, res.output)
         payload = json.loads(res.output)
@@ -198,6 +201,9 @@ def test_parse_trail_ref_shapes():
     assert parse_trail_ref("abc:3-7") == ("abc", None, (3, 7), "span")
     assert parse_trail_ref("abc:origin") == ("abc", None, None, "origin")
     assert parse_trail_ref("abc:nope") == ("abc", None, None, "invalid")
+    # F1: the one grammar delta — ``:last`` moves from "invalid" to its own
+    # reserved slot. Every other tuple above is pinned byte-identical.
+    assert parse_trail_ref("abc:last") == ("abc", None, None, "last")
 
 
 # --------------------------------------------------------------------------- #
