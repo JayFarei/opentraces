@@ -256,7 +256,9 @@ def test_a2_trace_map_on_superseded_generation_exits_zero(tmp_path):
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["trace_id"] == "og0"
-    assert payload["map"]["nodes"]
+    # v7: the default whole-trace map is the bounded faceted view, not a raw
+    # node dump. The superseded generation still resolves with content.
+    assert payload["scope"]["node_count"] > 0
 
 
 def test_a2_include_superseded_returns_trace_level_units(tmp_path):
