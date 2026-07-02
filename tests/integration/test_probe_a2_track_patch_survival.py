@@ -39,6 +39,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -199,7 +201,8 @@ def _run() -> int:
 
 def test_probe_a2_track_patch_survival():
     rc = _run()
-    assert rc != 2, "A2 SETUP-INVALID (opentraces CLI binary absent in this worktree)"
+    if rc == 2:
+        pytest.skip("A2 SETUP-INVALID (opentraces CLI binary absent in this worktree)")
     assert rc == 0, (
         "A2 RED: `trail track --patch` is non-interactive (hangs the full "
         "read_events() read) and/or returns empty/wrong-route survival data"
