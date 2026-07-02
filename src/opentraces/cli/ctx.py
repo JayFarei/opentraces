@@ -62,8 +62,8 @@ class CtxGroup(OpentracesGroup):
     ``ctx <trace>[:<step>|:last]`` renders the context projection of a
     trace directly, with no subcommand — the bare noun IS the read. A
     positional token that is NOT a registered subcommand is treated as
-    that ``<trace>:<step>`` ref; the retained subcommands (``list`` /
-    ``info`` and the hidden plumbing) still dispatch normally.
+    that ``<trace>:<step>`` ref; the retained hidden subcommands still
+    dispatch normally.
 
     ``trace:step`` is the universal cross-substrate address: the same
     token resolves across ``ctx``, ``trace get``, and ``trail``.
@@ -125,6 +125,15 @@ class CtxGroup(OpentracesGroup):
     help="Include compaction-dropped content (audit-complete union).",
 )
 @click.option(
+    "--full",
+    "as_full",
+    is_flag=True,
+    help=(
+        "Inline the FULL hydrated model input (system + messages + tools + "
+        "runtime) — the fork/eval-row packet. Default stays bounded."
+    ),
+)
+@click.option(
     "--remote",
     "remote",
     default=None,
@@ -144,6 +153,7 @@ def ctx_group(
     ref: str | None,
     layer: str | None,
     with_dropped: bool,
+    as_full: bool,
     remote: str | None,
     offline: bool,
     as_json: bool,
@@ -156,6 +166,7 @@ def ctx_group(
     ctx <trace>:<step>       the model input at that step
     ctx <trace>:last         the final / active step
         [--layer system|messages|tools|runtime]   render one layer readably
+        [--full]   inline the full hydrated body (the fork packet)
         [--with-dropped] [--json] [--remote R]
 
     ``trace:step`` is the universal address — the same token resolves
@@ -168,6 +179,7 @@ def ctx_group(
         ref=ref,
         layer=layer,
         with_dropped=with_dropped,
+        as_full=as_full,
         remote=remote,
         offline=offline,
         as_json=as_json,
@@ -356,6 +368,17 @@ class _BareBackend:
         self.bucket_slug = _bucket_slug_for_project(project_dir)
         self.projection = build_context_tree_projection_for_trace(self.repo, trace_id)
         self._proj_nodes = self.projection.nodes_by_trace.get(trace_id, [])
+        # Global drill-in (v7 #164): the CWD-derived slug is a guess — when
+        # neither the projection nor that slug's bucket companion yields a
+        # node for this trace, fall back to the manifest's project_slug for
+        # the trace id (the same trace -> project join the overview already
+        # rides), so ``ctx <id>:<N>`` resolves from ANY cwd.
+        if not self._proj_nodes and not (
+            self.bucket_slug and _read_bucket_nodes(self.bucket_slug, trace_id)
+        ):
+            manifest_slug = _manifest_slug_for_trace(trace_id)
+            if manifest_slug:
+                self.bucket_slug = manifest_slug
 
     # -- node resolution ---------------------------------------------------
     def active_nodes(self) -> list[Any]:
@@ -489,6 +512,7 @@ def _run_bare_ctx(
     ref: str | None,
     layer: str | None,
     with_dropped: bool,
+    as_full: bool,
     remote: str | None,
     offline: bool,
     as_json: bool,
@@ -525,6 +549,7 @@ def _run_bare_ctx(
                 selector,
                 layer=layer,
                 with_dropped=with_dropped,
+                as_full=as_full,
                 remote=remote,
                 offline=offline,
                 emit_json=emit_json,
@@ -690,7 +715,10 @@ def _render_overview(
     label = "otel" if fidelity == "otel" else "jsonl (structure-only)"
     head = f"ctx {trace_id} · {label} · {step_count} steps"
     if peak_tokens is not None:
-        head += f" · context ~{peak_tokens:,} tok (est)"
+        # "peak messages": the headline measures the MESSAGES layer only,
+        # while a step card sums all four layers — label it honestly rather
+        # than implying a whole-context peak (v7 #164).
+        head += f" · peak messages ~{peak_tokens:,} tok (est)"
     click.echo(head)
     if sparkline:
         peak_txt = f"  peak @ step {peak_step}" if peak_step is not None else ""
@@ -709,6 +737,7 @@ def _render_step_or_layer(
     *,
     layer: str | None,
     with_dropped: bool,
+    as_full: bool,
     remote: str | None,
     offline: bool,
     emit_json: bool,
@@ -735,6 +764,7 @@ def _render_step_or_layer(
             step_index=step_index,
             layer_alias=layer,
             with_dropped=with_dropped,
+            as_full=as_full,
             remote=remote,
             offline=offline,
             emit_json=emit_json,
@@ -760,12 +790,26 @@ def _render_step_or_layer(
             msg_count = _count_messages(_layer_content(lyr))
         if lt == "tool_registry":
             tool_count = _count_tools(_layer_content(lyr))
+        # --full: inline the FULL hydrated body — the fork/eval-row packet
+        # (v7 #164). Same hydration path as the hidden ``ctx show --full``
+        # (every messages content_hash resolved to its text), now reachable
+        # at the documented ``ctx <trace>:<step>`` address.
+        if as_full and lyr is not None:
+            content = _layer_content(lyr)
+            if lt == "messages":
+                content = _hydrate_messages_content(
+                    content,
+                    backend.bucket_slug,
+                    remote=None if offline else remote,
+                    node=node,
+                )
+            entry["content"] = content
 
     est = _est_tokens(total_bytes)
     read = [
-        f"opentraces ctx {trace_id}:{step_index} --layer messages",
+        f"opentraces ctx {trace_id}:{step_index} --full --json",
+        f"opentraces ctx {trace_id}:{step_index} --layer messages --full",
         f"opentraces ctx {trace_id}:{step_index} --layer system",
-        f"opentraces ctx {trace_id}:{step_index} --layer tools",
     ]
     payload = {
         "schema_version": _CTX_VIEW_SCHEMA_VERSION,
@@ -801,7 +845,13 @@ def _render_step_or_layer(
             "  fidelity: structure-only (jsonl) — counts are exact, message "
             "content is not stored"
         )
-    click.echo(f"  read → --layer messages   --layer system   --layer tools")
+    if as_full:
+        for lt, entry in layers_out.items():
+            if "content" in entry:
+                click.echo(f"  {lt}:")
+                click.echo(_dump_json(entry["content"]))
+        return
+    click.echo(f"  read → --full   --layer messages   --layer system   --layer tools")
 
 
 def _render_layer(
@@ -812,6 +862,7 @@ def _render_layer(
     step_index: int | None,
     layer_alias: str,
     with_dropped: bool,
+    as_full: bool,
     remote: str | None,
     offline: bool,
     emit_json: bool,
@@ -879,12 +930,13 @@ def _render_layer(
     shown_content = content
     shown_msgs: list[Any] = []
     if msg_list is not None:
-        shown_msgs = msg_list[:_MESSAGES_PAGE]
+        # --full disables paging: the whole hydrated message list (v7 #164).
+        shown_msgs = msg_list if as_full else msg_list[:_MESSAGES_PAGE]
         page = {
             "shown": len(shown_msgs),
             "total": len(msg_list),
             "offset": 0,
-            "limit": _MESSAGES_PAGE,
+            "limit": len(msg_list) if as_full else _MESSAGES_PAGE,
         }
         if isinstance(content, dict) and msg_key is not None:
             shown_content = {**content, msg_key: shown_msgs}
@@ -927,16 +979,20 @@ def _render_layer(
     if msg_list is not None:
         for i, msg in enumerate(shown_msgs):
             role = msg.get("role", "?") if isinstance(msg, dict) else "?"
-            preview = _truncate_for_text(_dump_json(msg), 240).replace("\n", " ")
+            if as_full:
+                preview = _dump_json(msg)
+            else:
+                preview = _truncate_for_text(_dump_json(msg), 240).replace("\n", " ")
             click.echo(f"  [{i}] {role}: {preview}")
         click.echo(f"  showing {page['shown']} of {page['total']} messages")
         if page["total"] > page["shown"]:
             click.echo(
                 f"  read → opentraces ctx {trace_id}:{step_index} "
-                f"--layer messages --json | jq '.content'"
+                f"--layer messages --full --json | jq '.content'"
             )
     else:
-        click.echo(_truncate_for_text(_dump_json(content)))
+        text = _dump_json(content)
+        click.echo(text if as_full else _truncate_for_text(text))
     if fidelity != "otel" and layer_type == "messages":
         click.echo(
             "  fidelity: structure-only (jsonl) — message content not stored"
@@ -1118,6 +1174,22 @@ def _bucket_slug_for_project(project_dir: Path | None) -> str | None:
         return get_project_dir(target).name
     except Exception:
         return None
+
+
+def _manifest_slug_for_trace(trace_id: str) -> str | None:
+    """Global trace -> project_slug join: manifest row first, then the
+    documented per-trace ``trace.json`` fallback (mirrors the overview's
+    ``_overview_summary`` lookup — no blob loads)."""
+    for row in _read_bucket_manifest_no_blobs().get("traces") or []:
+        if isinstance(row, dict) and row.get("trace_id") == trace_id:
+            return row.get("project_slug")
+    try:
+        from ..core.bucket_store import trace_v2_summary_by_id
+
+        entry = trace_v2_summary_by_id(trace_id)
+    except Exception:
+        return None
+    return entry.get("project_slug") if isinstance(entry, dict) else None
 
 
 def _read_bucket_nodes(slug: str, trace_id: str) -> list[Any]:
@@ -1455,6 +1527,7 @@ def _lazy_fetch_message_blob(
 @ctx_group.command(
     "list",
     cls=OpentracesCommand,
+    hidden=True,  # v7 #164 — "no ctx list": discovery is the trace spine; `bucket list` is the row surface. Callable, off --help.
     examples=[
         "opentraces ctx list",
         "opentraces ctx list --json",
@@ -1554,6 +1627,7 @@ def ctx_list_cmd(remote: str | None, as_json: bool) -> None:
 @ctx_group.command(
     "info",
     cls=OpentracesCommand,
+    hidden=True,  # v7 #164 — superseded by the bare-noun `ctx <trace>` overview; callable, off --help
     examples=[
         "opentraces ctx info <trace-id>",
         "opentraces ctx info <trace-id> --json",

@@ -28,6 +28,10 @@ HIDDEN_PLUMBING = [
     "ctx step",
     "ctx reads",
     "ctx writes",
+    # v7 #164 — "no ctx list": discovery is the trace spine, `bucket list` is
+    # the row surface; `ctx info` is superseded by the bare-noun overview.
+    "ctx list",
+    "ctx info",
     "bucket rebuild",
     "bucket replay",
     "bucket prune",
@@ -64,8 +68,6 @@ CORE_VISIBLE = [
     "bucket sync",
     "bucket verify",
     "bucket repair",
-    "ctx list",
-    "ctx info",
     "trace query",
     "trace map",
     "trail blame",

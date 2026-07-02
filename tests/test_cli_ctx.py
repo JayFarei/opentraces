@@ -845,15 +845,19 @@ def test_ctx_bare_stdin_composition(runner, linear_project):
 
 
 def test_ctx_visibility_curation(runner):
-    """Superseded verbs are hidden (callable); list/info stay visible."""
-    for name in ("tree", "show", "step", "reads", "writes"):
+    """Every subcommand is hidden (callable): the bare noun is the ONE verb.
+
+    v7 #164 cut ``list``/``info`` from --help too — "no ctx list": discovery
+    is the trace spine, ``bucket list`` is the row surface.
+    """
+    for name in ("tree", "show", "step", "reads", "writes", "list", "info"):
         cmd = ctx_group.commands[name]
         assert cmd.hidden is True, f"{name} should be hidden"
-    for name in ("list", "info"):
-        assert ctx_group.commands[name].hidden is False
     # Hidden != removed: still dispatchable.
     res = runner.invoke(ctx_group, ["tree", "no-such", "--json"])
     assert res.exit_code == 0  # empty-state envelope, not a crash
+    res = runner.invoke(ctx_group, ["list", "--json"])
+    assert res.exit_code == 0, res.output
 
 
 def test_ctx_list_is_a_frozen_envelope_without_status_header(runner):
@@ -917,6 +921,7 @@ def test_render_layer_pages_legacy_steps_shape(runner, monkeypatch):
         step_index=4,
         layer_alias="messages",
         with_dropped=False,
+        as_full=False,
         remote=None,
         offline=False,
         emit_json=True,
