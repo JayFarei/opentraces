@@ -226,26 +226,50 @@ def test_kill_l5_missing_header():
 
 def test_l5_frozen_envelope_exemption():
     """Frozen consumer envelopes are exempt from L5 BY DESIGN (freeze beats
-    uniformity), but a NON-frozen surface cannot ride the exemption — the
-    exemption is keyed on the frozen schema_version VALUE, never the command."""
+    uniformity), but the exemption validates the PAIRING (command PATH + its OWN
+    frozen schema_version), never the schema_version VALUE alone. So a non-frozen
+    surface emitting a frozen version string is still flagged, and a frozen
+    surface emitting the wrong frozen version is still flagged."""
     from .agent_contract_lint import FROZEN_ENVELOPE_EXCEPTIONS
 
-    # A frozen envelope missing the L5 status header is EXEMPT (no violation),
-    # byte-identical to origin/main.
+    # (2) The genuine frozen surfaces, each emitting its OWN frozen version, are
+    # EXEMPT (no violation) — byte-identical to origin/main.
     assert l5_uniform_envelope(
         "ctx list", {"schema_version": "opentraces.ctx.list.v2", "traces": []}
+    ) == []
+    assert l5_uniform_envelope(
+        "ctx info", {"schema_version": "opentraces.ctx.info.v2", "nodes": []}
+    ) == []
+    assert l5_uniform_envelope(
+        "ctx tree", {"schema_version": "opentraces.context_tree.v1", "nodes": []}
     ) == []
     assert l5_uniform_envelope(
         "ctx show", {"schema_version": "opentraces.context_tree.v1", "nodes": []}
     ) == []
 
-    # KILL: a non-frozen surface, even at the SAME command path, still fails L5.
-    # A future surface cannot smuggle a header-less envelope past L5 by mounting
-    # under a ctx path — it must be an explicitly-frozen schema_version.
+    # (1) KILL: a NON-frozen surface emitting a frozen schema_version string it
+    # does not own is NOT exempt — it still fails L5 (Codex probe: bucket status
+    # emitting a ctx frozen version must not dodge the header requirement).
+    assert l5_uniform_envelope(
+        "bucket status", {"schema_version": "opentraces.ctx.list.v2", "bucket": {}}
+    ) != []
+
+    # KILL: a frozen surface emitting the WRONG frozen version (one belonging to a
+    # different frozen surface) is NOT exempt.
+    assert l5_uniform_envelope(
+        "ctx list", {"schema_version": "opentraces.context_tree.v1", "traces": []}
+    ) != []
+
+    # KILL: a frozen surface emitting a non-frozen version is NOT exempt.
     assert l5_uniform_envelope(
         "ctx list", {"schema_version": "opentraces.not.frozen.v1", "traces": []}
     ) != []
+
+    # The exemption keys on command paths; no frozen version string is a key, and
+    # the not-frozen version is owned by no surface.
     assert "opentraces.not.frozen.v1" not in FROZEN_ENVELOPE_EXCEPTIONS
+    frozen_versions = frozenset().union(*FROZEN_ENVELOPE_EXCEPTIONS.values())
+    assert "opentraces.not.frozen.v1" not in frozen_versions
 
 
 def test_kill_l6_count_and_version_divergence():

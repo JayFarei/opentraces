@@ -57,25 +57,37 @@ PROMPT_BYTES = ("[y/N]", "[Y/n]", "Proceed?", "Trust and run it?", "choose", "�
 # reads as data. Write/control verbs (setup*, dataset run, auth) are excluded.
 READ_FAMILY_ROOTS = ("trace", "ctx", "trail", "bucket", "status", "doctor", "config")
 
-# FROZEN_ENVELOPE_EXCEPTIONS — schema_version strings whose byte-shape is a
-# frozen downstream-consumer contract (replay / RL / viewer / dashboards /
-# Slack / PR). For these, the schema_version tag IS the shape contract: a field
-# may not be added without a version bump, so they cannot carry the uniform L5
-# ``status`` header without silently breaking byte-compatibility. L5 exempts
-# them BY DESIGN — freeze beats uniformity. This is a first-class, documented
-# mechanism (not a quarantine deferral); the exemption is keyed on the frozen
-# schema_version VALUE, never on the command path, so a non-frozen surface
-# cannot ride it (proven by test_l5_frozen_envelope_exemption). Mirrors
-# opentraces.cli.ctx.FROZEN_ENVELOPE_SCHEMA_VERSIONS.
-FROZEN_ENVELOPE_EXCEPTIONS = frozenset({
-    "opentraces.context_tree.v1",
-    "opentraces.context_reads.v1",
-    "opentraces.context_writes.v1",
-    "opentraces.context_resolve.v1",
-    "opentraces.context_resume.v1",
-    "opentraces.ctx.list.v2",
-    "opentraces.ctx.info.v2",
-})
+# FROZEN_ENVELOPE_EXCEPTIONS — the frozen downstream-consumer surfaces (replay /
+# RL / viewer / dashboards / Slack / PR) whose --json byte-shape is a
+# version-tagged contract: a field may not be added without a schema bump, so
+# they cannot carry the uniform L5 ``status`` header without silently breaking
+# byte-compatibility. L5 exempts them BY DESIGN — freeze beats uniformity. This
+# is a first-class, documented mechanism (not a quarantine deferral).
+#
+# The exemption validates the PAIRING, not the value alone. It is a mapping from
+# each frozen command PATH to the frozen schema_version(s) that command owns, so
+# the exemption applies only when BOTH (a) the command is a known frozen surface
+# AND (b) it emits its OWN expected frozen schema_version. Consequences (proven
+# by test_l5_frozen_envelope_exemption): a NON-frozen surface emitting a frozen
+# version string is NOT exempt (still an L5 violation), and a frozen surface
+# emitting the WRONG frozen version (one belonging to a different frozen surface)
+# is NOT exempt. The union of values mirrors
+# opentraces.cli.ctx.FROZEN_ENVELOPE_SCHEMA_VERSIONS (every frozen version is
+# owned by exactly the ctx command(s) that emit it).
+FROZEN_ENVELOPE_EXCEPTIONS: dict[str, frozenset[str]] = {
+    "ctx list": frozenset({"opentraces.ctx.list.v2"}),
+    "ctx info": frozenset({"opentraces.ctx.info.v2"}),
+    "ctx tree": frozenset({"opentraces.context_tree.v1"}),
+    "ctx show": frozenset({"opentraces.context_tree.v1"}),
+    "ctx step": frozenset({"opentraces.context_tree.v1"}),
+    "ctx diff": frozenset({"opentraces.context_tree.v1"}),
+    "ctx compactions": frozenset({"opentraces.context_tree.v1"}),
+    "ctx reads": frozenset({"opentraces.context_reads.v1"}),
+    "ctx writes": frozenset({"opentraces.context_writes.v1"}),
+    "ctx resolve": frozenset({"opentraces.context_resolve.v1"}),
+    "ctx prune": frozenset({"opentraces.context_resume.v1"}),
+    "ctx resume": frozenset({"opentraces.context_resume.v1"}),
+}
 
 # Commands we do NOT auto-execute in the sweep (network / daemon / interactive /
 # destructive-on-real-substrate). Mirrors test_json_surface_sweep.EXEC_DENYLIST;
@@ -267,9 +279,12 @@ def l5_uniform_envelope(path: str, doc: Any) -> list[Violation]:
     # Frozen consumer envelopes are exempt from the uniform header BY DESIGN
     # (see FROZEN_ENVELOPE_EXCEPTIONS): their byte-shape is a version-tagged
     # contract, so a status field cannot be added without a schema bump. The
-    # exemption is keyed on the frozen schema_version VALUE, so a non-frozen
-    # surface (even at the same command path) still fails L5.
-    if doc.get("schema_version") in FROZEN_ENVELOPE_EXCEPTIONS:
+    # exemption validates the PAIRING: it applies only when this command PATH is
+    # a known frozen surface AND emits its OWN expected frozen schema_version. A
+    # non-frozen surface emitting a frozen version string is therefore NOT exempt,
+    # and a frozen surface emitting the wrong frozen version is NOT exempt either.
+    allowed = FROZEN_ENVELOPE_EXCEPTIONS.get(path)
+    if allowed is not None and doc.get("schema_version") in allowed:
         return []
     has_status = "status" in doc or "ok" in doc
     has_schema = "schema_version" in doc
