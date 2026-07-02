@@ -37,6 +37,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -146,8 +148,10 @@ def _run() -> int:
 
 def test_probe_a6_trackall_bounded():
     rc = _run()
-    assert rc != 2, "A6 SETUP-INVALID: trace_patch_created registry too small (<100) for grounding"
-    assert rc != 3, "A6 HARNESS-INVALID: missing `timeout`/`gtimeout` or opentraces CLI binary"
+    if rc == 2:
+        pytest.skip("A6 SETUP-INVALID: trace_patch_created registry too small (<100) for grounding")
+    if rc == 3:
+        pytest.skip("A6 HARNESS-INVALID: missing `timeout`/`gtimeout` or opentraces CLI binary")
     assert rc == 0, (
         "A6 RED: `trail track --all --limit 5 --json` is not bounded by --limit "
         "(hang past budget) or did not enumerate exactly 5 real distinct patches"
