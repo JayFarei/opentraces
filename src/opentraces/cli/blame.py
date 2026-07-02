@@ -33,6 +33,7 @@ from typing import Any
 
 import click
 
+from ._envelope import envelope
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import project_dir_option
 from ..clients.text.colors import (
@@ -870,12 +871,15 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
                         include_entities: bool,
                         project_cwd: Path,
                         trail_rows: list[dict] | None = None) -> dict:
-    """Build JSON payload. Backward-compatible: keys ``commit``, ``coverage``,
-    ``traces``, ``files`` stay stable. Add ``entity_contributions`` when
-    entity data is present (never drops existing keys).
+    """Build JSON payload. Backward-compatible: the uniform L5 header
+    (``status``, ``schema_version`` = ``opentraces.trail.blame.v1``) leads, and
+    keys ``commit``, ``coverage``, ``traces``, ``files`` stay stable. Add
+    ``entity_contributions`` when entity data is present (never drops existing
+    keys).
 
     ``trail_rows`` lets the caller pass the already-resolved attribution rows so
     the commit-scoped Trail projection is not rebuilt a second time per blame."""
+    from ..core.trails.contract import BLAME_SCHEMA_VERSION
     full_sha, subject, ts = meta
     attributed, total, ratio = _coverage_pct(data)
     files_out: dict = {}
@@ -893,7 +897,7 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
         {t.get("trace_id") for t in (data.get("traces") or [])
          if t.get("trace_id")},
     )
-    payload: dict = {
+    payload: dict = envelope(BLAME_SCHEMA_VERSION, **{
         "commit": {"sha": full_sha, "subject": subject, "timestamp": ts},
         "coverage": {"attributed": attributed, "total": total, "ratio": ratio},
         "traces": data.get("traces") or [],
@@ -901,7 +905,7 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
         "hookLinked": [
             {"trace_id": tid, "id": tid[:8]} for tid in hook_linked_ids
         ],
-    }
+    })
     if trail_rows is None:
         trail_rows = _trail_evidence_for_commit(project_cwd, full_sha, scope_file)
     disagreements, projection_limitations = _projection_disagreements(
@@ -1160,12 +1164,14 @@ def _build_trace_json_payload(
     project_cwd: Path, trace_id: str, *, include_overlapping: bool,
 ) -> dict:
     """JSON shape for ``ot blame t:<id> --json``. Matches the web payload
-    keys to keep one contract across surfaces."""
+    keys to keep one contract across surfaces, plus the uniform L5 header
+    (``status``, ``schema_version`` = ``opentraces.trail.blame_trace.v1``)."""
     from ..core import inverse_blame as _ib
+    from ..core.trails.contract import BLAME_TRACE_SCHEMA_VERSION
 
     result = _ib.compute(project_cwd, trace_id,
                          include_overlapping=include_overlapping)
-    return {
+    return envelope(BLAME_TRACE_SCHEMA_VERSION, **{
         "trace": {
             "id": result.short_id,
             "trace_id": result.trace_id,
@@ -1187,10 +1193,12 @@ def _build_trace_json_payload(
             for c in result.commits
         ],
         "files": [{"path": p, "lines": n} for p, n in result.files],
-    }
+    })
 
 
 def _build_file_line_json_payload(project_cwd: Path, target: str) -> dict:
+    from ..core.trails.contract import BLAME_LINE_SCHEMA_VERSION
+
     path, raw_line = target.rsplit(":", 1)
     line_no = int(raw_line)
     projection = _trail_projection_for(project_cwd)
@@ -1215,14 +1223,14 @@ def _build_file_line_json_payload(project_cwd: Path, target: str) -> dict:
     relation = "anchored_in_git" if rows else "unknown"
     if not rows and "no_git_anchor_for_line" not in limitations:
         limitations.append("no_git_anchor_for_line")
-    return {
+    return envelope(BLAME_LINE_SCHEMA_VERSION, **{
         "target": target,
         "relation": relation,
         "trailEvidence": rows,
         "trace_patch": rows[0] if rows else None,
         "git_anchor": rows[0] if rows else None,
         "limitations": limitations,
-    }
+    })
 
 
 # --------------------------------------------------------------------------- #

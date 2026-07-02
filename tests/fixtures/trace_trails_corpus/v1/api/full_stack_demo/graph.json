@@ -397,5 +397,7 @@
     }
   ],
   "mode": "commit",
-  "pivot_trace_id": null
+  "pivot_trace_id": null,
+  "schema_version": "opentraces.trail.graph.v1",
+  "status": "ok"
 }

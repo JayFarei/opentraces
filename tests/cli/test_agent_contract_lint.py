@@ -29,6 +29,7 @@ from .agent_contract_lint import (
     F1_OWNED_CLAUSES,
     GUARD_COMMANDS,
     HANG_CLUSTER,
+    L5_ARGGED_TARGETS,
     QUARANTINE,
     QUARANTINE_BASELINE,
     RunResult,
@@ -132,6 +133,23 @@ def seeded_bucket(tmp_path):
         )
     repo = tmp_path / "acl-repo"
     _init_repo(repo)
+    # Opt the repo in (marker file) and seed ONE hook-linked git note on HEAD
+    # so `trail blame commit HEAD --json` exits 0 with the honest notes-only
+    # envelope (coverage 0/0, hookLinked carrying acl-trace-0). Without these,
+    # blame exits 2 (not opted in) / 1 (empty cache) and the L5_ARGGED_TARGETS
+    # envelope pass would be vacuous (never fire) —
+    # test_argged_l5_pass_is_nonvacuous_on_seeded_world pins this stays true.
+    from opentraces.core.config import _write_marker
+    from opentraces.enrichment.git import notes_store
+
+    _write_marker(repo, "acl-project-0000", {})
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+        check=True,
+    ).stdout.strip()
+    assert notes_store.append(
+        head_sha, [notes_store.format_link("acl-trace-0")], cwd=repo,
+    ) == 1
     return home, repo
 
 
@@ -170,6 +188,27 @@ def test_agent_contract_is_lint_clean_outside_quarantine(seeded_bucket, capsys):
         f"{len(failing)} agent-contract violation(s) outside quarantine "
         f"(quarantined: {len(quarantined)}):\n{detail}"
     )
+
+
+def test_argged_l5_pass_is_nonvacuous_on_seeded_world(seeded_bucket):
+    """NON-VACUITY pin: every L5_ARGGED_TARGETS argv actually exits 0 with
+    parseable JSON on the seeded world (the fixture's marker + git note make
+    blame take the honest notes-only path), so the argged L5 envelope check in
+    the gate genuinely fires rather than being skipped on a non-zero exit."""
+    home, repo = seeded_bucket
+    for name, argv in L5_ARGGED_TARGETS:
+        res = _run(argv, home=home, cwd=repo, stdin=subprocess.DEVNULL)
+        assert res.exit_code == 0, (
+            f"{name}: exit {res.exit_code} on the seeded world — the argged L5 "
+            f"pass would be VACUOUS\nstderr: {res.stderr[-400:]}"
+        )
+        doc = json.loads(res.stdout.strip())
+        # And the live envelope carries the uniform header end-to-end.
+        assert doc["status"] == "ok"
+        assert doc["schema_version"] == "opentraces.trail.blame.v1"
+        assert doc["hookLinked"] == [
+            {"trace_id": "acl-trace-0", "id": "acl-trac"}
+        ]
 
 
 # -- 2. clause kills -----------------------------------------------------------
@@ -270,6 +309,66 @@ def test_l5_frozen_envelope_exemption():
     assert "opentraces.not.frozen.v1" not in FROZEN_ENVELOPE_EXCEPTIONS
     frozen_versions = frozenset().union(*FROZEN_ENVELOPE_EXCEPTIONS.values())
     assert "opentraces.not.frozen.v1" not in frozen_versions
+
+
+def test_kill_l5_argged_headerless_blame():
+    """The argged-L5 pass is red-capable: a headerless blame doc (the exact
+    pre-fix `trail blame commit --json` shape) fed through the argged path is
+    flagged — blame is NOT in FROZEN_ENVELOPE_EXCEPTIONS, so nothing shields a
+    missing header. The clean (post-fix) doc produces nothing."""
+    headerless = {
+        "commit": {"sha": "d" * 40, "subject": "x", "timestamp": "t"},
+        "coverage": {"attributed": 0, "total": 0, "ratio": 0.0},
+        "traces": [],
+        "files": {},
+        "hookLinked": [],
+        "trailEvidence": [],
+    }
+    for name, _argv in L5_ARGGED_TARGETS:
+        assert [v.clause for v in l5_uniform_envelope(name, headerless)] == ["L5"]
+    clean = {"status": "ok", "schema_version": "opentraces.trail.blame.v1", **headerless}
+    for name, _argv in L5_ARGGED_TARGETS:
+        assert l5_uniform_envelope(name, clean) == []
+
+
+def test_kill_l5_argged_pass_is_wired():
+    """WIRING kill: lint_agent_contract itself must surface an L5 violation for
+    an argged target when the seeded-world runner returns a headerless exit-0
+    JSON doc — proving the L5_ARGGED_TARGETS loop actually runs inside the gate
+    (not just that l5_uniform_envelope can flag a doc)."""
+    benign = RunResult(["x"], 0, '{"status": "ok", "schema_version": "x.v1"}', "", False)
+
+    def hang_runner(argv: list[str]) -> RunResult:
+        if argv[:2] == ["trail", "blame"]:
+            return RunResult(argv, 0, '{"commit": {"sha": "d"}}', "", False)
+        return benign
+
+    failing, _quarantined = lint_agent_contract(
+        sweep_runner=lambda path: benign,
+        guard_runner=lambda argv: RunResult(argv, 2, '{"status": "error", "error": {"code": "x"}}', "", False),
+        l6_docs=None,
+        hang_runner=hang_runner,
+    )
+    flagged = {v.command for v in failing if v.clause == "L5"}
+    assert {name for name, _ in L5_ARGGED_TARGETS} <= flagged
+
+
+def test_frozen_exceptions_equal_ctx_frozen_set():
+    """Drift guard: the exception set may only ever contain the genuinely-frozen
+    ctx consumer envelopes. The union of FROZEN_ENVELOPE_EXCEPTIONS' versions
+    must equal opentraces.cli.ctx.FROZEN_ENVELOPE_SCHEMA_VERSIONS exactly —
+    adding a non-ctx surface (e.g. trail blame) or a new version on either side
+    without the other is a test failure, not a silent widening."""
+    from opentraces.cli.ctx import FROZEN_ENVELOPE_SCHEMA_VERSIONS
+
+    from .agent_contract_lint import FROZEN_ENVELOPE_EXCEPTIONS
+
+    assert frozenset().union(*FROZEN_ENVELOPE_EXCEPTIONS.values()) == (
+        FROZEN_ENVELOPE_SCHEMA_VERSIONS
+    )
+    # And every excepted command PATH is a ctx surface — trail blame (which
+    # carries the uniform header natively) can never be smuggled in here.
+    assert all(path.startswith("ctx ") for path in FROZEN_ENVELOPE_EXCEPTIONS)
 
 
 def test_kill_l6_count_and_version_divergence():

@@ -16,6 +16,8 @@
   "projection_limitations": [
     "attribution_cache_missing_trail_events_used"
   ],
+  "schema_version": "opentraces.trail.blame.v1",
+  "status": "ok",
   "traces": [],
   "trailEvidence": [
     {

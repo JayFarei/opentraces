@@ -182,6 +182,9 @@ def test_json_output_shape(tmp_path, monkeypatch):
     )
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
+    # Uniform L5 envelope header (additive; every legacy key unchanged).
+    assert payload["status"] == "ok"
+    assert payload["schema_version"] == "opentraces.trail.blame.v1"
     assert payload["commit"]["sha"] == sha
     assert "coverage" in payload and "attributed" in payload["coverage"]
     assert payload["coverage"]["total"] == 3

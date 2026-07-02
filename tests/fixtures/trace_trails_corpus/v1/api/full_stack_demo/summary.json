@@ -11,6 +11,8 @@
         "hookLinked",
         "projection_disagreements",
         "projection_limitations",
+        "schema_version",
+        "status",
         "traces",
         "trailEvidence"
       ]
@@ -21,7 +23,9 @@
       "top_level_keys": [
         "commits",
         "mode",
-        "pivot_trace_id"
+        "pivot_trace_id",
+        "schema_version",
+        "status"
       ]
     },
     {
