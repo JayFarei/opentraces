@@ -22,11 +22,13 @@ from .walker import walk_dict_strings
 # detector-protocol tools `sanitize_dict` executes over string leaves, plus
 # `path_anonymizer` which the unconditional anonymize_paths step below applies.
 # The remaining registry tools operate on TraceRecord structure and cannot run
-# over a row: trufflehog / llm_pii are apply-only detectors (no `find`),
+# over a row: trufflehog is apply-only (no `find`, TraceRecord-shaped),
 # capsule_scope is a record field-exclusion transformer, classifier is a
-# whole-record judge. A dataset security contract may only reference this set.
+# whole-record judge. `llm_pii` (#143) gained a per-string `find()` adapter, so
+# it is now dict-runnable like `privacy_filter` — both are availability-gated NER
+# detectors. A dataset security contract may only reference this set.
 DATASET_ROW_TOOLS: frozenset[str] = frozenset(
-    {"regex", "entropy", "privacy_filter", "business_logic", "path_anonymizer"}
+    {"regex", "entropy", "privacy_filter", "llm_pii", "business_logic", "path_anonymizer"}
 )
 
 # Non-overridable reader's floor (issue #84). These tools run over EVERY
