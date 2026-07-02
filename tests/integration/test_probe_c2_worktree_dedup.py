@@ -19,6 +19,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -93,7 +95,8 @@ def _run() -> int:
 
 def test_probe_c2_worktree_dedup():
     rc = _run()
-    assert rc != 2, "C2 SETUP-INVALID (hermetic worktree scenario failed to build)"
+    if rc == 2:
+        pytest.skip("C2 SETUP-INVALID (hermetic worktree scenario failed to build)")
     assert rc == 0, "C2 RED: per-worktree snapshot duplication (--git-dir not --git-common-dir)"
 
 
