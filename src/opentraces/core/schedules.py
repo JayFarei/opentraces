@@ -17,6 +17,20 @@ _INTERVAL_RE = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")
 _INTERVAL_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _SCHEDULE_LOG_LINE_LIMIT = 5000
 
+# The permanently-dead ``claude-code-headless`` executor was removed in the M1
+# engine collapse (#185). A schedule serialized before the collapse still
+# deserializes (the schema keeps the value readable); on read we coerce it onto
+# the automated ``script`` executor so the regenerated trigger command stays
+# valid instead of naming a removed executor.
+_LEGACY_HEADLESS_EXECUTOR = "claude-code-headless"
+_DEFAULT_EXECUTOR = "script"
+
+
+def _coerce_executor(executor: str | None) -> str:
+    if not executor or executor == _LEGACY_HEADLESS_EXECUTOR:
+        return _DEFAULT_EXECUTOR
+    return str(executor)
+
 
 @dataclass(frozen=True)
 class ScheduleState:
@@ -102,7 +116,7 @@ def read_schedule(name: str) -> ScheduleState:
         path=dataset.path,
         enabled=bool(raw.get("enabled")),
         every=str(raw.get("every") or ""),
-        executor=str(raw.get("executor") or "claude-code-headless"),
+        executor=_coerce_executor(raw.get("executor")),
         trigger=dict(raw.get("trigger") or {}),
         last_run_status=raw.get("last_run_status"),
     )

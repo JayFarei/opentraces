@@ -180,6 +180,48 @@ def test_plan057_literal_boundaries_reject_deferred_or_unknown_modes():
         WorkflowRef(skill="missing-digest", digest="")
 
 
+# --- M1 engine collapse (#185): script default + headless back-compat --------
+
+
+def test_script_is_the_automated_default_executor():
+    """The engine collapse makes ``script`` the automated default executor
+    (``current-agent`` remains the development/human-in-the-loop path)."""
+    config = ExecutorConfig()
+    assert config.default == "script"
+    assert config.development == "current-agent"
+    # ``script`` is an accepted executor value for both surfaces.
+    assert ExecutorConfig(default="script").default == "script"
+    assert DatasetSchedule(enabled=True, every="2h", executor="script").executor == "script"
+
+
+def test_legacy_headless_executor_value_still_deserializes():
+    """The permanently-dead ``claude-code-headless`` executor was removed from
+    the engine, but the value stays READABLE on ``ExecutorName`` so schedules,
+    executor configs, and run records serialized before the collapse still load
+    (and round-trip) instead of failing validation."""
+    config = ExecutorConfig(default="claude-code-headless")
+    assert config.default == "claude-code-headless"
+
+    schedule = DatasetSchedule.model_validate(
+        {"enabled": True, "every": "2h", "executor": "claude-code-headless"}
+    )
+    assert schedule.executor == "claude-code-headless"
+    restored = DatasetSchedule.model_validate_json(schedule.model_dump_json())
+    assert restored == schedule
+
+    run = DatasetRunRecord(
+        run_id="run_legacy",
+        dataset_name="legacy",
+        dry_run=False,
+        executor="claude-code-headless",
+        scope={"scope": "all-projects"},
+        workflow_digest="sha256:workflow",
+        schema_digest="sha256:schema",
+        started_at="2026-04-28T12:00:00Z",
+    )
+    assert run.model_dump(mode="json")["executor"] == "claude-code-headless"
+
+
 # --- Plan 092 Track 2: dataset security policy schema ------------------------
 
 
