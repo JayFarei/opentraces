@@ -1,8 +1,11 @@
 name = "maintain-install"
 description = """
 Maintain the install (plan 063 §1: `maintain-install`):
-`setup upgrade` upgrades the CLI + refreshes the project skill file.
-Journey asserts the help surface.
+`upgrade` upgrades the CLI + refreshes the project skill file. Issue #160
+moved it from a `setup` subcommand to a root peer verb (the update leg of
+the in / update / out triad beside `setup`); this journey now exercises the
+root path, plus the backwards-compatible hidden `setup upgrade` alias.
+Journey asserts the help surface only (no real upgrade attempt).
 """
 lane = "extended"
 tier = 0
@@ -14,9 +17,19 @@ requires = ["cli"]
 [[steps]]
 type = "cli"
 id = "upgrade-help"
-argv = ["setup", "upgrade", "--help"]
+argv = ["upgrade", "--help"]
 
 [[assertions]]
 kind = "stdout_contains"
 step = "upgrade-help"
+value = "Upgrade"
+
+[[steps]]
+type = "cli"
+id = "setup-upgrade-help"
+argv = ["setup", "upgrade", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "setup-upgrade-help"
 value = "Upgrade"

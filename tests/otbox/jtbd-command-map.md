@@ -44,7 +44,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **offboard-repo** | 1/1 | 1 | A developer unenrolls + wipes local state |
 | **verify-install** | 1/1 | 1 | `doctor` reports pipeline health after any setup step |
 | **connect-hf-identity** | 1 → 3 | 1 | `auth login` / `whoami` / `logout` lifecycle |
-| **configure-settings** | 1 → 2 | 1 | `config set` + `config show` |
+| **configure-settings** | 1 → 3 | 1 | `config set` + `config show` + `config get` |
 | **configure-tracking-mode** | 1/1 | 1 | `config tracking-mode` |
 | **enable-shell-completions** | 1 → 3 | 1 | Print → install → uninstall |
 | **connect-agent-runtime** | 1 → 2 | 1 | `setup claude-code` + `setup skill` + `setup entity-parser` |
@@ -123,12 +123,14 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `status` | Developer checks inbox counts + remote binding after init to confirm the project is live | onboard-repo (5/5) | `cli-lifecycle`, `cli-publish-happy-path` | human |
 | `remove` | Developer unenrolls a project + wipes local state after stopping capture | offboard-repo (1/1) | `cli-lifecycle` | human |
 | `doctor` | Developer or agent verifies pipeline health after setup to catch broken tools or missing hooks | verify-install (1/1) | `doctor-health`, `install-smoke-tier1` | both |
+| `setup doctor` | Same `doctor` command object mounted a second time under `setup`, so the install-health read-twin is discoverable right beside the verbs it reports on (issue #160) | verify-install (1/1) — alias | unowned | both |
 | `auth login` | Developer authenticates with HuggingFace via browser OAuth or token so dataset remotes + bucket sync are unblocked | connect-hf-identity (1/3) | unowned | both |
 | `auth whoami` | Agent or developer confirms which HF identity is active before running publish commands | connect-hf-identity (2/3) | unowned | both |
 | `auth logout` | Developer removes stored HF credentials to rotate or decommission an identity | connect-hf-identity (3/3) | unowned | human |
 | `config set` | Developer or agent writes a config key to global or project scope so behaviour changes take effect without editing JSON | configure-settings (1/2) | `capture-safety-excluded-marker` | both |
 | `config show` | Developer inspects current config with secrets masked to confirm active settings | configure-settings (2/2) | `cli-lifecycle` | human |
 | `config tracking-mode` | Developer switches between global and manual tracking behavior so auto-enrollment matches the repo's privacy posture | configure-tracking-mode (1/1) | `capture-safety-tracking-mode`, `capture-safety-excluded-marker` | human |
+| `config get` | Developer or agent reads one resolved config key without a whole-config dump (the `set [KEY] [VALUE]` shape implies a matching key-addressing getter, issue #160) | configure-settings (3/3 — new) | unowned | both |
 | `completions` | Developer prints a shell completion script to evaluate before installing | enable-shell-completions (1/3) | unowned | human |
 | `completions install` | Developer installs shell completions for bash/zsh/fish so `ot <TAB>` works | enable-shell-completions (2/3) | unowned | human |
 | `completions uninstall` | Developer removes installed completions after uninstalling or switching shells | enable-shell-completions (3/3) | unowned | human |
@@ -144,9 +146,11 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `setup capture-otlp` | Developer patches Claude Code telemetry settings and installs the local OTLP receiver so Context Tree layers can be captured from wire events | configure-otel-capture (1/6) | unowned | human |
 | `setup trufflehog` | Developer configures the optional TruffleHog secret detector for redaction and publication safety checks | configure-security-detectors (1/2) | unowned | both |
 | `setup privacy-filter` | Developer configures the optional `openai/privacy-filter` PII detector for dataset-row scanning | configure-security-detectors (2/2) | unowned | both |
-| `setup llm-review` | Developer configures the optional LLM reviewer that gates dataset publication | configure-security-reviewer (1/1) | unowned | both |
-| `setup upgrade` | Developer upgrades the CLI + refreshes the project skill file after a new release | maintain-install (1/2) | unowned | both |
-| `setup uninstall` | Developer reverses the opentraces install — the symmetric inverse of `setup` — removing hooks/daemons/env while preserving captured traces, datasets, and buckets (`--purge` to also delete the corpus) | maintain-install (2/2) | `setup-uninstall-dry-run` | both |
+| `setup llm-review` (hidden) | Developer configures the optional LLM reviewer that gates dataset publication — a session-level publication gate, not a per-record sanitize/install step, so it's off `setup --help` (issue #160); still callable, unchanged internals | configure-security-reviewer (1/1) | unowned | both |
+| `setup upgrade` (hidden) | Backwards-compatible alias for the root `opentraces upgrade` peer verb (issue #160) | maintain-install (1/2) — alias | unowned | both |
+| `setup uninstall` (hidden) | Backwards-compatible alias for the root `opentraces uninstall` peer verb (issue #160) | maintain-install (2/2) — alias | unowned | both |
+| `upgrade` | Developer upgrades the CLI + refreshes the project skill file after a new release — a root peer verb beside `setup` (the in / update / out triad), not a subcommand of it (issue #160) | maintain-install (1/2) | unowned | both |
+| `uninstall` | Developer reverses the opentraces install — the symmetric inverse of `setup` — removing hooks/daemons/env while preserving captured traces, datasets, and buckets (`--purge` to also delete the corpus); a root peer verb beside `setup` (issue #160) | maintain-install (2/2) | `setup-uninstall-dry-run` | both |
 | `security sanitize` | Developer or workflow author pipes JSON through the security pipeline tool registry to sanitize a record in a language-agnostic way | inspect-security-pipeline (1/3) | unowned | both |
 | `security tools list` | Developer or agent inspects the registered security tools + their enable state before deciding which to opt into | inspect-security-pipeline (2/3) | unowned | both |
 | `security tools info` | Developer inspects one tool's descriptor (config keys, runtime requirements) before opt-in | inspect-security-pipeline (3/3) | unowned | both |

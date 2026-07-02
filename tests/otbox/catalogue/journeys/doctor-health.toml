@@ -3,6 +3,10 @@ description = """
 Pipeline health surface: run `doctor` in JSON mode against a seeded
 project and confirm the structured health payload parses and reports
 the trail capture audit as ok.
+
+Also runs the same command object mounted a second time under `setup`
+(issue #160's `setup doctor` read-twin) and confirms it reports the
+identical health envelope.
 """
 lane = "extended"
 tier = 0
@@ -13,6 +17,11 @@ requires = ["cli"]
 type = "cli"
 id = "doctor"
 argv = ["--json", "doctor"]
+
+[[steps]]
+type = "cli"
+id = "setup-doctor"
+argv = ["--json", "setup", "doctor"]
 
 [[assertions]]
 kind = "returncode"
@@ -29,4 +38,15 @@ equals = "ok"
 kind = "stdout_json"
 step = "doctor"
 path = "doctor.trace_index.state"
+equals = "ok"
+
+[[assertions]]
+kind = "returncode"
+step = "setup-doctor"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-doctor"
+path = "doctor.trail_capture_audit.state"
 equals = "ok"
