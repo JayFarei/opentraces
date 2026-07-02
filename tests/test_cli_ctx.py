@@ -856,10 +856,14 @@ def test_ctx_visibility_curation(runner):
     assert res.exit_code == 0  # empty-state envelope, not a crash
 
 
-def test_ctx_list_envelope_has_status_header(runner):
-    """L5: ctx list --json carries the uniform {status, schema_version} header."""
+def test_ctx_list_is_a_frozen_envelope_without_status_header(runner):
+    """``ctx list`` emits the FROZEN ``opentraces.ctx.list.v2`` consumer
+    contract, so it stays byte-identical to origin/main: the schema_version tag
+    is the shape, and the L5 uniform ``status`` header is NOT injected (a field
+    add would silently break byte-compatibility). L5 exempts frozen envelopes by
+    design; the shape is pinned in tests/cli/test_ctx_frozen_envelopes.py."""
     data = _invoke_json(runner, ["list", "--json"])
-    assert data["status"] == "ok"
+    assert "status" not in data
     assert data["schema_version"] == "opentraces.ctx.list.v2"
 
 

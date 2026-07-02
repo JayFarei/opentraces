@@ -180,28 +180,64 @@ def _project_repo(project_dir: Path | None) -> Path:
     return Path(project_dir or Path.cwd()).resolve()
 
 
+# Frozen consumer-contract envelopes (schema_version strings). These shapes are
+# byte-compatible contracts downstream consumers (replay / RL / viewer /
+# dashboards / Slack / PR) lock against; the version tag identifies the shape,
+# so a field may NOT be added without a schema_version bump. They therefore
+# stay BYTE-IDENTICAL to origin/main — NO L5 ``status`` header is injected. The
+# NEW bare-noun view envelope (``opentraces.ctx.view.v1``) is not frozen and
+# keeps its uniform L5 header. The two ``ctx.{list,info}.v2`` literals mirror
+# ``_CTX_LIST_SCHEMA_VERSION`` / ``_CTX_INFO_SCHEMA_VERSION`` defined below (a
+# runtime assert at their definition site prevents drift).
+FROZEN_ENVELOPE_SCHEMA_VERSIONS: frozenset[str] = frozenset({
+    CONTEXT_TREE_SCHEMA_VERSION,
+    CONTEXT_READS_SCHEMA_VERSION,
+    CONTEXT_WRITES_SCHEMA_VERSION,
+    CONTEXT_RESOLVE_SCHEMA_VERSION,
+    CONTEXT_RESUME_SCHEMA_VERSION,
+    "opentraces.ctx.list.v2",
+    "opentraces.ctx.info.v2",
+})
+
+
+def _is_frozen_envelope(payload: dict[str, Any]) -> bool:
+    """True when ``payload`` is a frozen consumer envelope (no L5 status)."""
+    return payload.get("schema_version") in FROZEN_ENVELOPE_SCHEMA_VERSIONS
+
+
 def _emit(payload: dict[str, Any]) -> None:
     """Stable JSON envelope emitter (mirrors cli/trace.py style).
 
-    ADR-0007 lint L5: every ctx ``--json`` view carries a uniform
-    ``{status, schema_version, ...}`` header. We inject a top-level
-    ``status: "ok"`` when the caller has not already stamped a
-    ``status`` / ``ok`` verdict (error payloads set ``status: "error"``
-    themselves), so the header is present and ordered status-first
-    without editing every payload site.
+    ADR-0007 lint L5: the ctx bare-noun view (``opentraces.ctx.view.v1``)
+    carries a uniform ``{status, schema_version, ...}`` header, so we inject a
+    top-level ``status: "ok"`` when the caller has not already stamped a
+    ``status`` / ``ok`` verdict.
+
+    EXCEPTION — frozen consumer envelopes are emitted BYTE-IDENTICAL to
+    origin/main (no ``status`` key). Their schema_version is the shape
+    contract, so injecting a field would silently break byte-compatibility
+    without a version bump; freeze beats L5 uniformity for these surfaces
+    (see :data:`FROZEN_ENVELOPE_SCHEMA_VERSIONS` and the lint's
+    FROZEN_ENVELOPE_EXCEPTIONS).
     """
-    if "status" not in payload and "ok" not in payload:
+    if (
+        "status" not in payload
+        and "ok" not in payload
+        and not _is_frozen_envelope(payload)
+    ):
         payload = {"status": "ok", **payload}
     click.echo(_dump_json(payload))
 
 
 def _empty_state(schema_version: str, reason: str, **extras: Any) -> dict[str, Any]:
-    """Return a standard empty-state envelope (rc=0, never raises)."""
-    payload: dict[str, Any] = {
-        "status": "ok",
-        "schema_version": schema_version,
-        "limitations": [reason],
-    }
+    """Return a standard empty-state envelope (rc=0, never raises).
+
+    Frozen consumer envelopes stay byte-identical to origin/main (no
+    ``status`` key); the non-frozen surfaces keep the L5 status header.
+    """
+    payload: dict[str, Any] = {"schema_version": schema_version, "limitations": [reason]}
+    if schema_version not in FROZEN_ENVELOPE_SCHEMA_VERSIONS:
+        payload = {"status": "ok", **payload}
     payload.update(extras)
     return payload
 
@@ -971,6 +1007,11 @@ def _dropped_summary(backend: _BareBackend, trace_id: str) -> dict[str, Any]:
 # so downstream consumers can lock against a stable shape.
 _CTX_LIST_SCHEMA_VERSION = "opentraces.ctx.list.v2"
 _CTX_INFO_SCHEMA_VERSION = "opentraces.ctx.info.v2"
+
+# These two are frozen consumer envelopes: keep the FROZEN_ENVELOPE_SCHEMA_VERSIONS
+# literals (defined next to _emit, above) in lockstep with the constants here.
+assert _CTX_LIST_SCHEMA_VERSION in FROZEN_ENVELOPE_SCHEMA_VERSIONS
+assert _CTX_INFO_SCHEMA_VERSION in FROZEN_ENVELOPE_SCHEMA_VERSIONS
 
 
 def _read_bucket_manifest_no_blobs() -> dict[str, Any]:

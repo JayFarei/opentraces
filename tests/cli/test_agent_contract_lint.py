@@ -224,6 +224,30 @@ def test_kill_l5_missing_header():
     assert l5_uniform_envelope("status", {"ok": True, "schema_version": "x"}) == []
 
 
+def test_l5_frozen_envelope_exemption():
+    """Frozen consumer envelopes are exempt from L5 BY DESIGN (freeze beats
+    uniformity), but a NON-frozen surface cannot ride the exemption — the
+    exemption is keyed on the frozen schema_version VALUE, never the command."""
+    from .agent_contract_lint import FROZEN_ENVELOPE_EXCEPTIONS
+
+    # A frozen envelope missing the L5 status header is EXEMPT (no violation),
+    # byte-identical to origin/main.
+    assert l5_uniform_envelope(
+        "ctx list", {"schema_version": "opentraces.ctx.list.v2", "traces": []}
+    ) == []
+    assert l5_uniform_envelope(
+        "ctx show", {"schema_version": "opentraces.context_tree.v1", "nodes": []}
+    ) == []
+
+    # KILL: a non-frozen surface, even at the SAME command path, still fails L5.
+    # A future surface cannot smuggle a header-less envelope past L5 by mounting
+    # under a ctx path — it must be an explicitly-frozen schema_version.
+    assert l5_uniform_envelope(
+        "ctx list", {"schema_version": "opentraces.not.frozen.v1", "traces": []}
+    ) != []
+    assert "opentraces.not.frozen.v1" not in FROZEN_ENVELOPE_EXCEPTIONS
+
+
 def test_kill_l6_count_and_version_divergence():
     docs = {
         "a": {"trace_count": 1896, "security_version": "0.6.0"},

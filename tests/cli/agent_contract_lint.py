@@ -57,6 +57,26 @@ PROMPT_BYTES = ("[y/N]", "[Y/n]", "Proceed?", "Trust and run it?", "choose", "�
 # reads as data. Write/control verbs (setup*, dataset run, auth) are excluded.
 READ_FAMILY_ROOTS = ("trace", "ctx", "trail", "bucket", "status", "doctor", "config")
 
+# FROZEN_ENVELOPE_EXCEPTIONS — schema_version strings whose byte-shape is a
+# frozen downstream-consumer contract (replay / RL / viewer / dashboards /
+# Slack / PR). For these, the schema_version tag IS the shape contract: a field
+# may not be added without a version bump, so they cannot carry the uniform L5
+# ``status`` header without silently breaking byte-compatibility. L5 exempts
+# them BY DESIGN — freeze beats uniformity. This is a first-class, documented
+# mechanism (not a quarantine deferral); the exemption is keyed on the frozen
+# schema_version VALUE, never on the command path, so a non-frozen surface
+# cannot ride it (proven by test_l5_frozen_envelope_exemption). Mirrors
+# opentraces.cli.ctx.FROZEN_ENVELOPE_SCHEMA_VERSIONS.
+FROZEN_ENVELOPE_EXCEPTIONS = frozenset({
+    "opentraces.context_tree.v1",
+    "opentraces.context_reads.v1",
+    "opentraces.context_writes.v1",
+    "opentraces.context_resolve.v1",
+    "opentraces.context_resume.v1",
+    "opentraces.ctx.list.v2",
+    "opentraces.ctx.info.v2",
+})
+
 # Commands we do NOT auto-execute in the sweep (network / daemon / interactive /
 # destructive-on-real-substrate). Mirrors test_json_surface_sweep.EXEC_DENYLIST;
 # kept local so this lint is self-contained.
@@ -244,6 +264,13 @@ def l4_remote_uniformity(path: str, cmd: click.Command) -> list[Violation]:
 def l5_uniform_envelope(path: str, doc: Any) -> list[Violation]:
     if not isinstance(doc, dict):
         return [Violation("L5", path, f"--json output is not a JSON object ({type(doc).__name__})")]
+    # Frozen consumer envelopes are exempt from the uniform header BY DESIGN
+    # (see FROZEN_ENVELOPE_EXCEPTIONS): their byte-shape is a version-tagged
+    # contract, so a status field cannot be added without a schema bump. The
+    # exemption is keyed on the frozen schema_version VALUE, so a non-frozen
+    # surface (even at the same command path) still fails L5.
+    if doc.get("schema_version") in FROZEN_ENVELOPE_EXCEPTIONS:
+        return []
     has_status = "status" in doc or "ok" in doc
     has_schema = "schema_version" in doc
     missing = []
