@@ -109,23 +109,25 @@ def _render_for_branch(
     return body, meta
 
 
-def attach(parent_group: click.Group) -> None:
+def attach(parent_group: click.Group, *, hidden: bool = False) -> None:
     """Attach the ``pr`` subgroup to an existing parent group.
 
-    Called by ``cli/__init__.py`` with the ``blame`` group so the final
-    surface is ``opentraces trail blame pr render | create | update``.
-    Lives under ``blame`` because every consumer (PR, future Slack,
-    dashboard, CI) renders the same blame-shaped data for a different
-    place and time.
+    Called by ``cli/__init__.py`` with ``trail`` (the visible top-level
+    ``opentraces trail pr render | create | update`` — the family's one gated
+    GitHub write, isolated from the read verbs so ``blame`` stays a pure read)
+    and, with ``hidden=True``, with the ``blame`` group so the pre-#165
+    ``opentraces trail blame pr ...`` path stays callable as a compat alias.
+    Both mounts route to identical command behavior.
     """
 
-    @parent_group.group("pr", cls=OpentracesGroup)
+    @parent_group.group("pr", cls=OpentracesGroup, hidden=hidden)
     def trail_pr_group() -> None:
         """Render and publish PR bodies from blame-shaped trace lineage."""
 
     @trail_pr_group.command(
         "render",
         cls=OpentracesCommand,
+        hidden=hidden,
         examples=[
             "opentraces trail blame pr render --base main",
             "opentraces trail blame pr render --base main --output /tmp/pr.md",
@@ -204,6 +206,7 @@ def attach(parent_group: click.Group) -> None:
     @trail_pr_group.command(
         "create",
         cls=OpentracesCommand,
+        hidden=hidden,
         examples=[
             "opentraces trail blame pr create --base main",
             "opentraces trail blame pr create --base main --draft",
@@ -329,6 +332,7 @@ def attach(parent_group: click.Group) -> None:
     @trail_pr_group.command(
         "update",
         cls=OpentracesCommand,
+        hidden=hidden,
         examples=[
             "opentraces trail blame pr update --base main",
             "opentraces trail blame pr update --base main --number 42",
