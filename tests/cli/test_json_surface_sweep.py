@@ -82,9 +82,12 @@ GLOBAL_JSON_ONLY = {
     "setup watcher start",
     "setup watcher stop",
     "setup watcher uninstall",
-    "trail blame pr create",
-    "trail blame pr render",
-    "trail blame pr update",
+    # #165: the PR write group was lifted to a top-level `trail pr` verb (the
+    # `trail blame pr ...` path stays callable as a hidden compat alias, so it
+    # drops off the PUBLIC sweep and out of this frozen list).
+    "trail pr create",
+    "trail pr render",
+    "trail pr update",
 }
 
 # Zero-required-arg commands we do NOT execute in the sweep, with reasons.

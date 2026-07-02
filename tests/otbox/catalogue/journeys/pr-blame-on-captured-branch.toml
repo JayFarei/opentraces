@@ -61,7 +61,7 @@ requires_branch_commits_min = 3
 type = "cli"
 id = "render-body"
 argv = [
-    "trail", "blame", "pr", "render",
+    "trail", "pr", "render",
     "--base", "{base_commit_sha}",
     "--no-llm",
 ]
@@ -74,7 +74,7 @@ argv = [
 type = "cli"
 id = "render-to-file"
 argv = [
-    "trail", "blame", "pr", "render",
+    "trail", "pr", "render",
     "--base", "{base_commit_sha}",
     "--no-llm",
     "--output", "{project}/pr_body.md",

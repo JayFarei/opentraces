@@ -144,7 +144,6 @@ QUARANTINE: list[QuarantineEntry] = [
     QuarantineEntry("L5", "bucket remote status", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "ctx list", "envelope carries schema_version but no top-level status/ok", "ctx"),
     QuarantineEntry("L5", "doctor", "schema_version is nested in doctor.*, not promoted to top level", "status"),
-    QuarantineEntry("L5", "trail graph", "payload carries neither status/ok nor schema_version", "trail"),
     QuarantineEntry("L5", "trace skills", "status-only envelope lacks a top-level schema_version header", "trace"),
     QuarantineEntry("L5", "trace index compact", "envelope lacks a top-level schema_version header", "trace"),
     QuarantineEntry("L5", "trace index rebuild", "envelope lacks a top-level schema_version header", "trace"),

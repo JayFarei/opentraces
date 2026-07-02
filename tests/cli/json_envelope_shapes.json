@@ -442,11 +442,13 @@
   ]
  },
  "trail graph": {
-  "schema_version": null,
+  "schema_version": "opentraces.trail.graph.v1",
   "top_level_keys": [
    "commits",
    "mode",
-   "pivot_trace_id"
+   "pivot_trace_id",
+   "schema_version",
+   "status"
   ]
  },
  "workflow list": {
