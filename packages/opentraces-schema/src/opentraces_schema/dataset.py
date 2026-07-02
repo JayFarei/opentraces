@@ -7,7 +7,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-ExecutorName = Literal["current-agent", "claude-code-headless"]
+# ``script`` is the automated default executor (deterministic subprocess builder).
+# ``claude-code-headless`` was the permanently-stubbed headless executor removed in
+# the M1 engine collapse (#185); its value stays READABLE here so schedules and run
+# records serialized before the collapse still deserialize. ``current-agent`` is the
+# labeled human-in-the-loop lifecycle path.
+ExecutorName = Literal["current-agent", "claude-code-headless", "script"]
 DatasetScope = Literal["all-projects", "project", "cwd", "trace"]
 DatasetIdentityMode = Literal["payload_hash", "fields"]
 DatasetRunStatus = Literal["running", "succeeded", "failed", "cancelled"]
@@ -232,7 +237,7 @@ class ExecutorConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    default: ExecutorName = "claude-code-headless"
+    default: ExecutorName = "script"
     development: ExecutorName = "current-agent"
     timeout_minutes: int = Field(30, ge=1)
     budget_usd: float | None = Field(default=None, ge=0)
@@ -278,7 +283,7 @@ class DatasetSchedule(BaseModel):
 
     enabled: bool = False
     every: str | None = None
-    executor: ExecutorName = "claude-code-headless"
+    executor: ExecutorName = "script"
 
     @model_validator(mode="after")
     def _enabled_requires_every(self) -> "DatasetSchedule":
