@@ -364,7 +364,13 @@ def parse_trail_ref(ref: str) -> tuple[str, int | None, tuple[int, int] | None, 
     Returns ``(trace_id, step_index, span, reserved)`` where exactly one of
     ``step_index`` / ``span`` / ``reserved`` is non-None past the bare-trace
     case. ``reserved`` carries a named-but-deferred slot (``origin`` for #130,
-    or a span for v1.1) so the CLI can degrade honestly rather than crash.
+    ``last`` for the final-step selector, or a span for v1.1) so the CLI can
+    degrade honestly rather than crash.
+
+    This is the SHARED trace-address grammar: ``trace get`` resolves
+    ``trace:step`` / ``trace:last`` / ``trace:A-B`` through it too, so the
+    pinned tuples in ``tests/cli/test_trail_lineage_world.py`` are the single
+    byte-compat oracle for every consumer.
     """
     raw = ref.strip()
     if ":" not in raw:
@@ -374,6 +380,8 @@ def parse_trail_ref(ref: str) -> tuple[str, int | None, tuple[int, int] | None, 
     addr = addr.strip()
     if addr == "origin":
         return trace_part, None, None, "origin"
+    if addr == "last":
+        return trace_part, None, None, "last"
     if "-" in addr:
         a, _, b = addr.partition("-")
         try:

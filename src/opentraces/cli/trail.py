@@ -107,14 +107,18 @@ def trail_ref_cmd(
         if rc:
             sys.exit(rc)
 
-    if reserved in ("span", "origin", "invalid"):
-        # The span (``A-B``) and session-open (``:origin``, #130) slots are
-        # reserved in the addressing grammar but not materialized in v1; degrade
-        # honestly instead of guessing.
+    if reserved in ("span", "origin", "invalid", "last"):
+        # The span (``A-B``), session-open (``:origin``, #130), and final-step
+        # (``:last``, resolved by ``trace get``/``ctx`` but not yet by trail)
+        # slots are reserved in the addressing grammar but not materialized in
+        # v1; degrade honestly instead of guessing. ``last`` MUST be gated here
+        # too — without it, ``trail T:last`` would silently fall through to the
+        # bare-trace lineage card.
         note = {
             "span": "span_form_deferred_v1_1",
             "origin": "origin_slot_reserved_130",
             "invalid": "unparseable_step_address",
+            "last": "last_selector_deferred_trail_v1",
         }[reserved]
         _emit(
             {
