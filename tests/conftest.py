@@ -32,6 +32,7 @@ if str(_SCHEMA_SRC) not in sys.path:
 # this fixture with a no-op.
 from opentraces.core import paths as _paths  # noqa: E402
 from opentraces.core import config as _config  # noqa: E402
+from opentraces import cli as _cli  # noqa: E402
 
 
 _PATH_MARKERS = (
@@ -120,4 +121,12 @@ def _isolate_opentraces_global_state(tmp_path_factory, monkeypatch):
         monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
         if hasattr(mod, "STAGING_DIR"):
             monkeypatch.setattr(mod, "STAGING_DIR", staging_dir)
+
+    # Reset the CLI's module-level ``--json`` latch. In production every
+    # ``opentraces`` invocation is a fresh process, so the root group's
+    # ``_json_mode`` global always starts False and is set by ``main`` per run.
+    # Tests that invoke a subcommand group directly (e.g. ``ctx``) bypass
+    # ``main``, so without this reset a prior test's ``--json`` invocation
+    # leaks a True latch and flips their default text output to JSON.
+    monkeypatch.setattr(_cli, "_json_mode", False)
     yield opentraces_dir
