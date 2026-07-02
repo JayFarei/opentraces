@@ -2177,11 +2177,168 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     examples=[
         "opentraces status",
         "opentraces status --json",
-        "opentraces status --limit 0",
+        "opentraces status --short",
+        "opentraces status --full",
+        "opentraces status --project my-repo",
     ],
     see_also=[
-        ("opentraces trace query", "search retained traces with filters."),
+        ("opentraces bucket status", "lower-level bucket health readout."),
+        ("opentraces bucket repair", "rebuild the bucket read model."),
         ("opentraces doctor", "check pipeline and integration health."),
+    ],
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the opentraces.bucket.status.v1 envelope as JSON.")
+@click.option("--full", "full", is_flag=True, help="Add the debugger detail the default render drops.")
+@click.option("--short", "short", is_flag=True, help="One-line porcelain summary (stable, scriptable).")
+@click.option("--project", "project", metavar="SLUG", default=None, help="Scope every count + the safety verdict to one project.")
+def status(as_json: bool, full: bool, short: bool, project: str | None) -> None:
+    """Fleet bucket safety dashboard — is my private trace bucket safe to sync?
+
+    An O(1) read of the local bucket (never a full scan): how many traces are
+    captured, how many are cleared for sync, and — the load-bearing signal —
+    how many are not yet cleared. The safe verdict is impossible while any
+    trace is unscanned; wording is a PROCESS state ("not cleared for sync"),
+    never a content claim.
+    """
+    global _json_mode
+    if as_json:
+        _json_mode = True
+    if short and (full or as_json):
+        if _json_mode:
+            emit_json(error_response(
+                "BAD_USAGE", "status",
+                "--short cannot be combined with --full or --json.",
+            ))
+        else:
+            click.echo("status: --short cannot be combined with --full or --json.", err=True)
+        sys.exit(2)
+
+    from ..core.fleet_status import build_fleet_status
+
+    payload = build_fleet_status(project=project)
+
+    if short:
+        click.echo(_status_short_line(payload))
+        return
+    if _json_mode:
+        emit_json(payload)
+        return
+    _render_fleet_status(payload, full=full)
+    # Non-TTY-without-flag consumers still get the sentinel JSON block.
+    emit_json(payload)
+
+
+def _status_short_line(payload: dict) -> str:
+    """Stable one-line porcelain. The clean signal encodes the FULL safety
+    gate — unfiltered==0 AND unscanned==0 AND not stale — never unfiltered
+    alone, so a script cannot read 'clean' off an unscanned bucket."""
+    store = payload.get("store") or {}
+    safety = payload.get("safety") or {}
+    fresh = payload.get("freshness") or {}
+    total = store.get("trace_count")
+    total_s = "?" if total is None else str(total)
+    unscanned = safety.get("unscanned_count")
+    not_cleared = safety.get("not_cleared_count")
+    stale = bool(fresh.get("stale"))
+    if safety.get("verdict") == "empty":
+        signal = "empty"
+    elif bool(payload.get("ready")) and not stale:
+        signal = "clean"
+    else:
+        signal = "not-cleared"
+    parts = [
+        f"status={signal}",
+        f"traces={total_s}",
+        f"unscanned={'?' if unscanned is None else unscanned}",
+        f"not_cleared={'?' if not_cleared is None else not_cleared}",
+        f"stale={'yes' if stale else 'no'}",
+    ]
+    return " ".join(parts)
+
+
+def _render_fleet_status(payload: dict, *, full: bool) -> None:
+    """Curated, safety-first human render. Silent when the bucket is truly clean."""
+    store = payload.get("store") or {}
+    safety = payload.get("safety") or {}
+    sync = payload.get("sync") or {}
+    fleet = payload.get("fleet") or {}
+    fresh = payload.get("freshness") or {}
+    verdict = safety.get("verdict")
+    total = store.get("trace_count")
+
+    if not payload.get("ok"):
+        click.echo(f"{_warn('bucket read model unavailable')} - run 'opentraces bucket repair'.")
+        return
+
+    if verdict == "empty":
+        click.echo(_dim("No traces captured yet. Start a connected agent; traces are captured automatically."))
+        return
+
+    scope = f" [{payload['scope_project']}]" if payload.get("scope_project") else ""
+    if payload.get("ready") and not fresh.get("stale"):
+        # Truly clean: a quiet, one-line all-clear (silent-when-clean posture).
+        click.echo(f"{_ok('cleared for sync')}{scope}  {_dim(f'{total} trace(s), all scanned and clean')}")
+        if full:
+            _render_fleet_table(fleet, full=full)
+        return
+
+    # Not cleared - lead with the safety headline.
+    unscanned = safety.get("unscanned_count") or 0
+    not_cleared = safety.get("not_cleared_count") or 0
+    click.echo(f"{_warn('not cleared for sync')}{scope}  {_bold(str(not_cleared))} of {_bold(str(total))} trace(s) not cleared")
+    click.echo(
+        f"  {_dim('scanned')} {safety.get('scanned_count')}    "
+        f"{_dim('unscanned')} {unscanned}    "
+        f"{_dim('not cleared')} {not_cleared}"
+    )
+    if fresh.get("understates_safety"):
+        click.echo(_dim("  note: some traces are unscanned - these counts may understate what is not cleared."))
+    for reason in sync.get("blocked_reasons") or []:
+        click.echo(f"    {_dim('blocked:')} {reason}")
+
+    _render_fleet_table(fleet, full=full)
+
+    if fresh.get("stale"):
+        reasons = ", ".join(fresh.get("reasons") or []) or "stale"
+        click.echo(f"  {_warn('read model stale')} ({reasons}) - refresh with 'opentraces bucket repair'.")
+
+    for step in payload.get("next_steps") or []:
+        click.echo(f"  {_dim('→')} {step}")
+
+
+def _render_fleet_table(fleet: dict, *, full: bool) -> None:
+    rows = fleet.get("by_project") or []
+    if not rows:
+        return
+    click.echo()
+    for p in rows:
+        nc = p.get("not_cleared_count") or 0
+        marker = _warn("○") if nc else _ok("✓")
+        line = f"  {marker} {p.get('project') or '(unknown)'}  {_dim(str(p.get('trace_count')) + ' trace(s)')}"
+        if nc:
+            line += f"  {_dim(str(nc) + ' not cleared')}"
+        if full:
+            line += _dim(
+                f"  [scanned {p.get('scanned_count')}, unscanned {p.get('unscanned_count')}, "
+                f"syncable {p.get('syncable_count')}]"
+            )
+        click.echo(line)
+    omitted = fleet.get("projects_omitted") or 0
+    if omitted:
+        click.echo(_dim(f"  … and {omitted} more project(s)"))
+
+
+@main.command(
+    "status-inbox",
+    hidden=True,
+    examples=[
+        "opentraces status-inbox",
+        "opentraces status-inbox --json",
+        "opentraces status-inbox --limit 0",
+    ],
+    see_also=[
+        ("opentraces status", "the fleet bucket safety dashboard."),
+        ("opentraces trace query", "search retained traces with filters."),
     ],
 )
 @click.option(
@@ -2197,11 +2354,13 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     is_flag=True,
     help="Emit structured JSON (same as the global --json flag).",
 )
-def status(limit: int, as_json: bool) -> None:
-    """Show status of the current opentraces project.
+def status_inbox(limit: int, as_json: bool) -> None:
+    """Show the per-project capture inbox (transitional).
 
-    Summarises inbox counts by stage, the active remote, and the most
-    recent traces. A fast snapshot of what's waiting, staged, and shipped.
+    The former ``opentraces status``: inbox counts by stage, the active
+    remote, and the most recent traces for the current project. Retained
+    (callable, hidden from --help) while ``opentraces status`` is the
+    fleet-wide bucket safety dashboard.
     """
     global _json_mode
     if as_json:

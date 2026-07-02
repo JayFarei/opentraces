@@ -121,10 +121,17 @@ class TestPreInitCommands:
 class TestPublicCommandTree:
     """Smoke-test the unreleased simplified command surface."""
 
-    def test_status_not_initialized(self, runner, tmp_path, monkeypatch):
+    def test_status_inbox_not_initialized(self, runner, tmp_path, monkeypatch):
+        # The project opt-in gate lives on `status-inbox` since #161 repurposed
+        # top-level `status` into the init-free fleet bucket dashboard.
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(main, ["status"])
+        result = runner.invoke(main, ["status-inbox"])
         assert result.exit_code == 3
+
+    def test_fleet_status_needs_no_init(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(main, ["--json", "status"])
+        assert result.exit_code == 0, result.output
 
     def test_status_json_after_init(self, initialized_project):
         project_dir, runner = initialized_project
@@ -234,10 +241,10 @@ class TestHintLines:
     """error_response hints should appear in human-readable output."""
 
     def test_not_initialized_shows_hint(self, tmp_path, monkeypatch):
-        """status on an uninitialized dir should show a Hint: line."""
+        """status-inbox on an uninitialized dir should show a Hint: line."""
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        result = runner.invoke(main, ["status"])
+        result = runner.invoke(main, ["status-inbox"])
         assert "Hint:" in result.output or result.exit_code == 3
 
 
