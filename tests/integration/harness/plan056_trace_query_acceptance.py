@@ -79,7 +79,7 @@ def _enroll_project(project_dir: Path) -> None:
     )
 
 
-def _write_project_trace(project_dir: Path) -> None:
+def _write_project_trace(project_dir: Path) -> int:
     from opentraces.core.config import get_project_traces_dir
     from opentraces_schema import Agent, Observation, Step, ToolCall, TraceRecord
 
@@ -160,7 +160,8 @@ def _write_project_trace(project_dir: Path) -> None:
     )
     traces_dir = get_project_traces_dir(project_dir)
     traces_dir.mkdir(parents=True, exist_ok=True)
-    (traces_dir / f"{record.trace_id}.jsonl").write_text(record.model_dump_json() + "\n")
+    primary_json = record.model_dump_json()
+    (traces_dir / f"{record.trace_id}.jsonl").write_text(primary_json + "\n")
 
     distractor = TraceRecord(
         trace_id="trace-plan056-acceptance-distractor",
@@ -184,6 +185,11 @@ def _write_project_trace(project_dir: Path) -> None:
     (traces_dir / f"{distractor.trace_id}.jsonl").write_text(
         distractor.model_dump_json() + "\n"
     )
+    # The full stored TraceRecord is the ground truth a query CandidatePacket
+    # compresses. Since CLI v7 (#163) made `trace get` bounded-by-default (a
+    # card, not the whole trace), measure the compression ratio against this
+    # full record rather than the now-bounded `trace get` payload.
+    return len(primary_json.encode())
 
 
 def _invoke(runner: CliRunner, argv: list[str]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -241,7 +247,7 @@ def run_local() -> dict[str, Any]:
         project = root / "demo"
         with _temporary_opentraces_home(home):
             _enroll_project(project)
-            _write_project_trace(project)
+            full_trace_bytes = _write_project_trace(project)
             runner = CliRunner()
 
             # Search is read-only: build the compact search snapshot once, the
@@ -308,7 +314,7 @@ def run_local() -> dict[str, Any]:
             )
             command_transcripts.append(map_transcript)
 
-            get_transcript, get_payload = _invoke(
+            get_transcript, _get_payload = _invoke(
                 runner,
                 ["trace", "get", packet["trace_id"], "--json"],
             )
@@ -316,7 +322,9 @@ def run_local() -> dict[str, Any]:
 
             packet_bytes = len(json.dumps(packet, sort_keys=True).encode())
             slice_bytes = len(json.dumps(map_payload["map"], sort_keys=True).encode())
-            full_trace_bytes = len(json.dumps(get_payload["trace"], sort_keys=True).encode())
+            # full_trace_bytes is the full stored TraceRecord (captured at write
+            # time). `trace get` is bounded-by-default since #163, so its payload
+            # is no longer the "full trace" the packet/slice compress.
             # Rebuild idempotence is over the read model that serves queries:
             # the search snapshot, rebuilt from the same corpus, is identical.
             first_digest = _snapshot_digest()
