@@ -401,7 +401,7 @@ def setup_git(remove: bool) -> None:
     Old commits cannot be backfilled, correlation starts from the first
     commit after install.
 
-    OFF cost: git is a record ENRICHER, not a capture source — turning it
+    OFF cost: git is a record SIGNAL, not a capture source — turning it
     off does not stop capture, but trace attribution and `trail blame`
     degrade (no commit-to-trace correlation for commits made while it's
     off). The watcher auto-reinstalls this hook every sweep while it runs,
