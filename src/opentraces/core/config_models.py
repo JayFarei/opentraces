@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 
 from .trace_stage import (
     DEFAULT_AGENT,
-    DEFAULT_PUSH_POLICY,
     DEFAULT_REVIEW_POLICY,
 )
 
@@ -261,7 +260,6 @@ class ProjectConfig(BaseModel):
 
     excluded: bool = False
     review_policy: str = DEFAULT_REVIEW_POLICY
-    push_policy: str = DEFAULT_PUSH_POLICY
     remotes: dict[str, RemoteConfig] = Field(default_factory=dict)
     active_remote: str | None = None
     default_visibility: str = Field("private", pattern="^(public|private)$")
@@ -296,8 +294,6 @@ class Config(BaseModel):
         None,
         description="Override for ~/.claude/projects/ location",
     )
-    classifier_sensitivity: str = Field("medium", pattern="^(low|medium|high)$")
-    dataset_visibility: str = Field("private", pattern="^(public|private)$")
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     bucket: BucketConfig = Field(default_factory=BucketConfig)
     capture: CaptureConfig = Field(default_factory=CaptureConfig)

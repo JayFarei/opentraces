@@ -783,8 +783,6 @@ def _render_config_pretty(data: dict, config_path) -> None:
     _kv("config version", data.get("config_version", "?"))
     token = data.get("hf_token")
     _kv("hf token", "*** (set)" if token else _dim("(not set)"))
-    _kv("classifier sensitivity", data.get("classifier_sensitivity", "medium"))
-    _kv("dataset visibility", data.get("dataset_visibility", "private"))
     custom_path = data.get("projects_path")
     if custom_path:
         _kv("projects path", custom_path)
@@ -1310,7 +1308,6 @@ def init(
                 "status": "ok",
                 "message": "Already initialized" if not added_agents else "Updated initialized project",
                 "review_policy": proj_config["review_policy"],
-                "push_policy": proj_config["push_policy"],
                 "agents": proj_config["agents"],
                 "agents_added": added_agents,
             }
@@ -1318,7 +1315,6 @@ def init(
         return
 
     review_policy = DEFAULT_REVIEW_POLICY
-    push_policy = "manual"
     selected_agents = normalize_agents(list(agents))
 
     if _is_interactive_terminal() and not agents:
@@ -1357,7 +1353,6 @@ def init(
     proj_config: dict = {
         "mode": "auto" if review_policy == "auto" else "review",
         "review_policy": review_policy,
-        "push_policy": push_policy,
         "agents": selected_agents,
         "visibility": "private",
     }
@@ -1463,7 +1458,6 @@ def init(
         click.echo(f"  Entity parser: {entity_provisioned.version} ({entity_provisioned.source})")
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
     click.echo(f"  Policy:  {review_policy}")
-    click.echo(f"  Push:    {push_policy}")
     if existing_session_count:
         click.echo(f"  Existing Claude traces: {existing_session_count}")
         if imported_existing or import_errors:
@@ -1485,7 +1479,6 @@ def init(
         "status": "ok",
         "mode": proj_config["mode"],
         "review_policy": review_policy,
-        "push_policy": push_policy,
         "remote": None,
         "agents": selected_agents,
         "hook_installed": hook_installed,
@@ -2746,7 +2739,6 @@ def status_inbox(limit: int, as_json: bool) -> None:
         "status": "ok",
         "project": project_name,
         "review_policy": proj_config["review_policy"],
-        "push_policy": proj_config["push_policy"],
         "agents": proj_config["agents"],
         "remote": remote,
         "counts": counts,

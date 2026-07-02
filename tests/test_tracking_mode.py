@@ -222,7 +222,7 @@ def test_auto_enrolled_policy_is_private_review(tmp_path):
 
     policy = load_project_config(proj)
     assert policy["review_policy"] == "review"
-    assert policy["push_policy"] == "manual"
+    assert "push_policy" not in policy  # dead field deleted (#160)
     # The safety net: the effective project defaults are private.
     assert ProjectConfig().default_visibility == "private"
 

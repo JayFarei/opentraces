@@ -1699,10 +1699,14 @@ def _security_tools(
 
 def _build_security_section(cfg, th_version, llm_review, review_policy) -> dict[str, Any]:
     """Compute the doctor ``security`` block; tools list is rendered once."""
+    from ..security.tools import cfg_block
+
     return {
         "version": SECURITY_VERSION,
         "tools": _security_tools(cfg, th_version, llm_review, review_policy),
-        "classifier_sensitivity": getattr(cfg, "classifier_sensitivity", "medium"),
+        # The top-level Config.classifier_sensitivity dup was deleted (#160);
+        # the real setting lives on the per-tool security block.
+        "classifier_sensitivity": getattr(cfg_block(cfg, "classifier"), "sensitivity", "medium"),
         "review_policy": review_policy,
         "blocked_reasons": ["parse_error", "trufflehog_finding"],
     }

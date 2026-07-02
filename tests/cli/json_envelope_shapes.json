@@ -130,10 +130,8 @@
   "top_level_keys": [
    "bucket",
    "capture",
-   "classifier_sensitivity",
    "config_version",
    "custom_redact_strings",
-   "dataset_visibility",
    "excluded_projects",
    "hf_token",
    "projects",

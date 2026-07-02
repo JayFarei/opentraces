@@ -26,7 +26,7 @@ argv = ["config", "show"]
 [[steps]]
 type = "cli"
 id = "config-get"
-argv = ["--json", "config", "get", "classifier_sensitivity"]
+argv = ["--json", "config", "get", "config_version"]
 
 [[steps]]
 type = "cli"
@@ -52,7 +52,7 @@ equals = 0
 kind = "stdout_json"
 step = "config-get"
 path = "key"
-equals = "classifier_sensitivity"
+equals = "config_version"
 
 [[assertions]]
 kind = "stdout_contains"

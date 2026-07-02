@@ -177,7 +177,6 @@ def context() -> None:
         "schema_version": SCHEMA_VERSION,
         "config": {
             "review_policy": proj_config.get("review_policy", "review"),
-            "push_policy": proj_config.get("push_policy", "manual"),
             "agents": proj_config.get("agents", ["claude-code"]),
             "remote": proj_config.get("remote"),
             "visibility": proj_config.get("visibility", "private"),
