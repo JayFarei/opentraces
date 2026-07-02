@@ -168,8 +168,10 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
     )
     assert get_result.exit_code == 0, get_result.output
     get_payload = json.loads(get_result.output)
+    # v7: bounded overview + uniform L5 envelope (opentraces.trace.get.v1).
+    assert get_payload["schema_version"] == "opentraces.trace.get.v1"
     assert get_payload["trace"]["trace_id"] == "trace-local-index-cli"
-    assert get_payload["trace"]["schema_version"]
+    assert get_payload["trace"]["step_count"] >= 1
 
     slice_result = runner.invoke(
         main,

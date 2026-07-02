@@ -270,8 +270,12 @@ def test_trace_query_map_get_json_cli_round_trip(tmp_path):
     got = runner.invoke(main, ["trace", "get", packet["trace_id"], "--json"])
     assert got.exit_code == 0, got.output
     get_payload = json.loads(got.output)
-    assert get_payload["trace"]["trace_id"] == "trace-plan056-cli"
-    assert get_payload["trace"]["steps"][0]["content"].startswith("Use grill-me")
+    # v7: bare `trace get <id>` returns a bounded overview, NOT a full step dump.
+    overview = get_payload["trace"]
+    assert overview["trace_id"] == "trace-plan056-cli"
+    assert overview["step_count"] >= 1
+    assert "steps" not in overview  # bounded: no O(steps) array
+    assert overview["summary"] and overview["title"]  # readable, not id-only
 
 
 def test_trace_skills_json_lists_usage_from_snapshot(tmp_path):
@@ -376,8 +380,12 @@ def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tm
     # index path.
     from opentraces.core.trace_index import default_index_path, get_trace_map
 
+    # v7: the default map is the bounded faceted browse; use a selector
+    # (--actions) to obtain the node dump for a specific node lookup.
     cli_map = json.loads(
-        runner.invoke(main, ["trace", "map", record.trace_id, "--json"]).output
+        runner.invoke(
+            main, ["trace", "map", record.trace_id, "--actions", "tool_call", "--json"]
+        ).output
     )
     cli_bash = next(n for n in cli_map["map"]["nodes"] if n.get("tool_name") == "Bash")
     assert cli_bash["metadata"].get("write_verified") is not True
@@ -453,7 +461,12 @@ def test_trace_map_accepts_ot_map_uri_and_map_node_target(tmp_path):
     assert query.exit_code == 0, query.output
     trace_id = json.loads(query.output)["candidates"][0]["trace_id"]
 
-    by_uri = runner.invoke(main, ["trace", "map", f"ot://trace/{trace_id}/map", "--json"])
+    # v7: the ot:// map URI resolves the same trace; use a selector to get the
+    # node dump (the default view is the bounded faceted browse).
+    by_uri = runner.invoke(
+        main,
+        ["trace", "map", f"ot://trace/{trace_id}/map", "--actions", "user_instruction", "--json"],
+    )
     assert by_uri.exit_code == 0, by_uri.output
     uri_payload = json.loads(by_uri.output)
     assert uri_payload["trace_id"] == trace_id
@@ -514,7 +527,11 @@ def test_trace_map_walks_backward_and_forward_from_node(tmp_path):
     assert query.exit_code == 0, query.output
     trace_id = json.loads(query.output)["candidates"][0]["trace_id"]
 
-    full_map = runner.invoke(main, ["trace", "map", trace_id, "--json"])
+    # v7: the default map is bounded; use the --actions selector to get the
+    # file_edit node dump to seed the directional walk.
+    full_map = runner.invoke(
+        main, ["trace", "map", trace_id, "--actions", "file_edit", "--json"]
+    )
     assert full_map.exit_code == 0, full_map.output
     edit_node = next(
         node

@@ -127,14 +127,15 @@ class QuarantineEntry:
 
 
 QUARANTINE: list[QuarantineEntry] = [
-    # L4 — the dual --remote-bucket / --force-remote-bucket pair on the two
-    # visible trace read verbs. The trace-family slice collapses these to the
-    # single `--remote TEXT` (hidden deprecated aliases allowed).
-    QuarantineEntry("L4", "trace get", "advertises --remote-bucket/--force-remote-bucket", "trace"),
-    QuarantineEntry("L4", "trace query", "advertises --remote-bucket/--force-remote-bucket", "trace"),
     # L5 — visible read/family verbs whose --json envelope predates the uniform
     # {status, schema_version} header. Each owning slice adopts cli/_envelope
     # and empties its entries. Enumerated from the live CLI on an empty world.
+    #
+    # The trace-family entries (L4 trace get/query; L5 trace skills / trace
+    # index *) were retired by the #163 trace slice: the dual --remote-bucket
+    # flags are now hidden deprecated aliases, and skills / index are hidden
+    # plumbing (no longer visible read verbs), so none of them surface a
+    # violation any more.
     QuarantineEntry("L5", "bucket status", "payload lacks a top-level schema_version header", "status"),
     QuarantineEntry("L5", "bucket manifest", "payload lacks a top-level schema_version header", "bucket"),
     QuarantineEntry("L5", "bucket reclaim", "payload lacks a top-level schema_version header", "bucket"),
@@ -145,11 +146,6 @@ QUARANTINE: list[QuarantineEntry] = [
     QuarantineEntry("L5", "ctx list", "envelope carries schema_version but no top-level status/ok", "ctx"),
     QuarantineEntry("L5", "doctor", "schema_version is nested in doctor.*, not promoted to top level", "status"),
     QuarantineEntry("L5", "trail graph", "payload carries neither status/ok nor schema_version", "trail"),
-    QuarantineEntry("L5", "trace skills", "status-only envelope lacks a top-level schema_version header", "trace"),
-    QuarantineEntry("L5", "trace index compact", "envelope lacks a top-level schema_version header", "trace"),
-    QuarantineEntry("L5", "trace index rebuild", "envelope lacks a top-level schema_version header", "trace"),
-    QuarantineEntry("L5", "trace index refresh", "envelope lacks a top-level schema_version header", "trace"),
-    QuarantineEntry("L5", "trace index status", "envelope lacks a top-level schema_version header", "trace"),
 ]
 
 # Clauses F1 (this slice) is responsible for; they must have NO quarantine
@@ -220,9 +216,17 @@ def is_read_verb(path: str) -> bool:
 # L4 — remote uniformity (STATIC, no execution)
 # --------------------------------------------------------------------------
 def l4_remote_uniformity(path: str, cmd: click.Command) -> list[Violation]:
-    opts = _opts(cmd)
+    # Only ADVERTISED (non-hidden) params count — the L4 contract explicitly
+    # allows hidden deprecated aliases (``hidden=True`` on the option), so a
+    # command that collapses to a single visible ``--remote`` while keeping the
+    # old dual flags callable-but-hidden is clean.
+    visible_opts: set[str] = set()
+    for p in cmd.params:
+        if getattr(p, "hidden", False):
+            continue
+        visible_opts.update(p.opts or [])
     out: list[Violation] = []
-    dual = opts & {"--remote-bucket", "--force-remote-bucket"}
+    dual = visible_opts & {"--remote-bucket", "--force-remote-bucket"}
     if dual:
         out.append(
             Violation(

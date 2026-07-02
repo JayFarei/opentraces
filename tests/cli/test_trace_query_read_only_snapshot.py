@@ -644,11 +644,12 @@ def test_trace_index_missing_legacy_reports_explicit_repair_without_bootstrap() 
     assert "Bootstrapping" not in result.stderr
 
 
-def test_trace_query_over_threshold_cold_build_returns_maintenance_needed(monkeypatch) -> None:
-    # #124: on a large/fresh bucket with no snapshot, the first query must NOT
-    # start the unbounded inline hydration. The cold-build guard refuses it and
-    # the CLI surfaces the IDENTICAL maintenance_needed/exit-3 envelope the issue
-    # requires — only the reason string is the new pass-through 'cold_build_too_large'.
+def test_trace_query_over_threshold_cold_build_returns_honest_empty(monkeypatch) -> None:
+    # #124 + v7 V11: on a large/fresh bucket with no snapshot, the first query
+    # must NOT start the unbounded inline hydration (the cold-build guard still
+    # refuses it) AND must never surface the internal `cold_build_too_large`
+    # (or any index-maintenance) string. The index self-maintains invisibly:
+    # the query "just works" and returns an honest EMPTY result at exit 0.
     from opentraces.core import trace_corpus
     from opentraces.core import trace_search_snapshot as tss
     from opentraces.core.trace_search_snapshot import COLD_BUILD_MAX_SOURCES
@@ -676,10 +677,14 @@ def test_trace_query_over_threshold_cold_build_returns_maintenance_needed(monkey
         ["trace", "query", "--lex", "site", "--limit", "3", "--json"],
     )
 
-    assert result.exit_code == 3, result.output
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["status"] == "maintenance_needed"
-    assert payload["reason"] == "cold_build_too_large"
-    assert payload["advice"] == "opentraces trace index"
+    assert payload["status"] == "ok"
+    assert payload["schema_version"] == "opentraces.trace.query.v1"
+    assert payload["candidates"] == []
+    assert payload["total"] == 0
+    # V11: the internal maintenance sentinel must NEVER leak to any output path.
+    assert "cold_build_too_large" not in result.output
+    assert "maintenance_needed" not in result.output
     # The guard fired before any build/hydration ran.
     assert not default_snapshot_path().exists()

@@ -124,8 +124,10 @@ def test_cli_map_get_slice_serve_from_bucket():
     m = runner.invoke(main, ["trace", "map", trace_id, "--json"])
     assert m.exit_code == 0, m.output
     map_payload = json.loads(m.output)
+    # v7: default map is the bounded faceted browse (serves from the bucket).
     assert map_payload["trace_id"] == trace_id
-    assert map_payload["map"]["trace_id"] == trace_id
+    assert map_payload["schema_version"] == "opentraces.trace.map.v1"
+    assert map_payload["handoff"]["command"].startswith("trace slice")
 
     g = runner.invoke(main, ["trace", "get", trace_id, "--json"])
     assert g.exit_code == 0, g.output
