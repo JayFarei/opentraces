@@ -1,12 +1,16 @@
 """F0 Phase-0 hang cure — CLI read verbs must bound WORK, not just output.
 
-Covers the four CLI-surface cures whose backends re-scanned a whole-corpus
+Covers the CLI-surface cures whose backends re-scanned a whole-corpus
 primitive on a plain read:
 
 * ``trail track --all`` — ``--limit`` (default 50 for ``--all``) bounds the
   per-patch git-survival loop to the NEWEST patches, not the oldest+slowest.
 * ``trail resolve ot://file/...`` — routes through a scoped event read, never
   the whole-log ``read_events``.
+* ``trail blame commit t:<trace>`` (forward trace-mode) — routes through the
+  trace-scoped projection twin, never the whole-log projection walk.
+* ``trail blame commit <path>:<line>`` (file:line target) — routes through the
+  patch/anchor scoped event slice, never the whole-log projection walk.
 * ``bucket manifest`` (read) — serves the persisted ``manifest.json`` instead
   of recomputing it.
 * ``bucket verify --sample N`` — a true work budget: every check is bounded to
@@ -132,6 +136,126 @@ def test_trail_resolve_file_takes_the_bounded_route(tmp_path: Path, monkeypatch)
     # envelope — the point is it resolves without touching read_events.
     payload = resolve_resource(tmp_path, "ot://file/app.py/line/2/origin")
     assert payload["resource_type"] == "file_line_origin"
+
+
+# --------------------------------------------------------------------------- #
+# trail blame commit t:<trace> (forward trace-mode) — bounded event read
+# --------------------------------------------------------------------------- #
+
+
+def _seed_anchored_patch(repo: Path, trace_id: str, commit_sha: str) -> None:
+    """Append one trace_patch_created + git_anchor_created pair for
+    ``trace_id`` anchored on ``commit_sha``."""
+    patch_id = f"tracepatch-sha256:{sha256_text(trace_id)[:12]}"
+    anchor_id = f"gitanchor-sha256:{sha256_text(commit_sha)[:12]}"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id=trace_id,
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": patch_id,
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": "    return 'new'\n",
+                    "raw_authored_hash": sha256_text("new"),
+                    "git_clean_hash": sha256_text("new"),
+                    "limitations": [],
+                },
+            ),
+            TrailEventDraft(
+                event_type="git_anchor_created",
+                trace_id=trace_id,
+                step_index=1,
+                capture_method=["post_commit_correlator"],
+                payload={
+                    "git_anchor_id": anchor_id,
+                    "trace_patch_id": patch_id,
+                    "commit_id": {"algo": "sha1", "hex": commit_sha},
+                    "path": "app.py",
+                    "range": {"start_line": 2, "end_line": 2},
+                    "relation": "anchored_in_git",
+                    "evidence_tier": "exact_range_hash",
+                    "evidence_firmness": "firm",
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+
+def _forbid_whole_log_reads(monkeypatch) -> None:
+    """Make every whole-log primitive on the blame path raise: the parsed
+    ``read_events`` walk (both its defining module and the name ``query``
+    imported) and the whole-log projection builder itself."""
+    from opentraces.core.trails import event_log as event_log_mod
+    from opentraces.core.trails import query as query_mod
+
+    def _boom(*_a, **_k):  # pragma: no cover - only on regression
+        raise AssertionError("whole-log read must not be called by blame")
+
+    monkeypatch.setattr(event_log_mod, "read_events", _boom)
+    monkeypatch.setattr(query_mod, "read_events", _boom)
+    monkeypatch.setattr(query_mod, "build_trail_query_projection", _boom)
+
+
+def test_forward_trace_blame_takes_the_bounded_route(tmp_path: Path, monkeypatch) -> None:
+    """``trail blame commit t:<trace> --json`` (forward: where did this trace's
+    edits land) resolves via the trace-scoped projection twin — never the
+    whole-log ``read_events`` / ``build_trail_query_projection`` walk that made
+    it hang (rc=124) on a mature canonical log."""
+    _init_repo(tmp_path)
+    sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    trace_id = "f0cafe00-1234-4000-8000-000000000001"
+    _seed_anchored_patch(tmp_path, trace_id, sha)
+
+    # Opt the project in so trace-mode blame can consult staging.
+    from opentraces.core.config import _write_marker
+
+    _write_marker(tmp_path, "f0-blame-proj", {})
+
+    _forbid_whole_log_reads(monkeypatch)
+
+    res = _run(
+        ["trail", "blame", "commit", f"t:{trace_id}", "--json",
+         "--project", str(tmp_path)]
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+    assert payload["trace"]["trace_id"] == trace_id
+    commits = {c["sha"]: c for c in payload["commits"]}
+    assert sha in commits
+    assert commits[sha]["source"] == "trail_events"
+
+
+def test_file_line_blame_takes_the_bounded_route(tmp_path: Path, monkeypatch) -> None:
+    """``trail blame commit <path>:<line>`` builds its projection from the
+    patch/anchor scoped event slice — the malformed group form
+    ``trail blame <trace>:<N>`` lands here too, and both hung pre-cure."""
+    _init_repo(tmp_path)
+    sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    trace_id = "f0cafe00-1234-4000-8000-000000000002"
+    _seed_anchored_patch(tmp_path, trace_id, sha)
+
+    _forbid_whole_log_reads(monkeypatch)
+
+    res = _run(
+        ["trail", "blame", "commit", "app.py:2", "--json",
+         "--project", str(tmp_path)]
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+    assert payload["target"] == "app.py:2"
+    assert payload["relation"] == "anchored_in_git"
+    assert payload["trailEvidence"][0]["trace_id"] == trace_id
 
 
 # --------------------------------------------------------------------------- #
