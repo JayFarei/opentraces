@@ -570,8 +570,27 @@ def _trail_projection_for_commits(project_cwd: Path, commit_shas: set[str]):
 
 
 def _trail_trace_id_for_prefix(project_cwd: Path, prefix: str) -> str | None:
-    projection = _trail_projection_for(project_cwd)
-    if projection is None:
+    """Resolve a trail-only trace identifier via its OWN scoped footprint.
+
+    Bounded route (scoped_reads contract): reads only the candidate's events
+    through the trace-scoped projection twin — never the whole-log
+    ``build_trail_query_projection`` walk that made ``trail blame commit
+    t:<trace>`` hang on a mature canonical log. A FULL trail-only id still
+    resolves (exact OID-index hit); a short prefix of an UNSTAGED trail-only
+    trace no longer does — staging-backed prefixes were already resolved
+    upstream via ``resolve_trace_id_prefix``, and the old whole-log prefix
+    scan never completed on a mature log anyway (rc=124).
+    """
+    try:
+        from ..core.trails.scoped_reads import (
+            build_trail_query_projection_for_trace,
+        )
+
+        probe = prefix[2:] if prefix.lower().startswith("t:") else prefix
+        projection = build_trail_query_projection_for_trace(
+            project_cwd, probe.strip()
+        )
+    except Exception:
         return None
     return projection.resolve_trace_prefix(prefix)
 
