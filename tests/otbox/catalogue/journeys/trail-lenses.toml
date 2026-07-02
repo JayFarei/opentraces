@@ -124,3 +124,19 @@ equals = "opentraces.trail.lineage.v1"
 kind = "stdout_not_contains"
 step = "lineage"
 value = "survival"
+
+# ---------------------------------------------------------------------
+# `trail blame commit t:<trace>` — FORWARD (trace-mode) attribution.
+# The rc=124 hang on this path is cured: it is bounded via the
+# trace-scoped read seam (predicates-before-projection), so it TERMINATES
+# and resolves the trace's edits to their commits (v7 PR-review fix).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "blame-forward"
+argv = ["trail", "blame", "commit", "t:{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "blame-forward"
+equals = 0
