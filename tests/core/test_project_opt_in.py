@@ -92,30 +92,47 @@ class TestCaptureGate:
 
 
 class TestStatusGate:
-    def test_status_refuses_without_init(
+    # The per-project opt-in gate + excluded-marker contract now lives on the
+    # transitional ``status-inbox`` verb (#161 repurposed top-level ``status``
+    # into the fleet bucket dashboard, which reads the global bucket and does
+    # NOT require a project opt-in). These assert the inbox verb's gate verbatim.
+    def test_status_inbox_refuses_without_init(
         self, runner, isolated_home, tmp_path
     ) -> None:
         # CliRunner's isolated_filesystem to chdir into an uninitialized dir.
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(main, ["status"])
+            result = runner.invoke(main, ["status-inbox"])
             assert result.exit_code == 3
             assert "Not an opentraces project" in result.output
 
-    def test_status_accepts_after_init(
+    def test_fleet_status_does_not_require_init(
+        self, runner, isolated_home, tmp_path
+    ) -> None:
+        # The fleet dashboard reads the global bucket; an uninitialized cwd is
+        # fine — it reports an empty bucket and exits 0 (never rc=3).
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(main, ["--json", "status"])
+            assert result.exit_code == 0, result.output
+            payload = json.loads(result.output.strip())
+            assert payload["ok"] is True
+            assert payload["schema_version"] == "opentraces.bucket.status.v1"
+            assert payload["safety"]["verdict"] == "empty"
+
+    def test_status_inbox_accepts_after_init(
         self, runner, isolated_home, tmp_path
     ) -> None:
         with runner.isolated_filesystem(temp_dir=tmp_path) as td:
             save_project_config(Path(td), {"review_policy": "review"})
 
-            result = runner.invoke(main, ["status"])
+            result = runner.invoke(main, ["status-inbox"])
             assert result.exit_code == 0, result.output
             assert "0 traces in inbox" in result.output
 
-    def test_status_reports_bare_excluded_marker_cleanly(
+    def test_status_inbox_reports_bare_excluded_marker_cleanly(
         self, runner, isolated_home, tmp_path
     ) -> None:
         """A bare committed ``{"excluded": true}`` marker (no project_id)
-        is a legal opt-out shape. ``status`` must report the excluded
+        is a legal opt-out shape. ``status-inbox`` must report the excluded
         state, exit 0, and leave the marker byte-identical — no raw
         KeyError('project_id'), no minted id (release-gate CAP-4)."""
         with runner.isolated_filesystem(temp_dir=tmp_path) as td:
@@ -123,18 +140,18 @@ class TestStatusGate:
             marker.write_text('{"excluded": true}')
             marker_before = marker.read_bytes()
 
-            result = runner.invoke(main, ["status"])
+            result = runner.invoke(main, ["status-inbox"])
             assert result.exit_code == 0, result.output
             assert "excluded" in result.output
             assert marker.read_bytes() == marker_before
 
-    def test_status_json_reports_excluded_state(
+    def test_status_inbox_json_reports_excluded_state(
         self, runner, isolated_home, tmp_path
     ) -> None:
         with runner.isolated_filesystem(temp_dir=tmp_path) as td:
             (Path(td) / ".opentraces.json").write_text('{"excluded": true}')
 
-            result = runner.invoke(main, ["--json", "status"])
+            result = runner.invoke(main, ["--json", "status-inbox"])
             assert result.exit_code == 0, result.output
             # L3 (epic #129): explicit --json emits pure JSON, no sentinel.
             out = result.output
