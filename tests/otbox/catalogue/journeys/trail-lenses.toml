@@ -1,0 +1,118 @@
+name = "trail-lenses"
+description = """
+CLI v7 Trace Trails lenses over one real anchored trace: the same
+VCS-anchored lineage rendered through commit blame, the commit+trace
+graph, batch survival tracking, and the per-trace lineage card.
+
+`trail blame <sha>` (the DIRECT commit-blame form, not `blame commit`)
+renders per-commit attribution; `trail graph` renders the commit+trace
+graph; `trail track --all` emits per-patch survival JSONL; and the bare
+`trail <trace_id>` lineage card returns the frozen
+`opentraces.trail.lineage.v1` envelope — the lineage view carries NO
+`survival` key (that lives on the `track` lens, not lineage).
+
+NOTE (authoring): `trail track --all` batch mode emits per-patch survival
+JSONL WITHOUT a top-level `schema_version` (only the single-patch/anchor
+track path stamps `opentraces.trail.track.v1`); the batch lens is asserted
+via rc=0 + the `survival_state` field it actually carries.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# backfill the attribution cache over the captured commit history.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "backfill"
+argv = ["backfill"]
+
+[[assertions]]
+kind = "returncode"
+step = "backfill"
+equals = 0
+
+# ---------------------------------------------------------------------
+# `trail blame <sha>` — the DIRECT commit-blame form.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "blame-direct"
+argv = ["trail", "blame", "{commit_sha}"]
+
+[[assertions]]
+kind = "returncode"
+step = "blame-direct"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "blame-direct"
+value = "src/app.py"
+
+# ---------------------------------------------------------------------
+# `trail graph` — the commit + trace graph.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "graph"
+argv = ["trail", "graph"]
+
+[[assertions]]
+kind = "returncode"
+step = "graph"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "graph"
+value = "seed: initial project"
+
+# ---------------------------------------------------------------------
+# `trail track --all` — batch per-patch survival JSONL.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "track-all"
+argv = ["trail", "track", "--all", "--json", "--limit", "5"]
+
+[[assertions]]
+kind = "returncode"
+step = "track-all"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "track-all"
+value = "survival_state"
+
+# ---------------------------------------------------------------------
+# bare `trail <trace_id>` — the frozen lineage envelope, NO survival key.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "lineage"
+argv = ["trail", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "lineage"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "lineage"
+path = "schema_version"
+equals = "opentraces.trail.lineage.v1"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "lineage"
+value = "survival"

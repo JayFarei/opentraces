@@ -81,6 +81,11 @@ SENTINEL_JOURNEYS = (
     "agent-session-to-published-dataset",
     "dataset-security-required-rejection",
     "slicer-conformance",
+    # CLI v7 core (epic #129) — one real-execution sentinel per v7 surface.
+    "setup-roundtrip",
+    "status-safety-gate",
+    "trace-map-dive",
+    "trail-lenses",
 )
 
 

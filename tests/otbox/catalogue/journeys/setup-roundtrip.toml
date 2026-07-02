@@ -1,0 +1,112 @@
+name = "setup-roundtrip"
+description = """
+CLI v7 seed smoke — the setup family's agent contract, exercised for real.
+
+The heart is the ADR-0007 L2 no-prompt property: bare `opentraces --json
+setup` must NEVER drop into the interactive wizard. It refuses with a
+structured `INTERACTIVE_REQUIRED` error (rc=2) and emits ZERO prompt bytes
+(no `[y/N]`), so an agent can branch on the error code instead of hanging
+on a prompt it can't answer.
+
+The round-trip then proves the non-interactive verbs an agent actually
+drives: `setup git` installs the post-commit hook, `doctor` reports health,
+and `config get` reads a single global setting through the frozen
+`opentraces.config.get.v1` envelope.
+"""
+lane = "core"
+tier = 0
+requires = ["cli", "git"]
+seed = "smoke"
+
+# ---------------------------------------------------------------------
+# L2 no-prompt: `--json setup` refuses the wizard with a structured error.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "setup-no-prompt"
+argv = ["--json", "setup"]
+expect_returncode = 2
+
+[[assertions]]
+kind = "returncode"
+step = "setup-no-prompt"
+equals = 2
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-no-prompt"
+path = "error.code"
+equals = "INTERACTIVE_REQUIRED"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "setup-no-prompt"
+value = "[y/N]"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "setup-no-prompt"
+value = "[Y/n]"
+
+# ---------------------------------------------------------------------
+# `setup git` — install the post-commit hook non-interactively.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "setup-git"
+argv = ["--json", "setup", "git"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-git"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-git"
+path = "state.installed"
+equals = true
+
+# ---------------------------------------------------------------------
+# `doctor` — install-health read-twin.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "status"
+equals = "ok"
+
+# ---------------------------------------------------------------------
+# `config get` — single-key read through the frozen envelope.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "config-get"
+argv = ["--json", "config", "get", "capture"]
+
+[[assertions]]
+kind = "returncode"
+step = "config-get"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "config-get"
+path = "schema_version"
+equals = "opentraces.config.get.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "config-get"
+path = "key"
+equals = "capture"
