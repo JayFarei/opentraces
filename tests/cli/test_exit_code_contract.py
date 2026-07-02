@@ -53,6 +53,26 @@ def test_trace_get_unresolved_ot_resource_exits_6():
     assert "Traceback" not in result.output
 
 
+def test_trace_get_step_address_unresolved_trace_exits_6():
+    """F1: a well-formed step address on an unknown trace is a lookup miss
+    (rc=6), same family as the bare-ref miss above."""
+    result = CliRunner().invoke(main, ["trace", "get", "nonexistent-trace:3", "--json"])
+
+    assert result.exit_code == 6, result.output
+    assert "Trace not found" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_trace_get_malformed_step_selector_exits_2():
+    """F1: a malformed selector is a caller/contract violation (rc=2) —
+    the address parse runs BEFORE trace resolution, matching ctx/trail."""
+    result = CliRunner().invoke(main, ["trace", "get", "nonexistent-trace:junk", "--json"])
+
+    assert result.exit_code == 2, result.output
+    assert "Unparseable step address" in result.output
+    assert "Traceback" not in result.output
+
+
 # ---------------------------------------------------------------------------
 # exit 3 — remote schema ahead of local (fail-closed publish)
 # ---------------------------------------------------------------------------
