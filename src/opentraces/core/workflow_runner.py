@@ -1,27 +1,32 @@
 """Run harness for local dataset workflow skills.
 
-Two execution surfaces live here:
+One execution seam lives here (the M1 engine collapse, #185):
 
-* ``run_dataset_workflow`` — the dataset-bound runner. Uses agent-skill
-  executors (``current-agent`` writes RUN.md instructions, ``claude-code-headless``
-  invokes the Claude CLI). Owned by ``ot dataset run``.
-* ``execute_workflow`` — the dataset-free primitive. Uses a deterministic
-  ``script`` executor that subprocess-runs ``scripts/build_rows.py`` from the
-  workflow package, with the run packet on stdin/env. Used by non-dataset
-  consumers like the branch-context PR consumer in ``core.branch_context``.
+* ``execute_workflow`` — the single workflow-execution primitive. It runs a
+  deterministic ``script`` executor that subprocess-runs
+  ``scripts/build_rows.py`` from the workflow package, with the versioned
+  ``opentraces.workflow.run_packet.v1`` run packet handed over on the
+  environment (``OT_RUN_PACKET``/``OT_DATASET_OUTPUT``). ``_execute_script`` is
+  the ONE subprocess seam. Used directly by non-dataset consumers like the
+  branch-context PR consumer in ``core.branch_context``.
+* ``run_dataset_workflow`` — the dataset-bound runner. It is lifecycle
+  bookkeeping (locks, run dirs, cursors, append, run records) *around*
+  ``execute_workflow``: it builds the one versioned run packet (a superset that
+  additionally carries the dataset fields templates and the lifecycle read),
+  writes the dataset run artifacts, then hands execution to
+  ``execute_workflow``. The ``current-agent`` executor stays a lifecycle-only
+  branch (writes ``RUN.md`` instructions, executes no script) — it is the
+  labeled human-in-the-loop path, not a second executor.
 
-The two share workflow-package loading and JSONL output reading, but they
-have different lifecycle semantics (dataset bookkeeping vs. write-and-return)
-and so live as siblings rather than one calling the other. A future refactor
-can collapse them once a third consumer arrives and the shared shape is
-clearly load-bearing.
+The previously-dead ``claude-code-headless`` executor (a permanent stub that
+never produced rows) and its fake-rows environment test-injection hook were
+removed in the collapse.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -127,7 +132,7 @@ def run_dataset_workflow(
     selected_executor = executor or (
         dataset.manifest.executor.development if dry_run else dataset.manifest.executor.default
     )
-    if selected_executor not in {"current-agent", "claude-code-headless", "script"}:
+    if selected_executor not in {"current-agent", "script"}:
         raise ValueError(f"unsupported executor: {selected_executor}")
 
     run_id = _new_run_id()
@@ -153,15 +158,27 @@ def run_dataset_workflow(
             + (f": {projects}" if projects else "")
         )
     output_path = run_dir / "output_rows.jsonl"
-    run_packet = {
+    # For the ``script`` executor, resolve the workflow package up front so the
+    # single execution seam (``execute_workflow``) runs the exact package the
+    # dataset pins. ``current-agent`` executes no script, so it never resolves
+    # (and must not require) an installed package.
+    workflow_package = (
+        _workflow_package_for_dataset(dataset)
+        if selected_executor == "script"
+        else None
+    )
+    # ONE versioned run packet (opentraces.workflow.run_packet.v1). The dataset
+    # runner builds it as a SUPERSET: the versioned base shape plus the dataset
+    # fields templates read (``scope`` is in the base; ``candidate_query`` is
+    # added here) and the lifecycle/provenance fields (``source_provenance``,
+    # ``security``, ``privacy_tier``, ``trail_freshness``...). Adding keys keeps
+    # it frozen-envelope safe (still .v1); nothing is removed.
+    dataset_context = {
         "run_id": run_id,
         "dataset_name": dataset.name,
         "dataset_path": str(dataset.path),
         "dry_run": dry_run,
         "scheduled": scheduled,
-        "executor": selected_executor,
-        "schema_path": str(dataset.path / dataset.manifest.schema_ref.path),
-        "output_path": str(output_path),
         "workflow": dataset.manifest.workflow.model_dump(mode="json"),
         "candidate_query": (
             dataset.manifest.candidate_query.model_dump(mode="json")
@@ -169,13 +186,23 @@ def run_dataset_workflow(
             else None
         ),
         "source_provenance": source_provenance,
-        "scope": scope or {"scope": "all-projects"},
         "limit": limit,
         "privacy_tier": privacy_tier,
         "security": dataset.manifest.security.model_dump(mode="json"),
         "trail_freshness_policy": trail_freshness_policy,
         "trail_freshness": trail_freshness,
     }
+    run_packet = _build_workflow_packet(
+        workflow_name=dataset.manifest.workflow.skill,
+        workflow_digest=workflow_digest,
+        workflow_path=str(workflow_package.path) if workflow_package else None,
+        schema_path=str(dataset.path / dataset.manifest.schema_ref.path),
+        scope=scope or {"scope": "all-projects"},
+        output_path=output_path,
+        executor=selected_executor,
+        started_at=started_at,
+        dataset_context=dataset_context,
+    )
     _write_run_packet(run_dir, dataset.manifest, schema, run_packet)
     lock_path = dataset.path / ".opentraces" / ".lock"
 
@@ -211,16 +238,20 @@ def run_dataset_workflow(
         )
 
     try:
-        if selected_executor == "script":
-            output_path.write_text("", encoding="utf-8")
-            _execute_script(
-                _workflow_package_for_dataset(dataset),
-                run_dir,
-                output_path,
-                run_packet,
-            )
-        else:
-            _execute_claude_code_headless(run_packet, output_path)
+        # The dataset runner is lifecycle bookkeeping AROUND the single
+        # execution seam: hand the resolved package + superset run packet to
+        # ``execute_workflow`` (which owns ``_execute_script``, the one
+        # subprocess boundary). ``current-agent`` returned above and never
+        # reaches here.
+        execute_workflow(
+            dataset.manifest.workflow.skill,
+            scope=run_packet["scope"],
+            output_path=output_path,
+            executor="script",
+            run_dir=run_dir,
+            run_packet=run_packet,
+            workflow_package=workflow_package,
+        )
         rows = _read_output_rows(output_path)
         with _dataset_lock(lock_path, run_id):
             append_summary = append_rows(
@@ -294,23 +325,6 @@ def _workflow_package_for_dataset(dataset) -> WorkflowPackage:
     if isinstance(source, str) and source:
         return resolve_workflow_reference(source)
     return load_workflow(dataset.manifest.workflow.skill)
-
-
-def _execute_claude_code_headless(run_packet: dict[str, Any], output_path: Path) -> None:
-    fake_rows = os.environ.get("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS")
-    if fake_rows is not None:
-        output_path.write_text(fake_rows.rstrip("\n") + "\n", encoding="utf-8")
-        return
-    executable = shutil.which("claude")
-    if not executable:
-        raise ExecutorUnavailableError(
-            "claude-code-headless executor is unavailable. Install Claude Code or "
-            "set OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS for recorded local tests."
-        )
-    raise ExecutorUnavailableError(
-        "claude-code-headless executor seam is available, but real invocation is not "
-        "enabled by default in Plan 57 tests."
-    )
 
 
 def _trail_freshness_for_dataset(dataset, scope: dict[str, Any]) -> list[dict[str, Any]]:
@@ -514,14 +528,18 @@ def execute_workflow(
     output_path: Path,
     executor: str = "script",
     extra_env: dict[str, str] | None = None,
+    run_dir: Path | None = None,
+    run_packet: dict[str, Any] | None = None,
+    workflow_package: WorkflowPackage | None = None,
 ) -> WorkflowExecutionResult:
     """Run a workflow's deterministic builder, write rows to ``output_path``.
 
-    This is the dataset-free primitive. Unlike ``run_dataset_workflow`` it
-    does not append to a dataset, advance cursors, or hold a dataset lock.
-    It loads the workflow package, writes a ``run_packet.json`` next to the
-    output, invokes the script executor, then returns the row count and
-    provenance.
+    This is the SINGLE workflow-execution seam (M1 collapse, #185).
+    ``run_dataset_workflow`` wraps it with dataset lifecycle bookkeeping;
+    non-dataset consumers (e.g. the branch-context PR consumer) call it
+    directly. It loads the workflow package, writes a versioned
+    ``run_packet.json`` next to the output, invokes the ONE script executor
+    (``_execute_script``), then returns the row count and provenance.
 
     Parameters
     ----------
@@ -541,6 +559,14 @@ def execute_workflow(
         Currently only ``"script"`` is supported. The script executor runs
         ``<workflow.path>/scripts/build_rows.py`` as a subprocess with
         ``OT_RUN_PACKET`` and ``OT_DATASET_OUTPUT`` env vars set.
+    run_dir, run_packet, workflow_package:
+        Lifecycle hooks for the dataset runner. When ``run_dataset_workflow``
+        drives this seam it supplies its own ``run_dir`` (the dataset run
+        directory), the already-built superset ``run_packet`` (and thus owns
+        writing the dataset run artifacts), and the pre-resolved
+        ``workflow_package`` (which may resolve a config-pinned source, not
+        just an installed name). Direct primitive callers leave these ``None``
+        and get the minimal versioned packet written next to the output.
     """
 
     if executor != "script":
@@ -548,20 +574,30 @@ def execute_workflow(
             f"unsupported executor: {executor} (execute_workflow only supports 'script')"
         )
 
-    workflow = load_workflow(workflow_name)
+    workflow = workflow_package if workflow_package is not None else load_workflow(workflow_name)
     output_path = output_path.expanduser()
-    run_dir = output_path.parent
+    run_dir = run_dir if run_dir is not None else output_path.parent
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    started_at = utc_now_str()
-    run_packet = _build_workflow_packet(
-        workflow=workflow,
-        scope=scope,
-        output_path=output_path,
-        executor=executor,
-        started_at=started_at,
-    )
-    _write_workflow_packet(run_dir, run_packet)
+    if run_packet is None:
+        started_at = utc_now_str()
+        schema_path = workflow.path / "schemas" / "row.schema.json"
+        run_packet = _build_workflow_packet(
+            workflow_name=workflow.name,
+            workflow_digest=workflow.digest,
+            workflow_path=str(workflow.path),
+            schema_path=str(schema_path) if schema_path.exists() else None,
+            scope=scope,
+            output_path=output_path,
+            executor=executor,
+            started_at=started_at,
+        )
+        _write_workflow_packet(run_dir, run_packet)
+    else:
+        # The dataset runner already built the superset packet and wrote the
+        # dataset run artifacts; do not re-author or overwrite them here.
+        started_at = str(run_packet.get("started_at") or utc_now_str())
+
     output_path.write_text("", encoding="utf-8")
 
     _execute_script(workflow, run_dir, output_path, run_packet, extra_env=extra_env)
@@ -582,24 +618,37 @@ def execute_workflow(
 
 def _build_workflow_packet(
     *,
-    workflow: WorkflowPackage,
+    workflow_name: str,
+    workflow_digest: str,
+    workflow_path: str | None,
+    schema_path: str | None,
     scope: dict[str, Any],
     output_path: Path,
     executor: str,
     started_at: str,
+    dataset_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    schema_path = workflow.path / "schemas" / "row.schema.json"
-    return {
+    """Build the ONE versioned run packet (opentraces.workflow.run_packet.v1).
+
+    The base shape is the primitive packet. ``dataset_context`` (when the
+    dataset runner supplies it) merges in the dataset-only keys — a strict
+    superset that only ADDS keys, so the envelope stays frozen at ``.v1``.
+    """
+
+    packet: dict[str, Any] = {
         "schema_version": "opentraces.workflow.run_packet.v1",
-        "workflow_name": workflow.name,
-        "workflow_digest": workflow.digest,
-        "workflow_path": str(workflow.path),
-        "schema_path": str(schema_path) if schema_path.exists() else None,
+        "workflow_name": workflow_name,
+        "workflow_digest": workflow_digest,
+        "workflow_path": workflow_path,
+        "schema_path": schema_path,
         "executor": executor,
         "scope": scope,
         "output_path": str(output_path),
         "started_at": started_at,
     }
+    if dataset_context:
+        packet.update(dataset_context)
+    return packet
 
 
 def _write_workflow_packet(
