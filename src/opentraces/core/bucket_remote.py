@@ -391,6 +391,15 @@ def _hf_push(
                 else ""
             )
         )
+    # Egress gate (#162): refuse before ANY network call if the FRESH manifest
+    # still withholds any trace. The bucket-level sync.eligible flag above is
+    # all-or-nothing and misses status_unknown rows (they do not increment
+    # unfiltered_count); this per-trace gate closes that hole so a not-cleared
+    # trace can never physically egress while being reported "withheld".
+    # Placed before _hf_status so a refusal touches zero bytes on the wire.
+    from .bucket_sync import enforce_push_clearance
+
+    partition = enforce_push_clearance(manifest)
     status = _hf_status(url, token)
     if status.get("state") in {"remote_ahead", "diverged"} and not force:
         raise BucketRemoteError(
@@ -415,6 +424,22 @@ def _hf_push(
     # traces whose envelopes have landed; envelopes only reference
     # blobs that have landed.
     bucket_root = paths.bucket_dir()
+    # TOCTOU tightening (#162): the egress gate above ran on M1, but _hf_status
+    # recomputed the manifest after it and the passes below read the LIVE bucket
+    # tree. Re-run the clearance gate on a manifest recomputed IMMEDIATELY before
+    # the egress walk, so the authorizing snapshot is the last manifest computed
+    # before egress and the digest/partition reported reflect exactly it. No
+    # manifest recompute sits between this final gate and the walk.
+    #
+    # RESIDUAL (deliberately out of scope): a trace captured concurrently DURING
+    # the push — written between this final recompute and the tree walk below —
+    # can still reach egress without having been in the cleared partition. That
+    # window is a pre-existing property of the whole-tree push protocol; airtight
+    # closure needs allow-list egress (upload only files named by the cleared
+    # manifest), which would change the full-corpus whole-tree upload the
+    # cross-machine bucket_digest protocol depends on.
+    manifest = bucket_manifest(write=True, include_objects=False)
+    partition = enforce_push_clearance(manifest)
     passes = _ordered_bucket_upload_passes(
         skip_blocked_project_slugs=blocked_projects
     )
@@ -463,6 +488,7 @@ def _hf_push(
         "context_tree_files_uploaded": context_tree_files_uploaded,
         "pass_counts": pass_counts,
         "verification": verification,
+        "push_partition": partition,
     }
 
 

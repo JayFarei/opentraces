@@ -554,17 +554,20 @@ def teleport_open_cmd(workspace: Path, project: Path, as_json: bool) -> None:
 @click.option(
     "--remote-bucket",
     is_flag=True,
-    help="Pull the configured private bucket remote and replay TrailEvents before searching.",
+    hidden=True,
+    help="(deprecated; use --remote) Pull the configured private bucket remote and replay TrailEvents before searching.",
 )
 @click.option(
     "--force-remote-bucket",
     is_flag=True,
-    help="Allow --remote-bucket to overwrite local-ahead/diverged bucket or differing TrailEvents.",
+    hidden=True,
+    help="(deprecated) Allow --remote-bucket to overwrite local-ahead/diverged bucket or differing TrailEvents.",
 )
 @click.option(
     "--bucket-repo-id",
     default=None,
-    help="Bucket TrailEvents repo id when the remote bucket has multiple repository exports.",
+    hidden=True,
+    help="(deprecated) Bucket TrailEvents repo id when the remote bucket has multiple repository exports.",
 )
 @project_dir_option
 def search_cmd(

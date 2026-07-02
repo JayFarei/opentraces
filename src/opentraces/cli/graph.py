@@ -21,6 +21,8 @@ from ._help import OpentracesCommand
 from ._options import dump_json as _dump_json, project_dir_option
 from ..clients.text import graph_renderer as _gr
 
+GRAPH_SCHEMA_VERSION = "opentraces.trail.graph.v1"
+
 
 @click.command(
     "graph",
@@ -151,6 +153,8 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
     if not commits:
         if as_json:
             click.echo(_dump_json({
+                    "status": "ok",
+                    "schema_version": GRAPH_SCHEMA_VERSION,
                     "mode": opts.mode,
                     "pivot_trace_id": opts.pivot_trace_id,
                     "commits": [],
@@ -160,6 +164,8 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
         return
     if as_json:
         payload = {
+            "status": "ok",
+            "schema_version": GRAPH_SCHEMA_VERSION,
             "mode": opts.mode,
             "pivot_trace_id": opts.pivot_trace_id,
             "commits": [

@@ -24,7 +24,7 @@ Commands:
 opentraces trace query --cwd --lex "auth middleware regression" --json
 opentraces trace map <trace-id> --bursts --json
 opentraces trace slice <trace-id> --template bursts --json
-opentraces ctx step <trace-id> 7 --json
+opentraces ctx <trace-id>:7 --json
 opentraces ctx resume <context-node-id> --json
 opentraces trail track <trace-id> --json
 ```
@@ -39,7 +39,7 @@ Use the cheapest read first:
 1. `trace query` for candidates.
 2. `trace map --bursts` for intent and edit clusters.
 3. `trace slice` for the bounded step window.
-4. `ctx step` or `ctx resume` for model-visible context.
+4. `ctx <trace>:<step>` (or `ctx resume`) for model-visible context.
 5. `trail track` for whether the trace output still survives.
 
 The agent only loads full trace content after the candidate is clearly useful.

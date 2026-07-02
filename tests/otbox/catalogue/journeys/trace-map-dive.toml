@@ -1,0 +1,87 @@
+name = "trace-map-dive"
+description = """
+CLI v7 trace-side dive on one real captured trace: map -> get card ->
+waste, the read path an agent walks to understand a session.
+
+`trace map <id> --json` returns the frozen `opentraces.trace.map.v1`
+envelope carrying the slice handoff (a `trace slice ... --from-step N
+--to-step M` command an agent runs next). `trace get <id>` renders a
+readable card. `trace get <id> --waste --json` returns the frozen
+`opentraces.context_waste.v2` deterministic context-waste envelope.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# `trace map` — frozen map envelope + the slice handoff.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-map"
+argv = ["trace", "map", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-map"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-map"
+path = "schema_version"
+equals = "opentraces.trace.map.v1"
+
+# The slice handoff is present (the deterministic next-command for an agent).
+[[assertions]]
+kind = "stdout_json"
+step = "trace-map"
+path = "handoff.from_step"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-map"
+value = "--from-step"
+
+# ---------------------------------------------------------------------
+# `trace get` — a readable card.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-get"
+argv = ["trace", "get", "{trace_id}"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-get"
+value = "steps:"
+
+# ---------------------------------------------------------------------
+# `trace get --waste` — frozen context-waste envelope.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-waste"
+argv = ["trace", "get", "{trace_id}", "--waste", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-waste"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-waste"
+path = "schema_version"
+equals = "opentraces.context_waste.v2"

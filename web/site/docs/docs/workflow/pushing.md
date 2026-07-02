@@ -33,14 +33,25 @@ opentraces dataset publish my-dataset --exclude-state lost --exclude-state never
 ## Bucket Sync Is Separate
 
 ```bash
-opentraces bucket remote push
-opentraces bucket remote pull
-opentraces bucket remote status
+opentraces bucket sync push
+opentraces bucket sync pull
+opentraces bucket sync status
 ```
 
 Bucket sync moves raw retained evidence. Dataset publish moves approved
 projected rows. A private bucket remote can exist even when no dataset has
-been published.
+been published. `opentraces bucket sync push` is the gated egress seal for
+the bucket: it recomputes the push-time pushed/withheld partition and, if
+any trace is not cleared for sync, REFUSES outright — zero bytes egressed,
+non-zero exit — rather than pushing a partial or unscanned bucket. Preview
+the partition first with `opentraces bucket sync push --dry-run`, which
+reports the same `pushed[]` / `withheld[]` (each withheld entry carries a
+`reason`/`sub_reason`) split without touching the remote. Run `opentraces
+status` beforehand as the pre-egress safety gate — it is the fleet-wide
+scanned/unscanned dashboard, and its "safe to sync" verdict is structurally
+impossible to show green while any trace remains unscanned. (`bucket remote
+push|pull|diff|status` still work as the old spelling; `bucket sync` is the
+current one.)
 
 ## Security And Publication Gates
 
@@ -50,9 +61,15 @@ or LLM review, it should run those steps before approving rows.
 ```bash
 opentraces security tools list
 opentraces security sanitize --tools regex,entropy
-opentraces setup llm-review
+opentraces dataset review my-dataset --json
+opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset --check-only
 ```
+
+LLM-assisted row review now runs through `dataset review` /
+`dataset publish`, not a standalone `setup llm-review` step (that command
+still works but is hidden — the canonical surface for clearing rows before
+publish is the review/approve/publish lifecycle above).
 
 `dataset publish --check-only` also blocks any row that does not satisfy the
 dataset's required security tools (block reason

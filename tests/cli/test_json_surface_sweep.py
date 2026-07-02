@@ -59,6 +59,7 @@ GLOBAL_JSON_ONLY = {
     "capsule verdict",
     "completions install",
     "completions uninstall",
+    "config get",
     "config set",
     "config show",
     "config tracking-mode",
@@ -71,20 +72,27 @@ GLOBAL_JSON_ONLY = {
     "setup claude-code",
     "setup codex-cli",
     "setup git",
-    "setup llm-review",
+    # setup llm-review: hidden (issue #160 — a publication gate, not a setup
+    # install step) -> off the PUBLIC sweep.
     "setup privacy-filter",
     "setup skill",
     "setup trufflehog",
-    "setup uninstall",
-    "setup upgrade",
     "setup watcher install",
     "setup watcher restart",
     "setup watcher start",
     "setup watcher stop",
     "setup watcher uninstall",
-    "trail blame pr create",
-    "trail blame pr render",
-    "trail blame pr update",
+    # #165: the PR write group was lifted to a top-level `trail pr` verb (the
+    # `trail blame pr ...` path stays callable as a hidden compat alias, so it
+    # drops off the PUBLIC sweep and out of this frozen list).
+    "trail pr create",
+    "trail pr render",
+    "trail pr update",
+    # issue #160: `upgrade`/`uninstall` are now root peer verbs (the same
+    # command objects formerly mounted only as `setup upgrade`/`setup
+    # uninstall`, which are now hidden copies and off the PUBLIC sweep).
+    "uninstall",
+    "upgrade",
 }
 
 # Zero-required-arg commands we do NOT execute in the sweep, with reasons.
@@ -97,7 +105,10 @@ EXEC_DENYLIST = {
     "auth logout": "mutates credential state; logout flow covered in tests/cli/test_auth_group.py",
     "completions install": "writes to the user's shell profile",
     "completions uninstall": "edits the user's shell profile",
-    "setup upgrade": "spawns the package manager (network)",
+    # issue #160: `upgrade` is now the root peer verb (same command object as
+    # the former `setup upgrade`, which is now a hidden copy off the PUBLIC
+    # sweep).
+    "upgrade": "spawns the package manager (network)",
     "capture-otlp start": "spawns a long-lived daemon process",
     "capture-otlp restart": "spawns a long-lived daemon process",
     "setup watcher start": "spawns the long-lived watcher daemon (sweep timeout)",

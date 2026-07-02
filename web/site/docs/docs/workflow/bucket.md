@@ -9,7 +9,7 @@ Buckets are distinct from datasets:
 
 | Layer | Contents | Egress |
 |-------|----------|--------|
-| Bucket | raw trace envelopes, patch history, Trail events, Context Tree events, source events, blobs, manifest | `opentraces bucket remote push` |
+| Bucket | raw trace envelopes, patch history, Trail events, Context Tree events, source events, blobs, manifest | `opentraces bucket sync push` |
 | Dataset | workflow-projected rows over one or more traces | `opentraces dataset publish` |
 
 ## Principles
@@ -19,9 +19,14 @@ Buckets are distinct from datasets:
 - **The bucket is replayable.** Trail events and manifests are enough to rebuild
   derived projections and restore the canonical Git event ref.
 - **Large evidence is lazy.** Context and raw blobs are content-addressed, so
-  readers can inspect manifests first and fetch only what they need.
+  readers can inspect the inventory first and fetch only what they need.
 - **Datasets are projections.** Publishing a dataset row does not publish the
   bucket unless you separately sync the bucket remote.
+- **Egress is a gated seal, reads are pure.** `bucket sync push` is one of the
+  few commands in the CLI that writes anywhere outside the local bucket, and
+  it refuses outright — zero bytes egressed, non-zero exit — while any trace
+  is not cleared for sync. Every inspection command below (`status`, `list`,
+  `verify`) is a derive-on-demand read that never persists anything.
 
 ## Layout
 
@@ -48,69 +53,101 @@ bucket/
 `trace.json` is the `TraceRecord` spine. The companion files carry the large
 or evolving evidence needed by Trace Trails, Context Tree, and replay.
 
+## Fleet Safety Dashboard
+
+```bash
+opentraces status
+opentraces status --short
+opentraces status --full
+opentraces status --project my-repo
+opentraces status --json
+```
+
+`opentraces status` is the top-level, O(1) answer to "is my private trace
+bucket safe to sync?" — scanned/unscanned counts across the whole fleet and a
+green "safe to sync" verdict that is structurally impossible while any trace
+is still unscanned. `--short` prints a one-line, stable, scriptable summary;
+`--full` adds debugger-level detail; `--project` scopes every count and the
+verdict to one project slug. The envelope is `opentraces.bucket.status.v1`.
+
+For the lower-level per-bucket health readout that this dashboard's verdict
+points back to, use `opentraces bucket status`.
+
 ## Inspect
 
 ```bash
 opentraces bucket status
-opentraces bucket manifest --json
-opentraces bucket manifest --heal --json
+opentraces bucket status --json
+opentraces bucket list --json
+opentraces bucket list --unscanned --json
+opentraces bucket list --unsynced --unfiltered --security-stale --json
+opentraces bucket list --project my-repo --since 2026-06-01 --json
+opentraces bucket list --count --json
 opentraces bucket verify --sample 100 --json
 opentraces bucket verify --full --json
 ```
 
-`bucket status` avoids expensive blob enumeration. `bucket verify` recomputes
-blob hashes and checks for dangling references.
+`bucket status` is the lower-level, per-bucket health readout (avoids
+expensive blob enumeration). `bucket list` is the bounded, paginated,
+accelerator-backed per-trace inventory — it reads the security/sync status
+accelerator once and applies filters before projection, so it stays fast even
+on a large fleet bucket; use `--limit`/`--cursor` to page, `--count` to get
+just a match count without materializing rows, and the facet flags
+(`--unsynced`, `--unfiltered`, `--security-stale`, `--unscanned`) to slice by
+sync/security state. `bucket verify` recomputes blob hashes and checks for
+dangling references.
 
-`bucket status` and `bucket manifest` are side-effect-free reads: they never
-write under the bucket. Self-heal (materializing the top-level manifest from the
-per-trace envelopes on disk) is explicit via `bucket manifest --heal`, or do a
-full rebuild with `bucket repair`.
+`bucket status` and `bucket list` are side-effect-free reads: they never
+write under the bucket. A full rebuild of the manifest and per-trace
+envelopes from canonical state is explicit via `bucket repair`.
 
-## Repair, Rebuild, And Replay
+## Repair And Replay
 
 ```bash
 opentraces bucket repair --json
-opentraces bucket rebuild --json
-opentraces bucket rebuild --substrate context-tree --json
 opentraces bucket replay --repo /path/to/git-clone --json
 ```
 
 `bucket repair` re-projects envelopes and the manifest from canonical events
-and blobs. `bucket rebuild` refreshes one or all derived substrate projections
-from canonical state (`trail`, `traces`, `context-tree`, or `all`). `bucket
-replay` reconstructs the canonical Trace Trails Git event ref in another Git
-repository from bucket-exported events.
+and blobs — the documented crash-recovery primitive, idempotent and safe to
+re-run. `bucket replay` reconstructs the canonical Trace Trails Git event ref
+in another Git repository from bucket-exported events.
 
 ## Remote Sync
 
 ```bash
-opentraces setup bucket
-opentraces bucket remote status --json
-opentraces bucket remote diff --json
-opentraces bucket remote push --json
-opentraces bucket remote pull --json
-opentraces bucket prefetch <trace-id> --json
+opentraces bucket connect
+opentraces bucket sync status --json
+opentraces bucket sync diff --json
+opentraces bucket sync push --dry-run --json
+opentraces bucket sync push --json
+opentraces bucket sync pull --json
 ```
 
 Sync order is substrate-aware: blobs, then events, then envelopes, then the
-manifest. `prefetch` warms one trace's blobs before `trace get` or `ctx` loads
-them. A configured bucket remote does not publish dataset rows.
+manifest. A configured bucket remote does not publish dataset rows.
 
-`setup bucket` requires authentication: run `opentraces auth login` first, or it
-exits with a `run 'opentraces auth login'` hint. The wizard then prompts for a
-bucket security policy (recommended / basic / strict / off / custom) before
-configuring remote sync.
+`bucket sync push` is the gated egress seal: it computes an auditable
+`pushed[]`/`withheld[]` partition and refuses — zero bytes egressed,
+non-zero exit — if any trace is not cleared for sync. Run `--dry-run` first
+to preview the partition without egressing anything; if traces are withheld,
+clear them with `opentraces bucket security run --all` and re-check.
+
+`bucket connect` requires authentication: run `opentraces auth login` first,
+or it exits with a `run 'opentraces auth login'` hint. The wizard then
+prompts for a bucket security policy (recommended / basic / strict / off /
+custom) before configuring remote sync.
 
 ## Bucket Security Policy
 
-Bucket security protects raw captured evidence before `bucket remote push`. The
+Bucket security protects raw captured evidence before `bucket sync push`. The
 policy is a named bundle over the same `cfg.security.<tool>.enabled` flags that
 `setup <tool>` and `config set security.<tool>.enabled` flip, scoped to the
 bucket.
 
 ```bash
 opentraces auth login
-opentraces setup bucket
+opentraces bucket connect
 opentraces bucket security status
 opentraces bucket security policy --policy recommended
 opentraces bucket security policy --tool regex --enable
@@ -139,7 +176,7 @@ Policy bundles:
 Bucket security flags are machine-global (the same `cfg.security.<tool>.enabled`
 flags capture-time sanitization reads), so applying a policy can turn OFF a tool
 you enabled for another purpose; the CLI prints a warning naming any tool it
-disables. When `setup bucket` runs non-interactively (for example with `--json`,
+disables. When `bucket connect` runs non-interactively (for example with `--json`,
 in CI, or any non-TTY), it applies the `recommended` policy by default so a
 remote-syncing private bucket is never left with zero redaction; pass explicit
 `--enable-security-tool` / `--disable-security-tool` flags to override.
@@ -147,9 +184,13 @@ remote-syncing private bucket is never left with zero redaction; pass explicit
 ## Cleanup
 
 ```bash
-opentraces bucket prune --dry-run --json
-opentraces bucket prune --json
+opentraces bucket reclaim --json
+opentraces bucket reclaim --apply --json
 ```
 
-`bucket prune` only deletes unreachable blobs and atomic-write temp files. It
-never deletes events or `trace.json`.
+`bucket reclaim` lists (and, with `--apply`, removes) leaked Trace Trails
+cruft under `.git/**/opentraces/` — stray temp files and orphan accelerator
+pickles. It is dry-run by default and never touches events or `trace.json`.
+Orphan-blob cleanup and single-trace blob warming (the old `bucket prune` /
+`bucket prefetch`) are hidden-but-callable advanced ops now superseded by
+`verify` / `repair` / `reclaim` for everyday maintenance.

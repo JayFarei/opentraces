@@ -60,6 +60,11 @@ def setup_claude_code(
       PostCompact  records explicit compaction events so collapsed context
                    is still attributable.
 
+    OFF cost: hooks are the foundation of capture — they feed the trace,
+    trail, and context-tree records alike. Turning them off does not stop
+    capture: it continues via watcher backfill, but coarser (no live step
+    boundaries) and attribution degrades.
+
     Use --dry-run to preview the changes, --remove to uninstall.
     """
     from ..capture.claude_code.install import (
@@ -172,6 +177,11 @@ def setup_codex_cli(
     scripts write project-local sidecar JSONL under ``.opentraces/codex-cli``
     and the Stop hook triggers bounded session ingestion through the Codex
     parser.
+
+    OFF cost: hooks are the foundation of capture — they feed the trace,
+    trail, and context-tree records alike. Turning them off does not stop
+    capture: it continues via watcher backfill, but coarser (no live step
+    boundaries) and attribution degrades.
     """
     from ..capture._base import HookInstallError
     from ..capture.codex_cli.install import (
@@ -286,6 +296,11 @@ def setup_pi(
     silently install Python, start services, configure HuggingFace auth, or
     enable optional security tools. Use `/ot-setup` inside Pi or
     `opentraces init --agent pi` for project capture enrollment.
+
+    OFF cost: hooks are the foundation of capture — they feed the trace,
+    trail, and context-tree records alike. Turning them off does not stop
+    capture: it continues via watcher backfill, but coarser (no live step
+    boundaries) and attribution degrades.
     """
     if json_flag:
         _cli._json_mode = True  # noqa: SLF001 - command-local --json compatibility
@@ -384,7 +399,15 @@ def setup_git(remove: bool) -> None:
                                   traces and the agent context behind them.
 
     Old commits cannot be backfilled, correlation starts from the first
-    commit after install. Use --remove to uninstall.
+    commit after install.
+
+    OFF cost: git is a record SIGNAL, not a capture source — turning it
+    off does not stop capture, but trace attribution and `trail blame`
+    degrade (no commit-to-trace correlation for commits made while it's
+    off). The watcher auto-reinstalls this hook every sweep while it runs,
+    so an explicit `--remove` here is the honest way to keep it off.
+
+    Use --remove to uninstall.
     """
     from ..capture.git import install as git_hook
     if remove:

@@ -188,6 +188,9 @@ class TestTraceModeCLI:
         code, out = _run([f"t:{trace_id}", "--json"], repo)
         assert code == 0, out
         data = json.loads(out)
+        # Uniform L5 envelope header (additive; trace-mode shape version).
+        assert data["status"] == "ok"
+        assert data["schema_version"] == "opentraces.trail.blame_trace.v1"
         assert data["trace"]["trace_id"] == trace_id
         assert len(data["commits"]) == 1
         commit = data["commits"][0]

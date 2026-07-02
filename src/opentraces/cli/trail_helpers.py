@@ -90,12 +90,22 @@ def _collect_event_log_patch_ids(
     repo: Path,
     *,
     since: datetime | None = None,
+    limit: int | None = None,
 ) -> list[str]:
     """Return patch ids from the project's TrailEvent log.
 
     When ``since`` is provided, only Trace Patches whose ``event_time`` is
     on/after the cutoff are included. Order preserves event_sequence so
     the most recent patches appear last.
+
+    When ``limit`` is provided, the returned list is bounded to the ``limit``
+    MOST RECENT patches (the tail). This bounds the caller's per-patch git
+    survival WORK, not just the emitted rows: the oldest patches are the most
+    expensive to resolve (longest history to walk to HEAD) and the least
+    interesting, so a recent-N budget is both fast and useful. Because
+    ``read_events_scoped`` is event_sequence-ascending, the tail is the newest
+    ``limit`` patches and their relative "most recent appear last" ordering is
+    preserved.
 
     Plan 087 — scoped to ``trace_patch_created`` blobs via the raw-bytes
     prefilter, so enumerating every patch id parses a tiny fraction of a large
@@ -119,6 +129,8 @@ def _collect_event_log_patch_ids(
         if isinstance(patch_id, str) and patch_id and patch_id not in seen:
             out.append(patch_id)
             seen.add(patch_id)
+    if limit is not None and limit >= 0 and len(out) > limit:
+        out = out[-limit:]
     return out
 
 
@@ -215,6 +227,12 @@ def _emit_batch_track(
                 payload["trace_id"] = tid
             else:
                 payload.setdefault("trace_id", None)
+            # Parity with the single-patch track path (cli/trail.py stamps
+            # TRACK_SURVIVAL_SCHEMA_VERSION): each batch survival record carries
+            # the same schema_version so JSONL consumers see one identified
+            # shape across both modes. Additive; the trail_timeline scope
+            # (opentraces.trail_timeline.v1) is a different surface, untouched.
+            payload.setdefault("schema_version", "opentraces.trail.track.v1")
         # Emit one JSON object per line (no indent) so jq -s can stream.
         click.echo(json.dumps(payload, sort_keys=True))
 

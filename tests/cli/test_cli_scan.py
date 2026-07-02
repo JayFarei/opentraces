@@ -274,9 +274,13 @@ class TestScanCommand:
 
 
 def _extract_json(output: str) -> dict:
-    """Parse the JSON payload emitted after the ``---OPENTRACES_JSON---`` sentinel."""
+    """Parse the JSON payload from ``--json`` output.
+
+    L3 (epic #129): explicit ``--json`` emits pure JSON with no
+    ``---OPENTRACES_JSON---`` sentinel; the legacy auto-non-TTY path still
+    prepends one. Tolerate both.
+    """
     from opentraces.cli import SENTINEL
     idx = output.rfind(SENTINEL)
-    assert idx >= 0, f"no sentinel in output: {output!r}"
-    blob = output[idx + len(SENTINEL):].strip()
+    blob = output[idx + len(SENTINEL):].strip() if idx >= 0 else output.strip()
     return json.loads(blob)

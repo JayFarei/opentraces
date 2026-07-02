@@ -29,6 +29,12 @@ def setup_watcher_group() -> None:
     activity appears. It powers ``opentraces trail blame`` and the lazy
     Trace Trails maturation pipeline.
 
+    OFF cost: the watcher is an always-on TRI-record engine (trace ingest +
+    trail maturation + ctx-to-bucket) and it also auto-reinstalls the git
+    post-commit hook every sweep. Stopping it means no maturation and no
+    backstop — captured data still lands via hooks, but nothing matures it
+    or catches what the live hooks missed.
+
     Subcommands:
 
     \b

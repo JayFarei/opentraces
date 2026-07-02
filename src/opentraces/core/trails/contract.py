@@ -28,6 +28,15 @@ SEARCH_SCHEMA_VERSION = "opentraces.trail.search.v1"
 # envelope). Bump only when the summary payload shape changes.
 ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v2"
 RESOLVE_SCHEMA_VERSION = "opentraces.trail.resolve.v1"
+# ``trail blame`` --json envelopes (ADR-0007 lint L5). Three distinct versions
+# because a schema_version identifies a SHAPE and the three blame forms share
+# no top-level structure: commit-mode ({commit, coverage, traces, files, ...}),
+# trace-mode t:<id> ({trace, commits, files}), and file:line
+# ({target, relation, trailEvidence, ...}). The header is ADDITIVE — every
+# pre-existing key is unchanged; bump on any shape change.
+BLAME_SCHEMA_VERSION = "opentraces.trail.blame.v1"
+BLAME_TRACE_SCHEMA_VERSION = "opentraces.trail.blame_trace.v1"
+BLAME_LINE_SCHEMA_VERSION = "opentraces.trail.blame_line.v1"
 TRACE_TRAILS_METADATA_SCHEMA_VERSION = "opentraces.trace_trails.v1"
 SNAPSHOT_RESUME_SCHEMA_VERSION = "opentraces.snapshot_resume.v1"
 SNAPSHOT_RESUME_METADATA_KEY = "trace_trails.snapshot_resume_contract"

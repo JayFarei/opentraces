@@ -44,7 +44,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **offboard-repo** | 1/1 | 1 | A developer unenrolls + wipes local state |
 | **verify-install** | 1/1 | 1 | `doctor` reports pipeline health after any setup step |
 | **connect-hf-identity** | 1 → 3 | 1 | `auth login` / `whoami` / `logout` lifecycle |
-| **configure-settings** | 1 → 2 | 1 | `config set` + `config show` |
+| **configure-settings** | 1 → 3 | 1 | `config set` + `config show` + `config get` |
 | **configure-tracking-mode** | 1/1 | 1 | `config tracking-mode` |
 | **enable-shell-completions** | 1 → 3 | 1 | Print → install → uninstall |
 | **connect-agent-runtime** | 1 → 2 | 1 | `setup claude-code` + `setup skill` + `setup entity-parser` |
@@ -73,7 +73,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **maintain-index** | 1 → 2 | 4 | `trace index rebuild` + `status` + `compact` |
 | **recreate-trace-environment** ★ | 1 → 2 | 3 + 6 | `trace teleport export` + `open` — reconstitutes the environment that produced a trace, for perturbation analysis, RL training, evaluation harnesses, or "rewind" features in OSS repos |
 | **commit-attribution-audit** | 1 → 3 | 4 (Trail) | `trail blame commit` + `trail graph` |
-| **pr-lineage-publish** | 1 → 3 | 4 | `trail blame pr render` → `create` → `update` |
+| **pr-lineage-publish** | 1 → 3 | 4 | `trail pr render` → `create` → `update` |
 | **survival-walk** | 2/3 | 4 | `trail track` |
 | **build-dataset-from-lineage** ★ | (utility) | 4 + 6 | Hidden `trail *` commands — load-bearing utilities for downstream dataset / consumer apps that need lineage primitives (`explain` for evidence chains, `resolve` for `ot://` URI deref, `sync` / `attach` / `mature` / `rebuild` for survival-state maintenance, `snapshots` / `snapshot checkout` for rewind, `timeline` / `search` / `diff` for structured lineage lookup). Hidden from end-user `--help` but **not power-user debugging only** — consumer apps depend on these. |
 | **inspect-private-storage** | 1 → 2 | 5 (Bucket) | `bucket status` + `manifest` |
@@ -123,18 +123,20 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `status` | Developer checks inbox counts + remote binding after init to confirm the project is live | onboard-repo (5/5) | `cli-lifecycle`, `cli-publish-happy-path` | human |
 | `remove` | Developer unenrolls a project + wipes local state after stopping capture | offboard-repo (1/1) | `cli-lifecycle` | human |
 | `doctor` | Developer or agent verifies pipeline health after setup to catch broken tools or missing hooks | verify-install (1/1) | `doctor-health`, `install-smoke-tier1` | both |
+| `setup doctor` | Same `doctor` command object mounted a second time under `setup`, so the install-health read-twin is discoverable right beside the verbs it reports on (issue #160) | verify-install (1/1) — alias | unowned | both |
 | `auth login` | Developer authenticates with HuggingFace via browser OAuth or token so dataset remotes + bucket sync are unblocked | connect-hf-identity (1/3) | unowned | both |
 | `auth whoami` | Agent or developer confirms which HF identity is active before running publish commands | connect-hf-identity (2/3) | unowned | both |
 | `auth logout` | Developer removes stored HF credentials to rotate or decommission an identity | connect-hf-identity (3/3) | unowned | human |
 | `config set` | Developer or agent writes a config key to global or project scope so behaviour changes take effect without editing JSON | configure-settings (1/2) | `capture-safety-excluded-marker` | both |
 | `config show` | Developer inspects current config with secrets masked to confirm active settings | configure-settings (2/2) | `cli-lifecycle` | human |
 | `config tracking-mode` | Developer switches between global and manual tracking behavior so auto-enrollment matches the repo's privacy posture | configure-tracking-mode (1/1) | `capture-safety-tracking-mode`, `capture-safety-excluded-marker` | human |
+| `config get` | Developer or agent reads one resolved config key without a whole-config dump (the `set [KEY] [VALUE]` shape implies a matching key-addressing getter, issue #160) | configure-settings (3/3 — new) | unowned | both |
 | `completions` | Developer prints a shell completion script to evaluate before installing | enable-shell-completions (1/3) | unowned | human |
 | `completions install` | Developer installs shell completions for bash/zsh/fish so `ot <TAB>` works | enable-shell-completions (2/3) | unowned | human |
 | `completions uninstall` | Developer removes installed completions after uninstalling or switching shells | enable-shell-completions (3/3) | unowned | human |
 | `setup` (bare) | Developer walks an interactive wizard that covers every integration after init | onboard-integrations (1/1) | unowned | human |
 | `setup auth` (hidden) | Backwards-compatible alias for the canonical `auth login` command | connect-hf-identity (1/3) — alias | unowned | human |
-| `setup bucket` | Developer configures whether captured traces sync to a private HF remote or stay local-only | configure-bucket (1/1) | unowned | both |
+| `setup bucket` (hidden) | Developer configures whether captured traces sync to a private HF remote or stay local-only — renamed to `bucket connect` (issue #162); stays callable hidden | configure-bucket (1/1) | unowned | both |
 | `setup claude-code` | Developer installs the four Claude Code hooks (PreToolUse / PostToolUse / Stop / PostCompact) so sessions are captured | connect-agent-runtime (1/2) | `capture-safety-tracking-mode` | both |
 | `setup codex-cli` | Developer installs Codex CLI capture hooks so Codex sessions enter the same trace/bucket substrates as Claude Code | configure-codex-runtime (1/1) | `codex-full-parity-latest` | both |
 | `setup pi` | Developer installs the Pi extension package entry so Pi sessions auto-enroll into capture | connect-agent-runtime (2/2) | `pi-setup-dry-run` | both |
@@ -144,9 +146,11 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `setup capture-otlp` | Developer patches Claude Code telemetry settings and installs the local OTLP receiver so Context Tree layers can be captured from wire events | configure-otel-capture (1/6) | unowned | human |
 | `setup trufflehog` | Developer configures the optional TruffleHog secret detector for redaction and publication safety checks | configure-security-detectors (1/2) | unowned | both |
 | `setup privacy-filter` | Developer configures the optional `openai/privacy-filter` PII detector for dataset-row scanning | configure-security-detectors (2/2) | unowned | both |
-| `setup llm-review` | Developer configures the optional LLM reviewer that gates dataset publication | configure-security-reviewer (1/1) | unowned | both |
-| `setup upgrade` | Developer upgrades the CLI + refreshes the project skill file after a new release | maintain-install (1/2) | unowned | both |
-| `setup uninstall` | Developer reverses the opentraces install — the symmetric inverse of `setup` — removing hooks/daemons/env while preserving captured traces, datasets, and buckets (`--purge` to also delete the corpus) | maintain-install (2/2) | `setup-uninstall-dry-run` | both |
+| `setup llm-review` (hidden) | Developer configures the optional LLM reviewer that gates dataset publication — a session-level publication gate, not a per-record sanitize/install step, so it's off `setup --help` (issue #160); still callable, unchanged internals | configure-security-reviewer (1/1) | unowned | both |
+| `setup upgrade` (hidden) | Backwards-compatible alias for the root `opentraces upgrade` peer verb (issue #160) | maintain-install (1/2) — alias | unowned | both |
+| `setup uninstall` (hidden) | Backwards-compatible alias for the root `opentraces uninstall` peer verb (issue #160) | maintain-install (2/2) — alias | unowned | both |
+| `upgrade` | Developer upgrades the CLI + refreshes the project skill file after a new release — a root peer verb beside `setup` (the in / update / out triad), not a subcommand of it (issue #160) | maintain-install (1/2) | unowned | both |
+| `uninstall` | Developer reverses the opentraces install — the symmetric inverse of `setup` — removing hooks/daemons/env while preserving captured traces, datasets, and buckets (`--purge` to also delete the corpus); a root peer verb beside `setup` (issue #160) | maintain-install (2/2) | `setup-uninstall-dry-run` | both |
 | `security sanitize` | Developer or workflow author pipes JSON through the security pipeline tool registry to sanitize a record in a language-agnostic way | inspect-security-pipeline (1/3) | unowned | both |
 | `security tools list` | Developer or agent inspects the registered security tools + their enable state before deciding which to opt into | inspect-security-pipeline (2/3) | unowned | both |
 | `security tools info` | Developer inspects one tool's descriptor (config keys, runtime requirements) before opt-in | inspect-security-pipeline (3/3) | unowned | both |
@@ -207,8 +211,8 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `ctx writes` | Agent lists context writes for a trace so downstream consumers can identify what changed in the model-visible state | inspect-context-tree (5/9) | `context-tree-ctx-writes` | agent |
 | `ctx diff` | Agent compares two ContextNodes to see what layers changed between model steps | inspect-context-tree (6/9) | `context-tree-ctx-diff` | agent |
 | `ctx compactions` | Developer inspects compaction boundaries and loss summaries in a captured session | inspect-context-tree (7/9) | `context-tree-compaction` | both |
-| `ctx list` | Agent lists bucket-manifest Context Tree heads without loading every blob | inspect-context-tree (8/9) | unowned | agent |
-| `ctx info` | Agent inspects a single trace's Context Tree head and blob availability from the bucket manifest | inspect-context-tree (9/9) | unowned | agent |
+| `ctx list` (hidden) | Agent lists bucket-manifest Context Tree heads without loading every blob — cut from `ctx --help` per #164 (discovery is the trace spine; `bucket list` is the row surface); still callable | inspect-context-tree (8/9) | unowned | agent |
+| `ctx info` (hidden) | Agent inspects a single trace's Context Tree head and blob availability from the bucket manifest — cut from `ctx --help` per #164 (folds into the bare `ctx <trace>` overview); still callable | inspect-context-tree (9/9) | unowned | agent |
 | `ctx prune` | Agent materializes a pruned session up to a ContextNode for replay or resume-from-step workflows | resume-from-context (1/4) | `context-tree-ctx-prune` | agent |
 | `ctx resume` | Agent emits a compact resume packet for one ContextNode so another agent can continue with bounded context | resume-from-context (2/4) | `context-tree-ctx-resume` | agent |
 | `ctx resolve` | Agent resolves Context Tree resource identifiers to canonical payloads for replay, dashboards, or audits | resume-from-context (3/4) | `context-tree-ctx-resolve` | agent |
@@ -220,9 +224,9 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 |---|---|---|---|---|
 | `trail blame commit` | Reviewer asks which traces contributed to a given commit so they can audit attribution | commit-attribution-audit (2/3) | `trail-blame-and-graph` | both |
 | `trail graph` | Developer scans commit + trace history as a GitButler-style ASCII graph to navigate which sessions touched which commits | commit-attribution-audit (1/3) | `trail-blame-and-graph` | both |
-| `trail blame pr render` | Developer previews the trace-lineage PR body for the current branch before pushing | pr-lineage-publish (1/3) | unowned | human |
-| `trail blame pr create` | Developer opens a GitHub PR whose body is sourced from trace lineage, so reviewers see what agent sessions produced each commit | pr-lineage-publish (2/3) | unowned | human |
-| `trail blame pr update` | Developer refreshes an existing PR body after new commits land so the lineage stays current | pr-lineage-publish (3/3) | unowned | human |
+| `trail pr render` | Developer previews the trace-lineage PR body for the current branch before pushing | pr-lineage-publish (1/3) | unowned | human |
+| `trail pr create` | Developer opens a GitHub PR whose body is sourced from trace lineage, so reviewers see what agent sessions produced each commit | pr-lineage-publish (2/3) | unowned | human |
+| `trail pr update` | Developer refreshes an existing PR body after new commits land so the lineage stays current | pr-lineage-publish (3/3) | unowned | human |
 | `trail track` | Agent or developer walks survival state for one trace or a batch of patches to confirm which edits survived into git | survival-walk (2/3) | unowned | both |
 | `trail snapshot checkout` (hidden) | Developer materializes a snapshot rewind point to replay or inspect a prior workspace state | build-dataset-from-lineage | unowned | human |
 | `trail snapshots` (hidden) | Developer lists rewind candidates for a trace before picking one to check out | build-dataset-from-lineage | unowned | human |
@@ -243,17 +247,24 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 
 | Command | JTBD one-liner | Action trajectory (n/N) | Owning journey | Persona |
 |---|---|---|---|---|
-| `bucket status` | Developer or agent checks bucket health + sync eligibility + trail freshness before deciding whether to push to the remote | inspect-private-storage (1/2) | `bucket-inspect` | both |
-| `bucket manifest` | Developer materializes + prints the bucket manifest to confirm every trace was written + get the current digest | inspect-private-storage (2/2) | `bucket-inspect` | both |
+| `bucket status` (hidden) | Lower-level bucket-health readout — the fleet dashboard moved to the top-level `status` (issue #162); stays callable hidden | inspect-private-storage (1/2) | `bucket-inspect` | both |
+| `bucket manifest` (hidden) | Prints the bucket manifest — read side moved to `bucket list`, `--heal` folded into `bucket repair` (issue #162); stays callable hidden | inspect-private-storage (2/2) | `bucket-inspect` | both |
+| `bucket list` | Agent or developer enumerates the per-trace bucket inventory — bounded, paginated, filterable (`--unsynced` / `--unscanned` / `--security-stale` / `--project` / `--since`), the hang-proof read the old `manifest` never was | inspect-private-storage (1/2) | `bucket-list-and-sync-withhold` | both |
+| `bucket connect` | Developer configures the private bucket remote target (the rename of `setup bucket`) — binds the HF remote before syncing | configure-bucket (1/1) | `bucket-list-and-sync-withhold` | both |
 | `bucket security policy` | Developer inspects or sets which security tools the bucket egress filter runs (off/basic/recommended/strict or a custom per-tool set) before private sync | configure-bucket (1/3) | `bucket-security-policy-basic` | both |
 | `bucket security run` | Developer applies the configured security filter over already-captured records so they become remote-sync eligible | configure-bucket (2/3) | `bucket-security-policy-basic` | both |
 | `bucket security status` | Developer or agent checks the bucket security posture + the exact remediation before a remote sync | configure-bucket (3/3) | `bucket-remote-status-filtered-eligible` | both |
-| `bucket remote status` | Developer compares the local bucket digest with the remote before deciding whether a push or pull is safe | compare-bucket-digests (1/1) | unowned | both |
-| `bucket remote diff` | Developer sees which objects diverge between local and remote manifests before committing to a push or pull | compare-bucket-digests (1/1) | unowned | both |
-| `bucket remote push` | Developer mirrors the local bucket to the configured HF remote so traces are backed up off-machine | backup-bucket-to-remote (1/1) | unowned | both |
-| `bucket remote pull` | Developer restores the local bucket from the configured HF remote on a new or wiped machine so the full trace corpus is available | restore-bucket-on-new-machine (1/1) | unowned | human |
+| `bucket sync status` | Developer compares the local bucket digest with the configured remote before deciding whether a push or pull is safe (was `bucket remote status`) | compare-bucket-digests (1/1) | `bucket-list-and-sync-withhold` | both |
+| `bucket sync diff` | Developer sees which objects diverge between the local and remote manifests before committing to a push or pull (was `bucket remote diff`) | compare-bucket-digests (1/1) | `bucket-list-and-sync-withhold` | both |
+| `bucket sync push` | Developer mirrors the local bucket to the configured remote — withholds every trace not yet cleared for sync; `--dry-run` computes the pushed/withheld partition without egressing (was `bucket remote push`) | backup-bucket-to-remote (1/1) | `bucket-list-and-sync-withhold` | both |
+| `bucket sync pull` | Developer restores the local bucket from the configured remote on a new or wiped machine (was `bucket remote pull`) | restore-bucket-on-new-machine (1/1) | `bucket-list-and-sync-withhold` | human |
+| `bucket remote status` (hidden) | Pre-#162 alias of `bucket sync status`; stays callable hidden | compare-bucket-digests (1/1) | unowned | both |
+| `bucket remote diff` (hidden) | Pre-#162 alias of `bucket sync diff`; stays callable hidden | compare-bucket-digests (1/1) | unowned | both |
+| `bucket remote push` (hidden) | Pre-#162 alias of `bucket sync push`; stays callable hidden | backup-bucket-to-remote (1/1) | unowned | both |
+| `bucket remote pull` (hidden) | Pre-#162 alias of `bucket sync pull`; stays callable hidden | restore-bucket-on-new-machine (1/1) | unowned | human |
 | `bucket replay` | Developer replays bucket-exported Trace Trails into a target Git repository after pulling to a new machine so trail lineage is reconstructed | restore-trail-lineage-to-repo (1/1) | unowned | both |
 | `bucket verify` | Developer checks bucket manifest, blob integrity, and dangling references before trusting or syncing the bucket | inspect-private-storage (2/2) | unowned | both |
+| `bucket reclaim` | Developer reclaims leaked Trace Trails cruft under `.git/**/opentraces/` (leaked tmp files + orphan accelerator pickles) — dry-run by default, `--apply` to remove | inspect-private-storage (maintenance) | `bucket-list-and-sync-withhold` | both |
 | `bucket repair` | Developer rebuilds the bucket from canonical event logs and blobs after detecting manifest drift | inspect-private-storage (maintenance) | unowned | human |
 | `bucket rebuild` | Developer rebuilds bucket projections after substrate changes or fixture refreshes | inspect-private-storage (maintenance) | unowned | human |
 | `bucket prune` | Developer removes unreachable bucket blobs in dry-run or confirmed mode without deleting trace/event history | inspect-private-storage (maintenance) | unowned | human |

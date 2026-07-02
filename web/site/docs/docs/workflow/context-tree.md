@@ -18,53 +18,60 @@ Schema joins:
   model-visible context nodes across turns, compactions, forks, and resumes.
 - **Layers are content-addressed.** Context nodes point to layer blobs, so the
   bucket can move the environment without embedding every byte into each row.
-- **Reads and writes are queryable.** `ctx reads` and `ctx writes` expose what
-  the agent observed and changed from the context substrate.
+- **The bare noun is the read.** `ctx <trace>` renders the overview; there is
+  no separate lookup step for "what did the model see" — reads and writes are
+  a `--json | jq` decomposition of that same view, not their own subcommands.
 - **Resume is a first-class output.** `ctx resume` creates a structured packet
   for an agent to restart from a context node.
 
 ## Commands
 
 ```bash
-opentraces ctx list --json
-opentraces ctx info <trace-id> --json
-opentraces ctx tree <trace-id> --json
-opentraces ctx show <context-node-id> --json
-opentraces ctx step <trace-id> <step-index> --json
-opentraces ctx reads <trace-id> --json
-opentraces ctx writes <trace-id> --json
-opentraces ctx diff <node-a> <node-b> --json
-opentraces ctx compactions <trace-id> --json
-opentraces ctx resume <context-node-id> --json
-opentraces ctx prune <context-node-id> --source-jsonl <session.jsonl>
-opentraces ctx resolve ot://context-node/<id> --json
-opentraces ctx anchor-for-step <trace-id> <step-index>
+opentraces ctx <trace-id>                        # overview: shape + capture method
+opentraces ctx <trace-id>:<step-index>            # model input at that step
+opentraces ctx <trace-id>:last                    # the final / active step
+opentraces ctx <trace-id>:<step-index> --layer system|messages|tools|runtime
+opentraces ctx <trace-id>:<step-index> --full     # inline the full hydrated model input
+opentraces ctx <trace-id> --json
 ```
 
-`ctx list` and `ctx info` are manifest-only reads for fast inventory. The
-other commands load Context Tree events and layer blobs as needed.
+`ctx <trace>[:<step>|:last]` is the bare-noun context read (`opentraces.ctx.view.v1`):
+no subcommand needed, the ref IS the command. `<trace>:<step>` is the same
+universal address that `trace get` and `trail` resolve, so the identical ref
+can be piped between them (`opentraces trace query --json | opentraces ctx --json`).
+`--layer` renders one layer readably instead of the bounded four-layer card;
+`--full` inlines the complete hydrated model input (the fork/eval-row packet).
+
+`ctx list` and `ctx info <trace-id>` (manifest-only inventory reads, no blob
+loads) and the old subcommand forms (`ctx tree`, `ctx show`, `ctx step`,
+`ctx reads`, `ctx writes`, `ctx diff`, `ctx compactions`, `ctx resume`,
+`ctx prune`, `ctx resolve`, `ctx anchor-for-step`) remain callable and
+`--json`-scriptable; the bare-noun ref is the documented entry point going
+forward.
 
 ## Layers
 
-Context nodes reference content-addressed layers:
+Context nodes reference content-addressed layers. `ctx <trace>:<step> --layer <name>` takes the
+human-facing alias on the left; it maps to the substrate's layer type on the right:
 
-| Layer | Meaning |
-|-------|---------|
-| `system` | System prompt and instruction context |
-| `messages` | Conversation messages in scope |
-| `tool_registry` | Tools and schemas visible to the model |
-| `runtime_state` | Captured runtime settings and state hints |
+| `--layer` alias | Layer type | Meaning |
+|-----------------|------------|---------|
+| `system` | `system` | System prompt and instruction context |
+| `messages` | `messages` | Conversation messages in scope |
+| `tools` | `tool_registry` | Tools and schemas visible to the model |
+| `runtime` | `runtime_state` | Captured runtime settings and state hints |
 
 ## Capture Sources
 
-The substrate accepts additive capture sources:
+The substrate accepts additive capture sources, and `ctx <trace>` is honest about which one
+produced a given node — a two-rung fidelity ladder, `jsonl` (structure-only) or `otel` (full wire):
 
-| Source | Status | Notes |
-|--------|--------|-------|
-| JSONL reconstruction | available | Works from agent session logs; some views are session-level approximations |
-| Pi extension sidecars | available for Pi | Provider/context sidecars use `capture_method=live_capture` with fuller messages/tool registry/runtime state when available; transcript fallback records limitations |
-| OTLP receiver | available for Claude Code | Captures fuller API body, tool schema, and sampling parameter evidence |
-| HTTP proxy | reserved/deferred | Historical prototype, not the current path |
+| Source | `capture_method` | Fidelity | Notes |
+|--------|-------------------|----------|-------|
+| JSONL reconstruction | `transcript_reconstruction` | `jsonl` | Works from agent session logs; structure-only — message content sizes are not stored, so `ctx <trace>` draws no size chart, and some views are session-level approximations |
+| Pi extension sidecars | `live_capture` | `jsonl` | Provider/context sidecars use fuller messages/tool registry/runtime state when available; transcript fallback records limitations |
+| OTLP receiver | `otel` | `otel` | Byte-perfect wire capture for Claude Code — full API body, tool schema, and sampling parameter evidence; `ctx <trace>` reports `fidelity: otel` and draws a token-size sparkline from it |
+| HTTP proxy | `proxy` | — | Reserved/deferred; historical prototype, not the current path |
 
 ## OTLP Operations
 

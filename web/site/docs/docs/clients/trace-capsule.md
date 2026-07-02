@@ -73,8 +73,9 @@ The `<trace-id>` is optional when `--from-session` is given (the two are mutuall
   only when you need the full matched span.
 - `--progress auto|plain|json|never` reports stage/heartbeat to **stderr** during the
   slow export phases (slice / context / trail-anchor projection); the `--json` envelope
-  on stdout stays clean. `auto` is quiet on a non-TTY. (Shared with the `trace index
-  rebuild` progress contract.)
+  on stdout stays clean. `auto` is quiet on a non-TTY. (Shared with the hidden-but-callable
+  `trace index rebuild` progress contract — the Trace Index self-maintains behind `trace query`
+  now, so this command no longer appears in `--help`.)
 
 ### `capsule preview` — inspect egress before anything leaves
 

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from .state import TraceStatus
 
 DEFAULT_REVIEW_POLICY = "review"
-DEFAULT_PUSH_POLICY = "manual"
 DEFAULT_REMOTE_NAME = "opentraces"
 DEFAULT_AGENT = "claude-code"
 
@@ -74,12 +73,6 @@ def normalize_review_policy(value: str | None) -> str:
     if value in {"auto", "auto-ready", "auto_ready"}:
         return "auto"
     return DEFAULT_REVIEW_POLICY
-
-
-def normalize_push_policy(value: str | None) -> str:
-    if value in {"auto", "auto-push", "auto_push"}:
-        return "auto-push"
-    return DEFAULT_PUSH_POLICY
 
 
 def normalize_agents(agents: list[str] | None) -> list[str]:

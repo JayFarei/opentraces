@@ -10,7 +10,7 @@ opentraces doctor
 opentraces doctor --security
 ```
 
-`status` tells you what the current repo thinks is captured or pending. `doctor` tells you whether required integrations are misconfigured.
+`status` is the fleet bucket safety dashboard: scanned/unscanned trace counts and a "safe to sync" verdict that is structurally impossible while any trace is unscanned (`--short` / `--full` / `--project SLUG`). `doctor` tells you whether required integrations are misconfigured. The old per-project capture inbox view is now the hidden `opentraces status-inbox`.
 
 ## Common Problems
 
@@ -115,14 +115,16 @@ opentraces doctor
 
 ### Bucket Sync Diverged
 
-If `bucket remote status` reports a diverged or remote-ahead bucket:
+If `bucket sync status` reports a diverged or remote-ahead bucket:
 
 ```bash
-opentraces bucket remote status
-opentraces bucket remote diff
-opentraces bucket remote pull --force   # remote wins
-opentraces bucket remote push --force   # local wins
+opentraces bucket sync status
+opentraces bucket sync diff
+opentraces bucket sync pull --force   # remote wins
+opentraces bucket sync push --force   # local wins
 ```
+
+`bucket sync` mirrors the whole raw bucket substrate (traces, blobs, events, manifest) against the configured remote; `bucket sync push` additionally refuses (zero bytes, non-zero exit) if any trace is not yet cleared for sync, so a diverged push may mean traces are still unscanned rather than a real conflict — check `opentraces status` first. The old `bucket remote push|pull|diff|status` spellings still work but are hidden from `--help`.
 
 Use `--force` carefully: it overwrites the slower side.
 
@@ -157,6 +159,12 @@ opentraces setup llm-review --test
 opentraces setup llm-review
 opentraces setup llm-review --disable
 ```
+
+`setup llm-review` is now hidden from `--help` (it configures a publication gate, not a per-record sanitize step) but is still callable exactly as above. The row-level surface that consumes it day to day is `opentraces dataset review` / `opentraces dataset publish`.
+
+### Command Hangs Or Exits 2 Under `--json`
+
+If a command that normally prompts interactively (for example an unconfirmed `setup` step or a review action) instead exits immediately with a structured error and code `2` when run with `--json` or from a non-TTY agent shell, that is expected: interactive commands refuse to prompt under `--json`/non-TTY and emit an `INTERACTIVE_REQUIRED` error with zero prompt bytes rather than hanging on stdin. Re-run interactively, or pass the flags needed to answer the prompt non-interactively (check `--help` for the command's non-interactive form).
 
 ### Resetting A Repo
 

@@ -1,7 +1,10 @@
-"""Step 12: ot setup upgrade absorbs the flat ot upgrade.
+"""Step 12 (superseded by issue #160): `upgrade` is now a root PEER verb.
 
-Both surfaces survive during the transition (Step 15 removes the flat one).
-The grouped form delegates to the same impl, so behavior matches.
+Step 12 originally absorbed the flat `ot upgrade` under `setup upgrade`.
+Issue #160 (the CLI v7 setup redesign) reverses that: `upgrade`/`uninstall`
+are the update/out legs of the in / update / out triad beside `setup`, not
+subcommands of it — the same command objects, mounted at root (visible) and
+demoted to a hidden-but-callable copy under `setup` (hidden != removed).
 """
 
 from __future__ import annotations
@@ -19,14 +22,32 @@ def runner():
 
 class TestSetupUpgradeRegistered:
     def test_setup_upgrade_help_works(self, runner) -> None:
+        """`setup upgrade` is hidden (off `setup --help`) but stays callable."""
         result = runner.invoke(main, ["setup", "upgrade", "--help"])
         assert result.exit_code == 0, result.output
         assert "skill-only" in result.output or "Only update" in result.output
 
-    def test_setup_help_lists_upgrade(self, runner) -> None:
+    def test_setup_upgrade_is_hidden(self, runner) -> None:
         result = runner.invoke(main, ["setup", "--help"])
         assert result.exit_code == 0
-        assert "upgrade" in result.output
+        assert main.commands["setup"].commands["upgrade"].hidden is True
+        # Not in the auto-generated Commands: listing (still may appear in
+        # the group's own descriptive prose, which mentions the peer verb).
+        commands_block = result.output.split("Commands:", 1)[-1]
+        assert "upgrade" not in commands_block
+
+    def test_root_upgrade_is_the_advertised_peer_verb(self, runner) -> None:
+        """`opentraces upgrade` is the canonical, visible, root peer verb."""
+        assert main.commands["upgrade"].hidden is False
+        result = runner.invoke(main, ["upgrade", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "skill-only" in result.output or "Only update" in result.output
+
+    def test_root_and_setup_upgrade_share_the_same_implementation(self, runner) -> None:
+        """Same object, two mount points (define-once, mount-twice)."""
+        assert main.commands["upgrade"].callback is (
+            main.commands["setup"].commands["upgrade"].callback
+        )
 
     def test_setup_upgrade_skill_only_runs(self, runner, tmp_path, monkeypatch) -> None:
         """Smoke test — --skill-only path doesn't shell out to brew/pip,

@@ -515,7 +515,7 @@ class TestLivePushIntegration:
         monkeypatch.setenv("HF_TOKEN", token)
         monkeypatch.setattr(
             "opentraces.cli.load_config",
-            lambda: Config(hf_token=token, dataset_visibility="private"),
+            lambda: Config(hf_token=token),
         )
         runner = CliRunner()
         result = runner.invoke(main, ["push", "--private", "--repo", repo_id])

@@ -1,0 +1,144 @@
+name = "trace-get-step-address"
+description = """
+F1 (CLI v7): the universal trace:step address resolves on `trace get`.
+
+ctx and trail journeys already exercise the `<trace>:<step>` token on a
+real captured session; before F1 the SAME token raw-tracebacked on
+`trace get` (rc=1, sqlite legacy-index fallback) even though trail's
+world payload next_steps advertises `trace get <T>:<N>`. This journey
+proves the CLI now honors its own advertised contract on a real
+captured trace:
+
+* `trace get {trace_id}:{step_index} --json` -> rc=0 bounded STEP CARD
+  (the action lens) inside the existing opentraces.trace.get.v1
+  envelope, with the step key present.
+* `trace get {trace_id}:last --json` -> rc=0 (the final action).
+* `trace get {trace_id}:0-{step_index} --json` -> rc=0 with the slice
+  key (SPAN lens, delegated to the trace-slice engine).
+* `trace get {trace_id}:999999 --json` -> rc=6 honest lookup miss
+  (never a traceback).
+
+The trace_id + step_index come from the checkpoint's audit notes
+(`c_captured_session_audit`) via the journey templating engine — the
+same variables the ctx/trail happy-path journeys use.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["trace-spine"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# STEP form — the bounded action card at the captured Edit step.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "step-card"
+argv = ["trace", "get", "{trace_id}:{step_index}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-card"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-card"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-card"
+path = "schema_version"
+equals = "opentraces.trace.get.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-card"
+path = "trace_id"
+equals = "{trace_id}"
+
+# The step variant key is present with a real step payload (0 is a valid
+# step_index, so assert on the role which is always non-null).
+[[assertions]]
+kind = "stdout_json"
+step = "step-card"
+path = "step.role"
+
+# The card advertises the closed cross-substrate triple.
+[[assertions]]
+kind = "stdout_json"
+step = "step-card"
+path = "next_steps.0"
+
+# ---------------------------------------------------------------------
+# :last — the final action of the captured session.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "last-card"
+argv = ["trace", "get", "{trace_id}:last", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "last-card"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "last-card"
+path = "step.role"
+
+# ---------------------------------------------------------------------
+# SPAN form — delegated to the slice engine, slice key present.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "span-slice"
+argv = ["trace", "get", "{trace_id}:0-{step_index}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "span-slice"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "span-slice"
+path = "slice.slice_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "span-slice"
+path = "span.from_step"
+equals = 0
+
+# ---------------------------------------------------------------------
+# A missing step is an honest rc=6 lookup miss, never a traceback.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bad-step"
+argv = ["trace", "get", "{trace_id}:999999", "--json"]
+expect_returncode = 6
+
+[[assertions]]
+kind = "returncode"
+step = "bad-step"
+equals = 6
+
+[[assertions]]
+kind = "stderr_contains"
+step = "bad-step"
+value = "Step not found"
+
+[[assertions]]
+kind = "stderr_not_contains"
+step = "bad-step"
+value = "Traceback"

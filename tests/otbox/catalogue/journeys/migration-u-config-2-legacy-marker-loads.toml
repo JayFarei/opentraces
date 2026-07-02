@@ -26,10 +26,14 @@ type = "cli"
 id = "config-show"
 argv = ["--json", "config", "show"]
 
+# The per-project inbox readout (review_policy, stage counts) is the transitional
+# `status-inbox` verb since #161 repurposed top-level `status` into the fleet
+# bucket dashboard. This journey asserts the legacy per-project review policy, so
+# it targets the inbox verb that still surfaces it.
 [[steps]]
 type = "cli"
 id = "status"
-argv = ["--json", "status"]
+argv = ["--json", "status-inbox"]
 
 [[assertions]]
 kind = "returncode"

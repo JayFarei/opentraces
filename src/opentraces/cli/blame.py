@@ -33,6 +33,7 @@ from typing import Any
 
 import click
 
+from ._envelope import envelope
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import project_dir_option
 from ..clients.text.colors import (
@@ -568,9 +569,53 @@ def _trail_projection_for_commits(project_cwd: Path, commit_shas: set[str]):
         return _trail_projection_for(project_cwd)
 
 
+def _trail_projection_for_file_line(project_cwd: Path):
+    """Trail projection bounded to the patch/anchor slice (scoped_reads contract).
+
+    The file:line blame target only ever reads ``patches_touching_file`` +
+    ``with_current_survival`` — rows built solely from ``trace_patch_created``
+    and ``git_anchor_created`` events (the same slice ``trail resolve
+    ot://file/...`` reads via ``resources._RESOLVE_EVENT_TYPES``). Building the
+    projection from that scoped read instead of the whole-log walk cures the
+    ``trail blame <path>:<line>`` hang (which the malformed group form
+    ``trail blame <trace>:<N>`` also hit) on a mature canonical log; the rows
+    are byte-identical because no other event type feeds them.
+    """
+    try:
+        from ..core.trails import build_trail_query_projection_from_events
+        from ..core.trails.scoped_reads import read_events_scoped
+
+        events = read_events_scoped(
+            project_cwd,
+            event_types={"trace_patch_created", "git_anchor_created"},
+        )
+        return build_trail_query_projection_from_events(project_cwd, events)
+    except Exception:
+        return None
+
+
 def _trail_trace_id_for_prefix(project_cwd: Path, prefix: str) -> str | None:
-    projection = _trail_projection_for(project_cwd)
-    if projection is None:
+    """Resolve a trail-only trace identifier via its OWN scoped footprint.
+
+    Bounded route (scoped_reads contract): reads only the candidate's events
+    through the trace-scoped projection twin — never the whole-log
+    ``build_trail_query_projection`` walk that made ``trail blame commit
+    t:<trace>`` hang on a mature canonical log. A FULL trail-only id still
+    resolves (exact OID-index hit); a short prefix of an UNSTAGED trail-only
+    trace no longer does — staging-backed prefixes were already resolved
+    upstream via ``resolve_trace_id_prefix``, and the old whole-log prefix
+    scan never completed on a mature log anyway (rc=124).
+    """
+    try:
+        from ..core.trails.scoped_reads import (
+            build_trail_query_projection_for_trace,
+        )
+
+        probe = prefix[2:] if prefix.lower().startswith("t:") else prefix
+        projection = build_trail_query_projection_for_trace(
+            project_cwd, probe.strip()
+        )
+    except Exception:
         return None
     return projection.resolve_trace_prefix(prefix)
 
@@ -870,12 +915,15 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
                         include_entities: bool,
                         project_cwd: Path,
                         trail_rows: list[dict] | None = None) -> dict:
-    """Build JSON payload. Backward-compatible: keys ``commit``, ``coverage``,
-    ``traces``, ``files`` stay stable. Add ``entity_contributions`` when
-    entity data is present (never drops existing keys).
+    """Build JSON payload. Backward-compatible: the uniform L5 header
+    (``status``, ``schema_version`` = ``opentraces.trail.blame.v1``) leads, and
+    keys ``commit``, ``coverage``, ``traces``, ``files`` stay stable. Add
+    ``entity_contributions`` when entity data is present (never drops existing
+    keys).
 
     ``trail_rows`` lets the caller pass the already-resolved attribution rows so
     the commit-scoped Trail projection is not rebuilt a second time per blame."""
+    from ..core.trails.contract import BLAME_SCHEMA_VERSION
     full_sha, subject, ts = meta
     attributed, total, ratio = _coverage_pct(data)
     files_out: dict = {}
@@ -893,7 +941,7 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
         {t.get("trace_id") for t in (data.get("traces") or [])
          if t.get("trace_id")},
     )
-    payload: dict = {
+    payload: dict = envelope(BLAME_SCHEMA_VERSION, **{
         "commit": {"sha": full_sha, "subject": subject, "timestamp": ts},
         "coverage": {"attributed": attributed, "total": total, "ratio": ratio},
         "traces": data.get("traces") or [],
@@ -901,7 +949,7 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
         "hookLinked": [
             {"trace_id": tid, "id": tid[:8]} for tid in hook_linked_ids
         ],
-    }
+    })
     if trail_rows is None:
         trail_rows = _trail_evidence_for_commit(project_cwd, full_sha, scope_file)
     disagreements, projection_limitations = _projection_disagreements(
@@ -1160,12 +1208,14 @@ def _build_trace_json_payload(
     project_cwd: Path, trace_id: str, *, include_overlapping: bool,
 ) -> dict:
     """JSON shape for ``ot blame t:<id> --json``. Matches the web payload
-    keys to keep one contract across surfaces."""
+    keys to keep one contract across surfaces, plus the uniform L5 header
+    (``status``, ``schema_version`` = ``opentraces.trail.blame_trace.v1``)."""
     from ..core import inverse_blame as _ib
+    from ..core.trails.contract import BLAME_TRACE_SCHEMA_VERSION
 
     result = _ib.compute(project_cwd, trace_id,
                          include_overlapping=include_overlapping)
-    return {
+    return envelope(BLAME_TRACE_SCHEMA_VERSION, **{
         "trace": {
             "id": result.short_id,
             "trace_id": result.trace_id,
@@ -1187,13 +1237,15 @@ def _build_trace_json_payload(
             for c in result.commits
         ],
         "files": [{"path": p, "lines": n} for p, n in result.files],
-    }
+    })
 
 
 def _build_file_line_json_payload(project_cwd: Path, target: str) -> dict:
+    from ..core.trails.contract import BLAME_LINE_SCHEMA_VERSION
+
     path, raw_line = target.rsplit(":", 1)
     line_no = int(raw_line)
-    projection = _trail_projection_for(project_cwd)
+    projection = _trail_projection_for_file_line(project_cwd)
     limitations: list[str] = []
     rows: list[dict] = []
     if projection is None:
@@ -1215,14 +1267,14 @@ def _build_file_line_json_payload(project_cwd: Path, target: str) -> dict:
     relation = "anchored_in_git" if rows else "unknown"
     if not rows and "no_git_anchor_for_line" not in limitations:
         limitations.append("no_git_anchor_for_line")
-    return {
+    return envelope(BLAME_LINE_SCHEMA_VERSION, **{
         "target": target,
         "relation": relation,
         "trailEvidence": rows,
         "trace_patch": rows[0] if rows else None,
         "git_anchor": rows[0] if rows else None,
         "limitations": limitations,
-    }
+    })
 
 
 # --------------------------------------------------------------------------- #
@@ -1602,7 +1654,25 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
 # from the workflow runtime, just rendered for a different place and time.
 
 
-@click.group("blame", cls=OpentracesGroup)
+class _BlameGroup(OpentracesGroup):
+    """Blame group that resolves a bare ``trail blame <sha>`` directly.
+
+    ``trail blame <sha | trace:step | file:line>`` dispatches to the ``commit``
+    subcommand (the bidirectional attribution reader); ``trail blame commit
+    <sha>`` stays callable unchanged, and the ``pr`` subgroup resolves normally.
+    """
+
+    def resolve_command(self, ctx, args):  # type: ignore[override]
+        if (
+            args
+            and not args[0].startswith("-")
+            and args[0] not in self.commands
+        ):
+            args = ["commit", *args]
+        return super().resolve_command(ctx, args)
+
+
+@click.group("blame", cls=_BlameGroup)
 def blame_group() -> None:
     """Per-commit attribution and PR-shaped projections of trace lineage."""
 

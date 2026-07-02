@@ -134,18 +134,19 @@ class TestStatus:
     """Test the status command."""
 
     def test_status_shows_project_info(self, runner, initialized_project):
-        """status shows mode info and session count."""
+        """status-inbox shows mode info and session count (the transitional
+        per-project inbox verb; top-level `status` is now the fleet dashboard)."""
         os.chdir(str(initialized_project))
-        result = runner.invoke(main, ["status"])
+        result = runner.invoke(main, ["status-inbox"])
 
         assert result.exit_code == 0
         assert "review" in result.output  # review_policy visible in the header banner
         assert "sessions in inbox" in result.output or "session" in result.output
 
     def test_status_shows_remote(self, runner, initialized_project):
-        """status shows that no dataset remote has been configured yet."""
+        """status-inbox shows that no dataset remote has been configured yet."""
         os.chdir(str(initialized_project))
-        result = runner.invoke(main, ["status"])
+        result = runner.invoke(main, ["status-inbox"])
 
         assert result.exit_code == 0
         assert "remote: not set" in result.output

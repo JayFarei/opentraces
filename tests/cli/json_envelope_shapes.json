@@ -7,11 +7,15 @@
    "status"
   ]
  },
- "bucket manifest": {
-  "schema_version": null,
+ "bucket list": {
+  "schema_version": "opentraces.bucket.list.v1",
   "top_level_keys": [
-   "manifest",
-   "status"
+   "cursor",
+   "rows",
+   "schema_version",
+   "status",
+   "total",
+   "unknown_status_count"
   ]
  },
  "bucket prune": {
@@ -30,24 +34,19 @@
    "status"
   ]
  },
- "bucket remote diff": {
-  "schema_version": null,
+ "bucket reclaim": {
+  "schema_version": "opentraces.bucket.reclaim.v1",
   "top_level_keys": [
-   "remote",
-   "status"
-  ]
- },
- "bucket remote status": {
-  "schema_version": null,
-  "top_level_keys": [
-   "remote",
+   "reclaim",
+   "schema_version",
    "status"
   ]
  },
  "bucket repair": {
-  "schema_version": null,
+  "schema_version": "opentraces.bucket.repair.v1",
   "top_level_keys": [
    "repair",
+   "schema_version",
    "status"
   ]
  },
@@ -66,21 +65,29 @@
    "status"
   ]
  },
- "bucket status": {
-  "schema_version": null,
+ "bucket sync diff": {
+  "schema_version": "opentraces.bucket.sync_diff.v1",
   "top_level_keys": [
-   "bucket",
-   "config",
-   "freshness",
+   "remote",
+   "schema_version",
+   "status"
+  ]
+ },
+ "bucket sync status": {
+  "schema_version": "opentraces.bucket.sync_status.v1",
+  "top_level_keys": [
+   "remote",
+   "schema_version",
    "status"
   ]
  },
  "bucket verify": {
-  "schema_version": null,
+  "schema_version": "opentraces.bucket.verify.v1",
   "top_level_keys": [
    "errors",
    "ok",
    "sampled",
+   "schema_version",
    "status",
    "verify"
   ]
@@ -123,10 +130,8 @@
   "top_level_keys": [
    "bucket",
    "capture",
-   "classifier_sensitivity",
    "config_version",
    "custom_redact_strings",
-   "dataset_visibility",
    "excluded_projects",
    "hf_token",
    "projects",
@@ -139,13 +144,6 @@
   "top_level_keys": [
    "status",
    "tracking_mode"
-  ]
- },
- "ctx list": {
-  "schema_version": "opentraces.ctx.list.v2",
-  "top_level_keys": [
-   "schema_version",
-   "traces"
   ]
  },
  "dataset list": {
@@ -163,9 +161,10 @@
   ]
  },
  "doctor": {
-  "schema_version": null,
+  "schema_version": "0.7.0",
   "top_level_keys": [
    "doctor",
+   "schema_version",
    "status"
   ]
  },
@@ -217,6 +216,14 @@
    "hooks_file",
    "installed",
    "next_steps",
+   "status"
+  ]
+ },
+ "setup doctor": {
+  "schema_version": "0.7.0",
+  "top_level_keys": [
+   "doctor",
+   "schema_version",
    "status"
   ]
  },
@@ -313,29 +320,6 @@
    "trufflehog_version"
   ]
  },
- "setup uninstall": {
-  "schema_version": "opentraces.setup_uninstall.v1",
-  "top_level_keys": [
-   "daemon_stopped",
-   "dry_run",
-   "error_names",
-   "keys_removed",
-   "ok",
-   "package_uninstall_command",
-   "prune_unflushed",
-   "refs_preserved",
-   "refs_purged",
-   "removed_names",
-   "repos",
-   "residue",
-   "schema_version",
-   "skipped_names",
-   "surfaces",
-   "tier",
-   "tracking_mode_reset",
-   "unit_unloaded"
-  ]
- },
  "setup watcher install": {
   "schema_version": null,
   "top_level_keys": [
@@ -380,6 +364,22 @@
   "top_level_keys": [
    "action",
    "status"
+  ]
+ },
+ "status": {
+  "schema_version": "opentraces.bucket.status.v1",
+  "top_level_keys": [
+   "fleet",
+   "freshness",
+   "next_steps",
+   "ok",
+   "ready",
+   "safety",
+   "schema_version",
+   "scope_project",
+   "security_version",
+   "store",
+   "sync"
   ]
  },
  "trace index compact": {
@@ -435,11 +435,36 @@
   ]
  },
  "trail graph": {
-  "schema_version": null,
+  "schema_version": "opentraces.trail.graph.v1",
   "top_level_keys": [
    "commits",
    "mode",
-   "pivot_trace_id"
+   "pivot_trace_id",
+   "schema_version",
+   "status"
+  ]
+ },
+ "uninstall": {
+  "schema_version": "opentraces.setup_uninstall.v1",
+  "top_level_keys": [
+   "daemon_stopped",
+   "dry_run",
+   "error_names",
+   "keys_removed",
+   "ok",
+   "package_uninstall_command",
+   "prune_unflushed",
+   "refs_preserved",
+   "refs_purged",
+   "removed_names",
+   "repos",
+   "residue",
+   "schema_version",
+   "skipped_names",
+   "surfaces",
+   "tier",
+   "tracking_mode_reset",
+   "unit_unloaded"
   ]
  },
  "workflow list": {

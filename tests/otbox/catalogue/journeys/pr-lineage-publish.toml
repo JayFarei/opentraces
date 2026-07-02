@@ -17,17 +17,17 @@ requires = ["cli", "git"]
 [[steps]]
 type = "cli"
 id = "render-help"
-argv = ["trail", "blame", "pr", "render", "--help"]
+argv = ["trail", "pr", "render", "--help"]
 
 [[steps]]
 type = "cli"
 id = "create-help"
-argv = ["trail", "blame", "pr", "create", "--help"]
+argv = ["trail", "pr", "create", "--help"]
 
 [[steps]]
 type = "cli"
 id = "update-help"
-argv = ["trail", "blame", "pr", "update", "--help"]
+argv = ["trail", "pr", "update", "--help"]
 
 [[assertions]]
 kind = "stdout_contains"

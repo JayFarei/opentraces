@@ -145,10 +145,28 @@ def compute(
     total_lines = 0
     canonical_trace_id = primary.trace_id if primary is not None else trace_id
 
+    # Predicates-before-projection (core/trails/scoped_reads contract):
+    # forward blame answers "where did this trace's edits land" — a
+    # trace-scoped question — so the Trail projection is built from the
+    # identifier set's own event footprints (O(result) via the OID index),
+    # never the whole-log ``build_trail_query_projection`` walk that made
+    # ``trail blame commit t:<trace>`` hang (rc=124) on a mature ~983K-object
+    # canonical log. Events are merged across the fork/session candidates so
+    # the multi-fork union behaviour is unchanged; ``resolve_trace_prefix``
+    # now resolves within that footprint (the CLI hands us an already-resolved
+    # full id; staging prefixes were resolved upstream).
     try:
-        from .trails import build_trail_query_projection
+        from .trails import build_trail_query_projection_from_events
+        from .trails.scoped_reads import read_events_for_trace
 
-        trail_projection = build_trail_query_projection(project_cwd)
+        events_by_id: dict = {}
+        for candidate in sorted(id_candidates):
+            for event in read_events_for_trace(project_cwd, candidate):
+                events_by_id[event.event_id] = event
+        trail_projection = build_trail_query_projection_from_events(
+            project_cwd,
+            sorted(events_by_id.values(), key=lambda e: e.event_sequence),
+        )
         trail_resolved = trail_projection.resolve_trace_prefix(trace_id)
         if trail_resolved:
             canonical_trace_id = trail_resolved

@@ -176,6 +176,14 @@ jobs:
           python -m pytest tests/otbox/test_catalogue_lint.py \
             tests/otbox/test_journey_assertions.py \
             tests/otbox/test_jtbd_ssot.py -q
+      # Agent-contract lint (ADR-0007 L1-L6, epic #129). The mechanical gate
+      # that keeps the CLI's agent-facing contract (must-terminate,
+      # must-not-prompt, valid JSON, remote uniformity, uniform envelope,
+      # cross-sibling self-consistency) from regressing. Explicit named step
+      # here mirrors the slicer-conformance precedent; the file also runs for
+      # free in fast-premerge via the sharder (idempotent).
+      - name: Agent-contract lint gate (L1-L6)
+        run: python -m pytest tests/cli/test_agent_contract_lint.py -q
       - name: otbox vertical slice
         run: make otbox-slice
       # Trace Slicer Library (issue #141) conformance gate. SENTINEL journey +
@@ -189,3 +197,17 @@ jobs:
             "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[slicer-conformance]" \
             tests/otbox/test_mutation_kills.py \
             -k "slicer or coherent" -q
+      # CLI v7 core (epic #129) sentinel journeys. One real-execution journey
+      # per v7 surface — setup family L2 no-prompt contract, the status safety
+      # gate, the trace map/get/waste dive, and the trail lenses. Explicit
+      # node-ids here (not nightly-only) mirror the slicer-conformance
+      # precedent: SENTINEL_JOURNEYS membership alone does NOT gate per-PR.
+      # Hermetic tier-0 boxes (synthetic fake-harness capture chain), ~35s.
+      - name: CLI v7 core sentinel journeys (setup / status / trace / trail)
+        run: |
+          python -m pytest \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[setup-roundtrip]" \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[status-safety-gate]" \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[trace-map-dive]" \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[trail-lenses]" \
+            -q

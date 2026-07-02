@@ -41,7 +41,7 @@ For a dataset around one observed skill, use the built-in skill episodes
 workflow directly:
 
 ```bash
-opentraces trace skills --json
+opentraces trace query --skill opentraces --json
 opentraces dataset new opentraces-episodes --from-skill opentraces
 opentraces dataset run opentraces-episodes --executor script --json
 ```
@@ -74,7 +74,7 @@ opentraces trace query --lex "fix failing test" --cwd --json
 opentraces trace map <trace-id> --bursts --json
 opentraces trace slice <trace-id> --template bursts --json
 opentraces trail track <trace-id> --json
-opentraces ctx step <trace-id> 7 --json
+opentraces ctx <trace-id>:7 --json
 opentraces ctx resume <context-node-id> --json
 ```
 
@@ -89,7 +89,7 @@ only when the row schema needs it.
 | `default` | Minimal scaffold for custom row builders |
 | `skill-episodes-v1` | Skill episode rows for one observed skill, normally created with `dataset new --from-skill <skill>` |
 | `skill-command-trajectory-eval-v1` | Compact eval rows for command/skill trajectory attribution |
-| `pr-intent-summary-v1` | Branch-context rows consumed by `opentraces trail blame pr render/create/update` |
+| `pr-intent-summary-v1` | Branch-context rows consumed by `opentraces trail pr render/create/update` |
 
 ## Everything-Style Workflows
 
@@ -103,7 +103,7 @@ For example, a command-trajectory workflow may include:
 - the user intent summary from `trace map --bursts`;
 - the bounded step window from `trace slice`;
 - patch survival from `trail track`;
-- visible context from `ctx step` or `ctx resume`;
+- visible context from `ctx <trace-id>:<step>` or `ctx resume`;
 - security metadata from an explicit `security sanitize` pass.
 
 ## Security Contract

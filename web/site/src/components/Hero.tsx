@@ -64,7 +64,7 @@ const HERO_PANELS: Panel[] = [
       { label: "remote", value: "alice/opentraces-bucket", valCls: "s", status: "manual", statusCls: "di" },
     ],
     footer: "Raw evidence stays private until you sync",
-    next: ["opentraces trace query --since 7d", "opentraces bucket remote push"],
+    next: ["opentraces trace query --since 7d", "opentraces bucket sync push"],
   },
   {
     prompt: "~/my-project$",
@@ -98,7 +98,7 @@ const HERO_PANELS: Panel[] = [
   },
   {
     prompt: "~/my-project$",
-    command: "opentraces ctx step tr_7f31 7",
+    command: "opentraces ctx tr_7f31:7",
     pill: "ctx",
     subtitle: "what the agent saw",
     rows: [

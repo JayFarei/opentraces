@@ -1,0 +1,88 @@
+name = "status-safety-gate"
+description = """
+CLI v7 fleet safety dashboard — `opentraces status` is a clean-parse,
+O(1) read that can NEVER report a bucket safe to sync while any trace is
+not yet cleared.
+
+On a real captured session (one ingested trace holding unresolved
+redactable content), the `opentraces.bucket.status.v1` envelope reports
+`ready: false` with `safety.not_cleared_count >= 1` and
+`verdict == "not_cleared"` — the load-bearing safety gate. The `--short`
+porcelain encodes the SAME gate: it reads `not-cleared`, never `clean`,
+so a script cannot mistake an uncleared bucket for a syncable one.
+
+NOTE (authoring): the synthetic capture chain always security-scans on
+ingest, so `unscanned_count` is 0 on every default-CI checkpoint; the
+uncleared gate is asserted via `not_cleared_count` (the same hard gate:
+`ready` requires unscanned==0 AND not_cleared==0).
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# `status --json` — the frozen opentraces.bucket.status.v1 safety envelope.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "status-json"
+argv = ["--json", "status"]
+
+[[assertions]]
+kind = "returncode"
+step = "status-json"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-json"
+path = "schema_version"
+equals = "opentraces.bucket.status.v1"
+
+# The load-bearing gate: a bucket with an uncleared trace is never ready.
+[[assertions]]
+kind = "stdout_json"
+step = "status-json"
+path = "ready"
+equals = false
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "status-json"
+path = "safety.not_cleared_count"
+min = 1
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-json"
+path = "safety.verdict"
+equals = "not_cleared"
+
+# ---------------------------------------------------------------------
+# `status --short` — the porcelain encodes the same gate: never "clean".
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "status-short"
+argv = ["status", "--short"]
+
+[[assertions]]
+kind = "returncode"
+step = "status-short"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "status-short"
+value = "status=not-cleared"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "status-short"
+value = "status=clean"

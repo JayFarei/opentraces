@@ -48,12 +48,14 @@ def setup_group(ctx: click.Context) -> None:
                     only when the tool is explicitly enabled.
       privacy-filter
                     optional local/HF NER PII detector (transformers + torch).
-      llm-review    optional dataset-row reviewer used by publication gates,
-                    separate from per-record sanitize tools.
-      uninstall     the symmetric inverse of ``setup``: reverse every
-                    install-time patch + daemon (``--integrations-only``,
-                    preserves captured data) or also delete captured data +
-                    git refs (``--purge``).
+      doctor        install-health read-twin: installed/enrolled/healthy per
+                    integration, plus what's degraded and why.
+
+    ``upgrade``/``uninstall`` are peer verbs beside ``setup`` (the in / update
+    / out triad), not subcommands of it: ``opentraces upgrade`` /
+    ``opentraces uninstall``. The optional dataset-row reviewer is a
+    publication gate, not an install step, so it's off this listing (see
+    ``opentraces dataset review``).
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
     integration, or call a subcommand to target one directly. HuggingFace login
@@ -113,6 +115,16 @@ def _run_setup_wizard() -> None:
       6. security tool status             (trufflehog / llm-review, read-only)
       7. closing panel — point at `opentraces init` + `opentraces doctor`
     """
+    # ADR-0007 lint L2: bare ``opentraces setup`` is an interactive wizard. It
+    # must never prompt under ``--json`` or on a non-interactive terminal —
+    # refuse with a structured error naming the explicit subcommands instead.
+    _cli.require_interactive(
+        "setup",
+        "run a specific integration directly (e.g. 'opentraces setup claude-code', "
+        "'opentraces setup git', 'opentraces setup watcher install') instead of the "
+        "interactive wizard",
+    )
+
     from ..capture import get_hook_installers
     from ..security.trufflehog import find_trufflehog
     from ..watcher import installer as _winst

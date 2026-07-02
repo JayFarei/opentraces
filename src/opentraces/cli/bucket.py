@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from ._envelope import envelope
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
 from ._progress import build_cli_progress, progress_option
@@ -17,6 +18,8 @@ from ._security_flags import (
     apply_security_tool_flag_changes,
     security_tool_change_payload,
 )
+from ..core.bucket_list import DEFAULT_LIMIT as _LIST_DEFAULT
+from ..core.bucket_list import MAX_LIMIT as _LIST_MAX
 from ..core.config import load_config, save_config
 
 
@@ -188,11 +191,19 @@ def bucket_security_policy_cmd(
         )
 
 
-@bucket_group.command("status", cls=OpentracesCommand)
+@bucket_group.command("status", cls=OpentracesCommand, hidden=True)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @progress_option
 def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
-    """Show local bucket health, sync eligibility, and trail freshness."""
+    """Lower-level bucket health readout (hidden; use ``opentraces status``).
+
+    Issue #162 — the fleet safety dashboard now lives at the top-level
+    ``opentraces status`` (the ``opentraces.bucket.status.v1`` contract).
+    This command stays callable (hidden != removed) as the lower-level
+    bucket-HEALTH readout that ``status``'s one-line verdict points to; its
+    ``opentraces.bucket.health.v1`` envelope is byte-compatible with prior
+    callers so nothing scripting it breaks.
+    """
     from ..core.bucket_store import bucket_status_fast
 
     # Issue #55 — `bucket status` is a pure read: no manifest.json write, no
@@ -212,7 +223,12 @@ def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
     finally:
         reporter.done()
     if as_json:
-        click.echo(_dump_json(payload))
+        # L5 uniform envelope (ADR-0007): promote {status, schema_version} to the
+        # top level. The nested "bucket"/"config"/"freshness" blocks are unchanged,
+        # so existing consumers reading payload["bucket"][...] are unaffected. This
+        # is the bucket-HEALTH readout; the top-level `opentraces status` fleet
+        # dashboard is the distinct opentraces.bucket.status.v1 contract.
+        click.echo(_dump_json(envelope("opentraces.bucket.health.v1", **payload)))
         return
     bucket = payload["bucket"]
     config = payload.get("config") or {}
@@ -254,7 +270,78 @@ def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
             click.echo(f"    refresh with: {hint}")
 
 
-@bucket_group.command("manifest", cls=OpentracesCommand)
+@bucket_group.command("list", cls=OpentracesCommand)
+@click.option("--unsynced", is_flag=True, help="Only traces not yet cleared for sync (a PROCESS state, not a content verdict).")
+@click.option("--unfiltered", is_flag=True, help="Only scanned traces still holding unresolved redactable content.")
+@click.option("--security-stale", "security_stale", is_flag=True, help="Only traces scanned by an older security version.")
+@click.option("--unscanned", is_flag=True, help="Only traces whose security state is not yet known (the honest 'unknown' facet).")
+@click.option("--project", "project", metavar="SLUG", default=None, help="Scope to one project slug.")
+@click.option("--since", "since", metavar="WHEN", default=None, help="Only traces written at/after WHEN (ISO written_at); unknown-written_at rows are never dropped.")
+@click.option("--count", "count_only", is_flag=True, help="Return only the matching count (ignores --limit); materializes no rows.")
+@click.option("--limit", "limit", type=int, default=None, help=f"Max rows per page (default {_LIST_DEFAULT}, hard cap {_LIST_MAX}).")
+@click.option("--cursor", "cursor", default=None, help="Opaque page cursor from a prior page's `cursor` field.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def bucket_list_cmd(
+    unsynced: bool,
+    unfiltered: bool,
+    security_stale: bool,
+    unscanned: bool,
+    project: str | None,
+    since: str | None,
+    count_only: bool,
+    limit: int | None,
+    cursor: str | None,
+    as_json: bool,
+) -> None:
+    """The per-trace inventory — bounded, paginated, hang-proof (issue #162).
+
+    ``list`` is the read side ``bucket manifest`` never was: it reads the
+    plan-087 per-row status accelerator ONCE and applies its predicates BEFORE
+    projection, so a real fleet bucket returns a bounded page in an interactive
+    budget instead of hanging. An ABSENT per-row status renders as an explicit
+    ``unknown`` facet (never coerced to ``clean``); the envelope always carries
+    ``unknown_status_count`` so a sparse-accelerator bucket is never mistaken
+    for a scanned-clean one. ``list`` supersedes ``ctx list`` as the row surface.
+    """
+    from ..core.bucket_list import build_bucket_list
+
+    payload = build_bucket_list(
+        unsynced=unsynced,
+        unfiltered=unfiltered,
+        security_stale=security_stale,
+        unscanned=unscanned,
+        project=project,
+        since=since,
+        limit=_LIST_DEFAULT if limit is None else limit,
+        cursor=cursor,
+        count_only=count_only,
+    )
+    if as_json:
+        click.echo(_dump_json(envelope(payload.pop("schema_version"), **payload)))
+        return
+
+    if count_only:
+        click.echo(f"{payload['count']} trace(s) match "
+                   f"({payload['unknown_status_count']} of unknown status).")
+        return
+    rows = payload["rows"]
+    if not rows:
+        click.echo("No traces match.")
+    for row in rows:
+        title = row.get("title") or "(untitled)"
+        click.echo(
+            f"  {row.get('trace_id')}  [{row.get('sync_state')}]  "
+            f"{row.get('project_slug') or '-'}  {title}"
+        )
+    click.echo(
+        f"  ({len(rows)} shown of {payload['total']} total; "
+        f"{payload['unknown_status_count']} unknown status)"
+    )
+    if payload.get("cursor"):
+        click.echo(f"  next page: --cursor {payload['cursor']}")
+
+
+@bucket_group.command("manifest", cls=OpentracesCommand, hidden=True)
 @click.option(
     "--heal",
     is_flag=True,
@@ -265,14 +352,39 @@ def bucket_status_cmd(as_json: bool, progress_mode: str) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def bucket_manifest_cmd(heal: bool, as_json: bool) -> None:
-    """Print the local bucket manifest (read-only; pass --heal to materialize)."""
-    from ..core.bucket_store import bucket_manifest, bucket_manifest_path
+    """Print the local bucket manifest (hidden; use ``bucket list`` / ``bucket repair``).
 
-    # Issue #55 — default is a pure read: compute + print the manifest (incl.
-    # an in-memory reconcile of record-only orphans) without writing any byte
-    # under the bucket. `--heal` restores the materializing behavior (write
-    # manifest.json + per-trace envelopes), idempotent on a no-op.
-    manifest = bucket_manifest(write=heal, heal=heal, include_objects=False)
+    Issue #162 — the per-trace inventory read side moved to the bounded,
+    accelerator-backed ``bucket list``; the ``--heal`` write side folded into
+    ``bucket repair``. This command stays callable (hidden != removed) so its
+    read path (already bounded from the #87 F0 hang cure) and ``--heal`` keep
+    working for scripts pinned to them.
+    """
+    from ..core.bucket_store import (
+        bucket_manifest,
+        bucket_manifest_path,
+        read_persisted_manifest_capped,
+    )
+
+    # #87 F0 hang cure — a read (no --heal) SERVES the persisted manifest.json
+    # O(1) instead of recomputing it, exactly like ``bucket status`` /
+    # ``ctx list`` already do. The full O(N) recompute (which re-scans every
+    # trace record + raw source + trail/context substrate + a per-repo anchor
+    # read) is kept ONLY for --heal or when no usable persisted manifest exists
+    # (a fresh/empty world, or an unreadable/too-large file) — so small buckets
+    # and the empty-world CLI sweep behave exactly as before. The served file is
+    # the authoritative manifest a prior --heal / repair / push wrote; its
+    # top-level keys are byte-compatible with the recomputed shape.
+    manifest: dict[str, object] | None = None
+    if not heal:
+        state, persisted = read_persisted_manifest_capped()
+        if state == "ok" and isinstance(persisted, dict):
+            manifest = persisted
+    if manifest is None:
+        # Issue #55 — the recompute path is still a pure read when heal=False:
+        # it reconciles record-only orphans in memory without writing any byte
+        # under the bucket. `--heal` restores the materializing behavior.
+        manifest = bucket_manifest(write=heal, heal=heal, include_objects=False)
     if as_json:
         click.echo(_dump_json({"status": "ok", "manifest": manifest}))
         return
@@ -280,9 +392,15 @@ def bucket_manifest_cmd(heal: bool, as_json: bool) -> None:
     click.echo(f"  digest: {manifest.get('digest')}")
 
 
-@bucket_group.group("remote", cls=OpentracesGroup)
+@bucket_group.group("remote", cls=OpentracesGroup, hidden=True)
 def bucket_remote_group() -> None:
-    """Manage the configured private bucket remote."""
+    """Manage the configured private bucket remote (hidden; use ``bucket sync``).
+
+    Issue #162 — the canonical mover is ``bucket sync {push,pull,diff,status}``.
+    This group stays callable (hidden != removed) so scripts pinned to
+    ``bucket remote ...`` keep working byte-identically; each subcommand shares
+    the exact command object mounted under ``bucket sync``.
+    """
 
 
 @bucket_remote_group.command("status", cls=OpentracesCommand)
@@ -298,7 +416,9 @@ def bucket_remote_status_cmd(remote_root: Path | None, as_json: bool) -> None:
     """Compare local bucket digest with the configured private remote."""
     from ..core.bucket_remote import remote_status
 
-    payload = {"status": "ok", "remote": remote_status(fake_root=remote_root)}
+    payload = envelope(
+        "opentraces.bucket.sync_status.v1", remote=remote_status(fake_root=remote_root)
+    )
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -351,7 +471,7 @@ def bucket_remote_diff_cmd(remote_root: Path | None, as_json: bool) -> None:
     from ..core.bucket_remote import remote_diff
 
     remote = remote_diff(fake_root=remote_root)
-    payload = {"status": "ok", "remote": remote}
+    payload = envelope("opentraces.bucket.sync_diff.v1", remote=remote)
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -369,6 +489,16 @@ def bucket_remote_diff_cmd(remote_root: Path | None, as_json: bool) -> None:
 )
 @click.option("--force", is_flag=True, help="Overwrite a remote-ahead or diverged bucket.")
 @click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    help=(
+        "Compute the pushed/withheld egress partition WITHOUT egressing a "
+        "single byte. Prints which traces are cleared for sync and which are "
+        "withheld (and why), so the egress-safety decision is auditable first."
+    ),
+)
+@click.option(
     "--unsafe-push",
     "unsafe_push",
     is_flag=True,
@@ -381,22 +511,96 @@ def bucket_remote_diff_cmd(remote_root: Path | None, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def bucket_remote_push_cmd(
-    remote_root: Path | None, force: bool, unsafe_push: bool, as_json: bool
+    remote_root: Path | None,
+    force: bool,
+    dry_run: bool,
+    unsafe_push: bool,
+    as_json: bool,
 ) -> None:
-    """Mirror the local bucket into the configured private remote."""
+    """Mirror the local bucket into the configured private remote.
+
+    Issue #162 — ``sync push`` egresses raw substrate, so it makes its
+    withhold decision AUDITABLE. The envelope carries ``pushed[]`` (trace ids
+    cleared for sync) and ``withheld[]`` (each ``{trace_id, reason, sub_reason}``).
+    A trace is cleared ONLY when its accelerator row is positively
+    ``syncable == true``; an absent row is withheld (conservative). The
+    withhold reason is a PROCESS state (``not_cleared_for_sync``), never a
+    content verdict. ``--dry-run`` computes the same partition without egressing.
+
+    Egress safety (the load-bearing property): the real (non-dry-run) push
+    REFUSES — ``status='refused'``, ``pushed=[]``, non-zero exit, ZERO bytes
+    egressed — whenever the fresh push-time partition still withholds any
+    trace. Enforcement runs against the SAME manifest the push egresses (the
+    push recomputes it after re-scanning local stores), so the envelope can
+    never claim a trace was withheld while its bytes actually left the machine.
+    """
     from ..core.bucket_remote import BucketRemoteError, remote_push
+    from ..core.bucket_sync import BucketPushWithheldError, sync_push_partition
+
+    if dry_run:
+        # Advisory preview from the PERSISTED accelerator (O(1), no recompute,
+        # no egress). The real push enforces on a freshly-recomputed manifest;
+        # both use the same partition function, so they agree on a current bucket.
+        partition = sync_push_partition()
+        payload = envelope(
+            "opentraces.bucket.sync_push.v1",
+            dry_run=True,
+            pushed=partition["pushed"],
+            withheld=partition["withheld"],
+        )
+        if as_json:
+            click.echo(_dump_json(payload))
+            return
+        click.echo("Bucket sync push (dry run — nothing egressed):")
+        click.echo(f"  cleared for sync: {len(partition['pushed'])}")
+        click.echo(f"  withheld:         {len(partition['withheld'])} (not_cleared_for_sync)")
+        return
 
     try:
         remote = remote_push(
             fake_root=remote_root, force=force, unsafe_push=unsafe_push
         )
+    except BucketPushWithheldError as exc:
+        # Refusal: nothing egressed. Emit the auditable partition so the caller
+        # knows exactly which traces are not cleared and how to clear them.
+        withheld = exc.partition.get("withheld") or []
+        payload = envelope(
+            "opentraces.bucket.sync_push.v1",
+            status="refused",
+            dry_run=False,
+            pushed=[],
+            withheld=withheld,
+            next_steps=[
+                "opentraces bucket security run --all",
+                "opentraces bucket sync push --dry-run  # re-audit the partition",
+            ],
+        )
+        if as_json:
+            click.echo(_dump_json(payload))
+        else:
+            click.echo(
+                f"Bucket sync push REFUSED — {len(withheld)} trace(s) not "
+                "cleared for sync; nothing egressed.",
+                err=True,
+            )
+            click.echo("  run 'opentraces bucket security run --all' to clear them", err=True)
+        sys.exit(2)
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
     except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
         from opentraces import cli as root_cli
         root_cli._fail_hf_or_reraise(exc, "")
-    payload = {"status": "ok", "remote": remote}
+    # The push cleared: report the FRESH push-time partition (withheld is empty
+    # by construction — the gate refused otherwise), never the stale pre-read.
+    partition = remote.get("push_partition") or {"pushed": [], "withheld": []}
+    payload = envelope(
+        "opentraces.bucket.sync_push.v1",
+        dry_run=False,
+        remote=remote,
+        pushed=partition["pushed"],
+        withheld=partition["withheld"],
+    )
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -404,6 +608,7 @@ def bucket_remote_push_cmd(
     click.echo(
         f"  files: {remote.get('files_copied', remote.get('files_uploaded', 0))}"
     )
+    click.echo(f"  withheld: {len(partition['withheld'])} (not_cleared_for_sync)")
 
 
 @bucket_remote_group.command("pull", cls=OpentracesCommand)
@@ -442,7 +647,7 @@ def bucket_remote_pull_cmd(
     except Exception as exc:  # noqa: BLE001 - HF/network errors must not traceback
         from opentraces import cli as root_cli
         root_cli._fail_hf_or_reraise(exc, "")
-    payload = {"status": "ok", "remote": remote}
+    payload = envelope("opentraces.bucket.sync_pull.v1", remote=remote)
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -594,7 +799,7 @@ def bucket_rebuild_cmd(substrate: str, as_json: bool) -> None:
                     f"Phase B Track B1 stub: not yet implemented ({exc})"
                 ) from exc
 
-    envelope: dict = {
+    rebuild_payload: dict = {
         "status": "ok",
         "rebuild": {
             "substrate": substrate,
@@ -604,9 +809,9 @@ def bucket_rebuild_cmd(substrate: str, as_json: bool) -> None:
     # When a single substrate was requested keep the legacy flat shape too
     # so existing callers (rebuild --substrate context-tree) don't break.
     if substrate != "all" and substrate in rebuild_results:
-        envelope["rebuild"].update(rebuild_results[substrate])
+        rebuild_payload["rebuild"].update(rebuild_results[substrate])
     if as_json:
-        click.echo(_dump_json(envelope))
+        click.echo(_dump_json(rebuild_payload))
         return
     click.echo(f"Bucket rebuild: substrate={substrate}")
     for sub, result in rebuild_results.items():
@@ -655,6 +860,11 @@ def bucket_repair_cmd(bucket_root: Path | None, as_json: bool) -> None:
     events (the single source of truth). ``--bucket-root <dir>`` targets a
     bucket COPY so the re-derive can be verified without mutating the live
     bucket.
+
+    Issue #162 — this is where ``bucket manifest --heal`` folds: ``repair`` is
+    the canonical read-model rebuild (it persists ``manifest.json`` + the
+    per-trace envelopes from canonical state), so ``status``'s freshness
+    remediation points here, never at the demoted ``manifest --heal``.
     """
     try:
         from ..core.bucket_store import bucket_repair
@@ -670,7 +880,7 @@ def bucket_repair_cmd(bucket_root: Path | None, as_json: bool) -> None:
             f"Phase B Track B1 stub: bucket_repair not yet implemented ({exc})"
         ) from exc
 
-    payload = {"status": "ok", "repair": dict(result)}
+    payload = envelope("opentraces.bucket.repair.v1", repair=dict(result))
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -710,7 +920,7 @@ def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
 
     target = Path(repo) if repo is not None else Path.cwd()
     report = reclaim_repo(target, apply=apply)
-    payload = {"status": "ok", "reclaim": report.as_dict()}
+    payload = envelope("opentraces.bucket.reclaim.v1", reclaim=report.as_dict())
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -775,15 +985,16 @@ def bucket_verify_cmd(sample_size: int, as_full: bool, as_json: bool) -> None:
     errors = list(result_dict.get("errors") or [])
     sampled = int(result_dict.get("sampled", 0) or 0)
 
-    envelope = {
-        "status": "ok" if ok else "error",
-        "ok": ok,
-        "sampled": sampled,
-        "errors": errors,
-        "verify": result_dict,
-    }
+    payload = envelope(
+        "opentraces.bucket.verify.v1",
+        status="ok" if ok else "error",
+        ok=ok,
+        sampled=sampled,
+        errors=errors,
+        verify=result_dict,
+    )
     if as_json:
-        click.echo(_dump_json(envelope))
+        click.echo(_dump_json(payload))
         if not ok:
             sys.exit(3)
         return
@@ -833,14 +1044,14 @@ def bucket_prune_cmd(dry_run: bool, as_json: bool) -> None:
     result_dict = dict(result)
     would_delete = int(result_dict.get("would_delete", 0) or 0)
     deleted = int(result_dict.get("deleted", 0) or 0)
-    envelope = {
+    prune_payload = {
         "status": "ok",
         "would_delete": would_delete,
         "deleted": deleted,
         "prune": result_dict,
     }
     if as_json:
-        click.echo(_dump_json(envelope))
+        click.echo(_dump_json(prune_payload))
         return
     click.echo(f"Bucket prune (dry_run={dry_run}):")
     click.echo(f"  would_delete: {would_delete}")
@@ -874,10 +1085,115 @@ def bucket_prefetch_cmd(trace_id: str, remote: str | None, as_json: bool) -> Non
         sys.exit(3)
 
     result_dict = dict(result)
-    envelope = {"status": "ok", "trace_id": trace_id, "prefetch": result_dict}
+    prefetch_payload = {"status": "ok", "trace_id": trace_id, "prefetch": result_dict}
     if as_json:
-        click.echo(_dump_json(envelope))
+        click.echo(_dump_json(prefetch_payload))
         return
     click.echo(f"Bucket prefetch: trace={trace_id}")
     for key, value in result_dict.items():
         click.echo(f"  {key}: {value}")
+
+
+# ---------------------------------------------------------------------------
+# Issue #162 — `bucket sync` is the canonical mover (was the `bucket remote`
+# subgroup). Its FOUR EQUAL subverbs share the exact command objects mounted
+# under the now-hidden `bucket remote`, so `diff` / `status` are first-class
+# peers of `push` / `pull` and the two paths are byte-identical.
+# ---------------------------------------------------------------------------
+@bucket_group.group("sync", cls=OpentracesGroup)
+def bucket_sync_group() -> None:
+    """Mirror the raw bucket substrate against the configured remote.
+
+    ``sync`` is the bidirectional mirror of the WHOLE bucket (traces, blobs,
+    events, manifest) — distinct from ``dataset publish`` (the gated one-way
+    egress of reviewed rows). ``diff`` / ``status`` inspect before you gate;
+    ``push`` egresses raw substrate and withholds every trace not yet cleared
+    for sync (see ``sync push --dry-run``); ``pull`` restores.
+    """
+
+
+# The same command objects the hidden `bucket remote` group holds — mounted
+# here as the canonical, visible surface.
+bucket_sync_group.add_command(bucket_remote_push_cmd, name="push")
+bucket_sync_group.add_command(bucket_remote_pull_cmd, name="pull")
+bucket_sync_group.add_command(bucket_remote_diff_cmd, name="diff")
+bucket_sync_group.add_command(bucket_remote_status_cmd, name="status")
+
+
+@bucket_group.command(
+    "connect",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces bucket connect",
+        "opentraces bucket connect --local-only",
+        "opentraces bucket connect --repo me/opentraces-bucket",
+    ],
+    see_also=[
+        ("opentraces bucket sync push", "mirror the local bucket to the remote"),
+        ("opentraces auth login", "authenticate before using the default HF target"),
+    ],
+)
+@click.option(
+    "--remote/--local-only",
+    "remote_enabled",
+    default=True,
+    show_default=True,
+    help="Configure private remote bucket sync, or opt out to local-only.",
+)
+@click.option(
+    "--provider",
+    type=click.Choice(["huggingface", "fake"]),
+    default="huggingface",
+    show_default=True,
+    help="Remote bucket provider.",
+)
+@click.option(
+    "--repo",
+    default=None,
+    help="Private HuggingFace bucket repo id. Defaults to <user>/opentraces-bucket.",
+)
+@click.option(
+    "--fake-root",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Local directory used by the fake bucket remote harness.",
+)
+@click.option(
+    "--sync-policy",
+    type=click.Choice(["daemon", "manual"]),
+    default="daemon",
+    show_default=True,
+    help="How the private remote bucket should be kept current.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.pass_context
+def bucket_connect_cmd(
+    ctx: click.Context,
+    remote_enabled: bool,
+    provider: str,
+    repo: str | None,
+    fake_root: Path | None,
+    sync_policy: str,
+    as_json: bool,
+) -> None:
+    """Configure the private bucket remote target (the rename of ``setup bucket``).
+
+    Issue #162 — ``connect`` binds the remote (and needs HF auth for the
+    default HuggingFace target); ``sync`` moves data. They stay distinct verbs.
+    This is a thin wrapper over the same configure logic ``setup bucket`` runs;
+    ``setup bucket`` stays callable (hidden).
+    """
+    from .setup_bucket import setup_bucket_cmd
+
+    # Forward to the shared configure logic; ctx.invoke fills the remaining
+    # `setup bucket` params (push/pull-now, security-tool toggles, migrate)
+    # with their defaults — connect is the lean "bind the target" front door.
+    ctx.invoke(
+        setup_bucket_cmd,
+        remote_enabled=remote_enabled,
+        provider=provider,
+        repo=repo,
+        fake_root=fake_root,
+        sync_policy=sync_policy,
+        as_json=as_json,
+    )

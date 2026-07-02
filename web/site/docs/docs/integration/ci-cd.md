@@ -37,17 +37,19 @@ Run these before a gated publish:
 ```bash
 opentraces doctor
 opentraces doctor --security
+opentraces status --short
 ```
+
+`opentraces status` is the fleet bucket safety dashboard: it reports how many captured traces are cleared for sync versus still unscanned, and the "safe to sync" verdict is structurally impossible while any trace is unscanned. `--short` prints a stable, scriptable one-line summary (`clean` / `not-cleared` / `empty`) suitable for a CI gate; use `--json` for the full `opentraces.bucket.status.v1` envelope.
 
 If you rely on optional integrations, configure them explicitly in automation:
 
 ```bash
 opentraces setup trufflehog --enable
 opentraces setup privacy-filter --enable
-opentraces setup llm-review --enable
 ```
 
-Those commands assume the required binary or endpoint is already available.
+Those commands assume the required binary or endpoint is already available. LLM row review is no longer configured through `setup llm-review` (that command is hidden but still callable); the canonical row-review surface is `opentraces dataset review` / `opentraces dataset publish`, which apply LLM verdicts as part of the dataset workflow when the workflow requires it.
 
 ## GitHub Actions Example
 

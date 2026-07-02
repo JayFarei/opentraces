@@ -99,16 +99,14 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
     json_only = _doctor_json_only()
 
     def _emit_doctor(payload: dict) -> None:
-        # L3 (epic #129) / issue #158 B6: under an EXPLICIT ``--json`` emit pure
-        # JSON, no ``---OPENTRACES_JSON---`` preamble, so ``doctor --json`` is
-        # valid JSON to ``json.loads``. The non-TTY auto-JSON path keeps the
-        # sentinel for backward-compatible consumers that split on it.
-        if as_json:
-            import json as _json
-
-            click.echo(_json.dumps(payload, indent=2))
-        else:
-            _cli.emit_json(payload)
+        # L3 (epic #129) / issue #158 B6: ``emit_json`` now owns the split —
+        # under an EXPLICIT ``--json`` (``_json_mode`` set above) it emits pure
+        # JSON with no ``---OPENTRACES_JSON---`` preamble so ``doctor --json``
+        # is valid ``json.loads`` input, while the auto non-TTY path
+        # (``doctor | cat``) keeps the sentinel for backward-compatible
+        # consumers that split on it. So ``doctor --json`` and ``doctor | cat``
+        # are each internally self-consistent.
+        _cli.emit_json(payload)
 
     if security_only:
         if not json_only:
@@ -121,7 +119,13 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
             "schema_version": report.get("schema_version"),
             "security": report["security"],
         }
-        _emit_doctor({"status": "ok", "doctor": trimmed})
+        # L5 uniform envelope (ADR-0007): promote schema_version to the top level
+        # (kept nested in ``doctor.*`` too for back-compat).
+        _emit_doctor({
+            "status": "ok",
+            "schema_version": report.get("schema_version"),
+            "doctor": trimmed,
+        })
     else:
         if not json_only:
             _render_doctor_human(report)
@@ -129,7 +133,14 @@ def doctor_cmd(security_only: bool, probe_runtimes: bool, as_json: bool) -> None
         # next_command / next_steps contract, not buried doctor.cli fields.
         # When a newer CLI is available (or deployed glue has drifted), make
         # the action the agent should take explicit and machine-readable.
-        envelope = {"status": "ok", "doctor": report, **_upgrade_directive(report)}
+        # L5 uniform envelope (ADR-0007): schema_version at the top level (also
+        # kept nested in ``doctor.schema_version`` for back-compat).
+        envelope = {
+            "status": "ok",
+            "schema_version": report.get("schema_version"),
+            "doctor": report,
+            **_upgrade_directive(report),
+        }
         _emit_doctor(envelope)
 
     code = doctor.exit_code(report)

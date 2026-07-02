@@ -266,7 +266,13 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
     return api_format, base_url, model, api_key_env, timeout
 
 
-@setup_group.command("llm-review")
+@setup_group.command(
+    "llm-review",
+    hidden=True,  # issue #160: a publication gate, not a per-record sanitize
+    # tool — belongs beside `dataset review`/`dataset publish`, not `setup`'s
+    # install/enable listing. Kept callable (hidden != removed); internals
+    # are unchanged and untouched by this move.
+)
 @click.option("--api-format", "api_format", default=None,
               type=click.Choice(["openai-compat", "ollama", "anthropic", "fake"], case_sensitive=False),
               help="Wire protocol the local client speaks: openai-compat "
@@ -336,6 +342,12 @@ def setup_review_llm_cmd(
     any_flag = any(v is not None for v in (api_format, base_url, model, api_key_env, timeout))
 
     if not any_flag and not enable and not test_only and not no_interactive:
+        # ADR-0007 lint L2: the preset picker is interactive. Under --json /
+        # non-TTY, refuse with a structured error instead of prompting.
+        _cli.require_interactive(
+            "setup llm-review",
+            "pass --enable with --base-url/--model (see --help), or --no-interactive",
+        )
         api_format, base_url, model, api_key_env, timeout = _setup_review_llm_interactive()
 
     # Layer flag overrides on top of current config.

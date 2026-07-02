@@ -181,8 +181,39 @@ def test_trace_get_bursts_matches_trace_map_bursts(tmp_path):
     assert [b["unique_files"] for b in map_bursts] == [b["unique_files"] for b in get_bursts]
 
 
+def test_trace_map_default_is_bounded_faceted_with_handoff(tmp_path):
+    """v7 V1: default `trace map <id>` is the bounded faceted browse — TYPE +
+    FILE facets, a section breadcrumb, relevance-capped landmarks, and an
+    always-available `trace slice` handoff — NOT an O(nodes) node dump."""
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    _write_project_trace(project, _trace_with_two_bursts())
+
+    runner = CliRunner()
+    rebuild = runner.invoke(main, ["trace", "index", "--json"])
+    assert rebuild.exit_code == 0, rebuild.output
+
+    full = runner.invoke(main, ["trace", "map", "trace-cluster-b-bursts", "--json"])
+    assert full.exit_code == 0, full.output
+    payload = json.loads(full.output)
+    # L5 envelope + the four-part bounded shape.
+    assert payload["status"] == "ok"
+    assert payload["schema_version"] == "opentraces.trace.map.v1"
+    assert "map" not in payload  # bounded: NO whole-trace node dump
+    assert set(payload["facets"]) == {"type", "file"}
+    assert "sections" in payload
+    assert "landmarks" in payload
+    # The handoff is a runnable slice command for the current span.
+    handoff = payload["handoff"]
+    assert handoff["command"].startswith("trace slice trace-cluster-b-bursts --from-step")
+    assert handoff["from_step"] <= handoff["to_step"]
+    # FILE facet collapses per-file edits (v7 V5): parser.py edited twice.
+    assert payload["facets"]["file"].get("src/parser.py") == 2
+
+
 def test_trace_map_actions_filter_compactness_via_cli(tmp_path):
-    """`--actions` should reduce CLI JSON output noticeably for trace-heavy traces."""
+    """`--actions` selector still returns a node-filtered sub-map (bounded by
+    the selector), narrowed to the requested action types."""
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _trace_with_two_bursts())
@@ -194,8 +225,6 @@ def test_trace_map_actions_filter_compactness_via_cli(tmp_path):
     )
     assert rebuild.exit_code == 0, rebuild.output
 
-    full = runner.invoke(main, ["trace", "map", "trace-cluster-b-bursts", "--json"])
-    assert full.exit_code == 0, full.output
     filtered = runner.invoke(
         main,
         [
@@ -209,12 +238,10 @@ def test_trace_map_actions_filter_compactness_via_cli(tmp_path):
     )
     assert filtered.exit_code == 0, filtered.output
 
-    full_size = len(full.output)
-    filtered_size = len(filtered.output)
-    # Should be strictly smaller — the filter drops the final_response node.
-    assert filtered_size < full_size
-    # Every kept node lives in the filter set.
+    # The selector path keeps the sub-map node dump + the slice handoff.
     payload = json.loads(filtered.output)
+    assert payload["schema_version"] == "opentraces.trace.map.v1"
+    assert payload["handoff"]["command"].startswith("trace slice")
     types = {n["action_type"] for n in payload["map"]["nodes"]}
     assert types <= {"user_instruction", "file_edit"}
 

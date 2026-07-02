@@ -5,7 +5,7 @@ by default for per-record sanitization. A bucket flow or workflow opts in to
 the tools it wants, either explicitly with `--tools` or by enabling tools in
 config and running with `--use-config`.
 
-Current pipeline version: `SECURITY_VERSION = 0.6.0`.
+Current pipeline version: `SECURITY_VERSION = 0.7.0`.
 
 ```bash
 opentraces security tools list
@@ -88,13 +88,14 @@ opentraces setup trufflehog --enable
 opentraces setup trufflehog --disable
 opentraces setup privacy-filter --enable --install-deps
 opentraces setup privacy-filter --disable
-opentraces setup llm-review
-opentraces setup llm-review --disable
 ```
 
-`llm-review` is intentionally separate from the inline tool registry. It is a
-session or row reviewer used by dataset publication gates, not a per-record
-sanitize tool.
+LLM-backed row review is intentionally separate from the inline tool registry.
+It is a session or row reviewer used by dataset publication gates, not a
+per-record sanitize tool, and it now lives on the dataset surface itself:
+`opentraces dataset review <name>` (plus `dataset review approve|reject|reset`)
+and `opentraces dataset publish <name>`. The old `setup llm-review` command is
+hidden but still callable.
 
 ## Bucket Security Policies
 

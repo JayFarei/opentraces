@@ -121,25 +121,34 @@ class TestPreInitCommands:
 class TestPublicCommandTree:
     """Smoke-test the unreleased simplified command surface."""
 
-    def test_status_not_initialized(self, runner, tmp_path, monkeypatch):
+    def test_status_inbox_not_initialized(self, runner, tmp_path, monkeypatch):
+        # The project opt-in gate lives on `status-inbox` since #161 repurposed
+        # top-level `status` into the init-free fleet bucket dashboard.
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(main, ["status"])
+        result = runner.invoke(main, ["status-inbox"])
         assert result.exit_code == 3
+
+    def test_fleet_status_needs_no_init(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(main, ["--json", "status"])
+        assert result.exit_code == 0, result.output
 
     def test_status_json_after_init(self, initialized_project):
         project_dir, runner = initialized_project
         result = runner.invoke(main, ["--json", "status"])
         assert result.exit_code == 0
-        assert "---OPENTRACES_JSON---" in result.output
+        # L3 (epic #129): explicit --json emits pure JSON, no sentinel preamble.
+        assert "---OPENTRACES_JSON---" not in result.output
+        json.loads(result.output.strip())
 
     def test_config_show(self, initialized_project):
         project_dir, runner = initialized_project
         result = runner.invoke(main, ["config", "show"])
         assert result.exit_code == 0
 
-    def test_config_set_classifier_sensitivity(self, initialized_project):
+    def test_config_set_projects_path(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["config", "set", "classifier_sensitivity", "high"])
+        result = runner.invoke(main, ["config", "set", "projects_path", "/tmp/claude-projects"])
         assert result.exit_code == 0
 
     @pytest.mark.parametrize(
@@ -232,10 +241,10 @@ class TestHintLines:
     """error_response hints should appear in human-readable output."""
 
     def test_not_initialized_shows_hint(self, tmp_path, monkeypatch):
-        """status on an uninitialized dir should show a Hint: line."""
+        """status-inbox on an uninitialized dir should show a Hint: line."""
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        result = runner.invoke(main, ["status"])
+        result = runner.invoke(main, ["status-inbox"])
         assert "Hint:" in result.output or result.exit_code == 3
 
 
@@ -796,9 +805,9 @@ class TestHooksCommands:
         ])
         assert result.exit_code == 0
         from opentraces.cli import SENTINEL
-        assert SENTINEL in result.output
-        json_part = result.output.split(SENTINEL, 1)[1].strip()
-        data = json.loads(json_part)
+        # L3 (epic #129): explicit --json emits pure JSON, no sentinel preamble.
+        assert SENTINEL not in result.output
+        data = json.loads(result.output.strip())
         assert data["status"] == "ok"
         assert data["dry_run"] is True
         assert "plan" in data

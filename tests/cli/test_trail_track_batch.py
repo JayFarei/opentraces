@@ -238,6 +238,20 @@ def test_track_limit_caps_output(tmp_path: Path) -> None:
     assert len(rows) == 3
 
 
+def test_batch_survival_records_carry_track_schema_version(tmp_path: Path) -> None:
+    """Wave J follow-up — each batch survival record self-describes with the
+    same ``opentraces.trail.track.v1`` the single-patch track path stamps, so a
+    JSONL consumer sees one identified shape across both modes."""
+    _init_repo(tmp_path)
+    _seed_patches(tmp_path, 4)
+
+    result = _run(tmp_path, ["trail", "track", "--all", "--json"])
+    assert result.exit_code == 0, result.output
+    rows = [json.loads(line) for line in result.output.splitlines() if line.strip()]
+    assert rows
+    assert all(row["schema_version"] == "opentraces.trail.track.v1" for row in rows)
+
+
 def test_track_batch_modes_mutually_exclusive_with_selectors(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     patch_ids = _seed_patches(tmp_path, 1)

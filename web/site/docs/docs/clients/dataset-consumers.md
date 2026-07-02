@@ -51,7 +51,7 @@ evidence when it is allowed:
 ```bash
 opentraces trace get <trace-id> --remote owner/private-bucket --json
 opentraces trail track <trace-id> --json
-opentraces ctx step <trace-id> <step-index> --json
+opentraces ctx <trace-id>:<step-index> --json
 ```
 
 That lookup is separate from dataset loading. A public dataset can reference a

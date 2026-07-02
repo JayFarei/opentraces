@@ -34,6 +34,7 @@ from ..core.trace_stage import (
     normalize_review_policy,
     resolve_visible_stage,
 )
+from ._envelope import envelope as _envelope
 from ._help import OpentracesGroup
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,8 @@ COMMAND_SECTIONS = [
         "Global Setup",
         [
             "setup",
+            "upgrade",
+            "uninstall",
             "auth",
             "config",
             "completions",
@@ -237,8 +240,43 @@ class GroupedGroup(OpentracesGroup):
     The banner + tagline + command-title bar are rendered by
     ``OpentracesGroup.format_help`` for every command and group; this
     subclass only overrides ``format_commands`` to swap the flat listing
-    for the curated sections defined in ``COMMAND_SECTIONS``.
+    for the curated sections defined in ``COMMAND_SECTIONS``, and
+    ``resolve_command`` for the v7 address-first dispatch below.
     """
+
+    def resolve_command(self, ctx, args):  # type: ignore[override]
+        # v7 F5 — address-first discovery: ``opentraces <ref>`` is the
+        # default action lens ``opentraces trace get <ref>``.
+        #
+        # KNOWN COMMANDS ALWAYS WIN: ``get_command`` is consulted before
+        # any address logic and returns hidden commands too, so no verb —
+        # present or future, visible or hidden — can ever be shadowed.
+        # Only a first token that would ALREADY error today ("No such
+        # command") and passes the conservative two-tier address gate in
+        # ``cli/_address.py`` is re-pointed at the registered ``trace
+        # get`` command, with the token as its REF and every remaining
+        # flag forwarded untouched. Everything else (typos, ``-`` flags,
+        # shell-completion resilient parsing) takes Click's unchanged
+        # path byte-identically, Did-you-mean suggestions included.
+        if args and not ctx.resilient_parsing:
+            cmd_name = click.utils.make_str(args[0])
+            if not cmd_name.startswith("-") and self.get_command(ctx, cmd_name) is None:
+                from ._address import root_dispatch_token
+
+                forwarded = root_dispatch_token(cmd_name)
+                if forwarded is not None:
+                    trace_grp = self.get_command(ctx, "trace")
+                    get_cmd = (
+                        trace_grp.get_command(ctx, "get")
+                        if isinstance(trace_grp, click.Group)
+                        else None
+                    )
+                    if get_cmd is not None:
+                        # info_name "trace get" makes downstream usage /
+                        # error text name the canonical verb:
+                        # "Usage: opentraces trace get [OPTIONS] REF".
+                        return "trace get", get_cmd, [forwarded, *args[1:]]
+        return super().resolve_command(ctx, args)
 
     def _style_rows(self, rows: list[tuple[str, str]], name_width: int) -> list[tuple[str, str]]:
         # Prefix each command with a dim-magenta "ot" shorthand, pad the
@@ -328,13 +366,23 @@ class GroupedGroup(OpentracesGroup):
 
 
 def emit_json(data: dict) -> None:
-    """Emit structured JSON after the sentinel for agent-native parsing.
+    """Emit structured JSON for agent-native parsing.
 
-    Emitted when ``--json`` is explicit OR when stdout is not a TTY
-    (piped into another tool, Click test runner, etc.). Suppressed
-    for interactive human sessions so the terminal stays clean.
+    Two emission conventions (ADR-0007 lint L3):
+
+    * **Explicit ``--json`` (``_json_mode``)** — emit PURE ``json.dumps``
+      with no ``---OPENTRACES_JSON---`` sentinel and no leading human text,
+      so ``opentraces --json <cmd> | jq`` is valid JSON.
+    * **Legacy auto-non-TTY (no ``--json`` flag, piped stdout)** — keep the
+      sentinel preamble so legacy consumers and otbox journey parsing that
+      split on it keep working.
+    * **Interactive human session (TTY, no ``--json``)** — suppressed so the
+      terminal stays clean.
     """
-    if not _json_mode and sys.stdout.isatty():
+    if _json_mode:
+        click.echo(json.dumps(data, indent=2))
+        return
+    if sys.stdout.isatty():
         return
     click.echo(f"\n{SENTINEL}")
     click.echo(json.dumps(data, indent=2))
@@ -367,6 +415,42 @@ def error_response(code: str, kind: str, message: str, hint: str | None = None, 
 
 def _is_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+# rc for a command that refused to prompt because it could not run
+# interactively (ADR-0007 lint L2). Distinct, documented exit code so an
+# agent can branch on "you must supply a flag" without parsing prose.
+RC_INTERACTIVE_REQUIRED = 2
+
+
+def require_interactive(command_name: str, hint: str) -> None:
+    """Refuse (zero prompt bytes) when we cannot prompt a human.
+
+    ADR-0007 lint L2: a command that would drop into an interactive
+    ``click.prompt``/``click.confirm`` must NOT do so under explicit
+    ``--json`` or on a non-interactive terminal (closed/piped stdin or
+    stdout). Instead it emits a structured ``INTERACTIVE_REQUIRED`` error
+    naming the explicit flags/subcommands that do the same work
+    non-interactively, and exits ``RC_INTERACTIVE_REQUIRED`` (2). Emits ZERO
+    prompt bytes.
+
+    A genuine interactive human session (real TTY, no ``--json``) returns
+    immediately so today's prompt behavior is unchanged.
+    """
+    if not _json_mode and _is_interactive_terminal():
+        return
+    payload = error_response(
+        "INTERACTIVE_REQUIRED",
+        command_name,
+        f"'{command_name}' needs an interactive terminal; refusing to prompt.",
+        hint=hint,
+    )
+    emit_json(payload)
+    if not _json_mode and sys.stdout.isatty():
+        # emit_json suppressed on a TTY-stdout / piped-stdin session; still
+        # surface a one-line refusal (no prompt bytes) so the human sees it.
+        click.echo(f"{command_name}: {hint}", err=True)
+    sys.exit(RC_INTERACTIVE_REQUIRED)
 
 
 def _masked_input(prompt: str = "Token: ") -> str:
@@ -462,6 +546,9 @@ def _agent_placeholder() -> str:
     # the room they have. Children inherit ``max_content_width`` from
     # this root context.
     context_settings={"max_content_width": 10_000},
+    # v7 F5 discoverability line for the address-first dispatch handled
+    # by GroupedGroup.resolve_command above.
+    epilog="Address shortcut: ot <trace-id>[:<step>]  ->  ot trace get <ref>",
 )
 @click.version_option(version=__version__)
 @click.option("--json", "json_mode", is_flag=True, help="Emit only machine-readable JSON output")
@@ -696,8 +783,6 @@ def _render_config_pretty(data: dict, config_path) -> None:
     _kv("config version", data.get("config_version", "?"))
     token = data.get("hf_token")
     _kv("hf token", "*** (set)" if token else _dim("(not set)"))
-    _kv("classifier sensitivity", data.get("classifier_sensitivity", "medium"))
-    _kv("dataset visibility", data.get("dataset_visibility", "private"))
     custom_path = data.get("projects_path")
     if custom_path:
         _kv("projects path", custom_path)
@@ -744,6 +829,35 @@ def _render_config_pretty(data: dict, config_path) -> None:
     _kv("timeout", f"{rl.get('timeout', '?')}s")
     _kv("prompt version", rl.get("prompt_version", "?"))
     click.echo()
+
+
+# Project-marker fields with a boolean SHAPE (checked truthy elsewhere, e.g.
+# core/config.py::is_project_excluded reads `marker.get("excluded")`).
+# `_PORTABLE_FIELDS` carries no type info of its own (the marker is a plain
+# dict, not a Pydantic model like the global Config), so this is the explicit
+# type map `config set --project` coerces against.
+_PORTABLE_BOOLEAN_FIELDS = frozenset({"excluded"})
+
+
+def _coerce_portable_value(key: str, raw: str) -> object:
+    """Type-aware coercion for ``config set --project`` (ADR-0007 config
+    fold, issue #160 V6). Without this, ``--project excluded false``
+    persists the truthy string ``"false"`` instead of the boolean
+    ``False`` — a footgun since ``is_project_excluded`` reads the marker
+    for a falsy value, so the string form never actually opts a project
+    back in. Non-boolean portable keys are returned unchanged (strings).
+    """
+    if key not in _PORTABLE_BOOLEAN_FIELDS:
+        return raw
+    lowered = raw.strip().lower()
+    if lowered in {"true", "1", "yes", "on"}:
+        return True
+    if lowered in {"false", "0", "no", "off"}:
+        return False
+    raise ValueError(
+        f"'{raw}' is not a valid boolean for '{key}' "
+        "(use true/false, 1/0, or yes/no)"
+    )
 
 
 @config.command("set")
@@ -821,11 +935,18 @@ def config_set(
             if value not in existing:
                 existing.append(value)
             proj_cfg[key] = existing
+            stored_value: object = existing
         else:
-            proj_cfg[key] = value
+            try:
+                stored_value = _coerce_portable_value(key, value)
+            except ValueError as e:
+                click.echo(str(e), err=True)
+                emit_json(error_response("INVALID_CONFIG_VALUE", "config-set", str(e)))
+                sys.exit(2)
+            proj_cfg[key] = stored_value
         save_project_config(proj_dir, proj_cfg)
-        click.echo(f"Set {key}={value} (project)")
-        emit_json({"status": "ok", "scope": "project", "key": key, "value": value})
+        click.echo(f"Set {key}={stored_value} (project)")
+        emit_json({"status": "ok", "scope": "project", "key": key, "value": stored_value})
         return
 
     # Global scope (default).
@@ -883,13 +1004,55 @@ def config_tracking_mode(mode: str | None) -> None:
     """
     cfg = load_config()
     if mode is None:
-        click.echo(cfg.capture.tracking_mode)
+        # L3 (epic #129): suppress the bare human value under explicit --json so
+        # stdout stays pure JSON.
+        human_echo(cfg.capture.tracking_mode)
         emit_json({"status": "ok", "tracking_mode": cfg.capture.tracking_mode})
         return
     cfg.capture.tracking_mode = mode
     save_config(cfg)
     click.echo(f"Set tracking-mode={mode}")
     emit_json({"status": "ok", "tracking_mode": mode})
+
+
+@config.command("get")
+@click.argument("key", required=True)
+def config_get(key: str) -> None:
+    """Read a single global configuration value.
+
+      ot config get <key>
+
+    The single-setting counterpart to 'ot config set <key> <value>' — the
+    canon `set [KEY] [VALUE]` shape implies a key-addressing getter, but
+    only the whole-config 'ot config show' dump existed until now. Prints
+    the bare value in human mode; under --json returns the uniform
+    {status, schema_version, key, value, source} envelope. Unknown keys
+    exit non-zero with a structured error instead of a bare value.
+    """
+    cfg = load_config()
+    if key not in type(cfg).model_fields:
+        message = f"Unknown config key '{key}'. Use 'opentraces config show' to see valid keys."
+        human_echo(message)
+        emit_json(error_response("UNKNOWN_CONFIG_KEY", "config-get", message))
+        sys.exit(2)
+
+    value = getattr(cfg, key)
+    if hasattr(value, "model_dump"):
+        # A nested config section (e.g. `bucket`, `security`) — dump to a
+        # plain JSON-serializable dict rather than leak a Pydantic repr.
+        value = value.model_dump()
+    if key == "hf_token" and value:
+        value = "***"
+    elif key == "custom_redact_strings" and value:
+        value = ["***" for _ in value]
+
+    human_echo(json.dumps(value, indent=2) if isinstance(value, (dict, list)) else str(value))
+    emit_json(_envelope(
+        "opentraces.config.get.v1",
+        key=key,
+        value=value,
+        source="global",
+    ))
 
 
 # --------------------------------------------------------------------------- #
@@ -1145,7 +1308,6 @@ def init(
                 "status": "ok",
                 "message": "Already initialized" if not added_agents else "Updated initialized project",
                 "review_policy": proj_config["review_policy"],
-                "push_policy": proj_config["push_policy"],
                 "agents": proj_config["agents"],
                 "agents_added": added_agents,
             }
@@ -1153,7 +1315,6 @@ def init(
         return
 
     review_policy = DEFAULT_REVIEW_POLICY
-    push_policy = "manual"
     selected_agents = normalize_agents(list(agents))
 
     if _is_interactive_terminal() and not agents:
@@ -1192,7 +1353,6 @@ def init(
     proj_config: dict = {
         "mode": "auto" if review_policy == "auto" else "review",
         "review_policy": review_policy,
-        "push_policy": push_policy,
         "agents": selected_agents,
         "visibility": "private",
     }
@@ -1298,7 +1458,6 @@ def init(
         click.echo(f"  Entity parser: {entity_provisioned.version} ({entity_provisioned.source})")
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
     click.echo(f"  Policy:  {review_policy}")
-    click.echo(f"  Push:    {push_policy}")
     if existing_session_count:
         click.echo(f"  Existing Claude traces: {existing_session_count}")
         if imported_existing or import_errors:
@@ -1320,7 +1479,6 @@ def init(
         "status": "ok",
         "mode": proj_config["mode"],
         "review_policy": review_policy,
-        "push_policy": push_policy,
         "remote": None,
         "agents": selected_agents,
         "hook_installed": hook_installed,
@@ -2050,11 +2208,168 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     examples=[
         "opentraces status",
         "opentraces status --json",
-        "opentraces status --limit 0",
+        "opentraces status --short",
+        "opentraces status --full",
+        "opentraces status --project my-repo",
     ],
     see_also=[
-        ("opentraces trace query", "search retained traces with filters."),
+        ("opentraces bucket status", "lower-level bucket health readout."),
+        ("opentraces bucket repair", "rebuild the bucket read model."),
         ("opentraces doctor", "check pipeline and integration health."),
+    ],
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the opentraces.bucket.status.v1 envelope as JSON.")
+@click.option("--full", "full", is_flag=True, help="Add the debugger detail the default render drops.")
+@click.option("--short", "short", is_flag=True, help="One-line porcelain summary (stable, scriptable).")
+@click.option("--project", "project", metavar="SLUG", default=None, help="Scope every count + the safety verdict to one project.")
+def status(as_json: bool, full: bool, short: bool, project: str | None) -> None:
+    """Fleet bucket safety dashboard — is my private trace bucket safe to sync?
+
+    An O(1) read of the local bucket (never a full scan): how many traces are
+    captured, how many are cleared for sync, and — the load-bearing signal —
+    how many are not yet cleared. The safe verdict is impossible while any
+    trace is unscanned; wording is a PROCESS state ("not cleared for sync"),
+    never a content claim.
+    """
+    global _json_mode
+    if as_json:
+        _json_mode = True
+    if short and (full or as_json):
+        if _json_mode:
+            emit_json(error_response(
+                "BAD_USAGE", "status",
+                "--short cannot be combined with --full or --json.",
+            ))
+        else:
+            click.echo("status: --short cannot be combined with --full or --json.", err=True)
+        sys.exit(2)
+
+    from ..core.fleet_status import build_fleet_status
+
+    payload = build_fleet_status(project=project)
+
+    if short:
+        click.echo(_status_short_line(payload))
+        return
+    if _json_mode:
+        emit_json(payload)
+        return
+    _render_fleet_status(payload, full=full)
+    # Non-TTY-without-flag consumers still get the sentinel JSON block.
+    emit_json(payload)
+
+
+def _status_short_line(payload: dict) -> str:
+    """Stable one-line porcelain. The clean signal encodes the FULL safety
+    gate — unfiltered==0 AND unscanned==0 AND not stale — never unfiltered
+    alone, so a script cannot read 'clean' off an unscanned bucket."""
+    store = payload.get("store") or {}
+    safety = payload.get("safety") or {}
+    fresh = payload.get("freshness") or {}
+    total = store.get("trace_count")
+    total_s = "?" if total is None else str(total)
+    unscanned = safety.get("unscanned_count")
+    not_cleared = safety.get("not_cleared_count")
+    stale = bool(fresh.get("stale"))
+    if safety.get("verdict") == "empty":
+        signal = "empty"
+    elif bool(payload.get("ready")) and not stale:
+        signal = "clean"
+    else:
+        signal = "not-cleared"
+    parts = [
+        f"status={signal}",
+        f"traces={total_s}",
+        f"unscanned={'?' if unscanned is None else unscanned}",
+        f"not_cleared={'?' if not_cleared is None else not_cleared}",
+        f"stale={'yes' if stale else 'no'}",
+    ]
+    return " ".join(parts)
+
+
+def _render_fleet_status(payload: dict, *, full: bool) -> None:
+    """Curated, safety-first human render. Silent when the bucket is truly clean."""
+    store = payload.get("store") or {}
+    safety = payload.get("safety") or {}
+    sync = payload.get("sync") or {}
+    fleet = payload.get("fleet") or {}
+    fresh = payload.get("freshness") or {}
+    verdict = safety.get("verdict")
+    total = store.get("trace_count")
+
+    if not payload.get("ok"):
+        click.echo(f"{_warn('bucket read model unavailable')} - run 'opentraces bucket repair'.")
+        return
+
+    if verdict == "empty":
+        click.echo(_dim("No traces captured yet. Start a connected agent; traces are captured automatically."))
+        return
+
+    scope = f" [{payload['scope_project']}]" if payload.get("scope_project") else ""
+    if payload.get("ready") and not fresh.get("stale"):
+        # Truly clean: a quiet, one-line all-clear (silent-when-clean posture).
+        click.echo(f"{_ok('cleared for sync')}{scope}  {_dim(f'{total} trace(s), all scanned and clean')}")
+        if full:
+            _render_fleet_table(fleet, full=full)
+        return
+
+    # Not cleared - lead with the safety headline.
+    unscanned = safety.get("unscanned_count") or 0
+    not_cleared = safety.get("not_cleared_count") or 0
+    click.echo(f"{_warn('not cleared for sync')}{scope}  {_bold(str(not_cleared))} of {_bold(str(total))} trace(s) not cleared")
+    click.echo(
+        f"  {_dim('scanned')} {safety.get('scanned_count')}    "
+        f"{_dim('unscanned')} {unscanned}    "
+        f"{_dim('not cleared')} {not_cleared}"
+    )
+    if fresh.get("understates_safety"):
+        click.echo(_dim("  note: some traces are unscanned - these counts may understate what is not cleared."))
+    for reason in sync.get("blocked_reasons") or []:
+        click.echo(f"    {_dim('blocked:')} {reason}")
+
+    _render_fleet_table(fleet, full=full)
+
+    if fresh.get("stale"):
+        reasons = ", ".join(fresh.get("reasons") or []) or "stale"
+        click.echo(f"  {_warn('read model stale')} ({reasons}) - refresh with 'opentraces bucket repair'.")
+
+    for step in payload.get("next_steps") or []:
+        click.echo(f"  {_dim('→')} {step}")
+
+
+def _render_fleet_table(fleet: dict, *, full: bool) -> None:
+    rows = fleet.get("by_project") or []
+    if not rows:
+        return
+    click.echo()
+    for p in rows:
+        nc = p.get("not_cleared_count") or 0
+        marker = _warn("○") if nc else _ok("✓")
+        line = f"  {marker} {p.get('project') or '(unknown)'}  {_dim(str(p.get('trace_count')) + ' trace(s)')}"
+        if nc:
+            line += f"  {_dim(str(nc) + ' not cleared')}"
+        if full:
+            line += _dim(
+                f"  [scanned {p.get('scanned_count')}, unscanned {p.get('unscanned_count')}, "
+                f"syncable {p.get('syncable_count')}]"
+            )
+        click.echo(line)
+    omitted = fleet.get("projects_omitted") or 0
+    if omitted:
+        click.echo(_dim(f"  … and {omitted} more project(s)"))
+
+
+@main.command(
+    "status-inbox",
+    hidden=True,
+    examples=[
+        "opentraces status-inbox",
+        "opentraces status-inbox --json",
+        "opentraces status-inbox --limit 0",
+    ],
+    see_also=[
+        ("opentraces status", "the fleet bucket safety dashboard."),
+        ("opentraces trace query", "search retained traces with filters."),
     ],
 )
 @click.option(
@@ -2070,11 +2385,13 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     is_flag=True,
     help="Emit structured JSON (same as the global --json flag).",
 )
-def status(limit: int, as_json: bool) -> None:
-    """Show status of the current opentraces project.
+def status_inbox(limit: int, as_json: bool) -> None:
+    """Show the per-project capture inbox (transitional).
 
-    Summarises inbox counts by stage, the active remote, and the most
-    recent traces. A fast snapshot of what's waiting, staged, and shipped.
+    The former ``opentraces status``: inbox counts by stage, the active
+    remote, and the most recent traces for the current project. Retained
+    (callable, hidden from --help) while ``opentraces status`` is the
+    fleet-wide bucket safety dashboard.
     """
     global _json_mode
     if as_json:
@@ -2422,7 +2739,6 @@ def status(limit: int, as_json: bool) -> None:
         "status": "ok",
         "project": project_name,
         "review_policy": proj_config["review_policy"],
-        "push_policy": proj_config["push_policy"],
         "agents": proj_config["agents"],
         "remote": remote,
         "counts": counts,
@@ -2473,13 +2789,14 @@ from .trail import trail_group as _trail_group  # noqa: E402
 _trail_group.add_command(_graph_cmd, name="graph")
 _trail_group.add_command(_blame_group, name="blame")
 
-# `trail blame pr` subgroup — PR body rendering driven by the
-# `pr-intent-summary-v1` workflow. First non-dataset workflow consumer.
-# Lives under `blame` because every consumer (PR, future Slack, dashboard,
-# CI) renders the same blame-shaped data for a different destination.
+# `trail pr` — the family's one gated GitHub write, lifted (#165) to a
+# top-level trail verb so the read verbs (`blame`/`track`/`graph`/bare `trail`)
+# stay pure projections. The pre-#165 `trail blame pr ...` path is kept as a
+# hidden compat alias so existing scripts and journeys keep working.
 from .trail_pr import attach as _attach_trail_pr  # noqa: E402
 
-_attach_trail_pr(_blame_group)
+_attach_trail_pr(_trail_group)
+_attach_trail_pr(_blame_group, hidden=True)
 
 main.add_command(_trail_group)
 
@@ -2559,6 +2876,12 @@ from . import setup_review_llm as _setup_review_llm  # noqa: E402,F401
 # import that previously sat in the installers review-llm section; relocated here
 # with the other registration imports). Unrelated to review-llm.
 from . import doctor_cli as _doctor_cli  # noqa: E402,F401
+
+# issue #160: mount the SAME `doctor` command object under `setup` (visible)
+# so the install-health read-twin is discoverable right beside the verbs it
+# reports on. Root `opentraces doctor` is unchanged (same object, one more
+# path — the object stays unhidden, so both mounts are visible).
+_setup_group.add_command(_doctor_cli.doctor_cmd, name="doctor")
 
 
 @_setup_group.command("auth", hidden=True)  # plan 087 — redundant with `auth login` (the canonical home); callable, off --help
@@ -3189,6 +3512,12 @@ def remote_remove(repo: str | None, delete_remote: bool, confirmed: bool) -> Non
         sys.exit(2)
 
     if delete_remote and not confirmed:
+        # ADR-0007 lint L2: destructive confirm must not prompt under --json /
+        # non-TTY; refuse with a structured error naming the --yes bypass.
+        require_interactive(
+            "remote remove",
+            "pass --yes to confirm the irreversible remote deletion non-interactively",
+        )
         click.echo(f"About to delete {repo} on HuggingFace (irreversible).")
         if not click.confirm("Proceed?"):
             click.echo("Cancelled.")

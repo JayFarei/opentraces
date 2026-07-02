@@ -135,12 +135,39 @@ def fake_remote_push(remote_root: Path | None = None, *, force: bool = False) ->
                 else ""
             )
         )
+    # Egress gate (#162): refuse before copying a single byte if the FRESH
+    # manifest still withholds any trace. The bucket-level sync.eligible flag
+    # above is all-or-nothing and misses status_unknown rows (they do not
+    # increment unfiltered_count); this per-trace gate closes that hole so a
+    # not-cleared trace can never physically egress while being reported
+    # "withheld". Raises BucketPushWithheldError (carrying the partition) when
+    # withheld is non-empty.
+    from .bucket_sync import enforce_push_clearance
+
+    partition = enforce_push_clearance(manifest)
     status = fake_remote_status(root)
     if status.get("state") in {"remote_ahead", "diverged"} and not force:
         raise ValueError(
             "remote bucket has changes that are not in the local bucket; "
             "pull first or pass --force to overwrite"
         )
+    # TOCTOU tightening (#162): the egress gate above ran on M1, but
+    # fake_remote_status recomputed the manifest after it and _copy_bucket_tree
+    # below reads the LIVE bucket tree. Re-run the clearance gate on a manifest
+    # recomputed IMMEDIATELY before the copy, so the authorizing snapshot is the
+    # last manifest computed before egress and the digest/partition/written
+    # remote manifest all reflect exactly it. No manifest recompute sits between
+    # this final gate and the copy.
+    #
+    # RESIDUAL (deliberately out of scope): a trace captured concurrently DURING
+    # the push — written between this final recompute and the copy below — can
+    # still reach egress without having been in the cleared partition. That
+    # window is a pre-existing property of the whole-tree push protocol; airtight
+    # closure needs allow-list egress (copy only files named by the cleared
+    # manifest), which would change the full-corpus whole-tree upload the
+    # cross-machine bucket_digest protocol depends on.
+    manifest = bucket_manifest(write=True, include_objects=False)
+    partition = enforce_push_clearance(manifest)
     copied = _copy_bucket_tree(local_bucket, root)
     _atomic_write_json(root / "manifest.json", manifest)
     write_bucket_sync_state(
@@ -156,6 +183,7 @@ def fake_remote_push(remote_root: Path | None = None, *, force: bool = False) ->
         "remote_root": str(root),
         "digest": manifest.get("digest"),
         "files_copied": copied,
+        "push_partition": partition,
     }
 
 

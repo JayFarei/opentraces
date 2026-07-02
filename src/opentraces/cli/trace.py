@@ -16,6 +16,7 @@ from pathlib import Path
 import click
 
 from opentraces import cli as _cli
+from ._envelope import envelope as _envelope
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
 from ._progress import progress_option
@@ -383,28 +384,28 @@ def trace_discover(
     show_default=True,
     help="Result order: relevance (score), time (oldest first), or recency (newest first).",
 )
-@click.option(
-    "--min-score",
-    type=float,
-    default=None,
-    help="Drop candidates scoring below this threshold.",
-)
-@click.option(
-    "--recency-weight",
-    type=float,
-    default=0.0,
-    help="Blend a recency term into the relevance score (newest-first tiebreak); 0 disables.",
-)
 @click.option("--force-rebuild", is_flag=True, help="Rejected: search commands are read-only.")
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    help=(
+        "Pull the configured private bucket remote and rebuild the search "
+        "snapshot before querying (names the remote repo for the trail). "
+        "Symmetric with `trace get --remote`."
+    ),
+)
 @click.option(
     "--remote-bucket",
     is_flag=True,
-    help="Pull the configured private bucket remote and rebuild the search snapshot before querying.",
+    hidden=True,
+    help="Deprecated alias for --remote (still works; uses the configured remote).",
 )
 @click.option(
     "--force-remote-bucket",
     is_flag=True,
-    help="Allow --remote-bucket to overwrite a local-ahead or diverged bucket.",
+    hidden=True,
+    help="Allow the remote pull to overwrite a local-ahead or diverged bucket.",
 )
 @click.option(
     "--source",
@@ -460,9 +461,8 @@ def trace_query(
     include_slice: str | None,
     max_slice_nodes: int,
     sort_order: str,
-    min_score: float | None,
-    recency_weight: float,
     force_rebuild: bool,
+    remote: str | None,
     remote_bucket: bool,
     force_remote_bucket: bool,
     query_source: str,
@@ -557,8 +557,11 @@ def trace_query(
         )
         sys.exit(3)
     remote_bucket_payload = None
-    if force_remote_bucket and not remote_bucket:
-        click.echo("--force-remote-bucket requires --remote-bucket.", err=True)
+    # v7 L4: `--remote` is the advertised name; `--remote-bucket` is a hidden
+    # deprecated alias that maps onto the same configured-remote pull path.
+    want_remote_pull = bool(remote) or remote_bucket
+    if force_remote_bucket and not want_remote_pull:
+        click.echo("--force-remote-bucket requires --remote.", err=True)
         sys.exit(2)
     if force_rebuild:
         click.echo(
@@ -586,20 +589,15 @@ def trace_query(
             err=True,
         )
         sys.exit(2)
-    if min_score is not None or recency_weight:
-        click.echo(
-            "--min-score and --recency-weight are not supported by the compact "
-            "read-only trace search snapshot.",
-            err=True,
-        )
-        sys.exit(2)
-    if remote_bucket:
+    if want_remote_pull:
         try:
             from ._remote_bucket import pull_remote_bucket_for_trace
 
             remote_bucket_payload = pull_remote_bucket_for_trace(
                 force=force_remote_bucket,
             )
+            if remote:
+                remote_bucket_payload["requested_repo"] = remote
         except Exception as exc:
             click.echo(f"Unable to read remote bucket: {exc}", err=True)
             sys.exit(3)
@@ -640,8 +638,45 @@ def trace_query(
             strict_freshness=fresh,
         )
     except SearchSnapshotNeedsRebuild as exc:
+        # v7 V11: the search index self-maintains invisibly. When the corpus is
+        # too large to build the cold snapshot inline, the guard (issue #124)
+        # must NOT surface its internal `cold_build_too_large` sentinel to the
+        # caller — the query just returns an honest empty result instead of
+        # leaking an index-maintenance state (the audit-P2 fix). Genuine
+        # self-heal failures (issue #30) and the explicit `--fresh` strict path
+        # keep the maintenance_needed signal.
+        if exc.reason == "cold_build_too_large":
+            payload = _envelope(
+                "opentraces.trace.query.v1",
+                source="snapshot",
+                sort=sort_order,
+                semantic_query=None,
+                total=0,
+                total_returned=0,
+                limit=limit,
+                next_page_token=None,
+                has_more=False,
+                candidates=[],
+                search_diagnostics={
+                    "used_search_snapshot": False,
+                    "used_fts": False,
+                    "rows_examined": 0,
+                    "hits_returned": 0,
+                    "hydrated_count": 0,
+                    "raw_trace_scan": False,
+                    "wrote_to_index": False,
+                    "rebuilt_index": False,
+                    "python_full_corpus_sort": False,
+                },
+            )
+            if remote_bucket_payload is not None:
+                payload["remote_bucket"] = remote_bucket_payload
+            if as_json:
+                click.echo(_dump_json(payload))
+            return
         # search_traces auto-rebuilds the compact snapshot once before raising
-        # (issue #30); reaching here means the automatic rebuild itself failed.
+        # (issue #30); reaching here means the automatic rebuild itself failed
+        # or `--fresh` could not prove freshness.
         payload = {
             "status": "maintenance_needed",
             "reason": exc.reason,
@@ -684,19 +719,19 @@ def trace_query(
         hydrated_count += hydrated
     diagnostics = page.diagnostics.as_dict()
     diagnostics["hydrated_count"] = hydrated_count
-    payload = {
-        "status": "ok",
-        "source": "snapshot",
-        "sort": sort_order,
-        "semantic_query": None,
-        "total": page.total,
-        "total_returned": len(candidates),
-        "limit": limit,
-        "next_page_token": page.next_page_token,
-        "has_more": page.next_page_token is not None,
-        "candidates": [packet.model_dump(mode="json") for packet in candidates],
-        "search_diagnostics": diagnostics,
-    }
+    payload = _envelope(
+        "opentraces.trace.query.v1",
+        source="snapshot",
+        sort=sort_order,
+        semantic_query=None,
+        total=page.total,
+        total_returned=len(candidates),
+        limit=limit,
+        next_page_token=page.next_page_token,
+        has_more=page.next_page_token is not None,
+        candidates=[packet.model_dump(mode="json") for packet in candidates],
+        search_diagnostics=diagnostics,
+    )
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
     # Issue #91: surface the served snapshot's freshness telemetry. On an
@@ -719,7 +754,7 @@ def trace_query(
         click.echo(f"{packet.trace_id}  {packet.title}")
 
 
-@trace_group.command("skills", cls=OpentracesCommand)
+@trace_group.command("skills", cls=OpentracesCommand, hidden=True)  # v7 7->4 collapse: folded into `trace query --skill`. Callable, off --help.
 @click.option("--skill", default=None, help="Show one exact skill name.")
 @click.option("--project", default=None, help="Project slug to search.")
 @click.option("--cwd", "current_cwd", is_flag=True, help="Search only the current opted-in project.")
@@ -778,6 +813,40 @@ def trace_skills(
             cursor=page_token,
         )
     except SearchSnapshotNeedsRebuild as exc:
+        # v7 V11 / audit-P2: the skill facet self-maintains invisibly. When the
+        # corpus is too large to build the cold snapshot inline, NEVER surface
+        # the internal `cold_build_too_large` sentinel — return an honest empty
+        # "no skills" result (this hidden verb is folded into `trace query
+        # --skill`, and both must be sentinel-free). Genuine self-heal failures
+        # keep the maintenance_needed signal.
+        if exc.reason == "cold_build_too_large":
+            empty = {
+                "status": "ok",
+                "source": "snapshot",
+                "total_skills": 0,
+                "total_invocations": 0,
+                "limit": limit,
+                "next_page_token": None,
+                "has_more": False,
+                "skills": [],
+                "search_diagnostics": {
+                    "used_search_snapshot": False,
+                    "used_fts": False,
+                    "rows_examined": 0,
+                    "hits_returned": 0,
+                    "hydrated_count": 0,
+                    "raw_trace_scan": False,
+                    "wrote_to_index": False,
+                    "rebuilt_index": False,
+                    "python_full_corpus_sort": False,
+                },
+                "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},
+            }
+            if as_json:
+                click.echo(_dump_json(empty))
+                return
+            click.echo("No skill invocations found.")
+            return
         payload = {
             "status": "maintenance_needed",
             "reason": exc.reason,
@@ -832,7 +901,7 @@ def trace_skills(
         click.echo(f"{item.skill_name}\t{item.invocation_count}\t{item.trace_count}")
 
 
-@trace_group.group("index", cls=OpentracesGroup, invoke_without_command=True)
+@trace_group.group("index", cls=OpentracesGroup, invoke_without_command=True, hidden=True)  # v7 7->4 collapse: index self-maintains behind query; callable plumbing, off --help.
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @progress_option
 @click.pass_context
@@ -1349,21 +1418,83 @@ def trace_map_cmd(
         if keep:
             selected = filter_trace_map_actions(selected, keep)
 
-    payload = {
-        "status": "ok",
-        "trace_id": trace_id,
-        "candidate_node_id": candidate_node_id,
-        "map": selected.model_dump(mode="json"),
-    }
+    selector_active = bool(candidate or around or from_node or as_bursts or actions_filter)
+    if selector_active:
+        # A selector narrowed the map — the sub-map is already bounded by the
+        # selector; emit it verbatim, wrapped in the L5 envelope, and still end
+        # in a runnable slice handoff for the narrowed span.
+        handoff = _map_handoff(selected, trace_id)
+        payload = _envelope(
+            "opentraces.trace.map.v1",
+            trace_id=trace_id,
+            candidate_node_id=candidate_node_id,
+            map=selected.model_dump(mode="json"),
+            handoff=handoff,
+        )
+        if as_json:
+            click.echo(_dump_json(payload))
+            return
+        for node in selected.nodes:
+            click.echo(f"{node.node_id}  {node.action_type}  {node.text_preview or ''}")
+        click.echo(f"next: opentraces {handoff['command']}")
+        return
+
+    # Default whole-trace browse — bounded faceted view (v7 V1: never O(nodes)).
+    record = _try_load_trace_record(trace_id)
+    view = _bounded_map_view(selected, trace_id=trace_id, record=record)
+    payload = _envelope("opentraces.trace.map.v1", trace_id=trace_id, **view)
     if as_json:
         click.echo(_dump_json(payload))
         return
-    for node in selected.nodes:
-        click.echo(f"{node.node_id}  {node.action_type}  {node.text_preview or ''}")
+    span = view["scope"]["span"]
+    click.echo(
+        f"trace {trace_id}  steps {span['from_step']}..{span['to_step']}  "
+        f"nodes {view['scope']['node_count']}"
+    )
+    click.echo("TYPE:")
+    for atype, count in view["facets"]["type"].items():
+        click.echo(f"  {count:>4}  {atype}")
+    if view["facets"]["file"]:
+        click.echo("FILE:")
+        for fpath, count in view["facets"]["file"].items():
+            click.echo(f"  {count:>4}  {fpath}")
+    click.echo(f"SECTIONS ({view['section_total']}):")
+    for sec in view["sections"]:
+        click.echo(f"  @{sec['step']}  {sec['preview']}")
+    if view["section_total"] > len(view["sections"]):
+        click.echo(f"  … +{view['section_total'] - len(view['sections'])} more")
+    click.echo(f"LANDMARKS ({view['landmark_total']}, relevance-capped):")
+    for lm in view["landmarks"]:
+        click.echo(f"  @{lm['step']}  {lm['type']}  {lm['preview']}")
+    click.echo(f"next: opentraces {view['handoff']['command']}")
 
 
 @trace_group.command("slice", cls=OpentracesCommand)
 @click.argument("target")
+@click.option(
+    "--by",
+    "slicer_by",
+    type=click.Choice(["user-turn", "change-burst", "milestone", "subgoal"]),
+    default=None,
+    help=(
+        "Tile the WHOLE trace into a Trajectory array (opentraces.slicing.v1): "
+        "user-turn/change-burst (deterministic); milestone/subgoal (cheap-LLM). "
+        "Absorbs the former `trace partition`."
+    ),
+)
+@click.option(
+    "--answers",
+    "answers_file",
+    default=None,
+    help="With --by milestone/subgoal: JSON file of cheap-LLM JudgmentAnswers.",
+)
+@click.option(
+    "--judge",
+    type=click.Choice(["deterministic", "agent", "provider", "human"]),
+    default="agent",
+    show_default=True,
+    help="With --by milestone/subgoal: judge backend. 'agent' uses the rc=10 handshake.",
+)
 @click.option("--from-step", "from_step", type=int, default=None, help="First step index in a manual slice.")
 @click.option("--to-step", "to_step", type=int, default=None, help="Last step index in a manual slice.")
 @click.option("--around-step", "around_step", type=int, default=None, help="Create a slice around one step.")
@@ -1391,6 +1522,9 @@ def trace_map_cmd(
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_slice_cmd(
     target: str,
+    slicer_by: str | None,
+    answers_file: str | None,
+    judge: str,
     from_step: int | None,
     to_step: int | None,
     around_step: int | None,
@@ -1401,7 +1535,7 @@ def trace_slice_cmd(
     no_commit_lookup: bool,
     as_json: bool,
 ) -> None:
-    """Extract deterministic Trace Slices for dataset workflows."""
+    """Extract deterministic Trace Slices, or tile the whole trace with --by."""
     from ..core.bursts import DEFAULT_BURST_GAP
     from ..core.trace_index import get_trace_map
     from ..core.trace_slices import (
@@ -1412,13 +1546,35 @@ def trace_slice_cmd(
     )
 
     manual_range = from_step is not None or to_step is not None
+
+    # --by tiles the WHOLE trace via the unified slicer engine (absorbs the
+    # former `trace partition`); it is mutually exclusive with the windowing
+    # modes and emits the FROZEN opentraces.slicing.v1 envelope untouched.
+    if slicer_by is not None:
+        if manual_range or around_step is not None or around_patch or template:
+            click.echo(
+                "--by tiles the whole trace and cannot be combined with "
+                "--template/--from-step/--to-step/--around-step/--around-patch.",
+                err=True,
+            )
+            sys.exit(2)
+        _run_slicing_partition(
+            target,
+            _SLICE_BY_TO_SLICER[slicer_by],
+            answers_file=answers_file,
+            judge=judge,
+            remote=None,
+            as_json=as_json,
+        )
+        return
+
     if manual_range and (from_step is None or to_step is None):
         click.echo("Use --from-step and --to-step together.", err=True)
         sys.exit(2)
     mode_count = sum(bool(value) for value in (manual_range, around_step is not None, around_patch, template))
     if mode_count != 1:
         click.echo(
-            "Choose exactly one slice mode: --template, --from-step/--to-step, "
+            "Choose exactly one slice mode: --by, --template, --from-step/--to-step, "
             "--around-step, or --around-patch.",
             err=True,
         )
@@ -1496,6 +1652,10 @@ def trace_slice_cmd(
         click.echo(str(exc), err=True)
         sys.exit(2)
 
+    payload = _envelope(
+        "opentraces.trace.slice.v1",
+        **{k: v for k, v in payload.items() if k != "status"},
+    )
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -1506,7 +1666,7 @@ def trace_slice_cmd(
         )
 
 
-@trace_group.command("partition", cls=OpentracesCommand)
+@trace_group.command("partition", cls=OpentracesCommand, hidden=True)  # v7 7->4 collapse: absorbed by `trace slice --by`. Callable (slicer-conformance journey), off --help.
 @click.argument("ref")
 @click.option(
     "--by",
@@ -1550,6 +1710,43 @@ def trace_partition_cmd(
     judgments are needed and none are supplied the command prints the
     JudgmentRequests + an instruction and exits ``rc=10``; answer them, write an
     ``--answers`` file, and re-run for the final tiled result at ``rc=0``.
+    """
+    _run_slicing_partition(
+        ref,
+        slicer,
+        answers_file=answers_file,
+        judge=judge,
+        remote=remote,
+        as_json=as_json,
+    )
+
+
+# Map `trace slice --by <name>` to the frozen slicer ids (v7: slice absorbs
+# partition; the envelope SHAPE — opentraces.slicing.v1 — is what's frozen, not
+# the verb name, so the rename is safe).
+_SLICE_BY_TO_SLICER = {
+    "user-turn": "s1",
+    "change-burst": "s2",
+    "milestone": "s3",
+    "subgoal": "s4",
+}
+
+
+def _run_slicing_partition(
+    ref: str,
+    slicer: str,
+    *,
+    answers_file: str | None,
+    judge: str,
+    remote: str | None,
+    as_json: bool,
+) -> None:
+    """Shared slicer engine for `trace partition` and `trace slice --by`.
+
+    Emits the FROZEN ``opentraces.slicing.v1`` envelope and honors the
+    ``rc=10 needs-judgment -> rc=0`` agent-loop handshake. This body is byte
+    -identical between the two entry points (the slicer-conformance SENTINEL
+    rides ``trace partition``; ``trace slice --by`` reuses the same engine).
     """
     from ..core import slicing
 
@@ -1661,12 +1858,14 @@ def trace_partition_cmd(
 @click.option(
     "--remote-bucket",
     is_flag=True,
-    help="Pull the configured private bucket remote before resolving the trace.",
+    hidden=True,
+    help="Deprecated: pull the configured private bucket remote before resolving the trace (still works).",
 )
 @click.option(
     "--force-remote-bucket",
     is_flag=True,
-    help="Allow --remote-bucket to overwrite a local-ahead or diverged bucket.",
+    hidden=True,
+    help="Allow the remote-bucket pull to overwrite a local-ahead or diverged bucket.",
 )
 @click.option(
     "--remote",
@@ -1729,8 +1928,16 @@ def trace_get(
 ) -> None:
     """Resolve a trace, trace unit, map node, or ot:// Trail resource.
 
+    REF accepts the universal trace address: ``<trace>``,
+    ``<trace>:<step>``, ``<trace>:last``, or ``<trace>:<A>-<B>`` — the same
+    token ``ctx`` and ``trail`` resolve. ``<trace>:<step>`` returns a bounded
+    step card (the action lens, with the ``context_node_id`` join key);
+    ``<trace>:<A>-<B>`` returns the same slice object as
+    ``trace slice --from-step A --to-step B``.
+
     Pass ``--resume`` to hand control back to the native/upstream agent
-    runtime instead of printing the trace details. ``--at-step`` currently
+    runtime instead of printing the trace details (``<trace>:<N> --resume``
+    forks from step N). ``--at-step`` currently
     requires a Claude Code trace. Pass
     ``--bursts`` to return the change-burst summary for the trace
     without re-walking the full Trace Map. Pass ``--card`` to return a bounded
@@ -1745,6 +1952,79 @@ def trace_get(
     if as_card and remote:
         click.echo("--card cannot be combined with --remote yet.", err=True)
         sys.exit(2)
+
+    # ------------------------------------------------------------------
+    # v7 F1 — the universal trace:step address, resolved on trace get.
+    #
+    # Parse ORDER matters: refs with a known scheme prefix (ot://, tu:,
+    # tmn:, t:) take the EXISTING dispatch paths byte-unchanged — their
+    # embedded colons are scheme separators, never step selectors. Only a
+    # bare ref containing ':' is run through the SHARED step-address
+    # grammar (core.trails.lineage.parse_trail_ref — the single grammar
+    # oracle, pinned by tests/cli/test_trail_lineage_world.py). This block
+    # runs BEFORE the --remote branch below so `trace get <T>:<N> --remote`
+    # returns the record-only step card, not the whole-trace overview.
+    # ------------------------------------------------------------------
+    addr_trace: str | None = None
+    step_sel: int | None = None
+    last_sel = False
+    span_sel: tuple[int, int] | None = None
+    if ":" in ref and not ref.startswith(("ot://", "tu:", "tmn:", "t:")):
+        from ..core.trails.lineage import parse_trail_ref
+
+        addr_trace, parsed_step, parsed_span, reserved = parse_trail_ref(ref)
+        if reserved == "last":
+            last_sel = True
+        elif reserved == "span":
+            span_sel = parsed_span
+        elif reserved == "origin":
+            click.echo(
+                f"':origin' is reserved and not resolvable on trace get yet; "
+                f"use {addr_trace}, {addr_trace}:<N>, {addr_trace}:last, or "
+                f"{addr_trace}:<A>-<B>.",
+                err=True,
+            )
+            sys.exit(2)
+        elif reserved is not None:
+            click.echo(
+                f"Unparseable step address: {ref} "
+                f"(use <trace>, <trace>:<N>, <trace>:last, or <trace>:<A>-<B>).",
+                err=True,
+            )
+            sys.exit(2)
+        else:
+            step_sel = parsed_step
+    has_addr = step_sel is not None or last_sel or span_sel is not None
+
+    if has_addr:
+        for flag_name, flag_val in (
+            ("--bursts", as_bursts),
+            ("--card", as_card),
+            ("--waste", as_waste),
+            ("--run-intel", as_run_intel),
+        ):
+            if flag_val:
+                click.echo(
+                    f"{flag_name} operates on the whole trace; use the bare trace ref.",
+                    err=True,
+                )
+                sys.exit(2)
+        if span_sel is not None and resume:
+            click.echo(
+                "--resume needs a single step; use <trace>:<N> or <trace>:last.",
+                err=True,
+            )
+            sys.exit(2)
+        if span_sel is not None and remote:
+            click.echo(
+                "Span addresses need the local Trace Map; "
+                "--remote cannot serve <trace>:<A>-<B>.",
+                err=True,
+            )
+            sys.exit(2)
+        if resume and at_step:
+            click.echo("Pass either <trace>:<step> or --at-step, not both.", err=True)
+            sys.exit(2)
 
     remote_bucket_payload = None
     if remote_bucket:
@@ -1763,6 +2043,28 @@ def trace_get(
         sys.exit(2)
 
     if resume:
+        if has_addr:
+            # <trace>:<N> --resume closes the resume triple: the same token
+            # that names the step in ctx/trail is the fork point. The
+            # at_step contract is exactly 's<int>'
+            # (capture/claude_code/resume.py::_find_step).
+            assert addr_trace is not None
+            fork_step = step_sel
+            if last_sel:
+                from ..core.trace_index import get_trace_path as _get_trace_path
+
+                trace_path = _get_trace_path(_trace_id_from_ref(addr_trace))
+                if trace_path is None or not trace_path.exists():
+                    click.echo(f"Trace not found: {ref}", err=True)
+                    sys.exit(6)
+                record = _read_trace_record_from_path(trace_path)
+                indices = [s.step_index for s in record.steps]
+                if not indices:
+                    click.echo(f"Step not found: {ref} (trace has no steps)", err=True)
+                    sys.exit(6)
+                fork_step = max(indices)
+            _resume_trace_impl(addr_trace, f"s{fork_step}", dry_run, as_json)
+            return
         _resume_trace_impl(ref, at_step, dry_run, as_json)
         return
 
@@ -1777,7 +2079,7 @@ def trace_get(
         except FileNotFoundError:
             click.echo(f"Trace not found: {ref}", err=True)
             sys.exit(6)
-        payload = {"status": "ok", "card": card.model_dump(mode="json")}
+        payload = _envelope("opentraces.trace.get.v1", card=card.model_dump(mode="json"))
         if remote_bucket_payload is not None:
             payload["remote_bucket"] = remote_bucket_payload
         if as_json:
@@ -1808,7 +2110,7 @@ def trace_get(
         from ..core.bucket_remote import BucketRemoteError
         from ..core.bucket_store import BucketLayoutError
 
-        trace_id = _trace_id_from_ref(ref)
+        trace_id = _trace_id_from_ref(addr_trace if has_addr else ref)
         try:
             record = _read_trace_record_via_backend(trace_id, remote)
         except _BackendUnavailable as exc:
@@ -1820,13 +2122,31 @@ def trace_get(
         except FileNotFoundError:
             click.echo(f"Trace not found on remote {remote}: {ref}", err=True)
             sys.exit(6)
-        payload = {"status": "ok", "trace": record.model_dump(mode="json")}
+        if step_sel is not None or last_sel:
+            # Record-only step card: the Trace Map lives in the LOCAL index,
+            # so map enrichment is silently skipped on --remote reads.
+            step = _select_step(record, step_sel, last_sel, ref)
+            payload = _envelope(
+                "opentraces.trace.get.v1",
+                trace_id=record.trace_id,
+                step=_step_card(record, step, trace_map=None),
+                next_steps=_step_next_steps(record.trace_id, step.step_index),
+            )
+            if remote_bucket_payload is not None:
+                payload["remote_bucket"] = remote_bucket_payload
+            if as_json:
+                click.echo(_dump_json(payload))
+                return
+            _echo_step_card_human(payload)
+            return
+        # v7: bounded overview by default, symmetric with the local read path.
+        payload = _envelope("opentraces.trace.get.v1", trace=_trace_overview(record))
         if remote_bucket_payload is not None:
             payload["remote_bucket"] = remote_bucket_payload
         if as_json:
             click.echo(_dump_json(payload))
             return
-        click.echo(payload["trace"]["trace_id"])
+        click.echo(f"{payload['trace']['trace_id']}  {payload['trace']['title']}")
         return
 
     from ..core.trace_index import get_map_node, get_trace_path, get_unit
@@ -1839,26 +2159,84 @@ def trace_get(
         except ValueError as exc:
             click.echo(f"Trace resource not found: {ref}: {exc}", err=True)
             sys.exit(6)
-        payload = {"status": "ok", "resource": resource}
+        payload = _envelope("opentraces.trace.get.v1", resource=resource)
     elif ref.startswith("tu:"):
         unit = get_unit(ref)
         if unit is None:
             click.echo(f"Trace unit not found: {ref}", err=True)
             sys.exit(6)
-        payload = {"status": "ok", "unit": unit.model_dump(mode="json")}
+        payload = _envelope("opentraces.trace.get.v1", unit=unit.model_dump(mode="json"))
     elif ref.startswith("tmn:"):
         node = get_map_node(ref)
         if node is None:
             click.echo(f"Trace Map node not found: {ref}", err=True)
             sys.exit(6)
-        payload = {"status": "ok", "map_node": node.model_dump(mode="json")}
+        payload = _envelope("opentraces.trace.get.v1", map_node=node.model_dump(mode="json"))
+    elif span_sel is not None:
+        # SPAN lens — one primitive, two addresses: `trace get <T>:<A>-<B>`
+        # delegates to the exact engine behind `trace slice --from-step A
+        # --to-step B`, embedding the slice object byte-identically.
+        from ..core.trace_index import get_trace_map
+        from ..core.trace_slices import slice_by_steps
+
+        assert addr_trace is not None
+        span_trace_id = _trace_id_from_ref(addr_trace)
+        trace_map = get_trace_map(span_trace_id)
+        if trace_map is None:
+            click.echo(f"Trace Map not found: {ref}", err=True)
+            sys.exit(6)
+        record = _try_load_trace_record(span_trace_id)
+        try:
+            slice_obj = slice_by_steps(
+                trace_map,
+                record,
+                start_step_index=span_sel[0],
+                end_step_index=span_sel[1],
+            )
+        except ValueError as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(2)
+        payload = _envelope(
+            "opentraces.trace.get.v1",
+            trace_id=trace_map.trace_id,
+            span={
+                "from_step": slice_obj["start_step_index"],
+                "to_step": slice_obj["end_step_index"],
+            },
+            slice=slice_obj,
+        )
+    elif step_sel is not None or last_sel:
+        # STEP lens — the bounded, constant-size action card. Same loader +
+        # same rc=6 not-found contract as the bare form.
+        assert addr_trace is not None
+        trace_path = get_trace_path(_trace_id_from_ref(addr_trace))
+        if trace_path is None or not trace_path.exists():
+            click.echo(f"Trace not found: {ref}", err=True)
+            sys.exit(6)
+        record = _read_trace_record_from_path(trace_path)
+        step = _select_step(record, step_sel, last_sel, ref)
+        # Best-effort local-map enrichment; silently omitted when the Trace
+        # Index is absent.
+        try:
+            from ..core.trace_index import get_trace_map
+
+            trace_map = get_trace_map(record.trace_id)
+        except Exception:
+            trace_map = None
+        payload = _envelope(
+            "opentraces.trace.get.v1",
+            trace_id=record.trace_id,
+            step=_step_card(record, step, trace_map=trace_map),
+            next_steps=_step_next_steps(record.trace_id, step.step_index),
+        )
     else:
         trace_path = get_trace_path(_trace_id_from_ref(ref))
         if trace_path is None or not trace_path.exists():
             click.echo(f"Trace not found: {ref}", err=True)
             sys.exit(6)
         record = _read_trace_record_from_path(trace_path)
-        payload = {"status": "ok", "trace": record.model_dump(mode="json")}
+        # v7 audit-P2 cure: bounded overview by default, NEVER a 1000-step dump.
+        payload = _envelope("opentraces.trace.get.v1", trace=_trace_overview(record))
 
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
@@ -1866,7 +2244,32 @@ def trace_get(
         click.echo(_dump_json(payload))
         return
     if "trace" in payload:
-        click.echo(payload["trace"]["trace_id"])
+        overview = payload["trace"]
+        click.echo(f"{overview['trace_id']}  {overview['title']}")
+        click.echo(f"  summary:  {overview['summary']}")
+        click.echo(f"  steps:    {overview['step_count']}")
+        outcome = overview.get("outcome") or {}
+        click.echo(
+            f"  outcome:  success={outcome.get('success')} "
+            f"committed={overview.get('committed')}"
+        )
+        if overview.get("duration_seconds") is not None:
+            click.echo(f"  duration: {overview['duration_seconds']}s")
+        files = overview.get("files_touched") or []
+        total_files = overview.get("files_touched_count", len(files))
+        if files:
+            shown = ", ".join(files)
+            more = "" if total_files <= len(files) else f" (+{total_files - len(files)} more)"
+            click.echo(f"  files:    {shown}{more}")
+    elif "step" in payload:
+        _echo_step_card_human(payload)
+    elif "slice" in payload:
+        # Same one-line-per-slice summary as `trace slice`.
+        item = payload["slice"]
+        click.echo(
+            f"{item['slice_id']}  steps {item['start_step_index']}..{item['end_step_index']}  "
+            f"nodes={len(item['map']['nodes'])}  patches={len(item['trace_patch_refs'])}"
+        )
     elif "unit" in payload:
         click.echo(payload["unit"]["unit_id"])
     elif "map_node" in payload:
@@ -1875,7 +2278,7 @@ def trace_get(
         click.echo(payload["resource"].get("resource_type", ref))
 
 
-@trace_group.command("compare", cls=OpentracesCommand)
+@trace_group.command("compare", cls=OpentracesCommand, hidden=True)  # v7 7->4 collapse: not one of the four job verbs; callable, off --help.
 @click.argument("trace_a")
 @click.argument("trace_b")
 @click.option("--no-quality", is_flag=True, help="Skip the deterministic quality persona delta.")
@@ -1954,12 +2357,12 @@ def _trace_get_bursts_impl(
         trace_record=record,
         commit_lookup=commit_lookup,
     )
-    payload = {
-        "status": "ok",
-        "trace_id": trace_id,
-        "burst_gap": gap,
-        "bursts": [b.to_metadata() for b in bursts],
-    }
+    payload = _envelope(
+        "opentraces.trace.get.v1",
+        trace_id=trace_id,
+        burst_gap=gap,
+        bursts=[b.to_metadata() for b in bursts],
+    )
     if as_json:
         click.echo(_dump_json(payload))
         return
@@ -2020,6 +2423,314 @@ def _trace_get_run_intel_impl(ref: str, as_json: bool) -> None:
         return
     for s in report.signals:
         click.echo(f"{s.kind}  step {s.step_index}  {s.reason}")
+
+
+def _trace_overview(record) -> dict:
+    """Build a bounded, readable overview of a trace (v7 audit-P2 cure).
+
+    The bare ``trace get <id>`` default must be readable but NEVER an
+    O(steps) dump: title/summary, step count, outcome, files touched, and
+    duration — a constant-size card regardless of how long the session ran.
+    """
+    from ..core.boilerplate import headline_from_summary, summary_for_record
+
+    summary = summary_for_record(record)
+    task_desc = getattr(getattr(record, "task", None), "description", None)
+    title = headline_from_summary(summary or task_desc or record.trace_id)
+
+    # Files touched: from patches (one entry per Edit/Write hunk), collapsed to
+    # unique relative paths and CAPPED so the overview stays constant-size.
+    max_files = 12
+    seen: list[str] = []
+    for patch in getattr(record, "patches", None) or []:
+        fp = getattr(patch, "file_path", None)
+        if fp and fp not in seen:
+            seen.append(fp)
+    files_touched = seen[:max_files]
+
+    outcome = record.outcome
+    outcome_dict = (
+        outcome.model_dump(mode="json") if hasattr(outcome, "model_dump") else dict(outcome or {})
+    )
+
+    metrics = getattr(record, "metrics", None)
+    duration = getattr(metrics, "total_duration_s", None) if metrics is not None else None
+    if duration is None:
+        start = getattr(record, "timestamp_start", None)
+        end = getattr(record, "timestamp_end", None)
+        if start is not None and end is not None:
+            try:
+                duration = max(0.0, (end - start).total_seconds())
+            except (TypeError, AttributeError):
+                duration = None
+
+    agent = getattr(record, "agent", None)
+    return {
+        "trace_id": record.trace_id,
+        "title": title or record.trace_id,
+        "summary": summary or title or record.trace_id,
+        "agent": {
+            "name": getattr(agent, "name", None),
+            "version": getattr(agent, "version", None),
+            "model": getattr(agent, "model", None),
+        },
+        "step_count": len(record.steps),
+        "outcome": outcome_dict,
+        "files_touched": files_touched,
+        "files_touched_count": len(seen),
+        "duration_seconds": duration,
+        "committed": getattr(outcome, "committed", None) if outcome is not None else None,
+        "commit_sha": getattr(outcome, "commit_sha", None) if outcome is not None else None,
+        "refs": {
+            "trace": record.trace_id,
+            "map": f"ot://trace/{record.trace_id}/map",
+            "card": f"ot://trace/{record.trace_id}/card",
+        },
+    }
+
+
+_STEP_CARD_CONTENT_PREVIEW_CHARS = 240
+_STEP_CARD_INPUT_PREVIEW_CHARS = 120
+_STEP_CARD_MAX_TOOL_CALLS = 8
+
+
+def _select_step(record, step_sel: int | None, last_sel: bool, ref: str):
+    """Resolve a step selector against a loaded TraceRecord, or exit 6.
+
+    Selection is an INDEX-FIELD match (``step.step_index == N``, mirroring
+    capture/claude_code/resume.py::_find_step), never a list position;
+    ``:last`` is the max step_index — the final action. Missing step is rc=6
+    for the whole address family (deliberate divergence from ctx's rc=3).
+    """
+    indices = [s.step_index for s in record.steps]
+    if not indices:
+        click.echo(f"Step not found: {ref} (trace has no steps)", err=True)
+        sys.exit(6)
+    wanted = max(indices) if last_sel else step_sel
+    step = next((s for s in record.steps if s.step_index == wanted), None)
+    if step is None:
+        click.echo(
+            f"Step not found: {ref} (trace has steps {min(indices)}..{max(indices)})",
+            err=True,
+        )
+        sys.exit(6)
+    return step
+
+
+def _step_card(record, step, *, trace_map=None) -> dict:
+    """Build the bounded, constant-size STEP CARD (the action lens).
+
+    Derived ONLY from the Step model (schema untouched) plus best-effort
+    local-map enrichment. Same audit-P2 discipline as ``_trace_overview``:
+    previews are truncated, tool_calls capped, observations summarized —
+    NEVER an O(step-content) dump.
+    """
+    content = step.content or ""
+    tool_calls = []
+    for tc in step.tool_calls[:_STEP_CARD_MAX_TOOL_CALLS]:
+        try:
+            input_preview = json.dumps(tc.input, default=str, sort_keys=True)
+        except (TypeError, ValueError):
+            input_preview = str(tc.input)
+        tool_calls.append(
+            {
+                "tool_name": tc.tool_name,
+                "tool_call_id": tc.tool_call_id,
+                "input_preview": input_preview[:_STEP_CARD_INPUT_PREVIEW_CHARS],
+            }
+        )
+    observations = {
+        "count": len(step.observations),
+        "total_chars": sum(len(o.content or "") for o in step.observations),
+        "first_error": next((o.error for o in step.observations if o.error), None),
+    }
+    token_usage = step.token_usage
+    card = {
+        "step_index": step.step_index,
+        "role": step.role,
+        "call_type": step.call_type,
+        "agent_role": step.agent_role,
+        "model": step.model,
+        "timestamp": step.timestamp,
+        "content_preview": content[:_STEP_CARD_CONTENT_PREVIEW_CHARS],
+        "content_chars": len(content),
+        "reasoning_present": bool(step.reasoning_content),
+        "tool_calls": tool_calls,
+        "tool_call_count": len(step.tool_calls),
+        "observations": observations,
+        "token_usage": (
+            token_usage.model_dump(mode="json")
+            if hasattr(token_usage, "model_dump")
+            else token_usage
+        ),
+        "context_node_id": step.context_node_id,
+    }
+    if trace_map is not None:
+        # A step usually projects to SEVERAL map nodes (agent_message +
+        # file_edit + tool_result ...). map_node_id is the first node covering
+        # the step; the file lists aggregate across all of them, deduped.
+        step_nodes = [n for n in trace_map.nodes if n.step_index == step.step_index]
+        if step_nodes:
+            card["map_node_id"] = step_nodes[0].node_id
+            files_modified: list[str] = []
+            files_read: list[str] = []
+            for node in step_nodes:
+                for fp in node.files_modified:
+                    if fp not in files_modified:
+                        files_modified.append(fp)
+                for fp in node.files_read:
+                    if fp not in files_read:
+                        files_read.append(fp)
+            card["files_modified"] = files_modified
+            card["files_read"] = files_read
+    return card
+
+
+def _step_next_steps(trace_id: str, step_index: int) -> list[str]:
+    """The closed cross-substrate triple for a resolved step address."""
+    return [
+        f"ctx {trace_id}:{step_index}",
+        f"trail {trace_id}:{step_index}",
+        f"trace slice {trace_id} --around-step {step_index} --radius 5",
+    ]
+
+
+def _echo_step_card_human(payload: dict) -> None:
+    """Compact human rendering of the step card envelope."""
+    card = payload["step"]
+    click.echo(
+        f"{payload['trace_id']}:{card['step_index']}  role={card['role']}  "
+        f"model={card.get('model') or '-'}"
+    )
+    if card.get("tool_calls"):
+        names = ", ".join(tc["tool_name"] for tc in card["tool_calls"])
+        suffix = ""
+        if card.get("tool_call_count", 0) > len(card["tool_calls"]):
+            suffix = f" (+{card['tool_call_count'] - len(card['tool_calls'])} more)"
+        click.echo(f"  tools:    {names}{suffix}")
+    if card.get("content_preview"):
+        click.echo(f"  content:  {card['content_preview']}")
+    obs = card.get("observations") or {}
+    if obs.get("count"):
+        line = f"  obs:      count={obs['count']} chars={obs['total_chars']}"
+        if obs.get("first_error"):
+            line += f" first_error={obs['first_error']}"
+        click.echo(line)
+    if card.get("context_node_id"):
+        click.echo(f"  ctx node: {card['context_node_id']}")
+    for hint in payload.get("next_steps", []):
+        click.echo(f"  next:     {hint}")
+
+
+def _map_span(trace_map) -> tuple[int, int]:
+    """First/last step index across a (sub)map's nodes (0,0 when empty)."""
+    steps = [n.step_index for n in trace_map.nodes if n.step_index is not None]
+    if not steps:
+        return 0, 0
+    return min(steps), max(steps)
+
+
+def _map_handoff(trace_map, trace_id: str) -> dict:
+    """The always-available `trace slice` handoff for the current span.
+
+    v7 map contract: every ``map`` call ends in a runnable
+    ``trace slice --from-step L --to-step H`` for the browsed span, with no
+    node-count cutoff — ``slice`` is the expensive pull, ``map`` the cheap browse.
+    """
+    lo, hi = _map_span(trace_map)
+    return {
+        "command": f"trace slice {trace_id} --from-step {lo} --to-step {hi}",
+        "from_step": lo,
+        "to_step": hi,
+    }
+
+
+# Landmark node types, in RELEVANCE priority order (v7 map ablation: capping by
+# raw position hid 23/25 errors, so the cap must keep the highest-signal types).
+_MAP_LANDMARK_PRIORITY = {
+    "error_signal": 0,
+    "subagent_call": 1,
+    "git_anchor": 2,
+    "final_response": 3,
+    "user_instruction": 4,
+}
+_MAP_MAX_LANDMARKS = 24
+_MAP_MAX_SECTIONS = 24
+_MAP_MAX_FILES = 20
+_MAP_PREVIEW_CHARS = 72
+
+
+def _bounded_map_view(trace_map, *, trace_id: str, record=None) -> dict:
+    """Bounded, roughly constant-size faceted browse of a whole trace (v7 V1).
+
+    NEVER O(nodes): TYPE + FILE facet counts (file paths collapsed across
+    abs/worktree/dir spellings), a collapsed SECTION breadcrumb, a
+    relevance-capped landmark set, and the always-available ``trace slice``
+    handoff for the current span.
+    """
+    from ..core.bursts import _normalise_path, _resolve_repo_root_for_paths
+
+    repo_root = None
+    try:
+        repo_root = _resolve_repo_root_for_paths(record, None)
+    except Exception:
+        repo_root = None
+
+    nodes = trace_map.nodes
+
+    type_counts: dict[str, int] = {}
+    for n in nodes:
+        type_counts[n.action_type] = type_counts.get(n.action_type, 0) + 1
+
+    file_counts: dict[str, int] = {}
+    for n in nodes:
+        for fp in list(n.files_modified) + list(n.files_read):
+            norm = _normalise_path(fp, repo_root)
+            if norm:
+                file_counts[norm] = file_counts.get(norm, 0) + 1
+    top_files = sorted(file_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:_MAP_MAX_FILES]
+
+    sections = [
+        {"step": n.step_index, "preview": (n.text_preview or "")[:_MAP_PREVIEW_CHARS]}
+        for n in nodes
+        if n.action_type == "user_instruction"
+    ]
+    section_total = len(sections)
+    sections = sections[:_MAP_MAX_SECTIONS]
+
+    raw_landmarks = [
+        {
+            "step": n.step_index if n.step_index is not None else -1,
+            "type": n.action_type,
+            "node_id": n.node_id,
+            "preview": (n.text_preview or "")[:_MAP_PREVIEW_CHARS],
+        }
+        for n in nodes
+        if n.action_type in _MAP_LANDMARK_PRIORITY
+    ]
+    # Relevance cap: keep the highest-signal landmarks (errors before filler),
+    # THEN restore chronological order for display.
+    raw_landmarks.sort(key=lambda l: (_MAP_LANDMARK_PRIORITY.get(l["type"], 9), l["step"]))
+    landmark_total = len(raw_landmarks)
+    landmarks = sorted(raw_landmarks[:_MAP_MAX_LANDMARKS], key=lambda l: l["step"])
+
+    lo, hi = _map_span(trace_map)
+    return {
+        "scope": {"filters": {}, "node_count": len(nodes), "span": {"from_step": lo, "to_step": hi}},
+        "facets": {
+            "type": dict(sorted(type_counts.items(), key=lambda kv: (-kv[1], kv[0]))),
+            "file": dict(top_files),
+        },
+        "sections": sections,
+        "section_total": section_total,
+        "landmarks": landmarks,
+        "landmark_total": landmark_total,
+        "handoff": {
+            "command": f"trace slice {trace_id} --from-step {lo} --to-step {hi}",
+            "from_step": lo,
+            "to_step": hi,
+        },
+    }
 
 
 def _try_load_trace_record(trace_id: str):

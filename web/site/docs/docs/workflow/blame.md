@@ -45,22 +45,24 @@ patch history and survival observations live in the Trail companion
 ## Commands
 
 ```bash
+opentraces trail blame <sha>
 opentraces trail blame commit <sha>
 opentraces trail blame commit c:<sha> src/main.py --lines
 opentraces trail blame commit t:<trace-id> --include-overlapping
-opentraces trail blame pr render --base main
-opentraces trail blame pr create --base main
-opentraces trail blame pr update --base main
+opentraces trail pr render --base main
+opentraces trail pr create --base main
+opentraces trail pr update --base main
 opentraces trail graph
 opentraces trail graph --trace <trace-id>
 opentraces trail track <trace-id>
 opentraces trail track --patch <trace-patch-id>
 opentraces trail track --anchor <git-anchor-id>
 opentraces trail track --since 12h --json
+opentraces trail <trace-id>
+opentraces trail <trace-id>:<step>
 ```
 
-`trail blame` is a group. `trail blame commit` resolves attribution.
-`trail blame pr` consumes branch-context workflow rows and renders a PR body.
+`trail blame` is a group; a bare `trail blame <sha>` dispatches to `trail blame commit` directly, which resolves attribution. `trail pr` — render/create/update — was lifted to a top-level `trail` verb since it is the family's one gated GitHub write, separate from the pure read verbs (`blame` / `track` / `graph`); it consumes branch-context workflow rows and renders a PR body. The old `trail blame pr render|create|update` path stays callable but hidden from `--help`. A bare `trail <trace-id>` (and `trail <trace-id>:<step>`) resolves a per-trace lineage card / step world without naming a subcommand, mirroring `ctx`'s addressing.
 
 ## Survival States
 
@@ -91,9 +93,9 @@ anchor through the current Git state.
 ## PR Consumer
 
 ```bash
-opentraces trail blame pr render --base main
-opentraces trail blame pr create --base main
-opentraces trail blame pr update --base main
+opentraces trail pr render --base main
+opentraces trail pr create --base main
+opentraces trail pr update --base main
 ```
 
 The PR consumer is workflow-based. It runs the bundled

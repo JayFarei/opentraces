@@ -20,7 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from .contract import CONTEXT_RESUME_SCHEMA_VERSION
-from .query import build_context_tree_projection
+# The sanctioned bounded entrypoints live behind the predicates-before-
+# projection seam; see core/trails/scoped_reads.py for the contract.
+from ..trails.scoped_reads import (
+    build_context_tree_projection_for_trace,
+    resolve_node_traces,
+)
 
 
 def context_resume_packet(repo: Path, node_id: str) -> dict[str, Any]:
@@ -37,8 +42,20 @@ def context_resume_packet(repo: Path, node_id: str) -> dict[str, Any]:
     Combines with ``snapshot_resume_packet(commit_id_from_node.trail_anchor_hint)``
     to fully describe the state for resume.
     """
-    projection = build_context_tree_projection(repo)
-    node = projection.nodes_by_id.get(node_id)
+    # Issue #121: bound the read. Resolve the owning trace via a scoped
+    # (context_node_observed-only) event read, then project just that trace,
+    # instead of materialising the whole event log (~983K events on a mature
+    # repo — the full-read walk that made ``ctx resume`` hang). Byte-identical:
+    # the per-trace projection contains exactly this node + its 4 layer ids,
+    # and ``capture_limitations_by_trace`` is per-trace keyed.
+    resolved = resolve_node_traces(repo, {node_id})
+    owner_trace = resolved.get(node_id)
+    projection = (
+        build_context_tree_projection_for_trace(repo, owner_trace)
+        if owner_trace is not None
+        else None
+    )
+    node = projection.nodes_by_id.get(node_id) if projection is not None else None
     if node is None:
         return {
             "schema_version": CONTEXT_RESUME_SCHEMA_VERSION,

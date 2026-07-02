@@ -53,6 +53,8 @@ opentraces setup llm-review --print
 opentraces setup llm-review --disable
 ```
 
+`setup llm-review` configures the `security.llm_review` provider settings below and stays callable, but the row-review workflow it feeds is now driven through `opentraces dataset review` / `opentraces dataset publish`, not a standalone review command.
+
 `trufflehog.verify_secrets` remains false by default so opentraces does not
 make outbound verification calls unless you explicitly configure that behavior.
 
@@ -81,7 +83,7 @@ printf '%s\n' '{"row":{"text":"..."}}' \
 A bucket security policy is a named bundle over the same
 `cfg.security.<tool>.enabled` flags set above. It is not a second config system:
 applying a policy flips those same flags, scoped to the bucket, so the raw
-captured evidence is protected before `bucket remote push`.
+captured evidence is protected before `bucket sync push`.
 
 ```bash
 opentraces bucket security status
@@ -95,9 +97,10 @@ opentraces bucket security status --json
 --policy` applies an exact bundle and accepts only `off|basic|recommended|strict`.
 `bucket security policy --tool ... --enable` / `--tool ... --disable` (repeatable)
 edits one tool at a time, and `bucket security run [--all | --trace <id>]` applies
-the configured filter to existing records. The `setup bucket` wizard also offers a
-`custom` walkthrough that toggles each tool individually; `custom` is not a
-`--policy` value.
+the configured filter to existing records. The `bucket connect` wizard (the
+rename of `setup bucket`, which stays callable) also offers a `custom`
+walkthrough that toggles each tool individually; `custom` is not a `--policy`
+value.
 
 | Policy | Tools |
 |--------|-------|

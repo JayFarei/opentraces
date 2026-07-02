@@ -26,6 +26,13 @@ from .event_log import (
 )
 from .exact import append_exact_patch_trail
 from .explain import explain_commit, explain_file_line, explain_trace_step
+from .lineage import (
+    LINEAGE_SCHEMA_VERSION,
+    WORLD_SCHEMA_VERSION,
+    build_trail_lineage_card,
+    build_trail_world,
+    parse_trail_ref,
+)
 from .sync import BatchSyncContext, batch_sync, sync_anchor, sync_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
 from .maturation import MaturationSummary, has_unsearched_recent_patches, mature_trails
@@ -97,6 +104,11 @@ __all__ = [
     "StepWindowOpenResult",
     "DEFAULT_TRACE_SLICE_STEP_RADIUS",
     "BatchSyncContext",
+    "LINEAGE_SCHEMA_VERSION",
+    "WORLD_SCHEMA_VERSION",
+    "build_trail_lineage_card",
+    "build_trail_world",
+    "parse_trail_ref",
     "append_event_batch",
     "append_exact_patch_trail",
     "append_step_snapshot",
