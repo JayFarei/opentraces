@@ -18,7 +18,6 @@ Two non-negotiables surfaced by the autoreview (eng + codex, both critical):
 from __future__ import annotations
 
 import getpass
-import re
 from pathlib import Path
 from typing import Any
 
@@ -44,15 +43,17 @@ class RedactionGateError(RuntimeError):
     """The mandatory redaction floor did not run. Publishing is blocked."""
 
 
-# Identity scrub: the detector floor catches secrets and PII, but the OPERATOR's
-# local username is structurally invisible to a prefix-regex + entropy floor (a
-# short lowercase token), and it leaks via git-author lines, ``whoami`` output,
-# prose, and home paths. We scrub it three ways:
-#   1. the literal home dir string                  (/Users/jane -> ~)
-#   2. the username inside a Unix OR Windows path    (.../Users/jane/...,  C:\Users\jane\...)
-#   3. the bare username token anywhere, word-bounded (git author jane -> <user>)
-# Over-redaction here is safe; under-redaction is a public leak.
-_PATH_USER_RE = re.compile(r"(?i)([/\\](?:Users|home)[/\\])([^/\\\s\"']+)")
+# Identity scrub (issue #143): retired the bespoke, strictly-weaker
+# ``_scrub_identity`` / ``_PATH_USER_RE`` (username-segment-only,
+# ``<user>``-flattening, tail-preserving) into the registry ``path_anonymizer``
+# tool. There is now exactly ONE path-scrubbing implementation. The operator's
+# local username is structurally invisible to a prefix-regex + entropy floor and
+# leaks via git-author lines, ``whoami`` output, prose, and home paths; the
+# path anonymizer scrubs it via (1) home-path hashing with tail-consumption
+# (``/Users/<me>/secret/.env`` -> ``/Users/[ot-user-<hash>]``, the WHOLE tail
+# gone, not just the username) and (2) bare-username replacement for the
+# operator's own identity tokens. Over-redaction here is safe; under-redaction
+# is a public leak.
 
 
 def _identity_tokens() -> list[str]:
@@ -65,41 +66,33 @@ def _identity_tokens() -> list[str]:
         tokens.add(Path.home().name)
     except Exception:  # pragma: no cover
         pass
-    # Only scrub tokens long enough that a word-boundary match won't shred prose.
+    # Only scrub tokens long enough that a bare match won't shred prose.
     return [t for t in tokens if t and len(t) >= 3]
 
 
-def _scrub_identity(obj: Any, home: str, token_res: list[re.Pattern[str]]) -> tuple[Any, int]:
-    """Recursively scrub home dir, path-embedded usernames, and bare username tokens."""
+def _anonymize_identity_paths(obj: Any) -> tuple[Any, int]:
+    """Anonymize home paths (tail-consumed) + operator identity via the registry
+    ``path_anonymizer`` tool, returning ``(redacted, changed_leaf_count)``.
 
-    count = 0
-    if isinstance(obj, str):
-        new = obj
-        if home and home in new:
-            occ = new.count(home)
-            new = new.replace(home, "~")
-            count += occ
-        new, n = _PATH_USER_RE.subn(r"\1<user>", new)
-        count += n
-        for pat in token_res:
-            new, n = pat.subn("<user>", new)
-            count += n
-        return new, count
-    if isinstance(obj, list):
-        out_list = []
-        for item in obj:
-            red, n = _scrub_identity(item, home, token_res)
-            out_list.append(red)
-            count += n
-        return out_list, count
-    if isinstance(obj, dict):
-        out_dict = {}
-        for key, value in obj.items():
-            red, n = _scrub_identity(value, home, token_res)
-            out_dict[key] = red
-            count += n
-        return out_dict, count
-    return obj, count
+    The count feeds the manifest's ``home_paths_scrubbed`` continuity (the old
+    ``_scrub_identity`` returned a substitution count; a changed-leaf count keeps
+    the ``>= 1`` contract while sourcing the single registry implementation).
+    """
+    from ...security.tools.path_anonymizer_tool import PathAnonymizerTransformer
+    from ...security.walker import walk_dict_strings
+
+    anon = PathAnonymizerTransformer()
+    extra = _identity_tokens()
+    count = [0]
+
+    def _transform(text: str, _path: str, _ft: Any) -> str:
+        new = anon.transform_text(text, extra_usernames=extra, consume_tail=True)
+        if new != text:
+            count[0] += 1
+        return new
+
+    redacted, _changes = walk_dict_strings(obj, _transform)
+    return (redacted if isinstance(redacted, (dict, list)) else obj), count[0]
 
 
 def build_redaction_manifest(
@@ -174,9 +167,7 @@ def redact_envelope(
         payload, _ = apply_field_exclusion(payload, exclude_paths)
 
     redacted, report = sanitize_dict(payload, tools=list(REDACTION_FLOOR))
-    home = str(Path.home())
-    token_res = [re.compile(r"\b" + re.escape(t) + r"\b") for t in _identity_tokens()]
-    redacted, scrub_count = _scrub_identity(redacted, home, token_res)
+    redacted, scrub_count = _anonymize_identity_paths(redacted)
     excluded = scan_excluded_paths(redacted)
     manifest = build_redaction_manifest(
         report,
