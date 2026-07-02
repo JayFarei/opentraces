@@ -445,8 +445,8 @@ def dataset_remote_visibility(
 @click.option("--every", required=True, help="Local interval such as 30s, 15m, 2h, or 1d.")
 @click.option(
     "--executor",
-    type=click.Choice(["current-agent", "claude-code-headless"]),
-    default="claude-code-headless",
+    type=click.Choice(["current-agent", "script"]),
+    default="script",
     show_default=True,
     help="Executor each scheduled run uses.",
 )
@@ -1061,7 +1061,7 @@ def _create_manual_dataset(
 @click.option("--dry-run", is_flag=True, help="Execute without appending rows or advancing cursors.")
 @click.option(
     "--executor",
-    type=click.Choice(["current-agent", "claude-code-headless", "script"]),
+    type=click.Choice(["current-agent", "script"]),
     default=None,
     help="Workflow executor.",
 )
@@ -1130,7 +1130,7 @@ def dataset_run(
     resume: str | None,
     as_json: bool,
 ) -> None:
-    """Run the dataset workflow in dry-run, current-agent, or headless mode."""
+    """Run the dataset workflow in dry-run, current-agent, or script mode."""
     started = time.monotonic()
     if resume:
         click.echo("--resume is reserved for future interrupted-run recovery.", err=True)
