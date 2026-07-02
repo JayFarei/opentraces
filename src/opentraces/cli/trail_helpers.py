@@ -227,6 +227,12 @@ def _emit_batch_track(
                 payload["trace_id"] = tid
             else:
                 payload.setdefault("trace_id", None)
+            # Parity with the single-patch track path (cli/trail.py stamps
+            # TRACK_SURVIVAL_SCHEMA_VERSION): each batch survival record carries
+            # the same schema_version so JSONL consumers see one identified
+            # shape across both modes. Additive; the trail_timeline scope
+            # (opentraces.trail_timeline.v1) is a different surface, untouched.
+            payload.setdefault("schema_version", "opentraces.trail.track.v1")
         # Emit one JSON object per line (no indent) so jq -s can stream.
         click.echo(json.dumps(payload, sort_keys=True))
 

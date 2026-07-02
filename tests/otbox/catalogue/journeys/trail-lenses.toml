@@ -12,9 +12,10 @@ graph; `trail track --all` emits per-patch survival JSONL; and the bare
 `survival` key (that lives on the `track` lens, not lineage).
 
 NOTE (authoring): `trail track --all` batch mode emits per-patch survival
-JSONL WITHOUT a top-level `schema_version` (only the single-patch/anchor
-track path stamps `opentraces.trail.track.v1`); the batch lens is asserted
-via rc=0 + the `survival_state` field it actually carries.
+JSONL where EACH record carries the same top-level `schema_version`
+(`opentraces.trail.track.v1`) the single-patch/anchor track path stamps, so
+JSONL consumers see one identified survival shape across both modes; the batch
+lens is asserted via rc=0 + the `survival_state` field and that schema_version.
 """
 lane = "core"
 tier = 0
@@ -92,6 +93,13 @@ equals = 0
 kind = "stdout_contains"
 step = "track-all"
 value = "survival_state"
+
+# Parity: each batch survival record self-describes with the same
+# schema_version the single-patch track path stamps.
+[[assertions]]
+kind = "stdout_contains"
+step = "track-all"
+value = "opentraces.trail.track.v1"
 
 # ---------------------------------------------------------------------
 # bare `trail <trace_id>` — the frozen lineage envelope, NO survival key.
