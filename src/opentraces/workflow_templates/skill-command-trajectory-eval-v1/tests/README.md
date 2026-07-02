@@ -8,12 +8,10 @@ python ~/.opentraces/workflows/skill-command-trajectory-eval-v1/scripts/build_ro
   --limit 5
 ```
 
-Then create a workflow-backed dataset and feed generated rows through the
-fake headless executor:
+Then create a workflow-backed dataset and run it through the deterministic
+`script` executor (it subprocess-runs the workflow's `scripts/build_rows.py`):
 
 ```bash
-OT_ROWS="$(cat /tmp/skill-command-trajectory-eval-v1.jsonl)" \
-OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS="$OT_ROWS" \
 opentraces dataset run skill-command-trajectory-eval-v1 \
-  --executor claude-code-headless --json
+  --executor script --json
 ```

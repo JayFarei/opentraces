@@ -260,7 +260,7 @@ equals = "captured-multi-skill"
 kind = "stdout_json"
 step = "schedule-show"
 path = "schedule.executor"
-equals = "claude-code-headless"
+equals = "script"
 
 # ---------------------------------------------------------------------
 # 8. Pause: toggle off. The text output reports the new enabled state.
