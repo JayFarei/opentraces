@@ -88,9 +88,9 @@ def parse_address(token: str) -> ParsedAddress | None:
     is not one of the three supported shapes (``origin`` and malformed
     selectors are deliberately NOT addresses here — trail owns those).
     The colon grammar delegates to ``parse_trail_ref`` so the shared
-    tuple contract stays the single oracle; ``last`` is recognized
-    locally until F1 teaches ``parse_trail_ref`` about it (both spellings
-    are honored so the F1 landing changes nothing in this module).
+    tuple contract stays the single oracle; F1 taught ``parse_trail_ref``
+    the ``last`` selector and this module recognizes it locally too, so
+    both spellings agree and the shared oracle stays authoritative.
     """
     raw = (token or "").strip()
     if not raw:

@@ -10,9 +10,10 @@ case. The load-bearing invariants:
 * Typos keep Click's exact "No such command" error, Did-you-mean intact.
 * Tier-2 short prefixes dispatch only when they resolve to a real trace,
   and the RESOLVED full id is forwarded (trace get is exact-id only).
-* Pre-F1, colon step refs dispatch and get trace get's address-shaped
-  "Trace not found" rc=6 — never "No such command". (F1 owns the step
-  resolution itself; this file pins only the DISPATCH.)
+* Colon step refs dispatch to trace get and (with F1 integrated)
+  resolve — ``:N`` / ``:last`` to a step card, ``:A-B`` to a span slice
+  — never "No such command". (F1 owns the selector resolution; this
+  file pins the DISPATCH.)
 * Short-prefix honesty: ``trace get <short-prefix>`` itself still exits
   6 — the shortcut's tier-2 resolution is deliberate dispatcher-side
   sugar, not a trace-get behavior change.
@@ -180,21 +181,20 @@ def test_ot_scheme_dispatches_to_trace_get(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_colon_step_ref_dispatches_verbatim_pre_f1(tmp_path):
-    """``<uuid>:3`` reaches trace get with the verbatim token.
+def test_colon_step_ref_dispatches_and_resolves(tmp_path):
+    """``<uuid>:<selector>`` reaches trace get AND resolves.
 
-    Pre-F1 trace get treats the whole token as an id: rc=6 with an
-    address-shaped "Trace not found" — the dispatch happened, so the
-    failure names the trace ref rather than a missing command. Post-F1
-    the same dispatch resolves the step; this test pins the DISPATCH.
+    This file pins the DISPATCH (never "No such command"); F1 owns the
+    selector resolution. With F1 integrated the dispatched token
+    resolves: ``:N`` / ``:last`` land on a step card and ``:A-B`` on a
+    span slice — all rc=0 for a seeded trace, none a missing command.
     """
     _seed(tmp_path, UUID)
     runner = CliRunner()
     for selector in ("3", "last", "2-5"):
         res = runner.invoke(main, [f"{UUID}:{selector}"])
-        assert res.exit_code == 6, (selector, res.output)
+        assert res.exit_code == 0, (selector, res.output)
         assert "No such command" not in res.output
-        assert f"Trace not found: {UUID}:{selector}" in res.output
 
 
 def test_colon_form_with_non_uuid_left_part_still_errors():
