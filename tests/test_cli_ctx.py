@@ -721,3 +721,205 @@ def test_resolve_node_traces_cli_smoke(multi_trace_project):
     assert resolved[node_a] == "trace-a"
     assert resolved[node_b] == "trace-b"
     assert len(resolved) == 2
+
+
+# --------------------------------------------------------------------------- #
+# v7 #164 — the bare-noun context read: ctx <trace>[:step|:last]
+# --------------------------------------------------------------------------- #
+
+_VIEW_SCHEMA = "opentraces.ctx.view.v1"
+_LINEAR = "trace-context-tree-linear"
+
+
+def test_ctx_bare_overview_json(runner, linear_project):
+    project, _t, _p = linear_project
+    data = _invoke_json(runner, [_LINEAR, *_project_arg(project), "--json"])
+    assert data["status"] == "ok"
+    assert data["schema_version"] == _VIEW_SCHEMA
+    assert data["view"] == "overview"
+    assert data["trace_id"] == _LINEAR
+    assert data["step_count"] == 8
+    # Fidelity honesty: a jsonl (transcript_reconstruction) trace is
+    # structure-only and MUST NOT fabricate a token chart.
+    assert data["fidelity"] == "jsonl"
+    assert data["size"]["sparkline"] is None
+    assert data["size"]["estimate_available"] is False
+    # Every screen ends in runnable next moves.
+    assert any(":last" in cmd for cmd in data["look"])
+
+
+def test_ctx_bare_overview_text_has_no_fake_chart(runner, linear_project):
+    project, _t, _p = linear_project
+    res = runner.invoke(ctx_group, [_LINEAR, *_project_arg(project)])
+    assert res.exit_code == 0, res.output
+    assert "structure only" in res.output  # honest jsonl note
+    # No sparkline glyphs fabricated for a jsonl trace.
+    assert not any(ch in res.output for ch in "▁▂▃▄▅▆▇█")
+    assert "look →" in res.output
+
+
+def test_ctx_bare_step_card_json(runner, linear_project):
+    project, _t, _p = linear_project
+    data = _invoke_json(runner, [f"{_LINEAR}:2", *_project_arg(project), "--json"])
+    assert data["status"] == "ok"
+    assert data["schema_version"] == _VIEW_SCHEMA
+    assert data["view"] == "step"
+    assert data["step_index"] == 2
+    assert data["node_id"]
+    saw = data["saw"]
+    assert saw["system"] is True
+    assert isinstance(saw["messages"], int) and saw["messages"] > 0
+    assert isinstance(saw["tools"], int)
+    assert data["size"]["method"] == "len//4"
+    assert set(data["layers"]) == {"system", "messages", "tool_registry", "runtime_state"}
+
+
+def test_ctx_bare_last_resolves_active_leaf(runner, linear_project):
+    project, _t, _p = linear_project
+    last = _invoke_json(runner, [f"{_LINEAR}:last", *_project_arg(project), "--json"])
+    at_max = _invoke_json(runner, [f"{_LINEAR}:7", *_project_arg(project), "--json"])
+    # :last == the max-step / active leaf (addressing DoD #8).
+    assert last["step_index"] == 7
+    assert last["node_id"] == at_max["node_id"]
+
+
+def test_ctx_bare_ref_resolves_same_node_as_hidden_step(runner, linear_project):
+    """The bare ref and the (now-hidden) `ctx step` land on the SAME node —
+    one `trace:step` token, one node, across surfaces (spine join)."""
+    project, _t, _p = linear_project
+    bare = _invoke_json(runner, [f"{_LINEAR}:3", *_project_arg(project), "--json"])
+    viastep = _invoke_json(
+        runner, ["step", _LINEAR, "3", *_project_arg(project), "--json"]
+    )
+    assert bare["node_id"] == viastep["node_id"]
+
+
+def test_ctx_bare_layer_messages_paged(runner, linear_project):
+    project, _t, _p = linear_project
+    data = _invoke_json(
+        runner, [f"{_LINEAR}:2", "--layer", "messages", *_project_arg(project), "--json"]
+    )
+    assert data["view"] == "layer"
+    assert data["layer"] == "messages"
+    assert data["layer_type"] == "messages"
+    assert "page" in data
+    assert data["page"]["shown"] <= data["page"]["total"]
+
+
+def test_ctx_bare_layer_messages_text_footer(runner, linear_project):
+    project, _t, _p = linear_project
+    res = runner.invoke(
+        ctx_group, [f"{_LINEAR}:2", "--layer", "messages", *_project_arg(project)]
+    )
+    assert res.exit_code == 0, res.output
+    assert "showing" in res.output and "messages" in res.output
+
+
+def test_ctx_bare_missing_trace_rc3(runner):
+    res = runner.invoke(ctx_group, ["no-such-trace-xyz", "--json"])
+    assert res.exit_code == 3
+
+
+def test_ctx_bare_missing_step_rc3(runner, linear_project):
+    project, _t, _p = linear_project
+    res = runner.invoke(ctx_group, [f"{_LINEAR}:9999", *_project_arg(project), "--json"])
+    assert res.exit_code == 3
+
+
+def test_ctx_bare_bad_shape_rc2(runner):
+    res = runner.invoke(ctx_group, ["some-trace:notanint", "--json"])
+    assert res.exit_code == 2
+
+
+def test_ctx_bare_stdin_composition(runner, linear_project):
+    """`... | ctx --json` hydrates a trace:step ref carried on stdin."""
+    project, _t, _p = linear_project
+    envelope = json.dumps({"trace_id": _LINEAR, "step": 2})
+    res = runner.invoke(
+        ctx_group, ["--json", *_project_arg(project)], input=envelope
+    )
+    assert res.exit_code == 0, res.output
+    data = json.loads(res.output)
+    assert data["view"] == "step"
+    assert data["step_index"] == 2
+
+
+def test_ctx_visibility_curation(runner):
+    """Superseded verbs are hidden (callable); list/info stay visible."""
+    for name in ("tree", "show", "step", "reads", "writes"):
+        cmd = ctx_group.commands[name]
+        assert cmd.hidden is True, f"{name} should be hidden"
+    for name in ("list", "info"):
+        assert ctx_group.commands[name].hidden is False
+    # Hidden != removed: still dispatchable.
+    res = runner.invoke(ctx_group, ["tree", "no-such", "--json"])
+    assert res.exit_code == 0  # empty-state envelope, not a crash
+
+
+def test_ctx_list_envelope_has_status_header(runner):
+    """L5: ctx list --json carries the uniform {status, schema_version} header."""
+    data = _invoke_json(runner, ["list", "--json"])
+    assert data["status"] == "ok"
+    assert data["schema_version"] == "opentraces.ctx.list.v2"
+
+
+def test_count_messages_recognises_legacy_steps_shape():
+    """The dominant already-captured jsonl shape stores its message list under
+    ``steps``; the counter must return an exact count for it, not None."""
+    from opentraces.cli.ctx import _count_messages
+
+    assert _count_messages({"messages": [1, 2, 3]}) == 3
+    # Legacy transcript-reconstruction envelope (bulk of the live bucket).
+    assert _count_messages({"scope": "session", "steps": [1, 2]}) == 2
+    assert _count_messages([1, 2, 3, 4]) == 4
+    assert _count_messages({"no_list_here": 1}) is None
+
+
+def test_render_layer_pages_legacy_steps_shape(runner, monkeypatch):
+    """`ctx <trace>:<step> --layer messages` pages the legacy ``steps`` shape
+    with a 'showing X of N' footer, not just the current ``messages`` shape."""
+    from opentraces.cli import ctx as ctx_mod
+
+    steps = [{"role": "user", "text": f"m{i}"} for i in range(25)]
+
+    class _FakeLayer:
+        layer_id = "sha256:deadbeef"
+        layer_type = "messages"
+        completeness = "approximated"
+        capture_method = "transcript_reconstruction"
+        content = {"scope": "session", "steps": steps}
+
+    class _FakeNode:
+        node_id = "sha256:node"
+        trace_id = "t"
+        step_index = 4
+        system_layer_id = None
+        messages_layer_id = "sha256:deadbeef"
+        tool_registry_layer_id = None
+        runtime_state_layer_id = None
+
+    class _FakeBackend:
+        bucket_slug = None
+
+        def get_layer(self, layer_id):
+            return _FakeLayer() if layer_id == "sha256:deadbeef" else None
+
+    payload = {}
+    monkeypatch.setattr(ctx_mod, "_emit", lambda p: payload.update(p))
+    ctx_mod._render_layer(
+        _FakeBackend(),
+        _FakeNode(),
+        trace_id="t",
+        step_index=4,
+        layer_alias="messages",
+        with_dropped=False,
+        remote=None,
+        offline=False,
+        emit_json=True,
+        capture_method="transcript_reconstruction",
+        fidelity="jsonl",
+    )
+    assert payload["view"] == "layer"
+    assert payload["page"] == {"shown": 20, "total": 25, "offset": 0, "limit": 20}
+    # The legacy key is preserved when we re-embed the paged slice.
+    assert len(payload["content"]["steps"]) == 20

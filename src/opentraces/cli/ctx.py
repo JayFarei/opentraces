@@ -56,9 +56,123 @@ DEFAULT_SHOW_BUDGET_BYTES = 4096
 # --------------------------------------------------------------------------- #
 
 
-@click.group("ctx", cls=OpentracesGroup)
-def ctx_group() -> None:
-    """Navigate the Context Tree: what the LLM saw at each step."""
+class CtxGroup(OpentracesGroup):
+    """``ctx`` as a bare-noun-addressable group (v7 #164).
+
+    ``ctx <trace>[:<step>|:last]`` renders the context projection of a
+    trace directly, with no subcommand — the bare noun IS the read. A
+    positional token that is NOT a registered subcommand is treated as
+    that ``<trace>:<step>`` ref; the retained subcommands (``list`` /
+    ``info`` and the hidden plumbing) still dispatch normally.
+
+    ``trace:step`` is the universal cross-substrate address: the same
+    token resolves across ``ctx``, ``trace get``, and ``trail``.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        first_pos: str | None = None
+        for tok in args:
+            if tok == "--":
+                break
+            if not tok.startswith("-"):
+                first_pos = tok
+                break
+        if first_pos is not None and first_pos in self.commands:
+            # Real subcommand dispatch: behave as a vanilla group. The
+            # bare-noun ``ref`` param is absent on this path.
+            ctx.params.setdefault("ref", None)
+            return super().parse_args(ctx, args)
+        # Bare-noun form (a ref) OR no args: parse the group's own options
+        # and pull the single leftover positional out as the ref. A group
+        # parser normally stops at the first positional (reserving it as the
+        # subcommand name); allow interspersing so ``ctx <ref> --json`` parses
+        # ``--json`` rather than leaving it stranded next to the ref.
+        parser = self.make_parser(ctx)
+        parser.allow_interspersed_args = True
+        opts, extra, _order = parser.parse_args(args=list(args))
+        for param in self.get_params(ctx):
+            if isinstance(param, click.Argument):
+                continue
+            param.handle_parse_result(ctx, opts, extra)
+        ref: str | None = None
+        if extra:
+            if len(extra) > 1:
+                ctx.fail(
+                    "ctx takes a single '<trace>[:<step>|:last]' ref; got "
+                    f"{extra!r}. Decompose with '--json | jq' instead."
+                )
+            ref = extra[0]
+        ctx.params["ref"] = ref
+        # Click 8.2+ renamed the internal ``protected_args`` slot; guard both.
+        if hasattr(ctx, "_protected_args"):
+            ctx._protected_args = []
+        ctx.args = []
+        return []
+
+
+@click.group("ctx", cls=CtxGroup, invoke_without_command=True)
+@click.option(
+    "--layer",
+    "layer",
+    type=click.Choice(["system", "messages", "tools", "runtime"]),
+    default=None,
+    help="Render ONE layer readably (default: the bounded four-layer card).",
+)
+@click.option(
+    "--with-dropped",
+    "with_dropped",
+    is_flag=True,
+    help="Include compaction-dropped content (audit-complete union).",
+)
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    help="Read from a remote HF dataset bucket (plan 080 §7). Format: 'user/repo'.",
+)
+@click.option(
+    "--offline",
+    "offline",
+    is_flag=True,
+    help="Fail rc=4 if a referenced blob isn't already in the local cache.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@project_dir_option
+@click.pass_context
+def ctx_group(
+    ctx: click.Context,
+    ref: str | None,
+    layer: str | None,
+    with_dropped: bool,
+    remote: str | None,
+    offline: bool,
+    as_json: bool,
+    project_dir: Path | None,
+) -> None:
+    """Context records: what did the model see? Per session, per step.
+
+    \b
+    ctx <trace>              the context overview (shape + capture method)
+    ctx <trace>:<step>       the model input at that step
+    ctx <trace>:last         the final / active step
+        [--layer system|messages|tools|runtime]   render one layer readably
+        [--with-dropped] [--json] [--remote R]
+
+    ``trace:step`` is the universal address — the same token resolves
+    across ``ctx``, ``trace get``, and ``trail``. A ``trace:step`` ref on
+    stdin (``trace query --json | ctx --json``) is hydrated too.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_bare_ctx(
+        ref=ref,
+        layer=layer,
+        with_dropped=with_dropped,
+        remote=remote,
+        offline=offline,
+        as_json=as_json,
+        project_dir=project_dir,
+    )
 
 
 def _project_repo(project_dir: Path | None) -> Path:
@@ -67,13 +181,24 @@ def _project_repo(project_dir: Path | None) -> Path:
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    """Stable JSON envelope emitter (mirrors cli/trace.py style)."""
+    """Stable JSON envelope emitter (mirrors cli/trace.py style).
+
+    ADR-0007 lint L5: every ctx ``--json`` view carries a uniform
+    ``{status, schema_version, ...}`` header. We inject a top-level
+    ``status: "ok"`` when the caller has not already stamped a
+    ``status`` / ``ok`` verdict (error payloads set ``status: "error"``
+    themselves), so the header is present and ordered status-first
+    without editing every payload site.
+    """
+    if "status" not in payload and "ok" not in payload:
+        payload = {"status": "ok", **payload}
     click.echo(_dump_json(payload))
 
 
 def _empty_state(schema_version: str, reason: str, **extras: Any) -> dict[str, Any]:
     """Return a standard empty-state envelope (rc=0, never raises)."""
     payload: dict[str, Any] = {
+        "status": "ok",
         "schema_version": schema_version,
         "limitations": [reason],
     }
@@ -105,6 +230,736 @@ def _truncate_for_text(text: str, budget: int = DEFAULT_SHOW_BUDGET_BYTES) -> st
     if len(text) <= budget:
         return text
     return text[:budget] + "\n... (use --full for the full content)"
+
+
+# --------------------------------------------------------------------------- #
+# ctx <trace>[:step] — the bare-noun context read (v7 #164)
+# --------------------------------------------------------------------------- #
+
+# One frozen envelope for every bare-noun view (overview / step / layer) so a
+# downstream consumer locks against a single shape. ``_emit`` stamps the
+# top-level ``status`` (L5); this constant is the ``schema_version`` header.
+_CTX_VIEW_SCHEMA_VERSION = "opentraces.ctx.view.v1"
+
+# Human-facing --layer aliases -> the substrate's ContextLayer type names.
+_LAYER_ALIAS: dict[str, str] = {
+    "system": "system",
+    "messages": "messages",
+    "tools": "tool_registry",
+    "runtime": "runtime_state",
+}
+
+# Bounded-by-default knobs. Size is a labelled ``len//4`` estimate, never a
+# real token count (fidelity ladder: honest by construction).
+_TOKEN_DIVISOR = 4
+_MESSAGES_PAGE = 20  # rows per --layer messages page
+_SPARK_CHARS = "▁▂▃▄▅▆▇█"
+_SPARK_WIDTH = 16
+
+
+def _spark(values: list[int]) -> str:
+    """Render a compact unicode sparkline from a list of magnitudes."""
+    if not values:
+        return ""
+    lo, hi = min(values), max(values)
+    span = (hi - lo) or 1
+    n = len(_SPARK_CHARS) - 1
+    return "".join(_SPARK_CHARS[min(n, int((v - lo) / span * n))] for v in values)
+
+
+def _est_tokens(byte_count: int) -> int:
+    return byte_count // _TOKEN_DIVISOR
+
+
+def _layer_content(layer: Any) -> Any:
+    return getattr(layer, "content", None) if layer is not None else None
+
+
+def _count_messages(content: Any) -> int | None:
+    """Structural message count (works even for structure-only jsonl layers).
+
+    Recognises both the current messages-layer shape (a ``messages`` list) and
+    the legacy transcript-reconstruction shape (a ``steps`` list), so counts
+    are exact for the bulk of already-captured bucket traces rather than "?".
+    """
+    if isinstance(content, list):
+        return len(content)
+    if isinstance(content, dict):
+        for key in ("messages", "steps"):
+            msgs = content.get(key)
+            if isinstance(msgs, list):
+                return len(msgs)
+    return None
+
+
+def _count_tools(content: Any) -> int | None:
+    if isinstance(content, list):
+        return len(content)
+    if isinstance(content, dict):
+        for key in ("tools", "tool_registry", "tool_definitions"):
+            val = content.get(key)
+            if isinstance(val, list):
+                return len(val)
+    return None
+
+
+class _BareBackend:
+    """Bounded per-trace resolver shared by every bare-noun view.
+
+    Rides the #121 seam: the per-trace projection
+    (``build_context_tree_projection_for_trace`` / ``resolve_node_traces``)
+    with the issue-#158 bucket-companion fallback for when the project's
+    Git event ref is hidden or unwritten. Never a whole-log ``read_events``.
+    """
+
+    def __init__(self, trace_id: str, project_dir: Path | None) -> None:
+        from ..core.context_tree.query import build_context_tree_projection_for_trace
+
+        self.trace_id = trace_id
+        self.repo = _project_repo(project_dir)
+        self.bucket_slug = _bucket_slug_for_project(project_dir)
+        self.projection = build_context_tree_projection_for_trace(self.repo, trace_id)
+        self._proj_nodes = self.projection.nodes_by_trace.get(trace_id, [])
+
+    # -- node resolution ---------------------------------------------------
+    def active_nodes(self) -> list[Any]:
+        if self._proj_nodes:
+            return list(self.projection.active_path(self.trace_id))
+        if self.bucket_slug:
+            nodes = _read_bucket_nodes(self.bucket_slug, self.trace_id)
+            return sorted(
+                nodes,
+                key=lambda n: (n.step_index if n.step_index is not None else -1),
+            )
+        return []
+
+    def node_for_step(self, step: int) -> Any | None:
+        node = self.projection.node_for_step(self.trace_id, step)
+        if node is None and self.bucket_slug:
+            bnodes = [
+                n
+                for n in _read_bucket_nodes(self.bucket_slug, self.trace_id)
+                if n.step_index == step
+            ]
+            node = _prefer_otel_node(bnodes, self.bucket_slug) if bnodes else None
+        return node
+
+    def active_leaf(self) -> Any | None:
+        path = self.active_nodes()
+        return path[-1] if path else None
+
+    def get_layer(self, layer_id: str | None) -> Any | None:
+        if not layer_id:
+            return None
+        layer = self.projection.layers_by_id.get(layer_id)
+        if layer is None and self.bucket_slug:
+            layer = _read_bucket_layer(self.bucket_slug, layer_id)
+        return layer
+
+    # -- honest fidelity ---------------------------------------------------
+    def node_layers(self, node: Any) -> list[tuple[str, Any]]:
+        pairs = (
+            ("system", node.system_layer_id),
+            ("messages", node.messages_layer_id),
+            ("tool_registry", node.tool_registry_layer_id),
+            ("runtime_state", node.runtime_state_layer_id),
+        )
+        return [(lt, self.get_layer(lid)) for lt, lid in pairs]
+
+    def node_capture_method(self, node: Any) -> str:
+        methods = {
+            getattr(layer, "capture_method", None)
+            for _lt, layer in self.node_layers(node)
+            if layer is not None
+        }
+        methods.discard(None)
+        if "otel" in methods:
+            return "otel"
+        if methods:
+            return sorted(methods)[0]
+        return getattr(node, "capture_completeness", None) or "unknown"
+
+
+def _fidelity_for(capture_method: str) -> str:
+    """Fold a capture_method label into the two-rung fidelity ladder."""
+    return "otel" if capture_method == "otel" else "jsonl"
+
+
+def _parse_ctx_ref(ref: str) -> tuple[str, str | int | None] | None:
+    """Parse ``<trace>[:<step>|:last]``. Returns ``(trace_id, selector)`` or
+    ``None`` on a malformed ref (caller -> rc=2, bad shape)."""
+    if ":" not in ref:
+        return (ref.strip(), None) if ref.strip() else None
+    trace_id, _sep, sel = ref.partition(":")
+    trace_id = trace_id.strip()
+    sel = sel.strip()
+    if not trace_id:
+        return None
+    if sel == "":
+        return (trace_id, None)
+    if sel == "last":
+        return (trace_id, "last")
+    try:
+        return (trace_id, int(sel))
+    except ValueError:
+        return None
+
+
+def _bad_shape(message: str) -> None:
+    """rc=2: a valid command but a malformed ref / argument shape."""
+    click.echo(message, err=True)
+    sys.exit(2)
+
+
+def _overview_summary(
+    trace_id: str, project_dir: Path | None, remote: str | None
+) -> dict[str, Any] | None:
+    """Cheap (blob-free) overview counts + capture methods from the manifest,
+    falling back to the per-trace projection when the manifest has no row."""
+    manifest: dict[str, Any]
+    if remote:
+        try:
+            manifest = _read_bucket_manifest_via_backend(remote)
+        except _BackendUnavailable as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(3)
+    else:
+        manifest = _read_bucket_manifest_no_blobs()
+    entry = None
+    for row in manifest.get("traces") or []:
+        if isinstance(row, dict) and row.get("trace_id") == trace_id:
+            entry = row
+            break
+    if entry is None and not remote:
+        from ..core.bucket_store import trace_v2_summary_by_id
+
+        entry = trace_v2_summary_by_id(trace_id)
+    if entry is not None:
+        summary = entry.get("summary") or {}
+        methods = list(summary.get("capture_methods") or [])
+        return {
+            "trace_id": trace_id,
+            "title": entry.get("title"),
+            "step_count": int(summary.get("step_count") or 0),
+            "node_count": int(summary.get("node_count") or 0),
+            "capture_methods": methods,
+            "source": "manifest",
+        }
+    return None
+
+
+def _run_bare_ctx(
+    *,
+    ref: str | None,
+    layer: str | None,
+    with_dropped: bool,
+    remote: str | None,
+    offline: bool,
+    as_json: bool,
+    project_dir: Path | None,
+) -> None:
+    """Dispatch the bare-noun ``ctx <ref>`` read (overview / step / layer)."""
+    import opentraces.cli as _cli
+
+    emit_json = bool(as_json) or bool(getattr(_cli, "_json_mode", False))
+
+    refs = _resolve_refs(ref)
+    if refs is None:
+        # No ref and nothing on stdin: show the group help (like any group).
+        ctx = click.get_current_context()
+        click.echo(ctx.get_help())
+        return
+
+    multi = len(refs) > 1
+    for one in refs:
+        parsed = _parse_ctx_ref(one)
+        if parsed is None:
+            _bad_shape(
+                f"Malformed ref {one!r}. Expected '<trace>', '<trace>:<step>', "
+                "or '<trace>:last'."
+            )
+        trace_id, selector = parsed
+        if selector is None:
+            _render_overview(
+                trace_id, project_dir, remote, emit_json=emit_json
+            )
+        else:
+            _render_step_or_layer(
+                trace_id,
+                selector,
+                layer=layer,
+                with_dropped=with_dropped,
+                remote=remote,
+                offline=offline,
+                emit_json=emit_json,
+                project_dir=project_dir,
+            )
+
+
+def _resolve_refs(ref: str | None) -> list[str] | None:
+    """Return the ref list: the CLI arg, else refs read off stdin (the
+    ``trace query --json | ctx`` composition), else ``None``."""
+    if ref:
+        return [ref]
+    if sys.stdin is None or sys.stdin.isatty():
+        return None
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return None
+    return _extract_refs_from_stdin(raw)
+
+
+def _extract_refs_from_stdin(raw: str) -> list[str] | None:
+    """Extract ``trace:step`` refs from piped stdin: a JSON envelope
+    (``trace query``/``trail`` output), JSON-lines, or bare tokens."""
+    refs: list[str] = []
+
+    def _harvest(obj: Any) -> None:
+        if isinstance(obj, dict):
+            for key in ("ref", "trace_ref", "trace_step", "id"):
+                val = obj.get(key)
+                if isinstance(val, str) and val:
+                    refs.append(val)
+                    return
+            tid = obj.get("trace_id")
+            if isinstance(tid, str) and tid:
+                step = obj.get("step") if obj.get("step") is not None else obj.get("step_index")
+                refs.append(f"{tid}:{step}" if isinstance(step, int) else tid)
+                return
+            for val in obj.values():
+                _harvest(val)
+        elif isinstance(obj, list):
+            for item in obj:
+                _harvest(item)
+
+    stripped = raw.strip()
+    try:
+        _harvest(json.loads(stripped))
+    except ValueError:
+        for line in stripped.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                _harvest(json.loads(line))
+            except ValueError:
+                refs.append(line.split()[0])
+    # De-dup, preserve order.
+    seen: set[str] = set()
+    out = [r for r in refs if not (r in seen or seen.add(r))]
+    return out or None
+
+
+def _render_overview(
+    trace_id: str,
+    project_dir: Path | None,
+    remote: str | None,
+    *,
+    emit_json: bool,
+) -> None:
+    summary = _overview_summary(trace_id, project_dir, remote)
+    sparkline: str | None = None
+    peak_step: int | None = None
+    peak_tokens: int | None = None
+    capture_methods: list[str] = summary["capture_methods"] if summary else []
+
+    # Fall back to the per-trace projection for counts when the manifest has
+    # no row (git-ref-only worlds), and derive the otel sparkline from the
+    # already-in-memory active-path layer sizes (never extra blob reads).
+    backend: _BareBackend | None = None
+    if summary is None or ("otel" in capture_methods):
+        if not remote:
+            backend = _BareBackend(trace_id, project_dir)
+    if summary is None:
+        if backend is None or not backend.active_nodes():
+            _missing_resource(f"No Context Tree for trace {trace_id!r}")
+        nodes = backend.active_nodes()
+        methods = set()
+        for n in nodes:
+            methods.add(backend.node_capture_method(n))
+        capture_methods = sorted(m for m in methods if m and m != "unknown")
+        summary = {
+            "trace_id": trace_id,
+            "title": None,
+            "step_count": (nodes[-1].step_index + 1) if nodes and nodes[-1].step_index is not None else len(nodes),
+            "node_count": len(nodes),
+            "capture_methods": capture_methods,
+            "source": "projection",
+        }
+
+    capture_method = "otel" if "otel" in capture_methods else (
+        capture_methods[0] if capture_methods else "unknown"
+    )
+    fidelity = _fidelity_for(capture_method)
+
+    # otel-only, best-effort sparkline from the active path's messages-layer
+    # sizes (jsonl stores no content -> NO chart, per the fidelity ladder).
+    if fidelity == "otel" and backend is not None and backend.active_nodes():
+        sizes: list[int] = []
+        steps: list[int | None] = []
+        for n in backend.active_nodes():
+            layer = backend.get_layer(n.messages_layer_id)
+            if layer is not None:
+                sizes.append(len(_dump_json(_layer_content(layer))))
+                steps.append(n.step_index)
+        if sizes:
+            peak_idx = max(range(len(sizes)), key=lambda i: sizes[i])
+            peak_step = steps[peak_idx]
+            peak_tokens = _est_tokens(sizes[peak_idx])
+            # Downsample to the sparkline width.
+            if len(sizes) > _SPARK_WIDTH:
+                stride = len(sizes) / _SPARK_WIDTH
+                sampled = [sizes[int(i * stride)] for i in range(_SPARK_WIDTH)]
+            else:
+                sampled = sizes
+            sparkline = _spark(sampled)
+
+    step_count = summary["step_count"]
+    last_step = step_count - 1 if step_count else 0
+    jump_step = peak_step if peak_step is not None else last_step
+    look = [
+        f"opentraces ctx {trace_id}:{jump_step}",
+        f"opentraces ctx {trace_id}:last",
+    ]
+    size_block: dict[str, Any] = {
+        "estimate_available": fidelity == "otel",
+        "unit": "tokens",
+        "method": "len//4",
+        "sparkline": sparkline,
+        "peak_step": peak_step,
+        "peak_tokens": peak_tokens,
+    }
+    if fidelity != "otel":
+        size_block["note"] = (
+            "structure-only (jsonl capture): message content is not stored, "
+            "so no size chart is drawn"
+        )
+
+    payload = {
+        "schema_version": _CTX_VIEW_SCHEMA_VERSION,
+        "view": "overview",
+        "trace_id": trace_id,
+        "title": summary.get("title"),
+        "capture_method": capture_method,
+        "fidelity": fidelity,
+        "step_count": step_count,
+        "node_count": summary["node_count"],
+        "size": size_block,
+        "look": look,
+    }
+    if emit_json:
+        _emit(payload)
+        return
+
+    label = "otel" if fidelity == "otel" else "jsonl (structure-only)"
+    head = f"ctx {trace_id} · {label} · {step_count} steps"
+    if peak_tokens is not None:
+        head += f" · context ~{peak_tokens:,} tok (est)"
+    click.echo(head)
+    if sparkline:
+        peak_txt = f"  peak @ step {peak_step}" if peak_step is not None else ""
+        click.echo(f"  size  {sparkline}{peak_txt}")
+    elif fidelity != "otel":
+        click.echo(
+            "  no size chart — jsonl capture stores structure only, not "
+            "message content"
+        )
+    click.echo(f"  look → {look[0]}   {look[1]}")
+
+
+def _render_step_or_layer(
+    trace_id: str,
+    selector: str | int,
+    *,
+    layer: str | None,
+    with_dropped: bool,
+    remote: str | None,
+    offline: bool,
+    emit_json: bool,
+    project_dir: Path | None,
+) -> None:
+    backend = _BareBackend(trace_id, project_dir)
+    if selector == "last":
+        node = backend.active_leaf()
+    else:
+        node = backend.node_for_step(int(selector))
+    if node is None:
+        where = "last step" if selector == "last" else f"step {selector}"
+        _missing_resource(f"No ContextNode for trace {trace_id} {where}")
+
+    step_index = node.step_index
+    capture_method = backend.node_capture_method(node)
+    fidelity = _fidelity_for(capture_method)
+
+    if layer:
+        _render_layer(
+            backend,
+            node,
+            trace_id=trace_id,
+            step_index=step_index,
+            layer_alias=layer,
+            with_dropped=with_dropped,
+            remote=remote,
+            offline=offline,
+            emit_json=emit_json,
+            capture_method=capture_method,
+            fidelity=fidelity,
+        )
+        return
+
+    # The bounded step CARD (default: all four layers, summarized).
+    layers = backend.node_layers(node)
+    layers_out: dict[str, Any] = {}
+    total_bytes = 0
+    system_present = False
+    msg_count: int | None = None
+    tool_count: int | None = None
+    for lt, lyr in layers:
+        entry = _summarize_layer(lyr)
+        layers_out[lt] = entry
+        total_bytes += entry.get("byte_count", 0)
+        if lt == "system" and lyr is not None:
+            system_present = _layer_content(lyr) not in (None, "", {}, [])
+        if lt == "messages":
+            msg_count = _count_messages(_layer_content(lyr))
+        if lt == "tool_registry":
+            tool_count = _count_tools(_layer_content(lyr))
+
+    est = _est_tokens(total_bytes)
+    read = [
+        f"opentraces ctx {trace_id}:{step_index} --layer messages",
+        f"opentraces ctx {trace_id}:{step_index} --layer system",
+        f"opentraces ctx {trace_id}:{step_index} --layer tools",
+    ]
+    payload = {
+        "schema_version": _CTX_VIEW_SCHEMA_VERSION,
+        "view": "step",
+        "trace_id": trace_id,
+        "step_index": step_index,
+        "node_id": node.node_id,
+        "capture_method": capture_method,
+        "fidelity": fidelity,
+        "saw": {
+            "system": system_present,
+            "messages": msg_count,
+            "tools": tool_count,
+        },
+        "size": {"estimate": est, "unit": "tokens", "method": "len//4"},
+        "layers": layers_out,
+        "read": read,
+    }
+    if emit_json:
+        _emit(payload)
+        return
+
+    msg_txt = "?" if msg_count is None else str(msg_count)
+    tool_txt = "?" if tool_count is None else str(tool_count)
+    sys_txt = "system prompt" if system_present else "no system layer"
+    click.echo(
+        f"ctx {trace_id}:{step_index} · step {step_index} · "
+        f"{capture_method} · ~{est:,} tok (est)"
+    )
+    click.echo(f"  saw:  {sys_txt} · {msg_txt} messages · {tool_txt} tools")
+    if fidelity != "otel":
+        click.echo(
+            "  fidelity: structure-only (jsonl) — counts are exact, message "
+            "content is not stored"
+        )
+    click.echo(f"  read → --layer messages   --layer system   --layer tools")
+
+
+def _render_layer(
+    backend: _BareBackend,
+    node: Any,
+    *,
+    trace_id: str,
+    step_index: int | None,
+    layer_alias: str,
+    with_dropped: bool,
+    remote: str | None,
+    offline: bool,
+    emit_json: bool,
+    capture_method: str,
+    fidelity: str,
+) -> None:
+    layer_type = _LAYER_ALIAS[layer_alias]
+    layer_id = {
+        "system": node.system_layer_id,
+        "messages": node.messages_layer_id,
+        "tool_registry": node.tool_registry_layer_id,
+        "runtime_state": node.runtime_state_layer_id,
+    }[layer_type]
+    layer = backend.get_layer(layer_id)
+
+    # Remote lazy-fetch / offline (mirrors ctx show's resolution order).
+    fetched_from = "local" if layer is not None else None
+    if layer is None and layer_id:
+        if offline:
+            _emit_offline_error(
+                node=node,
+                layer_id=layer_id,
+                layer_type=layer_type,
+                emit_json=emit_json,
+            )
+        if remote:
+            try:
+                layer = _lazy_fetch_layer_blob(
+                    remote=remote,
+                    node=node,
+                    layer_id=layer_id,
+                    layer_type=layer_type,
+                )
+            except _BackendUnavailable as exc:
+                click.echo(str(exc), err=True)
+                sys.exit(3)
+            if layer is not None:
+                fetched_from = "remote"
+
+    entry = _summarize_layer(layer)
+    content = _layer_content(layer)
+    if layer_type == "messages" and content is not None:
+        content = _hydrate_messages_content(
+            content,
+            backend.bucket_slug,
+            remote=None if offline else remote,
+            node=node,
+        )
+
+    # Extract the message list whether the (possibly hydrated) content is a
+    # bare list, a current ``{messages: [...]}`` envelope, or the legacy
+    # transcript-reconstruction ``{steps: [...]}`` envelope, then page it.
+    msg_list: list[Any] | None = None
+    msg_key: str | None = None
+    if layer_type == "messages":
+        if isinstance(content, list):
+            msg_list = content
+        elif isinstance(content, dict):
+            for key in ("messages", "steps"):
+                if isinstance(content.get(key), list):
+                    msg_list = content[key]
+                    msg_key = key
+                    break
+    page = None
+    shown_content = content
+    shown_msgs: list[Any] = []
+    if msg_list is not None:
+        shown_msgs = msg_list[:_MESSAGES_PAGE]
+        page = {
+            "shown": len(shown_msgs),
+            "total": len(msg_list),
+            "offset": 0,
+            "limit": _MESSAGES_PAGE,
+        }
+        if isinstance(content, dict) and msg_key is not None:
+            shown_content = {**content, msg_key: shown_msgs}
+        else:
+            shown_content = shown_msgs
+
+    payload: dict[str, Any] = {
+        "schema_version": _CTX_VIEW_SCHEMA_VERSION,
+        "view": "layer",
+        "trace_id": trace_id,
+        "step_index": step_index,
+        "node_id": node.node_id,
+        "layer": layer_alias,
+        "layer_type": layer_type,
+        "capture_method": capture_method,
+        "fidelity": fidelity,
+        "completeness": entry.get("completeness"),
+        "byte_count": entry.get("byte_count", 0),
+        "estimate_tokens": _est_tokens(entry.get("byte_count", 0)),
+        "content": shown_content,
+    }
+    if fetched_from is not None:
+        payload["fetched_from"] = fetched_from
+    if page is not None:
+        payload["page"] = page
+    if with_dropped:
+        payload["with_dropped"] = _dropped_summary(backend, trace_id)
+    if emit_json:
+        _emit(payload)
+        return
+
+    click.echo(
+        f"ctx {trace_id}:{step_index} --layer {layer_alias} · "
+        f"{capture_method} · {entry.get('completeness') or '-'} · "
+        f"~{_est_tokens(entry.get('byte_count', 0)):,} tok (est)"
+    )
+    if content is None:
+        click.echo("  (layer not captured / no content)")
+        return
+    if msg_list is not None:
+        for i, msg in enumerate(shown_msgs):
+            role = msg.get("role", "?") if isinstance(msg, dict) else "?"
+            preview = _truncate_for_text(_dump_json(msg), 240).replace("\n", " ")
+            click.echo(f"  [{i}] {role}: {preview}")
+        click.echo(f"  showing {page['shown']} of {page['total']} messages")
+        if page["total"] > page["shown"]:
+            click.echo(
+                f"  read → opentraces ctx {trace_id}:{step_index} "
+                f"--layer messages --json | jq '.content'"
+            )
+    else:
+        click.echo(_truncate_for_text(_dump_json(content)))
+    if fidelity != "otel" and layer_type == "messages":
+        click.echo(
+            "  fidelity: structure-only (jsonl) — message content not stored"
+        )
+
+
+def _emit_offline_error(
+    *, node: Any, layer_id: str, layer_type: str, emit_json: bool
+) -> None:
+    """rc=4 no-clobber/offline refusal (mirrors ctx show --offline)."""
+    hint = (
+        f"layer blob not in local cache; run "
+        f"'opentraces bucket prefetch {node.trace_id}' to warm it, or drop "
+        "--offline to fetch from the remote."
+    )
+    if emit_json:
+        _emit(
+            {
+                "schema_version": _CTX_VIEW_SCHEMA_VERSION,
+                "status": "error",
+                "view": "layer",
+                "node_id": node.node_id,
+                "error": {
+                    "code": "BLOB_MISSING_OFFLINE",
+                    "kind": "blob_missing_offline",
+                    "missing_layer_id": layer_id,
+                    "missing_layer_type": layer_type,
+                    "hint": hint,
+                },
+            }
+        )
+    else:
+        click.echo(f"Offline: {hint}", err=True)
+    sys.exit(4)
+
+
+def _dropped_summary(backend: _BareBackend, trace_id: str) -> dict[str, Any]:
+    """Compaction-drop summary for ``--with-dropped``.
+
+    Honest by construction: a non-compacted trace reports ``count: 0`` (the
+    union equals the window — no fabrication); a compacted trace surfaces the
+    recorded compaction events. Full dropped-content REHYDRATION is a v1.1
+    follow-up (the events + the audit-complete union of stored request
+    bodies); this reports the compaction boundaries that make it recoverable.
+    """
+    events = getattr(backend.projection, "compaction_events_by_trace", {}).get(
+        trace_id, []
+    )
+    return {
+        "count": len(events),
+        "compaction_boundaries": [
+            {
+                "node_id": getattr(e, "node_id", None),
+                "step_index": getattr(e, "step_index", None),
+            }
+            for e in events
+        ],
+        "rehydration": "v1.1: dropped-content union not yet materialized",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -785,6 +1640,7 @@ def ctx_info_cmd(trace_id: str, remote: str | None, as_json: bool) -> None:
 @ctx_group.command(
     "tree",
     cls=OpentracesCommand,
+    hidden=True,  # v7 #164 — superseded by the bare-noun `ctx <trace>` overview; callable, off --help
     examples=[
         "opentraces ctx tree <trace-id>",
         "opentraces ctx tree <trace-id> --show-orphans --json",
@@ -903,6 +1759,7 @@ def ctx_tree_cmd(
 @ctx_group.command(
     "show",
     cls=OpentracesCommand,
+    hidden=True,  # v7 #164 — superseded by `ctx <trace>:<step>`; callable, off --help
     examples=[
         "opentraces ctx show <node-id>",
         "opentraces ctx show <node-id> --full --json",
@@ -1163,6 +2020,7 @@ def ctx_show_cmd(
 @ctx_group.command(
     "step",
     cls=OpentracesCommand,
+    hidden=True,  # v7 #164 — superseded by `ctx <trace>:<step>`; callable, off --help
     examples=[
         "opentraces ctx step <trace-id> 7",
         "opentraces ctx step <trace-id> 7 --json",
@@ -1271,6 +2129,7 @@ def _io_range_options(func):
 @ctx_group.command(
     "reads",
     cls=OpentracesCommand,
+    hidden=True,  # v7 #164 — decomposition is `ctx <trace>:<step> --json | jq`; callable, off --help
     examples=[
         "opentraces ctx reads <trace-id> --from-step 5 --to-step 9",
         "opentraces ctx reads <trace-id> --step 7 --json",
@@ -1338,6 +2197,7 @@ def ctx_reads_cmd(
 @ctx_group.command(
     "writes",
     cls=OpentracesCommand,
+    hidden=True,  # v7 #164 — decomposition is `ctx <trace>:<step> --json | jq`; callable, off --help
     examples=[
         "opentraces ctx writes <trace-id> --from-step 5 --to-step 9",
         "opentraces ctx writes <trace-id> --with-trail-anchor --json",

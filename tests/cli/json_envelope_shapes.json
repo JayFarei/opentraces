@@ -152,6 +152,7 @@
   "schema_version": "opentraces.ctx.list.v2",
   "top_level_keys": [
    "schema_version",
+   "status",
    "traces"
   ]
  },
