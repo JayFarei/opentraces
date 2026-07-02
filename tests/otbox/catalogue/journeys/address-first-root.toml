@@ -97,6 +97,7 @@ equals_var = "address-shortcut:trace.step_count"
 type = "cli"
 id = "typo-still-errors"
 argv = ["stauts"]
+expect_returncode = 2
 
 [[assertions]]
 kind = "returncode"
