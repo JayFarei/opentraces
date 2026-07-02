@@ -95,10 +95,12 @@ _PATTERNS: list[dict] = [
         "description": "OpenAI project API key",
         "severity": "critical",
     },
-    # OpenAI generic key
+    # OpenAI generic key. The body admits a hyphen so ``sk-live-…`` /
+    # ``sk-<env>-…`` shapes are caught (issue #143 S3); the dummy-token allowlist
+    # (``sk-test``/``sk-example``/…) still excludes synthetic placeholders.
     {
         "name": "openai_api_key",
-        "pattern": re.compile(r"sk-[A-Za-z0-9]{20,}"),
+        "pattern": re.compile(r"sk-[A-Za-z0-9-]{20,}"),
         "description": "OpenAI API key (generic sk- prefix)",
         "severity": "critical",
     },

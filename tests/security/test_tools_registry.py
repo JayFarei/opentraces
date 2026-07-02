@@ -73,10 +73,11 @@ class TestRegistryShape:
 
     def test_per_field_detectors_implement_find(self) -> None:
         """Detectors that participate in ``sanitize_text``/``sanitize_dict``
-        must expose ``find``. TruffleHog and llm_pii are detector-kind but
-        scan record-shape, so they are intentionally excluded — those paths
-        run only via ``sanitize_record``."""
-        per_field = {"regex", "entropy", "privacy_filter"}
+        must expose ``find``. TruffleHog stays detector-kind but scans
+        record-shape (no ``find``), so it runs only via ``sanitize_record``.
+        ``llm_pii`` gained an availability-gated ``find`` adapter (#143), so it is
+        now dict-capable like ``privacy_filter``."""
+        per_field = {"regex", "entropy", "privacy_filter", "llm_pii"}
         for tool in iter_tools():
             if tool.name in per_field:
                 assert isinstance(tool, Detector), (

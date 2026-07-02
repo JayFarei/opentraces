@@ -145,6 +145,13 @@ def test_home_paths_are_scrubbed():
     blob = json.dumps(redacted)
     assert "somebody" not in blob  # path-embedded username removed
     assert manifest["home_paths_scrubbed"] >= 1
+    # Issue #143 drift-retirement proof: the bespoke ``_scrub_identity`` (which
+    # flattened to ``<user>`` and PRESERVED the revealing tail) is retired into
+    # the registry path_anonymizer, which consumes the WHOLE tail to a stable
+    # hashed token.
+    assert "/secret/repo/file.py" not in blob  # tail consumed, not preserved
+    assert "<user>" not in blob                 # old <user> flatten gone
+    assert "[ot-user-" in blob                  # replaced by the hashed token
 
 
 def test_windows_path_username_is_scrubbed():

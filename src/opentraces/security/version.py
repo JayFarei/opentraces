@@ -41,6 +41,20 @@ refactors that change the on-record metadata shape.
     username), making it idempotent by construction — so path_anonymizer can run
     in the always-on dataset reader floor without a content-shape skip that would
     falsely pass a real hash-shaped username (``deadbeef``) through intact.
+
+0.7.0 → 0.8.0
+    Issue #143 (ctx/trail-aware companion sanitization). Adds a per-string,
+    tail-consuming path anonymizer (``anonymize_paths(text, consume_tail=True)``
+    rewrites the WHOLE ``/Users|home/<name>/<tail>`` run to one hashed token, on
+    embedded substrings), retiring the capsule's strictly-weaker,
+    ``<user>``-flattening ``_scrub_identity`` into the registry tool. Widens the
+    generic OpenAI key regex ``sk-[A-Za-z0-9]{20,}`` → ``sk-[A-Za-z0-9-]{20,}``
+    (the ``sk-live-…`` / ``sk-<env>-…`` hyphen blind spot), preserving the
+    dummy-token allowlist. Adds ``companion_field_type(path) -> (FieldType,
+    is_path_leaf)`` and the ``sanitize_companion_dict`` seam (a sibling of
+    ``sanitize_dict``) that walks a ctx/trail dict leaf-by-leaf at per-leaf field
+    types and stamps a counts+types companion manifest. These are detection-logic
+    changes over the companion path, so the version contract bumps.
 """
 
-SECURITY_VERSION = "0.7.0"
+SECURITY_VERSION = "0.8.0"
