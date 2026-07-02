@@ -569,9 +569,53 @@ def _trail_projection_for_commits(project_cwd: Path, commit_shas: set[str]):
         return _trail_projection_for(project_cwd)
 
 
+def _trail_projection_for_file_line(project_cwd: Path):
+    """Trail projection bounded to the patch/anchor slice (scoped_reads contract).
+
+    The file:line blame target only ever reads ``patches_touching_file`` +
+    ``with_current_survival`` — rows built solely from ``trace_patch_created``
+    and ``git_anchor_created`` events (the same slice ``trail resolve
+    ot://file/...`` reads via ``resources._RESOLVE_EVENT_TYPES``). Building the
+    projection from that scoped read instead of the whole-log walk cures the
+    ``trail blame <path>:<line>`` hang (which the malformed group form
+    ``trail blame <trace>:<N>`` also hit) on a mature canonical log; the rows
+    are byte-identical because no other event type feeds them.
+    """
+    try:
+        from ..core.trails import build_trail_query_projection_from_events
+        from ..core.trails.scoped_reads import read_events_scoped
+
+        events = read_events_scoped(
+            project_cwd,
+            event_types={"trace_patch_created", "git_anchor_created"},
+        )
+        return build_trail_query_projection_from_events(project_cwd, events)
+    except Exception:
+        return None
+
+
 def _trail_trace_id_for_prefix(project_cwd: Path, prefix: str) -> str | None:
-    projection = _trail_projection_for(project_cwd)
-    if projection is None:
+    """Resolve a trail-only trace identifier via its OWN scoped footprint.
+
+    Bounded route (scoped_reads contract): reads only the candidate's events
+    through the trace-scoped projection twin — never the whole-log
+    ``build_trail_query_projection`` walk that made ``trail blame commit
+    t:<trace>`` hang on a mature canonical log. A FULL trail-only id still
+    resolves (exact OID-index hit); a short prefix of an UNSTAGED trail-only
+    trace no longer does — staging-backed prefixes were already resolved
+    upstream via ``resolve_trace_id_prefix``, and the old whole-log prefix
+    scan never completed on a mature log anyway (rc=124).
+    """
+    try:
+        from ..core.trails.scoped_reads import (
+            build_trail_query_projection_for_trace,
+        )
+
+        probe = prefix[2:] if prefix.lower().startswith("t:") else prefix
+        projection = build_trail_query_projection_for_trace(
+            project_cwd, probe.strip()
+        )
+    except Exception:
         return None
     return projection.resolve_trace_prefix(prefix)
 
@@ -1201,7 +1245,7 @@ def _build_file_line_json_payload(project_cwd: Path, target: str) -> dict:
 
     path, raw_line = target.rsplit(":", 1)
     line_no = int(raw_line)
-    projection = _trail_projection_for(project_cwd)
+    projection = _trail_projection_for_file_line(project_cwd)
     limitations: list[str] = []
     rows: list[dict] = []
     if projection is None:
