@@ -12,7 +12,7 @@ Storage layout (see paths.py):
 
 * Per-project, committable: ``<repo>/.opentraces.json``
     - ``project_id``        — stable UUID, source of truth for identity
-    - portable policy fields (review_policy, push_policy, agents,
+    - portable policy fields (review_policy, agents,
       post_processors, remote, visibility) — meant to travel with the repo
 
 The two trees are linked by ``project_id``. Cloning a repo on a new
@@ -42,10 +42,8 @@ from .paths import (
 )
 from .trace_stage import (
     DEFAULT_AGENT,
-    DEFAULT_PUSH_POLICY,
     DEFAULT_REVIEW_POLICY,
     normalize_agents,
-    normalize_push_policy,
     normalize_review_policy,
 )
 
@@ -127,7 +125,6 @@ MARKER_VERSION = "2"
 _PORTABLE_FIELDS = (
     "excluded",
     "review_policy",
-    "push_policy",
     "remotes",
     "active_remote",
     "default_visibility",
@@ -436,11 +433,6 @@ def _normalize_project_data(data: dict) -> bool:
     review_policy = normalize_review_policy(data.get("review_policy") or fallback)
     if data.get("review_policy") != review_policy:
         data["review_policy"] = review_policy
-        modified = True
-
-    push_policy = normalize_push_policy(data.get("push_policy"))
-    if data.get("push_policy") != push_policy:
-        data["push_policy"] = push_policy
         modified = True
 
     agents = normalize_agents(data.get("agents"))
@@ -840,7 +832,6 @@ def load_project_config(project_dir: Path) -> dict:
     if marker is None:
         return {
             "review_policy": DEFAULT_REVIEW_POLICY,
-            "push_policy": DEFAULT_PUSH_POLICY,
             "agents": [DEFAULT_AGENT],
         }
 

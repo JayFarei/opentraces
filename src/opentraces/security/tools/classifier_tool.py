@@ -25,7 +25,7 @@ class ClassifierJudge:
         block = cfg_block(cfg, self.name)
         if block is not None:
             return getattr(block, "sensitivity", "medium")
-        return getattr(cfg, "classifier_sensitivity", "medium") if cfg else "medium"
+        return "medium"
 
     def judge(self, record: TraceRecord, ctx: ToolContext) -> Verdict:
         sensitivity = self._sensitivity(ctx.cfg)

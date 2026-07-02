@@ -106,7 +106,7 @@ class TestLegacyMarkerMigration:
         data = load_project_config(tmp_path)
 
         assert data["review_policy"] == "review"
-        assert data["push_policy"] == "manual"
+        assert "push_policy" not in data  # dead field deleted (#160)
         assert data["agents"] == ["claude-code"]
 
 
@@ -231,7 +231,6 @@ class TestReadPurity:
         data = load_project_config(tmp_path)
 
         # Defaults are backfilled in memory...
-        assert data["push_policy"]
         assert data["remotes"] == {}
         assert data["active_remote"] is None
         # ...without touching the marker.

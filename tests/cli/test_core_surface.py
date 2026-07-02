@@ -96,3 +96,23 @@ def test_plumbing_is_hidden_but_callable(path: str) -> None:
 def test_core_verbs_stay_visible(path: str) -> None:
     cmd = _resolve(path)
     assert cmd.hidden is False, f"{path!r} is a core verb and must stay on --help"
+
+
+def test_trace_group_surface_pin() -> None:
+    """v7 7->4 collapse pin: the trace group's VISIBLE surface is exactly
+    the four job verbs. A future re-exposure of compare/partition/skills/
+    index/discover/teleport (or a new visible verb) fails here rather than
+    silently passing the lint; a dropped hidden verb fails too (hidden !=
+    removed)."""
+    trace = _resolve("trace")
+    assert isinstance(trace, click.Group)
+    ctx = click.Context(trace, info_name="trace")
+    all_cmds = {
+        name: trace.get_command(ctx, name) for name in trace.list_commands(ctx)
+    }
+    visible = {name for name, cmd in all_cmds.items() if not cmd.hidden}
+    assert visible == {"get", "map", "query", "slice"}
+    for name in ("compare", "partition", "skills", "index", "discover", "teleport"):
+        cmd = all_cmds.get(name)
+        assert cmd is not None, f"trace {name} was dropped (must stay hidden-but-callable)"
+        assert cmd.hidden is True, f"trace {name} must stay hidden from --help"

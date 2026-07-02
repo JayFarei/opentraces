@@ -42,19 +42,9 @@ kind = "returncode"
 step = "config-show"
 equals = 0
 
-# Existing 0.3.3 keys survive verbatim (no clobber).
-[[assertions]]
-kind = "stdout_json"
-step = "config-show"
-path = "dataset_visibility"
-equals = "private"
-
-[[assertions]]
-kind = "stdout_json"
-step = "config-show"
-path = "classifier_sensitivity"
-equals = "medium"
-
+# Existing 0.3.3 keys survive (no clobber). The legacy top-level
+# `dataset_visibility` / `classifier_sensitivity` keys were DELETED in
+# #160 (dead fields), so they are intentionally dropped on read now.
 # The 0.3.3 security key is preserved.
 [[assertions]]
 kind = "stdout_json"

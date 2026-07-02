@@ -146,9 +146,9 @@ class TestPublicCommandTree:
         result = runner.invoke(main, ["config", "show"])
         assert result.exit_code == 0
 
-    def test_config_set_classifier_sensitivity(self, initialized_project):
+    def test_config_set_projects_path(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["config", "set", "classifier_sensitivity", "high"])
+        result = runner.invoke(main, ["config", "set", "projects_path", "/tmp/claude-projects"])
         assert result.exit_code == 0
 
     @pytest.mark.parametrize(

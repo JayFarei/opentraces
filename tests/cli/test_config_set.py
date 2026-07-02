@@ -57,12 +57,12 @@ def runner():
 
 class TestConfigSetGenericGlobal:
     def test_set_scalar_global(self, runner, isolated_home) -> None:
-        """`ot config set classifier_sensitivity high` writes to global config."""
-        result = runner.invoke(main, ["config", "set", "classifier_sensitivity", "high"])
+        """`ot config set projects_path <dir>` writes to global config."""
+        result = runner.invoke(main, ["config", "set", "projects_path", "/tmp/claude-projects"])
         assert result.exit_code == 0, result.output
 
         global_cfg = json.loads((isolated_home / ".opentraces" / "config.json").read_text())
-        assert global_cfg.get("classifier_sensitivity") == "high"
+        assert global_cfg.get("projects_path") == "/tmp/claude-projects"
 
     def test_set_unknown_key_errors(self, runner, isolated_home) -> None:
         result = runner.invoke(main, ["config", "set", "completely_made_up_key", "x"])
@@ -165,29 +165,44 @@ class TestConfigSetProjectBooleanCoercion:
 
 class TestConfigGet:
     def test_get_known_key(self, runner, isolated_home) -> None:
-        result = runner.invoke(main, ["config", "get", "classifier_sensitivity"])
+        result = runner.invoke(main, ["config", "get", "config_version"])
         assert result.exit_code == 0, result.output
-        assert "medium" in result.output
+        assert result.output.strip()
 
     def test_get_unknown_key_errors(self, runner, isolated_home) -> None:
         result = runner.invoke(main, ["config", "get", "not_a_real_key"])
         assert result.exit_code != 0
 
+    @pytest.mark.parametrize(
+        "dead_key", ["dataset_visibility", "classifier_sensitivity", "push_policy"]
+    )
+    def test_get_deleted_dead_field_errors(self, runner, isolated_home, dead_key) -> None:
+        """#160 V5: the three dead config fields are DELETED, not readable.
+
+        `dataset_visibility` had zero readers, top-level
+        `classifier_sensitivity` was a no-op duplicate of
+        `security.classifier.sensitivity`, and `push_policy` was
+        display-only (hard-coded "manual")."""
+        result = runner.invoke(main, ["config", "get", dead_key])
+        assert result.exit_code != 0
+        result = runner.invoke(main, ["config", "set", dead_key, "x"])
+        assert result.exit_code != 0
+
     def test_get_json_envelope(self, runner, isolated_home) -> None:
-        result = runner.invoke(main, ["--json", "config", "get", "classifier_sensitivity"])
+        result = runner.invoke(main, ["--json", "config", "get", "config_version"])
         assert result.exit_code == 0, result.output
         doc = json.loads(result.output)
         assert doc["status"] == "ok"
         assert doc["schema_version"] == "opentraces.config.get.v1"
-        assert doc["key"] == "classifier_sensitivity"
-        assert doc["value"] == "medium"
+        assert doc["key"] == "config_version"
+        assert doc["value"]
         assert doc["source"] == "global"
 
     def test_get_after_set_round_trips(self, runner, isolated_home) -> None:
-        runner.invoke(main, ["config", "set", "classifier_sensitivity", "high"])
-        result = runner.invoke(main, ["--json", "config", "get", "classifier_sensitivity"])
+        runner.invoke(main, ["config", "set", "projects_path", "/tmp/claude-projects"])
+        result = runner.invoke(main, ["--json", "config", "get", "projects_path"])
         doc = json.loads(result.output)
-        assert doc["value"] == "high"
+        assert doc["value"] == "/tmp/claude-projects"
 
     def test_get_masks_hf_token(self, runner, isolated_home) -> None:
         from opentraces.core.config import save_credentials
