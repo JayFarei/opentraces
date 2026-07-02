@@ -148,13 +148,6 @@
    "tracking_mode"
   ]
  },
- "ctx list": {
-  "schema_version": "opentraces.ctx.list.v2",
-  "top_level_keys": [
-   "schema_version",
-   "traces"
-  ]
- },
  "dataset list": {
   "schema_version": null,
   "top_level_keys": [
