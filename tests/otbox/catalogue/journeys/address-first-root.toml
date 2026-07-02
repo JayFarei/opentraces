@@ -1,0 +1,114 @@
+name = "address-first-root"
+description = """
+v7 F5 — address-first discovery journey (SILVER) for the
+`resolve-trace-artifact` trajectory.
+
+`opentraces <trace-id> --json` is the default action lens for
+`opentraces trace get <trace-id> --json`: on a captured-session world
+the bare-address invocation must dispatch to trace get and return the
+same frozen `opentraces.trace.get.v1` envelope (schema_version +
+trace_id pinned cross-step via equals_var; byte-identity is pinned by
+the unit suite in tests/cli/test_root_address_dispatch.py).
+
+The conservative gate must NOT swallow typos: a non-address token keeps
+Click's exact "No such command" error (rc=2) with Did-you-mean intact.
+
+Forks from the artifact-preferred `c-captured-real-session` checkpoint
+so the dispatch runs against a real captured trace, not an empty-state
+envelope.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["resolve-trace-artifact"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — the bare-address shortcut: `opentraces <trace-id> --json`.
+# Pre-F5 this was "No such command"; now it must return trace get's
+# frozen envelope for the captured trace.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "address-shortcut"
+argv = ["{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "address-shortcut"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "address-shortcut"
+path = "schema_version"
+equals = "opentraces.trace.get.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "address-shortcut"
+path = "trace.trace_id"
+equals = "{trace_id}"
+
+# ---------------------------------------------------------------------
+# Step 2 — the canonical verb, same ref. The shortcut is pure dispatch:
+# both invocations must name the same trace under the same envelope.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "canonical-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "canonical-get"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "canonical-get"
+path = "schema_version"
+equals = "opentraces.trace.get.v1"
+
+# Cross-step identity: the shortcut resolved the SAME trace the
+# canonical verb resolves.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "canonical-get"
+path = "trace.trace_id"
+equals_var = "address-shortcut:trace.trace_id"
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "canonical-get"
+path = "trace.step_count"
+equals_var = "address-shortcut:trace.step_count"
+
+# ---------------------------------------------------------------------
+# Step 3 — typo safety: a non-address token keeps Click's unchanged
+# "No such command" usage error (rc=2), Did-you-mean intact.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "typo-still-errors"
+argv = ["stauts"]
+
+[[assertions]]
+kind = "returncode"
+step = "typo-still-errors"
+equals = 2
+
+[[assertions]]
+kind = "stderr_contains"
+step = "typo-still-errors"
+value = "No such command 'stauts'"
+
+[[assertions]]
+kind = "stderr_contains"
+step = "typo-still-errors"
+value = "Did you mean"
