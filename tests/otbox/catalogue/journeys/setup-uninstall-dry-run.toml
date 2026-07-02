@@ -1,9 +1,13 @@
 name = "setup-uninstall-dry-run"
 description = """
-Issue #85 — `setup uninstall --dry-run` resolves the full teardown plan and
+Issue #85 — `uninstall --dry-run` resolves the full teardown plan and
 mutates NOTHING. The world seed installs the real git post-commit hook, so the
 plan must list git under removed_names (would-remove) while the hook file is
 still on disk after the dry run. --dry-run is the recommended first invocation.
+Issue #160 moved `uninstall` from a `setup` subcommand to a root peer verb
+(the out leg of the in / update / out triad beside `setup`) — same command
+object, exercised here via its new root path; `setup uninstall` survives as
+a hidden, still-callable alias.
 """
 lane = "extended"
 tier = 0
@@ -14,7 +18,7 @@ requires = ["cli", "git"]
 [[steps]]
 type = "cli"
 id = "uninstall-dry"
-argv = ["--json", "setup", "uninstall", "--dry-run"]
+argv = ["--json", "uninstall", "--dry-run"]
 
 [[assertions]]
 kind = "returncode"

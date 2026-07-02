@@ -1195,6 +1195,11 @@ def setup_capture_otlp_cmd(
     Idempotent: rerun is safe. A backup is written to
     ``~/.claude/settings.json.opentraces-backup`` before any edit (plan §R10).
 
+    OFF cost: OTel is the only record-PURE capture source — it exists
+    solely for context-tree fidelity. With it off (or ``--uninstall``), ctx
+    stays approximated: the JSONL-reconstruction view, not the
+    byte-perfect wire view of what the model actually saw.
+
     Flags:
       --status      Report patch state without modifying anything.
       --uninstall   Remove our 12 OTel env keys.

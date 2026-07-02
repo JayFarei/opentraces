@@ -266,7 +266,13 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
     return api_format, base_url, model, api_key_env, timeout
 
 
-@setup_group.command("llm-review")
+@setup_group.command(
+    "llm-review",
+    hidden=True,  # issue #160: a publication gate, not a per-record sanitize
+    # tool — belongs beside `dataset review`/`dataset publish`, not `setup`'s
+    # install/enable listing. Kept callable (hidden != removed); internals
+    # are unchanged and untouched by this move.
+)
 @click.option("--api-format", "api_format", default=None,
               type=click.Choice(["openai-compat", "ollama", "anthropic", "fake"], case_sensitive=False),
               help="Wire protocol the local client speaks: openai-compat "

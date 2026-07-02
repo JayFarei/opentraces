@@ -8,12 +8,14 @@ for the decorator-registration side effect. One-way dep on ``installers``
 """
 from __future__ import annotations
 
+import copy as _copy
 import sys
 from pathlib import Path
 
 import click
 
 import opentraces.cli as _cli
+from . import main
 from .installers import setup_group
 
 
@@ -159,6 +161,37 @@ def setup_uninstall(integrations_only: bool, purge: bool, project: Path | None,
 
     _cli.emit_json(envelope)
     sys.exit(0 if envelope["ok"] else 5)
+
+
+def _hidden_copy(cmd: click.Command) -> click.Command:
+    """Shallow-copy a Click command for a second mount point with its own
+    visibility.
+
+    Click's ``hidden`` flag lives on the ``Command`` object itself, so one
+    shared object cannot be visible at one mount and hidden at another.
+    Giving the setup-namespace path its own hidden copy (while the root
+    peer mount stays visible) reuses the exact same callback and params —
+    the implementation is defined once; only the thin Command wrapper is
+    duplicated.
+    """
+    dup = _copy.copy(cmd)
+    dup.hidden = True
+    return dup
+
+
+# ---------------------------------------------------------------------------
+# Root peer verbs (issue #160). `upgrade` and `uninstall` are the
+# update/out members of the in / update / out triad, siblings of `setup`
+# rather than subcommands of it — per the ADR-0006 taxonomy, `setup` NEVER
+# removes. Mount the SAME command objects at root (visible, so they get a
+# COMMAND_SECTIONS row) and demote the `setup`-namespace originals to hidden
+# copies: `setup upgrade` / `setup uninstall` stay fully callable (hidden !=
+# removed), just off `setup --help`.
+# ---------------------------------------------------------------------------
+main.add_command(setup_upgrade, name="upgrade")
+main.add_command(setup_uninstall, name="uninstall")
+setup_group.add_command(_hidden_copy(setup_upgrade), name="upgrade")
+setup_group.add_command(_hidden_copy(setup_uninstall), name="uninstall")
 
 
 # ---------------------------------------------------------------------------

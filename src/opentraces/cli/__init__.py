@@ -34,6 +34,7 @@ from ..core.trace_stage import (
     normalize_review_policy,
     resolve_visible_stage,
 )
+from ._envelope import envelope as _envelope
 from ._help import OpentracesGroup
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,8 @@ COMMAND_SECTIONS = [
         "Global Setup",
         [
             "setup",
+            "upgrade",
+            "uninstall",
             "auth",
             "config",
             "completions",
@@ -792,6 +795,35 @@ def _render_config_pretty(data: dict, config_path) -> None:
     click.echo()
 
 
+# Project-marker fields with a boolean SHAPE (checked truthy elsewhere, e.g.
+# core/config.py::is_project_excluded reads `marker.get("excluded")`).
+# `_PORTABLE_FIELDS` carries no type info of its own (the marker is a plain
+# dict, not a Pydantic model like the global Config), so this is the explicit
+# type map `config set --project` coerces against.
+_PORTABLE_BOOLEAN_FIELDS = frozenset({"excluded"})
+
+
+def _coerce_portable_value(key: str, raw: str) -> object:
+    """Type-aware coercion for ``config set --project`` (ADR-0007 config
+    fold, issue #160 V6). Without this, ``--project excluded false``
+    persists the truthy string ``"false"`` instead of the boolean
+    ``False`` — a footgun since ``is_project_excluded`` reads the marker
+    for a falsy value, so the string form never actually opts a project
+    back in. Non-boolean portable keys are returned unchanged (strings).
+    """
+    if key not in _PORTABLE_BOOLEAN_FIELDS:
+        return raw
+    lowered = raw.strip().lower()
+    if lowered in {"true", "1", "yes", "on"}:
+        return True
+    if lowered in {"false", "0", "no", "off"}:
+        return False
+    raise ValueError(
+        f"'{raw}' is not a valid boolean for '{key}' "
+        "(use true/false, 1/0, or yes/no)"
+    )
+
+
 @config.command("set")
 @click.argument("key", required=False)
 @click.argument("value", required=False)
@@ -867,11 +899,18 @@ def config_set(
             if value not in existing:
                 existing.append(value)
             proj_cfg[key] = existing
+            stored_value: object = existing
         else:
-            proj_cfg[key] = value
+            try:
+                stored_value = _coerce_portable_value(key, value)
+            except ValueError as e:
+                click.echo(str(e), err=True)
+                emit_json(error_response("INVALID_CONFIG_VALUE", "config-set", str(e)))
+                sys.exit(2)
+            proj_cfg[key] = stored_value
         save_project_config(proj_dir, proj_cfg)
-        click.echo(f"Set {key}={value} (project)")
-        emit_json({"status": "ok", "scope": "project", "key": key, "value": value})
+        click.echo(f"Set {key}={stored_value} (project)")
+        emit_json({"status": "ok", "scope": "project", "key": key, "value": stored_value})
         return
 
     # Global scope (default).
@@ -938,6 +977,46 @@ def config_tracking_mode(mode: str | None) -> None:
     save_config(cfg)
     click.echo(f"Set tracking-mode={mode}")
     emit_json({"status": "ok", "tracking_mode": mode})
+
+
+@config.command("get")
+@click.argument("key", required=True)
+def config_get(key: str) -> None:
+    """Read a single global configuration value.
+
+      ot config get <key>
+
+    The single-setting counterpart to 'ot config set <key> <value>' — the
+    canon `set [KEY] [VALUE]` shape implies a key-addressing getter, but
+    only the whole-config 'ot config show' dump existed until now. Prints
+    the bare value in human mode; under --json returns the uniform
+    {status, schema_version, key, value, source} envelope. Unknown keys
+    exit non-zero with a structured error instead of a bare value.
+    """
+    cfg = load_config()
+    if key not in type(cfg).model_fields:
+        message = f"Unknown config key '{key}'. Use 'opentraces config show' to see valid keys."
+        human_echo(message)
+        emit_json(error_response("UNKNOWN_CONFIG_KEY", "config-get", message))
+        sys.exit(2)
+
+    value = getattr(cfg, key)
+    if hasattr(value, "model_dump"):
+        # A nested config section (e.g. `bucket`, `security`) — dump to a
+        # plain JSON-serializable dict rather than leak a Pydantic repr.
+        value = value.model_dump()
+    if key == "hf_token" and value:
+        value = "***"
+    elif key == "custom_redact_strings" and value:
+        value = ["***" for _ in value]
+
+    human_echo(json.dumps(value, indent=2) if isinstance(value, (dict, list)) else str(value))
+    emit_json(_envelope(
+        "opentraces.config.get.v1",
+        key=key,
+        value=value,
+        source="global",
+    ))
 
 
 # --------------------------------------------------------------------------- #
@@ -2607,6 +2686,12 @@ from . import setup_review_llm as _setup_review_llm  # noqa: E402,F401
 # import that previously sat in the installers review-llm section; relocated here
 # with the other registration imports). Unrelated to review-llm.
 from . import doctor_cli as _doctor_cli  # noqa: E402,F401
+
+# issue #160: mount the SAME `doctor` command object under `setup` (visible)
+# so the install-health read-twin is discoverable right beside the verbs it
+# reports on. Root `opentraces doctor` is unchanged (same object, one more
+# path — the object stays unhidden, so both mounts are visible).
+_setup_group.add_command(_doctor_cli.doctor_cmd, name="doctor")
 
 
 @_setup_group.command("auth", hidden=True)  # plan 087 — redundant with `auth login` (the canonical home); callable, off --help
