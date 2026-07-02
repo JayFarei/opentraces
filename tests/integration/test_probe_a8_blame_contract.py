@@ -82,6 +82,9 @@ ATTRIBUTION_KEY_WHITELIST = frozenset({
     # ---- top-level payload (blame commit --json) ----
     "commit", "coverage", "traces", "files", "hookLinked", "trailEvidence",
     "projection_disagreements", "projection_limitations", "entity_contributions",
+    # ---- uniform L5 envelope header (ADR-0007): status:'ok' +
+    #      schema_version:'opentraces.trail.blame.v1' — additive, not survival ----
+    "status", "schema_version",
     # ---- commit / coverage ----
     "sha", "subject", "timestamp", "attributed", "total", "ratio",
     # ---- trailEvidence rows (flat anchor fields) ----

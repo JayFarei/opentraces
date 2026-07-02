@@ -73,7 +73,15 @@ READ_FAMILY_ROOTS = ("trace", "ctx", "trail", "bucket", "status", "doctor", "con
 # emitting the WRONG frozen version (one belonging to a different frozen surface)
 # is NOT exempt. The union of values mirrors
 # opentraces.cli.ctx.FROZEN_ENVELOPE_SCHEMA_VERSIONS (every frozen version is
-# owned by exactly the ctx command(s) that emit it).
+# owned by exactly the ctx command(s) that emit it) — pinned mechanically by
+# the drift guard in test_agent_contract_lint.py, so the exception set can only
+# ever contain genuinely-frozen ctx consumer surfaces.
+#
+# ``trail blame`` is deliberately NOT here: it satisfies L5 natively (uniform
+# {status, schema_version: opentraces.trail.blame*.v1} header on all three
+# payload forms) and is enforced via L5_ARGGED_TARGETS below — required args
+# exclude it from the main sweep, so without that pass it would ESCAPE L5
+# rather than being exempt from it.
 FROZEN_ENVELOPE_EXCEPTIONS: dict[str, frozenset[str]] = {
     "ctx list": frozenset({"opentraces.ctx.list.v2"}),
     "ctx info": frozenset({"opentraces.ctx.info.v2"}),
@@ -465,6 +473,21 @@ HANG_CLUSTER: list[tuple[str, list[str]]] = [
     ("trail blame commit", ["trail", "blame", "commit", "HEAD"]),
 ]
 
+# L5 argged targets: read verbs the main sweep SKIPS (required args exclude
+# them from the per-command sweep at the `required_args(cmd)` gate below), so
+# their envelope uniformity would otherwise never be checked — an escape, not
+# an exemption. Each entry runs via ``hang_runner`` on the seeded bucket world
+# (whose fixture seeds a hook-linked git note on HEAD so blame exits 0 with the
+# honest notes-only envelope, making this pass NON-vacuous) and, when it exits
+# 0 with parseable JSON, must satisfy l5_uniform_envelope like any other read
+# verb. Both blame invocation forms are listed because the bare
+# ``trail blame <sha>`` resolves through _BlameGroup to the same ``commit``
+# subcommand — one header regression must fail both names.
+L5_ARGGED_TARGETS: list[tuple[str, list[str]]] = [
+    ("trail blame commit", ["trail", "blame", "commit", "HEAD"]),
+    ("trail blame", ["trail", "blame", "HEAD"]),
+]
+
 # L2 guard-listed commands. ``full`` targets deterministically reach the guard
 # under bare --json and must carry the full refusal contract; the others are
 # asserted zero-prompt only (their guard is environment-gated, e.g. trufflehog
@@ -517,6 +540,17 @@ def lint_agent_contract(
     if hang_runner is not None:
         for name, argv in HANG_CLUSTER:
             raw.extend(l1_terminates(name, hang_runner(argv)))
+
+    # L5 (part B) — argged read verbs the main sweep skips (required args).
+    # Mirrors the main sweep's gate: only an exit-0, non-timed-out run with
+    # parseable JSON is envelope-checked.
+    if hang_runner is not None:
+        for name, argv in L5_ARGGED_TARGETS:
+            res = hang_runner(argv)
+            if res.exit_code == 0 and not res.timed_out:
+                doc = _parse_json(res.stdout)
+                if doc is not None:
+                    raw.extend(l5_uniform_envelope(name, doc))
 
     # L2 — guard commands.
     for name, argv, full in GUARD_COMMANDS:
