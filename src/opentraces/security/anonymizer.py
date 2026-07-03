@@ -203,16 +203,27 @@ _MARKER_TAIL_RE = re.compile(
 # (``extract_usernames_from_paths``) requires a 3+ char ``[A-Za-z0-9_-]``
 # username, so it MISSES dotted (``jane.doe``) and short (``j``) names — their
 # home-path tail then survived even with ``consume_tail=True``. This rewrites ANY
-# raw ``/Users|home/<name>/<tail-until-delimiter>`` whose ``<name>`` matches the
-# username grammar ``[A-Za-z0-9._-]+`` (dots, hyphens, underscores, short names)
-# to the single hashed ``[ot-user-<hash>]`` token, regardless of whether the
-# name was auto-detected. The hashed marker begins with ``[`` (outside the name
-# class), so an already-rewritten segment is never re-matched — idempotent by
-# construction. Companion-only: the TraceRecord ``apply`` path never sets
-# ``consume_tail``, so this never runs there and trace digests are unchanged.
+# raw ``/Users|home/<name>`` whose ``<name>`` matches the username grammar
+# ``[A-Za-z0-9._-]+`` (dots, hyphens, underscores, short names) to the single
+# hashed ``[ot-user-<hash>]`` token, dropping any ``/<tail-until-delimiter>`` that
+# follows — regardless of whether the name was auto-detected. The hashed marker
+# begins with ``[`` (outside the name class), so an already-rewritten segment is
+# never re-matched — idempotent by construction. Companion-only: the TraceRecord
+# ``apply`` path never sets ``consume_tail``, so this never runs there and trace
+# digests are unchanged.
+#
+# The match is case-INSENSITIVE (``Users``/``users``/``home``/``HOME``) and the
+# trailing tail is OPTIONAL — restoring the retired ``_PATH_USER_RE`` semantics so
+# a THIRD-PARTY collaborator's home path is collapsed even when it is tail-less
+# ("cloned into /Users/teammate") or lower-cased ("/users/collaborator/.env").
+# Before this, only the operator's own tokens (bare-username replacement) plus
+# canonically-cased *tailed* auto-detected names were scrubbed, leaking a
+# non-operator username verbatim into public capsule egress. Over-redaction here
+# is safe; under-redaction is a public leak.
 _HOME_PATH_CONSUME_RE = re.compile(
     r"([/\\](?:Users|home)[/\\])([A-Za-z0-9._-]+)"
-    r"(?:[/\\][^\s\"'`<>]+)"
+    r"(?:[/\\][^\s\"'`<>]+)?",
+    re.IGNORECASE,
 )
 
 
