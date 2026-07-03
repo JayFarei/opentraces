@@ -107,8 +107,12 @@ def test_headless_executor_rejected_by_the_runner_allowlist():
 
 def test_exactly_one_subprocess_script_seam():
     source = Path(workflow_runner.__file__).read_text(encoding="utf-8")
-    # _execute_script is the ONE subprocess boundary in the module.
-    assert source.count("subprocess.run(") == 1
+    # _execute_script is the ONE script-execution seam. #188 moved the actual
+    # subprocess boundary into the shared isolation primitive, so the module no
+    # longer calls subprocess.run directly and instead drives exactly one
+    # run_isolated( call.
+    assert "subprocess.run(" not in source
+    assert source.count("run_isolated(") == 1
 
 
 def test_dataset_runner_calls_execute_workflow_not_execute_script_directly():

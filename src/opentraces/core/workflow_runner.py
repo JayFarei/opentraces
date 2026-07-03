@@ -7,8 +7,10 @@ One execution seam lives here (the M1 engine collapse, #185):
   ``scripts/build_rows.py`` from the workflow package, with the versioned
   ``opentraces.workflow.run_packet.v1`` run packet handed over on the
   environment (``OT_RUN_PACKET``/``OT_DATASET_OUTPUT``). ``_execute_script`` is
-  the ONE subprocess seam. Used directly by non-dataset consumers like the
-  branch-context PR consumer in ``core.branch_context``.
+  the ONE script-execution seam; #188 routes its subprocess boundary through the
+  shared isolation primitive (``core.isolation.run_isolated``) with a scrubbed
+  env and an honest ``sandbox_tier``. Used directly by non-dataset consumers
+  like the branch-context PR consumer in ``core.branch_context``.
 * ``run_dataset_workflow`` — the dataset-bound runner. It is lifecycle
   bookkeeping (locks, run dirs, cursors, append, run records) *around*
   ``execute_workflow``: it builds the one versioned run packet (a superset that
@@ -27,7 +29,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -39,6 +40,7 @@ import yaml
 
 from opentraces_schema import DatasetRunRecord
 
+from . import paths
 from .datasets import (
     AppendSummary,
     append_rows,
@@ -49,6 +51,12 @@ from .datasets import (
     save_manifest,
     source_provenance_for_query,
     write_source_provenance,
+)
+from .isolation import SANDBOX_TIER_NONE, IsolationReport, run_isolated
+from .workflow_judgment import (
+    OT_JUDGMENT_SIDECAR_ENV,
+    RC_NEEDS_JUDGMENT,
+    read_sidecar_requests,
 )
 from .workflows import WorkflowPackage, load_workflow, resolve_workflow_reference
 
@@ -63,6 +71,23 @@ class DatasetRunLockError(RuntimeError):
 
 class WorkflowScriptError(RuntimeError):
     """Raised when a workflow's script executor exits non-zero."""
+
+
+class WorkflowNeedsJudgmentError(RuntimeError):
+    """Raised when a workflow's builder exits ``rc=10`` with a judgment sidecar.
+
+    This is the #186 handshake, NOT a failure: the builder needs recorded
+    judgments to produce deterministic rows. Carries the workflow name and the
+    structured ``judgment_requests`` the builder wrote so the CLI can render the
+    ``opentraces.workflow.needs_judgment.v1`` envelope and exit ``rc=10``.
+    """
+
+    def __init__(self, workflow_name: str, judgment_requests: list[dict[str, Any]]):
+        self.workflow_name = workflow_name
+        self.judgment_requests = judgment_requests
+        super().__init__(
+            f"workflow '{workflow_name}' needs {len(judgment_requests)} judgment(s)"
+        )
 
 
 @dataclass(frozen=True)
@@ -127,6 +152,7 @@ def run_dataset_workflow(
     scheduled: bool = False,
     privacy_tier: str | None = None,
     trail_freshness_policy: str = "warn",
+    answers: dict[str, Any] | None = None,
 ) -> DatasetRunResult:
     dataset = load_dataset(name)
     selected_executor = executor or (
@@ -192,6 +218,11 @@ def run_dataset_workflow(
         "trail_freshness_policy": trail_freshness_policy,
         "trail_freshness": trail_freshness,
     }
+    # #186: recorded judgments are the fourth contract input. Persisting them in
+    # the run packet is what makes the projection f(workflow, bucket, answers) —
+    # the builder reads packet["answers"] to finalize rows deterministically.
+    if answers:
+        dataset_context["answers"] = answers
     run_packet = _build_workflow_packet(
         workflow_name=dataset.manifest.workflow.skill,
         workflow_digest=workflow_digest,
@@ -227,7 +258,17 @@ def run_dataset_workflow(
             append_summary=append_summary,
             status="succeeded",
         )
-        _write_run_summary(run_dir, run_record, append_summary, cursor_advanced=False)
+        # current-agent is raw agent emission (the LLM's output is not a recorded
+        # input), so it is honestly labeled reconstructable=False and carries no
+        # isolation tier — no script ran in the shared isolation primitive.
+        _write_run_summary(
+            run_dir,
+            run_record,
+            append_summary,
+            cursor_advanced=False,
+            reconstructable=False,
+            sandbox_tier=SANDBOX_TIER_NONE,
+        )
         return DatasetRunResult(
             run_id=run_id,
             run_dir=run_dir,
@@ -243,7 +284,7 @@ def run_dataset_workflow(
         # ``execute_workflow`` (which owns ``_execute_script``, the one
         # subprocess boundary). ``current-agent`` returned above and never
         # reaches here.
-        execute_workflow(
+        execution = execute_workflow(
             dataset.manifest.workflow.skill,
             scope=run_packet["scope"],
             output_path=output_path,
@@ -266,6 +307,10 @@ def run_dataset_workflow(
                     "executor": selected_executor,
                     "scope": run_packet["scope"],
                     "limit": limit,
+                    # #188 honesty labels: a script run IS reconstructable, and
+                    # the achieved isolation tier is what the primitive reported.
+                    "reconstructable": execution.reconstructable,
+                    "isolation": {"sandbox_tier": execution.sandbox_tier},
                 },
                 trail_freshness=trail_freshness,
             )
@@ -273,6 +318,11 @@ def run_dataset_workflow(
             if not dry_run:
                 _advance_cursor(dataset.path, dataset.manifest, run_id)
                 cursor_advanced = True
+    except WorkflowNeedsJudgmentError:
+        # Not a failure: the builder asked for judgments (#186). Leave the run
+        # packet + sidecar in place and propagate rc=10 to the CLI without
+        # marking the run failed.
+        raise
     except Exception as exc:
         empty_summary = AppendSummary(
             dataset_name=name,
@@ -295,7 +345,14 @@ def run_dataset_workflow(
         (run_dir / "log.txt").write_text(
             f"{type(exc).__name__}: {exc}\n", encoding="utf-8"
         )
-        _write_run_summary(run_dir, failed_record, empty_summary, cursor_advanced=False)
+        _write_run_summary(
+            run_dir,
+            failed_record,
+            empty_summary,
+            cursor_advanced=False,
+            reconstructable=True,
+            sandbox_tier=SANDBOX_TIER_NONE,
+        )
         raise
     run_record = _run_record(
         run_id=run_id,
@@ -309,7 +366,14 @@ def run_dataset_workflow(
         append_summary=append_summary,
         status="succeeded",
     )
-    _write_run_summary(run_dir, run_record, append_summary, cursor_advanced=cursor_advanced)
+    _write_run_summary(
+        run_dir,
+        run_record,
+        append_summary,
+        cursor_advanced=cursor_advanced,
+        reconstructable=execution.reconstructable,
+        sandbox_tier=execution.sandbox_tier,
+    )
     return DatasetRunResult(
         run_id=run_id,
         run_dir=run_dir,
@@ -440,6 +504,8 @@ def _write_run_summary(
     append_summary: AppendSummary,
     *,
     cursor_advanced: bool,
+    reconstructable: bool = True,
+    sandbox_tier: str = SANDBOX_TIER_NONE,
 ) -> None:
     validation_payload = {
         "validation_error_count": append_summary.validation_error_count,
@@ -449,6 +515,11 @@ def _write_run_summary(
         "run": run_record.model_dump(mode="json"),
         "append": append_summary.__dict__,
         "cursor_advanced": cursor_advanced,
+        # #188 honesty labels (additive): whether this run's rows can be
+        # reconstructed by replaying the recorded inputs, and the achieved
+        # isolation tier of the script executor.
+        "reconstructable": reconstructable,
+        "isolation": {"sandbox_tier": sandbox_tier},
     }
     (run_dir / "validation.json").write_text(
         json.dumps(validation_payload, indent=2, sort_keys=True) + "\n",
@@ -509,7 +580,13 @@ _WORKFLOW_SCRIPT_RELPATH = Path("scripts") / "build_rows.py"
 
 @dataclass(frozen=True)
 class WorkflowExecutionResult:
-    """Outcome of one ``execute_workflow`` invocation."""
+    """Outcome of one ``execute_workflow`` invocation.
+
+    ``reconstructable`` / ``sandbox_tier`` are the #188 honesty labels: a
+    ``script`` run (including a recorded-answer #186 run) is reconstructable,
+    and ``sandbox_tier`` is the isolation the shared primitive actually achieved
+    (``none`` / ``jail`` in M1).
+    """
 
     workflow_name: str
     workflow_digest: str
@@ -519,6 +596,8 @@ class WorkflowExecutionResult:
     started_at: str
     finished_at: str
     scope: dict[str, Any]
+    reconstructable: bool = True
+    sandbox_tier: str = SANDBOX_TIER_NONE
 
 
 def execute_workflow(
@@ -531,6 +610,7 @@ def execute_workflow(
     run_dir: Path | None = None,
     run_packet: dict[str, Any] | None = None,
     workflow_package: WorkflowPackage | None = None,
+    answers: dict[str, Any] | None = None,
 ) -> WorkflowExecutionResult:
     """Run a workflow's deterministic builder, write rows to ``output_path``.
 
@@ -591,6 +671,7 @@ def execute_workflow(
             output_path=output_path,
             executor=executor,
             started_at=started_at,
+            answers=answers,
         )
         _write_workflow_packet(run_dir, run_packet)
     else:
@@ -600,7 +681,9 @@ def execute_workflow(
 
     output_path.write_text("", encoding="utf-8")
 
-    _execute_script(workflow, run_dir, output_path, run_packet, extra_env=extra_env)
+    isolation = _execute_script(
+        workflow, run_dir, output_path, run_packet, extra_env=extra_env
+    )
 
     rows = _read_output_rows(output_path)
     finished_at = utc_now_str()
@@ -613,6 +696,10 @@ def execute_workflow(
         started_at=started_at,
         finished_at=finished_at,
         scope=scope,
+        # A script / recorded-answer run IS reconstructable; the sandbox_tier is
+        # whatever the shared isolation primitive honestly reported (#188).
+        reconstructable=True,
+        sandbox_tier=isolation.sandbox_tier,
     )
 
 
@@ -627,12 +714,15 @@ def _build_workflow_packet(
     executor: str,
     started_at: str,
     dataset_context: dict[str, Any] | None = None,
+    answers: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the ONE versioned run packet (opentraces.workflow.run_packet.v1).
 
     The base shape is the primitive packet. ``dataset_context`` (when the
     dataset runner supplies it) merges in the dataset-only keys — a strict
     superset that only ADDS keys, so the envelope stays frozen at ``.v1``.
+    ``answers`` (#186) is persisted when present so the builder can finalize its
+    rows deterministically and replay is f(workflow, bucket, answers).
     """
 
     packet: dict[str, Any] = {
@@ -646,6 +736,8 @@ def _build_workflow_packet(
         "output_path": str(output_path),
         "started_at": started_at,
     }
+    if answers:
+        packet["answers"] = answers
     if dataset_context:
         packet.update(dataset_context)
     return packet
@@ -674,40 +766,78 @@ def _execute_script(
     output_path: Path,
     run_packet: dict[str, Any],
     extra_env: dict[str, str] | None = None,
-) -> None:
+) -> IsolationReport:
+    """Run a workflow's ``build_rows.py`` through the shared isolation primitive.
+
+    This is the ONE subprocess seam (#185). #188 routes it through
+    ``core.isolation.run_isolated``, which is the actual subprocess boundary: the
+    child env is built from an ALLOWLIST (parent secrets never inherited), only
+    the ``OT_*`` contract vars reach it, and ``$HOME`` is redirected to a
+    throwaway dir. BUNDLED (first-party ``source_type=="package"``) templates
+    still reach the operator's bucket via an explicit ``OT_OPENTRACES_DIR`` and
+    run with network allowed; THIRD-PARTY (``file``) sources get full
+    network-deny and NO bucket var. Returns the honest :class:`IsolationReport`.
+
+    #186 handshake: the child is handed an ``OT_JUDGMENT_SIDECAR`` path; when the
+    builder needs judgments it writes its JudgmentRequests there and exits
+    ``rc=10``. That combination raises :class:`WorkflowNeedsJudgmentError` (a
+    handshake, not a failure) rather than :class:`WorkflowScriptError`.
+    """
     script = workflow.path / _WORKFLOW_SCRIPT_RELPATH
     if not script.exists():
         raise ExecutorUnavailableError(
             f"workflow '{workflow.name}' has no {_WORKFLOW_SCRIPT_RELPATH} "
             "(script executor requires a deterministic builder)"
         )
-    env = os.environ.copy()
-    env["OT_RUN_PACKET"] = str(run_dir / "run_packet.json")
-    env["OT_DATASET_OUTPUT"] = str(output_path)
-    env["OT_WORKFLOW_PATH"] = str(workflow.path)
+
+    bundled = workflow.source_type == "package"
+    sidecar_path = run_dir / "judgment_requests.json"
+    # ONLY the OT_* contract vars reach the scrubbed child (plus the isolation
+    # primitive's own PATH/LANG/... allowlist). Nothing else — not the parent's
+    # secrets, not the parent HOME.
+    allow_env: dict[str, str] = {
+        "OT_RUN_PACKET": str(run_dir / "run_packet.json"),
+        "OT_DATASET_OUTPUT": str(output_path),
+        "OT_WORKFLOW_PATH": str(workflow.path),
+        OT_JUDGMENT_SIDECAR_ENV: str(sidecar_path),
+    }
+    if bundled:
+        # First-party templates import opentraces and read the bucket; the
+        # scrubbed HOME would hide it, so hand over the real bucket root.
+        allow_env["OT_OPENTRACES_DIR"] = str(paths.OPENTRACES_DIR)
     if extra_env:
-        env.update(extra_env)
+        allow_env.update(extra_env)
+
+    network = "allow" if bundled else "deny"
+    source_trust = "trusted" if bundled else "untrusted"
+
     log_path = run_dir / "log.txt"
     try:
-        completed = subprocess.run(
+        result = run_isolated(
             [sys.executable, str(script)],
-            env=env,
             cwd=str(workflow.path),
-            capture_output=True,
-            text=True,
-            check=False,
+            allow_env=allow_env,
+            network=network,
+            source_trust=source_trust,
         )
     except OSError as exc:
         raise ExecutorUnavailableError(
             f"unable to invoke workflow script {script}: {exc}"
         ) from exc
+
     log_payload = (
-        f"# stdout\n{completed.stdout or ''}\n\n"
-        f"# stderr\n{completed.stderr or ''}\n"
+        f"# stdout\n{result.stdout or ''}\n\n"
+        f"# stderr\n{result.stderr or ''}\n"
     )
     log_path.write_text(log_payload, encoding="utf-8")
-    if completed.returncode != 0:
+
+    # #186: rc=10 + a written sidecar is the judgment handshake, not a failure.
+    if result.returncode == RC_NEEDS_JUDGMENT and sidecar_path.exists():
+        requests = read_sidecar_requests(sidecar_path)
+        raise WorkflowNeedsJudgmentError(workflow.name, requests)
+    if result.returncode != 0:
         raise WorkflowScriptError(
             f"workflow '{workflow.name}' script exited "
-            f"{completed.returncode}: see {log_path}"
+            f"{result.returncode}: see {log_path}"
         )
+    return result.achieved
