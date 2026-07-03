@@ -94,23 +94,32 @@ def _host_isolation_detected() -> bool:
 
 
 def _capsule_is_foreign(capsule: dict[str, Any], local_slug: str | None) -> bool:
-    """Fail-CLOSED foreignness (#157 H4). A capsule is NOT foreign only when the
-    consumer knows its own repo identity AND the capsule's declared source slug is
-    present and EQUAL to it. The source slug is producer-controlled, so an ABSENT or
-    MISMATCHED source slug can no longer bypass the gate: with a known local
-    identity, absent/mismatched source ⇒ foreign ⇒ blocked (unless overridden).
+    """Fail-CLOSED foreignness (#157 H4, hardened in #208). A capsule that DECLARES
+    a ``source.project_slug`` is NOT foreign only when we can PROVE it is ours — i.e.
+    we know our own local identity AND it is EQUAL to the declared slug. Any declared
+    slug we cannot prove is ours is FOREIGN and blocked (unless overridden):
 
-    When the consumer has NO local identity (``local_slug`` absent) the gate has
-    nothing to be foreign *to* and does not apply; the run still stamps the honest
-    ``sandbox_tier="none"`` label. The shipped CLI always resolves ``local_slug``
-    from the repo, so the victim-facing path is fully covered."""
+    * declared slug, local identity, EQUAL           → not foreign (own capsule);
+    * declared slug, local identity, MISMATCH         → foreign (spoofed/other repo);
+    * declared slug, NO local identity (empty/None)   → foreign — we cannot prove
+      ownership, so we must fail CLOSED (the #208 fix: this branch used to return
+      False and let a foreign capsule execute from any un-``init``'d directory);
+    * NO declared source slug at all                  → not foreign when we also have
+      no identity (nothing to be foreign *to*); still treated as foreign when we DO
+      have a known local identity (a producer that omitted provenance, #157 H4).
 
-    local = str(local_slug or "").strip()
-    if not local:
-        return False
+    Every run stamps the honest ``sandbox_tier="none"`` label regardless of this
+    verdict — foreignness only gates whether the captured command may execute."""
+
     src_slug = str(((capsule.get("source") or {}).get("project_slug")) or "").strip()
+    local = str(local_slug or "").strip()
     if not src_slug:
-        return True  # producer omitted provenance while we HAVE an identity ⇒ foreign
+        # No declared provenance: foreign only when we HAVE an identity to be
+        # foreign to; with no identity either there is nothing to compare against.
+        return bool(local)
+    if not local:
+        # A DECLARED source slug we cannot prove is ours ⇒ FOREIGN. Fail CLOSED.
+        return True
     return src_slug != local
 
 

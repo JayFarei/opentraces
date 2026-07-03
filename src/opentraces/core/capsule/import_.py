@@ -183,8 +183,10 @@ def _read_existing_anchor_rows(slug: str, trace_id: str) -> list[dict[str, Any]]
 
     Import writes the carried anchor ROWS (not TrailEvents) as gzip JSONL, so a
     scope-merge reads them back with a plain gzip+json parse. A present companion
-    that is NOT row-shaped (e.g. a real TrailEvent companion) yields ``[]`` so the
-    merge never corrupts a natively-captured companion.
+    that is NOT row-shaped (e.g. a real TrailEvent companion) yields ``[]``. This
+    read alone does NOT protect a native companion — a scope-merge onto a native
+    trace is refused up-front by ``import_capsule`` (#208 data-loss guard); this
+    helper only ever runs against a prior CAPSULE import's row-shaped companion.
     """
 
     path = trace_v1_trail_path(slug, trace_id)
@@ -307,6 +309,7 @@ def import_capsule(
         )
 
     prior = existing.record
+    prior_is_import_created = "capsule_import" in (prior.metadata or {})
     prior_meta = (prior.metadata or {}).get("capsule_import") or {}
     prior_cids = [str(c) for c in (prior_meta.get("capsule_ids") or [])]
 
@@ -316,6 +319,20 @@ def import_capsule(
             status="noop", trace_id=trace_id, capsule_id=incoming_cid, slug=slug,
             anchors=anchors, conflicts=list(prior_meta.get("conflicts") or []),
             limitations=limitations, written=False,
+        )
+
+    if not prior_is_import_created:
+        # DATA-LOSS GUARD (#208): the trace at this id was captured NATIVELY (it
+        # carries no ``capsule_import`` provenance). The scope-merge below would
+        # overwrite its Trail companion with only the capsule's thin anchor rows
+        # and rewrite its context/sources companions to ``b""`` — destroying real
+        # TrailEvents, ContextTree events, and source blobs. REFUSE before any
+        # write; a capsule may only scope-merge onto a prior CAPSULE import.
+        raise CapsuleImportError(
+            f"refusing to import capsule {incoming_cid!r}: trace {trace_id!r} already "
+            f"exists as a NATIVE (non-imported) trace in project {slug!r}. A scope-merge "
+            "would destroy its captured trail/context/sources companions. Remove the "
+            "native trace first (`opentraces trace remove`) if you intend to replace it."
         )
 
     # SCOPE-MERGE — validate the incoming projection (raises before write).

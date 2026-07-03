@@ -29,6 +29,16 @@ from opentraces.core.capsule.share import build_capsule_bundle  # noqa: E402
 from opentraces.core.capsule.test_extract import declared_test  # noqa: E402
 
 
+def _run_own(cap, **kwargs):
+    """Re-test an OWN capsule (#208 fail-closed foreign gate). In the CLI
+    ``local_slug`` resolves to the repo slug, which equals the capsule's own
+    ``source.project_slug``; a direct library caller must pass it too, else a
+    DECLARED source slug with no local identity is (correctly) refused as foreign."""
+
+    slug = (cap.get("source") or {}).get("project_slug")
+    return run_capsule_test(cap, local_slug=slug, **kwargs)
+
+
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
     return build_world(tmp_path_factory.mktemp("dep_unblock_world"))
@@ -81,14 +91,14 @@ def _bundle_file(tmp_path, bdata) -> Path:
 
 def test_pinned_buggy_dependency_reproduces(world, tmp_path):
     cap, bdata = _pkg_capsule(world)
-    res = run_capsule_test(cap, bundle_path=_bundle_file(tmp_path, bdata))
+    res = _run_own(cap, bundle_path=_bundle_file(tmp_path, bdata))
     assert res["verdict"] == "reproduces", res
     assert res["consumes_used"] == {"humanduration": "v0.1.0"}
 
 
 def test_upgrading_dependency_flips_to_fixed(world, tmp_path):
     cap, bdata = _pkg_capsule(world)
-    res = run_capsule_test(cap, bundle_path=_bundle_file(tmp_path, bdata),
+    res = _run_own(cap, bundle_path=_bundle_file(tmp_path, bdata),
                            with_overrides={"humanduration": "v0.2.0"})
     assert res["verdict"] == "fixed", res
     assert res["consumes_used"] == {"humanduration": "v0.2.0"}
@@ -101,7 +111,7 @@ def test_matrix_resolves_to_the_fixed_version(world, tmp_path):
     resolved_in = None
     verdicts = {}
     for ver in ("v0.1.0", "v0.2.0"):
-        res = run_capsule_test(cap, bundle_path=bundle, with_overrides={"humanduration": ver})
+        res = _run_own(cap, bundle_path=bundle, with_overrides={"humanduration": ver})
         verdicts[ver] = res["verdict"]
         if res["verdict"] == "fixed" and resolved_in is None:
             resolved_in = ver
@@ -116,8 +126,8 @@ def test_client_source_is_unchanged_across_versions(world, tmp_path):
     cap2, bdata2 = _pkg_capsule(world)
     assert bdata == bdata2  # same client bundle bytes
     bundle = _bundle_file(tmp_path, bdata)
-    r1 = run_capsule_test(cap, bundle_path=bundle, with_overrides={"humanduration": "v0.1.0"})
-    r2 = run_capsule_test(cap, bundle_path=bundle, with_overrides={"humanduration": "v0.2.0"})
+    r1 = _run_own(cap, bundle_path=bundle, with_overrides={"humanduration": "v0.1.0"})
+    r2 = _run_own(cap, bundle_path=bundle, with_overrides={"humanduration": "v0.2.0"})
     assert (r1["verdict"], r2["verdict"]) == ("reproduces", "fixed")
 
 
@@ -153,10 +163,10 @@ def test_no_cache_collision_between_same_version_sources(world, tmp_path):
     cap, bdata = _client_capsule(world, consumes=consumes,
                                  command="python -m pytest -q test_delay.py")
     bundle = _bundle_file(tmp_path, bdata)
-    assert run_capsule_test(cap, bundle_path=bundle,
+    assert _run_own(cap, bundle_path=bundle,
                             with_overrides={"humanduration": buggy})["verdict"] == "reproduces"
     # Same version string, fixed source: must be FIXED, not a cached 'reproduces'.
-    assert run_capsule_test(cap, bundle_path=bundle,
+    assert _run_own(cap, bundle_path=bundle,
                             with_overrides={"humanduration": fixed})["verdict"] == "fixed"
 
 
@@ -214,9 +224,9 @@ def test_service_axis_reproduce_then_fixed_via_redeploy(world, tmp_path):
             limitations=[], created_with="svc-axis test",
         )
         # Default: pinned at deploy-v1 (buggy) -> the client hits the buggy API -> reproduces.
-        assert run_capsule_test(cap, bundle_path=bundle)["verdict"] == "reproduces"
+        assert _run_own(cap, bundle_path=bundle)["verdict"] == "reproduces"
         # Server-side redeploy: point the same capsule at v2 (no client change) -> fixed.
-        res = run_capsule_test(cap, bundle_path=bundle, with_overrides={"convert-api": v2.url})
+        res = _run_own(cap, bundle_path=bundle, with_overrides={"convert-api": v2.url})
         assert res["verdict"] == "fixed", res
         assert res["consumes_used"] == {"convert-api": v2.url}
 
@@ -234,8 +244,8 @@ def test_service_consume_injects_endpoint_env(world, tmp_path):
     cap, bdata = _client_capsule(world, consumes=consumes, command=cmd)
     bundle = _bundle_file(tmp_path, bdata)
     # default endpoint (v1) -> the v2 check fails -> reproduces
-    assert run_capsule_test(cap, bundle_path=bundle)["verdict"] == "reproduces"
+    assert _run_own(cap, bundle_path=bundle)["verdict"] == "reproduces"
     # override to v2 -> env matches -> exit 0 -> fixed
-    res = run_capsule_test(cap, bundle_path=bundle, with_overrides={"convert-api": v2})
+    res = _run_own(cap, bundle_path=bundle, with_overrides={"convert-api": v2})
     assert res["verdict"] == "fixed", res
     assert res["consumes_used"] == {"convert-api": v2}

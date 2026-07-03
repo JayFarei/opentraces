@@ -128,7 +128,7 @@ def test_capsule_cli_full_troubleshoot_loop(tmp_path):
 
     # 2. TROUBLESHOOT: reproduce the failure at the buggy commit.
     repro = _cli("capsule", "test", str(capsule_json), "--against", buggy,
-                 "--repo-dir", str(repo), "--yes")
+                 "--repo-dir", str(repo), "--unsafe-run-on-host", "--yes")
     assert repro.returncode == 0, repro.stderr
     assert _verdict(repro) == "reproduces", repro.stdout + repro.stderr
     assert "framework=pytest" in repro.stderr
@@ -136,7 +136,7 @@ def test_capsule_cli_full_troubleshoot_loop(tmp_path):
 
     # 3. RE-TEST: the same repro reports fixed at the fix commit.
     refix = _cli("capsule", "test", str(capsule_json), "--against", fixed,
-                 "--repo-dir", str(repo), "--yes")
+                 "--repo-dir", str(repo), "--unsafe-run-on-host", "--yes")
     assert refix.returncode == 0, refix.stderr
     assert _verdict(refix) == "fixed", refix.stdout + refix.stderr
     assert "🟢" in refix.stderr
@@ -144,7 +144,7 @@ def test_capsule_cli_full_troubleshoot_loop(tmp_path):
     # 4. SELF-SUFFICIENCY: delete the repo entirely, then reproduce FROM THE BUNDLE.
     shutil.rmtree(repo)
     assert not repo.exists()
-    hermetic = _cli("capsule", "test", str(capsule_json), "--from-bundle", "--yes")
+    hermetic = _cli("capsule", "test", str(capsule_json), "--from-bundle", "--unsafe-run-on-host", "--yes")
     assert hermetic.returncode == 0, hermetic.stderr
     assert _verdict(hermetic) == "reproduces", hermetic.stdout + hermetic.stderr
     assert "[bundle]" in hermetic.stderr, "must report it ran from the bundle, not git"
@@ -157,6 +157,6 @@ def test_capsule_cli_from_bundle_fixed_without_repo(tmp_path):
     arts = write_capsule_dir(built["capsule"], tmp_path / "out", bundle_bytes=built["bundle_bytes"])
     shutil.rmtree(fix["repo"])
 
-    proc = _cli("capsule", "test", str(arts["json"]), "--from-bundle", "--yes")
+    proc = _cli("capsule", "test", str(arts["json"]), "--from-bundle", "--unsafe-run-on-host", "--yes")
     assert proc.returncode == 0, proc.stderr
     assert _verdict(proc) == "fixed", proc.stdout + proc.stderr
