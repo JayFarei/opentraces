@@ -322,10 +322,11 @@ def test_write_then_load_roundtrip(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_capsule_open_needs_no_home_or_bucket(tmp_path):
-    """A maintainer in a brand-new environment can `capsule open` a capsule with
+def test_capsule_get_needs_no_home_or_bucket(tmp_path):
+    """A maintainer in a brand-new environment can `capsule get` a capsule with
     no ~/.opentraces, no bucket, no project. Hermetic: a severed-HOME subprocess
-    resolves a local capsule file and creates no opentraces state."""
+    resolves a local capsule file and creates no opentraces state. The severed-HOME
+    no-state contract (#196) is preserved VERBATIM under the renamed `get` verb."""
 
     import os
     import subprocess
@@ -341,7 +342,7 @@ def test_capsule_open_needs_no_home_or_bucket(tmp_path):
     env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
     proc = subprocess.run(
         [sys.executable, "-c", "from opentraces.cli import main; main()",
-         "capsule", "open", str(arts["json"]), "--json"],
+         "capsule", "get", str(arts["json"]), "--json"],
         capture_output=True, text=True, env=env,
     )
     assert proc.returncode == 0, proc.stderr
@@ -350,3 +351,158 @@ def test_capsule_open_needs_no_home_or_bucket(tmp_path):
     assert out["schema_version"] == CAPSULE_SCHEMA_VERSION
     # The consume path must not materialize any opentraces state in the fresh HOME.
     assert not (fresh_home / ".opentraces").exists()
+
+
+def test_capsule_open_stays_callable_hidden(tmp_path):
+    """The legacy `open` verb is hidden-but-callable (v7 pattern) so the issue-body
+    embedded `opentraces capsule open <url> --json` keeps resolving verbatim."""
+
+    from click.testing import CliRunner
+
+    from opentraces.cli.capsule import capsule_group
+
+    cap = _make_capsule()
+    arts = write_capsule_dir(cap, tmp_path / "store")
+    res = CliRunner().invoke(capsule_group, ["open", str(arts["json"]), "--json"])
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.output)["capsule_id"] == cap["capsule_id"]
+
+
+# --------------------------------------------------------------------------- #
+# #195 — seal core: ref-grammar span seam + honesty front-matter (hermetic export)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def export_env(tmp_path, monkeypatch):
+    from opentraces.core import paths
+
+    monkeypatch.setattr(paths, "OPENTRACES_DIR", tmp_path / "ot")
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    # opt-in marker so get_project_dir resolves a stable slug (export needs it).
+    (project_dir / paths.MARKER_FILENAME).write_text(
+        json.dumps({"project_id": "test-project-id"}), encoding="utf-8"
+    )
+    return project_dir
+
+
+def _seed_trace(project_dir, trace_id, *, n_steps=6, eco=("python",),
+                capture_method="transcript_reconstruction", base_commit="abc123def456"):
+    from opentraces_schema import TraceRecord
+
+    from opentraces.core.bucket_trace_records import write_trace_record
+    from opentraces.core.config import get_project_dir
+
+    slug = get_project_dir(project_dir).name
+    rec = TraceRecord.model_validate({
+        "trace_id": trace_id,
+        "session_id": trace_id,
+        "agent": {"name": "codex", "version": "1.0", "model": "gpt"},
+        "task": {"description": "fix the flaky parser", "base_commit": base_commit},
+        "environment": {"language_ecosystem": list(eco)},
+        "context_tree_summary": {"capture_method": capture_method},
+        "steps": [
+            {"step_index": i, "role": "agent", "content": f"step {i}: hit a traceback error"}
+            for i in range(n_steps)
+        ],
+    })
+    write_trace_record(rec, project_slug=slug, source_layer="test")
+    return slug
+
+
+def test_seal_honesty_front_matter_is_floored(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa1111-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid)
+    cap = export_capsule(project_dir=export_env, trace_id=tid)
+    assert cap["source"]["env_tier"] == "L0"
+    assert cap["source"]["verdict_trust"] == "floor"
+
+
+def test_hash_only_capture_never_reports_full_messages(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa2222-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid, capture_method="transcript_reconstruction")
+    cap = export_capsule(project_dir=export_env, trace_id=tid)
+    assert cap["privacy_scope"]["messages_completeness"] == "hash_only"
+
+
+def test_otel_capture_reports_full_messages(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa3333-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid, capture_method="otel")
+    cap = export_capsule(project_dir=export_env, trace_id=tid)
+    assert cap["privacy_scope"]["messages_completeness"] == "full"
+
+
+def test_unpushed_pin_is_declared(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa4444-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid, base_commit="deadbeefcafe0000")
+    cap = export_capsule(project_dir=export_env, trace_id=tid)
+    # No git repo → the pin cannot be proven pushed → honest downgrade + limitation.
+    assert cap["repo_pin"]["pushed"] is False
+    assert "repo_pin_unpushed" in cap["limitations"]
+
+
+def test_language_ecosystem_list_shape_defect_declared(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa5555-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid, eco=["python", "rust"])
+    cap = export_capsule(project_dir=export_env, trace_id=tid)
+    # Consumers expect a scalar; emit the first element + DECLARE the shape defect.
+    assert cap["environment"]["language_ecosystem"] == "python"
+    assert "language_ecosystem_shape_defect" in cap["limitations"]
+
+
+def test_create_span_seals_exactly_that_span(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa6666-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid, n_steps=8)
+    cap = export_capsule(project_dir=export_env, trace_id=tid, from_step=2, to_step=4)
+    assert cap["slice"]["start_step_index"] == 2
+    assert cap["slice"]["end_step_index"] == 4
+    assert [s["step_index"] for s in cap["slice"]["steps"]] == [2, 3, 4]
+
+
+def test_whole_trace_and_point_forms_seal(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa7777-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid, n_steps=6)
+    whole = export_capsule(project_dir=export_env, trace_id=tid)
+    assert whole["slice"]["steps"], "whole-trace focal seal must carry steps"
+    point = export_capsule(project_dir=export_env, trace_id=tid, step_index=3)
+    assert point["slice"]["steps"], "point form must carry steps"
+
+
+def test_two_seals_of_same_span_are_byte_identical(export_env):
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa8888-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid, n_steps=8)
+    a = export_capsule(project_dir=export_env, trace_id=tid, from_step=1, to_step=5)
+    b = export_capsule(project_dir=export_env, trace_id=tid, from_step=1, to_step=5)
+    # cmp-clean: byte-identical seals from carry-not-recompute + deterministic id.
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+    assert a["capsule_id"] == b["capsule_id"]
+
+
+def test_envelope_stays_frozen_v1_with_additive_keys(export_env):
+    from opentraces.core.capsule.contract import CAPSULE_SCHEMA_VERSION as _V
+    from opentraces.core.capsule.contract import validate_capsule
+    from opentraces.core.capsule.export import export_capsule
+
+    tid = "aaaa9999-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid)
+    cap = export_capsule(project_dir=export_env, trace_id=tid)
+    # Additive honesty keys did NOT bump the schema version and still validate.
+    assert cap["schema_version"] == _V == "opentraces.capsule.v1"
+    assert validate_capsule(cap) is cap

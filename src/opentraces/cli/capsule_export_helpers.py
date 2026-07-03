@@ -72,7 +72,8 @@ def _parse_consume(spec: str) -> dict:
 
 def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
                test_command=None, expect_error=None, setup_command=None, consume_specs=(),
-               product=None, include_prompts=False, product_full_span=False, progress=None):
+               product=None, include_prompts=False, product_full_span=False, progress=None,
+               from_step=None, to_step=None):
     from ..core.capsule.export import CapsuleExportError, export_capsule
 
     project = _resolve_project(project_dir)
@@ -82,6 +83,8 @@ def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
             project_dir=project,
             trace_id=trace_id,
             step_index=step,
+            from_step=from_step,
+            to_step=to_step,
             node_id=node_id,
             radius=radius,
             remote_url=repo_url,
