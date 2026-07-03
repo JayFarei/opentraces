@@ -525,7 +525,11 @@ def dataset_schedule_list(as_json: bool) -> None:
     """List local dataset workflow schedules."""
     schedules = [_schedule_payload(schedule) for schedule in list_schedules()]
     if as_json:
-        click.echo(_dump_json({"status": "ok", "schedules": schedules}))
+        click.echo(_dump_json({
+            "status": "ok",
+            "schema_version": "opentraces.dataset.schedule_list.v1",
+            "schedules": schedules,
+        }))
         return
     for schedule in schedules:
         click.echo(f"{schedule['dataset']}  {schedule['every']}  enabled={schedule['enabled']}")
@@ -622,7 +626,11 @@ def dataset_list(as_json: bool) -> None:
     """List local HF-shaped datasets."""
     datasets = [_dataset_payload(dataset) for dataset in list_datasets()]
     if as_json:
-        click.echo(_dump_json({"status": "ok", "datasets": datasets}))
+        click.echo(_dump_json({
+            "status": "ok",
+            "schema_version": "opentraces.dataset.list.v1",
+            "datasets": datasets,
+        }))
         return
     for dataset in datasets:
         click.echo(f"{dataset['name']}  {dataset['path']}")

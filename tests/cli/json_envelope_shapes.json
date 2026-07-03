@@ -147,16 +147,18 @@
   ]
  },
  "dataset list": {
-  "schema_version": null,
+  "schema_version": "opentraces.dataset.list.v1",
   "top_level_keys": [
    "datasets",
+   "schema_version",
    "status"
   ]
  },
  "dataset schedule list": {
-  "schema_version": null,
+  "schema_version": "opentraces.dataset.schedule_list.v1",
   "top_level_keys": [
    "schedules",
+   "schema_version",
    "status"
   ]
  },
