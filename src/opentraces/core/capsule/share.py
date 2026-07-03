@@ -332,6 +332,39 @@ def write_mini_bucket(mini: dict[str, Any], dest_dir: Path) -> list[Path]:
     return written
 
 
+def recompute_written_mini_bucket_digest(mini_dir: Path) -> str | None:
+    """Recompute the mini-bucket digest from the files ON DISK under ``mini_dir``.
+
+    Returns ``None`` when no ``mini_bucket_manifest.json`` is present. Used at
+    publish time to prove the stamped ``mini_bucket_digest`` matches the bytes
+    actually uploaded (#197 H4 — no hollow claim). The digest is a pure content
+    hash, so it is recomputed from the uncompressed companion blobs, not the
+    manifest's self-reported digest.
+    """
+
+    from .contract import compute_mini_bucket_digest
+
+    mini_dir = Path(mini_dir)
+    manifest_path = mini_dir / "mini_bucket_manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    blobs = manifest.get("blobs") or {}
+    trace_digests: dict[str, dict[str, str | None]] = {}
+    for tid, trec in (manifest.get("traces") or {}).items():
+        face_digests: dict[str, str | None] = {}
+        for face in ("trail", "context", "sources"):
+            blob = ((trec.get("companions") or {}).get(face) or {}).get("blob")
+            if blob is None:
+                face_digests[face] = None
+                continue
+            rel = blobs.get(blob)
+            content = gzip.decompress((mini_dir / rel).read_bytes())
+            face_digests[face] = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        trace_digests[tid] = face_digests
+    return compute_mini_bucket_digest(trace_digests)
+
+
 def carried_section_inventory(capsule: dict[str, Any]) -> dict[str, Any]:
     """Counts + surfaces of what the capsule carries — NEVER a leaked byte (#198).
 
@@ -509,8 +542,9 @@ def publish_capsule(
     bundle_bytes: bytes | None = None,
     require_clearance: bool = False,
     clearance_manifest: dict[str, Any] | None = None,
+    mini_bucket: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Upload ONLY capsule.json + capsule.md (+ the bundle when present) to ``capsules/v1/<id>/`` on HF.
+    """Upload capsule.json + capsule.md (+ the bundle + the mini-bucket when present) to ``capsules/v1/<id>/`` on HF.
 
     Returns ``{repo_id, revision, capsule_url, human_url, viewer_url, capsule_id}``
     with the URL pinned to the publish commit sha when the hub returns one.
@@ -522,6 +556,12 @@ def publish_capsule(
     push-time snapshot (no TOCTOU); ``None`` falls back to the live bucket lookup.
     The R7 ``ensure_redacted`` gate is preserved (wrapped, not replaced), as is
     the sha-pin double-commit.
+
+    #197 H4 — ``mini_bucket`` (a :func:`build_mini_bucket` result) is written into
+    the uploaded folder so the scoped, redacted mini-bucket the capsule's
+    ``mini_bucket_digest`` claims ACTUALLY ships. Before upload the digest is
+    recomputed over the written files and asserted equal to the stamp; a capsule
+    that stamps a digest but supplies no mini-bucket refuses (no hollow claim).
     """
 
     # #198 clearance gate — evaluated BEFORE any HF import/call so a refusal is
@@ -559,8 +599,30 @@ def publish_capsule(
     import tempfile
 
     base = f"{CAPSULE_PREFIX}/{cid}"
+    stamped_digest = capsule.get("mini_bucket_digest")
     with tempfile.TemporaryDirectory() as tmp:
-        artifacts = write_capsule_dir(capsule, Path(tmp), bundle_bytes=bundle_bytes)
+        artifacts = write_capsule_dir(
+            capsule, Path(tmp), bundle_bytes=bundle_bytes, mini_bucket=mini_bucket
+        )
+        # #197 H4 — the capsule may only claim a mini_bucket_digest over content
+        # it actually ships. Recompute the digest over the written mini-bucket and
+        # refuse a hollow claim (stamped-but-absent) or a mismatch.
+        if stamped_digest:
+            written_digest = recompute_written_mini_bucket_digest(
+                artifacts["dir"] / "mini_bucket"
+            )
+            if written_digest is None:
+                raise RuntimeError(
+                    "capsule stamps a mini_bucket_digest but no mini-bucket was "
+                    "supplied to publish; pass mini_bucket= so the claimed "
+                    "content ships (no hollow digest)."
+                )
+            if written_digest != stamped_digest:
+                raise RuntimeError(
+                    f"mini-bucket digest mismatch: capsule stamps "
+                    f"{stamped_digest!r} but the written mini-bucket hashes to "
+                    f"{written_digest!r}."
+                )
         commit = api.upload_folder(
             repo_id=rid,
             repo_type="dataset",
@@ -819,6 +881,7 @@ __all__ = [
     "mint_capsule_url",
     "mint_viewer_url",
     "publish_capsule",
+    "recompute_written_mini_bucket_digest",
     "render_capsule_markdown",
     "render_issue_body",
     "resolve_capsule",

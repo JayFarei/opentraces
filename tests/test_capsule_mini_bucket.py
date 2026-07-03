@@ -16,13 +16,16 @@ RED-first coverage for the capsule SECOND-HALF mini-bucket:
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
+import types
 
 from opentraces.core.capsule.companions import redact_companions
 from opentraces.core.capsule.contract import (
     build_capsule_id,
     build_multi_trace_capsule_id,
     compute_mini_bucket_digest,
+    freeze_capsule,
 )
 from opentraces.core.capsule.share import (
     build_mini_bucket,
@@ -239,6 +242,136 @@ def test_multi_trace_mini_bucket_each_trace_independently_resolvable(tmp_path, m
             blob = traces[tid]["companions"][face]["blob"]
             if blob is not None:
                 assert blob in mini["manifest"]["blobs"]
+
+
+# --------------------------------------------------------------------------- #
+# H4 (#197) — the redacted mini-bucket the digest claims MUST actually ship
+# --------------------------------------------------------------------------- #
+
+
+def _capsule_with_mini(trace_id: str, digest: str) -> dict:
+    return freeze_capsule(
+        capsule_id="minibucketpub01",
+        source={"project_slug": "p", "trace_id": trace_id, "step_index": 1, "agent": "demo"},
+        summary={"title": "leak", "what_happened": "x", "failure": "x",
+                 "is_failure": True, "scope": "1"},
+        test=None,
+        environment={"dependencies": [], "language_ecosystem": "python", "setup": []},
+        bundle=None,
+        intent={"headline": "x", "most_substantive_spec": None, "trigger": None},
+        failing_step={"index": 1, "type": "agent", "error_excerpt": "x", "had_error_marker": True},
+        slice_payload={"slice_id": "s", "trace_id": trace_id, "steps": [], "limitations": []},
+        context_resume_packet={"schema_version": "opentraces.context_resume.v1", "node_id": "n",
+                               "system_layer": {"content": {}}},
+        trail_anchors=[],
+        repo_pin={"remote_url": None, "commit_sha": "abc", "changed_files": []},
+        redaction={"manifest": None},
+        render_state={"redaction": "unredacted", "closure": "closure_full", "replay": "x"},
+        limitations=[],
+        created_with="h4 test",
+        mini_bucket_digest=digest,
+    )
+
+
+def _digest_from_uploaded(uploaded: dict[str, bytes], base: str) -> str:
+    """Recompute the mini-bucket digest purely from the uploaded bytes."""
+    prefix = f"{base}/mini_bucket/"
+    manifest = json.loads(uploaded[prefix + "mini_bucket_manifest.json"].decode("utf-8"))
+    blobs = manifest["blobs"]
+    trace_digests: dict[str, dict[str, str | None]] = {}
+    for tid, trec in manifest["traces"].items():
+        face_digests: dict[str, str | None] = {}
+        for face in ("trail", "context", "sources"):
+            blob = trec["companions"][face]["blob"]
+            if blob is None:
+                face_digests[face] = None
+                continue
+            content = gzip.decompress(uploaded[prefix + blobs[blob]])
+            face_digests[face] = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        trace_digests[tid] = face_digests
+    return compute_mini_bucket_digest(trace_digests)
+
+
+def test_publish_uploads_mini_bucket_and_digest_matches(tmp_path, monkeypatch):
+    slug = _seed_companions(tmp_path, monkeypatch, "tid-pub")
+    mini = build_mini_bucket(tmp_path, slug, ["tid-pub"])
+    capsule = _capsule_with_mini("tid-pub", mini["digest"])
+
+    uploaded: dict[str, bytes] = {}
+
+    class _CapturingApi:
+        def __init__(self, token=None):
+            pass
+
+        def create_repo(self, **kw):
+            return None
+
+        def upload_folder(self, *, repo_id, repo_type, folder_path, path_in_repo, commit_message):
+            from pathlib import Path as _P
+
+            root = _P(folder_path)
+            for p in root.rglob("*"):
+                if p.is_file():
+                    key = f"{path_in_repo}/{p.relative_to(root)}"
+                    uploaded[key] = p.read_bytes()
+            return types.SimpleNamespace(oid="deadbeefrevision")
+
+        def upload_file(self, **kw):
+            return types.SimpleNamespace(oid="deadbeefrevision")
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", _CapturingApi)
+
+    from opentraces.core.capsule.share import publish_capsule
+
+    info = publish_capsule(
+        capsule, repo_id="someone/opentraces-capsules", token="fake",
+        require_clearance=False, mini_bucket=mini,
+    )
+    assert info["revision"] == "deadbeefrevision"
+
+    base = f"capsules/v1/{capsule['capsule_id']}"
+    # The scoped, redacted mini-bucket tree is actually uploaded (not a hollow claim).
+    assert any(k.startswith(f"{base}/mini_bucket/") for k in uploaded), sorted(uploaded)
+    # A digest recomputed over the UPLOADED mini-bucket files equals the stamp.
+    assert _digest_from_uploaded(uploaded, base) == capsule["mini_bucket_digest"]
+
+
+def test_publish_refuses_hollow_mini_bucket_digest(tmp_path, monkeypatch):
+    """A capsule that STAMPS a mini_bucket_digest but supplies no mini-bucket
+    must refuse to publish — the digest would be a claim over content that never
+    ships."""
+    capsule = _capsule_with_mini("tid-x", "deadbeefdead0000")
+
+    class _CapturingApi:
+        def __init__(self, token=None):
+            pass
+
+        def create_repo(self, **kw):
+            return None
+
+        def upload_folder(self, **kw):
+            raise AssertionError("must not upload a hollow-digest capsule")
+
+        def upload_file(self, **kw):
+            raise AssertionError("must not upload a hollow-digest capsule")
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", _CapturingApi)
+
+    from opentraces.core.capsule.share import publish_capsule
+
+    try:
+        publish_capsule(
+            capsule, repo_id="someone/opentraces-capsules", token="fake",
+            require_clearance=False, mini_bucket=None,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected a refusal for a stamped-but-absent mini-bucket")
 
 
 def test_multi_trace_capsule_id_is_order_independent_and_deterministic():
