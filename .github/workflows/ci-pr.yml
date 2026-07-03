@@ -223,6 +223,17 @@ jobs:
             "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[trace-map-dive]" \
             "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[trail-lenses]" \
             -q
+      # Seal-family M2 (#180) checkpoint-gate journeys. The dataset
+      # watermark -> verify -> publish-clearance lifecycle (#192/#193/#194)
+      # and the capsule mini-bucket redaction floor over raw companions (#197).
+      # Explicit node-ids (not nightly-only) mirror the v7-core precedent:
+      # SENTINEL_JOURNEYS membership alone does NOT gate per-PR.
+      - name: Seal-family M2 sentinel journeys (dataset sync/verify/publish + capsule redaction)
+        run: |
+          python -m pytest \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[dataset-sync-verify-publish]" \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[capsule-redaction-floor-on-raw-companions]" \
+            -q
 
   capsule-worker:
     name: capsule-worker vitest

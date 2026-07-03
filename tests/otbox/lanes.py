@@ -86,6 +86,10 @@ SENTINEL_JOURNEYS = (
     "status-safety-gate",
     "trace-map-dive",
     "trail-lenses",
+    # Seal-family M2 (#180) — the dataset watermark/verify/publish-clearance
+    # lifecycle and the capsule mini-bucket redaction floor.
+    "dataset-sync-verify-publish",
+    "capsule-redaction-floor-on-raw-companions",
 )
 
 
