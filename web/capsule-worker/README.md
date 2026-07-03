@@ -20,7 +20,7 @@ Plus: **never serve the environment face** — the worker fetches only `capsule.
 
 ## Byte-identity to the CLI
 
-`/full` returns the upstream bytes verbatim, so it is byte-identical to `opentraces capsule open --json`. Section endpoints serialize their carried sub-object with `canonicalStringify` (proven byte-identical to Python `json.dumps(sort_keys=True, indent=2)` against the frozen sample). The full CLI-parity fixture is wired by the integrator once the capsule envelope is frozen by the foundation slice.
+`/full` returns the upstream bytes verbatim, so it is byte-identical to `opentraces capsule get --json` (the pre-v7 `capsule open` spelling stays callable, hidden from `--help`). Section endpoints serialize their carried sub-object with `canonicalStringify` (proven byte-identical to Python `json.dumps(sort_keys=True, indent=2)` against the frozen sample). The full CLI-parity fixture is wired by the integrator once the capsule envelope is frozen by the foundation slice.
 
 ## Graceful degrade
 
