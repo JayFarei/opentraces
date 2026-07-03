@@ -48,6 +48,40 @@ class VCS(BaseModel):
     diff: str | None = Field(None, description="Unified diff string or null")
 
 
+class PinRecord(BaseModel):
+    """A single resolved dependency pin (``name==version``, optionally hashed).
+
+    Schema 0.8.0 (#200) — the structured home for the exact pins a future
+    resolver (#202) will emit for a trace's dependency closure. Everything
+    beyond ``name`` is optional so a hash can ride here for the L3 hermetic-wheel
+    path without a second schema bump. Absent on today's corpus (the resolver is
+    deferred), so its mere presence is data, never a trust lift.
+    """
+
+    name: str
+    version: str | None = Field(None, description="Exact resolved version, e.g. 2.31.0")
+    hash: str | None = Field(
+        None, description="Artifact hash (e.g. sha256:...) for the future L3 wheel path"
+    )
+    marker: str | None = Field(
+        None, description="PEP 508 environment marker, e.g. python_version >= '3.8'"
+    )
+    source: str | None = Field(
+        None, description="Resolver/index the pin came from (routed through the redaction floor)"
+    )
+
+
+class Interpreter(BaseModel):
+    """Runtime interpreter identity (name + version, e.g. cpython 3.11.6).
+
+    Schema 0.8.0 (#200) — records which interpreter the original session ran on
+    so replay can stop silently using the host interpreter. Both fields optional.
+    """
+
+    name: str | None = Field(None, description="Interpreter name, e.g. cpython, pypy")
+    version: str | None = Field(None, description="Interpreter version, e.g. 3.11.6")
+
+
 class Environment(BaseModel):
     """Runtime environment metadata for filtering and reproducibility."""
 
@@ -55,6 +89,28 @@ class Environment(BaseModel):
     shell: str | None = None
     vcs: VCS = Field(default_factory=VCS)
     language_ecosystem: list[str] = Field(default_factory=list)
+    # --- Schema 0.8.0 (#200): additive dependency-pin / runtime-identity home. ---
+    # All optional and absent by default. The resolver that FILLS these (and
+    # derives env_tier=L1) is the out-of-train follow-up #202; here they are a
+    # pure home. Their presence never raises env_tier or any trust ordinal —
+    # env_tier stays at its L0 floor across the M3 stack.
+    resolved_dependencies: list[PinRecord] | None = Field(
+        default=None,
+        description=(
+            "Exact resolved dependency pins for the trace's closure. None until the "
+            "#202 resolver fills them; presence does not raise env_tier."
+        ),
+    )
+    interpreter: Interpreter | None = Field(
+        default=None, description="Runtime interpreter identity (name/version)."
+    )
+    arch: str | None = Field(None, description="CPU architecture, e.g. arm64, x86_64")
+    platform: str | None = Field(
+        None, description="Platform tag, e.g. macosx_14_0_arm64, linux"
+    )
+    abi_tag: str | None = Field(
+        None, description="Python ABI tag for the L3 wheel-platform boundary, e.g. cp311"
+    )
 
 
 class ToolCall(BaseModel):

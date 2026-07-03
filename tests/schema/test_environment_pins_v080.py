@@ -285,14 +285,33 @@ def test_populating_pins_does_not_change_the_field_set():
     assert set(empty.model_dump()) == set(pinned.model_dump())
 
 
-def test_schema_source_defines_no_env_tier_derivation():
-    """Pin the boundary concretely: the schema package NEVER derives env_tier.
-    That derivation is core/#202's, and it stays L0 in this train."""
-    import opentraces_schema.models as models_mod
+def test_no_schema_model_carries_a_trust_ordinal_field():
+    """Pin the boundary structurally: NO model exported from the schema package
+    carries a trust ordinal / tier field. The whole trust vocabulary is DERIVED
+    downstream (core/capsule), pinned to L0/floor in this train — the schema is a
+    home for the #202 resolver's inputs, never the place trust is computed."""
+    import inspect
 
-    src = open(models_mod.__file__, encoding="utf-8").read()
-    assert "env_tier" not in src
-    assert "verdict_trust" not in src
+    from pydantic import BaseModel
+
+    import opentraces_schema as pkg
+
+    forbidden = {
+        "env_tier",
+        "verdict_trust",
+        "oracle_trust",
+        "diff_trust",
+        "sandbox_tier",
+    }
+    models = [
+        obj
+        for _, obj in inspect.getmembers(pkg)
+        if inspect.isclass(obj) and issubclass(obj, BaseModel)
+    ]
+    assert models, "expected exported schema models"
+    for model in models:
+        overlap = forbidden.intersection(model.model_fields)
+        assert not overlap, f"{model.__name__} leaked trust field(s): {overlap}"
 
 
 # --------------------------------------------------------------------------- #
