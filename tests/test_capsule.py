@@ -430,13 +430,17 @@ def test_hash_only_capture_never_reports_full_messages(export_env):
     assert cap["privacy_scope"]["messages_completeness"] == "hash_only"
 
 
-def test_otel_capture_reports_full_messages(export_env):
+def test_otel_capture_with_absent_bodies_does_not_report_full_messages(export_env):
+    # HONESTY: an otel session with no paired message bodies (this seed captures
+    # zero context layers) must NOT self-report ``messages_completeness=="full"``
+    # while ``source.completeness`` reads the real weaker value. The field derives
+    # from the messages LAYER's own completeness, not from the capture method.
     from opentraces.core.capsule.export import export_capsule
 
     tid = "aaaa3333-0000-0000-0000-000000000000"
     _seed_trace(export_env, tid, capture_method="otel")
     cap = export_capsule(project_dir=export_env, trace_id=tid)
-    assert cap["privacy_scope"]["messages_completeness"] == "full"
+    assert cap["privacy_scope"]["messages_completeness"] != "full"
 
 
 def test_unpushed_pin_is_declared(export_env):
