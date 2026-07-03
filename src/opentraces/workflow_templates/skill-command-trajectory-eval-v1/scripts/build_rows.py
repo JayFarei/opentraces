@@ -1,10 +1,22 @@
-"""Build compact command trajectory eval rows from raw evidence rows."""
+"""Build compact command trajectory eval rows from raw evidence rows.
+
+Redaction is intentionally NOT this template's job. The append-path floor
+(``security/dataset_rows.py::sanitize_dataset_row``, invoked by
+``datasets.append_rows`` over every row) is the single, non-overridable
+sanitization story for bundled workflow templates -- see docs/adr/0008 §1.8
+and issue #189. This module only *shapes* text into a compact, single-line,
+length-bounded form for a readable row; it never scrubs secrets, home paths,
+or numbers itself, because a second hand-rolled redaction path is exactly the
+drift the floor exists to prevent. A template that genuinely needs mid-flight
+scrubbing (this one does not -- the append path already sanitizes every row)
+should call the CLI sanitize surface (``opentraces security sanitize``)
+instead of hand-rolling its own.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import re
 from pathlib import Path
 from typing import Any
@@ -20,40 +32,16 @@ DEFAULT_SOURCE = (
 )
 BODY_PREFIX = "Base directory for this skill:"
 BODY_SKILL_RE = re.compile(r"Base directory for this skill:\s+\S*/skills/([^\s/]+)")
-ABS_PROJECT_RE = re.compile(
-    r"^/Users/[^/]+/(?:src/tries|Development|\\.codex/worktrees)/[^/]+/"
-)
-HIGH_ENTROPY_TOKEN_RE = re.compile(r"[A-Za-z0-9_=-]{20,}")
-LONG_NUMBER_RE = re.compile(r"\d{10,}")
-
-
-def shannon_entropy(text: str) -> float:
-    if not text:
-        return 0.0
-    counts: dict[str, int] = {}
-    for ch in text:
-        counts[ch] = counts.get(ch, 0) + 1
-    length = len(text)
-    return -sum((count / length) * math.log2(count / length) for count in counts.values())
-
-
-def redact_high_entropy_tokens(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        token = match.group(0)
-        if shannon_entropy(token) >= 4.5:
-            return "<TOKEN>"
-        return token
-
-    return HIGH_ENTROPY_TOKEN_RE.sub(replace, text)
 
 
 def compact_text(value: object, *, limit: int = 1600) -> str:
+    """Coerce ``value`` to a single-line, length-bounded string.
+
+    Formatting only: collapses newlines/whitespace and truncates. No
+    redaction happens here -- see the module docstring.
+    """
     text = "" if value is None else str(value)
     text = text.replace("\r", " ").replace("\n", " ")
-    text = ABS_PROJECT_RE.sub("", text)
-    text = re.sub(r"/Users/[^/\s]+/", "<HOME>/", text)
-    text = redact_high_entropy_tokens(text)
-    text = LONG_NUMBER_RE.sub("<NUM>", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
 
@@ -68,9 +56,12 @@ def body_skill_name(value: object) -> str:
 
 
 def normalize_path(value: str) -> str:
-    path = ABS_PROJECT_RE.sub("", value or "")
-    path = re.sub(r"^/Users/[^/]+/", "<HOME>/", path)
-    return path
+    """Return ``value`` as a plain string.
+
+    Home-path / username scrubbing is the append-path floor's job
+    (``path_anonymizer``), not this template's -- see the module docstring.
+    """
+    return value or ""
 
 
 def unique_sorted(values: list[str]) -> list[str]:
