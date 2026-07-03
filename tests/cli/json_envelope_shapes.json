@@ -163,7 +163,7 @@
   ]
  },
  "doctor": {
-  "schema_version": "0.7.0",
+  "schema_version": "0.8.0",
   "top_level_keys": [
    "doctor",
    "schema_version",
@@ -222,7 +222,7 @@
   ]
  },
  "setup doctor": {
-  "schema_version": "0.7.0",
+  "schema_version": "0.8.0",
   "top_level_keys": [
    "doctor",
    "schema_version",
