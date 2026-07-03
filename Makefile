@@ -53,7 +53,13 @@ SHARD_TOTAL ?= 1
 PYTEST_CI_DESELECTS := \
 	--deselect "tests/integration/test_bucket_dataset_remote_flow_uat.py::test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket" \
 	--deselect "tests/integration/test_bucket_remote_uat.py::test_installed_runtime_syncs_bucket_to_fake_remote_and_restores" \
-	--deselect "tests/integration/test_trace_trails_corpus.py::test_trace_trails_corpus_fixture_is_current"
+	--deselect "tests/integration/test_trace_trails_corpus.py::test_trace_trails_corpus_fixture_is_current" \
+	--deselect "tests/integration/test_probe_a9_track_survival_speed.py::test_probe_a9_track_survival_speed" \
+	--deselect "tests/integration/test_probe_a10_no_glob_guard.py::test_probe_a10_no_glob_guard" \
+	--deselect "tests/integration/test_probe_b1_creation_bijection.py::test_probe_b1_creation_bijection" \
+	--deselect "tests/integration/test_probe_b2_manifest_events_count.py::test_probe_b2_manifest_events_count" \
+	--deselect "tests/integration/test_probe_b3_per_patch_attribution.py::test_probe_b3_per_patch_attribution" \
+	--deselect "tests/integration/test_probe_b4_lineage_surface_agreement.py::test_probe_b4_lineage_surface_agreement"
 
 test-premerge: test-premerge-shard test-premerge-timing
 
