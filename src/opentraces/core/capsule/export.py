@@ -124,9 +124,13 @@ def _node_id_for_step(
     if from_bucket:
         return str(from_bucket)
     try:
-        from ..context_tree.query import build_context_tree_projection
+        from ..context_tree.query import build_context_tree_projection_for_trace
 
-        projection = build_context_tree_projection(project_dir)
+        # #208 perf-core — bounded to THIS trace's events (read_events_for_trace)
+        # instead of the whole canonical event log; every trace's layers/nodes
+        # are self-contained within its own events (query.py docstring), so
+        # node_for_step resolves identically, just without the corpus-wide walk.
+        projection = build_context_tree_projection_for_trace(project_dir, trace_id)
         node = projection.node_for_step(trace_id, step_index)
         if node is not None:
             return str(node.node_id)
@@ -665,7 +669,11 @@ def export_capsule(
         # cannot resolve the node (uncaptured / foreign trace).
         packet = resume_packet_from_bucket(slug, trace_id, resolved_node)
         if packet.get("error"):
-            live_packet = context_resume_packet(project_dir, resolved_node)
+            # #208 perf-core — trace_id is already known here; skip the
+            # resolve_node_traces scoped event read inside context_resume_packet.
+            live_packet = context_resume_packet(
+                project_dir, resolved_node, trace_id=trace_id
+            )
             if not live_packet.get("error"):
                 packet = live_packet
         if packet.get("error"):

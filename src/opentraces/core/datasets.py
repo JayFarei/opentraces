@@ -375,18 +375,46 @@ def source_provenance_for_query(
         "query_fingerprint": digest_payload(query_model.model_dump(mode="json")),
     }
     if include_bucket_snapshot:
-        from .bucket_store import bucket_manifest, trace_record_snapshot
+        # #208 perf-core — the persisted ``bucket/manifest.json`` already carries
+        # everything this fingerprint needs (digest, trace_records, raw_sources,
+        # trail_events, sync). Read it O(1) via the same byte-capped reader
+        # ``bucket_status_fast`` uses instead of recomputing a live
+        # ``bucket_manifest`` (3 full TraceRecord.model_validate passes over the
+        # whole corpus) BEFORE ``--scope``/``--limit`` have even narrowed the
+        # query. Mirrors ``bucket_status_fast``: any usable ("ok") persisted
+        # manifest is used regardless of its ``freshness`` staleness — this is a
+        # lineage fingerprint, not a live count, and a stale-but-present digest
+        # is still the correct provenance digest for what's actually on disk.
+        # Only recompute live when the persisted read-model is unavailable
+        # (absent/too_large/error).
+        from .bucket_store import read_persisted_manifest_capped
 
-        manifest_snapshot = bucket_manifest(write=False, include_objects=False)
-        payload["bucket_snapshot"] = trace_record_snapshot(include_objects=False)
-        payload["bucket_manifest"] = {
-            "digest": manifest_snapshot.get("digest"),
-            "updated_at": manifest_snapshot.get("updated_at"),
-            "trace_records": manifest_snapshot.get("trace_records"),
-            "raw_sources": manifest_snapshot.get("raw_sources"),
-            "trail_events": manifest_snapshot.get("trail_events"),
-            "sync": manifest_snapshot.get("sync"),
-        }
+        state, manifest_snapshot = read_persisted_manifest_capped()
+        if state == "ok" and isinstance(manifest_snapshot, dict):
+            payload["bucket_snapshot"] = (
+                manifest_snapshot.get("trace_records") or {}
+            ).get("snapshot")
+            payload["bucket_manifest"] = {
+                "digest": manifest_snapshot.get("digest"),
+                "updated_at": manifest_snapshot.get("updated_at"),
+                "trace_records": manifest_snapshot.get("trace_records"),
+                "raw_sources": manifest_snapshot.get("raw_sources"),
+                "trail_events": manifest_snapshot.get("trail_events"),
+                "sync": manifest_snapshot.get("sync"),
+            }
+        else:
+            from .bucket_store import bucket_manifest, trace_record_snapshot
+
+            manifest_snapshot = bucket_manifest(write=False, include_objects=False)
+            payload["bucket_snapshot"] = trace_record_snapshot(include_objects=False)
+            payload["bucket_manifest"] = {
+                "digest": manifest_snapshot.get("digest"),
+                "updated_at": manifest_snapshot.get("updated_at"),
+                "trace_records": manifest_snapshot.get("trace_records"),
+                "raw_sources": manifest_snapshot.get("raw_sources"),
+                "trail_events": manifest_snapshot.get("trail_events"),
+                "sync": manifest_snapshot.get("sync"),
+            }
     else:
         payload["bucket_snapshot"] = {
             "capture_mode": "deferred",
