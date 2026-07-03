@@ -28,6 +28,7 @@ from opentraces.core.workflows import (
     compute_workflow_digest,
     install_workflow,
     load_workflow,
+    resolve_workflow_reference,
     verify_workflow_digest,
     workflows_dir,
 )
@@ -103,6 +104,57 @@ def test_planted_top_level_dotfile_rejected_at_install(tmp_path):
     with pytest.raises(ValueError):
         install_workflow(source)
     assert not (workflows_dir() / "dotfile-pkg").exists()
+
+
+# --- (a2) DIRECT-PATH resolution rejects the same undigested entries --------
+
+
+def test_direct_path_package_with_dot_dir_payload_rejected_at_resolution(tmp_path):
+    """C3 (#187): the direct-path hole. ``dataset new --workflow /path`` resolves
+    a package WITHOUT the install-time dotfile/symlink gate, so a planted
+    ``scripts/.runtime/payload.py`` — excluded from ``compute_workflow_digest``
+    — resolves, lands, and can be imported/exec'd by ``build_rows.py`` while the
+    strict run-time reverify (recomputing the same dotfile-excluding digest)
+    misses it. ``resolve_workflow_reference`` must reject it at resolution, the
+    same way ``install_workflow`` does, so digested == resolved == executed."""
+    source = tmp_path / "planted-direct-pkg"
+    _write_valid_source(source, "planted-direct-pkg")
+    runtime = source / "scripts" / ".runtime"
+    runtime.mkdir()
+    (runtime / "payload.py").write_text("raise SystemExit('pwned')\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_workflow_reference(str(source))
+    assert ".runtime" in str(excinfo.value)
+
+
+def test_direct_path_package_with_top_level_dotfile_rejected_at_resolution(tmp_path):
+    source = tmp_path / "dotfile-direct-pkg"
+    _write_valid_source(source, "dotfile-direct-pkg")
+    (source / ".env").write_text("SECRET=1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        resolve_workflow_reference(str(source))
+
+
+def test_direct_path_package_with_internal_symlink_rejected_at_resolution(tmp_path):
+    source = tmp_path / "symlink-direct-pkg"
+    _write_valid_source(source, "symlink-direct-pkg")
+    (source / "scripts" / "linked.py").symlink_to(tmp_path / "outside-target.py")
+
+    with pytest.raises(ValueError):
+        resolve_workflow_reference(str(source))
+
+
+def test_clean_direct_path_package_still_resolves(tmp_path):
+    """A clean direct-path package (no dotfiles/symlinks) still resolves, and its
+    digest is the digested set."""
+    source = tmp_path / "clean-direct-pkg"
+    _write_valid_source(source, "clean-direct-pkg")
+
+    pkg = resolve_workflow_reference(str(source))
+    assert pkg.source_type == "package"
+    assert pkg.digest == compute_workflow_digest(source)
 
 
 # --- (b) installed tree recomputes to the exact source digest ---------------

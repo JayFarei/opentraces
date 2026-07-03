@@ -346,6 +346,13 @@ def resolve_workflow_reference(source: str | Path) -> WorkflowPackage:
     if path.is_file():
         if path.suffix.lower() not in {".md", ".markdown"}:
             raise ValueError(f"workflow file must be Markdown: {path}")
+        # Mirror the install-time integrity gate (#187 / C3): digested ==
+        # resolved == executed. Direct-path resolution used to skip these, so a
+        # package/file carrying a non-allowlisted dot-prefixed entry or a
+        # symlink resolved undigested (compute_workflow_digest excludes dot
+        # paths) yet could still be imported/exec'd by build_rows.py.
+        _reject_symlinks(path)
+        _reject_dotfiles(path)
         metadata = _read_skill_frontmatter(path)
         name = validate_workflow_name(str(metadata.get("name") or path.stem))
         return WorkflowPackage(
@@ -358,6 +365,12 @@ def resolve_workflow_reference(source: str | Path) -> WorkflowPackage:
             security=_workflow_security_contract(metadata),
         )
     if path.is_dir():
+        # Same integrity gate as the file branch and install (#187 / C3):
+        # reject non-allowlisted dotfiles/dot-dirs and symlinks BEFORE returning
+        # a package a run could execute, so the resolved tree equals the
+        # digested set.
+        _reject_symlinks(path)
+        _reject_dotfiles(path)
         entrypoint = _workflow_entrypoint(path)
         metadata = _read_skill_frontmatter(entrypoint)
         name = validate_workflow_name(str(metadata.get("name") or path.name))
