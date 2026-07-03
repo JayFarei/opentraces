@@ -1,0 +1,394 @@
+name = "dataset-sync-verify-publish"
+description = """
+Seal-family M2 (#192/#193/#194): the dataset watermark → verify →
+publish-clearance lifecycle, end to end on real captured bucket state.
+
+Forks from `c-captured-multi-skill` (3 real captured traces) and
+installs a trusted, deterministic bucket-reading workflow (one row per
+bucket trace) into the installed-workflow registry — the ONLY way the
+scrubbed script executor hands a workflow the real bucket via
+`OT_OPENTRACES_DIR` (#188 trust-by-provenance). Then:
+
+  1. `dataset run` (full) projects 3 rows — one per captured trace.
+  2. A NEW trace lands in the bucket via the `write_file` transcript
+     seeder → `_ingest-session` recipe (the Stop-hook ingest path).
+     `_ingest-session` alone lands a bucket TraceRecord — a dataset
+     workflow reads the bucket, not Trail.
+  3. `dataset run --sync` (#192) projects ONLY the delta: the run's
+     `delta_scope` reports `mode=sync bucket_changed=true
+     candidate_scope=delta` and the dataset grows by exactly one row
+     (`appended_count=1`), the recorded watermark having advanced past
+     the 3 originals.
+  4. A SECOND `--sync` with no further bucket change is the fast no-op
+     short-circuit: `bucket_changed=false candidate_scope=none
+     appended_count=0` — proving the watermark genuinely advanced (a
+     property dedup alone could not fake).
+  5. `dataset verify` (#193) replays the bound workflow side-effect-free
+     and byte-compares to the stored rows: `reproduces` (all 4 rows),
+     the frozen `opentraces.dataset.verify.v1` envelope.
+  6. `dataset publish` (#194) REFUSES: every row's source trace is a
+     freshly-captured, unscanned (not-cleared-for-egress) bucket trace,
+     so the shared egress-clearance predicate withholds the whole
+     publish — `status=refused`, exit 9, the frozen
+     `opentraces.dataset.publish.clearance.v1` partition, and ZERO bytes
+     reach the fake HF remote (no `dataset_infos.json` shard).
+  7. A hand-mutated stored row makes `dataset verify` report
+     `integrity-failure` (exit 7) — the byte-compare catches tampering.
+
+Uses the plan-058 filesystem fake HF remote throughout (never a real
+publish). A PR-lane SENTINEL journey: `requires ⊆ {cli, git}`.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+trajectories = ["build-publishable-dataset"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-multi-skill"]
+
+[preconditions]
+min_captured_traces = 3
+
+# --- 1. A trusted, deterministic bucket-reading workflow -----------------
+# Installed into {opentraces_dir}/workflows (the installed-workflow
+# registry) so `is_trusted_workflow` is true and the #188 script executor
+# hands build_rows.py the real bucket via OT_OPENTRACES_DIR. A workflow
+# pinned by an external --workflow /path would run untrusted (no bucket).
+[[steps]]
+type = "write_file"
+id = "write-skill"
+path = "m2-sync-workflow/SKILL.md"
+content = '''
+---
+name: m2-sync-curator
+description: Project one deterministic row per bucket trace
+mode: agent-skill
+---
+
+# m2-sync-curator
+
+Project one candidate row per trace in the private bucket.
+'''
+
+# Brace-free builder (dict() constructors only) so the journey's str.format
+# templating pass leaves it byte-identical. Reads every bucket trace
+# envelope and emits one deterministic row per trace_id; append-path dedup
+# makes a --sync re-run grow the dataset by exactly the new trace's row.
+[[steps]]
+type = "write_file"
+id = "write-builder"
+path = "m2-sync-workflow/scripts/build_rows.py"
+content = '''
+import glob
+import json
+import os
+
+otdir = os.environ.get("OT_OPENTRACES_DIR") or os.path.expanduser("~/.opentraces")
+troot = os.path.join(otdir, "bucket", "traces", "v1")
+rows = []
+for tj in sorted(glob.glob(os.path.join(troot, "*", "*", "trace.json"))):
+    try:
+        rec = json.load(open(tj, encoding="utf-8"))
+    except Exception:
+        continue
+    tid = rec.get("trace_id")
+    if not tid:
+        continue
+    rows.append(dict(source_trace_id=tid, source_unit_id="tu:" + tid + ":trace", summary="trajectory for " + tid))
+out = open(os.environ["OT_DATASET_OUTPUT"], "w", encoding="utf-8")
+for r in rows:
+    out.write(json.dumps(r, sort_keys=True) + "\n")
+out.close()
+'''
+
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "m2-schema.json"
+content = '''
+{"type": "object", "required": ["source_trace_id", "source_unit_id", "summary"], "properties": {"source_trace_id": {"type": "string"}, "source_unit_id": {"type": "string"}, "summary": {"type": "string"}}, "additionalProperties": false}
+'''
+
+[[steps]]
+type = "shell"
+id = "install-workflow"
+argv = ["bash", "-c", "mkdir -p {opentraces_dir}/workflows && cp -r {project}/m2-sync-workflow {opentraces_dir}/workflows/m2-sync-curator"]
+
+# --- 2. Create the workflow-driven dataset -------------------------------
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "m2sync", "--workflow", "m2-sync-curator", "--schema", "{project}/m2-schema.json", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-new"
+path = "dataset.manifest.workflow.skill"
+equals = "m2-sync-curator"
+
+# --- 3. Full run: one row per captured trace (3) -------------------------
+[[steps]]
+type = "cli"
+id = "run-full"
+argv = ["dataset", "run", "m2sync", "--executor", "script", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-full"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-full"
+path = "run.appended_count"
+equals = 3
+
+# --- 4. A NEW trace lands in the bucket ----------------------------------
+# Brace-free transcript seeder (the capture-safety recipe): writes a
+# synthetic Claude Code session JSONL to the box HOME.
+[[steps]]
+type = "write_file"
+id = "write-seeder"
+path = "seed_delta_transcript.py"
+content = '''
+import json
+from pathlib import Path
+
+sid = "sess-m2-delta"
+ts = "2026-07-03T09:00:00Z"
+tool_id = "tud1"
+user = dict(type="user", sessionId=sid, timestamp=ts, cwd=str(Path.cwd().resolve()),
+            message=dict(role="user", content="add a delta helper"))
+tool_use = dict(type="tool_use", id=tool_id, name="Read", input=dict(file_path="README.md"))
+asst = dict(type="assistant", sessionId=sid, timestamp=ts,
+            message=dict(role="assistant", content=[tool_use], usage=dict(input_tokens=5, output_tokens=5)))
+result = dict(type="user", sessionId=sid, timestamp=ts,
+              message=dict(role="user", content=[dict(type="tool_result", tool_use_id=tool_id, content="ok")]))
+path = Path.home() / (sid + ".jsonl")
+path.write_text("\n".join(json.dumps(line) for line in (user, asst, result)) + "\n")
+print(str(path))
+'''
+
+[[steps]]
+type = "shell"
+id = "seed-transcript"
+argv = ["{py_bin}", "{project}/seed_delta_transcript.py"]
+
+[[steps]]
+type = "cli"
+id = "ingest-delta"
+argv = ["_ingest-session", "{home}/sess-m2-delta.jsonl", "--project", "{project}"]
+
+[[assertions]]
+kind = "returncode"
+step = "ingest-delta"
+equals = 0
+
+# --- 5. --sync projects ONLY the delta (#192) ----------------------------
+[[steps]]
+type = "cli"
+id = "run-sync-delta"
+argv = ["dataset", "run", "m2sync", "--sync", "--executor", "script", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-delta"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-delta"
+path = "delta_scope.mode"
+equals = "sync"
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-delta"
+path = "delta_scope.bucket_changed"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-delta"
+path = "delta_scope.candidate_scope"
+equals = "delta"
+
+# Grows by exactly the delta: the one new trace's row (the 3 originals dedup).
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-delta"
+path = "run.appended_count"
+equals = 1
+
+# --- 6. A second --sync with no change is the fast no-op short-circuit ----
+[[steps]]
+type = "cli"
+id = "run-sync-noop"
+argv = ["dataset", "run", "m2sync", "--sync", "--executor", "script", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-noop"
+path = "delta_scope.bucket_changed"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-noop"
+path = "delta_scope.candidate_scope"
+equals = "none"
+
+[[assertions]]
+kind = "stdout_json"
+step = "run-sync-noop"
+path = "run.appended_count"
+equals = 0
+
+# --- 7. verify: reproduces (#193) ----------------------------------------
+[[steps]]
+type = "cli"
+id = "verify-reproduces"
+argv = ["dataset", "verify", "m2sync", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "verify-reproduces"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-reproduces"
+path = "status"
+equals = "reproduces"
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-reproduces"
+path = "verdict"
+equals = "reproduces"
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-reproduces"
+path = "schema_version"
+equals = "opentraces.dataset.verify.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-reproduces"
+path = "stored_row_count"
+equals = 4
+
+# --- 8. publish REFUSES on unscanned source traces (#194) ----------------
+[[steps]]
+type = "cli"
+id = "remote-create"
+argv = ["dataset", "remote", "create", "m2sync", "m2/dataset", "--private", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "remote-create"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "review-approve"
+argv = ["dataset", "review", "approve", "m2sync", "--all"]
+
+[[assertions]]
+kind = "returncode"
+step = "review-approve"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "publish-refused"
+argv = ["dataset", "publish", "m2sync", "--json"]
+expect_returncode = 9
+
+[[assertions]]
+kind = "returncode"
+step = "publish-refused"
+equals = 9
+
+[[assertions]]
+kind = "stdout_json"
+step = "publish-refused"
+path = "status"
+equals = "refused"
+
+[[assertions]]
+kind = "stdout_json"
+step = "publish-refused"
+path = "schema_version"
+equals = "opentraces.dataset.publish.clearance.v1"
+
+# No row was cleared for egress.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "publish-refused"
+path = "publish.published"
+equals = 0
+
+# ZERO bytes reached the fake HF remote — the refusal is before staging.
+[[assertions]]
+kind = "path_not_exists"
+path = "{fake_remote}/m2/dataset/dataset_infos.json"
+
+# --- 9. A hand-mutated stored row fails verify (#193 integrity) ----------
+[[steps]]
+type = "write_file"
+id = "write-mutator"
+path = "mutate_first_row.py"
+content = '''
+import json
+import sys
+
+train = sys.argv[1]
+lines = open(train, encoding="utf-8").read().splitlines()
+first = json.loads(lines[0])
+first["summary"] = "HAND MUTATED BY JOURNEY"
+lines[0] = json.dumps(first, sort_keys=True)
+open(train, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+print("mutated " + train)
+'''
+
+[[steps]]
+type = "shell"
+id = "mutate-row"
+argv = ["{py_bin}", "{project}/mutate_first_row.py", "{opentraces_dir}/datasets/m2sync/data/train.jsonl"]
+
+[[assertions]]
+kind = "returncode"
+step = "mutate-row"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "verify-integrity-failure"
+argv = ["dataset", "verify", "m2sync", "--json"]
+expect_returncode = 7
+
+[[assertions]]
+kind = "returncode"
+step = "verify-integrity-failure"
+equals = 7
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-integrity-failure"
+path = "status"
+equals = "integrity-failure"
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-integrity-failure"
+path = "verdict"
+equals = "integrity-failure"
