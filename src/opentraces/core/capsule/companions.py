@@ -25,6 +25,10 @@ from .._bucket_io import _canonical_json, _gzip_deterministic
 
 COMPANION_REDACTION_SCHEMA_VERSION = "opentraces.capsule.companion_redaction.v1"
 
+# Fail-closed placeholder: a line the sanitizer could not process is replaced by
+# this marker (never emitted verbatim) and the floor is marked NOT satisfied.
+_UNSANITIZABLE_PLACEHOLDER = "[opentraces:companion-line-unsanitizable-redacted]"
+
 
 def _empty_manifest(security_version: str | None) -> dict[str, Any]:
     return {
@@ -70,6 +74,13 @@ def redact_companion_text(
     floor_satisfied = True
     lines = 0
 
+    def _sanitize(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        return (
+            sanitize_companion_dict(payload, tools=tool_list)
+            if tool_list is not None
+            else sanitize_companion_dict(payload)
+        )
+
     for raw_line in text.split("\n"):
         stripped = raw_line.strip()
         if not stripped:
@@ -77,20 +88,32 @@ def redact_companion_text(
         lines += 1
         try:
             obj = json.loads(stripped)
+            is_json = True
         except ValueError:
-            # A non-JSON line is not something the field-aware walker can route;
-            # keep it verbatim rather than silently dropping content.
-            out_lines.append(stripped)
+            obj = None
+            is_json = False
+
+        # Fail closed: EVERY line's content is routed through the substrate
+        # sanitizer before emission — a non-JSON line, a JSON scalar, or a JSON
+        # array can each carry a planted secret, so none may pass through
+        # verbatim. Dicts sanitize directly; anything else is wrapped so the
+        # field-aware walker reaches its string leaves (secret detectors + the
+        # tail-consuming path anonymizer), then unwrapped.
+        try:
+            if is_json and isinstance(obj, dict):
+                redacted, manifest = _sanitize(obj)
+                out_lines.append(_canonical_json(redacted))
+            elif is_json:
+                wrapped, manifest = _sanitize({"value": obj})
+                out_lines.append(_canonical_json(wrapped.get("value")))
+            else:
+                wrapped, manifest = _sanitize({"value": stripped})
+                out_lines.append(str(wrapped.get("value")))
+        except Exception:  # noqa: BLE001 — a line we cannot sanitize is never leaked
+            out_lines.append(_UNSANITIZABLE_PLACEHOLDER)
+            floor_satisfied = False
             continue
-        if not isinstance(obj, dict):
-            out_lines.append(_canonical_json(obj))
-            continue
-        redacted, manifest = (
-            sanitize_companion_dict(obj, tools=tool_list)
-            if tool_list is not None
-            else sanitize_companion_dict(obj)
-        )
-        out_lines.append(_canonical_json(redacted))
+
         # Aggregate the per-line manifests into one companion-level manifest.
         if not tools_applied:
             tools_applied = list(manifest.get("tools_applied") or [])
@@ -102,7 +125,7 @@ def redact_companion_text(
             by_tool[tool] = by_tool.get(tool, 0) + int(count)
 
     body = ("\n".join(out_lines) + "\n") if out_lines else ""
-    if not tools_applied:
+    if lines == 0:
         # An empty companion never runs the walker; still declare the floor set.
         tools_applied = list(COMPANION_FLOOR) if tool_list is None else []
         floor_satisfied = tool_list is None or set(COMPANION_FLOOR).issubset(
