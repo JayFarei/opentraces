@@ -28,7 +28,9 @@ from ..trails.scoped_reads import (
 )
 
 
-def context_resume_packet(repo: Path, node_id: str) -> dict[str, Any]:
+def context_resume_packet(
+    repo: Path, node_id: str, *, trace_id: str | None = None
+) -> dict[str, Any]:
     """Return a structured packet describing the model's view at ``node_id``.
 
     Inlines all four ContextLayer contents (system, messages,
@@ -48,8 +50,15 @@ def context_resume_packet(repo: Path, node_id: str) -> dict[str, Any]:
     # repo — the full-read walk that made ``ctx resume`` hang). Byte-identical:
     # the per-trace projection contains exactly this node + its 4 layer ids,
     # and ``capture_limitations_by_trace`` is per-trace keyed.
-    resolved = resolve_node_traces(repo, {node_id})
-    owner_trace = resolved.get(node_id)
+    # #208 perf-core — when the caller already knows the owning trace_id (e.g.
+    # capsule export, which resolved it while building the node itself), skip
+    # the ``resolve_node_traces`` scoped event read entirely: it exists only to
+    # discover a trace_id we already have. Result is identical — the per-trace
+    # projection is keyed the same way regardless of how trace_id was learned.
+    owner_trace = trace_id
+    if owner_trace is None:
+        resolved = resolve_node_traces(repo, {node_id})
+        owner_trace = resolved.get(node_id)
     projection = (
         build_context_tree_projection_for_trace(repo, owner_trace)
         if owner_trace is not None
