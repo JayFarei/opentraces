@@ -79,11 +79,17 @@ def _egress_destinations(hf_repo, gh_repo) -> list[str]:
     return dests
 
 
-def _confirm_egress(destinations, manifest, business_logic_findings, assume_yes) -> None:
-    """Shared developer-approval gate before any public egress (plan 090). Names the
-    destinations and summarizes redaction/exclusion. ``--yes`` bypasses for
-    scripts/agents; a 'no' aborts with exit 1. Applied to BOTH share --publish and
-    issue --publish (previously only issue confirmed)."""
+def _confirm_egress(
+    destinations, manifest, business_logic_findings, assume_yes, carried_inventory=None
+) -> None:
+    """Shared developer-approval gate before any public egress (plan 090 / #198).
+
+    Names the destinations, summarizes redaction/exclusion, and renders the
+    carried-section inventory (counts + surfaces, never bytes) so the developer
+    approves with full sight of exactly what would ship. Explicit approve is
+    required; ``--yes`` is the ONLY auto-approve; a 'no' aborts with exit 1. Under
+    ``--json`` / a non-TTY it refuses-with-hint (ADR-0007 L2), emitting zero
+    prompt bytes. Applied to BOTH share --publish and issue --publish."""
 
     if assume_yes:
         return
@@ -102,9 +108,35 @@ def _confirm_egress(destinations, manifest, business_logic_findings, assume_yes)
         f"{manifest.get('fields_excluded', 0)} prompt fields excluded.",
         err=True,
     )
+    if carried_inventory:
+        click.echo(
+            "  carried: "
+            f"{carried_inventory.get('steps', 0)} steps · "
+            f"{carried_inventory.get('trail_anchors', 0)} trail anchors · "
+            f"context layers {carried_inventory.get('context_layers') or '(none)'} · "
+            f"test={carried_inventory.get('has_test')} · "
+            f"mini_bucket_digest={carried_inventory.get('mini_bucket_digest') or '(none)'}",
+            err=True,
+        )
     if not click.confirm("Proceed?", default=False):
         click.echo("aborted.", err=True)
         sys.exit(1)
+
+
+def _preflight_clearance_or_exit(capsule) -> None:
+    """#198 — refuse egress (before prompting/minting) when a source trace is not
+    cleared, so the human is never asked to approve something that cannot leave."""
+
+    from ..core.capsule.share import (
+        CapsuleClearanceError,
+        enforce_capsule_clearance,
+    )
+
+    try:
+        enforce_capsule_clearance(capsule)
+    except CapsuleClearanceError as exc:
+        click.echo(f"capsule publish refused: {exc}", err=True)
+        sys.exit(3)
 
 
 def _infer_issue_repo(capsule) -> str | None:
@@ -161,9 +193,13 @@ def _maybe_build_bundle(capsule, project, make_bundle):
 
 
 def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
-    """Publish to HF (capsule.json + capsule.md + bundle when present). Exits on error."""
+    """Publish to HF (capsule.json + capsule.md + bundle when present). Exits on error.
 
-    from ..core.capsule.share import publish_capsule
+    The CLI is THE egress door, so it always demands clearance (``require_clearance``):
+    a capsule sourced from an unscanned/withheld trace refuses with zero bytes out.
+    """
+
+    from ..core.capsule.share import CapsuleClearanceError, publish_capsule
 
     tok = _hf_token(token)
     if not tok:
@@ -174,7 +210,13 @@ def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
         )
         sys.exit(2)
     try:
-        info = publish_capsule(capsule, repo_id=hf_repo, token=tok, private=private, bundle_bytes=bundle_bytes)
+        info = publish_capsule(
+            capsule, repo_id=hf_repo, token=tok, private=private,
+            bundle_bytes=bundle_bytes, require_clearance=True,
+        )
+    except CapsuleClearanceError as exc:
+        click.echo(f"capsule publish refused: {exc}", err=True)
+        sys.exit(3)
     except Exception as exc:
         click.echo(f"capsule publish failed: {exc}", err=True)
         sys.exit(3)
@@ -321,7 +363,16 @@ def create_cmd(ref, from_step, to_step, step, node_id, radius, repo_url, project
     reporter.done()
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     dest = out or (project / ".opentraces" / "capsules")
-    arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes)
+    # #197 — materialize the scoped, redacted mini-bucket next to capsule.json.
+    mini = None
+    try:
+        from ..core.capsule.share import build_mini_bucket
+        from ..core.config import get_project_dir
+
+        mini = build_mini_bucket(project, get_project_dir(project).name, [resolved_trace])
+    except Exception:  # pragma: no cover - mini-bucket is additive, never fatal
+        mini = None
+    arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes, mini_bucket=mini)
     if as_json:
         click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
         return
@@ -333,6 +384,7 @@ def create_cmd(ref, from_step, to_step, step, node_id, radius, repo_url, project
         f"{manifest.get('home_paths_scrubbed',0)} paths scrubbed\n"
         f"  env_tier: {(capsule.get('source') or {}).get('env_tier')} · "
         f"verdict_trust: {(capsule.get('source') or {}).get('verdict_trust')}\n"
+        f"  mini_bucket_digest: {capsule.get('mini_bucket_digest') or '(none)'}\n"
         f"  md: {arts['md']}",
         err=True,
     )
@@ -469,11 +521,16 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
     )
     reporter.done()
     telemetry_stages = reporter.telemetry()
+    from ..core.capsule.share import carried_section_inventory
+
     manifest = (capsule.get("redaction") or {}).get("manifest") or {}
     privacy_scope = capsule.get("privacy_scope") or {}
     by_field_path = manifest.get("by_field_path") or {}
     by_tool = manifest.get("by_tool") or {}
     excluded = manifest.get("excluded_field_paths") or []
+    # #198 — the carried-section inventory (counts + surfaces, never leaked bytes):
+    # exactly what a publish WOULD ship, so the developer approves with full sight.
+    inventory = carried_section_inventory(capsule)
     # Destinations that WOULD receive it (display-only; nothing is contacted here).
     destinations = _egress_destinations(_default_hf_repo(None), _infer_issue_repo(capsule))
 
@@ -493,6 +550,7 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
             },
             "business_logic": {"findings": by_tool.get("business_logic", 0)},
             "privacy_scope": privacy_scope,
+            "carried_inventory": inventory,
             "destinations": destinations,
             # Issue #98 — additive per-stage progress telemetry (stderr-only
             # progress events do not pollute this stdout payload; this block is
@@ -520,6 +578,13 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
     click.echo("  privacy scope:")
     for k, v in privacy_scope.items():
         click.echo(f"    {k}: {v}")
+    click.echo(
+        "  carried sections (counts + surfaces, no bytes): "
+        f"{inventory['steps']} steps · {inventory['trail_anchors']} trail anchors · "
+        f"context layers {inventory['context_layers'] or '(none)'} · "
+        f"test={inventory['has_test']} · bundle={inventory['has_bundle']} · "
+        f"mini_bucket_digest={inventory['mini_bucket_digest'] or '(none)'}"
+    )
     click.echo("  destinations that WOULD receive it (not contacted):")
     for d in destinations or ["(none configured)"]:
         click.echo(f"    {d}")
@@ -563,9 +628,16 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
             click.echo("could not determine an HF repo; pass --repo <owner/name>.", err=True)
             sys.exit(2)
         # Plan 090: share --publish now shares the consent gate (was issue-only).
+        # #198: refuse an unscanned/withheld source BEFORE prompting or minting.
+        _preflight_clearance_or_exit(capsule)
+        from ..core.capsule.share import carried_section_inventory
+
         _manifest = (capsule.get("redaction") or {}).get("manifest") or {}
         _bl = (_manifest.get("by_tool") or {}).get("business_logic", 0)
-        _confirm_egress(_egress_destinations(repo, None), _manifest, _bl, assume_yes)
+        _confirm_egress(
+            _egress_destinations(repo, None), _manifest, _bl, assume_yes,
+            carried_inventory=carried_section_inventory(capsule),
+        )
         url, human, info = _publish_and_url(capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes)
         click.echo(f"published {cid} (rev {info['revision'][:12]}) · {human}", err=True)
     elif repo:
@@ -646,9 +718,16 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
 
     # Explicit public-destination consent — shared with share --publish (plan 090).
     # Names both destinations + the redaction summary. --yes bypasses for agents.
+    # #198: refuse an unscanned/withheld source BEFORE prompting or minting.
+    _preflight_clearance_or_exit(capsule)
+    from ..core.capsule.share import carried_section_inventory
+
     _manifest = (capsule.get("redaction") or {}).get("manifest") or {}
     _bl = (_manifest.get("by_tool") or {}).get("business_logic", 0)
-    _confirm_egress(_egress_destinations(repo, target_repo), _manifest, _bl, assume_yes)
+    _confirm_egress(
+        _egress_destinations(repo, target_repo), _manifest, _bl, assume_yes,
+        carried_inventory=carried_section_inventory(capsule),
+    )
 
     url, human, _info = _publish_and_url(capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes)
     body = render_issue_body(capsule, capsule_url=url, human_url=human)
