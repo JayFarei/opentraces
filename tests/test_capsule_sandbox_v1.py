@@ -158,6 +158,60 @@ def test_5d_tampered_bundle_refused_before_extract(calc_repo, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# 5f — #157 H4: the foreign gate fails CLOSED on a missing/spoofed source slug.
+# The source slug is producer-controlled, so an ABSENT source slug can no longer
+# bypass the block when the consumer has a known local identity.
+# --------------------------------------------------------------------------- #
+
+
+def test_5f_missing_source_slug_is_foreign_and_blocked(calc_repo, tmp_path):
+    meta, data = build_capsule_bundle(calc_repo["repo"], calc_repo["sha"])
+    bundle = tmp_path / "b.tar.gz"
+    bundle.write_bytes(data)
+
+    cap = _capsule(calc_repo["sha"], meta=meta)  # NO source.project_slug at all
+    assert "source" not in cap
+    with pytest.raises(SandboxNotOwnedError):
+        run_capsule_test(cap, bundle_path=bundle, local_slug="my-local-project")
+
+    # The explicit override still lets it run, honestly tier none.
+    cap2 = _capsule(calc_repo["sha"], meta=meta)
+    res = run_capsule_test(
+        cap2, bundle_path=bundle, local_slug="my-local-project", unsafe_run_on_host=True
+    )
+    assert res["runnable"] is True
+    assert res["sandbox_tier"] == "none"
+
+
+def test_5f_matching_slug_is_not_foreign(calc_repo, tmp_path):
+    meta, data = build_capsule_bundle(calc_repo["repo"], calc_repo["sha"])
+    bundle = tmp_path / "b.tar.gz"
+    bundle.write_bytes(data)
+
+    cap = _capsule(calc_repo["sha"], slug="my-local-project", meta=meta)
+    res = run_capsule_test(cap, bundle_path=bundle, local_slug="my-local-project")
+    assert res["runnable"] is True
+    assert res["sandbox_tier"] == "none"
+
+
+def test_5f_capsule_is_foreign_predicate_fails_closed():
+    from opentraces.core.capsule.run import _capsule_is_foreign
+
+    # both present + equal => not foreign (own capsule)
+    assert _capsule_is_foreign({"source": {"project_slug": "p"}}, "p") is False
+    # present + mismatch => foreign
+    assert _capsule_is_foreign({"source": {"project_slug": "p"}}, "q") is True
+    # absent source slug WITH a known local identity => foreign (producer omitted)
+    assert _capsule_is_foreign({"source": {}}, "p") is True
+    assert _capsule_is_foreign({}, "p") is True
+    # no local identity => the gate cannot apply (nothing to be foreign to); the
+    # shipped CLI always resolves a local slug, and every run still stamps the
+    # honest sandbox_tier=none label regardless.
+    assert _capsule_is_foreign({"source": {"project_slug": "p"}}, None) is False
+    assert _capsule_is_foreign({}, None) is False
+
+
 @pytest.mark.skipif(
     not os.environ.get("OT_REAL_SANDBOX"), reason="opt-in real S0-escape proof"
 )

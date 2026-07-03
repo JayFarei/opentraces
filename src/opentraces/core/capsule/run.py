@@ -94,17 +94,24 @@ def _host_isolation_detected() -> bool:
 
 
 def _capsule_is_foreign(capsule: dict[str, Any], local_slug: str | None) -> bool:
-    """A capsule is FOREIGN when its source project slug is known and differs
-    from the local repo identity. Unknown provenance is NOT treated as foreign
-    (there is nothing to compare against); the honest ``sandbox_tier`` label
-    still applies to every run regardless."""
+    """Fail-CLOSED foreignness (#157 H4). A capsule is NOT foreign only when the
+    consumer knows its own repo identity AND the capsule's declared source slug is
+    present and EQUAL to it. The source slug is producer-controlled, so an ABSENT or
+    MISMATCHED source slug can no longer bypass the gate: with a known local
+    identity, absent/mismatched source ⇒ foreign ⇒ blocked (unless overridden).
 
-    if not local_slug:
+    When the consumer has NO local identity (``local_slug`` absent) the gate has
+    nothing to be foreign *to* and does not apply; the run still stamps the honest
+    ``sandbox_tier="none"`` label. The shipped CLI always resolves ``local_slug``
+    from the repo, so the victim-facing path is fully covered."""
+
+    local = str(local_slug or "").strip()
+    if not local:
         return False
     src_slug = str(((capsule.get("source") or {}).get("project_slug")) or "").strip()
     if not src_slug:
-        return False
-    return src_slug != str(local_slug).strip()
+        return True  # producer omitted provenance while we HAVE an identity ⇒ foreign
+    return src_slug != local
 
 
 def _safe_env(home: Path, inherit: bool, extra: dict[str, str] | None = None) -> dict[str, str]:
