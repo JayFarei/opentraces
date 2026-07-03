@@ -165,7 +165,7 @@ def create_dataset(
     *,
     description: str | None = None,
     workflow_skill: str | None = None,
-    workflow_digest: str = "sha256:unconfigured",
+    workflow_digest: str,
     workflow_instructions: str | None = None,
     workflow_config: dict[str, Any] | None = None,
     row_schema: dict[str, Any] | None = None,
