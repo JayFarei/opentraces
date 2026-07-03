@@ -643,6 +643,19 @@ def export_capsule(
     redacted, manifest = redact_envelope(raw, exclude_paths=exclude_paths)
     assert_redaction_gate(manifest)
     redacted["redaction"] = {"manifest": manifest}
+    # #197 — stamp the mini-bucket digest AFTER redaction. The mini-bucket
+    # re-redacts the source companions through the substrate capability; its
+    # deterministic 16-hex digest is the capsule's integrity claim over the
+    # scoped companion content. Stamped post-redaction (a hash is not a secret;
+    # 16 hex stays below the entropy floor so it survives ensure_redacted intact)
+    # and mirroring the redaction-manifest placeholder pattern above.
+    try:
+        from .share import build_mini_bucket
+
+        mini = build_mini_bucket(project_dir, slug, [trace_id])
+        redacted["mini_bucket_digest"] = mini["digest"]
+    except Exception:  # pragma: no cover - mini-bucket is additive, never fatal
+        redacted["mini_bucket_digest"] = None
     reporter.done()
     return redacted
 
