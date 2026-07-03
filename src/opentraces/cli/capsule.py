@@ -33,6 +33,7 @@ from pathlib import Path
 import click
 
 import opentraces.cli as _cli
+from ._options import project_dir_option
 from ._progress import build_cli_progress, progress_option
 from .capsule_export_helpers import (
     _do_export,
@@ -191,7 +192,7 @@ def capsule_group() -> None:
     """
 
 
-@capsule_group.command("export")
+@capsule_group.command("export", hidden=True)
 @click.argument("trace_id", required=False, default=None)
 @_export_options
 @click.option("--from-session", "from_session", default=None, metavar="SESSION_ID",
@@ -260,18 +261,86 @@ def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comm
     click.echo(str(arts["json"]))  # primary stdout = the capsule path
 
 
-@capsule_group.command("open")
+@capsule_group.command("create")
 @click.argument("ref")
-@click.option("--json/--no-json", "as_json", default=True, show_default=True,
-              help="Emit the frozen capsule envelope as JSON (the agent contract).")
-@click.option("--summary", is_flag=True, help="Print the human markdown instead of JSON.")
-def open_cmd(ref, as_json, summary):
-    """Resolve a capsule (file / https / hf:// ref) and print its envelope.
+@click.option("--from-step", "from_step", type=int, default=None,
+              help="Seal an explicit step span (with --to-step). The slice selects the "
+                   "scope; the anchor step is derived from it.")
+@click.option("--to-step", "to_step", type=int, default=None, help="End of the --from-step span.")
+@click.option("--step", type=int, default=None, hidden=True)
+@click.option("--node", "node_id", default=None, hidden=True)
+@click.option("--radius", type=int, default=4, hidden=True)
+@click.option("--repo-url", default=None, help="Override the public repo remote URL recorded in the pin.")
+@project_dir_option
+@click.option("--product", default=None, metavar="NAME",
+              help="Bind the capsule to ONE consumed product (the usage-episode anchor).")
+@click.option("--include-prompts", "include_prompts", is_flag=True, default=False,
+              help="Include prompt-bearing fields (system prompt + reasoning). Excluded by default.")
+@click.option("--test-command", "test_command", default=None, hidden=True)
+@click.option("--expect-error", "expect_error", default=None, hidden=True)
+@click.option("--setup-command", "setup_command", default=None, hidden=True)
+@click.option("--consume", "consume_specs", multiple=True, hidden=True)
+@progress_option
+@click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=None,
+              help="Output dir (default: <project>/.opentraces/capsules).")
+@click.option("--bundle", "make_bundle", is_flag=True,
+              help="Embed a hermetic source bundle (git archive at the pin).")
+@click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
+def create_cmd(ref, from_step, to_step, step, node_id, radius, repo_url, project_dir,
+               product, include_prompts, test_command, expect_error, setup_command,
+               consume_specs, progress_mode, out, make_bundle, as_json):
+    """Seal a bounded, redacted, self-contained capsule from an agent session.
 
-    This is the agent-to-agent consume verb: one command, structured JSON out,
-    zero bespoke parsing. The ``--json`` flag is the default and is accepted
-    explicitly so the command embedded in the issue body runs verbatim.
+    REF is a v7 address: a whole ``<trace>``, a point ``<trace>:<step>``, or a
+    span ``<trace>:A-B``. The address selects the scope — no step/radius flag
+    soup. ``--from-step/--to-step`` is the equivalent explicit span seam.
     """
+
+    from ..core.capsule.share import write_capsule_dir
+    from ._address import parse_address
+
+    parsed = parse_address(ref)
+    if parsed is None:
+        raise click.UsageError(f"could not parse capsule ref {ref!r} (expected trace | trace:step | trace:A-B)")
+    resolved_trace = parsed.trace_part
+    # The address selector overrides the flags (the visible seam). A bare trace
+    # keeps the focal default; ``:N`` is a point; ``:A-B`` is a span.
+    selector = parsed.selector
+    if isinstance(selector, tuple):
+        from_step, to_step = selector
+    elif isinstance(selector, int):
+        step = selector
+    # ``last`` (str selector) is a deferred slot; fall through to the focal default.
+
+    reporter = build_cli_progress("capsule create", progress_mode)
+    capsule, project = _do_export(
+        resolved_trace, step, node_id, radius, repo_url, project_dir,
+        test_command, expect_error, setup_command, consume_specs, product, include_prompts,
+        progress=reporter, from_step=from_step, to_step=to_step,
+    )
+    reporter.done()
+    bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
+    dest = out or (project / ".opentraces" / "capsules")
+    arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes)
+    if as_json:
+        click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
+        return
+    manifest = (capsule.get("redaction") or {}).get("manifest") or {}
+    click.echo(
+        f"capsule {capsule['capsule_id']} · {(capsule.get('summary') or {}).get('title','')[:80]}\n"
+        f"  redaction: floor {manifest.get('floor')} ran · "
+        f"{manifest.get('redactions_applied',0)} redactions · "
+        f"{manifest.get('home_paths_scrubbed',0)} paths scrubbed\n"
+        f"  env_tier: {(capsule.get('source') or {}).get('env_tier')} · "
+        f"verdict_trust: {(capsule.get('source') or {}).get('verdict_trust')}\n"
+        f"  md: {arts['md']}",
+        err=True,
+    )
+    click.echo(str(arts["json"]))  # primary stdout = the capsule path
+
+
+def _resolve_and_print_capsule(ref, summary):
+    """Shared resolve+print body for ``capsule get`` (and the hidden ``open``)."""
 
     from ..core.capsule.contract import CapsuleSchemaAheadError
     from ..core.capsule.render import render_capsule_markdown
@@ -292,6 +361,79 @@ def open_cmd(ref, as_json, summary):
         click.echo(render_capsule_markdown(capsule))
         return
     click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
+
+
+@capsule_group.command("get")
+@click.argument("ref")
+@click.option("--json/--no-json", "as_json", default=True, show_default=True,
+              help="Emit the frozen capsule envelope as JSON (the agent contract).")
+@click.option("--summary", is_flag=True, help="Print the human markdown instead of JSON.")
+def get_cmd(ref, as_json, summary):
+    """Resolve a capsule (file / https / hf:// ref) and print its envelope.
+
+    Read-only: no ~/.opentraces, bucket, or project state is created — a
+    maintainer in a brand-new environment can ``get`` a capsule and read it.
+    (``capsule import`` is the explicit opt-in that writes it into the bucket.)
+    """
+
+    _resolve_and_print_capsule(ref, summary)
+
+
+@capsule_group.command("open", hidden=True)
+@click.argument("ref")
+@click.option("--json/--no-json", "as_json", default=True, show_default=True,
+              help="Emit the frozen capsule envelope as JSON (the agent contract).")
+@click.option("--summary", is_flag=True, help="Print the human markdown instead of JSON.")
+def open_cmd(ref, as_json, summary):
+    """Legacy alias for ``capsule get`` (hidden-but-callable; the issue-body
+    embedded ``opentraces capsule open <url> --json`` still resolves verbatim)."""
+
+    _resolve_and_print_capsule(ref, summary)
+
+
+@capsule_group.command("import")
+@click.argument("ref")
+@click.option("--source-layer", "source_layer", default="capsule_import", show_default=True,
+              help="Provenance label recorded on the imported bucket record.")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit the frozen opentraces.capsule.import.v1 report as JSON.")
+def import_cmd(ref, source_layer, as_json):
+    """Resolve a capsule and WRITE it into the local bucket as a first-class trace.
+
+    The explicit opt-in write (unlike ``get``): the carried spine is materialized
+    into a schema-valid TraceRecord under the reused trace id, its recorded anchors
+    into the per-trace Trail companion, so the imported capsule projects natively
+    (``map`` / ``slice`` / ``trace get``). Collisions: same capsule id is an
+    idempotent no-op; a different capsule id over the same trace scope-merges.
+    """
+
+    from ..core.capsule.contract import CapsuleSchemaAheadError
+    from ..core.capsule.import_ import CapsuleImportError, import_capsule
+    from ..core.capsule.share import CapsuleResolveError, resolve_capsule
+
+    try:
+        capsule = resolve_capsule(ref)
+    except CapsuleSchemaAheadError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+    except (CapsuleResolveError, ValueError) as exc:
+        click.echo(f"not a resolvable opentraces capsule: {exc}", err=True)
+        sys.exit(2)
+    try:
+        report = import_capsule(capsule, source_layer=source_layer)
+    except CapsuleImportError as exc:
+        click.echo(f"capsule import failed: {exc}", err=True)
+        sys.exit(2)
+    if as_json:
+        click.echo(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    click.echo(
+        f"{report['status']} · trace {report['trace_id']} · capsule {report['capsule_id']}\n"
+        f"  trail anchors: {report['trail_anchor_count']}"
+        + (f" · conflicts: {len(report['conflicts'])}" if report.get("conflicts") else ""),
+        err=True,
+    )
+    click.echo(report["trace_id"])  # primary stdout = the imported trace id
 
 
 @capsule_group.command("preview")
