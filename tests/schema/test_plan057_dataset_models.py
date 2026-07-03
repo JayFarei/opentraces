@@ -166,6 +166,40 @@ def test_dataset_run_record_and_row_index_entry_are_stable_json_contracts():
     }
 
 
+def test_row_index_entry_carries_lineage_ref_inside_free_provenance_dict():
+    """#191 (M2): the first-class span ref rides inside the free-form
+    ``provenance`` dict — the frozen ``DatasetRowIndexEntry`` schema gains NO new
+    top-level field (the train's one MINOR bump is reserved for M3)."""
+    entry = DatasetRowIndexEntry(
+        row_id="row_ref",
+        identity_hash="sha256:identity",
+        payload_hash="sha256:payload",
+        schema_digest="sha256:schema",
+        data_file="data/train.jsonl",
+        line=1,
+        run_id="run_ref",
+        appended_at="2026-07-02T12:00:00Z",
+        source_trace_id="9f8e7d6c-1234-4abc-8def-0123456789ab",
+        provenance={
+            "schema_version": "opentraces.dataset.row_provenance.v2",
+            "ref": "9f8e7d6c-1234-4abc-8def-0123456789ab:3-9",
+            "source_refs": {
+                "trace_id": "9f8e7d6c-1234-4abc-8def-0123456789ab",
+                "step_range": [3, 9],
+                "ref": "9f8e7d6c-1234-4abc-8def-0123456789ab:3-9",
+                "ref_valid": True,
+            },
+        },
+    )
+    # No top-level ``ref`` / ``span_ref`` field exists on the model.
+    dumped = entry.model_dump(mode="json")
+    assert "ref" not in dumped
+    assert "span_ref" not in dumped
+    assert dumped["provenance"]["ref"] == "9f8e7d6c-1234-4abc-8def-0123456789ab:3-9"
+    restored = DatasetRowIndexEntry.model_validate_json(entry.model_dump_json())
+    assert restored == entry
+
+
 def test_plan057_literal_boundaries_reject_deferred_or_unknown_modes():
     with pytest.raises(ValidationError):
         ExecutorConfig(default="remote-cloud")
