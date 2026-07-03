@@ -94,17 +94,24 @@ def _host_isolation_detected() -> bool:
 
 
 def _capsule_is_foreign(capsule: dict[str, Any], local_slug: str | None) -> bool:
-    """A capsule is FOREIGN when its source project slug is known and differs
-    from the local repo identity. Unknown provenance is NOT treated as foreign
-    (there is nothing to compare against); the honest ``sandbox_tier`` label
-    still applies to every run regardless."""
+    """Fail-CLOSED foreignness (#157 H4). A capsule is NOT foreign only when the
+    consumer knows its own repo identity AND the capsule's declared source slug is
+    present and EQUAL to it. The source slug is producer-controlled, so an ABSENT or
+    MISMATCHED source slug can no longer bypass the gate: with a known local
+    identity, absent/mismatched source ⇒ foreign ⇒ blocked (unless overridden).
 
-    if not local_slug:
+    When the consumer has NO local identity (``local_slug`` absent) the gate has
+    nothing to be foreign *to* and does not apply; the run still stamps the honest
+    ``sandbox_tier="none"`` label. The shipped CLI always resolves ``local_slug``
+    from the repo, so the victim-facing path is fully covered."""
+
+    local = str(local_slug or "").strip()
+    if not local:
         return False
     src_slug = str(((capsule.get("source") or {}).get("project_slug")) or "").strip()
     if not src_slug:
-        return False
-    return src_slug != str(local_slug).strip()
+        return True  # producer omitted provenance while we HAVE an identity ⇒ foreign
+    return src_slug != local
 
 
 def _safe_env(home: Path, inherit: bool, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -365,9 +372,9 @@ def run_capsule_test(
         )
 
     # --- bundle integrity HARD gate (#157) ------------------------------- #
-    # A tampered bundle is REFUSED before it is extracted or executed. Reuses the
-    # present-not-enforced verify_bundle sha256 check; a bundle with no pinned
-    # sha256 (verify_bundle returns True) preserves the pre-gate behaviour.
+    # A tampered bundle is REFUSED before it is extracted or executed. verify_bundle
+    # now REQUIRES a pinned sha256 (#157 H5): a bundle whose bytes are present but
+    # carry NO pinned hash is unbound and is refused here rather than run.
     if bundle_path is not None:
         from .share import verify_bundle
 
@@ -378,9 +385,13 @@ def run_capsule_test(
                 "pins; refusing to extract or run a tampered bundle."
             )
 
-    # Honest sandbox_tier label (#157): stamped at the top-level key the U1 clamp
-    # reads (core/capsule/replay.py::_read_trust_factors) so a foreign-capsule
-    # verdict floors. Determined by the run ENVIRONMENT (S0), not the outcome.
+    # Honest sandbox_tier label (#157): the run's own S0 self-report, stamped on the
+    # capsule dict as a truthful record of THIS run's isolation. Replay's trust
+    # computation (core/capsule/replay.py::_derive_trust_factors, C1) never reads
+    # this field OFF a capsule — a producer could pre-stamp it — it trusts only a
+    # LOCAL run_result threaded by the caller; here that tier is honestly ``none``,
+    # so a foreign-capsule verdict floors either way. Determined by the run
+    # ENVIRONMENT (S0), not the outcome.
     capsule["sandbox_tier"] = _SANDBOX_TIER
 
     with _consumes_setup(capsule, with_overrides, timeout) as (extra_env, used, cerr):

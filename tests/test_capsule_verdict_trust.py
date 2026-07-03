@@ -208,22 +208,41 @@ def test_build_replay_packet_preserves_existing_v1_shape():
     assert packet["oracle"]["strategy"] == "error_string_gone"
 
 
-def test_packet_verdict_rises_only_when_all_four_fields_are_loaded():
-    # Proves build_replay_packet READS the four ordinals off the capsule (rather
-    # than hardcoding 'floor'): a fully-loaded SYNTHETIC capsule clamps to
-    # 'high'. This is the ONLY way the gate goes non-floor — by real stamped
-    # state, never by softening the clamp.
+def test_packet_derives_ordinals_from_carried_evidence_not_self_labels():
+    # Proves build_replay_packet DERIVES the four ordinals (C1) rather than reading
+    # a producer's self-labels or hardcoding 'floor'. A capsule that SELF-DECLARES
+    # the strongest label for every factor but carries NO backing evidence is
+    # floored; a capsule that CARRIES real evidence (a declared test + a
+    # self-consistent exact patch) flips gradable/scoped ok=True. env_tier/
+    # sandbox_tier are structurally floored this train (nothing local can verify
+    # them), so verdict_trust stays floor either way — trust only ever rises by
+    # real, locally-verifiable state, never by softening the clamp.
     from opentraces.core.capsule.replay import build_replay_packet
 
-    cap = _floor_capsule(
-        environment={"env_tier": "L4"},
-        slice_diff={"diff_trust": "exact"},
-        oracle_trust="declared",
-        sandbox_tier="microvm",
+    self_labeled = _floor_capsule(
+        environment={"env_tier": "L4"},        # ignored — nothing local verifies it
+        slice_diff={"diff_trust": "exact"},    # ignored — no carried patch
+        oracle_trust="declared",               # ignored — no carried test
+        sandbox_tier="microvm",                # ignored — no local run
     )
-    packet = build_replay_packet(cap, target_ref="HEAD")
-    assert packet["verdict_trust"] == "high"
-    assert "not reproducible" not in packet["honest_claim"].lower()
+    p_self = build_replay_packet(self_labeled, target_ref="HEAD")
+    assert p_self["verdict_trust"] == "floor"
+    assert p_self["properties"]["gradable"]["ok"] is False
+    assert p_self["properties"]["scoped"]["ok"] is False
+
+    with_evidence = _floor_capsule(
+        test={"command": "pytest -q", "source": "declared",
+              "expected": {"kind": "nonzero_exit"}},
+        slice_diff={"diff_trust": "exact",
+                    "format_patch": "diff --git a/a.py b/a.py\n+x\n",
+                    "changed_files": ["a.py"]},
+    )
+    p_ev = build_replay_packet(with_evidence, target_ref="HEAD")
+    assert p_ev["properties"]["gradable"]["ok"] is True  # derived from carried test
+    assert p_ev["properties"]["scoped"]["ok"] is True  # derived from carried patch
+    assert p_ev["trust_factors"]["oracle_trust"] == "declared"
+    assert p_ev["trust_factors"]["diff_trust"] == "exact"
+    assert p_ev["verdict_trust"] == "floor"  # env/sandbox still floor this train
 
 
 def test_partial_load_clamps_to_weakest_link():
@@ -342,23 +361,39 @@ def test_packet_carries_properties_block_with_ok_level_note():
         assert isinstance(prop["note"], str) and prop["note"]
 
 
-def test_each_property_ok_and_level_derive_from_its_ordinal():
-    # Fully-loaded SYNTHETIC capsule: every property flips ok=True, and `level`
-    # is exactly the stamped ordinal value.
+def test_each_property_derives_from_carried_evidence_and_local_verification():
+    # gradable/scoped DERIVE from the evidence the capsule CARRIES; reproducible/
+    # sandboxed derive from LOCAL verification (env forced L0, sandbox from a local
+    # run_result), never from a producer self-label (C1).
     from opentraces.core.capsule.replay import build_replay_packet
 
-    loaded = _floor_capsule(
+    cap = _floor_capsule(
+        # self-declared env/sandbox labels are IGNORED (nothing local verifies them)
         environment={"env_tier": "L4"},
-        slice_diff={"diff_trust": "exact"},
-        oracle_trust="declared",
         sandbox_tier="microvm",
+        # real CARRIED evidence for the two evidence-backed factors
+        test={"command": "pytest -q", "source": "declared",
+              "expected": {"kind": "nonzero_exit"}},
+        slice_diff={"diff_trust": "exact",
+                    "format_patch": "diff --git a/a.py b/a.py\n+x\n",
+                    "changed_files": ["a.py"]},
     )
-    props = build_replay_packet(loaded, target_ref="HEAD")["properties"]
-    assert props["reproducible"] == {"ok": True, "level": "L4",
-                                     "note": "cross-platform hermetic"}
+    props = build_replay_packet(cap, target_ref="HEAD")["properties"]
+    # gradable/scoped derive ok=True with the carried levels.
     assert props["gradable"]["ok"] is True and props["gradable"]["level"] == "declared"
     assert props["scoped"]["ok"] is True and props["scoped"]["level"] == "exact"
-    assert props["sandboxed"]["ok"] is True and props["sandboxed"]["level"] == "microvm"
+    # env is forced to its floor (self-declared L4 ignored); sandbox forced none.
+    assert props["reproducible"] == {"ok": False, "level": "L0",
+                                     "note": "environment not pinned (name-only) — "
+                                             "not independently reproducible"}
+    assert props["sandboxed"]["ok"] is False and props["sandboxed"]["level"] == "none"
+
+    # A LOCAL run_result reporting a real tier DOES raise sandboxed (local obs).
+    props2 = build_replay_packet(
+        cap, target_ref="HEAD", run_result={"sandbox_tier": "microvm"}
+    )["properties"]
+    assert props2["sandboxed"] == {"ok": True, "level": "microvm",
+                                   "note": "ran under a microVM sandbox"}
 
 
 def test_property_ok_boundaries_are_lattice_derived():

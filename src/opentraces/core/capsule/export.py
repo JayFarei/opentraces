@@ -421,16 +421,65 @@ def build_slice_diff(
         "format_patch": None,
     }
 
-    # D1 — single commit → exact, with the real diff + commit file set.
+    # D1 — single commit. `exact` MUST bound EXACTLY the slice (#156 H2): a commit
+    # that also touched files OUTSIDE the slice's own step range would over-capture,
+    # letting `scoped.ok` credit an unrelated change. Compare the commit's file set
+    # to the IN-SLICE patch files; when they differ (the commit did more than the
+    # slice) prefer a path-limited patch scoped to the slice's own files (a truly
+    # scoped exact), else honestly downgrade to `partial`.
     if len(shas) == 1:
         sha = shas[0]
         files = _git_show_files(project_dir, sha)
         if files:
+            commit_files = set(files)
+            in_slice_files = {
+                p for patch in patches_in_range if (p := _rel_file_path(patch, project_dir))
+            }
+            if in_slice_files and commit_files != in_slice_files:
+                # The commit's file set differs from the slice's own patch files: the
+                # whole-commit diff would over-capture. Scope to the slice's files the
+                # commit actually touched.
+                scope_files = sorted(in_slice_files & commit_files)
+                scoped_patch = (
+                    _git(project_dir, ["format-patch", "-1", "--stdout", sha, "--", *scope_files])
+                    if scope_files
+                    else None
+                )
+                if scope_files and scoped_patch and scoped_patch.strip():
+                    # A truly-scoped exact patch bounding ONLY the slice's files.
+                    block.update(
+                        {
+                            "diff_trust": "exact",
+                            "burst_commit_sha": sha,
+                            "changed_files": scope_files,
+                            "format_patch": scoped_patch,
+                            "changed_files_from_commit": True,
+                            # Honesty marker: the commit over-captured; the carried
+                            # patch was scoped down to the slice's own files.
+                            "commit_over_capture_scoped": True,
+                        }
+                    )
+                    return block
+                # Cannot produce a scoped patch → downgrade to `partial` over the
+                # whole commit rather than claim `exact` for an over-broad diff.
+                block.update(
+                    {
+                        "diff_trust": "partial",
+                        "burst_commit_sha": sha,
+                        "changed_files": sorted(commit_files),
+                        "changed_files_from_commit": True,
+                        "commit_over_capture": True,
+                    }
+                )
+                return block
+            # commit_files == in_slice_files, OR no in-slice patch rows to compare
+            # (Tier-2 patches-empty / no over-capture evidence): the commit bounds
+            # exactly the slice → honest exact over the whole commit.
             block.update(
                 {
                     "diff_trust": "exact",
                     "burst_commit_sha": sha,
-                    "changed_files": sorted(files),
+                    "changed_files": sorted(commit_files),
                     "format_patch": _git(project_dir, ["format-patch", "-1", "--stdout", sha]),
                     # Honesty marker: changed_files came from `git show --name-only`
                     # (the commit), not from patch rows. Load-bearing for the
