@@ -252,3 +252,69 @@ def test_d4_no_anchor_declares_unanchored_and_stops(three_commit_project):
     assert sd["diff_trust"] == "unanchored"
     assert sd["changed_files"] == []
     assert sd["format_patch"] is None
+
+
+# --------------------------------------------------------------------------- #
+# H2 — a SINGLE commit that also touched an out-of-slice file must NOT claim
+# `exact` over BOTH files. `exact` means the carried patch bounds EXACTLY the
+# slice; anything broader is `partial` (or a path-limited exact over the slice's
+# own file). RED-first: the current D1 branch takes the whole commit's file set.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def over_capture_project(paths_env):
+    """ONE commit adds both ``slice_file.py`` (in the slice's step range) and
+    ``unrelated_file.py`` (NOT in it). The slice-scoped diff must not credit the
+    unrelated file as part of an ``exact`` slice diff."""
+
+    project_dir = paths_env / "projover"
+    _init_repo(project_dir)
+    (project_dir / "slice_file.py").write_text("print('slice')\n", encoding="utf-8")
+    (project_dir / "unrelated_file.py").write_text("print('unrelated')\n", encoding="utf-8")
+    _git(project_dir, "add", "-A")
+    _git(project_dir, "commit", "-q", "-m", "one commit, two files")
+    sha = _git(project_dir, "rev-parse", "HEAD")
+    _mark_project(project_dir)
+
+    tid = "cccc3333-0000-0000-0000-000000000000"
+    steps = [{"step_index": i, "role": "agent", "content": f"step {i}"} for i in range(13)]
+    # Only slice_file.py has an in-slice patch row (step 6); unrelated_file.py has
+    # NO patch row at all — it rode along in the same commit but is out of scope.
+    patches = [
+        {"patch_id": "p-slice", "file_path": "slice_file.py", "step_index": 6, "anchor": _anchor(sha)},
+    ]
+    _seed(project_dir, tid, steps, patches)
+    return project_dir, tid, sha
+
+
+def test_h2_single_commit_over_capture_not_exact_over_both_files(over_capture_project, tmp_path):
+    from opentraces.core.bucket_store import read_trace_record_object, trace_record_path
+    from opentraces.core.capsule.export import build_slice_diff
+    from opentraces.core.config import get_project_dir
+
+    project_dir, tid, _sha = over_capture_project
+    slug = get_project_dir(project_dir).name
+    record = read_trace_record_object(trace_record_path(slug, tid)).record
+
+    # The slice 4..8 maps to the ONE commit; its in-slice file is slice_file.py.
+    sd = build_slice_diff(project_dir, record, start_step=4, end_step=8)
+
+    # The unrelated file must NEVER be credited to the slice's changed_files.
+    assert "unrelated_file.py" not in sd["changed_files"], sd
+
+    if sd["diff_trust"] == "exact":
+        # `exact` is allowed ONLY when it bounds EXACTLY the slice's own file, and
+        # the carried patch must materialize ONLY that file.
+        assert sd["changed_files"] == ["slice_file.py"], sd
+        assert sd["format_patch"], "an exact slice diff must carry a real patch"
+        apply_dir = tmp_path / "apply"
+        apply_dir.mkdir()
+        _git(apply_dir, "init", "-q")
+        (apply_dir / "slice.patch").write_text(sd["format_patch"], encoding="utf-8")
+        _git(apply_dir, "apply", "--whitespace=nowarn", str(apply_dir / "slice.patch"))
+        assert (apply_dir / "slice_file.py").exists(), "the slice's file must materialize"
+        assert not (apply_dir / "unrelated_file.py").exists(), "the out-of-slice file must NOT leak"
+    else:
+        # Otherwise it must honestly downgrade to partial (the commit did more).
+        assert sd["diff_trust"] == "partial", sd
