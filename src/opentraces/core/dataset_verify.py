@@ -26,6 +26,7 @@ NOTHING is appended, no cursor/watermark is advanced.
 from __future__ import annotations
 
 import tempfile
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -145,6 +146,26 @@ def _rerun_rows(dataset, answers: dict[str, Any]) -> list[dict[str, Any]]:
         return _read_output_rows(output_path)
 
 
+def _multiset_subset(a: Counter, b: Counter) -> bool:
+    """``True`` iff every line in ``a`` appears in ``b`` with at least its
+    multiplicity — a genuine multiset ⊆, so a duplicated stored line is only a
+    subset when the re-run produced at least as many copies."""
+    return all(b[line] >= count for line, count in a.items())
+
+
+def _multiset_delta(reproduced_lines: list[str], stored_counts: Counter) -> list[str]:
+    """The re-run lines beyond what the stored multiset accounts for, in re-run
+    order (the enumerated ``bucket-advanced`` delta)."""
+    remaining = Counter(stored_counts)
+    delta: list[str] = []
+    for line in reproduced_lines:
+        if remaining.get(line, 0) > 0:
+            remaining[line] -= 1
+        else:
+            delta.append(line)
+    return delta
+
+
 def _watermark_advanced(
     recorded: dict[str, Any] | None, current: dict[str, Any] | None
 ) -> bool:
@@ -215,17 +236,23 @@ def verify_dataset(name: str) -> DatasetVerifyResult:
         dataset, raw_rows, privacy_tier=_recorded_privacy_tier(dataset)
     )
 
-    stored_set = set(stored_lines)
-    reproduced_set = set(reproduced_lines)
+    # #193 requires BYTE comparison, not set equality: ``reproduces`` demands
+    # ordered byte-identity, and ``bucket-advanced`` uses a MULTISET subset so a
+    # duplicated / reordered stored line cannot false-clean against a re-run that
+    # dedupes by identity.
+    stored_counts = Counter(stored_lines)
+    reproduced_counts = Counter(reproduced_lines)
     byte_identical = reproduced_lines == stored_lines
 
-    if stored_set == reproduced_set:
+    if byte_identical:
         verdict = VERDICT_REPRODUCES
         detail = "re-run rows are byte-identical to the stored public rows"
         delta: list[str] = []
-    elif stored_set < reproduced_set and _watermark_advanced(recorded_wm, current_wm):
+    elif _multiset_subset(stored_counts, reproduced_counts) and _watermark_advanced(
+        recorded_wm, current_wm
+    ):
         verdict = VERDICT_BUCKET_ADVANCED
-        delta = [line for line in reproduced_lines if line not in stored_set]
+        delta = _multiset_delta(reproduced_lines, stored_counts)
         detail = (
             f"stored rows reproduce; the bucket advanced past the recorded "
             f"watermark, adding {len(delta)} row(s)"

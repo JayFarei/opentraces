@@ -192,8 +192,23 @@ def _maybe_build_bundle(capsule, project, make_bundle):
     return data
 
 
-def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
-    """Publish to HF (capsule.json + capsule.md + bundle when present). Exits on error.
+def _build_mini_bucket_for(project, trace_id):
+    """Build the scoped, redacted mini-bucket for one trace (or None on failure).
+
+    Shared by the publish paths so the mini-bucket the capsule's digest claims is
+    threaded into ``publish_capsule`` and actually uploaded (#197 H4)."""
+
+    try:
+        from ..core.capsule.share import build_mini_bucket
+        from ..core.config import get_project_dir
+
+        return build_mini_bucket(project, get_project_dir(project).name, [trace_id])
+    except Exception:  # pragma: no cover - mini-bucket is additive, never fatal
+        return None
+
+
+def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None, mini_bucket=None):
+    """Publish to HF (capsule.json + capsule.md + bundle + mini-bucket when present). Exits on error.
 
     The CLI is THE egress door, so it always demands clearance (``require_clearance``):
     a capsule sourced from an unscanned/withheld trace refuses with zero bytes out.
@@ -212,7 +227,7 @@ def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
     try:
         info = publish_capsule(
             capsule, repo_id=hf_repo, token=tok, private=private,
-            bundle_bytes=bundle_bytes, require_clearance=True,
+            bundle_bytes=bundle_bytes, require_clearance=True, mini_bucket=mini_bucket,
         )
     except CapsuleClearanceError as exc:
         click.echo(f"capsule publish refused: {exc}", err=True)
@@ -638,7 +653,10 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
             _egress_destinations(repo, None), _manifest, _bl, assume_yes,
             carried_inventory=carried_section_inventory(capsule),
         )
-        url, human, info = _publish_and_url(capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes)
+        url, human, info = _publish_and_url(
+            capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes,
+            mini_bucket=_build_mini_bucket_for(project, trace_id),
+        )
         click.echo(f"published {cid} (rev {info['revision'][:12]}) · {human}", err=True)
     elif repo:
         url = mint_capsule_url(repo, cid)
@@ -729,7 +747,10 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         carried_inventory=carried_section_inventory(capsule),
     )
 
-    url, human, _info = _publish_and_url(capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes)
+    url, human, _info = _publish_and_url(
+        capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes,
+        mini_bucket=_build_mini_bucket_for(project, trace_id),
+    )
     body = render_issue_body(capsule, capsule_url=url, human_url=human)
     _clip(do_copy, url)
     summary_title = (capsule.get("summary") or {}).get("title") or "session"

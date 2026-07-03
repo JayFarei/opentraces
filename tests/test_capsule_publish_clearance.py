@@ -143,6 +143,46 @@ def test_multi_trace_refuses_if_any_source_not_cleared(recording_api):
     assert recording_api.calls == []
 
 
+def test_publish_defaults_to_require_clearance_true(recording_api):
+    """C1 (#198): egress is off-by-default — ``publish_capsule`` must enforce
+    clearance with NO explicit ``require_clearance`` argument. A withheld/unknown
+    source refuses with zero bytes."""
+    from opentraces.core.capsule.share import CapsuleClearanceError, publish_capsule
+
+    with pytest.raises(CapsuleClearanceError):
+        publish_capsule(
+            _capsule("t"), repo_id="someone/opentraces-capsules", token="fake",
+            # NO require_clearance kwarg → the DEFAULT must be True.
+            clearance_manifest=_cleared_manifest(),
+        )
+    assert recording_api.calls == [], "the default must refuse, moving ZERO bytes"
+
+
+def test_empty_source_trace_set_refuses_fail_closed():
+    """C1 (#198): a capsule with NO clearable source trace must REFUSE, not clear —
+    'no source to clear' is fail-closed, never a silent green light."""
+    from opentraces.core.capsule.share import (
+        CapsuleClearanceError,
+        enforce_capsule_clearance,
+    )
+
+    sourceless = {"source": {}, "sources": []}
+    with pytest.raises(CapsuleClearanceError):
+        enforce_capsule_clearance(sourceless, manifest=_cleared_manifest())
+
+
+def test_allow_sourceless_egress_is_an_explicit_named_bypass():
+    """The degenerate source-free path only clears via an EXPLICIT opt-in, never
+    the silent default."""
+    from opentraces.core.capsule.share import enforce_capsule_clearance
+
+    sourceless = {"source": {}, "sources": []}
+    ok = enforce_capsule_clearance(
+        sourceless, manifest=_cleared_manifest(), allow_sourceless_egress=True
+    )
+    assert ok["cleared"] == []
+
+
 def test_enforce_capsule_clearance_uses_shared_predicate():
     from opentraces.core.capsule.share import (
         CapsuleClearanceError,

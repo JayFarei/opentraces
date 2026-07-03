@@ -191,6 +191,31 @@ def test_verify_hand_mutated_stored_row_is_integrity_failure(monkeypatch):
     assert payload["mutated_rows"], payload
 
 
+def test_verify_duplicated_stored_row_is_not_reproduces(monkeypatch):
+    """H3 (#193): a stored ``train.jsonl`` with a DUPLICATED row must NOT
+    false-clean. The re-run dedupes by identity, so a SET comparison reads the
+    stored duplicate as equal; the fix requires ordered byte-identity for
+    ``reproduces`` and a multiset subset for ``bucket-advanced``, so an
+    unexplained extra line is an integrity failure."""
+
+    from opentraces.core import dataset_verify
+
+    wm = {"manifest_digest": "d0", "last_write_at": "2026-01-15T00:00:00Z"}
+    _create_and_run("verify-dup", [_candidate("trace-a")], monkeypatch, watermark=wm)
+    monkeypatch.setattr(dataset_verify, "bucket_watermark", lambda: wm)
+
+    train = dataset_path("verify-dup") / "data" / "train.jsonl"
+    lines = [ln for ln in train.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 1
+    # Duplicate the single stored row: the re-run reproduces it exactly once.
+    train.write_text(lines[0] + "\n" + lines[0] + "\n", encoding="utf-8")
+
+    code, payload = _run_verify("verify-dup")
+    assert payload["status"] != "reproduces", payload
+    assert code != 0
+    assert payload["status"] == "integrity-failure"
+
+
 def test_verify_recorded_answers_workflow_reproduces_deterministically(monkeypatch):
     from opentraces.core import dataset_verify, workflow_runner
     from opentraces.core.datasets import create_dataset
