@@ -372,9 +372,9 @@ def run_capsule_test(
         )
 
     # --- bundle integrity HARD gate (#157) ------------------------------- #
-    # A tampered bundle is REFUSED before it is extracted or executed. Reuses the
-    # present-not-enforced verify_bundle sha256 check; a bundle with no pinned
-    # sha256 (verify_bundle returns True) preserves the pre-gate behaviour.
+    # A tampered bundle is REFUSED before it is extracted or executed. verify_bundle
+    # now REQUIRES a pinned sha256 (#157 H5): a bundle whose bytes are present but
+    # carry NO pinned hash is unbound and is refused here rather than run.
     if bundle_path is not None:
         from .share import verify_bundle
 

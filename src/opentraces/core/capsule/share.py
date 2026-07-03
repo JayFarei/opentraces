@@ -178,8 +178,12 @@ def sibling_bundle_path(capsule_file: Path) -> Path | None:
 
 
 def verify_bundle(bundle_path: Path, expected_sha256: str | None) -> bool:
+    # #157 H5 — the run/extract HARD gate REQUIRES a pinned hash. An absent/empty
+    # expected sha256 FAILS verification, so unbound bundle bytes are never extracted
+    # or run: a bundle can only be used when its bytes match a carried hash. (A
+    # capsule with no bundle at all never reaches this gate.)
     if not expected_sha256:
-        return True
+        return False
     import hashlib
 
     return hashlib.sha256(Path(bundle_path).read_bytes()).hexdigest() == expected_sha256

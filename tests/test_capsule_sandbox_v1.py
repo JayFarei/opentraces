@@ -212,6 +212,39 @@ def test_5f_capsule_is_foreign_predicate_fails_closed():
     assert _capsule_is_foreign({}, None) is False
 
 
+# --------------------------------------------------------------------------- #
+# 5g — #157 H5: the bundle hash gate is HARD. A bundle carrying bytes but NO
+# pinned sha256 is REFUSED — unbound bundle bytes never run.
+# --------------------------------------------------------------------------- #
+
+
+def test_5g_bundle_without_sha256_is_refused_at_run_gate(calc_repo, tmp_path):
+    meta, data = build_capsule_bundle(calc_repo["repo"], calc_repo["sha"])
+    bundle = tmp_path / "b.tar.gz"
+    bundle.write_bytes(data)
+
+    # Drop the pinned sha256: the bundle bytes are now UNBOUND.
+    unbound_meta = {k: v for k, v in meta.items() if k != "sha256"}
+    cap = _capsule(calc_repo["sha"], meta=unbound_meta)  # no source slug, no local_slug
+    assert "sha256" not in (cap.get("bundle") or {})
+    with pytest.raises(BundleHashMismatchError):
+        run_capsule_test(cap, bundle_path=bundle)
+
+
+def test_5g_verify_bundle_requires_a_pinned_hash(tmp_path):
+    import hashlib
+
+    from opentraces.core.capsule.share import verify_bundle
+
+    b = tmp_path / "b.bin"
+    b.write_bytes(b"hello")
+    good = hashlib.sha256(b"hello").hexdigest()
+    assert verify_bundle(b, good) is True  # matching hash verifies
+    assert verify_bundle(b, "deadbeef") is False  # mismatch fails
+    assert verify_bundle(b, None) is False  # H5: absent hash FAILS (was True)
+    assert verify_bundle(b, "") is False  # empty hash FAILS
+
+
 @pytest.mark.skipif(
     not os.environ.get("OT_REAL_SANDBOX"), reason="opt-in real S0-escape proof"
 )
