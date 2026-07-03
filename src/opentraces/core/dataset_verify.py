@@ -118,7 +118,6 @@ def _recorded_privacy_tier(dataset) -> str | None:
 
 def _rerun_rows(dataset, answers: dict[str, Any]) -> list[dict[str, Any]]:
     """Re-execute the bound workflow into a THROWAWAY dir (no append/advance)."""
-    from ._time import utc_now_str
     from .workflow_runner import (
         _read_output_rows,
         _workflow_package_for_dataset,
@@ -143,11 +142,7 @@ def _rerun_rows(dataset, answers: dict[str, Any]) -> list[dict[str, Any]]:
             answers=answers or None,
             verify_digest=False,
         )
-        rows = _read_output_rows(output_path)
-    # ``utc_now_str`` import kept explicit so a future timestamped re-run stays
-    # deterministic-by-input rather than wall-clock (no-op today).
-    _ = utc_now_str
-    return rows
+        return _read_output_rows(output_path)
 
 
 def _watermark_advanced(
