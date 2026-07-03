@@ -23,6 +23,7 @@ from ..core.datasets import (
     apply_dataset_security_edit,
     append_rows,
     create_dataset,
+    DatasetPublishWithheldError,
     DatasetRemotePermissionError,
     DatasetRemoteSchemaAheadError,
     dataset_path,
@@ -73,6 +74,22 @@ from ..core.schedules import (
     remove_schedule,
     resume_schedule,
 )
+
+
+class WorkflowBindError(Exception):
+    """A ``dataset new --workflow <ref>`` bind that must fail before any create.
+
+    #190: every ``--workflow`` is resolved BEFORE creating a dataset directory.
+    An unresolvable ref (or a required-but-absent workflow) raises this, which
+    ``dataset_new`` maps to a structured ``rc=2`` error envelope with nothing
+    created. ``code`` names the failure class; ``workflow`` echoes the ref.
+    """
+
+    def __init__(self, code: str, message: str, *, workflow: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.workflow = workflow
 
 
 @click.group("dataset", cls=OpentracesGroup)
@@ -508,7 +525,11 @@ def dataset_schedule_list(as_json: bool) -> None:
     """List local dataset workflow schedules."""
     schedules = [_schedule_payload(schedule) for schedule in list_schedules()]
     if as_json:
-        click.echo(_dump_json({"status": "ok", "schedules": schedules}))
+        click.echo(_dump_json({
+            "status": "ok",
+            "schema_version": "opentraces.dataset.schedule_list.v1",
+            "schedules": schedules,
+        }))
         return
     for schedule in schedules:
         click.echo(f"{schedule['dataset']}  {schedule['every']}  enabled={schedule['enabled']}")
@@ -605,7 +626,11 @@ def dataset_list(as_json: bool) -> None:
     """List local HF-shaped datasets."""
     datasets = [_dataset_payload(dataset) for dataset in list_datasets()]
     if as_json:
-        click.echo(_dump_json({"status": "ok", "datasets": datasets}))
+        click.echo(_dump_json({
+            "status": "ok",
+            "schema_version": "opentraces.dataset.list.v1",
+            "datasets": datasets,
+        }))
         return
     for dataset in datasets:
         click.echo(f"{dataset['name']}  {dataset['path']}")
@@ -665,7 +690,16 @@ def dataset_status(name: str, as_json: bool) -> None:
 @click.option("--description", default=None, help="Dataset description.")
 @click.option("--workflow", default=None, help="Workflow skill name or path to a Markdown workflow file/package.")
 @click.option("--from-skill", "from_skill", default=None, help="Create a skill-episodes dataset for this skill.")
-@click.option("--workflow-digest", default="sha256:unconfigured", help="Workflow digest for legacy skill-name workflows.")
+@click.option(
+    "--workflow-digest",
+    default=None,
+    help=(
+        "Optional digest pin override for a resolved --workflow. #190 removed "
+        "the sha256:unconfigured default: an unresolvable --workflow now exits "
+        "rc=2 rather than binding opaquely, so a resolved workflow's real digest "
+        "is always what gets pinned."
+    ),
+)
 @click.option("--query-name", default=None, help="Remembered trace query name for workflow runs.")
 @click.option(
     "--query-scope",
@@ -711,7 +745,7 @@ def dataset_new(
     description: str | None,
     workflow: str | None,
     from_skill: str | None,
-    workflow_digest: str,
+    workflow_digest: str | None,
     query_name: str | None,
     query_scope: str,
     query_lex: str | None,
@@ -815,6 +849,22 @@ def dataset_new(
             candidate_query=candidate_query,
             source_provenance=source_provenance,
         )
+    except WorkflowBindError as exc:
+        # #190: resolve-before-create failed — nothing was created. Invalid
+        # usage is rc=2, with a structured error envelope.
+        payload = {
+            "status": "error",
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "workflow": exc.workflow,
+            },
+        }
+        if as_json:
+            click.echo(_dump_json(payload))
+        else:
+            click.echo(exc.message, err=True)
+        sys.exit(2)
     except (FileExistsError, FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -910,18 +960,40 @@ def _candidate_query_for_dataset(
 
 def _resolve_workflow_for_dataset(
     workflow: str | None,
-    workflow_digest: str,
+    workflow_digest: str | None,
 ) -> tuple[str | None, str, dict[str, object] | None, DatasetSecurityPolicy | None]:
+    """Resolve a ``--workflow`` ref to (skill, real digest, config, security).
+
+    #190: EVERY ``--workflow`` is resolved before the dataset directory is
+    created. The pre-#190 silent fallback that bound an unresolvable bare name
+    to the ``sha256:unconfigured`` default is deleted — an unresolvable ref (or
+    a required-but-absent workflow) raises :class:`WorkflowBindError`, mapped to
+    ``rc=2`` with nothing created. A resolved workflow's REAL digest is always
+    what gets pinned; ``workflow_digest`` no longer resurrects an opaque bind.
+    """
     if not workflow:
-        return None, workflow_digest, None, None
+        # The automated path requires a workflow. Manual (``--rows-file``) and
+        # ``--from-skill`` datasets are handled before this seam is reached.
+        raise WorkflowBindError(
+            "workflow_required",
+            "dataset new requires --workflow <ref> (or --rows-file for a manual "
+            "dataset, or --from-skill for a skill-episodes dataset).",
+        )
     if not _looks_like_workflow_path(workflow):
-        # A bare name may reference an installed workflow package. If it
-        # resolves, seed the dataset's security policy from its contract and
-        # pin its digest; otherwise treat the name as an opaque skill string.
+        # A bare name must reference an installed workflow package. If it
+        # resolves, seed the dataset's security policy from its contract and pin
+        # its real digest; if it does not resolve, the bind fails (rc=2) — there
+        # is no opaque bare-name bind anymore.
         try:
             installed = load_workflow(workflow)
-        except (FileNotFoundError, ValueError):
-            return workflow, workflow_digest, None, None
+        except (FileNotFoundError, ValueError) as exc:
+            raise WorkflowBindError(
+                "workflow_unresolved",
+                f"workflow does not resolve: {workflow} ({exc}). Install it with "
+                "`opentraces workflow create` or pass a path to a Markdown "
+                "workflow file/package.",
+                workflow=workflow,
+            ) from exc
         security = (
             DatasetSecurityPolicy.from_contract(
                 installed.security, source_workflow_digest=installed.digest
@@ -931,7 +1003,14 @@ def _resolve_workflow_for_dataset(
         )
         return installed.name, installed.digest, None, security
 
-    package = resolve_workflow_reference(workflow)
+    try:
+        package = resolve_workflow_reference(workflow)
+    except (FileNotFoundError, ValueError) as exc:
+        raise WorkflowBindError(
+            "workflow_unresolved",
+            f"workflow path does not resolve: {workflow} ({exc}).",
+            workflow=workflow,
+        ) from exc
     config: dict[str, object] = {
         "source": str(package.path),
         "source_type": package.source_type,
@@ -1101,6 +1180,16 @@ def _create_manual_dataset(
     help="How to handle stale Trace Trail projections during composition.",
 )
 @click.option("--since-last-run", is_flag=True, help="Use the dataset cursor.")
+@click.option(
+    "--sync",
+    "sync",
+    is_flag=True,
+    help=(
+        "Project only bucket data newer than the recorded watermark (a delta, "
+        "not a full re-run); advance the watermark on success. A no-op when the "
+        "bucket has not advanced since the last sync."
+    ),
+)
 @click.option("--reconcile", is_flag=True, help="Run a full reconciliation scan.")
 @click.option("--scheduled", is_flag=True, help="Mark this run as scheduler initiated.")
 @click.option(
@@ -1147,6 +1236,7 @@ def dataset_run(
     privacy_tier: str | None,
     trail_freshness_policy: str,
     since_last_run: bool,
+    sync: bool,
     reconcile: bool,
     scheduled: bool,
     approve_new: bool,
@@ -1201,6 +1291,8 @@ def dataset_run(
         scope_payload["trace_id"] = trace_id
     if since_last_run:
         scope_payload["since_last_run"] = True
+    if sync:
+        scope_payload["sync"] = True
     if reconcile:
         scope_payload["reconcile"] = True
     answers = None
@@ -1222,6 +1314,7 @@ def dataset_run(
             trail_freshness_policy=trail_freshness_policy,
             answers=answers,
             strict=strict,
+            sync=sync,
         )
     except WorkflowNeedsJudgmentError as exc:
         # #186 handshake: the workflow needs recorded judgments. Emit the
@@ -1262,6 +1355,8 @@ def dataset_run(
         "cursor_advanced": result.cursor_advanced,
         "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},
     }
+    if result.delta_scope is not None:
+        payload["delta_scope"] = result.delta_scope
     if approve_new and result.append_summary.row_ids:
         review_state = set_publication_review_status(
             name,
@@ -1285,6 +1380,9 @@ def dataset_run(
                 check_only=publish_check_only,
                 token=token,
             )
+        except DatasetPublishWithheldError as exc:
+            _emit_publish_withheld(exc, as_json=as_json)
+            sys.exit(exc.exit_code)
         except (DatasetRemotePermissionError, DatasetRemoteSchemaAheadError, ValueError) as exc:
             click.echo(str(exc), err=True)
             sys.exit(3)
@@ -1462,6 +1560,9 @@ def dataset_publish(
             min_retention=min_retention,
             exclude_states=list(exclude_states) if exclude_states else None,
         )
+    except DatasetPublishWithheldError as exc:
+        _emit_publish_withheld(exc, as_json=as_json)
+        sys.exit(exc.exit_code)
     except DatasetRemotePermissionError as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -1485,6 +1586,39 @@ def dataset_publish(
             f" filter_dropped={summary.filter_summary.get('rows_dropped_total', 0)}"
         )
     click.echo(line)
+
+
+@dataset_group.command("verify", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_verify(name: str, as_json: bool) -> None:
+    """Replay the bound workflow and grade the dataset seal's explainability.
+
+    Re-executes the workflow against the bucket (with recorded answers) in a
+    side-effect-free mode and byte-compares the re-run to the stored rows,
+    classifying the outcome as ``reproduces`` / ``bucket-advanced`` /
+    ``integrity-failure``. An integrity failure exits non-zero.
+    """
+    from ..core.dataset_verify import verify_dataset, verify_envelope
+
+    try:
+        result = verify_dataset(name)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except (ExecutorUnavailableError, WorkflowIntegrityError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    envelope = verify_envelope(result)
+    if as_json:
+        click.echo(_dump_json(envelope))
+    else:
+        line = f"{result.verdict}: {result.detail}"
+        if result.verdict == "bucket-advanced":
+            line += f" (delta={len(result.delta)})"
+        click.echo(line)
+    if result.exit_code != 0:
+        sys.exit(result.exit_code)
 
 
 @dataset_group.command("approve", cls=OpentracesCommand, hidden=True)
@@ -1638,6 +1772,37 @@ def _remote_payload(summary) -> dict[str, object]:
         "visibility": summary.visibility,
         "active": summary.active,
     }
+
+
+def _publish_withheld_payload(exc: DatasetPublishWithheldError) -> dict[str, object]:
+    """The frozen ``opentraces.dataset.publish.clearance.v1`` refusal envelope.
+
+    ``status='refused'`` + the enumerable ``{published, refused}`` partition,
+    mirroring bucket sync's Door-A auditable refusal (zero bytes egressed).
+    """
+    partition = exc.partition or {}
+    return {
+        "status": "refused",
+        "schema_version": "opentraces.dataset.publish.clearance.v1",
+        "publish": {
+            "refused": partition.get("refused") or [],
+            "published": partition.get("published") or [],
+            "message": str(exc),
+        },
+    }
+
+
+def _emit_publish_withheld(exc: DatasetPublishWithheldError, *, as_json: bool) -> None:
+    if as_json:
+        click.echo(_dump_json(_publish_withheld_payload(exc)))
+        return
+    click.echo(str(exc), err=True)
+    for row in exc.partition.get("refused") or []:
+        click.echo(
+            f"  refused {row.get('row_id')} "
+            f"(trace {row.get('trace_id')}): {row.get('sub_reason')}",
+            err=True,
+        )
 
 
 def _publish_summary_payload(summary) -> dict[str, object]:

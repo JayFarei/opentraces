@@ -9,17 +9,23 @@ byte-identical to what was shared.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .contract import validate_capsule
 from .render import render_capsule_markdown, render_issue_body
 
 HF_HOST = "https://huggingface.co"
+# #198 — the human-facing capsule microsite (the #199 render worker resolves the
+# already-public, sha-pinned HF blob). The URL is minted here so the envelope
+# records the address a person opens, next to the raw-blob agent URL.
+VIEWER_HOST = "https://capsules.opentraces.ai"
 CAPSULE_PREFIX = "capsules/v1"
 BUNDLE_FILENAME = "capsule.bundle.tar.gz"
 
@@ -56,6 +62,17 @@ def human_capsule_url(repo_id: str, capsule_id: str, *, revision: str = "main") 
 
     rid = _hf_repo_id(repo_id)
     return f"{HF_HOST}/datasets/{rid}/blob/{revision}/{CAPSULE_PREFIX}/{capsule_id}/capsule.md"
+
+
+def mint_viewer_url(repo_id: str, capsule_id: str, *, revision: str = "main") -> str:
+    """The microsite address a human opens (#198 / #199 render worker).
+
+    The worker resolves the already-public, redacted, sha-pinned HF blob; this is
+    a stable, revision-pinned handle recorded in the envelope's share block.
+    """
+
+    rid = _hf_repo_id(repo_id)
+    return f"{VIEWER_HOST}/{rid}/{capsule_id}?rev={revision}"
 
 
 def build_capsule_bundle(project_dir: Path, sha: str) -> tuple[dict[str, Any], bytes]:
@@ -105,9 +122,18 @@ def verify_bundle(bundle_path: Path, expected_sha256: str | None) -> bool:
 
 
 def write_capsule_dir(
-    capsule: dict[str, Any], dest_root: Path, *, bundle_bytes: bytes | None = None,
+    capsule: dict[str, Any],
+    dest_root: Path,
+    *,
+    bundle_bytes: bytes | None = None,
+    mini_bucket: dict[str, Any] | None = None,
 ) -> dict[str, Path]:
-    """Write capsule.json + capsule.md (+ the bundle when present) under the dir."""
+    """Write capsule.json + capsule.md (+ the bundle when present) under the dir.
+
+    When ``mini_bucket`` (a :func:`build_mini_bucket` result) is supplied the
+    scoped, redacted mini-bucket files are written under ``<id>/mini_bucket/``
+    (#197). Omitting it keeps the historical write byte-identical.
+    """
 
     cid = capsule["capsule_id"]
     out_dir = Path(dest_root) / CAPSULE_PREFIX / cid
@@ -126,7 +152,326 @@ def write_capsule_dir(
         bundle_path = out_dir / capsule["bundle"]["filename"]
         bundle_path.write_bytes(bundle_bytes)
         result["bundle"] = bundle_path
+    if mini_bucket is not None:
+        result["mini_bucket"] = write_mini_bucket(mini_bucket, out_dir / "mini_bucket")
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Mini-bucket (#197): a scoped, redacted materialization of the source traces'
+# companions on the bucket layout conventions, with content-addressed blobs and
+# a deterministic digest. The capsule stops being an envelope-inline blob and
+# becomes a genuine mini-bucket carried next to capsule.json.
+# --------------------------------------------------------------------------- #
+
+
+def _companion_faces():
+    from ..bucket_layout import (
+        trace_v1_context_path,
+        trace_v1_sources_path,
+        trace_v1_trail_path,
+    )
+
+    return (
+        ("trail", trace_v1_trail_path),
+        ("context", trace_v1_context_path),
+        ("sources", trace_v1_sources_path),
+    )
+
+
+def build_mini_bucket(
+    project_dir: Path,
+    slug: str,
+    trace_ids: Sequence[str],
+    *,
+    tools: Sequence[Any] | None = None,
+) -> dict[str, Any]:
+    """Materialize a scoped, redacted mini-bucket for ``trace_ids``.
+
+    For each trace, reads the raw ``trail/context/sources.jsonl.gz`` companions
+    from the bucket layout, re-redacts them through the substrate capability
+    (``redact_companions`` → ``sanitize_companion_dict``), and lays them out as
+    content-addressed blobs (``blobs/v1/<slug>/<hh>/<sha256>.jsonl.gz``) plus a
+    per-trace spine (``traces/v1/<slug>/<trace>/trace.json``) that references the
+    companion blobs by content digest. Every trace is INDEPENDENTLY resolvable
+    from its spine; ``mini_bucket_digest`` is a pure content hash (gzip- and
+    machine-independent). Returns ``{files, manifest, digest, schema_version}``.
+    ``project_dir`` is accepted for symmetry with the export choke point; the
+    companion paths derive from ``paths.bucket_dir()`` (which honors test
+    ``OPENTRACES_DIR`` monkeypatching).
+    """
+
+    from ..bucket_layout import _path_part
+    from .companions import redact_companions
+    from .contract import (
+        MINI_BUCKET_MANIFEST_SCHEMA_VERSION,
+        MINI_BUCKET_TRACE_SCHEMA_VERSION,
+        compute_mini_bucket_digest,
+    )
+
+    files: dict[str, bytes] = {}
+    blobs: dict[str, str] = {}
+    traces: dict[str, Any] = {}
+    trace_digests: dict[str, dict[str, str | None]] = {}
+
+    for tid in trace_ids:
+        companions: dict[str, Any] = {}
+        face_digests: dict[str, str | None] = {}
+        for face, path_fn in _companion_faces():
+            raw_path = path_fn(slug, tid)
+            raw = raw_path.read_bytes() if raw_path.exists() else b""
+            gz, redaction = redact_companions(raw, tools=tools)
+            content = gzip.decompress(gz) if gz else b""
+            if content:
+                digest_hex = hashlib.sha256(content).hexdigest()
+                digest = f"sha256:{digest_hex}"
+                relpath = (
+                    f"blobs/v1/{_path_part(slug)}/{digest_hex[:2]}/{digest_hex}.jsonl.gz"
+                )
+                files[relpath] = gz
+                blobs[digest] = relpath
+                companions[face] = {"blob": digest, "redaction": redaction}
+                face_digests[face] = digest
+            else:
+                companions[face] = {"blob": None, "redaction": redaction}
+                face_digests[face] = None
+
+        spine = {
+            "schema_version": MINI_BUCKET_TRACE_SCHEMA_VERSION,
+            "trace_id": tid,
+            "project_slug": slug,
+            "companions": {
+                face: {"blob": companions[face]["blob"]}
+                for face in ("trail", "context", "sources")
+            },
+        }
+        spine_rel = f"traces/v1/{_path_part(slug)}/{_path_part(tid)}/trace.json"
+        files[spine_rel] = (json.dumps(spine, sort_keys=True, ensure_ascii=False) + "\n").encode(
+            "utf-8"
+        )
+        traces[tid] = {"slug": slug, "trace_json": spine_rel, "companions": companions}
+        trace_digests[tid] = face_digests
+
+    digest = compute_mini_bucket_digest(trace_digests)
+    manifest = {
+        "schema_version": MINI_BUCKET_MANIFEST_SCHEMA_VERSION,
+        "digest": digest,
+        "traces": traces,
+        "blobs": blobs,
+    }
+    files["mini_bucket_manifest.json"] = (
+        json.dumps(manifest, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    return {
+        "schema_version": MINI_BUCKET_MANIFEST_SCHEMA_VERSION,
+        "files": files,
+        "manifest": manifest,
+        "digest": digest,
+    }
+
+
+def verify_mini_bucket(mini: dict[str, Any]) -> list[str]:
+    """Integrity check: content-addressed blobs, no dangling refs.
+
+    Returns a list of human-readable issues ( empty == integral ). Checks that
+    every companion blob a trace references resolves to a file whose content hash
+    equals its content address, and that the blob index carries no orphan or
+    missing-file entry.
+    """
+
+    files = mini.get("files") or {}
+    manifest = mini.get("manifest") or {}
+    blobs = manifest.get("blobs") or {}
+    issues: list[str] = []
+    referenced: set[str] = set()
+
+    for tid, trec in (manifest.get("traces") or {}).items():
+        spine_rel = trec.get("trace_json")
+        if spine_rel not in files:
+            issues.append(f"missing trace spine for {tid}: {spine_rel}")
+        for face, meta in (trec.get("companions") or {}).items():
+            blob = (meta or {}).get("blob")
+            if blob is None:
+                continue
+            referenced.add(blob)
+            relpath = blobs.get(blob)
+            if relpath is None:
+                issues.append(f"dangling companion ref {tid}/{face}: {blob} not in blob index")
+                continue
+            if relpath not in files:
+                issues.append(f"dangling blob {tid}/{face}: {relpath} missing from files")
+                continue
+            try:
+                content = gzip.decompress(files[relpath])
+            except (OSError, ValueError):
+                issues.append(f"corrupt blob {relpath}")
+                continue
+            digest_hex = blob.split(":", 1)[1] if ":" in blob else blob
+            if hashlib.sha256(content).hexdigest() != digest_hex:
+                issues.append(f"content-address mismatch for {relpath}")
+
+    for blob, relpath in blobs.items():
+        if blob not in referenced:
+            issues.append(f"orphan blob {blob} ({relpath}) referenced by no trace")
+        if relpath not in files:
+            issues.append(f"blob index points at missing file {relpath}")
+    return issues
+
+
+def write_mini_bucket(mini: dict[str, Any], dest_dir: Path) -> list[Path]:
+    """Write the materialized mini-bucket files under ``dest_dir``."""
+
+    from .._bucket_io import _atomic_write_bytes
+
+    dest = Path(dest_dir)
+    written: list[Path] = []
+    for rel, data in (mini.get("files") or {}).items():
+        target = dest / rel
+        _atomic_write_bytes(target, data)
+        written.append(target)
+    return written
+
+
+def recompute_written_mini_bucket_digest(mini_dir: Path) -> str | None:
+    """Recompute the mini-bucket digest from the files ON DISK under ``mini_dir``.
+
+    Returns ``None`` when no ``mini_bucket_manifest.json`` is present. Used at
+    publish time to prove the stamped ``mini_bucket_digest`` matches the bytes
+    actually uploaded (#197 H4 — no hollow claim). The digest is a pure content
+    hash, so it is recomputed from the uncompressed companion blobs, not the
+    manifest's self-reported digest.
+    """
+
+    from .contract import compute_mini_bucket_digest
+
+    mini_dir = Path(mini_dir)
+    manifest_path = mini_dir / "mini_bucket_manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    blobs = manifest.get("blobs") or {}
+    trace_digests: dict[str, dict[str, str | None]] = {}
+    for tid, trec in (manifest.get("traces") or {}).items():
+        face_digests: dict[str, str | None] = {}
+        for face in ("trail", "context", "sources"):
+            blob = ((trec.get("companions") or {}).get(face) or {}).get("blob")
+            if blob is None:
+                face_digests[face] = None
+                continue
+            rel = blobs.get(blob)
+            content = gzip.decompress((mini_dir / rel).read_bytes())
+            face_digests[face] = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        trace_digests[tid] = face_digests
+    return compute_mini_bucket_digest(trace_digests)
+
+
+def carried_section_inventory(capsule: dict[str, Any]) -> dict[str, Any]:
+    """Counts + surfaces of what the capsule carries — NEVER a leaked byte (#198).
+
+    The seal-time preview/approve inventory: a reviewer sees WHAT would ship
+    (how many steps, which context layers, whether a test/bundle/mini-bucket is
+    present) without seeing the content itself.
+    """
+
+    slice_ = capsule.get("slice") or {}
+    steps = slice_.get("steps") or []
+    anchors = capsule.get("trail_anchors") or []
+    packet = capsule.get("context_resume_packet") or {}
+    privacy_scope = capsule.get("privacy_scope") or {}
+    layer_keys = ("system_layer", "messages_layer", "tool_registry_layer", "runtime_state_layer")
+    context_layers = [
+        k for k in layer_keys if isinstance(packet.get(k), dict) and packet.get(k)
+    ]
+    carried_sections = (
+        "summary", "intent", "failing_step", "slice", "context_resume_packet",
+        "trail_anchors", "repo_pin", "test", "environment", "bundle", "product",
+    )
+    surfaces = [name for name in carried_sections if capsule.get(name)]
+    return {
+        "schema_version": "opentraces.capsule.carried_inventory.v1",
+        "steps": len(steps),
+        "trail_anchors": len(anchors),
+        "context_layers": context_layers,
+        "has_context_resume_packet": bool(packet and not packet.get("error")),
+        "has_test": bool(capsule.get("test")),
+        "has_bundle": bool(capsule.get("bundle")),
+        "mini_bucket_digest": capsule.get("mini_bucket_digest"),
+        "messages_included": bool(privacy_scope.get("messages_included")),
+        "system_prompt_included": bool(privacy_scope.get("system_prompt_included")),
+        "messages_completeness": privacy_scope.get("messages_completeness"),
+        "surfaces": surfaces,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Egress clearance (#198): the ONE shared predicate on the capsule publish door.
+# --------------------------------------------------------------------------- #
+
+
+class CapsuleClearanceError(RuntimeError):
+    """A source trace is not cleared for egress; publish refuses (zero bytes)."""
+
+    def __init__(self, withheld: list[dict[str, Any]]):
+        self.withheld = withheld
+        ids = ", ".join(
+            f"{w.get('trace_id')} ({w.get('clearance')})" for w in withheld
+        )
+        super().__init__(
+            "capsule publish refused: source trace(s) not cleared for egress "
+            f"({ids}). A capsule sourced from an unscanned/withheld trace cannot "
+            "leave the machine. Scan/clear the trace(s) first."
+        )
+
+
+def _capsule_source_trace_ids(capsule: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    src = capsule.get("source") or {}
+    tid = str(src.get("trace_id") or "").strip()
+    if tid:
+        ids.append(tid)
+    for entry in capsule.get("sources") or []:
+        t = str((entry or {}).get("trace_id") or "").strip()
+        if t and t not in ids:
+            ids.append(t)
+    return ids
+
+
+def enforce_capsule_clearance(
+    capsule: dict[str, Any],
+    *,
+    manifest: dict[str, Any] | None = None,
+    allow_sourceless_egress: bool = False,
+) -> dict[str, Any]:
+    """Refuse egress unless EVERY source trace is cleared (ADR-0008 §3).
+
+    Uses the ONE shared predicate ``egress_clearance.clearance_for_trace``. A
+    multi-trace capsule refuses if ANY source trace is not ``cleared``. Raises
+    :class:`CapsuleClearanceError` carrying the withheld partition; on success
+    returns ``{"cleared": [trace_id, ...]}``.
+
+    #198 C1 — an EMPTY source-trace set is fail-closed: 'no clearable source' is
+    treated as not-cleared and REFUSES, so the degenerate/abuse path cannot
+    silently clear. A legitimate source-free capsule must opt in EXPLICITLY via
+    ``allow_sourceless_egress=True`` (never the silent default).
+    """
+
+    from ..egress_clearance import CLEARED, clearance_for_trace
+
+    tids = _capsule_source_trace_ids(capsule)
+    if not tids:
+        if allow_sourceless_egress:
+            return {"cleared": []}
+        raise CapsuleClearanceError(
+            [{"trace_id": "(none)", "clearance": "no_clearable_source"}]
+        )
+    withheld: list[dict[str, Any]] = []
+    for tid in tids:
+        state = clearance_for_trace(tid, manifest=manifest)
+        if state != CLEARED:
+            withheld.append({"trace_id": tid, "clearance": state})
+    if withheld:
+        raise CapsuleClearanceError(withheld)
+    return {"cleared": tids}
 
 
 # --------------------------------------------------------------------------- #
@@ -209,12 +554,40 @@ def publish_capsule(
     token: str | None,
     private: bool = False,
     bundle_bytes: bytes | None = None,
+    require_clearance: bool = True,
+    clearance_manifest: dict[str, Any] | None = None,
+    allow_sourceless_egress: bool = False,
+    mini_bucket: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Upload ONLY capsule.json + capsule.md (+ the bundle when present) to ``capsules/v1/<id>/`` on HF.
+    """Upload capsule.json + capsule.md (+ the bundle + the mini-bucket when present) to ``capsules/v1/<id>/`` on HF.
 
-    Returns ``{repo_id, revision, capsule_url, human_url}`` with the URL pinned
-    to the publish commit sha when the hub returns one.
+    Returns ``{repo_id, revision, capsule_url, human_url, viewer_url, capsule_id}``
+    with the URL pinned to the publish commit sha when the hub returns one.
+
+    #198 — when ``require_clearance`` is set (the CLI egress door always sets it)
+    the shared egress predicate is evaluated FIRST: a capsule sourced from an
+    unscanned/withheld trace raises :class:`CapsuleClearanceError` before any HF
+    call, so a refusal moves ZERO bytes. ``clearance_manifest`` supplies a
+    push-time snapshot (no TOCTOU); ``None`` falls back to the live bucket lookup.
+    The R7 ``ensure_redacted`` gate is preserved (wrapped, not replaced), as is
+    the sha-pin double-commit.
+
+    #197 H4 — ``mini_bucket`` (a :func:`build_mini_bucket` result) is written into
+    the uploaded folder so the scoped, redacted mini-bucket the capsule's
+    ``mini_bucket_digest`` claims ACTUALLY ships. Before upload the digest is
+    recomputed over the written files and asserted equal to the stamp; a capsule
+    that stamps a digest but supplies no mini-bucket refuses (no hollow claim).
     """
+
+    # #198 clearance gate — evaluated BEFORE any HF import/call so a refusal is
+    # provably zero-byte. Wraps (does not replace) the R7 redaction gate below.
+    # Egress is off-by-default (require_clearance defaults True).
+    if require_clearance:
+        enforce_capsule_clearance(
+            capsule,
+            manifest=clearance_manifest,
+            allow_sourceless_egress=allow_sourceless_egress,
+        )
 
     try:
         from huggingface_hub import HfApi
@@ -239,14 +612,37 @@ def publish_capsule(
     capsule["share"] = {
         "capsule_url": mint_capsule_url(rid, cid, revision="main"),
         "human_url": human_capsule_url(rid, cid, revision="main"),
+        "viewer_url": mint_viewer_url(rid, cid, revision="main"),
         "published_revision": None,
     }
 
     import tempfile
 
     base = f"{CAPSULE_PREFIX}/{cid}"
+    stamped_digest = capsule.get("mini_bucket_digest")
     with tempfile.TemporaryDirectory() as tmp:
-        artifacts = write_capsule_dir(capsule, Path(tmp), bundle_bytes=bundle_bytes)
+        artifacts = write_capsule_dir(
+            capsule, Path(tmp), bundle_bytes=bundle_bytes, mini_bucket=mini_bucket
+        )
+        # #197 H4 — the capsule may only claim a mini_bucket_digest over content
+        # it actually ships. Recompute the digest over the written mini-bucket and
+        # refuse a hollow claim (stamped-but-absent) or a mismatch.
+        if stamped_digest:
+            written_digest = recompute_written_mini_bucket_digest(
+                artifacts["dir"] / "mini_bucket"
+            )
+            if written_digest is None:
+                raise RuntimeError(
+                    "capsule stamps a mini_bucket_digest but no mini-bucket was "
+                    "supplied to publish; pass mini_bucket= so the claimed "
+                    "content ships (no hollow digest)."
+                )
+            if written_digest != stamped_digest:
+                raise RuntimeError(
+                    f"mini-bucket digest mismatch: capsule stamps "
+                    f"{stamped_digest!r} but the written mini-bucket hashes to "
+                    f"{written_digest!r}."
+                )
         commit = api.upload_folder(
             repo_id=rid,
             repo_type="dataset",
@@ -274,6 +670,7 @@ def publish_capsule(
         pinned["share"] = {
             "capsule_url": mint_capsule_url(rid, cid, revision=revision),
             "human_url": human_capsule_url(rid, cid, revision=revision),
+            "viewer_url": mint_viewer_url(rid, cid, revision=revision),
             "revision": revision,
             "published_revision": revision,
         }
@@ -291,12 +688,14 @@ def publish_capsule(
 
     return {
         "repo_id": rid,
+        "capsule_id": cid,
         # The commit the handed URLs resolve at — serves the SHA-pinned capsule.json.
         "revision": pin_revision,
         # The immutable data/content commit embedded in the capsule (non-null marker).
         "published_revision": revision if revision != "main" else None,
         "capsule_url": mint_capsule_url(rid, cid, revision=pin_revision),
         "human_url": human_capsule_url(rid, cid, revision=pin_revision),
+        "viewer_url": mint_viewer_url(rid, cid, revision=pin_revision),
     }
 
 
@@ -478,15 +877,20 @@ def close_issue(repo: str, number: int, *, reason: str = "completed") -> None:
 
 __all__ = [
     "BUNDLE_FILENAME",
+    "CapsuleClearanceError",
     "CapsuleResolveError",
     "GhError",
     "GhUnavailableError",
     "build_capsule_bundle",
+    "build_mini_bucket",
+    "carried_section_inventory",
     "close_issue",
     "comment_issue",
     "copy_to_clipboard",
+    "enforce_capsule_clearance",
     "sibling_bundle_path",
     "verify_bundle",
+    "verify_mini_bucket",
     "create_or_update_issue",
     "find_capsule_issue",
     "gh_available",
@@ -495,9 +899,12 @@ __all__ = [
     "human_capsule_url",
     "load_capsule_file",
     "mint_capsule_url",
+    "mint_viewer_url",
     "publish_capsule",
+    "recompute_written_mini_bucket_digest",
     "render_capsule_markdown",
     "render_issue_body",
     "resolve_capsule",
     "write_capsule_dir",
+    "write_mini_bucket",
 ]

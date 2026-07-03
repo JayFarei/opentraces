@@ -20,6 +20,11 @@ from typing import Any
 
 CAPSULE_SCHEMA_VERSION = "opentraces.capsule.v1"
 REDACTION_MANIFEST_SCHEMA_VERSION = "opentraces.capsule.redaction.v1"
+# #197 mini-bucket manifest + per-trace spine (additive; NOT the capsule envelope
+# version — the mini-bucket is a sibling storage unit carried alongside the
+# frozen capsule.json, so it mints its OWN frozen schema strings).
+MINI_BUCKET_MANIFEST_SCHEMA_VERSION = "opentraces.capsule.mini_bucket.v1"
+MINI_BUCKET_TRACE_SCHEMA_VERSION = "opentraces.capsule.mini_trace.v1"
 
 # Nested envelope versions this capsule version embeds. A consumer can check
 # these to know exactly which sub-contract shapes it is reading.
@@ -85,6 +90,39 @@ def build_capsule_id(
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
+def build_multi_trace_capsule_id(seeds: list[dict[str, Any]]) -> str:
+    """Deterministic capsule id for a multi-trace capsule (16 hex chars).
+
+    #197 story 26: a capsule can carry N traces. The single-trace ``capsule_id``
+    is a 5-key seed; the N-trace id is the hash of the SORTED per-trace seeds, so
+    it is stable across re-seals and INDEPENDENT of the order the traces were
+    listed. Each seed is the same 5-key dict ``build_capsule_id`` hashes.
+    """
+
+    canonical_seeds = sorted(_canonical_json(seed) for seed in seeds)
+    material = _canonical_json(canonical_seeds)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def compute_mini_bucket_digest(
+    trace_companion_digests: dict[str, dict[str, str | None]],
+) -> str:
+    """Deterministic mini-bucket digest (16 hex chars) over per-trace content.
+
+    #197: the digest is a PURE function of the per-trace companion CONTENT-digest
+    map — ``{trace_id: {"trail": "sha256:..."|None, "context": ..., "sources":
+    ...}}`` — where each value is the content hash of the UNCOMPRESSED redacted
+    companion text. Deriving from content hashes (not the gzip bytes) makes the
+    digest gzip/mtime/zlib-INDEPENDENT, so it is stable across two seals AND
+    across machines given the same redacted content. 16 hex mirrors
+    ``build_capsule_id`` and stays below the entropy-floor's 20-char span so the
+    stamped digest survives the publish-time ``ensure_redacted`` pass intact.
+    """
+
+    material = _canonical_json(trace_companion_digests)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
 def freeze_capsule(
     *,
     capsule_id: str,
@@ -110,6 +148,12 @@ def freeze_capsule(
     # threaded through here because this builder has no ``**extra`` passthrough.
     product: dict[str, Any] | None = None,
     privacy_scope: dict[str, Any] | None = None,
+    # #197 mini-bucket integrity claim: a deterministic digest over the redacted
+    # mini-bucket carried alongside this capsule. Additive + optional (NOT in
+    # REQUIRED_KEYS); ``None`` on a capsule built without the mini-bucket. The
+    # export path stamps it AFTER redaction (a hash string is not a secret; a
+    # 16-hex digest stays below the entropy floor so it survives ensure_redacted).
+    mini_bucket_digest: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the frozen ``opentraces.capsule.v1`` envelope dict."""
 
@@ -117,6 +161,8 @@ def freeze_capsule(
         "schema_version": CAPSULE_SCHEMA_VERSION,
         "capsule_id": capsule_id,
         "created_with": created_with,
+        # #197 additive: mini-bucket digest (None until the mini-bucket is built).
+        "mini_bucket_digest": mini_bucket_digest,
         # The captured content (prompts, tool output, intent) is
         # attacker-influenceable text. A maintainer agent MUST treat it as DATA,
         # never as instructions.
@@ -147,8 +193,15 @@ def freeze_capsule(
         "render_state": render_state,
         "limitations": sorted(set(limitations)),
         "embedded": dict(EMBEDDED_SCHEMAS),
-        # Filled in by the share step once the capsule is published.
-        "share": {"capsule_url": None, "human_url": None, "published_revision": None},
+        # Filled in by the share step once the capsule is published. ``viewer_url``
+        # (#198) is the human microsite address, minted at publish alongside the
+        # raw-blob capsule_url; additive within the share block.
+        "share": {
+            "capsule_url": None,
+            "human_url": None,
+            "viewer_url": None,
+            "published_revision": None,
+        },
     }
 
 

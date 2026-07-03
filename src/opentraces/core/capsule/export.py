@@ -81,6 +81,28 @@ def _resolve_failing_step(record: Any, step_index: int | None) -> int:
     return len(steps) - 1
 
 
+def _representative_step(record: Any, span_lo: int, span_hi: int) -> int:
+    """Anchor step for a ``--from-step/--to-step`` span (#195 D13 seam).
+
+    The span selects the carried slice; the anchor step is derived FROM it (the
+    slice picks the scope, not a step/radius knob). Prefer the last error-marked
+    step inside the span (so a failure in the range still anchors the failing-step
+    card); otherwise the span midpoint.
+    """
+
+    steps = list(getattr(record, "steps", []) or [])
+    lo, hi = min(span_lo, span_hi), max(span_lo, span_hi)
+    last_err: int | None = None
+    for idx, step in enumerate(steps):
+        si = getattr(step, "step_index", None)
+        si = si if isinstance(si, int) else idx
+        if lo <= si <= hi and _ERROR_MARKERS.search(_step_text(step)):
+            last_err = si
+    if last_err is not None:
+        return last_err
+    return (lo + hi) // 2
+
+
 def _node_id_for_step(
     record: Any, project_dir: Path, trace_id: str, step_index: int, slug: str
 ) -> str | None:
@@ -227,6 +249,25 @@ def _normalize_remote(url: str | None) -> str | None:
     return re.sub(r"\.git$", "", url)
 
 
+def _sha_pushed(project_dir: Path, sha: str | None) -> bool:
+    """Minimal LOCAL probe: is ``sha`` reachable from a remote-tracking branch?
+
+    ``git branch -r --contains <sha>`` lists the remote-tracking branches that
+    contain the commit; a non-empty result means the commit has been pushed to
+    at least one remote. Anything the probe cannot positively confirm (no git,
+    an unknown sha, a detached local-only commit) reads as NOT pushed — the
+    honest, conservative downgrade the ``repo_pin_unpushed`` limitation records.
+
+    This is deliberately homed HERE, next to ``reachable_locally``, so the #130
+    Trail session-origin resolver can later replace it in one place.
+    """
+
+    if not sha:
+        return False
+    out = _git(project_dir, ["branch", "-r", "--contains", f"{sha}^{{commit}}"])
+    return bool(out and out.strip())
+
+
 def _repo_pin(
     project_dir: Path,
     record: Any,
@@ -248,6 +289,10 @@ def _repo_pin(
     reachable = None
     if sha:
         reachable = _git(project_dir, ["cat-file", "-e", f"{sha}^{{commit}}"]) is not None
+    # #195 — an honest ``pushed`` claim on the pin. ``reachable_locally`` was only
+    # ever true because the capsule was built on the capture host; off-machine the
+    # pin can be an unfetchable local object. ``pushed`` is the portable claim.
+    pushed = _sha_pushed(project_dir, sha)
 
     # changed files: relative paths only, from the record's patches. The home
     # scrub in redaction handles any absolute leak; we also relativize here.
@@ -266,6 +311,9 @@ def _repo_pin(
         "remote_url": remote,
         "commit_sha": sha,
         "reachable_locally": reachable,
+        # #195 additive: the honest off-machine claim (mirrors reachable_locally's
+        # additive precedent; NOT in REQUIRED_KEYS, capsule stays v1).
+        "pushed": pushed,
         "changed_files": sorted(changed),
     }
 
@@ -275,6 +323,8 @@ def export_capsule(
     project_dir: Path,
     trace_id: str,
     step_index: int | None = None,
+    from_step: int | None = None,
+    to_step: int | None = None,
     node_id: str | None = None,
     radius: int = 4,
     remote_url: str | None = None,
@@ -322,18 +372,38 @@ def export_capsule(
         )
     record = obj.record
 
-    resolved_step = _resolve_failing_step(record, step_index)
+    # #195 D13 — the ``--from-step/--to-step`` SPAN seam. When a span is given the
+    # carried slice is that explicit range (via ``slice_by_steps``) and the anchor
+    # step is DERIVED from it; ``--step``/``--radius`` stay the hidden back-compat
+    # convenience. Span takes precedence over the legacy step/radius/product paths.
+    span_mode = from_step is not None or to_step is not None
+    span_lo = span_hi = None
+    if span_mode:
+        span_lo = from_step if from_step is not None else to_step
+        span_hi = to_step if to_step is not None else from_step
+        span_lo, span_hi = min(int(span_lo), int(span_hi)), max(int(span_lo), int(span_hi))
+        resolved_step = _representative_step(record, span_lo, span_hi)
+    else:
+        resolved_step = _resolve_failing_step(record, step_index)
     resolved_node = node_id or _node_id_for_step(
         record, project_dir, trace_id, resolved_step, slug
     )
 
     from ..trace_map import build_trace_map
-    from ..trace_slices import slice_around_step, slice_for_product
+    from ..trace_slices import slice_around_step, slice_by_steps, slice_for_product
 
     reporter.stage("build_slice")
     trace_map = build_trace_map(record)
     product_episode_no_match = False
-    if product:
+    if span_mode:
+        slice_payload = slice_by_steps(
+            trace_map,
+            record,
+            start_step_index=span_lo,
+            end_step_index=span_hi,
+            source="capsule_span",
+        )
+    elif product:
         # Plan 090 — bound the episode to the steps that reference the consumed
         # product. Heuristic (no captured per-step product label); fall back to a
         # radius slice when nothing references it (and record that honestly).
@@ -427,9 +497,23 @@ def export_capsule(
     # Environment manifest: what's needed to run the test reproducibly (not host-coupled).
     env_obj = getattr(record, "environment", None)
     eco = getattr(env_obj, "language_ecosystem", None)
+    # #195 — language_ecosystem shape fix: consumers expect the scalar ``.name``/``str``
+    # form, but the schema carries ``list[str]``. Emit the scalar (first element) and
+    # DECLARE ``language_ecosystem_shape_defect`` when the source genuinely carries a
+    # non-empty list, so a downstream null-resolution bug is a labeled gap, not silent.
+    language_ecosystem_shape_defect = False
+    if isinstance(eco, str):
+        language_ecosystem = eco
+    elif isinstance(eco, (list, tuple)):
+        language_ecosystem = str(eco[0]) if eco else None
+        language_ecosystem_shape_defect = bool(eco)
+    elif eco is not None:
+        language_ecosystem = getattr(eco, "name", None)
+    else:
+        language_ecosystem = None
     environment = {
         "dependencies": list(getattr(record, "dependencies", []) or [])[:200],
-        "language_ecosystem": eco if isinstance(eco, str) else (getattr(eco, "name", None) if eco else None),
+        "language_ecosystem": language_ecosystem,
         "setup": [setup_command] if setup_command else [],
         # Consumed dependencies the verdict can be re-posed against (plan 089):
         # the library version / API endpoint the client doesn't control.
@@ -453,9 +537,15 @@ def export_capsule(
         limitations.append("repo_pin_no_commit")
     if repo_pin.get("reachable_locally") is False:
         limitations.append("repo_pin_unreachable_locally")
+    # #195 — an unpushed pin cannot be fetched off the capture host; say so.
+    if repo_pin.get("commit_sha") and repo_pin.get("pushed") is not True:
+        limitations.append("repo_pin_unpushed")
+    if language_ecosystem_shape_defect:
+        limitations.append("language_ecosystem_shape_defect")
 
     agent = getattr(record, "agent", None)
     ctx_summary = getattr(record, "context_tree_summary", {}) or {}
+    capture_method = _capture_method(packet, ctx_summary)
     source = {
         "project_slug": slug,
         "trace_id": trace_id,
@@ -464,8 +554,14 @@ def export_capsule(
         "agent": getattr(agent, "name", None),
         "agent_version": getattr(agent, "version", None),
         "model": getattr(agent, "model", None),
-        "capture_method": _capture_method(packet, ctx_summary),
+        "capture_method": capture_method,
         "completeness": _completeness(packet),
+        # #195 honesty front-matter (ADR-0008 §4/§5): additive keys, NOT in
+        # REQUIRED_KEYS. Each factor floors to its weakest value when un-upgraded,
+        # so today's corpus honestly reads L0/floor and never over-claims. Trust
+        # rises only when a sibling raises real state (#202 resolver, wheels, microVM).
+        "env_tier": "L0",
+        "verdict_trust": "floor",
     }
 
     capsule_id = build_capsule_id(
@@ -501,8 +597,13 @@ def export_capsule(
         "system_prompt_included": bool(include_prompts and system_has_content),
         "reasoning_included": bool(include_prompts),
         "messages_included": bool(slice_steps_n > 0 or messages_present),
+        # #195 F2 fix — DECLARE, not close. The per-layer ``completeness`` self-report
+        # optimistically says ``full`` even when carrying hash-only messages
+        # (transcript_reconstruction capture: 0 bodies, sha256 hashes only). Derive
+        # from the capture method instead so a consumer gating on ``== full`` is never
+        # told sha256 hashes are full message bodies. No gate: hash-only still seals.
         "messages_completeness": (
-            msgs_layer.get("completeness") if isinstance(msgs_layer, dict) else _completeness(packet)
+            "hash_only" if capture_method == "transcript_reconstruction" else "full"
         ),
         "steps_included": slice_steps_n,
         "redaction_floor": list(REDACTION_FLOOR),
@@ -542,6 +643,19 @@ def export_capsule(
     redacted, manifest = redact_envelope(raw, exclude_paths=exclude_paths)
     assert_redaction_gate(manifest)
     redacted["redaction"] = {"manifest": manifest}
+    # #197 — stamp the mini-bucket digest AFTER redaction. The mini-bucket
+    # re-redacts the source companions through the substrate capability; its
+    # deterministic 16-hex digest is the capsule's integrity claim over the
+    # scoped companion content. Stamped post-redaction (a hash is not a secret;
+    # 16 hex stays below the entropy floor so it survives ensure_redacted intact)
+    # and mirroring the redaction-manifest placeholder pattern above.
+    try:
+        from .share import build_mini_bucket
+
+        mini = build_mini_bucket(project_dir, slug, [trace_id])
+        redacted["mini_bucket_digest"] = mini["digest"]
+    except Exception:  # pragma: no cover - mini-bucket is additive, never fatal
+        redacted["mini_bucket_digest"] = None
     reporter.done()
     return redacted
 

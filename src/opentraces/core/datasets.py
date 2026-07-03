@@ -165,7 +165,7 @@ def create_dataset(
     *,
     description: str | None = None,
     workflow_skill: str | None = None,
-    workflow_digest: str = "sha256:unconfigured",
+    workflow_digest: str,
     workflow_instructions: str | None = None,
     workflow_config: dict[str, Any] | None = None,
     row_schema: dict[str, Any] | None = None,
@@ -421,6 +421,41 @@ def write_source_provenance(root: Path | str, payload: dict[str, Any]) -> None:
     path = source_provenance_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json(path, payload)
+
+
+def bucket_watermark() -> dict[str, Any]:
+    """Current bucket position for the dataset sync watermark (#192).
+
+    Pairs the transport-neutral bucket ``digest`` (the coarse "changed at all"
+    signal) with the max per-row ``status.written_at`` from the plan-087
+    accelerator (via :func:`_aggregate_status_from_rows`, the O(rows-in-memory)
+    read). This is READ-ONLY over the status accelerator — which is
+    DIGEST-EXCLUDED — so ``bucket_digest`` stays byte-identical.
+    """
+    from .bucket_store import _aggregate_status_from_rows, bucket_manifest
+
+    manifest = bucket_manifest(write=False, include_objects=False)
+    traces = manifest.get("traces") if isinstance(manifest, dict) else None
+    agg = _aggregate_status_from_rows(traces if isinstance(traces, list) else [])
+    return {
+        "manifest_digest": (
+            manifest.get("digest") if isinstance(manifest, dict) else None
+        ),
+        "last_write_at": agg.get("last_write_at"),
+    }
+
+
+def push_clearance_manifest() -> dict[str, Any]:
+    """A FRESH push-time bucket manifest snapshot for the egress clearance gate.
+
+    Dataset publish (#194) authorizes every selected row's source trace against
+    the SAME snapshot this returns (no TOCTOU). Kept as a named seam so the
+    clearance decision reads exactly one recompute of the bucket the publisher
+    is about to egress, and so tests can substitute a controlled snapshot.
+    """
+    from .bucket_store import bucket_manifest
+
+    return bucket_manifest(write=False, include_objects=False)
 
 
 def load_manifest(root: Path | str) -> DatasetManifest:
@@ -748,6 +783,26 @@ def read_row_provenance(name: str) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _read_run_answers(dataset: LocalDataset, run_id: str) -> dict[str, Any]:
+    """Read the recorded judgments for a run from its run packet (#186/#191).
+
+    The dataset runner persists ``answers`` in ``run_packet.json`` at the run
+    directory; this reads them back so row provenance can record the fourth
+    contract input without the runner having to thread them through the append
+    call. Absent packet / no answers => an empty dict (honestly empty, digested
+    downstream as such). Read-only and best-effort.
+    """
+    packet_path = dataset.path / ".opentraces" / "runs" / run_id / "run_packet.json"
+    if not packet_path.exists():
+        return {}
+    try:
+        packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    answers = packet.get("answers") if isinstance(packet, dict) else None
+    return answers if isinstance(answers, dict) else {}
+
+
 def _build_row_provenance(
     row: dict[str, Any],
     *,
@@ -767,19 +822,27 @@ def _build_row_provenance(
     if bucket_snapshot.get("capture_mode") != "deferred":
         trace_record_ref = _bucket_record_ref(source_refs.get("trace_id"))
     run = run_provenance or {}
-    # #188 honesty labels (additive, still row_provenance.v1). ``reconstructable``
-    # is True only for a script / recorded-answer run (a raw agent emission is
-    # never appended through this path, so the conservative default is False);
-    # ``isolation`` carries the achieved sandbox tier the runner reported.
+    # #188 honesty labels (additive). ``reconstructable`` is True only for a
+    # script / recorded-answer run (a raw agent emission is never appended
+    # through this path, so the conservative default is False); ``isolation``
+    # carries the achieved sandbox tier the runner reported.
     reconstructable = bool(run.get("reconstructable", False))
     isolation = run.get("isolation") or {"sandbox_tier": "none"}
+    # #191 contract triple: workflow digest + bucket digest + answers digest.
+    # The fourth input (recorded judgments) rides the run packet; an absent
+    # packet honestly yields an empty-but-digested answers set (never omitted).
+    answers = _read_run_answers(dataset, run_id)
+    answers_digest = digest_payload(answers)
+    bucket_manifest_digest = bucket_manifest_snapshot.get("digest")
     return {
-        "schema_version": "opentraces.dataset.row_provenance.v1",
+        "schema_version": "opentraces.dataset.row_provenance.v2",
         "reconstructable": reconstructable,
         "isolation": isolation,
         "row_id": row_id,
         "run_id": run_id,
         "dataset": dataset.name,
+        # First-class span ref (scope_ref leg), parsed/validated in source_refs.
+        "ref": source_refs.get("ref"),
         "source_refs": source_refs,
         "workflow": {
             "skill": dataset.manifest.workflow.skill,
@@ -787,10 +850,22 @@ def _build_row_provenance(
             "config": dataset.manifest.workflow.config,
         },
         "bucket": {
-            "manifest_digest": bucket_manifest_snapshot.get("digest"),
+            "manifest_digest": bucket_manifest_digest,
             "snapshot_digest": bucket_snapshot.get("digest"),
             "object_count": bucket_snapshot.get("object_count"),
             "source_trace_record": trace_record_ref,
+        },
+        # The fourth contract input, recorded so replay is
+        # f(scope_ref, workflow@digest, bucket_state@digest, answers).
+        "answers": {
+            "digest": answers_digest,
+            "recorded": answers,
+        },
+        # Convenience roll-up of the three content digests the triple pins.
+        "contract_triple": {
+            "workflow_digest": dataset.manifest.workflow.digest,
+            "bucket_digest": bucket_manifest_digest,
+            "answers_digest": answers_digest,
         },
         "trail": {
             "freshness": list(trail_freshness or []),
@@ -821,22 +896,117 @@ def _build_row_provenance(
     }
 
 
-def _extract_row_source_refs(row: dict[str, Any]) -> dict[str, Any]:
-    refs: dict[str, Any] = {
-        "trace_id": _first_str(row, "source_trace_id", "trace_id"),
-        "unit_id": _first_str(row, "source_unit_id", "unit_id", "candidate_id"),
-        "slice_id": _first_str(row, "source_slice_id", "slice_id"),
-    }
-    if isinstance(row.get("source"), dict):
-        source = row["source"]
-        refs["trace_id"] = refs["trace_id"] or _first_str(source, "trace_id", "id")
-        refs["unit_id"] = refs["unit_id"] or _first_str(source, "unit_id", "candidate_id")
-        refs["slice_id"] = refs["slice_id"] or _first_str(source, "slice_id")
+def _coerce_span(value: Any) -> tuple[int, int] | None:
+    """Coerce a row's step-range field into an ``(a, b)`` int pair, or ``None``.
+
+    Accepts the dict form (``{"start": a, "end": b}``) and the sequence form
+    (``[a, b]``). Anything else (open ranges, single ints, junk) is not a span.
+    """
+    if isinstance(value, dict):
+        a, b = value.get("start"), value.get("end")
+    elif isinstance(value, (list, tuple)) and len(value) == 2:
+        a, b = value[0], value[1]
+    else:
+        return None
+    try:
+        return int(a), int(b)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_step_range_field(row: dict[str, Any]) -> Any | None:
+    """The row's explicit step-range field value (verbatim), if any."""
     for key in ("step_range", "steps", "source_steps"):
         if key in row:
-            refs["step_range"] = row[key]
-            break
-    return {key: value for key, value in refs.items() if value not in (None, "")}
+            return row[key]
+    return None
+
+
+def _row_ref_string(row: dict[str, Any]) -> str | None:
+    """The canonical address ref for a row: an explicit ``ref`` field, else one
+    synthesized from the row's source trace id + step range.
+
+    A workflow MAY emit a canonical ``ref`` (preferred when present). When it
+    does not, the runner synthesizes one: a colon-free trace id carries its span
+    as ``<trace>:<A-B>`` (round-trips through the shared oracle), while a
+    synthetic colon-bearing id (the bundled template's ``raw:raw-row-*`` keys)
+    cannot form a valid ``trace:A-B`` address, so the bare id is emitted and the
+    resolver degrades it to an opaque trace ref rather than crashing.
+    """
+    explicit = _first_str(row, "ref")
+    if explicit:
+        return explicit
+    trace_id = _first_str(row, "source_trace_id", "trace_id")
+    if not trace_id and isinstance(row.get("source"), dict):
+        trace_id = _first_str(row["source"], "trace_id", "id")
+    if not trace_id:
+        return None
+    if ":" in trace_id:
+        return trace_id
+    span = _coerce_span(_row_step_range_field(row))
+    if span is not None:
+        return f"{trace_id}:{span[0]}-{span[1]}"
+    return trace_id
+
+
+def _extract_row_source_refs(row: dict[str, Any]) -> dict[str, Any]:
+    """Ref-first source resolution (#191).
+
+    A row's lineage is resolved from a first-class ``ref`` address parsed and
+    validated through the shared :func:`parse_trail_ref` oracle (never a
+    re-implemented span parser). The scraped source fields remain the fallback
+    for unit / slice ids (which the address grammar does not model), for a
+    synthetic id that cannot form a valid ``trace:A-B`` address, and for an
+    explicit ``step_range`` a row carries verbatim (dict form preserved).
+    """
+    from .trails.lineage import parse_trail_ref
+
+    ref = _row_ref_string(row)
+    parsed_trace: str | None = None
+    parsed_span: list[int] | None = None
+    ref_valid = False
+    if ref:
+        p_trace, p_step, p_span, reserved = parse_trail_ref(ref)
+        if reserved not in ("invalid", "origin"):
+            ref_valid = True
+            parsed_trace = (p_trace or "").strip() or None
+            if p_span is not None:
+                parsed_span = [int(p_span[0]), int(p_span[1])]
+            elif p_step is not None:
+                parsed_span = [int(p_step), int(p_step)]
+
+    # trace_id: ref-first (the parsed address) when the ref validated, else the
+    # scraped source field (covers synthetic colon-bearing ids).
+    trace_id = parsed_trace or _first_str(row, "source_trace_id", "trace_id")
+    unit_id = _first_str(row, "source_unit_id", "unit_id", "candidate_id")
+    slice_id = _first_str(row, "source_slice_id", "slice_id")
+    if isinstance(row.get("source"), dict):
+        source = row["source"]
+        trace_id = trace_id or _first_str(source, "trace_id", "id")
+        unit_id = unit_id or _first_str(source, "unit_id", "candidate_id")
+        slice_id = slice_id or _first_str(source, "slice_id")
+
+    refs: dict[str, Any] = {
+        "trace_id": trace_id,
+        "unit_id": unit_id,
+        "slice_id": slice_id,
+    }
+    # step_range: an explicitly-carried field wins verbatim (preserves the
+    # pre-existing dict form); otherwise derive it from the parsed span so a
+    # ref-only row still round-trips its span.
+    step_range = _row_step_range_field(row)
+    if step_range is None and parsed_span is not None:
+        step_range = parsed_span
+    if step_range is not None:
+        refs["step_range"] = step_range
+
+    resolved = {key: value for key, value in refs.items() if value not in (None, "")}
+    if ref:
+        # ``ref`` / ``ref_valid`` are always carried when a ref exists (a False
+        # ``ref_valid`` is meaningful — an opaque, non-address source id).
+        resolved["ref"] = ref
+        resolved["ref_valid"] = ref_valid
+    return resolved
 
 
 def _bucket_record_ref(trace_id: Any) -> dict[str, Any] | None:
@@ -1073,6 +1243,52 @@ def read_rows_by_id(name: str) -> dict[str, dict[str, Any]]:
     return rows
 
 
+def reproduce_train_lines(
+    dataset: LocalDataset,
+    rows: list[dict[str, Any]],
+    *,
+    privacy_tier: str | None = None,
+) -> list[str]:
+    """Project raw workflow rows into the canonical ``data/train.jsonl`` lines.
+
+    Mirrors :func:`append_rows`'s in-flight transform (sanitize -> validate ->
+    identity-dedup -> canonical JSON) WITHOUT any write, so ``dataset verify``
+    (#193) can BYTE-compare a side-effect-free re-run against the stored public
+    rows. The privacy-tier / tool resolution matches :func:`append_rows`, so a
+    reproduced line is byte-for-byte what an append would have written for the
+    same raw row.
+    """
+    default_privacy_tier = (
+        DEFAULT_PRIVACY_TIER
+        if dataset.manifest.publication_policy.review == "auto"
+        and not dataset.manifest.remotes
+        else "medium"
+    )
+    resolved_privacy_tier = normalize_privacy_tier(
+        privacy_tier, default=default_privacy_tier
+    )
+    schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
+    security_policy = dataset.manifest.security
+    policy_tools: list[str] | None = (
+        list(security_policy.enabled_tools) if security_policy.enabled_tools else None
+    )
+    seen: set[str] = set()
+    lines: list[str] = []
+    for row in rows:
+        sanitized = sanitize_dataset_row(
+            row, privacy_tier=resolved_privacy_tier, tools=policy_tools
+        )
+        candidate = sanitized.row
+        if validate_row(candidate, schema):
+            continue
+        identity_hash = row_identity_hash(candidate, dataset.manifest.identity)
+        if identity_hash in seen:
+            continue
+        seen.add(identity_hash)
+        lines.append(_canonical_json(candidate))
+    return lines
+
+
 def _row_mean_retention(row: dict[str, Any]) -> float | None:
     """Cluster F D8: mean retention across patches_with_survival.
 
@@ -1206,6 +1422,19 @@ def publish_dataset(
             exclude_states=exclude_states,
         )
 
+        # #194: the shared egress clearance gate. Map each selected row -> its
+        # source trace and authorize against ONE fresh push-time manifest
+        # snapshot (no TOCTOU). If ANY row's source trace is not cleared, refuse
+        # the whole publish with the enumerable partition — ZERO bytes staged or
+        # uploaded (mirrors bucket sync's Door-A all-or-nothing refusal). Cleared
+        # rows publish exactly as today.
+        if selected_rows:
+            clearance = dataset_egress_clearance(
+                name, [row_id for row_id, _row in selected_rows]
+            )
+            if clearance["refused"]:
+                raise DatasetPublishWithheldError(clearance)
+
         staging_path, staged_files = _stage_publication(
             dataset,
             selected_rows,
@@ -1331,6 +1560,24 @@ def withdraw_dataset_row(
     return record
 
 
+def _index_entry_source_trace(entry: DatasetRowIndexEntry) -> str | None:
+    """The source trace id of a row-index entry, ref-resolved (#191).
+
+    Prefers the first-class ``source_trace_id`` (populated from the parsed span
+    ref at append time), falling back to the provenance ``source_refs.trace_id``
+    so a rebuilt or older index still resolves by ref rather than field-scraping
+    the public row.
+    """
+    if entry.source_trace_id:
+        return entry.source_trace_id
+    source_refs = (entry.provenance or {}).get("source_refs")
+    if isinstance(source_refs, dict):
+        value = source_refs.get("trace_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def forget_trace_cascade(
     trace_id: str,
     *,
@@ -1338,19 +1585,24 @@ def forget_trace_cascade(
 ) -> dict[str, Any]:
     """Cascade source-trace withdrawal across every local dataset.
 
-    Resolves all dataset rows whose ``source_trace_id`` matches ``trace_id``
-    and emits a row-level withdrawal for each one. Datasets with no matching
+    #191: rows are resolved by their PARSED ref via the row index
+    (``DatasetRowIndexEntry.source_trace_id``, populated from the validated span
+    ref, with the provenance ``source_refs.trace_id`` as a belt-and-suspenders
+    fallback) — NOT by scraping public-row fields. Datasets with no matching
     rows are untouched.
     """
 
     affected: list[dict[str, Any]] = []
     for dataset in list_datasets():
-        rows = read_rows_by_id(dataset.name)
-        matches = [
-            row_id
-            for row_id, row in rows.items()
-            if row.get("source_trace_id") == trace_id
-        ]
+        seen: set[str] = set()
+        matches: list[str] = []
+        for entry in read_row_index(dataset.name):
+            if _index_entry_source_trace(entry) != trace_id:
+                continue
+            if entry.row_id in seen:
+                continue
+            seen.add(entry.row_id)
+            matches.append(entry.row_id)
         if not matches:
             continue
         withdrawn_ids: list[str] = []
@@ -1454,6 +1706,93 @@ class DatasetSecurityFindingsError(RuntimeError):
             f"publication blocked: {len(findings)} security finding(s) in withdrawal records"
         )
         self.findings = findings
+
+
+# The withhold reason a dataset row's egress refusal carries. Distinct STRING
+# from bucket sync's ``not_cleared_for_sync`` (this is Door B, dataset publish),
+# but the SUB-reasons (``syncable_false`` / ``status_unknown``) are byte-identical
+# to Door A's — because both read the SAME shared predicate (egress_clearance).
+DATASET_WITHHOLD_REASON = "not_cleared_for_egress"
+
+
+class DatasetPublishWithheldError(RuntimeError):
+    """A dataset publish would egress rows from not-yet-cleared traces — refuse.
+
+    ADR-0008 §3: exactly one predicate decides whether a trace's bytes may leave
+    the private bucket. Dataset publish (#194) adopts that shared predicate
+    (``egress_clearance.clearance_for_trace``, the same leaf bucket sync's
+    ``push_withhold_partition`` calls) instead of a third lock. When any selected
+    row's SOURCE trace is not positively cleared against the FRESH push-time
+    manifest, this is raised BEFORE a single byte is staged — carrying the
+    enumerable ``{published, refused}`` partition so the CLI can emit the
+    auditable ``status='refused'`` envelope. Mirrors
+    :class:`~opentraces.core.bucket_sync.BucketPushWithheldError` (Door A).
+    """
+
+    classification = "egress_not_cleared"
+    exit_code = 9
+
+    def __init__(self, partition: dict[str, Any]) -> None:
+        self.partition = partition
+        refused = partition.get("refused") or []
+        super().__init__(
+            f"dataset publish refused: {len(refused)} row(s) sourced from "
+            "traces not cleared for egress"
+        )
+
+
+def dataset_egress_clearance(
+    name: str,
+    row_ids: list[str],
+    *,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Partition selected rows into ``published`` / ``refused`` by source-trace
+    clearance (#194).
+
+    Each row is mapped to its source trace (``DatasetRowIndexEntry`` ref,
+    populated by M2-1's lineage) and authorized through the SHARED
+    :func:`~opentraces.core.egress_clearance.clearance_for_trace` predicate
+    against ONE push-time ``manifest`` snapshot (the no-TOCTOU path: the same
+    snapshot judges every row). A row whose source trace is not positively
+    ``cleared`` — including a row with no resolvable source trace — is REFUSED
+    with a ``{row_id, trace_id, reason, sub_reason}`` record whose sub-reason
+    (``syncable_false`` / ``status_unknown``) is the same vocabulary Door A
+    speaks, because it reads the same predicate.
+    """
+    from .egress_clearance import CLEARED, NOT_CLEARED, clearance_for_trace
+
+    if manifest is None:
+        manifest = push_clearance_manifest()
+    trace_by_row: dict[str, str | None] = {}
+    for entry in read_row_index(name):
+        if entry.row_id not in trace_by_row:
+            trace_by_row[entry.row_id] = _index_entry_source_trace(entry)
+    published: list[str] = []
+    refused: list[dict[str, Any]] = []
+    for row_id in row_ids:
+        trace_id = trace_by_row.get(row_id)
+        state = (
+            clearance_for_trace(trace_id, manifest=manifest)
+            if trace_id
+            else "unknown"
+        )
+        if state == CLEARED:
+            published.append(row_id)
+        else:
+            refused.append(
+                {
+                    "row_id": row_id,
+                    "trace_id": trace_id,
+                    "reason": DATASET_WITHHOLD_REASON,
+                    "sub_reason": (
+                        "syncable_false"
+                        if state == NOT_CLEARED
+                        else "status_unknown"
+                    ),
+                }
+            )
+    return {"published": published, "refused": refused}
 
 
 def _stage_publication(

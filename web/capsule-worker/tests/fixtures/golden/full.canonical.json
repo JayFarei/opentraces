@@ -1,0 +1,383 @@
+{
+  "bundle": null,
+  "capsule_id": "64944d7c91aa87bd",
+  "content_is_untrusted": true,
+  "context_resume_packet": {
+    "branch_type": "linear",
+    "capture_completeness": "approximated",
+    "limitations": [],
+    "messages_layer": {
+      "capture_method": "transcript_reconstruction",
+      "completeness": "full",
+      "content": {
+        "is_summary": false,
+        "messages": [
+          {
+            "content_hash": "sha256:930266a6373b5ab39e4461b02abd157fd426c0f7ad7274ed5eab8371e3a1f9dc",
+            "parent_uuid": "039c04e5-0eea-42f3-ab22-39df19f6c348",
+            "role": "user",
+            "uuid": "8894fcee-85bc-4bd0-baf9-fd1988800dec"
+          },
+          {
+            "content_hash": "sha256:df1d14122bb233c969b0113b4b6e363063c6c017226eab688749a946a73f3a5d",
+            "parent_uuid": "00904b95-84f3-456b-a6a7-1da086a7b766",
+            "role": "user",
+            "uuid": "43ea442a-c9a2-4a70-9870-c17842a1d09c"
+          }
+        ],
+        "span_first_uuid": "8894fcee-85bc-4bd0-baf9-fd1988800dec",
+        "span_last_uuid": "5f0ab049-db31-40fb-9651-694e4e88de71",
+        "summary_of_span": null,
+        "total_token_estimate": 660
+      },
+      "layer_id": "sha256:0665c97b6faed2826303830ac46a490351915e9016f579632420668b84be9735",
+      "layer_type": "messages"
+    },
+    "node_id": "sha256:1054bbbcbf7dc97f9ae5026fe03eb9386e5ac403ff384ef5c29164ac00d09b20",
+    "runtime_state_layer": {
+      "capture_method": "transcript_reconstruction",
+      "completeness": "full",
+      "content": {
+        "allowlisted_env": {
+          "CLAUDE_CODE_CHILD_SESSION": "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+          "CLAUDE_CODE_ENTRYPOINT": "sha256:99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c",
+          "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+          "CLAUDE_CODE_NO_FLICKER": "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+          "CLAUDE_CODE_SESSION_ID": "sha256:17cf9c94d7e9f16c611ea0571483a9bb306e8cbe966b0ca0bf4c47e60bb891a2",
+          "CLAUDE_EFFORT": "sha256:6ef7c9b15ecdd69083724b84cfdc2100351963488b51b4ea2fcbddf493fbec94",
+          "CLAUDE_PROJECT_DIR": "sha256:deda9824ea59cf916f4d17909bfafad9dac73054210015c1858e9fc3c2aa0917",
+          "HOME": "sha256:035949ea3619576fe4096c3ad1ef9aa4ee30f2663f6f6517ee305270968e77e9",
+          "LANG": "sha256:ed8e9a8e277e89e97fb391676cb629b3a326002a82296f2abbc38135c3a106c2",
+          "PATH": "sha256:f1247cfff27d6f1be149ca8a09644d183b8dd5e2af0673af166109f04f26f7c0",
+          "SHELL": "sha256:b663616e0c19c82649403596a2fa8185e4ef34c22f2bc3623359e9f0428b9153",
+          "TERM": "sha256:c8b24a57859de308e5686428d031f86a46a26291156d282ee4b9ae65f10bdaa1",
+          "USER": "sha256:0650679229d99d906609c87ddaf65518aeeebcc43d9e96d9cf4b8a601b6a3580"
+        },
+        "claude_code_version": "unknown",
+        "cwd": "",
+        "effort_level": null,
+        "mcp_servers": {},
+        "model": "",
+        "permission_mode": "default"
+      },
+      "layer_id": "sha256:f4af09fe95d91e35cb2ecee96058f2f9a1a0003dc6561246e7b347f9a3ea5ca5",
+      "layer_type": "runtime_state"
+    },
+    "schema_version": "opentraces.context_resume.v1",
+    "source": "bucket_companion",
+    "step_index": 5,
+    "system_layer": "[EXCLUDED:context_resume_packet.system_layer]",
+    "tool_registry_layer": {
+      "capture_method": "transcript_reconstruction",
+      "completeness": "approximated",
+      "content": {
+        "deferred_tools": [],
+        "tools": []
+      },
+      "layer_id": "sha256:e03d30b06a3a205c78bf8d13c4f1835a79368b574c17aed390f33b95355ccfde",
+      "layer_type": "tool_registry"
+    },
+    "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6",
+    "trail_anchor_hint": null,
+    "transcript_offset": 73321,
+    "transcript_uuid": "a7b26759-5d78-46b0-b68d-5efec43a8fe0"
+  },
+  "created_with": "opentraces 0.4.8",
+  "embedded": {
+    "context_resume": "opentraces.context_resume.v1",
+    "trace_slice": "opentraces.trace_slice.v1"
+  },
+  "environment": {
+    "consumes": [],
+    "dependencies": [
+      "click",
+      "huggingface_hub"
+    ],
+    "language_ecosystem": null,
+    "setup": []
+  },
+  "failing_step": {
+    "error_excerpt": "",
+    "had_error_marker": false,
+    "index": 4,
+    "tool_name": null,
+    "type": "agent"
+  },
+  "intent": {
+    "headline": "can you take the second sentence of the site from\n\nopentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, evals, and datasets.\n\nto \n\n\nopentraces is a local-first evidence layer for agent wor\u2026[trimmed]",
+    "most_substantive_spec": {
+      "step": 1,
+      "text": "can you take the second sentence of the site from\n\nopentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, evals, and datasets.\n\nto \n\n\nopentraces is a local-first evidence layer for agent wor\u2026[trimmed]"
+    },
+    "trigger": null
+  },
+  "limitations": [
+    "no_executable_test",
+    "trail_anchors_unavailable"
+  ],
+  "privacy_scope": {
+    "developer_approved": false,
+    "messages_completeness": "full",
+    "messages_included": true,
+    "reasoning_included": false,
+    "redaction_floor": [
+      "regex",
+      "entropy"
+    ],
+    "steps_included": 5,
+    "system_prompt_included": false
+  },
+  "product": null,
+  "redaction": {
+    "manifest": {
+      "by_field_path": {
+        "slice.map.nodes[2].metadata.tool_call_id": 1,
+        "slice.map.nodes[2].unit_id": 1,
+        "slice.map.nodes[3].metadata.source_call_id": 1,
+        "slice.map.nodes[3].unit_id": 1,
+        "slice.map.nodes[4].metadata.tool_call_id": 1,
+        "slice.map.nodes[4].unit_id": 1,
+        "slice.map.nodes[5].metadata.source_call_id": 1,
+        "slice.map.nodes[5].unit_id": 1,
+        "slice.steps[1].observations[0].source_call_id": 1,
+        "slice.steps[1].tool_calls[0].tool_call_id": 1,
+        "slice.steps[2].observations[0].source_call_id": 1,
+        "slice.steps[2].tool_calls[0].tool_call_id": 1
+      },
+      "by_severity": {
+        "medium": 12
+      },
+      "by_tool": {
+        "entropy": 12
+      },
+      "excluded_field_paths": [
+        "context_resume_packet.system_layer",
+        "slice.steps.0.reasoning_content"
+      ],
+      "fields_excluded": 6,
+      "findings_total": 12,
+      "floor": [
+        "regex",
+        "entropy"
+      ],
+      "floor_satisfied": true,
+      "home_paths_scrubbed": 13,
+      "redactions_applied": 12,
+      "schema_version": "opentraces.capsule.redaction.v1",
+      "security_version": "0.7.0",
+      "tools_applied": [
+        "regex",
+        "entropy"
+      ]
+    }
+  },
+  "render_state": {
+    "closure": "closure_full",
+    "redaction": "redacted_ok",
+    "replay": "replay_unverified"
+  },
+  "repo_pin": {
+    "changed_files": [
+      "web/site/src/components/Hero.tsx"
+    ],
+    "commit_sha": "a2756fbc7c3edd2585d41df253b813fe9424e268",
+    "reachable_locally": true,
+    "remote_url": "https://github.com/JayFarei/opentraces"
+  },
+  "schema_version": "opentraces.capsule.v1",
+  "share": {
+    "capsule_url": "https://huggingface.co/datasets/<owner>/<repo>/resolve/<sha>/capsules/v1/64944d7c91aa87bd/capsule.json",
+    "human_url": "https://huggingface.co/datasets/<owner>/<repo>/blob/<sha>/capsules/v1/64944d7c91aa87bd/capsule.md",
+    "published_revision": "<sha>",
+    "viewer_url": "https://capsules.opentraces.ai/<owner>/<repo>/64944d7c91aa87bd@<sha>"
+  },
+  "slice": {
+    "end_step_index": 8,
+    "generation_index": 1,
+    "git_anchor_refs": [],
+    "limitations": [],
+    "map": {
+      "edges": [
+        {
+          "anchor_refs": [],
+          "confidence": "deterministic",
+          "edge_id": "tme:7b424774-c446-4e9e-9b58-9e48d56920c6:1",
+          "edge_type": "previous_next",
+          "metadata": {},
+          "source_node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:1",
+          "target_node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:2",
+          "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6"
+        },
+        {
+          "anchor_refs": [],
+          "confidence": "deterministic",
+          "edge_id": "tme:7b424774-c446-4e9e-9b58-9e48d56920c6:2",
+          "edge_type": "previous_next",
+          "metadata": {},
+          "source_node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:2",
+          "target_node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:3",
+          "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6"
+        }
+      ],
+      "limitations": [],
+      "nodes": [
+        {
+          "action_type": "user_instruction",
+          "active_user_step": 1,
+          "anchor_refs": [],
+          "confidence": "deterministic",
+          "end_step_index": 1,
+          "files_modified": [],
+          "files_read": [],
+          "metadata": {},
+          "next_node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:2",
+          "node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:1",
+          "parent_node_id": null,
+          "previous_node_id": null,
+          "signal_refs": [],
+          "start_step_index": 1,
+          "step_index": 1,
+          "text_preview": "can you take the second sentence of the site from opentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, ev...",
+          "tool_name": null,
+          "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6",
+          "unit_id": "tu:7b424774-c446-4e9e-9b58-9e48d56920c6:step:1"
+        },
+        {
+          "action_type": "agent_message",
+          "active_user_step": 1,
+          "anchor_refs": [],
+          "confidence": "deterministic",
+          "end_step_index": 2,
+          "files_modified": [],
+          "files_read": [],
+          "metadata": {},
+          "next_node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:3",
+          "node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:2",
+          "parent_node_id": null,
+          "previous_node_id": "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:1",
+          "signal_refs": [],
+          "start_step_index": 2,
+          "step_index": 2,
+          "text_preview": "I'll find where that sentence lives in the site.",
+          "tool_name": null,
+          "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6",
+          "unit_id": "tu:7b424774-c446-4e9e-9b58-9e48d56920c6:step:2"
+        }
+      ],
+      "root_node_ids": [
+        "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:1"
+      ],
+      "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6"
+    },
+    "map_node_refs": [
+      "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:1",
+      "tmn:7b424774-c446-4e9e-9b58-9e48d56920c6:2"
+    ],
+    "metadata": {
+      "center_step_index": 4,
+      "radius": 4
+    },
+    "slice_id": "b46cc712cd740f167e07b8cc6fea3ee844c1a020b43ee8b303a3182494538b21",
+    "source": "around_step",
+    "start_step_index": 0,
+    "steps": [
+      {
+        "agent_role": null,
+        "call_type": "main",
+        "content": "can you take the second sentence of the site from\n\nopentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, evals, and datasets.\n\nto \n\n\nopentraces is a local-first evidence layer for agent wor\u2026[trimmed]",
+        "context_node_id": "sha256:1809f96768cbfbb31020f97314e69c0e24e00b0d2ec26433862e780f94cfc041",
+        "model": null,
+        "observations": [],
+        "parent_step": null,
+        "reasoning_content": "[EXCLUDED:slice.steps.0.reasoning_content]",
+        "role": "user",
+        "snippets": [],
+        "step_index": 1,
+        "subagent_trajectory_ref": null,
+        "system_prompt_hash": null,
+        "timestamp": "2026-06-12T08:15:48.776Z",
+        "token_usage": {
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "prefix_reuse_tokens": 0
+        },
+        "tool_calls": [],
+        "tools_available": []
+      },
+      {
+        "agent_role": "main",
+        "call_type": "main",
+        "content": "I'll find where that sentence lives in the site.",
+        "context_node_id": "sha256:172c091dc3607199de60363daba5c517ba9afd2d635852e04f6c1e88cc223096",
+        "model": "anthropic/claude-opus-4-8",
+        "observations": [
+          {
+            "content": "src/components/Hero.tsx:218:            opentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, evals, and datasets.",
+            "error": null,
+            "output_summary": "src/components/Hero.tsx:218:            opentraces captures every agent session privately, anchors it to Git, and turns it into search, lineage, evals, and datasets.",
+            "source_call_id": "[REDACTED]"
+          }
+        ],
+        "parent_step": null,
+        "reasoning_content": "[EXCLUDED:slice.steps.1.reasoning_content]",
+        "role": "agent",
+        "snippets": [],
+        "step_index": 2,
+        "subagent_trajectory_ref": null,
+        "system_prompt_hash": null,
+        "timestamp": "2026-06-12T08:15:51.839Z",
+        "token_usage": {
+          "cache_read_tokens": 15802,
+          "cache_write_tokens": 31446,
+          "input_tokens": 16234,
+          "output_tokens": 183,
+          "prefix_reuse_tokens": 0
+        },
+        "tool_calls": [
+          {
+            "duration_ms": null,
+            "input": {
+              "command": "cd ~/src/tries/2026-03-27-community-traces-hf/web/site && grep -rn \"anchors it to Git\" src/ public/ 2>/dev/null",
+              "description": "Search for the sentence in site source"
+            },
+            "tool_call_id": "[REDACTED]",
+            "tool_name": "Bash"
+          }
+        ],
+        "tools_available": [
+          "Bash"
+        ]
+      }
+    ],
+    "template": null,
+    "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6",
+    "trace_patch_refs": []
+  },
+  "source": {
+    "agent": "claude-code",
+    "agent_version": "2.1.175",
+    "capture_method": "transcript_reconstruction",
+    "completeness": "approximated",
+    "context_node_id": "sha256:1054bbbcbf7dc97f9ae5026fe03eb9386e5ac403ff384ef5c29164ac00d09b20",
+    "model": "anthropic/claude-opus-4-8",
+    "project_slug": "2026-03-27-community-traces-hf-24eb286b",
+    "step_index": 4,
+    "trace_id": "7b424774-c446-4e9e-9b58-9e48d56920c6"
+  },
+  "summary": {
+    "failure": null,
+    "is_failure": false,
+    "outcome": {
+      "success": null,
+      "terminal_state": null
+    },
+    "outcome_taxonomy": "unclear",
+    "scope": "9 steps around step 4, 5 total, 1 file edits",
+    "title": "can you take the second sentence of the site from",
+    "what_happened": "No explicit runtime error was captured; this capsule pins the session so the intent can be re-posed against current code."
+  },
+  "test": null,
+  "trail_anchors": []
+}

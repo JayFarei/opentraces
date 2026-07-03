@@ -1,0 +1,9 @@
+{
+  "consumes": [],
+  "dependencies": [
+    "click",
+    "huggingface_hub"
+  ],
+  "language_ecosystem": null,
+  "setup": []
+}

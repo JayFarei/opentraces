@@ -1,0 +1,205 @@
+name = "capsule-redaction-floor-on-raw-companions"
+description = """
+Seal-family M2 (#197): the capsule mini-bucket redaction floor over RAW
+per-trace companions — the FIRST consumer that copies raw
+trail/context/sources companions into a shareable unit, so M1's
+companion-leak closes HERE.
+
+Forks from `c-captured-with-secrets` (one resolvable captured trace) and
+plants the eight canonical tail-probe sentinels (ported from
+`tests/security/test_companion_sanitize_tailprobe.py`) into that trace's
+raw `context.jsonl.gz` companion on the bucket layout — a conversational
+`sk-live-` token (S3), three home-path tails (S5 `/secret/.env`, S6
+`/work/acme`, S8 `/.ssh/id_rsa`), a code secret (S7 `ghp_`), an AWS key
+(S1) + email (S2), and a person name (S4 `SENTINEL4 Doe`).
+
+`capsule create` then seals the trace: `build_mini_bucket` re-reads the
+raw companions and re-redacts every line through M1's
+`sanitize_companion_dict` (regex → entropy → business_logic →
+path_anonymizer, the stock COMPANION_FLOOR), laying the result out as
+content-addressed `mini_bucket/blobs/v1/.../*.jsonl.gz`.
+
+Asserting on the sealed capsule BYTES (decompressed mini-bucket blobs),
+the stock floor closes 7 of 8: the `sk-live-` token, the three path
+tails, the `ghp_`/AWS/email secrets are ABSENT. The person name (S4) is
+the ONE residual — it needs an availability-gated NER (privacy_filter /
+llm_pii) the stock CI box never carries — so this journey asserts S4 is
+still PRESENT (the honest stock band). It deliberately does NOT demand
+the 8/8 NER close; that closure is proven in the unit
+`test_companion_sanitize_tailprobe.py::test_person_name_closes_only_when_ner_present`.
+
+A PR-lane SENTINEL journey: `requires ⊆ {cli, git}`, stock floor only.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+trajectories = ["capsule-dependency-unblock"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-with-secrets"]
+
+[preconditions]
+min_captured_traces = 1
+
+# --- 1. The planter: plant the 8 sentinels into the raw context companion -
+# Brace-free (dict() constructors) so the journey's str.format templating
+# pass leaves it byte-identical. Writes the planted envelope as one
+# deterministic (gzip mtime=0) JSONL line into the captured trace's raw
+# `context.jsonl.gz`, exactly where `build_mini_bucket` re-reads it.
+[[steps]]
+type = "write_file"
+id = "write-planter"
+path = "plant_sentinels.py"
+content = '''
+import glob
+import gzip
+import io
+import json
+import os
+import sys
+
+trace_id = sys.argv[1]
+otdir = sys.argv[2]
+
+S1 = "AKIAZZ7QF3SENTINEL1X"
+S2 = "jane.SENTINEL2@acme.com"
+S3 = "sk-live-SENTINEL3aaaaaaaaaaaaaaaaaaaaaaaa"
+S4 = "SENTINEL4 Doe"
+S4E = "x@y.com"
+S5 = "/Users/SENTINEL5/secret/.env"
+S6 = "/Users/SENTINEL6/work/acme"
+S7 = 'API_KEY = "ghp_SENTINEL7aaaaaaaaaaaaaaaaaaaaaa"'
+S8 = 'path = "/Users/SENTINEL8/.ssh/id_rsa"'
+
+user_msg = "Live key " + S3 + ". Contact " + S4 + " <" + S4E + ">. It is written to " + S5 + " on the box."
+messages = dict(messages=[dict(role="user", content=user_msg)])
+resume = dict(
+    messages_layer=dict(layer_type="messages", content=messages),
+    runtime_state_layer=dict(layer_type="runtime_state", content=dict(cwd=S6, model="claude-fable-5", permission_mode="default")),
+)
+anchors = [
+    dict(file_path="config/settings.py", authored_text=S7),
+    dict(file_path="scripts/deploy.sh", authored_text=S8),
+]
+envelope = dict(
+    schema_version="opentraces.capsule.v1",
+    trace=dict(trace_id=trace_id, summary=dict(what_happened="Rotated the deploy key " + S1 + " and pinged " + S2 + " to confirm the IAM policy.")),
+    context_resume_packet=resume,
+    trail_anchors=anchors,
+)
+line = json.dumps(envelope, sort_keys=True, ensure_ascii=False) + "\n"
+buf = io.BytesIO()
+gz = gzip.GzipFile(fileobj=buf, mode="wb", mtime=0)
+gz.write(line.encode("utf-8"))
+gz.close()
+targets = glob.glob(os.path.join(otdir, "bucket", "traces", "v1", "*", trace_id, "context.jsonl.gz"))
+if not targets:
+    raise SystemExit("no raw context companion for trace " + trace_id)
+open(targets[0], "wb").write(buf.getvalue())
+print("planted sentinels into " + targets[0])
+'''
+
+# --- 2. The dumper: decompress every sealed mini-bucket companion blob ----
+[[steps]]
+type = "write_file"
+id = "write-dumper"
+path = "dump_capsule_blobs.py"
+content = '''
+import glob
+import gzip
+import os
+import sys
+
+project = sys.argv[1]
+root = os.path.join(project, ".opentraces", "capsules")
+pattern = os.path.join(root, "**", "mini_bucket", "blobs", "v1", "**", "*.jsonl.gz")
+blobs = sorted(glob.glob(pattern, recursive=True))
+parts = []
+total = 0
+for b in blobs:
+    try:
+        body = gzip.decompress(open(b, "rb").read()).decode("utf-8", "replace")
+    except Exception:
+        continue
+    total = total + len(body)
+    parts.append(body)
+print("MINI_BUCKET_BLOB_COUNT=" + str(len(blobs)))
+print("MINI_BUCKET_BLOB_BYTES=" + str(total))
+sys.stdout.write("".join(parts))
+'''
+
+# --- 3. Plant + seal: resolve the captured trace, plant, `capsule create` -
+[[steps]]
+type = "shell"
+id = "plant-and-seal"
+argv = ["bash", "-c", "TRACE=$(basename $(dirname $(ls {opentraces_dir}/bucket/traces/v1/*/*/trace.json | head -1))) && {py_bin} {project}/plant_sentinels.py $TRACE {opentraces_dir} && {repo_root}/otd capsule create $TRACE --project {project}"]
+
+[[assertions]]
+kind = "returncode"
+step = "plant-and-seal"
+equals = 0
+
+# --- 4. Dump the sealed mini-bucket bytes --------------------------------
+[[steps]]
+type = "shell"
+id = "dump-blobs"
+argv = ["{py_bin}", "{project}/dump_capsule_blobs.py", "{project}"]
+
+[[assertions]]
+kind = "returncode"
+step = "dump-blobs"
+equals = 0
+
+# The seal produced at least one redacted companion blob (non-vacuous).
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "MINI_BUCKET_BLOB_COUNT=0"
+
+# --- 5. The stock floor closes 7 of 8 in the sealed bytes ----------------
+# S3: the conversational sk-live- token (widened sk- regex).
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "sk-live-SENTINEL3"
+
+# S5 / S6 / S8: the three home-path TAILS (path_anonymizer tail-consume).
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "/secret/.env"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "/work/acme"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "/.ssh/id_rsa"
+
+# S7 / S1 / S2: code secret, AWS key, email (regex controls).
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "ghp_SENTINEL7"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "AKIAZZ7QF3SENTINEL1X"
+
+[[assertions]]
+kind = "stdout_not_contains"
+step = "dump-blobs"
+value = "jane.SENTINEL2@acme.com"
+
+# --- 6. S4 is the ONE residual on a stock box (NER-only) ------------------
+# The person name survives the stock floor — its absence would require an
+# availability-gated NER the PR-lane CI box never carries. Asserting it
+# PRESENT is the honest stock band; NEVER demand the 8/8 NER close here.
+[[assertions]]
+kind = "stdout_contains"
+step = "dump-blobs"
+value = "SENTINEL4 Doe"
