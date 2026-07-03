@@ -2,9 +2,21 @@ name = "cli-publish-happy-path"
 description = """
 The thin vertical slice journey (spec step 5). Against a smoke-seeded
 box, drive a real end-to-end CLI publish: inspect status, rebuild the
-trace index, query traces, build an ad-hoc dataset, bind a (fake) HF
-remote, approve every row, and publish. Verdict PASS proves otbox can
-run a real opentraces user journey to completion.
+trace index, query traces, land + CLEAR a real bucket trace, build an
+ad-hoc dataset from it, bind a (fake) HF remote, approve every row, and
+publish. Verdict PASS proves otbox can run a real opentraces user
+journey to completion.
+
+#194 makes egress a genuine gate: `dataset publish` refuses any row
+sourced from a trace that is not cleared (scanned + syncable) in the
+push-time bucket manifest. A real happy path therefore publishes CLEARED
+data. The smoke seed's replayed traces live only in the legacy project
+traces layer (never the bucket), so this journey lands a real trace in
+the bucket via the Stop-hook `_ingest-session` path, runs the bucket
+security filter (`bucket security policy basic` + `bucket security run
+--all`) to make it syncable/cleared, then publishes an ad-hoc dataset
+that references that cleared trace. This is the honest contract — you
+publish cleared data, you do not bypass the gate.
 """
 lane = "core"
 tier = 0
@@ -27,23 +39,121 @@ type = "cli"
 id = "trace-query"
 argv = ["trace", "query", "greet"]
 
-# --- build an ad-hoc dataset from the seeded traces -----------------------
+# --- land a real trace in the bucket via the Stop-hook ingest path --------
+# Brace-free transcript seeder (the capture-safety recipe): writes a
+# synthetic Claude Code session JSONL to the box HOME. `_ingest-session`
+# alone lands a bucket TraceRecord (the smoke seed's replayed traces never
+# reach the bucket, so a manual --rows-file over them would be uncleared).
 [[steps]]
 type = "write_file"
-id = "write-rows"
-path = "otbox_rows.jsonl"
-content = """
-{"source_trace_id": "otbox000000000000", "source_unit_id": "tu:otbox000000000000:trace", "summary": "refactor greet() helper"}
-{"source_trace_id": "otbox000000000001", "source_unit_id": "tu:otbox000000000001:trace", "summary": "extend greet() helper"}
-"""
+id = "write-seeder"
+path = "seed_publish_transcript.py"
+content = '''
+import json
+from pathlib import Path
+
+sid = "sess-publish-happy"
+ts = "2026-07-03T09:00:00Z"
+tool_id = "tup1"
+user = dict(type="user", sessionId=sid, timestamp=ts, cwd=str(Path.cwd().resolve()),
+            message=dict(role="user", content="add a greet helper"))
+tool_use = dict(type="tool_use", id=tool_id, name="Read", input=dict(file_path="README.md"))
+asst = dict(type="assistant", sessionId=sid, timestamp=ts,
+            message=dict(role="assistant", content=[tool_use], usage=dict(input_tokens=5, output_tokens=5)))
+result = dict(type="user", sessionId=sid, timestamp=ts,
+              message=dict(role="user", content=[dict(type="tool_result", tool_use_id=tool_id, content="ok")]))
+path = Path.home() / (sid + ".jsonl")
+path.write_text("\n".join(json.dumps(line) for line in (user, asst, result)) + "\n")
+print(str(path))
+'''
 
 [[steps]]
+type = "shell"
+id = "seed-transcript"
+argv = ["{py_bin}", "{project}/seed_publish_transcript.py"]
+
+[[steps]]
+type = "cli"
+id = "ingest"
+argv = ["_ingest-session", "{home}/sess-publish-happy.jsonl", "--project", "{project}"]
+
+[[assertions]]
+kind = "returncode"
+step = "ingest"
+equals = 0
+
+# --- clear the trace: scan it so it is syncable/cleared for egress --------
+[[steps]]
+type = "cli"
+id = "security-policy"
+argv = ["bucket", "security", "policy", "--policy", "basic", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "security-policy"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "security-run"
+argv = ["bucket", "security", "run", "--all", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "security-run"
+equals = 0
+
+# The ingested trace was scanned (and thereby made cleared for egress).
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "security-run"
+path = "security_run.filtered"
+min = 1
+
+# --- build an ad-hoc dataset referencing the cleared bucket trace ---------
+# Brace-free row-file generator (dict() constructors) so the journey's
+# str.format templating pass leaves it byte-identical. Resolves the
+# ingested trace's id from the bucket layout and writes the rows + schema.
+[[steps]]
 type = "write_file"
-id = "write-schema"
-path = "otbox_schema.json"
-content = """
-{"type": "object", "properties": {"source_trace_id": {"type": "string"}, "source_unit_id": {"type": "string"}, "summary": {"type": "string"}}, "required": ["source_trace_id", "summary"]}
-"""
+id = "write-rowsgen"
+path = "gen_rows.py"
+content = '''
+import glob
+import json
+import os
+import sys
+
+otdir = sys.argv[1]
+project = sys.argv[2]
+troot = os.path.join(otdir, "bucket", "traces", "v1")
+tids = []
+for tj in sorted(glob.glob(os.path.join(troot, "*", "*", "trace.json"))):
+    try:
+        rec = json.load(open(tj, encoding="utf-8"))
+    except Exception:
+        continue
+    if rec.get("trace_id"):
+        tids.append(rec["trace_id"])
+if not tids:
+    raise SystemExit("no bucket trace to reference")
+tid = tids[0]
+row = dict(source_trace_id=tid, source_unit_id="tu:" + tid + ":trace", summary="publish the cleared greet() trajectory")
+open(os.path.join(project, "otbox_rows.jsonl"), "w", encoding="utf-8").write(json.dumps(row) + "\n")
+schema = dict(type="object", properties=dict(source_trace_id=dict(type="string"), source_unit_id=dict(type="string"), summary=dict(type="string")), required=["source_trace_id", "summary"])
+open(os.path.join(project, "otbox_schema.json"), "w", encoding="utf-8").write(json.dumps(schema))
+print("wrote rows for " + tid)
+'''
+
+[[steps]]
+type = "shell"
+id = "gen-rows"
+argv = ["{py_bin}", "{project}/gen_rows.py", "{opentraces_dir}", "{project}"]
+
+[[assertions]]
+kind = "returncode"
+step = "gen-rows"
+equals = 0
 
 [[steps]]
 type = "cli"
@@ -77,10 +187,11 @@ kind = "stdout_contains"
 step = "trace-query"
 value = "otbox000000000000"
 
+# The cleared trace publishes — a genuine happy path under the #194 gate.
 [[assertions]]
 kind = "stdout_contains"
 step = "publish"
-value = "published: rows=2"
+value = "published: rows=1"
 
 [[assertions]]
 kind = "path_exists"

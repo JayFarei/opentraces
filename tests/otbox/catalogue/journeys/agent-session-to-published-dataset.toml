@@ -117,13 +117,49 @@ step = "trace-discover"
 value = "{trace_id}"
 
 # --- 2. Seed a row file referencing the captured trace_id ----------------
+# The captured trace's real id is resolved from the bucket layout by a
+# brace-free helper. (A JSONL `write_file` cannot template `{trace_id}`
+# inline: str.format bails on the row's own JSON braces and leaves the
+# placeholder literal, which the #194 clearance then reads as an unknown
+# trace — the latent bug that gate exposed.)
 [[steps]]
 type = "write_file"
-id = "write-rows"
-path = "captured_rows.jsonl"
-content = """
-{"source_trace_id": "{trace_id}", "source_unit_id": "tu:{trace_id}:trace", "summary": "captured: add farewell() helper to src/app.py"}
-"""
+id = "write-rowsgen"
+path = "gen_captured_rows.py"
+content = '''
+import glob
+import json
+import os
+import sys
+
+otdir = sys.argv[1]
+project = sys.argv[2]
+troot = os.path.join(otdir, "bucket", "traces", "v1")
+tids = []
+for tj in sorted(glob.glob(os.path.join(troot, "*", "*", "trace.json"))):
+    try:
+        rec = json.load(open(tj, encoding="utf-8"))
+    except Exception:
+        continue
+    if rec.get("trace_id"):
+        tids.append(rec["trace_id"])
+if not tids:
+    raise SystemExit("no captured bucket trace to reference")
+tid = tids[0]
+row = dict(source_trace_id=tid, source_unit_id="tu:" + tid + ":trace", summary="captured: add farewell() helper to src/app.py")
+open(os.path.join(project, "captured_rows.jsonl"), "w", encoding="utf-8").write(json.dumps(row) + "\n")
+print("wrote captured row for " + tid)
+'''
+
+[[steps]]
+type = "shell"
+id = "gen-rows"
+argv = ["{py_bin}", "{project}/gen_captured_rows.py", "{opentraces_dir}", "{project}"]
+
+[[assertions]]
+kind = "returncode"
+step = "gen-rows"
+equals = 0
 
 [[steps]]
 type = "write_file"
@@ -172,6 +208,37 @@ argv = ["dataset", "review", "approve", "captured-session", "--all"]
 kind = "returncode"
 step = "review-approve"
 equals = 0
+
+# --- 5b. Clear the source trace for egress (#194) -------------------------
+# The captured trace lands in the bucket unscanned, so the #194 egress
+# clearance gate would withhold every row sourced from it. A genuine
+# publish ships CLEARED data: run the bucket security filter so the
+# captured trace is scanned + syncable in the push-time manifest.
+[[steps]]
+type = "cli"
+id = "security-policy"
+argv = ["bucket", "security", "policy", "--policy", "basic", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "security-policy"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "security-run"
+argv = ["bucket", "security", "run", "--all", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "security-run"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "security-run"
+path = "security_run.filtered"
+min = 1
 
 # --- 6. Publish to the fake HF remote -------------------------------------
 [[steps]]
