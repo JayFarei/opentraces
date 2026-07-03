@@ -24,11 +24,35 @@ opentraces dataset publish my-import --to my-org/dataset
 ```
 
 Workflow-driven runs (`opentraces dataset new my-dataset --workflow my-workflow
---schema schema.json`, then `opentraces dataset run my-dataset`) are designed to
-execute inside an agent session with `--executor current-agent`. The
-`--executor claude-code-headless` choice is a reserved seam: it currently exits
-with an executor-unavailable error instead of invoking Claude Code, so it is
-not yet a working CI pattern.
+--schema schema.json`, then `opentraces dataset run my-dataset`) have two
+executors. `--executor current-agent` is the human/agent-in-the-loop path: it
+writes `RUN.md` instructions and executes no script, so it needs a live agent
+session and is not a CI pattern by itself. `--executor script` is the
+deterministic CI path: it subprocess-runs the workflow package's
+`scripts/build_rows.py` with the run packet on `OT_RUN_PACKET`/
+`OT_DATASET_OUTPUT`, under an isolated-subprocess primitive (allowlisted env,
+redirected `$HOME`) with no live agent required — this is the executor CI
+should use for a workflow-backed dataset:
+
+```bash
+opentraces dataset run my-dataset --executor script --json
+```
+
+Before executing, the run re-verifies the installed workflow package's digest
+against the digest the dataset pinned; a mismatch warns by default or, under
+`--strict`, fails the run before anything executes:
+
+```bash
+opentraces dataset run my-dataset --executor script --strict --json
+```
+
+The historical `claude-code-headless` executor value was a permanent stub
+that never produced rows; it has been removed (the workflow engine collapse,
+seal-family M1) and `dataset run --executor` now only accepts
+`current-agent`/`script`. The value stays readable on old serialized records
+so they still deserialize, and a recurring `dataset schedule` trigger stored
+against the removed value is coerced onto `script` when its next run command
+is regenerated.
 
 ## Health Checks
 

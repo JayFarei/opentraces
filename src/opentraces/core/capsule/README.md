@@ -7,7 +7,8 @@ maintainer's agent resolves the URL with one command and re-poses the captured
 *intent* against current code.
 
 This is the **share-first** v1 (autoreview-resolved). The replay loop is the
-maintainer's own agent, driven via the `capsule open` consume verb. There is no
+maintainer's own agent, driven via the `capsule get` consume verb (the pre-v7
+`capsule open` spelling stays callable, hidden from `--help`). There is no
 opentraces-side agent runner in v1.
 
 ## The four signals (from the blog)
@@ -24,22 +25,29 @@ A capsule carries what makes a bug reproducible by intent, not by bytes:
 ## Verbs
 
 ```bash
-# Build a local, redacted, self-sufficient capsule (zero remote config).
-opentraces capsule export <trace-id> --project <repo>
+# Seal a local, redacted, self-sufficient capsule (zero remote config).
+# REF is a v7 address (<trace>, <trace>:<step>, <trace>:A-B); --from-step/--to-step
+# is the explicit span seam. The pre-v7 `capsule export` spelling (richer flag
+# set: --test-command/--setup-command/--consume/--from-session) stays callable.
+opentraces capsule create <ref> --project <repo>
 #   -> writes capsules/v1/<id>/capsule.json + capsule.md, prints the json path.
 
-# The CONSUME verb: resolve from a file / https / hf:// ref, print the envelope.
-opentraces capsule open <ref> --json        # zero bespoke parsing for the agent
-opentraces capsule open <ref> --summary     # human markdown
+# The read-only CONSUME verb: resolve from a file / https / hf:// ref, print the envelope.
+opentraces capsule get <ref> --json        # zero bespoke parsing for the agent
+opentraces capsule get <ref> --summary     # human markdown
+
+# The explicit opt-in WRITE verb: resolve + materialize into the local bucket
+# as a first-class trace (idempotent on the same capsule id).
+opentraces capsule import <ref> --json
 
 # Mint the shareable URL (and optionally publish it).
 opentraces capsule share <trace-id> --repo <hf-owner/name> [--copy]
-opentraces capsule share <trace-id> --repo <hf-owner/name> --execute --public
+opentraces capsule share <trace-id> --repo <hf-owner/name> --publish
 
-# Render / file the GitHub issue (embeds the URL + the `capsule open` command).
-opentraces capsule issue render <trace-id> --repo <hf-owner/name>
-opentraces capsule issue create <trace-id> --issue-repo <gh-owner/name> \
-  --repo <hf-owner/name> --execute --public [--copy]
+# Render / file the GitHub issue (embeds the URL + the `capsule get` command).
+opentraces capsule issue <trace-id> --repo <hf-owner/name>
+opentraces capsule issue <trace-id> --issue-repo <gh-owner/name> \
+  --repo <hf-owner/name> --publish [--copy]
 ```
 
 ## Safety (the moat)
@@ -55,8 +63,14 @@ opentraces capsule issue create <trace-id> --issue-repo <gh-owner/name> \
 - **Untrusted content.** `content_is_untrusted: true` on the envelope; the human
   render routes captured text through `branch_context.redact_intent` (strips
   adversarial sentinels / fence-breakouts / heading injection).
-- **Explicit public consent.** `--execute` to a public destination requires
-  `--public` naming the repo.
+- **Explicit public consent.** `--publish` to a real destination requires a
+  named `--repo`/`--issue-repo` (or an inferred one) and runs a consent-gate
+  confirmation before any bytes leave, unless `--yes`; `--private` opts the HF
+  dataset repo out of public visibility.
+- **Bundle secret-scan gate (M3).** A `--bundle`'d capsule's exact shipped
+  archive bytes are scanned for secrets before `share --publish`/`issue
+  --publish`; a finding blocks the publish (zero bytes out) unless
+  `--i-accept-bundle-findings`. This is a publish GATE, never a trust factor.
 
 ## URL design
 
@@ -72,8 +86,8 @@ commit oid for immutability. A `capsule.md` mirror renders as a human page on HF
 
 ## Self-sufficiency
 
-`export` sources the resume packet from the live Context Tree projection when
-present, else from the trace's OWN bucket companion
+Sealing (`create` or `export`) sources the resume packet from the live Context
+Tree projection when present, else from the trace's OWN bucket companion
 (`bucket/contexts/v1/<slug>/<trace>/nodes.jsonl` + layer blobs). The capsule
 resolves with zero access to the originating machine. Degraded captures produce a
 valid `closure_intent_only` capsule (recorded in `limitations`), never a crash.
@@ -82,9 +96,10 @@ valid `closure_intent_only` capsule (recorded in `limitations`), never a crash.
 
 A capsule is now framed as a **privacy-bounded usage episode**: the asset is how an
 agent used ONE consumed product, with a runnable test as **optional evidence, not the
-point**. `test=null` is first-class — every path (export / preview / open / render /
-publish) works with no test. The change is additive: `REQUIRED_KEYS` and
-`CAPSULE_SCHEMA_VERSION` are unchanged; `SECURITY_VERSION` bumped to `0.6.0`.
+point**. `test=null` is first-class — every path (create/export / preview / get/open /
+import / render / publish) works with no test. The change was additive:
+`REQUIRED_KEYS` and `CAPSULE_SCHEMA_VERSION` stayed unchanged; `SECURITY_VERSION`
+was bumped to `0.6.0` at the time (current: `0.8.0`, issue #143).
 
 ```bash
 # Inspect egress BEFORE anything leaves the machine (writes/publishes NOTHING):
@@ -171,6 +186,8 @@ partial over a half-scanned Trail projection is not well-defined.
 | `redaction.py` | Mandatory floor + counts-only manifest + hard gate + home scrub. |
 | `render.py` | `render_issue_body` / `render_capsule_markdown` (agent-first, human-second). |
 | `share.py` | URL mint, local write, HF publish (capsule-only), clipboard, idempotent `gh` issue. |
-| `../../cli/capsule.py` | `opentraces capsule {export, open, share, issue}` (export gains `--from-session` / `--from-agent` / `--product-full-span` / `--progress`; preview gains `--product-full-span` / `--progress`). |
+| `../../cli/capsule.py` | `opentraces capsule {create, get, import, preview, share, issue, replay, test, verdict, watch}` (`export`/`open` are the pre-v7 spellings, hidden but callable; `export` gains `--from-session` / `--from-agent` / `--product-full-span` / `--progress`; `preview` gains `--product-full-span` / `--progress`). |
+| `replay.py` | Lattice clamp (`clamp(oracle_trust, env_tier, diff_trust, sandbox_tier) -> verdict_trust`) + the four-property replay-honesty surface (M3, ADR-0008). |
+| `run.py` | `capsule test`'s isolated repro runner (`core/isolation.py`); stamps the honest `sandbox_tier`. |
 
 Tests: `tests/test_capsule.py` (hermetic) + `tests/test_capsule_export_integration.py`.
