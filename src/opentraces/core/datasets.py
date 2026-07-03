@@ -1741,6 +1741,47 @@ class DatasetPublishWithheldError(RuntimeError):
         )
 
 
+def _row_source_is_gateable_trace(trace_id: str | None) -> bool:
+    """Does a REAL private-bucket trace stand behind this dataset-row source id?
+
+    The egress clearance gate withholds a row's bytes when the PRIVATE TRACE it
+    came from is not cleared. But the ONE bundled template
+    (``skill-command-trajectory-eval-v1``) mints synthetic ``raw:<row-key>``
+    source ids (``build_rows.py``: ``safe_trace_id = f"raw:{key}"``) that
+    reference NO bucket trace — the row carries no private bytes to withhold (it
+    was already sanitized through the dataset row floor at build time). Such a
+    genuinely source-less / synthetic-id row is clearance-EXEMPT.
+
+    The exemption must NOT weaken the real gate: a REAL trace id that is merely
+    un-backfilled / unscanned still refuses. So a source id is a gateable REAL
+    trace when EITHER signal marks it real:
+
+    * it PARSES as a valid trace ADDRESS — ``parse_trail_ref`` does not classify
+      it ``invalid``. A real ``trace_id`` is an opaque colon-free UUID (a bare
+      address); an operator-passed bare id is a valid address too, so an
+      un-backfilled real trace still faces the gate. The template's
+      ``raw:<row-key>`` cannot form a ``trace:A-B`` address (``int("raw")``
+      fails) → ``invalid``.
+    * it RESOLVES to an on-disk private-bucket trace envelope
+      (:func:`~opentraces.core.bucket_envelope.trace_v2_summary_by_id` is not
+      ``None``) — belt-and-suspenders so an id that does not parse as an address
+      yet names a real trace is still gated.
+
+    Return ``False`` (exempt) only for a missing id, or a synthetic id that is
+    BOTH an invalid trace address AND resolves to no bucket trace.
+    """
+    if not trace_id:
+        return False
+    from .trails.lineage import parse_trail_ref
+
+    _t, _step, _span, reserved = parse_trail_ref(trace_id)
+    if reserved != "invalid":
+        return True
+    from .bucket_envelope import trace_v2_summary_by_id
+
+    return trace_v2_summary_by_id(trace_id) is not None
+
+
 def dataset_egress_clearance(
     name: str,
     row_ids: list[str],
@@ -1754,11 +1795,20 @@ def dataset_egress_clearance(
     populated by M2-1's lineage) and authorized through the SHARED
     :func:`~opentraces.core.egress_clearance.clearance_for_trace` predicate
     against ONE push-time ``manifest`` snapshot (the no-TOCTOU path: the same
-    snapshot judges every row). A row whose source trace is not positively
-    ``cleared`` — including a row with no resolvable source trace — is REFUSED
-    with a ``{row_id, trace_id, reason, sub_reason}`` record whose sub-reason
+    snapshot judges every row). A row whose source trace is a REAL private
+    bucket trace that is not positively ``cleared`` is REFUSED with a
+    ``{row_id, trace_id, reason, sub_reason}`` record whose sub-reason
     (``syncable_false`` / ``status_unknown``) is the same vocabulary Door A
     speaks, because it reads the same predicate.
+
+    A row whose source references NO real private-bucket trace — a genuinely
+    source-less id or the bundled template's synthetic ``raw:<row-key>`` id
+    (see :func:`_row_source_is_gateable_trace`) — is clearance-EXEMPT: there are
+    no private bytes to withhold, the row was already sanitized through the
+    dataset row floor. This is what makes the shipped
+    ``skill-command-trajectory-eval-v1`` template publishable out of the box.
+    The exemption does not weaken the real gate: an un-backfilled / unscanned
+    REAL trace still resolves and refuses.
     """
     from .egress_clearance import CLEARED, NOT_CLEARED, clearance_for_trace
 
@@ -1772,11 +1822,11 @@ def dataset_egress_clearance(
     refused: list[dict[str, Any]] = []
     for row_id in row_ids:
         trace_id = trace_by_row.get(row_id)
-        state = (
-            clearance_for_trace(trace_id, manifest=manifest)
-            if trace_id
-            else "unknown"
-        )
+        if not _row_source_is_gateable_trace(trace_id):
+            # Source-less / synthetic-id row (no private trace behind it).
+            published.append(row_id)
+            continue
+        state = clearance_for_trace(trace_id, manifest=manifest)
         if state == CLEARED:
             published.append(row_id)
         else:

@@ -167,3 +167,92 @@ def _make_publishable_dataset_noremote(name: str, *, cleared: str, withheld: str
     )
     append_rows(name, [_row(cleared)], run_id="run-1", privacy_tier="medium")
     append_rows(name, [_row(withheld)], run_id="run-2", privacy_tier="medium")
+
+
+# --- Synthetic / source-less row exemption -------------------------------
+#
+# The ONE bundled template (skill-command-trajectory-eval-v1) mints synthetic
+# ``raw:<row-key>`` source ids (build_rows.py: ``safe_trace_id = f"raw:{key}"``)
+# that reference NO private-bucket trace. Before the exemption those rows made
+# the template categorically UNPUBLISHABLE: each synthetic id resolved to
+# ``status_unknown`` and aborted the WHOLE publish with exit 9, zero bytes. A
+# row that references no bucket trace at all has no private bytes to withhold
+# (it was already sanitized through the dataset row floor), so it is
+# clearance-EXEMPT. A REAL trace id that is merely un-backfilled / unscanned
+# (a valid bare trace address) must STILL refuse — that is the existing
+# `trace-unscanned` coverage above and the second half of the contrast test.
+
+
+def _synthetic_row(row_key: str) -> dict:
+    """A row shaped like the bundled template's output: a synthetic
+    ``raw:<row-key>`` source id that references no bucket trace."""
+    return {
+        "source_trace_id": f"raw:{row_key}",
+        "source_unit_id": f"raw-unit:{row_key}",
+        "summary": f"Synthetic trajectory row {row_key}.",
+    }
+
+
+def _make_publishable_synthetic_dataset(name: str, row_key: str) -> None:
+    create_dataset(
+        name,
+        workflow_skill="curator",
+        workflow_digest="sha256:wf",
+        row_schema=_schema(),
+        publication_policy={"review": "auto"},
+    )
+    add_dataset_remote(name, f"me/{name}", visibility="private")
+    append_rows(name, [_synthetic_row(row_key)], run_id="run-1", privacy_tier="medium")
+
+
+def test_synthetic_raw_source_id_rows_publish_exempt(tmp_path, monkeypatch):
+    """The bundled template's synthetic ``raw:<row-key>`` rows publish out of the
+    box: no private bucket trace stands behind them, so a fresh empty push-time
+    manifest must NOT abort the whole publish."""
+    monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(tmp_path / "remotes"))
+    _make_publishable_synthetic_dataset("pub-synthetic", "raw-row-000001")
+    # Empty manifest: no trace resolves. A REAL trace id would be refused here;
+    # the synthetic id is exempt because it names no bucket trace at all.
+    monkeypatch.setattr(datasets, "push_clearance_manifest", lambda: _manifest())
+
+    summary = publish_dataset("pub-synthetic", contributor="tester")
+    assert summary.uploaded is True
+    assert summary.new_row_count == 1
+    remote_rows = "\n".join(
+        p.read_text()
+        for p in (tmp_path / "remotes" / "me" / "pub-synthetic" / "data").glob("*.jsonl")
+    )
+    assert "raw:raw-row-000001" in remote_rows
+
+
+def test_egress_clearance_exempts_synthetic_but_refuses_real_uncleared(monkeypatch):
+    """One predicate, two verdicts: a synthetic ``raw:`` row is EXEMPT while a
+    REAL uncleared bucket-trace row in the SAME dataset is still REFUSED."""
+    create_dataset(
+        "mixed-ds",
+        workflow_skill="curator",
+        workflow_digest="sha256:wf",
+        row_schema=_schema(),
+        publication_policy={"review": "auto"},
+    )
+    append_rows(
+        "mixed-ds", [_synthetic_row("raw-row-000001")], run_id="run-1", privacy_tier="medium"
+    )
+    append_rows(
+        "mixed-ds", [_row("trace-real-uncleared")], run_id="run-2", privacy_tier="medium"
+    )
+
+    manifest = _manifest()  # empty: the real trace is unknown / unscanned.
+    monkeypatch.setattr(datasets, "push_clearance_manifest", lambda: manifest)
+
+    from opentraces.core.datasets import read_row_index
+
+    row_ids = [e.row_id for e in read_row_index("mixed-ds")]
+    partition = dataset_egress_clearance("mixed-ds", row_ids, manifest=manifest)
+
+    # The synthetic row is published (exempt); the real uncleared row refused.
+    refused_traces = {r["trace_id"] for r in partition["refused"]}
+    assert refused_traces == {"trace-real-uncleared"}
+    assert len(partition["published"]) == 1
+    # The refused REAL trace carries the un-backfilled/unscanned sub_reason.
+    assert partition["refused"][0]["sub_reason"] == "status_unknown"
