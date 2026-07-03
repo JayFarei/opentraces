@@ -98,7 +98,7 @@ def test_trace_capsule_example_is_capsule_task():
     assert capsule["redaction"]["manifest"]["floor"] == ["regex", "entropy", "business_logic"]
     assert "pytest tests/test_duration_parser.py::test_accepts_iso_duration" in capsule["test"]["command"]
     assert "opentraces capsule preview" in readme
-    assert "opentraces capsule open" in readme
+    assert "opentraces capsule get" in readme
     assert "--issue-repo owner/project" in readme
     assert "--json > capsule.json" in readme
     assert "GitHub issue" in readme
