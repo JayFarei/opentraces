@@ -19,6 +19,7 @@ Three acceptance checks:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +77,63 @@ def _run_command_eval_build_rows(source: Path, output: Path) -> None:
         ],
         check=True,
     )
+
+
+def test_command_eval_template_honors_ot_env_contract(tmp_path):
+    """H5 (#189): the bundled template must run under the same OT_* env contract
+    the scrubbed script executor uses -- the output path from
+    ``OT_DATASET_OUTPUT`` (no ``--output`` arg) and the bucket/source root from
+    ``OT_OPENTRACES_DIR`` (NOT ``Path.home()``, which the executor scrubs to a
+    throwaway). Before the fix the required ``--output`` arg + ``Path.home()``
+    source made this fail / read the wrong bucket when run as a dataset
+    workflow."""
+    # The raw source lives under the OT_OPENTRACES_DIR bucket the template must
+    # resolve from -- NOT under the (throwaway/scrubbed) HOME.
+    bucket = tmp_path / "bucket"
+    source = bucket / "datasets" / "skill-command-trajectories" / "data" / "train.jsonl"
+    source.parent.mkdir(parents=True)
+    raw_row = json.loads(
+        (COMMAND_EVAL_TEMPLATE / "examples" / "input-candidate-packet.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    source.write_text(json.dumps(raw_row, sort_keys=True) + "\n", encoding="utf-8")
+
+    output = tmp_path / "rows.jsonl"
+    run_packet = tmp_path / "run_packet.json"
+    run_packet.write_text(
+        json.dumps({"schema_version": "opentraces.workflow.run_packet.v1"}) + "\n",
+        encoding="utf-8",
+    )
+    throwaway_home = tmp_path / "throwaway-home"
+    throwaway_home.mkdir()
+
+    env = {
+        **os.environ,
+        "HOME": str(throwaway_home),  # scrubbed HOME has no real .opentraces
+        "OT_RUN_PACKET": str(run_packet),
+        "OT_DATASET_OUTPUT": str(output),
+        "OT_OPENTRACES_DIR": str(bucket),
+    }
+    # No --output arg: the env contract alone must drive the output path.
+    subprocess.run(
+        [sys.executable, str(COMMAND_EVAL_TEMPLATE / "scripts" / "build_rows.py")],
+        check=True,
+        env=env,
+    )
+
+    assert output.exists(), "template must write rows to OT_DATASET_OUTPUT"
+    built = [
+        json.loads(line)
+        for line in output.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(built) == 1
+    expected = json.loads(
+        (COMMAND_EVAL_TEMPLATE / "examples" / "expected-row.json").read_text(encoding="utf-8")
+    )
+    # Row STRUCTURE preserved (issue #189 keeps the shape unchanged).
+    assert built[0] == expected
 
 
 def test_command_eval_template_row_shape_matches_golden(tmp_path):

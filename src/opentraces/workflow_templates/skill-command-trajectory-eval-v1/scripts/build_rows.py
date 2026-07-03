@@ -17,19 +17,54 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 
-DEFAULT_SOURCE = (
-    Path.home()
-    / ".opentraces"
-    / "datasets"
-    / "skill-command-trajectories"
-    / "data"
-    / "train.jsonl"
-)
+def _bucket_root() -> Path:
+    """Resolve the opentraces bucket root under the OT_* env contract.
+
+    The scrubbed script executor hands the real bucket over as
+    ``OT_OPENTRACES_DIR`` (HOME is redirected to a throwaway), so prefer it and
+    fall back to ``~/.opentraces`` only for a direct/manual invocation with no
+    env contract.
+    """
+    env = os.environ.get("OT_OPENTRACES_DIR")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".opentraces"
+
+
+def _default_source() -> Path:
+    return (
+        _bucket_root()
+        / "datasets"
+        / "skill-command-trajectories"
+        / "data"
+        / "train.jsonl"
+    )
+
+
+def _env_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    return Path(value).expanduser() if value else None
+
+
+def _packet_limit() -> int | None:
+    """Optional row cap read from the run packet (the dataset runner sets it)."""
+    packet = _env_path("OT_RUN_PACKET")
+    if packet is None:
+        return None
+    try:
+        payload = json.loads(packet.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = payload.get("limit")
+    return value if isinstance(value, int) else None
+
+
 BODY_PREFIX = "Base directory for this skill:"
 BODY_SKILL_RE = re.compile(r"Base directory for this skill:\s+\S*/skills/([^\s/]+)")
 
@@ -184,17 +219,25 @@ def read_rows(source: Path, *, limit: int | None = None) -> list[dict[str, Any]]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
-    parser.add_argument("--output", type=Path, required=True)
+    # --source / --output are optional overrides for direct/test invocation; the
+    # workflow contract drives them via env (OT_DATASET_OUTPUT / OT_OPENTRACES_DIR).
+    parser.add_argument("--source", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
-    rows = read_rows(args.source.expanduser(), limit=args.limit)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as stream:
+    output = args.output or _env_path("OT_DATASET_OUTPUT")
+    if output is None:
+        parser.error("no output path: set OT_DATASET_OUTPUT or pass --output")
+    source = args.source or _default_source()
+    limit = args.limit if args.limit is not None else _packet_limit()
+
+    rows = read_rows(source.expanduser(), limit=limit)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as stream:
         for row in rows:
             stream.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
-    print(f"emitted {len(rows)} row(s) -> {args.output}")
+    print(f"emitted {len(rows)} row(s) -> {output}")
     return 0
 
 
