@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from click.testing import CliRunner
 
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import dataset_path
 
+from tests._dataset_egress import neutralize_dataset_egress
 from tests.integration._script_workflow import (
     install_rows_workflow,
     install_scriptless_workflow,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_dataset_egress(monkeypatch):
+    # The --publish automation path predates the #194 egress clearance gate and
+    # projects synthetic trace ids that have no bucket entry.
+    neutralize_dataset_egress(monkeypatch)
 
 
 _ROWS_UNSET = object()

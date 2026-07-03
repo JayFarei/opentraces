@@ -22,6 +22,17 @@ import json
 from pathlib import Path
 
 import pytest
+
+from tests._dataset_egress import neutralize_dataset_egress
+
+
+@pytest.fixture(autouse=True)
+def _clear_dataset_egress(monkeypatch):
+    # These fake-remote publish golden paths predate the #194 egress clearance
+    # gate and publish synthetic trace ids with no bucket entry.
+    neutralize_dataset_egress(monkeypatch)
+
+import pytest
 from click.testing import CliRunner
 
 from opentraces.cli.dataset import dataset_group
