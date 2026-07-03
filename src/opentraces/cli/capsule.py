@@ -207,14 +207,26 @@ def _build_mini_bucket_for(project, trace_id):
         return None
 
 
-def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None, mini_bucket=None):
+def _publish_and_url(
+    capsule, *, hf_repo, token, private, bundle_bytes=None, mini_bucket=None,
+    i_accept_bundle_findings=False,
+):
     """Publish to HF (capsule.json + capsule.md + bundle + mini-bucket when present). Exits on error.
 
     The CLI is THE egress door, so it always demands clearance (``require_clearance``):
     a capsule sourced from an unscanned/withheld trace refuses with zero bytes out.
+
+    #157 — a bundle carrying a secret is BLOCKED by default (zero bytes out). The
+    producer may explicitly acknowledge and override that block via
+    ``i_accept_bundle_findings`` (the override records ``acknowledged=True`` on the
+    shipped ``bundle.secret_scan``); the default stays closed.
     """
 
-    from ..core.capsule.share import CapsuleClearanceError, publish_capsule
+    from ..core.capsule.share import (
+        BundleSecretFindingError,
+        CapsuleClearanceError,
+        publish_capsule,
+    )
 
     tok = _hf_token(token)
     if not tok:
@@ -228,8 +240,9 @@ def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None, min
         info = publish_capsule(
             capsule, repo_id=hf_repo, token=tok, private=private,
             bundle_bytes=bundle_bytes, require_clearance=True, mini_bucket=mini_bucket,
+            i_accept_bundle_findings=i_accept_bundle_findings,
         )
-    except CapsuleClearanceError as exc:
+    except (CapsuleClearanceError, BundleSecretFindingError) as exc:
         click.echo(f"capsule publish refused: {exc}", err=True)
         sys.exit(3)
     except Exception as exc:
@@ -622,8 +635,10 @@ def _clip(do_copy, url):
 @click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the shareable URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
+@click.option("--i-accept-bundle-findings", "i_accept_bundle_findings", is_flag=True,
+              help="Acknowledge + override a bundle secret-scan block (records acknowledged=True and ships the bundle anyway). Default: blocked.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, publish, private, make_bundle, do_copy, assume_yes, token):
+def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, publish, private, make_bundle, do_copy, assume_yes, i_accept_bundle_findings, token):
     """Mint a shareable capsule URL (add --publish to upload it)."""
 
     from ..core.capsule.share import (
@@ -656,6 +671,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         url, human, info = _publish_and_url(
             capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes,
             mini_bucket=_build_mini_bucket_for(project, trace_id),
+            i_accept_bundle_findings=i_accept_bundle_findings,
         )
         click.echo(f"published {cid} (rev {info['revision'][:12]}) · {human}", err=True)
     elif repo:
@@ -679,8 +695,10 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
 @click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
+@click.option("--i-accept-bundle-findings", "i_accept_bundle_findings", is_flag=True,
+              help="Acknowledge + override a bundle secret-scan block (records acknowledged=True and ships the bundle anyway). Default: blocked.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, token):
+def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, i_accept_bundle_findings, token):
     """Render the GitHub issue body for a capsule, or file it with --publish.
 
     The HF repo defaults to ``<you>/opentraces-capsules`` and the issue repo is
@@ -750,6 +768,7 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
     url, human, _info = _publish_and_url(
         capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes,
         mini_bucket=_build_mini_bucket_for(project, trace_id),
+        i_accept_bundle_findings=i_accept_bundle_findings,
     )
     body = render_issue_body(capsule, capsule_url=url, human_url=human)
     _clip(do_copy, url)
@@ -885,6 +904,10 @@ def replay_cmd(ref, target_ref, as_json):
               help="Inherit the full host env (default: minimal allowlist + throwaway HOME).")
 @click.option("--timeout", type=int, default=180, show_default=True, help="Command timeout (seconds).")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the untrusted-command confirmation.")
+@click.option("--unsafe-run-on-host", "unsafe_run_on_host", is_flag=True,
+              help="Override the FOREIGN-capsule sandbox block and run its captured command on the host with NO real containment (sandbox_tier=none). Default: foreign capsules are blocked.")
+@click.option("--i-own-isolation", "i_own_isolation", is_flag=True,
+              help="Assert you are running inside your own container/VM so a foreign capsule may execute (still stamps the honest sandbox_tier=none).")
 @click.option("--with", "with_specs", multiple=True, metavar="NAME=VER|SPEC|URL",
               help="Override a CONSUMED dependency (repeatable): library upgrade or API endpoint.")
 @click.option("--matrix", "matrix", default=None, metavar="NAME=v1,v2,…",
@@ -893,7 +916,7 @@ def replay_cmd(ref, target_ref, as_json):
 @click.option("--close/--no-close", default=False, help="Close the issue on a `fixed` verdict.")
 @click.option("--json", "as_json", is_flag=True, help="Emit the full test result as JSON.")
 def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assume_yes,
-             with_specs, matrix, verdict_issue, close, as_json):
+             unsafe_run_on_host, i_own_isolation, with_specs, matrix, verdict_issue, close, as_json):
     """Run the capsule AS A TEST: reproduce the failure or confirm the fix.
 
     The repro runs in an isolated checkout (a git worktree of the target ref, or
@@ -907,7 +930,11 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
 
     from ..core.capsule.consumes import ConsumeError, parse_matrix, parse_with
     from ..core.capsule.contract import CapsuleSchemaAheadError
-    from ..core.capsule.run import CapsuleTestError, run_capsule_test
+    from ..core.capsule.run import (
+        CapsuleTestError,
+        SandboxNotOwnedError,
+        run_capsule_test,
+    )
     from ..core.capsule.share import CapsuleResolveError, resolve_capsule
 
     try:
@@ -937,6 +964,16 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
 
     bundle_path = _resolve_bundle_path(ref, capsule) if from_bundle else None
     repo = Path(repo_dir or Path.cwd()).resolve()
+    # Local repo identity for the #157 foreign-capsule sandbox gate. Matches the
+    # slug export stamps into ``source.project_slug`` (get_project_dir(...).name),
+    # so a capsule sourced from a DIFFERENT project is recognized as foreign and
+    # blocked by default unless the producer overrides with the flags below.
+    from ..core.config import get_project_dir
+
+    try:
+        local_slug = get_project_dir(repo).name or None
+    except Exception:  # pragma: no cover - slug derivation is best-effort
+        local_slug = None
     where = (
         f"the capsule's source bundle ({(capsule.get('bundle') or {}).get('source_sha','')[:12]})"
         if bundle_path else f"an isolated checkout of `{target_ref}` in {repo}"
@@ -962,7 +999,8 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
         return run_capsule_test(
             capsule, repo_dir=(None if bundle_path else repo), target_ref=target_ref,
             bundle_path=bundle_path, timeout=timeout, inherit_env=inherit_env,
-            with_overrides=(merged or None),
+            with_overrides=(merged or None), local_slug=local_slug,
+            i_own_isolation=i_own_isolation, unsafe_run_on_host=unsafe_run_on_host,
         )
 
     icons = {"fixed": "🟢", "reproduces": "🔴", "inconclusive": "🟡"}
@@ -977,6 +1015,9 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
                              "exit_code": r.get("exit_code"), "reason": r.get("reason")})
                 if r["verdict"] == "fixed" and resolved_in is None:
                     resolved_in = ver
+        except SandboxNotOwnedError as exc:
+            click.echo(f"capsule test refused: {exc}", err=True)
+            sys.exit(3)
         except CapsuleTestError as exc:
             click.echo(f"capsule test could not run: {exc}", err=True)
             sys.exit(2)
@@ -998,6 +1039,9 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
     # --- Single run (optionally with --with overrides) ------------------------
     try:
         result = _run()
+    except SandboxNotOwnedError as exc:
+        click.echo(f"capsule test refused: {exc}", err=True)
+        sys.exit(3)
     except CapsuleTestError as exc:
         click.echo(f"capsule test could not run: {exc}", err=True)
         sys.exit(2)
