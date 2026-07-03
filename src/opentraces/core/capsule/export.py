@@ -34,6 +34,12 @@ _ERROR_MARKERS = re.compile(
 )
 _MAX_ERROR_EXCERPT = 600
 
+# #156 — the slice-scoped diff block carried on the capsule. Additive, NOT the
+# capsule envelope version (it is a sibling block threaded in ``export_capsule``,
+# mirroring the ``product``/``privacy_scope``/``mini_bucket_digest`` precedent);
+# it mints its OWN frozen schema string so a consumer can pin the shape.
+SLICE_DIFF_SCHEMA_VERSION = "opentraces.capsule.slice_diff.v1"
+
 
 class CapsuleExportError(RuntimeError):
     """Export refused to build a capsule (empty slice, no intent, missing trace)."""
@@ -318,6 +324,161 @@ def _repo_pin(
     }
 
 
+def _rel_file_path(patch: Any, project_dir: Path) -> str | None:
+    """Repo-relative path for a schema ``Patch`` (mirrors ``_repo_pin`` scrub)."""
+
+    fp = getattr(patch, "file_path", None)
+    if not fp:
+        return None
+    candidate = str(fp)
+    try:
+        return str(Path(candidate).resolve().relative_to(project_dir.resolve()))
+    except Exception:
+        return Path(candidate).name if Path(candidate).is_absolute() else candidate
+
+
+def _slice_commit_shas(record: Any, start_step: int, end_step: int) -> tuple[list[str], list[Any]]:
+    """Distinct commit shas anchored to patches whose ``step_index`` is IN the slice.
+
+    Tier-1 of the burst→commit anchor, scoped to the slice's OWN step range (not
+    the whole session): read ``patches[].anchor.commit_sha`` for the patches the
+    slice actually covers. This is the authoritative ``patches[]`` spine the burst
+    machinery projects from — reading it directly, step-scoped, is exactly "the
+    slice's own commit" without depending on a trace-map trail projection (which
+    only populates ``burst.patches`` commit_sha when ingest ran). Returns the
+    distinct shas (order-preserving) AND the in-range patches (for the D2 file
+    list / D4 snapshot check).
+    """
+
+    in_range: list[Any] = []
+    shas: list[str] = []
+    for patch in getattr(record, "patches", []) or []:
+        si = getattr(patch, "step_index", None)
+        if not isinstance(si, int) or not (start_step <= si <= end_step):
+            continue
+        in_range.append(patch)
+        anchor = getattr(patch, "anchor", None)
+        sha = getattr(anchor, "commit_sha", None) if anchor is not None else None
+        if isinstance(sha, str) and sha:
+            shas.append(sha)
+    return list(dict.fromkeys(shas)), in_range
+
+
+def build_slice_diff(
+    project_dir: Path,
+    record: Any,
+    *,
+    start_step: int,
+    end_step: int,
+) -> dict[str, Any]:
+    """Build the slice-scoped ``slice_diff`` block (#156, D1–D4 ladder).
+
+    Carries the diff reproducing THIS slice's burst commit, and a ``diff_trust``
+    ordinal feeding the ADR-0008 §5 clamp (``exact`` ▸ ``partial`` ▸
+    ``file_list_only`` ▸ ``unanchored``). Replaces the ``_repo_pin`` whole-session
+    over-capture (it walked ALL ``record.patches`` with no slice filter, and could
+    be EMPTY on the watcher path). The ladder:
+
+    - **D1 commit-anchored** — the slice maps to exactly ONE commit:
+      ``git format-patch -1 <sha>`` + ``changed_files`` from ``git show
+      --name-only`` → ``diff_trust="exact"``.
+    - **D2 patch-row-scoped** — no commit anchor but the slice has patch rows:
+      ``changed_files`` from those rows' ``file_path`` → ``file_list_only``.
+    - **D3 multi-commit** — the slice maps to >1 commit: union of shas + union of
+      their files → ``partial`` (do NOT chase ``exact``).
+    - **D4 snapshot-refs only / nothing** — declare ``unanchored`` and STOP; do
+      NOT synthesize a fake commit.
+
+    The **patches-empty Tier-2 fix (#156 2c)**: when ``record.patches`` is empty
+    but the slice's step range DID commit (via the hook-trail commit index),
+    derive ``changed_files`` from ``git show --name-only <sha>`` — NOT ``[]`` — and
+    stamp ``changed_files_from_commit`` so an empty-patches watcher case never
+    masquerades as "nothing changed".
+    """
+
+    from ..bursts import _build_commit_index, _git_show_files
+
+    shas, patches_in_range = _slice_commit_shas(record, start_step, end_step)
+    changed_from_commit = False
+
+    # Tier-2 fallback: no patch carried an anchor commit (the integration/watcher
+    # path where record.patches is empty or unattributed). Derive the slice's
+    # commit(s) from the hook-trail commit index, scoped to the slice's own range.
+    if not shas:
+        idx_shas: list[str] = []
+        for step_index, sha in _build_commit_index(record):
+            if isinstance(sha, str) and sha and start_step <= step_index <= end_step:
+                idx_shas.append(sha)
+        shas = list(dict.fromkeys(idx_shas))
+        if shas:
+            changed_from_commit = True
+
+    block: dict[str, Any] = {
+        "schema_version": SLICE_DIFF_SCHEMA_VERSION,
+        "start_step_index": start_step,
+        "end_step_index": end_step,
+        "burst_commit_shas": list(shas),
+        "format_patch": None,
+    }
+
+    # D1 — single commit → exact, with the real diff + commit file set.
+    if len(shas) == 1:
+        sha = shas[0]
+        files = _git_show_files(project_dir, sha)
+        if files:
+            block.update(
+                {
+                    "diff_trust": "exact",
+                    "burst_commit_sha": sha,
+                    "changed_files": sorted(files),
+                    "format_patch": _git(project_dir, ["format-patch", "-1", "--stdout", sha]),
+                    # Honesty marker: changed_files came from `git show --name-only`
+                    # (the commit), not from patch rows. Load-bearing for the
+                    # patches-empty Tier-2 case (2c) so an empty patches list never
+                    # reads as "nothing changed"; harmless-but-honest on D1 too.
+                    "changed_files_from_commit": True,
+                }
+            )
+            return block
+        # The commit is not resolvable in THIS repo (off-machine / unfetched pin):
+        # fall through to the patch-row / snapshot ladder below rather than claim
+        # exact against a commit we cannot read.
+        shas = []
+
+    # D3 — the slice spans more than one commit → partial, union of shas + files.
+    if len(shas) > 1:
+        union: set[str] = set()
+        for sha in shas:
+            union |= _git_show_files(project_dir, sha)
+        if union:
+            changed_from_commit = True
+        else:
+            union = {p for patch in patches_in_range if (p := _rel_file_path(patch, project_dir))}
+        block.update(
+            {
+                "diff_trust": "partial",
+                "burst_commit_shas": sorted(shas),
+                "changed_files": sorted(union),
+            }
+        )
+        if changed_from_commit:
+            block["changed_files_from_commit"] = True
+        return block
+
+    # No commit anchor at all: D2 (patch rows) or D4 (snapshot-only / nothing).
+    changed = sorted(
+        {p for patch in patches_in_range if (p := _rel_file_path(patch, project_dir))}
+    )
+    if changed:
+        block.update({"diff_trust": "file_list_only", "changed_files": changed})  # D2
+        return block
+
+    # D4 — the only evidence is snapshot refs (or there is none): declare
+    # unanchored and STOP. Never synthesize a fake commit.
+    block.update({"diff_trust": "unanchored", "changed_files": []})
+    return block
+
+
 def export_capsule(
     *,
     project_dir: Path,
@@ -487,12 +648,31 @@ def export_capsule(
     )
 
     # Runnable repro (the article's "replayable test"): a declared command wins;
-    # otherwise best-effort extraction from the failing command step.
-    from .test_extract import declared_test, extract_test_payload
+    # otherwise the captured FAILING command near the failing step; otherwise the
+    # captured PASSING test the agent ran (#156, the success-session majority).
+    # A declared --test-command with no --expect-error is the declared-PASS form:
+    # it grades exit-0 as the success bar (oracle._generic), so a maintainer can
+    # declare a passing test on a success session with no new flag.
+    from .test_extract import (
+        declared_test,
+        extract_passing_test_payload,
+        extract_test_payload,
+        oracle_trust_of,
+    )
 
-    test = declared_test(test_command, expect_error) or extract_test_payload(record, resolved_step)
+    test = (
+        declared_test(test_command, expect_error)
+        or extract_test_payload(record, resolved_step)
+        or extract_passing_test_payload(record)
+    )
     if test is None:
         limitations.append("no_executable_test")
+    # #156 — the oracle_trust ordinal (ADR-0008 §5), promoting today's
+    # strategy/source/signal_present proxies into an explicit token the replay
+    # clamp reads. A sealed capsule always carries re-posable intent, so a
+    # no-test session honestly floors to intent_reposed (its intrinsic ceiling),
+    # never "declared". Stamped onto the capsule below (raw["oracle_trust"]).
+    oracle_trust = oracle_trust_of(test)
 
     # Environment manifest: what's needed to run the test reproducibly (not host-coupled).
     env_obj = getattr(record, "environment", None)
@@ -540,7 +720,22 @@ def export_capsule(
         from .bucket_trail import SURVIVAL_NOT_RECOMPUTED
 
         limitations.append(SURVIVAL_NOT_RECOMPUTED)
+    # #156 — the slice-scoped diff. Read the slice's OWN step range and derive the
+    # diff that reproduces THIS slice's burst commit (not the whole session), plus
+    # the diff_trust ordinal the clamp reads. Then REPLACE the _repo_pin
+    # whole-session changed_files over-capture with this slice-scoped file set, so
+    # the capsule never credits a "fixed" verdict to an unrelated later commit
+    # baked into the archived tree.
+    slice_start = int(slice_payload.get("start_step_index", resolved_step))
+    slice_end = int(slice_payload.get("end_step_index", resolved_step))
+    slice_diff = build_slice_diff(
+        project_dir, record, start_step=slice_start, end_step=slice_end
+    )
+
     repo_pin = _repo_pin(project_dir, record, trace_id, remote_url)
+    # Slice-scoped, not whole-session: the authoritative changed-file set for the
+    # capsule is the slice's, mirrored onto the pin (over-capture cure, #156).
+    repo_pin["changed_files"] = list(slice_diff.get("changed_files", []))
     if not repo_pin.get("commit_sha"):
         limitations.append("repo_pin_no_commit")
     if repo_pin.get("reachable_locally") is False:
@@ -640,6 +835,17 @@ def export_capsule(
         privacy_scope=privacy_scope,
     )
 
+    # #156 — stamp the slice_diff block + the oracle_trust ordinal onto the raw
+    # envelope BEFORE redaction runs, so the carried diff (which can contain code
+    # / secrets) is scanned by the mandatory floor exactly like every other
+    # surface. Both are read by the replay clamp at its exact key paths
+    # (capsule["slice_diff"]["diff_trust"], capsule["oracle_trust"]); additive
+    # within opentraces.capsule.v1 (new optional keys, not in REQUIRED_KEYS,
+    # mirroring the product/privacy_scope precedent). oracle_trust is a short
+    # vocab token well below the entropy floor, so redaction leaves it intact.
+    raw["slice_diff"] = slice_diff
+    raw["oracle_trust"] = oracle_trust
+
     # Pull the manifest placeholder out so the redactor never has to reason
     # about redacting its own manifest; exclude prompt-bearing fields by default
     # (opt back in with --include-prompts); redact everything else; reattach.
@@ -684,4 +890,9 @@ def _completeness(packet: dict[str, Any]) -> str | None:
     return None
 
 
-__all__ = ["CapsuleExportError", "export_capsule"]
+__all__ = [
+    "CapsuleExportError",
+    "SLICE_DIFF_SCHEMA_VERSION",
+    "build_slice_diff",
+    "export_capsule",
+]
