@@ -43,7 +43,7 @@ PYTHON_STDLIB: set[str] = {
     "unittest", "urllib", "uu", "uuid", "venv", "warnings", "wave",
     "weakref", "webbrowser", "winreg", "winsound", "wsgiref",
     "xdrlib", "xml", "xmlrpc", "zipapp", "zipfile", "zipimport",
-    "zlib", "_thread",
+    "zlib", "_thread", "__future__",
 }
 
 # ~30 Node.js builtin module names.
