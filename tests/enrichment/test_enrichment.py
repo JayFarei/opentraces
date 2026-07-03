@@ -20,6 +20,7 @@ from opentraces.enrichment.dependencies import (
     extract_dependencies_from_imports,
     extract_dependencies_from_steps,
     infer_language_ecosystem,
+    suggest_consumes,
 )
 from opentraces.enrichment.git_signals import (
     MAX_VCS_DIFF_CHARS,
@@ -576,6 +577,44 @@ class TestExtractDependenciesFromSteps:
         steps = [_make_step(0, tool_calls=[_make_bash_tc("npm install --save-dev jest")])]
         deps = extract_dependencies_from_steps(steps)
         assert deps == ["jest"]
+
+    def test_ignores_shell_operators_and_redirections(self):
+        # issue: capsule --consume hints emitted "&&" and "2" from a command
+        # like "pip install requests && pytest 2>&1".
+        steps = [
+            _make_step(
+                0,
+                tool_calls=[_make_bash_tc("pip install requests && pytest 2>&1")],
+            )
+        ]
+        deps = extract_dependencies_from_steps(steps)
+        assert "&&" not in deps
+        assert "2" not in deps
+        assert "requests" in deps
+
+
+class TestSuggestConsumesGate:
+    """suggest_consumes must never surface shell operators / stdlib pseudo-modules."""
+
+    def test_drops_future_shell_operators_and_bare_digits(self):
+        hints = suggest_consumes(["__future__", "2", "&&", "requests"])
+        assert hints == ["package:requests="]
+
+    def test_real_dependencies_survive(self):
+        hints = suggest_consumes(["requests", "pytest"])
+        assert hints == ["package:requests=", "package:pytest="]
+
+
+class TestExtractDependenciesFromImportsFuture:
+    def test_future_import_is_filtered(self):
+        obs = Observation(
+            source_call_id="tc_1",
+            content="from __future__ import annotations\nimport requests\n",
+        )
+        steps = [_make_step(0, observations=[obs])]
+        deps = extract_dependencies_from_imports(steps)
+        assert "__future__" not in deps
+        assert "requests" in deps
 
 
 # ---------------------------------------------------------------------------

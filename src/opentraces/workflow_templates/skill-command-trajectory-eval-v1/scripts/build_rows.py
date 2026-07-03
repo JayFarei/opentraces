@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -229,10 +230,28 @@ def main() -> int:
     output = args.output or _env_path("OT_DATASET_OUTPUT")
     if output is None:
         parser.error("no output path: set OT_DATASET_OUTPUT or pass --output")
-    source = args.source or _default_source()
+    source = (args.source or _default_source()).expanduser()
     limit = args.limit if args.limit is not None else _packet_limit()
 
-    rows = read_rows(source.expanduser(), limit=limit)
+    if args.source is None and not source.exists():
+        # No explicit --source, and the upstream trajectories dataset this
+        # template evaluates has not been produced yet on this bucket. Fail
+        # soft: this is the ONE bundled template, so it must not crash a
+        # fresh install out of the box -- emit zero rows and explain why.
+        print(
+            "no rows: this template evaluates the upstream "
+            "'skill-command-trajectories' dataset, which has not been "
+            f"produced yet (expected at {source}). Run the workflow that "
+            "produces it first, or pass --source <path> to point at an "
+            "existing trajectories JSONL.",
+            file=sys.stderr,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("", encoding="utf-8")
+        print(f"emitted 0 row(s) -> {output}")
+        return 0
+
+    rows = read_rows(source, limit=limit)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as stream:
         for row in rows:
