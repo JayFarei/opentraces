@@ -61,6 +61,7 @@ from .workflow_judgment import (
 from .workflows import (
     WorkflowIntegrityError,
     WorkflowPackage,
+    is_trusted_workflow,
     load_workflow,
     resolve_workflow_reference,
     verify_workflow_digest,
@@ -819,10 +820,12 @@ def _execute_script(
     ``core.isolation.run_isolated``, which is the actual subprocess boundary: the
     child env is built from an ALLOWLIST (parent secrets never inherited), only
     the ``OT_*`` contract vars reach it, and ``$HOME`` is redirected to a
-    throwaway dir. BUNDLED (first-party ``source_type=="package"``) templates
-    still reach the operator's bucket via an explicit ``OT_OPENTRACES_DIR`` and
-    run with network allowed; THIRD-PARTY (``file``) sources get full
-    network-deny and NO bucket var. Returns the honest :class:`IsolationReport`.
+    throwaway dir. TRUSTED (first-party, by PROVENANCE — under the bundled
+    templates dir or the installed-workflow registry) templates still reach the
+    operator's bucket via an explicit ``OT_OPENTRACES_DIR`` and run with network
+    allowed; UNTRUSTED sources (an external directory, regardless of its
+    ``source_type`` shape) get full network-deny and NO bucket var (#188 / C2).
+    Returns the honest :class:`IsolationReport`.
 
     #186 handshake: the child is handed an ``OT_JUDGMENT_SIDECAR`` path; when the
     builder needs judgments it writes its JudgmentRequests there and exits
@@ -836,7 +839,10 @@ def _execute_script(
             "(script executor requires a deterministic builder)"
         )
 
-    bundled = workflow.source_type == "package"
+    # #188 / C2: trust is by PROVENANCE (bundled-templates dir or the installed
+    # registry), NOT the dir-vs-file ``source_type`` shape — an external
+    # directory resolves as ``package`` yet must stay untrusted.
+    bundled = is_trusted_workflow(workflow)
     sidecar_path = run_dir / "judgment_requests.json"
     # ONLY the OT_* contract vars reach the scrubbed child (plus the isolation
     # primitive's own PATH/LANG/... allowlist). Nothing else — not the parent's

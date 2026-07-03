@@ -53,6 +53,52 @@ def workflows_dir() -> Path:
     return paths.OPENTRACES_DIR / "workflows"
 
 
+def _bundled_templates_dir() -> Path | None:
+    """Filesystem path of the first-party bundled-templates package, or None.
+
+    Returns None when the package cannot be resolved to a real directory (e.g. a
+    zip-imported install), in which case only the installed-registry check
+    contributes to trust.
+    """
+    try:
+        root = resources.files(_BUILTIN_TEMPLATE_PACKAGE)
+    except (ModuleNotFoundError, TypeError):
+        return None
+    try:
+        candidate = Path(str(root))
+    except (TypeError, ValueError):
+        return None
+    return candidate if candidate.is_dir() else None
+
+
+def _is_within(path: Path, root: Path | None) -> bool:
+    if root is None:
+        return False
+    try:
+        path.expanduser().resolve().relative_to(root.expanduser().resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def is_trusted_workflow(pkg: WorkflowPackage) -> bool:
+    """Trust by PROVENANCE, not by dir-vs-file shape (#188 / C2).
+
+    A workflow is first-party TRUSTED iff its path lives under the bundled
+    workflow-templates package dir or the installed-workflow registry dir
+    (:func:`workflows_dir`, where :func:`install_workflow` writes). An arbitrary
+    external directory pinned by ``dataset new --workflow /path`` is UNTRUSTED
+    even though :func:`resolve_workflow_reference` labels its ``source_type`` as
+    ``"package"`` — a directory shape is not a provenance signal. The script
+    executor (#188) grants network access + the real bucket
+    (``OT_OPENTRACES_DIR``) to trusted workflows only; untrusted ones run
+    network-denied with no bucket var.
+    """
+    return _is_within(pkg.path, workflows_dir()) or _is_within(
+        pkg.path, _bundled_templates_dir()
+    )
+
+
 def validate_workflow_name(name: str) -> str:
     if not name or not _WORKFLOW_NAME_RE.fullmatch(name):
         raise ValueError(
