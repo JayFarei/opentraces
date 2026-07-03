@@ -22,6 +22,7 @@ from click.testing import CliRunner
 from opentraces.cli import main
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import dataset_path, load_dataset
+from opentraces.core.workflows import create_workflow
 
 
 def _write_rows(path, rows):
@@ -181,8 +182,10 @@ def test_dataset_new_rows_file_requires_schema_but_schema_can_define_workflow_co
     assert result.exit_code != 0
     assert not dataset_path("rows-only").exists()
 
-    # --schema without --rows-file creates a workflow-backed dataset with
-    # a custom row contract.
+    # --schema with a --workflow creates a workflow-backed dataset with a custom
+    # row contract. #190 removed the silent bind: `--schema` alone no longer
+    # implies a workflow, so a real workflow must be bound alongside the schema.
+    create_workflow("schema-curator")
     schema_path = rows_path.parent / "schema.json"
     schema_path.write_text(json.dumps(_basic_schema()), encoding="utf-8")
     result = runner.invoke(
@@ -190,6 +193,7 @@ def test_dataset_new_rows_file_requires_schema_but_schema_can_define_workflow_co
         [
             "new",
             "schema-only",
+            "--workflow", "schema-curator",
             "--schema", str(schema_path),
         ],
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from click.testing import CliRunner
 
 from opentraces.cli.dataset import dataset_group
@@ -13,6 +14,17 @@ from opentraces.core.datasets import (
     load_dataset,
     read_publication_state,
 )
+from opentraces.core.workflows import create_workflow
+
+
+@pytest.fixture(autouse=True)
+def _install_curator_workflow():
+    # #190: `dataset new --workflow curator` now resolves the bare name before
+    # creating the dataset, so the workflow must be installed first. These tests
+    # exercise remote/review/publish over an already-bound dataset (rows are
+    # appended directly, not via a script run), so a plain default workflow is
+    # all the bind needs to resolve and pin a real digest.
+    create_workflow("curator")
 
 
 def test_dataset_remote_lifecycle_updates_dataset_manifest(monkeypatch):
