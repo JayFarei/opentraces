@@ -28,9 +28,10 @@ removed in the collapse.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from opentraces.core._time import utc_now_str
 from pathlib import Path
@@ -754,6 +755,37 @@ def _new_run_id() -> str:
 
 _WORKFLOW_SCRIPT_RELPATH = Path("scripts") / "build_rows.py"
 
+logger = logging.getLogger(__name__)
+
+# DEFECT A (#188 regression): the shared isolation primitive defaults to a 180s
+# wall-clock timeout. That floor is fine for a foreign capsule repro but WRONG
+# for a dataset projection, which legitimately walks thousands of bucket traces
+# and can run well past three minutes. On origin/main the workflow subprocess had
+# no timeout at all. We restore a generous default here (raisable per-run via the
+# ``execute_workflow(timeout=...)`` param or the ``OT_WORKFLOW_TIMEOUT`` seconds
+# env override) so a long projection can complete while a genuinely hung script
+# is still eventually reaped.
+DEFAULT_WORKFLOW_TIMEOUT = 3600.0
+_WORKFLOW_TIMEOUT_ENV = "OT_WORKFLOW_TIMEOUT"
+
+
+def _resolve_workflow_timeout(explicit: float | None) -> float:
+    """Effective script timeout: explicit arg > env override > generous default."""
+    if explicit is not None:
+        return float(explicit)
+    raw = os.environ.get(_WORKFLOW_TIMEOUT_ENV)
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a number; falling back to the %.0fs default",
+                _WORKFLOW_TIMEOUT_ENV,
+                raw,
+                DEFAULT_WORKFLOW_TIMEOUT,
+            )
+    return DEFAULT_WORKFLOW_TIMEOUT
+
 
 @dataclass(frozen=True)
 class WorkflowExecutionResult:
@@ -775,6 +807,9 @@ class WorkflowExecutionResult:
     scope: dict[str, Any]
     reconstructable: bool = True
     sandbox_tier: str = SANDBOX_TIER_NONE
+    # Non-fatal, surfaced diagnostics (e.g. an untrusted workflow that produced
+    # zero rows because it has no bucket access — DEFECT B). Empty on a clean run.
+    warnings: list[str] = field(default_factory=list)
 
 
 def execute_workflow(
@@ -790,6 +825,7 @@ def execute_workflow(
     answers: dict[str, Any] | None = None,
     strict: bool = False,
     verify_digest: bool = True,
+    timeout: float | None = None,
 ) -> WorkflowExecutionResult:
     """Run a workflow's deterministic builder, write rows to ``output_path``.
 
@@ -833,6 +869,12 @@ def execute_workflow(
         ``strict`` makes a mismatch fatal (:class:`WorkflowIntegrityError`),
         otherwise it warns. The dataset runner sets ``verify_digest=False``
         because it verifies against the manifest pin itself.
+    timeout:
+        Wall-clock seconds before the workflow script is killed. ``None`` uses
+        the generous ``DEFAULT_WORKFLOW_TIMEOUT`` (raisable via the
+        ``OT_WORKFLOW_TIMEOUT`` env override) so a large-bucket projection that
+        legitimately runs past the isolation primitive's 180s floor can finish
+        (DEFECT A / #188 regression). A hung script is still eventually reaped.
     """
 
     if executor != "script":
@@ -881,10 +923,16 @@ def execute_workflow(
     output_path.write_text("", encoding="utf-8")
 
     isolation = _execute_script(
-        workflow, run_dir, output_path, run_packet, extra_env=extra_env
+        workflow,
+        run_dir,
+        output_path,
+        run_packet,
+        extra_env=extra_env,
+        timeout=_resolve_workflow_timeout(timeout),
     )
 
     rows = _read_output_rows(output_path)
+    warnings = _diagnose_empty_run(workflow, rows)
     finished_at = utc_now_str()
     return WorkflowExecutionResult(
         workflow_name=workflow.name,
@@ -899,7 +947,36 @@ def execute_workflow(
         # whatever the shared isolation primitive honestly reported (#188).
         reconstructable=True,
         sandbox_tier=isolation.sandbox_tier,
+        warnings=warnings,
     )
+
+
+def _diagnose_empty_run(
+    workflow: WorkflowPackage,
+    rows: list[dict[str, Any]],
+) -> list[str]:
+    """Surface the DEFECT B silent-empty case as an actionable warning.
+
+    An UNTRUSTED (external-directory) workflow is deliberately handed NO
+    ``OT_OPENTRACES_DIR`` (#188 / C2), so its ``paths.OPENTRACES_DIR`` resolves
+    inside the isolated throwaway HOME -> an empty bucket -> zero rows with rc=0.
+    Left silent that reads as a successful empty dataset. Name the cause instead.
+    A TRUSTED workflow that legitimately finds zero rows is NOT flagged (it had
+    real bucket access; empty is a real answer).
+    """
+    if rows:
+        return []
+    if is_trusted_workflow(workflow):
+        return []
+    message = (
+        f"workflow '{workflow.name}' produced ZERO rows and is untrusted "
+        "(resolved from an external directory), so it ran with NO bucket access "
+        "(OT_OPENTRACES_DIR is withheld from untrusted sources) against an "
+        "isolated empty bucket. Install it as a first-party workflow "
+        "('opentraces workflow create') if it must read your captured traces."
+    )
+    logger.warning(message)
+    return [message]
 
 
 def _build_workflow_packet(
@@ -965,6 +1042,7 @@ def _execute_script(
     output_path: Path,
     run_packet: dict[str, Any],
     extra_env: dict[str, str] | None = None,
+    timeout: float = DEFAULT_WORKFLOW_TIMEOUT,
 ) -> IsolationReport:
     """Run a workflow's ``build_rows.py`` through the shared isolation primitive.
 
@@ -1023,6 +1101,7 @@ def _execute_script(
             allow_env=allow_env,
             network=network,
             source_trust=source_trust,
+            timeout=timeout,
         )
     except OSError as exc:
         raise ExecutorUnavailableError(
