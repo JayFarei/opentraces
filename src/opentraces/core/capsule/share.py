@@ -75,11 +75,72 @@ def mint_viewer_url(repo_id: str, capsule_id: str, *, revision: str = "main") ->
     return f"{VIEWER_HOST}/{rid}/{capsule_id}?rev={revision}"
 
 
+# --------------------------------------------------------------------------- #
+# Bundle archive hygiene (#157 Part 1): defense-before-detection. ``git archive``
+# already honors ``.gitattributes export-ignore`` NATIVELY (no code needed), but
+# it happily ships a committed ``.env`` / private key / cert that is NOT marked
+# export-ignore. A default member-exclude filter drops those sensitive paths
+# BEFORE gzip so they never reach the public dataset.
+# --------------------------------------------------------------------------- #
+
+_BUNDLE_EXCLUDE_GLOBS = (".env", ".env.*", "*.pem", "id_rsa*", "*.key", ".netrc")
+_BUNDLE_EXCLUDE_DIRS = (".aws",)
+
+
+def _member_is_sensitive(name: str) -> bool:
+    """True when an archive member path is a committed secret/key by convention."""
+
+    import fnmatch
+
+    parts = Path(name).parts
+    if any(part in _BUNDLE_EXCLUDE_DIRS for part in parts):
+        return True
+    base = Path(name).name
+    return any(fnmatch.fnmatch(base, glob) for glob in _BUNDLE_EXCLUDE_GLOBS)
+
+
+def _filter_bundle_tar(tar_bytes: bytes) -> tuple[bytes, list[str]]:
+    """Drop sensitive members from a raw tar; return ``(filtered_bytes, excluded)``.
+
+    When NOTHING matches the filter the ORIGINAL bytes are returned unchanged, so
+    a secret-free bundle stays byte-identical to the raw ``git archive`` output
+    (cross-machine reproducibility preserved). Only a bundle that actually carries
+    a sensitive member is re-tarred; the re-tar copies each surviving member
+    verbatim (same ``TarInfo``, same git-archive mtime) into a deterministic PAX
+    tar, so two builds of the same commit remain byte-identical.
+    """
+
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tf:
+        if not any(_member_is_sensitive(m.name) for m in tf.getmembers()):
+            return tar_bytes, []
+
+    excluded: list[str] = []
+    out = io.BytesIO()
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tf, tarfile.open(
+        fileobj=out, mode="w:", format=tarfile.PAX_FORMAT
+    ) as tw:
+        for member in tf.getmembers():
+            if _member_is_sensitive(member.name):
+                excluded.append(member.name)
+                continue
+            if member.isreg():
+                tw.addfile(member, tf.extractfile(member))
+            else:
+                tw.addfile(member)
+    return out.getvalue(), excluded
+
+
 def build_capsule_bundle(project_dir: Path, sha: str) -> tuple[dict[str, Any], bytes]:
-    """git archive the repo at ``sha`` into a deterministic tar.gz.
+    """git archive the repo at ``sha`` into a deterministic, hygiene-filtered tar.gz.
 
     Returns ``(bundle_metadata, tar_gz_bytes)``. The bundle makes the capsule
     hermetic: the test runs even when the commit is private / force-pushed away.
+    A default member-exclude filter (``.env`` / keys / certs / ``.aws/`` / ``.netrc``)
+    drops committed secrets BEFORE gzip (#157). ``.gitattributes export-ignore``
+    is honored natively by ``git archive`` already.
     """
 
     import gzip
@@ -94,14 +155,17 @@ def build_capsule_bundle(project_dir: Path, sha: str) -> tuple[dict[str, Any], b
             f"git archive failed for {sha} in {project_dir}: "
             f"{raw.stderr.decode('utf-8', 'replace').strip()}"
         )
+    filtered_tar, excluded = _filter_bundle_tar(raw.stdout)
     # mtime=0 for byte-identity across machines (matches the bucket convention).
-    gz = gzip.compress(raw.stdout, mtime=0)
+    gz = gzip.compress(filtered_tar, mtime=0)
     meta = {
         "kind": "git_archive",
         "filename": BUNDLE_FILENAME,
         "source_sha": sha,
         "sha256": hashlib.sha256(gz).hexdigest(),
         "size_bytes": len(gz),
+        # Additive provenance: which committed-secret members hygiene dropped.
+        "excluded_members": excluded,
     }
     return meta, gz
 
@@ -547,6 +611,94 @@ def _resolve_remote_capsule(ref: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# Bundle secret-scan (#157 Part 1): a publish GATE, NEVER a trust factor. A
+# secret-bearing bundle does not degrade to a lower tier — it does not leave.
+# --------------------------------------------------------------------------- #
+
+
+class BundleSecretFindingError(RuntimeError):
+    """A capsule's source bundle carries a secret; publish REFUSES (zero bytes).
+
+    The unrecoverable failure mode is a committed/hardcoded secret shipping to a
+    PUBLIC HF dataset. This blocks by default; the operator may override after
+    review with ``i_accept_bundle_findings=True`` (which records an explicit
+    acknowledgement in ``bundle.secret_scan.acknowledged``). The message names
+    the detectors but NEVER the secret bytes.
+    """
+
+    def __init__(self, secret_scan: dict[str, Any], findings: list[Any]):
+        self.secret_scan = secret_scan
+        self.findings = findings
+        detectors = ", ".join(sorted({getattr(f, "detector_name", "?") for f in findings})) or "?"
+        super().__init__(
+            "capsule publish refused: the source bundle contains "
+            f"{secret_scan.get('findings_count', len(findings))} secret finding(s) "
+            f"[{detectors}]. A secret-bearing bundle is an unrecoverable public leak "
+            "and does NOT leave the machine. Remove the secret (or exclude the file) "
+            "and re-seal, or pass i_accept_bundle_findings=True to override after review."
+        )
+
+
+def scan_bundle_bytes(bundle_bytes: bytes, *, verify: bool = False) -> tuple[dict[str, Any], list[Any]]:
+    """Secret-scan the EXACT shipped bundle bytes; return ``(secret_scan, findings)``.
+
+    Extracts the bundle to a throwaway temp dir (reusing the untrusted-archive
+    path-traversal guard ``run.py::_safe_extractall``) and runs the native
+    ``trufflehog filesystem`` scan (``security/trufflehog.py::scan_file``) — a
+    bundle IS a directory after extraction, so ZERO adapter is needed. ``verify``
+    stays ``False`` (never make outbound verification probes from a publish path).
+
+    The returned ``secret_scan`` stamp is ALWAYS present (the load-bearing honesty
+    artifact): ``{status, blocked, findings_count, scanned_at, trufflehog_version,
+    acknowledged}``. When trufflehog is absent the scan is an HONEST skip
+    (``status="skipped_no_trufflehog"``, ``blocked=False``) — never a silent clean
+    claim. The stamp NEVER records a raw secret value.
+    """
+
+    import io
+    import tarfile
+    import tempfile
+    from datetime import datetime, timezone
+
+    from ...security.trufflehog import find_trufflehog, scan_file
+    from .run import _safe_extractall
+
+    scanned_at = datetime.now(timezone.utc).isoformat()
+    version = find_trufflehog()
+    if version is None:
+        return (
+            {
+                "status": "skipped_no_trufflehog",
+                "blocked": False,
+                "findings_count": 0,
+                "scanned_at": scanned_at,
+                "trufflehog_version": None,
+                "acknowledged": False,
+            },
+            [],
+        )
+
+    with tempfile.TemporaryDirectory(prefix="capsule-bundle-scan-") as tmp:
+        dest = Path(tmp)
+        with tarfile.open(fileobj=io.BytesIO(bundle_bytes), mode="r:gz") as tf:
+            _safe_extractall(tf, dest)
+        findings = scan_file(dest, verify=verify)
+
+    blocked = bool(findings)
+    return (
+        {
+            "status": "blocked" if blocked else "clean",
+            "blocked": blocked,
+            "findings_count": len(findings),
+            "scanned_at": scanned_at,
+            "trufflehog_version": version,
+            "acknowledged": False,
+        },
+        findings,
+    )
+
+
 def publish_capsule(
     capsule: dict[str, Any],
     *,
@@ -558,6 +710,7 @@ def publish_capsule(
     clearance_manifest: dict[str, Any] | None = None,
     allow_sourceless_egress: bool = False,
     mini_bucket: dict[str, Any] | None = None,
+    i_accept_bundle_findings: bool = False,
 ) -> dict[str, Any]:
     """Upload capsule.json + capsule.md (+ the bundle + the mini-bucket when present) to ``capsules/v1/<id>/`` on HF.
 
@@ -589,6 +742,20 @@ def publish_capsule(
             allow_sourceless_egress=allow_sourceless_egress,
         )
 
+    # #157 bundle secret-scan GATE — a publish GATE, NEVER a trust factor. Scan the
+    # EXACT shipped bytes; a finding BLOCKS (zero bytes out) unless the operator
+    # explicitly accepts. Evaluated BEFORE any HF import/call so a refusal is
+    # provably zero-byte. The stamp is ALWAYS recorded (clean OR blocked) on the
+    # capsule's bundle block below, so every published bundle carries the artifact.
+    pending_secret_scan: dict[str, Any] | None = None
+    if bundle_bytes is not None:
+        pending_secret_scan, _findings = scan_bundle_bytes(bundle_bytes)
+        if pending_secret_scan["blocked"] and not i_accept_bundle_findings:
+            raise BundleSecretFindingError(pending_secret_scan, _findings)
+        pending_secret_scan["acknowledged"] = bool(
+            pending_secret_scan["blocked"] and i_accept_bundle_findings
+        )
+
     try:
         from huggingface_hub import HfApi
     except Exception as exc:  # pragma: no cover - dep present in env
@@ -615,6 +782,13 @@ def publish_capsule(
         "viewer_url": mint_viewer_url(rid, cid, revision="main"),
         "published_revision": None,
     }
+    # #157 — stamp the always-present bundle.secret_scan honesty artifact onto the
+    # capsule so it ships in capsule.json (post-redaction; the stamp holds only
+    # counts/status/version, never a secret byte, so ensure_redacted leaves it).
+    if pending_secret_scan is not None:
+        bundle_meta = dict(capsule.get("bundle") or {})
+        bundle_meta["secret_scan"] = pending_secret_scan
+        capsule["bundle"] = bundle_meta
 
     import tempfile
 
@@ -877,12 +1051,14 @@ def close_issue(repo: str, number: int, *, reason: str = "completed") -> None:
 
 __all__ = [
     "BUNDLE_FILENAME",
+    "BundleSecretFindingError",
     "CapsuleClearanceError",
     "CapsuleResolveError",
     "GhError",
     "GhUnavailableError",
     "build_capsule_bundle",
     "build_mini_bucket",
+    "scan_bundle_bytes",
     "carried_section_inventory",
     "close_issue",
     "comment_issue",
