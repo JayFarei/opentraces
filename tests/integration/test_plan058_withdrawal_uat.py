@@ -20,7 +20,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from tests._dataset_egress import neutralize_dataset_egress
+
 from opentraces.cli.dataset import dataset_group
+
+
+@pytest.fixture(autouse=True)
+def _clear_dataset_egress(monkeypatch):
+    # These fake-remote publish golden paths predate the #194 egress clearance
+    # gate and publish synthetic trace ids with no bucket entry. (The withdrawal
+    # secret-scan refusal path is unaffected — that gate still fires.)
+    neutralize_dataset_egress(monkeypatch)
 from opentraces.core.datasets import (
     add_dataset_remote,
     append_rows,

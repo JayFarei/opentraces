@@ -5,6 +5,8 @@ import json
 import pytest
 from click.testing import CliRunner
 
+from tests._dataset_egress import neutralize_dataset_egress
+
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import (
     DatasetPublishSummary,
@@ -25,6 +27,13 @@ def _install_curator_workflow():
     # appended directly, not via a script run), so a plain default workflow is
     # all the bind needs to resolve and pin a real digest.
     create_workflow("curator")
+
+
+@pytest.fixture(autouse=True)
+def _clear_dataset_egress(monkeypatch):
+    # These publish golden paths predate the #194 egress clearance gate and use
+    # synthetic trace ids with no bucket entry.
+    neutralize_dataset_egress(monkeypatch)
 
 
 def test_dataset_remote_lifecycle_updates_dataset_manifest(monkeypatch):
