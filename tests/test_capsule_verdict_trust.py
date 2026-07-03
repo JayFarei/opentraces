@@ -306,3 +306,120 @@ def test_todays_corpus_every_capsule_is_floor(export_env):
     packet = build_replay_packet(cap, target_ref="HEAD")
     assert packet["verdict_trust"] == "floor"
     assert "not reproducible" in packet["honest_claim"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# #154 reshape — the four named PROPERTIES are the PRIMARY honest surface.
+# verdict_trust stays as the DERIVED weakest-link summary (computed the same way,
+# exercised by the clamp/min tests above). These add the property-block spec.
+# --------------------------------------------------------------------------- #
+
+_PROPERTY_NAMES = ("reproducible", "gradable", "scoped", "sandboxed")
+
+
+def test_replay_properties_symbol_exists():
+    # RED-first: the net-new derivation must exist and be callable.
+    from opentraces.core.capsule import replay
+
+    assert hasattr(replay, "_replay_properties"), (
+        "net-new symbol `_replay_properties` must exist (RED-first spec)"
+    )
+    assert callable(replay._replay_properties)
+
+
+def test_packet_carries_properties_block_with_ok_level_note():
+    from opentraces.core.capsule.replay import build_replay_packet
+
+    packet = build_replay_packet(_floor_capsule(), target_ref="HEAD")
+    assert "properties" in packet, "the properties block is the PRIMARY surface"
+    props = packet["properties"]
+    assert set(props) == set(_PROPERTY_NAMES)
+    for name in _PROPERTY_NAMES:
+        prop = props[name]
+        assert set(prop) == {"ok", "level", "note"}
+        assert isinstance(prop["ok"], bool)
+        assert isinstance(prop["level"], str) and prop["level"]
+        assert isinstance(prop["note"], str) and prop["note"]
+
+
+def test_each_property_ok_and_level_derive_from_its_ordinal():
+    # Fully-loaded SYNTHETIC capsule: every property flips ok=True, and `level`
+    # is exactly the stamped ordinal value.
+    from opentraces.core.capsule.replay import build_replay_packet
+
+    loaded = _floor_capsule(
+        environment={"env_tier": "L4"},
+        slice_diff={"diff_trust": "exact"},
+        oracle_trust="declared",
+        sandbox_tier="microvm",
+    )
+    props = build_replay_packet(loaded, target_ref="HEAD")["properties"]
+    assert props["reproducible"] == {"ok": True, "level": "L4",
+                                     "note": "cross-platform hermetic"}
+    assert props["gradable"]["ok"] is True and props["gradable"]["level"] == "declared"
+    assert props["scoped"]["ok"] is True and props["scoped"]["level"] == "exact"
+    assert props["sandboxed"]["ok"] is True and props["sandboxed"]["level"] == "microvm"
+
+
+def test_property_ok_boundaries_are_lattice_derived():
+    # The ok boundary is derived from the ordinal, not hardcoded:
+    #   reproducible ok ONLY at env L3/L4; gradable ok ONLY with a runnable/declared
+    #   oracle; scoped ok ONLY at exact; sandboxed ok at ANY non-none tier.
+    from opentraces.core.capsule.replay import _replay_properties
+
+    # L1 dependencies-pinned is NOT reproducible (only L3/L4 are).
+    assert _replay_properties(
+        {"oracle_trust": "none", "env_tier": "L1",
+         "diff_trust": "unanchored", "sandbox_tier": "none"}
+    )["reproducible"]["ok"] is False
+    assert _replay_properties(
+        {"oracle_trust": "none", "env_tier": "L3",
+         "diff_trust": "unanchored", "sandbox_tier": "none"}
+    )["reproducible"]["ok"] is True
+    # intent_reposed is NOT gradable (no runnable assertion); captured_pass IS.
+    assert _replay_properties(
+        {"oracle_trust": "intent_reposed", "env_tier": "L0",
+         "diff_trust": "unanchored", "sandbox_tier": "none"}
+    )["gradable"]["ok"] is False
+    assert _replay_properties(
+        {"oracle_trust": "captured_pass", "env_tier": "L0",
+         "diff_trust": "unanchored", "sandbox_tier": "none"}
+    )["gradable"]["ok"] is True
+    # partial diff is NOT scoped (only exact is).
+    assert _replay_properties(
+        {"oracle_trust": "none", "env_tier": "L0",
+         "diff_trust": "partial", "sandbox_tier": "none"}
+    )["scoped"]["ok"] is False
+    # a jail IS sandboxed (any non-none tier).
+    assert _replay_properties(
+        {"oracle_trust": "none", "env_tier": "L0",
+         "diff_trust": "unanchored", "sandbox_tier": "jail"}
+    )["sandboxed"]["ok"] is True
+
+
+def test_todays_corpus_reproducible_and_sandboxed_false_and_verdict_floor(export_env):
+    # The load-bearing honesty floor under the new surface: on today's corpus the
+    # environment is unpinned and the run has no isolation, so BOTH properties read
+    # False and the derived weakest-link verdict_trust is still floor.
+    from opentraces.core.capsule.export import export_capsule
+    from opentraces.core.capsule.replay import build_replay_packet
+
+    tid = "cccc3333-0000-0000-0000-000000000000"
+    _seed_trace(export_env, tid)
+    cap = export_capsule(project_dir=export_env, trace_id=tid)
+    packet = build_replay_packet(cap, target_ref="HEAD")
+    assert packet["properties"]["reproducible"]["ok"] is False
+    assert packet["properties"]["sandboxed"]["ok"] is False
+    assert packet["verdict_trust"] == "floor"
+
+
+def test_honest_claim_leads_with_the_named_properties():
+    # The claim mentions all four property names in plain language, ahead of the
+    # derived verdict_trust summary.
+    from opentraces.core.capsule.replay import build_replay_packet
+
+    claim = build_replay_packet(_floor_capsule(), target_ref="HEAD")["honest_claim"]
+    lowered = claim.lower()
+    for name in _PROPERTY_NAMES:
+        assert name in lowered, f"honest_claim must mention `{name}`"
+    assert "verdict_trust" in lowered  # the demoted weakest-link summary is still named

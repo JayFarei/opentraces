@@ -61,12 +61,66 @@ FACTOR_FLOOR = {
     "sandbox_tier": "none",
 }
 
-# Human-readable reason a factor at its floor is the weakest link in the chain.
-_FLOOR_REASON = {
-    "oracle_trust": "no captured or declared success oracle (oracle_trust=none)",
-    "env_tier": "the environment's dependency fidelity is not pinned (env_tier=L0)",
-    "diff_trust": "the change set is not anchored to an exact diff",
-    "sandbox_tier": "the replay ran without sandbox isolation (sandbox_tier=none)",
+# --------------------------------------------------------------------------- #
+# #154 reshape — the four named replay PROPERTIES are the PRIMARY honest surface.
+#
+# Each property is DERIVED from its lattice-ranked ordinal (read via
+# _read_trust_factors), never a stored field, so it auto-upgrades the moment its
+# factor rises (env via #202, oracle/diff via U3, sandbox via U4) with NO envelope
+# change. verdict_trust (the min over the same four positions) stays as the
+# DERIVED, secondary weakest-link summary for automation thresholds.
+#
+#   reproducible ← env_tier      (ok when vendored/hermetic: L3 or L4)
+#   gradable     ← oracle_trust  (ok when a runnable/declared test grades it)
+#   scoped       ← diff_trust    (ok when scoped to an exact diff)
+#   sandboxed    ← sandbox_tier  (ok when it ran under any real isolation)
+# --------------------------------------------------------------------------- #
+
+# Full plain-language note stored on each property (the honest, verbose form).
+_REPRODUCIBLE_NOTE = {
+    "L0": "environment not pinned (name-only) — not independently reproducible",
+    "L1": "dependencies resolved/pinned",
+    "L3": "vendored — hermetic on a matching platform",
+    "L4": "cross-platform hermetic",
+}
+_GRADABLE_NOTE = {
+    "none": "no runnable test",
+    "intent_reposed": "intent-only, no runnable assertion",
+    "captured_pass": "graded against a captured test",
+    "captured_error": "graded against a captured test",
+    "declared": "graded against a declared test",
+}
+_SCOPED_NOTE = {
+    "unanchored": "change set not anchored to a diff",
+    "file_list_only": "change set not anchored to a diff",
+    "partial": "multi-commit, partially scoped",
+    "exact": "scoped to the slice's own burst commit",
+}
+_SANDBOXED_NOTE = {
+    "none": "ran without isolation (same-UID)",
+    "jail": "ran under a jail sandbox",
+    "container": "ran under a container sandbox",
+    "microvm": "ran under a microVM sandbox",
+}
+
+# Compact parenthetical used in the leading honest_claim sentence (keeps the
+# claim readable; the full note above stays on the property block).
+_REPRODUCIBLE_SHORT = {
+    "L0": "environment not pinned", "L1": "dependencies pinned",
+    "L3": "vendored, hermetic on match", "L4": "cross-platform hermetic",
+}
+_GRADABLE_SHORT = {
+    "none": "no runnable test", "intent_reposed": "intent only",
+    "captured_pass": "captured test", "captured_error": "captured test",
+    "declared": "declared test",
+}
+_SCOPED_SHORT = {
+    "unanchored": "unanchored change set", "file_list_only": "unanchored change set",
+    "partial": "partially scoped", "exact": "an exact diff",
+}
+_SANDBOXED_SHORT = {
+    "none": "ran without isolation", "jail": "a jail sandbox",
+    "container": "a container sandbox", "microvm": "a microVM sandbox",
 }
 
 _ENV_CAVEAT = {
@@ -145,36 +199,71 @@ def _read_trust_factors(capsule: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _limiting_factors(factors: dict[str, str]) -> list[str]:
-    """The factor(s) sitting at the min position — the verdict's weakest link."""
+def _replay_properties(factors: dict[str, str]) -> dict[str, dict[str, Any]]:
+    """The four named replay PROPERTIES — the PRIMARY honest surface (#154).
 
-    order = ("oracle_trust", "env_tier", "diff_trust", "sandbox_tier")
-    positions = {f: _position(f, factors[f]) for f in order}
-    lo = min(positions.values())
-    return [f for f in order if positions[f] == lo]
+    Each property is ``{ok, level, note}`` derived purely from its lattice-ranked
+    ordinal in ``factors`` (never a stored field), so it auto-upgrades the moment
+    its owning factor rises with no envelope change. The frozen lattice positions
+    (:data:`FACTOR_POSITIONS`) still RANK each level; these predicates only choose
+    the ok/not-ok boundary for the plain-language read.
+    """
+
+    env_tier = factors["env_tier"]
+    oracle = factors["oracle_trust"]
+    diff = factors["diff_trust"]
+    sandbox = factors["sandbox_tier"]
+    return {
+        "reproducible": {
+            "ok": env_tier in ("L3", "L4"),
+            "level": env_tier,
+            "note": _REPRODUCIBLE_NOTE.get(env_tier, f"env_tier {env_tier}"),
+        },
+        "gradable": {
+            "ok": oracle in ("captured_pass", "captured_error", "declared"),
+            "level": oracle,
+            "note": _GRADABLE_NOTE.get(oracle, f"oracle_trust {oracle}"),
+        },
+        "scoped": {
+            "ok": diff == "exact",
+            "level": diff,
+            "note": _SCOPED_NOTE.get(diff, f"diff_trust {diff}"),
+        },
+        "sandboxed": {
+            "ok": sandbox != "none",
+            "level": sandbox,
+            "note": _SANDBOXED_NOTE.get(sandbox, f"sandbox_tier {sandbox}"),
+        },
+    }
 
 
-def _honest_claim(verdict_trust: str, factors: dict[str, str], limiting: list[str]) -> str:
-    """A human-readable claim that never exceeds the verdict's real trust."""
+_CLAIM_SHORT = {
+    "reproducible": _REPRODUCIBLE_SHORT,
+    "gradable": _GRADABLE_SHORT,
+    "scoped": _SCOPED_SHORT,
+    "sandboxed": _SANDBOXED_SHORT,
+}
 
-    if verdict_trust == "floor":
-        why = "; ".join(_FLOOR_REASON.get(f, f) for f in limiting)
-        return (
-            "This replay result is FLOOR-grade and NOT reproducible: the weakest "
-            f"link is {why}. Treat any verdict as advisory evidence, not a proven "
-            "reproduction."
-        )
-    if verdict_trust == "high":
-        return (
-            "This replay result is HIGH-grade: oracle, environment, diff, and "
-            "sandbox are all at their strongest rung, so the verdict is a "
-            "cross-platform-hermetic reproduction."
-        )
-    weakest = ", ".join(f"{f}={factors[f]}" for f in limiting)
-    return (
-        f"This replay result is {verdict_trust.upper()}-grade: it is bounded by "
-        f"its weakest link ({weakest}). Trust it only as far as that factor allows."
-    )
+
+def _honest_claim(properties: dict[str, dict[str, Any]], verdict_trust: str) -> str:
+    """A plain-language claim LEADING with the four named properties (#154).
+
+    Each property becomes an ``is``/``is not`` clause carrying a compact reason,
+    so the reader learns what the capsule is (gradable / reproducible / scoped /
+    sandboxed) before the derived weakest-link ``verdict_trust`` summary, which is
+    appended for automation thresholds. The claim never exceeds a property's real
+    level because both the ok boundary and the reason derive from the ordinal.
+    """
+
+    order = ("gradable", "reproducible", "scoped", "sandboxed")
+    clauses: list[str] = []
+    for name in order:
+        prop = properties[name]
+        short = _CLAIM_SHORT[name].get(prop["level"], prop["level"])
+        verb = "is" if prop["ok"] else "is not"
+        clauses.append(f"{verb} {name} ({short})")
+    body = "This capsule " + "; ".join(clauses)
+    return f"{body}. Weakest-link verdict_trust: {verdict_trust}."
 
 
 def _env_caveat(env_tier: str) -> str:
@@ -207,18 +296,19 @@ def build_replay_packet(capsule: dict[str, Any], *, target_ref: str) -> dict[str
 
     intent_text = summ.get("title") or (capsule.get("intent") or {}).get("headline") or ""
 
-    # ADR-0008 §5 honesty labels (#154). Read the four floor-defaulted ordinals,
-    # clamp to the weakest link, and stamp verdict_trust + a human-readable claim
-    # + the environment caveat. COMPUTED by the pure clamp from real stamped
-    # state — never hardcoded — so the label only rises when a sibling raises the
-    # underlying factor (#202 env, U3 oracle/diff, U4 sandbox), never by
-    # softening the clamp. Additive within opentraces.capsule_replay.v1 (new
-    # optional keys, floor-defaulted, mirroring the product/privacy_scope
-    # precedent; a v1 consumer ignores unknown keys, so this is not a shape break
-    # and does not bump the envelope version).
+    # ADR-0008 §5 honesty surface (#154 reshape). Read the four floor-defaulted
+    # ordinals, then surface them as the four named PROPERTIES (the primary read)
+    # AND as the derived weakest-link ``verdict_trust`` (the min, kept as the
+    # secondary automation summary). Both are COMPUTED from real stamped state —
+    # never hardcoded — so a property/verdict only rises when a sibling raises the
+    # underlying factor (#202 env, U3 oracle/diff, U4 sandbox), never by softening
+    # the clamp. Additive within opentraces.capsule_replay.v1 (new optional keys,
+    # floor-defaulted, mirroring the product/privacy_scope precedent; a v1 consumer
+    # ignores unknown keys, so this is not a shape break and does not bump the
+    # envelope version).
     trust_factors = _read_trust_factors(capsule)
     verdict_trust = clamp(**trust_factors)
-    limiting = _limiting_factors(trust_factors)
+    properties = _replay_properties(trust_factors)
 
     return {
         "schema_version": REPLAY_SCHEMA_VERSION,
@@ -230,9 +320,14 @@ def build_replay_packet(capsule: dict[str, Any], *, target_ref: str) -> dict[str
         "repo_pin": pin,
         "before_commit": pin.get("commit_sha"),
         "target_ref": target_ref,
+        # PRIMARY honest surface: the four named properties, each auto-derived from
+        # its lattice-ranked ordinal.
+        "properties": properties,
+        "honest_claim": _honest_claim(properties, verdict_trust),
+        # DERIVED, secondary weakest-link summary (min over the four positions) for
+        # automation thresholds — no longer the headline.
         "verdict_trust": verdict_trust,
         "trust_factors": trust_factors,
-        "honest_claim": _honest_claim(verdict_trust, trust_factors, limiting),
         "env_caveat": _env_caveat(trust_factors["env_tier"]),
         "oracle": {
             "strategy": strategy,
