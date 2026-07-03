@@ -139,6 +139,7 @@ jobs:
       - fast-premerge
       - timing-sensitive
       - otbox-slice
+      - capsule-worker
     if: always()
     steps:
       - name: Require fast pre-merge lane
@@ -153,6 +154,10 @@ jobs:
           fi
           if [ "${{ needs['otbox-slice'].result }}" != "success" ]; then
             echo "otbox-slice result: ${{ needs['otbox-slice'].result }}"
+            exit 1
+          fi
+          if [ "${{ needs['capsule-worker'].result }}" != "success" ]; then
+            echo "capsule-worker result: ${{ needs['capsule-worker'].result }}"
             exit 1
           fi
 
@@ -218,3 +223,25 @@ jobs:
             "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[trace-map-dive]" \
             "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[trail-lenses]" \
             -q
+
+  capsule-worker:
+    name: capsule-worker vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Hard-required through the `unit` aggregator. The capsule render worker's
+    # vitest suite runs hermetically (@cloudflare/vitest-pool-workers / miniflare,
+    # no deployed Cloudflare infra or network) so it gates every PR that touches
+    # web/capsule-worker without needing a live Worker.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/capsule-worker/package-lock.json
+      - name: Install
+        working-directory: web/capsule-worker
+        run: npm ci
+      - name: Vitest suite
+        working-directory: web/capsule-worker
+        run: npm test
