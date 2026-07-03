@@ -378,9 +378,13 @@ def run_capsule_test(
                 "pins; refusing to extract or run a tampered bundle."
             )
 
-    # Honest sandbox_tier label (#157): stamped at the top-level key the U1 clamp
-    # reads (core/capsule/replay.py::_read_trust_factors) so a foreign-capsule
-    # verdict floors. Determined by the run ENVIRONMENT (S0), not the outcome.
+    # Honest sandbox_tier label (#157): the run's own S0 self-report, stamped on the
+    # capsule dict as a truthful record of THIS run's isolation. Replay's trust
+    # computation (core/capsule/replay.py::_derive_trust_factors, C1) never reads
+    # this field OFF a capsule — a producer could pre-stamp it — it trusts only a
+    # LOCAL run_result threaded by the caller; here that tier is honestly ``none``,
+    # so a foreign-capsule verdict floors either way. Determined by the run
+    # ENVIRONMENT (S0), not the outcome.
     capsule["sandbox_tier"] = _SANDBOX_TIER
 
     with _consumes_setup(capsule, with_overrides, timeout) as (extra_env, used, cerr):

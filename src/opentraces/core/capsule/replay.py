@@ -64,9 +64,10 @@ FACTOR_FLOOR = {
 # --------------------------------------------------------------------------- #
 # #154 reshape — the four named replay PROPERTIES are the PRIMARY honest surface.
 #
-# Each property is DERIVED from its lattice-ranked ordinal (read via
-# _read_trust_factors), never a stored field, so it auto-upgrades the moment its
-# factor rises (env via #202, oracle/diff via U3, sandbox via U4) with NO envelope
+# Each property is DERIVED from its lattice-ranked ordinal (derived via
+# _derive_trust_factors from local verification / carried evidence, never a stored
+# producer label), so it auto-upgrades the moment its factor rises (env via #202,
+# oracle/diff via carried evidence, sandbox via a real local run) with NO envelope
 # change. verdict_trust (the min over the same four positions) stays as the
 # DERIVED, secondary weakest-link summary for automation thresholds.
 #
@@ -160,8 +161,8 @@ def clamp(*, oracle_trust: str, env_tier: str, diff_trust: str, sandbox_tier: st
     Zero I/O. Maps each incommensurable factor onto the shared 0..3 lattice
     position, takes the min, and re-expresses it in the ``{floor,low,medium,high}``
     OUTPUT namespace. Raises ``ValueError`` on an unknown vocab value — a typo is
-    never silently floored; a MISSING field uses its floor default at the READ
-    site (:func:`_read_trust_factors`), not here.
+    never silently floored; a MISSING / unverifiable factor uses its floor default
+    at the DERIVE site (:func:`_derive_trust_factors`), not here.
     """
 
     pos = min(
@@ -173,29 +174,96 @@ def clamp(*, oracle_trust: str, env_tier: str, diff_trust: str, sandbox_tier: st
     return VERDICT_TRUST_OUTPUT[pos]
 
 
-def _read_trust_factors(capsule: dict[str, Any]) -> dict[str, str]:
-    """Read the four trust ordinals off a capsule, each floored when absent.
+def _derive_oracle_trust(test: Any) -> str:
+    """Derive ``oracle_trust`` from the CARRIED test payload, never a self-label.
 
-    Each factor lives where its owning sibling stamps it (ADR-0008 §5): env_tier
-    in the ``environment`` block (#202's resolver raises it), diff_trust in
-    ``slice_diff`` (U3), oracle_trust at seal (U3), sandbox_tier from the run
-    result (U4). Until a sibling raises real state, every read returns its floor
-    default, so today's corpus honestly clamps to ``floor`` and never over-claims.
-    The reads are forward-compatible seams: a sibling stamping its field flows
-    through with no change here.
+    A capsule earns a gradable oracle only by CARRYING a runnable test. Map the
+    carried payload's ``source`` field through the seal-side ladder
+    (:func:`test_extract.oracle_trust_of`): ``declared`` ▸ ``captured_error`` ▸
+    ``captured_pass`` ▸ ``intent_reposed``. A test with no runnable ``command`` (or
+    no test at all) is not gradable and floors to ``intent_reposed`` — the intent a
+    sealed capsule always carries. A free top-level ``capsule["oracle_trust"]``
+    self-label is IGNORED: a producer cannot self-certify an oracle it does not
+    ship.
     """
 
-    env = capsule.get("environment") or {}
-    slice_diff = capsule.get("slice_diff") or {}
-    test = capsule.get("test")
-    oracle_trust = capsule.get("oracle_trust")
-    if not oracle_trust and isinstance(test, dict):
-        oracle_trust = test.get("oracle_trust")
+    from .test_extract import oracle_trust_of
+
+    if not isinstance(test, dict) or not str(test.get("command") or "").strip():
+        return "intent_reposed"
+    return oracle_trust_of(test)
+
+
+def _derive_diff_trust(slice_diff: Any) -> str:
+    """Derive ``diff_trust`` from the carried ``slice_diff`` VALIDATED, never a bare label.
+
+    Trust the carried block's claimed ordinal only when the CARRIED evidence backs
+    it (ADR-0008 §5): ``exact`` requires a non-empty single-commit ``format_patch``
+    AND a non-empty ``changed_files`` (the diff must bound the slice); ``partial`` /
+    ``file_list_only`` require a carried ``changed_files`` set. A bare
+    ``diff_trust="exact"`` with no carried patch, an inconsistent block, or an
+    absent block floors to ``unanchored`` — a producer cannot self-certify a scope
+    it does not ship.
+    """
+
+    if not isinstance(slice_diff, dict):
+        return "unanchored"
+    claimed = slice_diff.get("diff_trust")
+    if claimed not in FACTOR_POSITIONS["diff_trust"]:
+        return "unanchored"  # absent or unknown ordinal → floor
+    changed = slice_diff.get("changed_files") or []
+    patch = slice_diff.get("format_patch")
+    has_patch = isinstance(patch, str) and bool(patch.strip())
+    if claimed == "exact":
+        # `exact` MUST carry a real patch bounding the slice's own files.
+        return "exact" if (has_patch and changed) else "unanchored"
+    if claimed == "partial":
+        return "partial" if changed else "unanchored"
+    if claimed == "file_list_only":
+        return "file_list_only" if changed else "unanchored"
+    return "unanchored"
+
+
+def _derive_trust_factors(
+    capsule: dict[str, Any], *, run_result: dict[str, Any] | None = None
+) -> dict[str, str]:
+    """DERIVE the four trust ordinals at replay time — never trust a producer label.
+
+    The cardinal sin (ADR-0008 §5) is a capsule claiming more trust than it earned
+    from real, locally-verifiable state. A crafted or foreign capsule can stamp any
+    label it likes on ``environment.env_tier`` / ``oracle_trust`` /
+    ``slice_diff.diff_trust`` / ``sandbox_tier``; the consumer grades on what it can
+    verify LOCALLY or on the evidence the capsule actually CARRIES, not on faith:
+
+    - **env_tier → forced ``L0``.** No consumer-side code in this train can locally
+      verify reproducibility (the dependency resolver that could raise it is the
+      out-of-train follow-up, #202). The seal-side ``environment.env_tier`` field
+      stays for #202 to later populate; replay's trust computation ignores it.
+    - **sandbox_tier → forced ``none``** unless the CURRENT replay actually ran under
+      a verified LOCAL sandbox that reported a higher tier (threaded via
+      ``run_result``). A producer's self-claim about how THEY ran it is irrelevant to
+      how WE grade it; v1's own runner never reports above ``none``.
+    - **oracle_trust → derived from the CARRIED test** (:func:`_derive_oracle_trust`).
+    - **diff_trust → derived from the carried ``slice_diff`` VALIDATED**
+      (:func:`_derive_diff_trust`).
+
+    The net effect on today's corpus: ``reproducible`` and ``sandboxed`` are false
+    for every capsule (forced), ``verdict_trust`` floors, and a crafted capsule's
+    self-declared ``L4``/``microvm``/``exact``/``declared`` labels are IGNORED.
+    """
+
+    sandbox_tier = FACTOR_FLOOR["sandbox_tier"]
+    if isinstance(run_result, dict):
+        run_tier = run_result.get("sandbox_tier")
+        if isinstance(run_tier, str) and run_tier in FACTOR_POSITIONS["sandbox_tier"]:
+            sandbox_tier = run_tier
+
     return {
-        "oracle_trust": oracle_trust or FACTOR_FLOOR["oracle_trust"],
-        "env_tier": env.get("env_tier") or FACTOR_FLOOR["env_tier"],
-        "diff_trust": slice_diff.get("diff_trust") or FACTOR_FLOOR["diff_trust"],
-        "sandbox_tier": capsule.get("sandbox_tier") or FACTOR_FLOOR["sandbox_tier"],
+        "oracle_trust": _derive_oracle_trust(capsule.get("test")),
+        # env_tier is forced to its floor: nothing local can verify it this train.
+        "env_tier": FACTOR_FLOOR["env_tier"],
+        "diff_trust": _derive_diff_trust(capsule.get("slice_diff")),
+        "sandbox_tier": sandbox_tier,
     }
 
 
@@ -270,8 +338,15 @@ def _env_caveat(env_tier: str) -> str:
     return _ENV_CAVEAT.get(env_tier, f"env_tier {env_tier}: fidelity unknown.")
 
 
-def build_replay_packet(capsule: dict[str, Any], *, target_ref: str) -> dict[str, Any]:
-    """Assemble a replay packet from a frozen capsule for re-posing at ``target_ref``."""
+def build_replay_packet(
+    capsule: dict[str, Any], *, target_ref: str, run_result: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Assemble a replay packet from a frozen capsule for re-posing at ``target_ref``.
+
+    ``run_result`` (optional) is the LOCAL runner's result for THIS replay; when it
+    reports a real ``sandbox_tier`` (a local observation) that tier is trusted for
+    the ``sandboxed`` property. Absent it, ``sandbox_tier`` derives to ``none`` — a
+    producer's self-claim about isolation is never trusted (ADR-0008 §5)."""
 
     pin = capsule.get("repo_pin") or {}
     summ = capsule.get("summary") or {}
@@ -296,17 +371,18 @@ def build_replay_packet(capsule: dict[str, Any], *, target_ref: str) -> dict[str
 
     intent_text = summ.get("title") or (capsule.get("intent") or {}).get("headline") or ""
 
-    # ADR-0008 §5 honesty surface (#154 reshape). Read the four floor-defaulted
-    # ordinals, then surface them as the four named PROPERTIES (the primary read)
-    # AND as the derived weakest-link ``verdict_trust`` (the min, kept as the
-    # secondary automation summary). Both are COMPUTED from real stamped state —
-    # never hardcoded — so a property/verdict only rises when a sibling raises the
-    # underlying factor (#202 env, U3 oracle/diff, U4 sandbox), never by softening
-    # the clamp. Additive within opentraces.capsule_replay.v1 (new optional keys,
-    # floor-defaulted, mirroring the product/privacy_scope precedent; a v1 consumer
-    # ignores unknown keys, so this is not a shape break and does not bump the
-    # envelope version).
-    trust_factors = _read_trust_factors(capsule)
+    # ADR-0008 §5 honesty surface (#154 reshape). DERIVE the four ordinals from
+    # local verification / carried evidence (C1 — never trust a producer label),
+    # then surface them as the four named PROPERTIES (the primary read) AND as the
+    # derived weakest-link ``verdict_trust`` (the min, kept as the secondary
+    # automation summary). Both are COMPUTED from real, locally-verifiable state —
+    # never hardcoded, never taken on faith — so a property/verdict only rises when
+    # a sibling raises the underlying factor (#202 env, a carried test/patch, a real
+    # local sandbox), never by softening the clamp. Additive within
+    # opentraces.capsule_replay.v1 (new optional keys, floor-defaulted, mirroring
+    # the product/privacy_scope precedent; a v1 consumer ignores unknown keys, so
+    # this is not a shape break and does not bump the envelope version).
+    trust_factors = _derive_trust_factors(capsule, run_result=run_result)
     verdict_trust = clamp(**trust_factors)
     properties = _replay_properties(trust_factors)
 
