@@ -38,6 +38,45 @@ def test_consume_tail_drops_the_path_tail(text, tail):
     assert "[ot-user-" in out
 
 
+@pytest.mark.parametrize(
+    "text,tail,pre_hash_prefix",
+    [
+        ("/Users/jane.doe/secret/.env", "/secret/.env", "/Users/jane.doe/"),
+        ("/home/j/work/acme", "/work/acme", "/home/j/"),
+        ("cwd is /Users/a.b-c_d/proj/keys/private.pem now", "/proj/keys/private.pem", "/Users/a.b-c_d/"),
+        ('path = "/home/x/.ssh/id_rsa"', "/.ssh/id_rsa", "/home/x/"),
+    ],
+)
+def test_consume_tail_handles_dotted_and_short_usernames(text, tail, pre_hash_prefix):
+    """H6 (#143): auto-detection (``extract_usernames_from_paths``) misses dotted
+    (``jane.doe``) and short (``j``) usernames, so their home-path tail survived
+    on the companion path even with ``consume_tail=True``. The rewrite must be
+    STRUCTURAL — any ``/Users|home/<name>/<tail>`` collapses to the single hashed
+    token regardless of whether ``<name>`` was auto-detected."""
+    out = anonymize_paths(text, username="operator", consume_tail=True)
+    assert tail not in out
+    assert "[ot-user-" in out
+    # The raw home-path prefix (username segment) is gone.
+    assert pre_hash_prefix not in out
+
+
+def test_consume_tail_dotted_username_is_idempotent():
+    once = anonymize_paths("/Users/jane.doe/secret/.env", username="operator", consume_tail=True)
+    twice = anonymize_paths(once, username="operator", consume_tail=True)
+    assert twice == once
+    assert "/secret/.env" not in once
+    assert "[ot-user-" in once
+
+
+def test_dotted_username_tracerecord_path_unchanged():
+    """H6 stays companion-only: the TraceRecord ``apply`` path
+    (``consume_tail=False``) does NOT structurally consume an undetected dotted
+    username's path — it survives verbatim, so trace digests/goldens are
+    unchanged. The widening is for the companion/consume_tail path only."""
+    out = anonymize_paths("/Users/jane.doe/secret/.env", username="operator")
+    assert out == "/Users/jane.doe/secret/.env"
+
+
 def test_default_keeps_the_tail_unchanged_behavior():
     """The TraceRecord path (default consume_tail=False) is UNCHANGED — the
     username is hashed but the tail is preserved (no digest churn)."""

@@ -189,21 +189,49 @@ def _build_patterns(usernames: list[str]) -> list[tuple[re.Pattern, str]]:
 
 # Tail-consumer: after a username is hashed to the ``[ot-user-<8hex>]`` marker,
 # ``consume_tail`` collapses the home-path TAIL that follows the marker so
-# ``/Users/<name>/secret/.env`` leaks no structure. It matches ONLY the already
-# hashed marker form, so it is bounded to real home paths (never a bare
-# ``/Users``-shaped literal that was left un-hashed) and idempotent by
-# construction (after one pass the marker has no trailing tail to re-consume).
-# The tail runs until the first whitespace / quote / angle-bracket delimiter, so
-# it works on paths EMBEDDED in prose and in quoted code.
+# ``/Users/<name>/secret/.env`` leaks no structure. It matches the already
+# hashed marker form (detected usernames), and is idempotent by construction
+# (after one pass the marker has no trailing tail to re-consume). The tail runs
+# until the first whitespace / quote / angle-bracket delimiter, so it works on
+# paths EMBEDDED in prose and in quoted code.
 _MARKER_TAIL_RE = re.compile(
     r"([/\\](?:Users|home)[/\\]\[ot-user-[0-9a-f]{8}\])"
     r"(?:[/\\][^\s\"'`<>]+)"
 )
 
+# Structural home-path consume for the companion path (#143 / H6). Auto-detection
+# (``extract_usernames_from_paths``) requires a 3+ char ``[A-Za-z0-9_-]``
+# username, so it MISSES dotted (``jane.doe``) and short (``j``) names — their
+# home-path tail then survived even with ``consume_tail=True``. This rewrites ANY
+# raw ``/Users|home/<name>/<tail-until-delimiter>`` whose ``<name>`` matches the
+# username grammar ``[A-Za-z0-9._-]+`` (dots, hyphens, underscores, short names)
+# to the single hashed ``[ot-user-<hash>]`` token, regardless of whether the
+# name was auto-detected. The hashed marker begins with ``[`` (outside the name
+# class), so an already-rewritten segment is never re-matched — idempotent by
+# construction. Companion-only: the TraceRecord ``apply`` path never sets
+# ``consume_tail``, so this never runs there and trace digests are unchanged.
+_HOME_PATH_CONSUME_RE = re.compile(
+    r"([/\\](?:Users|home)[/\\])([A-Za-z0-9._-]+)"
+    r"(?:[/\\][^\s\"'`<>]+)"
+)
+
 
 def _consume_home_tail(text: str) -> str:
-    """Drop the home-path tail that follows an already-hashed user marker."""
-    return _MARKER_TAIL_RE.sub(r"\1", text)
+    """Collapse home-path tails on the companion path.
+
+    Two idempotent passes: first drop the tail after an already-hashed
+    ``[ot-user-…]`` marker (the detected-username form), then structurally
+    hash+collapse any remaining raw ``/Users|home/<name>/<tail>`` whose ``<name>``
+    auto-detection missed (dotted / short). The marker form is inert under the
+    structural pattern, so re-running is a byte-identical no-op.
+    """
+    text = _MARKER_TAIL_RE.sub(r"\1", text)
+
+    def _hash_and_drop_tail(match: re.Match) -> str:
+        prefix, name = match.group(1), match.group(2)
+        return f"{prefix}{_anonymized_username(name)}"
+
+    return _HOME_PATH_CONSUME_RE.sub(_hash_and_drop_tail, text)
 
 
 def anonymize_paths(
