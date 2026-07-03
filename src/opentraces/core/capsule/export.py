@@ -849,14 +849,16 @@ def export_capsule(
         "system_prompt_included": bool(include_prompts and system_has_content),
         "reasoning_included": bool(include_prompts),
         "messages_included": bool(slice_steps_n > 0 or messages_present),
-        # #195 F2 fix — DECLARE, not close. The per-layer ``completeness`` self-report
-        # optimistically says ``full`` even when carrying hash-only messages
-        # (transcript_reconstruction capture: 0 bodies, sha256 hashes only). Derive
-        # from the capture method instead so a consumer gating on ``== full`` is never
-        # told sha256 hashes are full message bodies. No gate: hash-only still seals.
-        "messages_completeness": (
-            "hash_only" if capture_method == "transcript_reconstruction" else "full"
-        ),
+        # #195 F2 fix — DECLARE, not close, and derive from the messages LAYER's
+        # OWN carried completeness (never launder a weak layer up to ``full``). A
+        # transcript_reconstruction layer optimistically self-reports ``full`` while
+        # carrying only sha256 hashes (0 bodies), so that one method still reads
+        # ``hash_only``; every other capture reports the messages layer's real
+        # completeness (``full`` / ``approximated`` / ``stub``), and an absent
+        # messages layer reads ``absent`` — never ``full``. A consumer gating on
+        # ``== full`` is thus never told hash-only / approximated / absent bodies
+        # are full message bodies. No gate: a weaker layer still seals.
+        "messages_completeness": _messages_completeness(capture_method, msgs_layer),
         "steps_included": slice_steps_n,
         "redaction_floor": list(REDACTION_FLOOR),
         "developer_approved": False,
@@ -937,6 +939,27 @@ def _completeness(packet: dict[str, Any]) -> str | None:
         if isinstance(layer, dict) and layer.get("completeness"):
             return layer["completeness"]
     return None
+
+
+def _messages_completeness(capture_method: str | None, msgs_layer: Any) -> str:
+    """Honest ``privacy_scope.messages_completeness`` derived from the LAYER (#195 F2).
+
+    Keyed on the messages LAYER's own carried ``completeness``, never on the
+    capture method — a producer must not launder a weak layer up to ``"full"``.
+    The single method-keyed exception is ``transcript_reconstruction``: that layer
+    optimistically self-reports ``"full"`` while carrying only sha256 message
+    hashes (0 real bodies), so it reads ``"hash_only"``. Every other capture
+    reports the layer's real completeness (``full`` / ``approximated`` / ``stub``);
+    an absent messages layer reads ``"absent"``. Only a genuinely-full layer
+    reports ``"full"``.
+    """
+
+    if capture_method == "transcript_reconstruction":
+        return "hash_only"
+    if isinstance(msgs_layer, dict):
+        carried = msgs_layer.get("completeness")
+        return str(carried) if carried else "absent"
+    return "absent"
 
 
 __all__ = [

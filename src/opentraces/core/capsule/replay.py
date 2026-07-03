@@ -11,6 +11,7 @@ issue (closing the loop, *"use it to close off the issue"*).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 REPLAY_SCHEMA_VERSION = "opentraces.capsule_replay.v1"
@@ -174,6 +175,33 @@ def clamp(*, oracle_trust: str, env_tier: str, diff_trust: str, sandbox_tier: st
     return VERDICT_TRUST_OUTPUT[pos]
 
 
+def _oracle_has_runnable_assertion(test: dict[str, Any]) -> bool:
+    """Does a carried oracle actually grade SOMETHING (ADR-0008 §5 corroboration)?
+
+    A ``declared`` / ``captured`` source is only a self-label; the graded property
+    it claims is real only when the payload carries a runnable ASSERTION:
+
+    - the command invokes a recognized test framework (its exit code IS a real
+      pass/fail — pytest/unittest/go test/node), OR
+    - the payload carries an explicit ``error_string`` expectation (checking the
+      captured error is gone / present is a concrete assertion).
+
+    A GENERIC command graded only by exit code (e.g. a bare ``true`` that always
+    exits 0) grades nothing — it is NOT "the test". Conservatively (this train)
+    such an oracle is NOT credited as a runnable assertion.
+    """
+
+    from .oracle import detect_framework
+
+    command = str(test.get("command") or "").strip()
+    if command and detect_framework(command) != "generic":
+        return True
+    expected = test.get("expected")
+    if isinstance(expected, dict) and expected.get("kind") == "error_string" and expected.get("value"):
+        return True
+    return False
+
+
 def _derive_oracle_trust(test: Any) -> str:
     """Derive ``oracle_trust`` from the CARRIED test payload, never a self-label.
 
@@ -185,25 +213,65 @@ def _derive_oracle_trust(test: Any) -> str:
     sealed capsule always carries. A free top-level ``capsule["oracle_trust"]``
     self-label is IGNORED: a producer cannot self-certify an oracle it does not
     ship.
+
+    CORROBORATION (ADR-0008 §5): a bare self-labelled ``source`` is not enough. A
+    ``declared`` / ``captured_*`` ordinal is credited ONLY when the payload carries
+    a real runnable assertion (:func:`_oracle_has_runnable_assertion`); otherwise
+    it floors to ``intent_reposed``. So a fabricated ``{command:"true",
+    source:"declared"}`` — a no-op command graded by exit-0 — cannot reach
+    ``declared`` on the properties surface.
+
+    RESIDUAL (conservative under-claim, documented): a ``declared`` command that IS
+    a genuine one-off assertion but is not a recognized framework and carries no
+    ``error_string`` (e.g. ``python -c "assert f()==1"``) is treated as
+    intent-only here. This under-credits rather than over-claims — the honest-safe
+    direction; a fuller producer→consumer oracle attestation is out of M3 scope.
     """
 
     from .test_extract import oracle_trust_of
 
     if not isinstance(test, dict) or not str(test.get("command") or "").strip():
         return "intent_reposed"
-    return oracle_trust_of(test)
+    level = oracle_trust_of(test)
+    if level in ("declared", "captured_error", "captured_pass") and not _oracle_has_runnable_assertion(test):
+        return "intent_reposed"
+    return level
+
+
+_DIFF_GIT_RE = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+?)\s*$", re.MULTILINE)
+_PLUS_FILE_RE = re.compile(r"^\+\+\+ (?:b/)?(?P<path>.+?)\s*$", re.MULTILINE)
+
+
+def _patch_touched_paths(patch: str) -> set[str]:
+    """Post-image (b-side) paths a unified/format patch actually touches.
+
+    Parses ``diff --git a/… b/…`` headers and ``+++ b/…`` hunk headers. Returns
+    the empty set when the text carries NO recognizable diff header (garbage /
+    prose bytes) — that emptiness is how a degenerate patch is detected.
+    """
+
+    paths: set[str] = set()
+    for m in _DIFF_GIT_RE.finditer(patch):
+        paths.add(m.group("b").strip())
+    for m in _PLUS_FILE_RE.finditer(patch):
+        p = m.group("path").strip()
+        if p and p != "/dev/null":
+            paths.add(p)
+    return paths
 
 
 def _derive_diff_trust(slice_diff: Any) -> str:
     """Derive ``diff_trust`` from the carried ``slice_diff`` VALIDATED, never a bare label.
 
     Trust the carried block's claimed ordinal only when the CARRIED evidence backs
-    it (ADR-0008 §5): ``exact`` requires a non-empty single-commit ``format_patch``
-    AND a non-empty ``changed_files`` (the diff must bound the slice); ``partial`` /
+    it (ADR-0008 §5): ``exact`` requires a well-formed, non-degenerate
+    ``format_patch`` whose touched paths BOUND the slice — the patch's post-image
+    path set must EQUAL the carried ``changed_files`` set (a garbage / prose blob,
+    or a patch touching different files, does not scope the slice). ``partial`` /
     ``file_list_only`` require a carried ``changed_files`` set. A bare
-    ``diff_trust="exact"`` with no carried patch, an inconsistent block, or an
-    absent block floors to ``unanchored`` — a producer cannot self-certify a scope
-    it does not ship.
+    ``diff_trust="exact"`` with no carried patch, a garbage patch, an inconsistent
+    block, or an absent block floors to ``unanchored`` — a producer cannot
+    self-certify a scope it does not ship.
     """
 
     if not isinstance(slice_diff, dict):
@@ -215,8 +283,17 @@ def _derive_diff_trust(slice_diff: Any) -> str:
     patch = slice_diff.get("format_patch")
     has_patch = isinstance(patch, str) and bool(patch.strip())
     if claimed == "exact":
-        # `exact` MUST carry a real patch bounding the slice's own files.
-        return "exact" if (has_patch and changed) else "unanchored"
+        # `exact` MUST carry a WELL-FORMED patch whose paths BOUND the declared
+        # files — parse it, don't trust the label. A garbage blob (no diff header)
+        # or a patch touching different files than `changed_files` floors.
+        if not (has_patch and changed):
+            return "unanchored"
+        touched = _patch_touched_paths(patch)
+        if not touched:
+            return "unanchored"  # degenerate — not a real patch
+        if touched != {str(p) for p in changed}:
+            return "unanchored"  # patch does not bound exactly the declared files
+        return "exact"
     if claimed == "partial":
         return "partial" if changed else "unanchored"
     if claimed == "file_list_only":

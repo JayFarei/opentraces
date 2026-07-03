@@ -162,6 +162,13 @@ def oracle_trust_of(test_payload: dict[str, Any] | None) -> str:
     MISSING test floors to ``intent_reposed`` here — never ``none``. ``none`` is
     only the clamp's absent-field default for a pre-#156 capsule that never
     stamped the ordinal at all.
+
+    This is the SEAL-side mapper: it maps the ``source`` label verbatim. On the
+    consumer/replay PROPERTIES surface, ``replay._derive_oracle_trust`` re-derives
+    the ordinal and additionally CORROBORATES it (a ``declared`` / ``captured_*``
+    level is credited only when the payload carries a real runnable assertion), so
+    a fabricated ``{command:"true", source:"declared"}`` cannot self-certify a
+    graded oracle at replay time.
     """
 
     if not test_payload:
