@@ -437,7 +437,10 @@ def _capsule_source_trace_ids(capsule: dict[str, Any]) -> list[str]:
 
 
 def enforce_capsule_clearance(
-    capsule: dict[str, Any], *, manifest: dict[str, Any] | None = None
+    capsule: dict[str, Any],
+    *,
+    manifest: dict[str, Any] | None = None,
+    allow_sourceless_egress: bool = False,
 ) -> dict[str, Any]:
     """Refuse egress unless EVERY source trace is cleared (ADR-0008 §3).
 
@@ -445,11 +448,22 @@ def enforce_capsule_clearance(
     multi-trace capsule refuses if ANY source trace is not ``cleared``. Raises
     :class:`CapsuleClearanceError` carrying the withheld partition; on success
     returns ``{"cleared": [trace_id, ...]}``.
+
+    #198 C1 — an EMPTY source-trace set is fail-closed: 'no clearable source' is
+    treated as not-cleared and REFUSES, so the degenerate/abuse path cannot
+    silently clear. A legitimate source-free capsule must opt in EXPLICITLY via
+    ``allow_sourceless_egress=True`` (never the silent default).
     """
 
     from ..egress_clearance import CLEARED, clearance_for_trace
 
     tids = _capsule_source_trace_ids(capsule)
+    if not tids:
+        if allow_sourceless_egress:
+            return {"cleared": []}
+        raise CapsuleClearanceError(
+            [{"trace_id": "(none)", "clearance": "no_clearable_source"}]
+        )
     withheld: list[dict[str, Any]] = []
     for tid in tids:
         state = clearance_for_trace(tid, manifest=manifest)
@@ -540,8 +554,9 @@ def publish_capsule(
     token: str | None,
     private: bool = False,
     bundle_bytes: bytes | None = None,
-    require_clearance: bool = False,
+    require_clearance: bool = True,
     clearance_manifest: dict[str, Any] | None = None,
+    allow_sourceless_egress: bool = False,
     mini_bucket: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Upload capsule.json + capsule.md (+ the bundle + the mini-bucket when present) to ``capsules/v1/<id>/`` on HF.
@@ -566,8 +581,13 @@ def publish_capsule(
 
     # #198 clearance gate — evaluated BEFORE any HF import/call so a refusal is
     # provably zero-byte. Wraps (does not replace) the R7 redaction gate below.
+    # Egress is off-by-default (require_clearance defaults True).
     if require_clearance:
-        enforce_capsule_clearance(capsule, manifest=clearance_manifest)
+        enforce_capsule_clearance(
+            capsule,
+            manifest=clearance_manifest,
+            allow_sourceless_egress=allow_sourceless_egress,
+        )
 
     try:
         from huggingface_hub import HfApi

@@ -323,7 +323,12 @@ def test_published_capsule_json_is_sha_pinned_40hex(monkeypatch):
 
     from opentraces.core.capsule.share import publish_capsule
 
-    info = publish_capsule(_publishable_capsule(), repo_id="someone/opentraces-capsules", token="fake")
+    # This test exercises the sha-pin double-commit, not the egress door; opt out
+    # of the (now default-on) clearance check explicitly (#198 C1).
+    info = publish_capsule(
+        _publishable_capsule(), repo_id="someone/opentraces-capsules", token="fake",
+        require_clearance=False,
+    )
 
     # The HANDED url must resolve at the re-stamp commit, so a third party fetching it
     # gets the SHA-pinned capsule.json — not the stale main/None folder version.
