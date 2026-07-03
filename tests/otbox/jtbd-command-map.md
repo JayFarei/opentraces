@@ -307,6 +307,9 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `skill-verifier autoverify` | Operator runs the factory's evidence-scored verification pass over a skill's episodes | skill-verifier-calibration (2/4) | `skill-verifier-factory-echo` | agent |
 | `skill-verifier align` | Operator aligns rubric criteria against human gold labels (calibration step) | skill-verifier-calibration (3/4) | `skill-verifier-command-smoke` | human |
 | `skill-verifier score` | Operator or loop scores a rollout against a calibrated rubric as a reward source | skill-verifier-calibration (4/4) | `skill-verifier-command-smoke` | agent |
+| `capsule create` | Developer seals a bounded, redacted, self-contained capsule from an agent session (v7 trace / trace:step / trace:A-B address) — the visible seal verb superseding `export` | capsule-dependency-unblock (1/9) | `capsule-command-smoke` | both |
+| `capsule get` | Consumer resolves a capsule (file / https / hf:// ref) and prints its envelope read-only, writing no bucket or project state | capsule-dependency-unblock (5/9) | `capsule-command-smoke` | both |
+| `capsule import` | Consumer resolves a capsule and writes it into the local bucket as a first-class trace so it projects natively via map / slice / trace get | capsule-dependency-unblock (5/9) | `capsule-command-smoke` | both |
 | `capsule export` | Developer seals a failing/usage episode (intent + context packet + slice + repo pin) into a capsule under .opentraces/ | capsule-dependency-unblock (1/9) | `capsule-dependency-unblock` | both |
 | `capsule preview` | Developer dry-runs the full redaction pipeline and reviews the counts-only manifest before anything leaves the machine | capsule-dependency-unblock (2/9) | `capsule-command-smoke` | human |
 | `capsule share` | Developer publishes the redacted capsule to HF (sha-pinned immutable URL) after the consent gate | capsule-dependency-unblock (3/9) | `capsule-dependency-unblock` | human |

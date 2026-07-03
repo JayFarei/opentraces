@@ -20,6 +20,21 @@ argv = ["capsule", "open", "--help"]
 
 [[steps]]
 type = "cli"
+id = "capsule-create-help"
+argv = ["capsule", "create", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-get-help"
+argv = ["capsule", "get", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-import-help"
+argv = ["capsule", "import", "--help"]
+
+[[steps]]
+type = "cli"
 id = "capsule-preview-help"
 argv = ["capsule", "preview", "--help"]
 
@@ -56,6 +71,21 @@ equals = 0
 [[assertions]]
 kind = "returncode"
 step = "capsule-open-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-create-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-get-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-import-help"
 equals = 0
 
 [[assertions]]
