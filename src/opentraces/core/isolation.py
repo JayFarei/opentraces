@@ -25,10 +25,17 @@ Three isolation dimensions, each reported honestly in :class:`IsolationReport`:
 
 ``sandbox_tier`` uses the ADR-0008 (#178 seal-family) lattice vocabulary:
 ``none`` (S0), ``jail`` (S1), ``container`` (S2), ``microvm`` (S3). This M1
-primitive emits ``jail`` ONLY when ``env_scrubbed`` AND ``home_isolated`` AND
-``network_denied`` all hold at the OS level; otherwise ``none``. It NEVER emits
-``container`` / ``microvm`` — those are M3 spike-gated. The label is honest by
-construction: a run without a real network-deny can never report ``jail``.
+primitive ALWAYS reports ``none`` (S0). Per the ADR-0008 honesty contract and
+the #146/#157 sandbox-v1 scope, a tier above ``none`` requires real OS-level
+filesystem containment, and M1 provides none: ``home_isolated`` is only a
+``$HOME``-string redirect, so the same-UID child can still read the operator's
+real HOME / bucket / config by absolute path or ``pwd.getpwuid(os.getuid())``.
+``jail`` (S1) would claim that containment, so it is NEVER emitted in v1 — the
+``container`` / ``microvm`` tiers are likewise M3 spike-gated. The three real
+signals — ``env_scrubbed``, ``network_denied``, ``home_isolated`` — stay honest
+and separate; the added ``filesystem_isolated`` (always False in M1) names the
+missing dimension machine-readably. Honesty by construction: the tier can only
+rise by delivering real containment, never by relabelling.
 """
 from __future__ import annotations
 
@@ -43,7 +50,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# --- ADR-0008 sandbox_tier vocabulary (M1 subset) -------------------------
+# --- ADR-0008 sandbox_tier vocabulary -------------------------------------
+# M1 only ever emits SANDBOX_TIER_NONE. SANDBOX_TIER_JAIL is the vocabulary
+# name for the S1 rung and is retained for reference / the M3 spike, but the
+# primitive never reports it: jail claims filesystem containment that a
+# same-UID ``$HOME``-redirect does not provide (C1 / #184).
 SANDBOX_TIER_NONE = "none"
 SANDBOX_TIER_JAIL = "jail"
 
@@ -70,12 +81,16 @@ class IsolationReport:
 
     Every field reflects the OS-level reality of the run, never the request:
     ``network_denied`` is ``True`` only if a functional deny mechanism was
-    applied, and ``sandbox_tier`` is ``jail`` only if all three lower flags hold.
+    applied. ``filesystem_isolated`` is the honest missing-dimension flag —
+    always ``False`` in M1 because a ``$HOME``-string redirect is not real
+    containment — and ``sandbox_tier`` stays ``none`` in v1 for the same reason
+    (a tier above ``none`` requires real filesystem containment; C1 / #184).
     """
 
     env_scrubbed: bool
     network_denied: bool
     home_isolated: bool
+    filesystem_isolated: bool
     sandbox_tier: str
 
 
@@ -152,17 +167,18 @@ def run_isolated(
 
         wrapped_cmd, network_denied = _apply_network_deny(list(cmd), network)
 
-        # ADR-0008: jail ONLY when all three lower flags hold at the OS level;
-        # never container/microvm in M1.
-        sandbox_tier = (
-            SANDBOX_TIER_JAIL
-            if (env_scrubbed and home_isolated and network_denied)
-            else SANDBOX_TIER_NONE
-        )
+        # C1 / #184: M1 provides no OS-level filesystem containment (a
+        # ``$HOME``-string redirect leaves the real HOME / bucket readable by
+        # absolute path to a same-UID child), so the honest tier is ALWAYS
+        # ``none`` (S0). ``jail`` would over-claim containment; it is never
+        # emitted in v1. ``filesystem_isolated`` records the missing dimension.
+        filesystem_isolated = False
+        sandbox_tier = SANDBOX_TIER_NONE
         report = IsolationReport(
             env_scrubbed=env_scrubbed,
             network_denied=network_denied,
             home_isolated=home_isolated,
+            filesystem_isolated=filesystem_isolated,
             sandbox_tier=sandbox_tier,
         )
 

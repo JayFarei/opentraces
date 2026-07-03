@@ -127,7 +127,36 @@ def test_tier_none_without_network_deny(tmp_path):
     assert result.achieved.sandbox_tier == "none"
 
 
-def test_tier_jail_only_when_fully_isolated(tmp_path):
+def test_fully_hardened_run_reports_none_never_jail(tmp_path):
+    """C1 (#184): env-scrub + network-deny + home-redirect is NOT filesystem
+    containment. The same-UID child can still read the real HOME / bucket by
+    absolute path or ``pwd.getpwuid(os.getuid()).pw_dir``, so the single
+    ``sandbox_tier`` token must stay ``none`` (S0) in M1 and MUST NOT over-claim
+    ``jail``. ``home_isolated`` is only a ``$HOME``-string redirect, honest as a
+    separate signal but not containment. This assertion is platform-independent:
+    the tier is ``none`` whether or not an OS network-deny mechanism exists,
+    because filesystem containment is the missing dimension either way."""
+    result = run_isolated(
+        [sys.executable, "-c", "print('hi')"],
+        cwd=str(tmp_path),
+        network="deny",
+    )
+    # The honest missing-dimension flag: filesystem is never contained in M1.
+    assert result.achieved.filesystem_isolated is False
+    # env scrub + home redirect always hold; they are honest, separate signals.
+    assert result.achieved.env_scrubbed is True
+    assert result.achieved.home_isolated is True
+    # The over-claim is gone: even a fully env+network+home-hardened run stays
+    # ``none`` because the filesystem is not contained.
+    assert result.achieved.sandbox_tier == "none"
+
+
+def test_fully_isolated_run_is_labeled_none_with_honest_booleans(tmp_path):
+    """C1 (#184): on a host that CAN deny the network, a run with all three
+    lower flags true still reports ``sandbox_tier == "none"`` (never ``jail``),
+    while the real booleans (``env_scrubbed`` / ``network_denied`` True,
+    ``filesystem_isolated`` False) stay honest and separate. (This test
+    previously asserted ``jail`` — the over-claim C1 removes.)"""
     result = run_isolated(
         [sys.executable, "-c", "print('hi')"],
         cwd=str(tmp_path),
@@ -135,12 +164,15 @@ def test_tier_jail_only_when_fully_isolated(tmp_path):
     )
     if not result.achieved.network_denied:
         pytest.skip(
-            "network deny unavailable on this platform; jail tier unreachable"
+            "network deny unavailable on this platform; cannot exercise the "
+            "all-three-flags-true case"
         )
     assert result.achieved.env_scrubbed is True
     assert result.achieved.home_isolated is True
     assert result.achieved.network_denied is True
-    assert result.achieved.sandbox_tier == "jail"
+    # No filesystem containment -> honest tier is none, never jail.
+    assert result.achieved.filesystem_isolated is False
+    assert result.achieved.sandbox_tier == "none"
 
 
 def test_tier_never_container_or_microvm(tmp_path):
