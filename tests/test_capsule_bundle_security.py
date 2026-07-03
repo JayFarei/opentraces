@@ -208,6 +208,11 @@ def test_4b_clean_bundle_is_byte_identical_to_raw_archive(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.skipif(
+    not _HAS_TRUFFLEHOG,
+    reason="a clean-scan publish needs trufflehog to CERTIFY clean; without it the "
+    "bundle is unscanned and #157 H3 fails the publish closed (see test_4e).",
+)
 def test_4c_clean_bundle_passes_and_publishes(tmp_path, monkeypatch):
     from opentraces.core.capsule.share import (
         build_capsule_bundle,
@@ -336,4 +341,108 @@ def test_4d_publish_cannot_emit_secret_bearing_bundle(tmp_path, monkeypatch):
     assert ss["blocked"] is True
     assert ss["acknowledged"] is True
     assert ss["status"] == "blocked"
+    assert info["capsule_id"] == "bundleseccap0001"
+
+
+# --------------------------------------------------------------------------- #
+# 4e — #157 H3: a scanner-absent bundle PUBLISH fails CLOSED. An UNSCANNED bundle
+# cannot be certified free of secrets, so it does not leave to a PUBLIC dataset
+# without an explicit override. (Non-publish paths never hit this gate; a capsule
+# with NO bundle has nothing to scan and publishes normally.)
+# --------------------------------------------------------------------------- #
+
+
+def test_4e_publish_fails_closed_when_trufflehog_absent(tmp_path, monkeypatch):
+    import opentraces.security.trufflehog as th_mod
+    from opentraces.core.capsule.share import (
+        BundleUnscannedError,
+        build_capsule_bundle,
+        publish_capsule,
+    )
+
+    # Force trufflehog ABSENT so the real scan returns skipped_no_trufflehog.
+    monkeypatch.setattr(th_mod, "find_trufflehog", lambda: None)
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "README.md").write_text("clean\n", encoding="utf-8")
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    sha = _commit_all(repo, "clean")
+    meta, bundle_bytes = build_capsule_bundle(repo, sha)
+
+    captured: dict = {}
+
+    class _FakeApi:
+        def __init__(self, token=None):
+            pass
+
+        def create_repo(self, **kw):
+            captured["create"] = True
+
+        def upload_folder(self, *, folder_path, **kw):
+            captured["uploaded"] = True
+            captured["capsule_json"] = (Path(folder_path) / "capsule.json").read_text("utf-8")
+            return types.SimpleNamespace(oid="rev4e")
+
+        def upload_file(self, **kw):
+            captured["pinned"] = True
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", _FakeApi)
+
+    # DEFAULT: a bundle-bearing capsule REFUSES (zero bytes: uploader never called).
+    with pytest.raises(BundleUnscannedError):
+        publish_capsule(
+            _capsule(meta), repo_id="someone/caps", token="fake",
+            bundle_bytes=bundle_bytes, require_clearance=False,
+        )
+    assert "uploaded" not in captured, "publish emitted an UNSCANNED bundle!"
+
+    # OVERRIDE: proceeds and stamps acknowledged=True on the shipped capsule.json.
+    info = publish_capsule(
+        _capsule(meta), repo_id="someone/caps", token="fake",
+        bundle_bytes=bundle_bytes, require_clearance=False,
+        i_accept_bundle_findings=True,
+    )
+    assert captured.get("uploaded") is True
+    body = json.loads(captured["capsule_json"])
+    ss = body["bundle"]["secret_scan"]
+    assert ss["status"] == "skipped_no_trufflehog"
+    assert ss["acknowledged"] is True
+    assert info["capsule_id"] == "bundleseccap0001"
+
+
+def test_4e_no_bundle_publishes_normally_without_trufflehog(monkeypatch):
+    # A capsule with NO bundle has nothing to scan; the scanner-absence gate never
+    # applies and publish proceeds normally.
+    import opentraces.security.trufflehog as th_mod
+    from opentraces.core.capsule.share import publish_capsule
+
+    monkeypatch.setattr(th_mod, "find_trufflehog", lambda: None)
+
+    captured: dict = {}
+
+    class _FakeApi:
+        def __init__(self, token=None):
+            pass
+
+        def create_repo(self, **kw):
+            return None
+
+        def upload_folder(self, *, folder_path, **kw):
+            captured["uploaded"] = True
+            return types.SimpleNamespace(oid="revnb")
+
+        def upload_file(self, **kw):
+            captured["pinned"] = True
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", _FakeApi)
+
+    info = publish_capsule(
+        _capsule(), repo_id="someone/caps", token="fake",
+        bundle_bytes=None, require_clearance=False,
+    )
+    assert captured.get("uploaded") is True  # no bundle => publishes normally
     assert info["capsule_id"] == "bundleseccap0001"

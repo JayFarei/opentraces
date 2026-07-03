@@ -640,6 +640,31 @@ class BundleSecretFindingError(RuntimeError):
         )
 
 
+class BundleUnscannedError(RuntimeError):
+    """A capsule's source bundle could NOT be secret-scanned (scanner absent) and is
+    being PUBLISHED; publish fails CLOSED (zero bytes) (#157 H3).
+
+    A raw ``git archive`` bundle uploaded to a PUBLIC HF dataset must be certified
+    free of secrets before it leaves. When trufflehog is not installed the scan is
+    an honest skip (``skipped_no_trufflehog``) — but an UNSCANNED bundle is NOT
+    certified safe, so it does not leave. Install the scanner
+    (``opentraces setup trufflehog``) and re-publish, or accept the risk after review
+    with ``i_accept_bundle_findings=True``. Non-publish paths (export/local) never
+    hit this gate; only the egress door fails closed.
+    """
+
+    def __init__(self, secret_scan: dict[str, Any]):
+        self.secret_scan = secret_scan
+        super().__init__(
+            "capsule publish refused: the source bundle could not be secret-scanned "
+            f"(status={secret_scan.get('status')!r}); a scanner (trufflehog) is not "
+            "installed, so the bundle cannot be certified free of secrets. An UNSCANNED "
+            "bundle does NOT leave to a PUBLIC dataset. Install trufflehog "
+            "(`opentraces setup trufflehog`) and re-publish, or pass "
+            "i_accept_bundle_findings=True to publish the unscanned bundle after review."
+        )
+
+
 def scan_bundle_bytes(bundle_bytes: bytes, *, verify: bool = False) -> tuple[dict[str, Any], list[Any]]:
     """Secret-scan the EXACT shipped bundle bytes; return ``(secret_scan, findings)``.
 
@@ -750,10 +775,16 @@ def publish_capsule(
     pending_secret_scan: dict[str, Any] | None = None
     if bundle_bytes is not None:
         pending_secret_scan, _findings = scan_bundle_bytes(bundle_bytes)
+        unscanned = pending_secret_scan.get("status") == "skipped_no_trufflehog"
         if pending_secret_scan["blocked"] and not i_accept_bundle_findings:
             raise BundleSecretFindingError(pending_secret_scan, _findings)
+        # #157 H3 — scanner-absent PUBLISH fails CLOSED: an UNSCANNED bundle cannot
+        # be certified free of secrets, so it does not leave to a PUBLIC dataset
+        # without an explicit override. Evaluated BEFORE any HF call (zero bytes).
+        if unscanned and not i_accept_bundle_findings:
+            raise BundleUnscannedError(pending_secret_scan)
         pending_secret_scan["acknowledged"] = bool(
-            pending_secret_scan["blocked"] and i_accept_bundle_findings
+            (pending_secret_scan["blocked"] or unscanned) and i_accept_bundle_findings
         )
 
     try:
@@ -1052,6 +1083,7 @@ def close_issue(repo: str, number: int, *, reason: str = "completed") -> None:
 __all__ = [
     "BUNDLE_FILENAME",
     "BundleSecretFindingError",
+    "BundleUnscannedError",
     "CapsuleClearanceError",
     "CapsuleResolveError",
     "GhError",
