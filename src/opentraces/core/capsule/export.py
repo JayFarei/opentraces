@@ -518,6 +518,14 @@ def export_capsule(
         # Consumed dependencies the verdict can be re-posed against (plan 089):
         # the library version / API endpoint the client doesn't control.
         "consumes": list(consumes or []),
+        # ADR-0008 §5 / #154 — the env_tier trust ordinal, stamped at its L0
+        # FLOOR here as a real field so the replay clamp reads it off the
+        # environment block and #202's dependency resolver can later RAISE it
+        # (L0→L1→L3→L4) WITHOUT a second envelope change. Floor-defaulted +
+        # additive (mirrors the honesty front-matter): today's corpus honestly
+        # reads L0, so verdict_trust clamps to floor and never over-claims. There
+        # is no L2 in the ladder (the L0/L1/L3/L4 gap is deliberate).
+        "env_tier": "L0",
     }
 
     reporter.stage("trail_anchors")
