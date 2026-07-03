@@ -968,10 +968,20 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
     # slug export stamps into ``source.project_slug`` (get_project_dir(...).name),
     # so a capsule sourced from a DIFFERENT project is recognized as foreign and
     # blocked by default unless the producer overrides with the flags below.
-    from ..core.config import get_project_dir
+    #
+    # #208: an un-``init``'d directory (fresh clone, ~/Downloads) has NO provable
+    # local identity — ``get_project_dir`` raises ``NotOptedInError``. We MUST NOT
+    # treat that as "own repo": ``local_slug=None`` is the honest "unknown identity"
+    # signal that ``run_capsule_test`` now fails CLOSED on for a DECLARED foreign
+    # source slug. So a foreign capsule from an un-init'd directory is refused, not
+    # silently executed on the host.
+    from ..core.config import NotOptedInError, get_project_dir
 
     try:
         local_slug = get_project_dir(repo).name or None
+    except NotOptedInError:
+        # No opentraces identity here → unknown local identity → fail closed below.
+        local_slug = None
     except Exception:  # pragma: no cover - slug derivation is best-effort
         local_slug = None
     where = (

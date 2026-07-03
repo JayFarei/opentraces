@@ -205,11 +205,13 @@ def test_5f_capsule_is_foreign_predicate_fails_closed():
     # absent source slug WITH a known local identity => foreign (producer omitted)
     assert _capsule_is_foreign({"source": {}}, "p") is True
     assert _capsule_is_foreign({}, "p") is True
-    # no local identity => the gate cannot apply (nothing to be foreign to); the
-    # shipped CLI always resolves a local slug, and every run still stamps the
-    # honest sandbox_tier=none label regardless.
-    assert _capsule_is_foreign({"source": {"project_slug": "p"}}, None) is False
+    # #208: a DECLARED source slug we cannot prove is ours (no local identity) is
+    # FOREIGN — fail CLOSED. A run from an un-init'd directory no longer bypasses
+    # the gate; the honest sandbox_tier=none label is still stamped regardless.
+    assert _capsule_is_foreign({"source": {"project_slug": "p"}}, None) is True
+    # No declared source slug AND no local identity => nothing to be foreign to.
     assert _capsule_is_foreign({}, None) is False
+    assert _capsule_is_foreign({"source": {}}, None) is False
 
 
 # --------------------------------------------------------------------------- #
