@@ -287,3 +287,41 @@ def test_failed_sync_run_leaves_watermark_untouched(monkeypatch):
         )
     # The failed run left the watermark at the last successful position.
     assert _cursor_watermark("sync-fail")["manifest_digest"] == "d0"
+
+
+def test_failed_script_run_preserves_child_stderr_in_log(monkeypatch):
+    """A failed workflow script's REAL error survives in the run's log.txt.
+
+    Regression (found dogfooding on a real bucket): ``run_dataset_workflow``'s
+    failure handler overwrote the run's ``log.txt`` with the bare
+    ``WorkflowScriptError`` message — whose text only points BACK at that same
+    ``log.txt`` — clobbering the child stderr that ``_execute_script`` had just
+    captured. A failed run must leave the actual diagnostic behind, or the user
+    is told to "see log.txt" for a log that only repeats the pointer.
+    """
+    import pytest
+
+    from opentraces.core import workflow_runner
+    from opentraces.core.datasets import dataset_path
+    from opentraces.core.workflow_runner import WorkflowScriptError
+
+    _create_sync_dataset("sync-log")
+    _write_candidates([_candidate("trace-jan", "2026-01-01T00:00:00Z")])
+    monkeypatch.setattr(
+        workflow_runner,
+        "bucket_watermark",
+        lambda: {"manifest_digest": "d0", "last_write_at": "2026-01-15T00:00:00Z"},
+    )
+    # The _SYNC_BUILDER writes "forced sync failure" to stderr then exits 1.
+    (paths.OPENTRACES_DIR / "FAIL").write_text("x", encoding="utf-8")
+    with pytest.raises(WorkflowScriptError):
+        workflow_runner.run_dataset_workflow(
+            "sync-log", executor="script", scope={"scope": "all-projects"}
+        )
+
+    runs = sorted((dataset_path("sync-log") / ".opentraces" / "runs").iterdir())
+    log = (runs[-1] / "log.txt").read_text(encoding="utf-8")
+    # The child's real stderr is PRESERVED (not clobbered) ...
+    assert "forced sync failure" in log
+    # ... with the wrapper outcome appended, not replacing it.
+    assert "WorkflowScriptError" in log

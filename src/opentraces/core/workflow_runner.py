@@ -465,9 +465,22 @@ def run_dataset_workflow(
             append_summary=empty_summary,
             status="failed",
         )
-        (run_dir / "log.txt").write_text(
-            f"{type(exc).__name__}: {exc}\n", encoding="utf-8"
+        # Preserve any child stdout/stderr already captured by _execute_script
+        # (the script's REAL error). The wrapper WorkflowScriptError message only
+        # points back at this same log.txt, so clobbering it here would destroy
+        # the one diagnostic a failed workflow leaves behind.
+        log_file = run_dir / "log.txt"
+        existing = (
+            log_file.read_text(encoding="utf-8") if log_file.exists() else ""
         )
+        summary_line = f"{type(exc).__name__}: {exc}\n"
+        if existing.strip():
+            log_file.write_text(
+                f"{existing.rstrip()}\n\n# run outcome\n{summary_line}",
+                encoding="utf-8",
+            )
+        else:
+            log_file.write_text(summary_line, encoding="utf-8")
         _write_run_summary(
             run_dir,
             failed_record,

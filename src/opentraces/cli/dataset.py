@@ -52,6 +52,7 @@ from ..core.workflow_runner import (
     DatasetRunLockError,
     ExecutorUnavailableError,
     WorkflowNeedsJudgmentError,
+    WorkflowScriptError,
     run_dataset_workflow,
 )
 from ..core.workflow_judgment import (
@@ -1341,6 +1342,7 @@ def dataset_run(
         ExecutorUnavailableError,
         DatasetRunLockError,
         WorkflowIntegrityError,
+        WorkflowScriptError,
     ) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
