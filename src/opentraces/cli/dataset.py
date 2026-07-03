@@ -23,6 +23,7 @@ from ..core.datasets import (
     apply_dataset_security_edit,
     append_rows,
     create_dataset,
+    DatasetPublishWithheldError,
     DatasetRemotePermissionError,
     DatasetRemoteSchemaAheadError,
     dataset_path,
@@ -1371,6 +1372,9 @@ def dataset_run(
                 check_only=publish_check_only,
                 token=token,
             )
+        except DatasetPublishWithheldError as exc:
+            _emit_publish_withheld(exc, as_json=as_json)
+            sys.exit(exc.exit_code)
         except (DatasetRemotePermissionError, DatasetRemoteSchemaAheadError, ValueError) as exc:
             click.echo(str(exc), err=True)
             sys.exit(3)
@@ -1548,6 +1552,9 @@ def dataset_publish(
             min_retention=min_retention,
             exclude_states=list(exclude_states) if exclude_states else None,
         )
+    except DatasetPublishWithheldError as exc:
+        _emit_publish_withheld(exc, as_json=as_json)
+        sys.exit(exc.exit_code)
     except DatasetRemotePermissionError as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -1757,6 +1764,37 @@ def _remote_payload(summary) -> dict[str, object]:
         "visibility": summary.visibility,
         "active": summary.active,
     }
+
+
+def _publish_withheld_payload(exc: DatasetPublishWithheldError) -> dict[str, object]:
+    """The frozen ``opentraces.dataset.publish.clearance.v1`` refusal envelope.
+
+    ``status='refused'`` + the enumerable ``{published, refused}`` partition,
+    mirroring bucket sync's Door-A auditable refusal (zero bytes egressed).
+    """
+    partition = exc.partition or {}
+    return {
+        "status": "refused",
+        "schema_version": "opentraces.dataset.publish.clearance.v1",
+        "publish": {
+            "refused": partition.get("refused") or [],
+            "published": partition.get("published") or [],
+            "message": str(exc),
+        },
+    }
+
+
+def _emit_publish_withheld(exc: DatasetPublishWithheldError, *, as_json: bool) -> None:
+    if as_json:
+        click.echo(_dump_json(_publish_withheld_payload(exc)))
+        return
+    click.echo(str(exc), err=True)
+    for row in exc.partition.get("refused") or []:
+        click.echo(
+            f"  refused {row.get('row_id')} "
+            f"(trace {row.get('trace_id')}): {row.get('sub_reason')}",
+            err=True,
+        )
 
 
 def _publish_summary_payload(summary) -> dict[str, object]:

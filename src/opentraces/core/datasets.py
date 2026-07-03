@@ -1422,6 +1422,19 @@ def publish_dataset(
             exclude_states=exclude_states,
         )
 
+        # #194: the shared egress clearance gate. Map each selected row -> its
+        # source trace and authorize against ONE fresh push-time manifest
+        # snapshot (no TOCTOU). If ANY row's source trace is not cleared, refuse
+        # the whole publish with the enumerable partition — ZERO bytes staged or
+        # uploaded (mirrors bucket sync's Door-A all-or-nothing refusal). Cleared
+        # rows publish exactly as today.
+        if selected_rows:
+            clearance = dataset_egress_clearance(
+                name, [row_id for row_id, _row in selected_rows]
+            )
+            if clearance["refused"]:
+                raise DatasetPublishWithheldError(clearance)
+
         staging_path, staged_files = _stage_publication(
             dataset,
             selected_rows,
@@ -1693,6 +1706,93 @@ class DatasetSecurityFindingsError(RuntimeError):
             f"publication blocked: {len(findings)} security finding(s) in withdrawal records"
         )
         self.findings = findings
+
+
+# The withhold reason a dataset row's egress refusal carries. Distinct STRING
+# from bucket sync's ``not_cleared_for_sync`` (this is Door B, dataset publish),
+# but the SUB-reasons (``syncable_false`` / ``status_unknown``) are byte-identical
+# to Door A's — because both read the SAME shared predicate (egress_clearance).
+DATASET_WITHHOLD_REASON = "not_cleared_for_egress"
+
+
+class DatasetPublishWithheldError(RuntimeError):
+    """A dataset publish would egress rows from not-yet-cleared traces — refuse.
+
+    ADR-0008 §3: exactly one predicate decides whether a trace's bytes may leave
+    the private bucket. Dataset publish (#194) adopts that shared predicate
+    (``egress_clearance.clearance_for_trace``, the same leaf bucket sync's
+    ``push_withhold_partition`` calls) instead of a third lock. When any selected
+    row's SOURCE trace is not positively cleared against the FRESH push-time
+    manifest, this is raised BEFORE a single byte is staged — carrying the
+    enumerable ``{published, refused}`` partition so the CLI can emit the
+    auditable ``status='refused'`` envelope. Mirrors
+    :class:`~opentraces.core.bucket_sync.BucketPushWithheldError` (Door A).
+    """
+
+    classification = "egress_not_cleared"
+    exit_code = 9
+
+    def __init__(self, partition: dict[str, Any]) -> None:
+        self.partition = partition
+        refused = partition.get("refused") or []
+        super().__init__(
+            f"dataset publish refused: {len(refused)} row(s) sourced from "
+            "traces not cleared for egress"
+        )
+
+
+def dataset_egress_clearance(
+    name: str,
+    row_ids: list[str],
+    *,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Partition selected rows into ``published`` / ``refused`` by source-trace
+    clearance (#194).
+
+    Each row is mapped to its source trace (``DatasetRowIndexEntry`` ref,
+    populated by M2-1's lineage) and authorized through the SHARED
+    :func:`~opentraces.core.egress_clearance.clearance_for_trace` predicate
+    against ONE push-time ``manifest`` snapshot (the no-TOCTOU path: the same
+    snapshot judges every row). A row whose source trace is not positively
+    ``cleared`` — including a row with no resolvable source trace — is REFUSED
+    with a ``{row_id, trace_id, reason, sub_reason}`` record whose sub-reason
+    (``syncable_false`` / ``status_unknown``) is the same vocabulary Door A
+    speaks, because it reads the same predicate.
+    """
+    from .egress_clearance import CLEARED, NOT_CLEARED, clearance_for_trace
+
+    if manifest is None:
+        manifest = push_clearance_manifest()
+    trace_by_row: dict[str, str | None] = {}
+    for entry in read_row_index(name):
+        if entry.row_id not in trace_by_row:
+            trace_by_row[entry.row_id] = _index_entry_source_trace(entry)
+    published: list[str] = []
+    refused: list[dict[str, Any]] = []
+    for row_id in row_ids:
+        trace_id = trace_by_row.get(row_id)
+        state = (
+            clearance_for_trace(trace_id, manifest=manifest)
+            if trace_id
+            else "unknown"
+        )
+        if state == CLEARED:
+            published.append(row_id)
+        else:
+            refused.append(
+                {
+                    "row_id": row_id,
+                    "trace_id": trace_id,
+                    "reason": DATASET_WITHHOLD_REASON,
+                    "sub_reason": (
+                        "syncable_false"
+                        if state == NOT_CLEARED
+                        else "status_unknown"
+                    ),
+                }
+            )
+    return {"published": published, "refused": refused}
 
 
 def _stage_publication(

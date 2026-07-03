@@ -2,6 +2,38 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_dataset_egress(monkeypatch):
+    """Neutralize the #194 dataset-publish egress gate for these legacy tests.
+
+    Plan-058's publish golden paths predate the shared clearance predicate and
+    source their rows from SYNTHETIC trace ids that have no bucket entry (so the
+    fresh push-time manifest would withhold every one). Seed a push-time
+    manifest that clears exactly the traces each dataset references, so these
+    tests keep asserting the publish PIPELINE (staging, retries, permission,
+    schema-ahead) without also re-deriving a real bucket. The clearance gate
+    itself is exercised in tests/core/test_dataset_publish_clearance.py.
+    """
+    import opentraces.core.datasets as ds
+
+    def _all_cleared() -> dict:
+        traces: list[dict] = []
+        seen: set[str] = set()
+        for dataset in ds.list_datasets():
+            for entry in ds.read_row_index(dataset.name):
+                trace_id = ds._index_entry_source_trace(entry)
+                if trace_id and trace_id not in seen:
+                    seen.add(trace_id)
+                    traces.append(
+                        {"trace_id": trace_id, "status": {"known": True, "syncable": True}}
+                    )
+        return {"digest": "sha256:plan058-cleared", "traces": traces}
+
+    monkeypatch.setattr(ds, "push_clearance_manifest", _all_cleared)
+
 
 def _row(summary: str, *, trace_id: str = "trace-1", unit_id: str | None = None) -> dict:
     return {
