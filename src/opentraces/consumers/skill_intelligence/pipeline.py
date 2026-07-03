@@ -134,7 +134,23 @@ def _refresh_skill_units(
     index_path: Path | None = None,
 ) -> list[TraceUnit]:
     if index_path is None:
-        return trace_index.list_skill_invocation_units_from_records(project_slug=project)
+        # #208 perf-core round 2: prefer the bounded, stale-tolerant search
+        # snapshot reader over the whole-corpus record scan. This caller has
+        # no per-skill filter (it needs every observed invocation for the
+        # audit breakdown), but "every invocation" is still a small, already
+        # -persisted SQL table read, not a reason to hydrate every TraceRecord
+        # in the bucket. Only fall back to the full scan when the snapshot
+        # itself is unusable (missing / unreadable / wrong schema) — a
+        # genuine "no bounded reader exists" gap, not this one.
+        from ...core.trace_search_snapshot import (
+            SearchSnapshotNeedsRebuild,
+            list_skill_invocation_units_stale_ok,
+        )
+
+        try:
+            return list_skill_invocation_units_stale_ok(project=project)
+        except SearchSnapshotNeedsRebuild:
+            return trace_index.list_skill_invocation_units_from_records(project_slug=project)
     db_path = index_path or trace_index.default_index_path()
     if db_path.exists():
         trace_index.refresh_index(db_path)
@@ -326,9 +342,17 @@ def build_episode_rows(
                 if _unit_skill(unit) == selected_skill
             ]
             records = _records_for_units(matched_units)
+            # #208 perf-core round 2: the units feeding this branch can now
+            # come from ``list_skill_invocation_units_stale_ok`` (a dirty
+            # snapshot), which can reference a trace that has since been
+            # pruned from the bucket. Drop those rather than emit a
+            # degraded/ghost row — a unit with no resolvable record is not a
+            # real episode. This is a no-op whenever the units came from the
+            # live-corpus fallback (every trace_id it emits resolves).
             rows = [
-                _episode_row_from_unit(unit, records.get(unit.trace_id))
+                _episode_row_from_unit(unit, records[unit.trace_id])
                 for unit in matched_units
+                if unit.trace_id in records
             ]
     else:
         matched_units = [
@@ -338,8 +362,9 @@ def build_episode_rows(
         ]
         records = _records_for_units(matched_units)
         rows = [
-            _episode_row_from_unit(unit, records.get(unit.trace_id))
+            _episode_row_from_unit(unit, records[unit.trace_id])
             for unit in matched_units
+            if unit.trace_id in records
         ]
     rows.sort(key=lambda row: (row["source_trace_id"], row["source_unit_id"]))
     if len(rows) < min_rows:

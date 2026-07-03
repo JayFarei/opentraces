@@ -1415,6 +1415,64 @@ def test_cold_build_over_threshold_list_skill_invocation_units_returns_maintenan
     assert calls == []
 
 
+def test_stale_ok_skill_units_serves_last_known_good_over_threshold(monkeypatch) -> None:
+    # #208 perf-core round 2: on a mature bucket a dirty (stale), schema-valid
+    # snapshot is still a bounded reader for skill-invocation units — the
+    # same issue #91 "last-known-good" precedent as search_traces, extended
+    # to this sibling reader. It must never fall back to an unbounded
+    # whole-corpus scan just because the corpus is too large to self-heal
+    # rebuild inline.
+    from opentraces.core.trace_search_snapshot import (
+        COLD_BUILD_MAX_SOURCES,
+        list_skill_invocation_units_stale_ok,
+    )
+
+    _write_trace(
+        "demo-project",
+        _trace("trace-review-a", description="Review the search path", skill="review"),
+    )
+    _write_trace(
+        "demo-project",
+        _trace("trace-opentraces", description="Use the opentraces skill", skill="opentraces"),
+    )
+    build_trace_search_snapshot()
+    mark_search_snapshot_dirty("active-capture", trace_id="trace-review-a")
+
+    calls = _install_oversized_corpus_and_builder_spy(
+        monkeypatch, COLD_BUILD_MAX_SOURCES + 1
+    )
+
+    # Per-skill filter still narrows, exactly like the non-stale-tolerant reader.
+    review_units = list_skill_invocation_units_stale_ok(
+        skill="review", project="demo-project"
+    )
+    assert {unit.trace_id for unit in review_units} == {"trace-review-a"}
+
+    # skill=None returns every observed skill's units — the audit's need —
+    # without ever touching a TraceRecord body.
+    all_units = list_skill_invocation_units_stale_ok(project="demo-project")
+    assert {unit.trace_id for unit in all_units} == {"trace-review-a", "trace-opentraces"}
+
+    # No inline rebuild ran: the guard never tripped, because this reader
+    # tolerates staleness instead of demanding a fresh rebuild.
+    assert calls == []
+
+
+def test_stale_ok_skill_units_raises_when_snapshot_missing(monkeypatch) -> None:
+    # A missing snapshot has nothing to serve from, stale or otherwise — the
+    # caller's cue to fall back to a whole-corpus scan (or an explicit
+    # ``trace index`` build) is preserved.
+    from opentraces.core.trace_search_snapshot import list_skill_invocation_units_stale_ok
+
+    assert not default_snapshot_path().exists()
+    try:
+        list_skill_invocation_units_stale_ok(project="demo-project")
+    except SearchSnapshotNeedsRebuild as exc:
+        assert exc.reason == "missing"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("missing snapshot should raise SearchSnapshotNeedsRebuild")
+
+
 def test_cold_build_threshold_is_env_overridable(monkeypatch) -> None:
     # A corpus that would trip the default ceiling is admitted when the operator
     # raises OPENTRACES_COLD_BUILD_MAX_SOURCES above it. We prove the GUARD does

@@ -215,3 +215,83 @@ def test_companion_path_does_not_poison_survival_cache(tmp_path: Path) -> None:
         "companion-sourced survival wrote the global survival cache — a stale "
         "companion would poison later live reads"
     )
+
+
+def test_companion_stream_skips_events_the_projection_never_reads(
+    tmp_path: Path,
+) -> None:
+    """#208 perf-core round 2: the companion carries every non-context TrailEvent
+    for the trace, not just anchor evidence — a real trail.jsonl.gz can be mostly
+    ``filesystem_mutation_observed`` / window-open-close / snapshot noise. The
+    streaming reader must drop those before ``TrailEvent`` construction (the
+    memory win) while producing IDENTICAL anchor rows to a read that kept them,
+    proving the filter is content-neutral for what this reader actually surfaces.
+    """
+    from opentraces.core.capsule.bucket_trail import (
+        _read_trail_companion,
+        trail_anchors_from_bucket,
+    )
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    trace_id = _seed_anchored_trace(repo)
+    # A large volume of an event type _build_projection_from_events ignores —
+    # exactly the noise a heavily-anchored real trace accumulates.
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="filesystem_mutation_observed",
+                trace_id=trace_id,
+                step_index=1,
+                capture_method=["fs_watcher"],
+                payload={"path": f"noise-{i}.py", "kind": "modified"},
+            )
+            for i in range(50)
+        ],
+        writer="test-fixture",
+    )
+    slug = _write_companion(repo, trace_id)
+
+    events = _read_trail_companion(slug, trace_id)
+    assert events is not None
+    assert {e.event_type for e in events} == {"trace_patch_created", "git_anchor_created"}
+    assert len(events) == 2  # the 50 filesystem_mutation_observed rows never parsed
+
+    # The anchors this reader actually surfaces are unaffected by the noise.
+    rows = trail_anchors_from_bucket(repo, slug, trace_id)
+    assert rows is not None and len(rows) == 1
+
+
+def test_corrupt_ignored_event_type_does_not_distrust_companion(
+    tmp_path: Path,
+) -> None:
+    """A malformed line of a type the projection never reads (here a payload
+    that fails ``TrailEvent`` validation) cannot hide a dropped anchor, so it
+    must not trip the all-or-nothing distrust — unlike a corrupt line of a
+    *consumed* type (``test_corrupt_companion_falls_back_to_live``)."""
+    import gzip
+    import json as _json
+
+    from opentraces.core.bucket_layout import trace_v1_trail_path
+    from opentraces.core.capsule.bucket_trail import trail_anchors_from_bucket
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    trace_id = _seed_anchored_trace(repo)
+    slug = _write_companion(repo, trace_id)
+
+    path = trace_v1_trail_path(slug, trace_id)
+    lines = gzip.open(path, "rb").read().decode("utf-8").splitlines()
+    assert lines
+    # Valid JSON, but not a valid TrailEvent (missing every required field) —
+    # of a type the projection ignores. Appended, not substituted, so the two
+    # real anchor-relevant lines survive untouched.
+    lines.append(_json.dumps({"event_type": "filesystem_mutation_observed"}))
+    with gzip.open(path, "wb") as fh:
+        fh.write(("\n".join(lines) + "\n").encode("utf-8"))
+
+    rows = trail_anchors_from_bucket(repo, slug, trace_id)
+    assert rows is not None and len(rows) == 1, (
+        "a malformed line of an ignored type must not fall back to the live read"
+    )

@@ -113,6 +113,52 @@ def test_corpus_audit_aggregates_trace_index_skill_invocations() -> None:
     }
 
 
+def test_audit_and_episode_rows_prefer_bounded_snapshot_over_whole_corpus_scan(
+    monkeypatch,
+) -> None:
+    # #208 perf-core round 2: a "known scope in hand" (project, and for
+    # episode rows, the selected skill) must never fall through to a
+    # whole-corpus TraceRecord scan while a schema-valid search snapshot
+    # (even a dirty/stale one) can serve the same skill-invocation units
+    # boundedly. Prove it by making the whole-corpus fallback explode if
+    # called at all.
+    from opentraces.consumers.skill_intelligence import audit_skill_invocations
+    from opentraces.consumers.skill_intelligence.pipeline import build_episode_rows
+    from opentraces.core import trace_index
+    from opentraces.core import trace_search_snapshot as snapshot_module
+    from opentraces.core.trace_search_snapshot import build_trace_search_snapshot
+    from opentraces.core.trace_search_state import mark_search_snapshot_dirty
+
+    _seed_skill_bucket()
+    build_trace_search_snapshot()
+    # Simulate an actively-capturing box: the persisted snapshot exists and
+    # is schema-valid but dirty (a new trace landed since the last build).
+    mark_search_snapshot_dirty("active-capture", trace_id="trace-claude-opentraces")
+
+    def _explode(*_args, **_kwargs):  # pragma: no cover - only runs on regression
+        raise AssertionError(
+            "whole-corpus record scan must not run while the snapshot can serve"
+        )
+
+    monkeypatch.setattr(
+        trace_index, "list_skill_invocation_units_from_records", _explode
+    )
+    # Force the "too large to self-heal rebuild inline" branch regardless of
+    # this test's tiny corpus, so the assertions exercise the same
+    # cold_build_too_large / stale-serve routing a mature bucket hits.
+    monkeypatch.setattr(snapshot_module, "_cold_build_exceeds", lambda _path: True)
+
+    audit = audit_skill_invocations(project="demo", min_usable_episodes=2)
+    assert audit["selected_skill"] == "opentraces"
+    assert audit["counts_by_skill"]["opentraces"]["usable_episodes"] == 2
+
+    rows = build_episode_rows(selected_skill="opentraces", project="demo", min_rows=0)
+    assert {row["source_trace_id"] for row in rows} == {
+        "trace-claude-opentraces",
+        "trace-codex-opentraces",
+    }
+
+
 def test_skill_intelligence_workflow_chain_and_schemas(tmp_path) -> None:
     from opentraces.consumers.skill_intelligence.pipeline import _initial_skill_for
     from opentraces.core.datasets import validate_row

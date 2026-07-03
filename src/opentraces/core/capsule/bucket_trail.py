@@ -30,6 +30,7 @@ from typing import Any
 from ..bucket_layout import trace_v1_trail_path
 from ..trails.models import TrailEvent
 from ..trails.query import (
+    _PROJECTION_EVENT_TYPES,
     TrailQueryProjection,
     build_trail_query_projection_from_events,
 )
@@ -66,33 +67,50 @@ def recorded_anchor_rows(
 
 
 def _read_trail_companion(slug: str, trace_id: str) -> list[TrailEvent] | None:
-    """Parse the trace's ``trail.jsonl.gz`` companion into TrailEvents.
+    """Stream-parse the trace's ``trail.jsonl.gz`` companion into TrailEvents.
 
     Returns ``None`` when the companion file does not exist OR cannot be fully
     parsed, so the caller falls back to the live read; returns ``[]`` for a
     present-but-empty companion (a captured trace that produced no trail events —
     distinct from "no companion").
 
-    Parsing is ALL-OR-NOTHING: a single corrupt gzip / JSON / model line distrusts
-    the whole companion and triggers the live fallback, rather than silently
-    dropping a real anchor and returning an incomplete-but-plausible result.
+    #208 perf-core round 2: the companion holds every non-context TrailEvent for
+    the trace (``filesystem_mutation_observed`` / window-open-close / snapshot /
+    watcher-attribution events included, not just anchor evidence), so on a
+    heavily-anchored trace it can be tens of megabytes compressed. The projection
+    this feeds (:func:`build_trail_query_projection_from_events`) only ever reads
+    ``_PROJECTION_EVENT_TYPES`` (``trace_patch_created`` / ``git_anchor_created`` /
+    ``git_anchor_search_completed`` — see ``trails/query.py``, the same filter the
+    commit- and trace-scoped builders already read-bound with). This reads the
+    gzip stream line-by-line (never materializing the whole decompressed body as
+    one string) and only pays the ``TrailEvent`` model-validation cost for lines
+    of a type the projection consumes — the same bounded-read shape
+    ``build_trail_query_projection_for_trace`` already uses, applied to the
+    file-backed companion instead of the canonical event log.
+
+    Parsing stays ALL-OR-NOTHING for the data this reader actually surfaces: a
+    corrupt gzip stream, unparseable JSON on ANY line, or a malformed line of a
+    *consumed* type distrusts the whole companion and triggers the live
+    fallback — never a silently-truncated anchor set. A malformed line of a type
+    the projection ignores anyway (e.g. a corrupt ``filesystem_mutation_observed``
+    row) cannot hide a dropped anchor, so it is not validated.
     """
     path = trace_v1_trail_path(slug, trace_id)
     if not path.exists():
         return None
-    try:
-        body = gzip.open(path, "rb").read().decode("utf-8")
-    except Exception:  # pragma: no cover - corrupt gzip ⇒ live fallback
-        return None
     events: list[TrailEvent] = []
-    for line in body.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            events.append(TrailEvent.model_validate(json.loads(line)))
-        except Exception:  # noqa: BLE001 — a single bad line ⇒ distrust the whole companion
-            return None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                if payload.get("event_type") not in _PROJECTION_EVENT_TYPES:
+                    continue
+                events.append(TrailEvent.model_validate(payload))
+    except Exception:  # noqa: BLE001 — corrupt gzip/JSON/model ⇒ live fallback
+        return None
     return events
 
 
