@@ -16,6 +16,7 @@ from pathlib import Path
 
 from opentraces.core.datasets import dataset_path, read_row_index, read_row_provenance
 
+from tests.integration._script_workflow import install_rows_workflow
 from tests.integration.harness.trace_trails_full_stack_demo import (
     _run_cli,
     _temporary_opentraces_home,
@@ -48,7 +49,7 @@ def _write_dataset_schema(path: Path) -> Path:
     return path
 
 
-def _headless_row(trace_id: str) -> str:
+def _dataset_row(trace_id: str) -> str:
     return json.dumps(
         {
             "source_trace_id": trace_id,
@@ -108,7 +109,6 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
     shutil.rmtree(opentraces_home / "index", ignore_errors=True)
 
     monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(dataset_remote_root))
-    monkeypatch.setenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", _headless_row(trace_id))
 
     with _temporary_opentraces_home(opentraces_home.parent):
         restored = _run_cli(
@@ -223,6 +223,7 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
             ]
         )
         assert created["dataset"]["manifest"]["remotes"] == {}
+        install_rows_workflow("restored-bucket-curator", _dataset_row(trace_id))
 
         run = _run_cli(
             [
@@ -230,7 +231,7 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
                 "run",
                 "restored-bucket-dataset",
                 "--executor",
-                "claude-code-headless",
+                "script",
                 "--privacy-tier",
                 "medium",
                 "--trail-freshness",
@@ -250,7 +251,7 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
         provenance = read_row_provenance("restored-bucket-dataset")[row.row_id]
         assert provenance["bucket"]["manifest_digest"].startswith("sha256:")
         assert provenance["privacy"]["privacy_tier"] == "medium"
-        assert provenance["run"]["executor"] == "claude-code-headless"
+        assert provenance["run"]["executor"] == "script"
 
         review = _run_cli(["dataset", "review", "restored-bucket-dataset", "--json"])
         assert review["rows"][row.row_id]["provenance"]["bucket"]["source_trace_record"][

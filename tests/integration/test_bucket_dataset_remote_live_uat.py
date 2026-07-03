@@ -23,13 +23,14 @@ import pytest
 
 from opentraces.core.datasets import dataset_path, read_row_index, read_row_provenance
 
+from tests.integration._script_workflow import install_rows_workflow
 from tests.integration.harness.trace_trails_full_stack_demo import (
     _run_cli,
     _temporary_opentraces_home,
     run_installed_runtime_demo,
 )
 from tests.integration.test_bucket_dataset_remote_flow_uat import (
-    _headless_row,
+    _dataset_row,
     _relative_files,
     _write_dataset_schema,
 )
@@ -134,7 +135,6 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
 
     shutil.rmtree(opentraces_home / "bucket")
     shutil.rmtree(opentraces_home / "index", ignore_errors=True)
-    os.environ["OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS"] = _headless_row(trace_id)
 
     with _temporary_opentraces_home(opentraces_home.parent):
         restored = _run_cli(
@@ -205,6 +205,7 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
             ]
         )
         assert created["dataset"]["manifest"]["remotes"] == {}
+        install_rows_workflow("live-hf-restored-curator", _dataset_row(trace_id))
 
         remote = _run_cli(
             [
@@ -224,7 +225,7 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
                 "run",
                 "live-hf-restored-dataset",
                 "--executor",
-                "claude-code-headless",
+                "script",
                 "--privacy-tier",
                 "medium",
                 "--trail-freshness",
@@ -253,7 +254,7 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
                 "run",
                 "live-hf-restored-dataset",
                 "--executor",
-                "claude-code-headless",
+                "script",
                 "--publish",
                 "--json",
             ]

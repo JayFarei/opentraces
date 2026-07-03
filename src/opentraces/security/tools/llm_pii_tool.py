@@ -23,6 +23,8 @@ class LLMPIIDetectorTool:
     def __init__(self) -> None:
         self._cached_detector: LLMPIIDetector | None = None
         self._cached_cfg_id: int | None = None
+        self._injected_detector: LLMPIIDetector | None = None
+        self._bound_cfg: Any = None
 
     def enabled(self, cfg: Any) -> bool:
         block = cfg_block(cfg, self.name)
@@ -55,12 +57,46 @@ class LLMPIIDetectorTool:
         """Return the LLMPIIDetector, reusing the cached instance across calls
         with the same cfg (keyed by id) so its per-instance prompt cache
         survives. cfg is process-stable for the run, so id() reuse can't occur.
+        An injected detector (bound via :meth:`with_detector`) always wins.
         """
+        if self._injected_detector is not None:
+            return self._injected_detector
         cfg_id = id(ctx.cfg) if ctx.cfg is not None else None
         if self._cached_detector is None or self._cached_cfg_id != cfg_id:
             self._cached_detector = self._build_detector(cfg=ctx.cfg)
             self._cached_cfg_id = cfg_id
         return self._cached_detector
+
+    def find(self, text: str, field_type: FieldType) -> list[Finding]:
+        """Per-string NER adapter (#143 move 4) — the dict-capable name detector.
+
+        Availability-gated: returns ``[]`` unless a detector is bound (via
+        :meth:`with_detector`) or buildable from a bound cfg, so a stock install
+        with no LLM endpoint is a clean skip, never a silent wrong answer.
+        """
+        det = self._resolve_detector(ToolContext(cfg=self._bound_cfg))
+        if det is None:
+            return []
+        ft_label = field_type.value if hasattr(field_type, "value") else str(field_type)
+        try:
+            pairs = det.detect_for_path("$", text, ft_label, siblings={})
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.warning("llm_pii find failed: %s", exc)
+            return []
+        findings: list[Finding] = []
+        for etype, etext in pairs:
+            for _, start, end in locate_substrings(text, [etext]):
+                findings.append(
+                    Finding(
+                        tool=self.name,
+                        pattern=etype,
+                        matched_text=etext,
+                        start=start,
+                        end=end,
+                        severity="high",
+                    )
+                )
+        return findings
 
     def apply(self, record: TraceRecord, ctx: ToolContext) -> ToolResult:
         det = self._resolve_detector(ctx)

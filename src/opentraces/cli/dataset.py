@@ -50,9 +50,20 @@ from ..core.datasets import (
 from ..core.workflow_runner import (
     DatasetRunLockError,
     ExecutorUnavailableError,
+    WorkflowNeedsJudgmentError,
     run_dataset_workflow,
 )
-from ..core.workflows import create_workflow, load_workflow, resolve_workflow_reference
+from ..core.workflow_judgment import (
+    RC_NEEDS_JUDGMENT,
+    build_needs_judgment,
+    load_answers as load_judgment_answers,
+)
+from ..core.workflows import (
+    WorkflowIntegrityError,
+    create_workflow,
+    load_workflow,
+    resolve_workflow_reference,
+)
 from ..core.schedules import (
     add_schedule,
     list_schedules,
@@ -445,8 +456,8 @@ def dataset_remote_visibility(
 @click.option("--every", required=True, help="Local interval such as 30s, 15m, 2h, or 1d.")
 @click.option(
     "--executor",
-    type=click.Choice(["current-agent", "claude-code-headless"]),
-    default="claude-code-headless",
+    type=click.Choice(["current-agent", "script"]),
+    default="script",
     show_default=True,
     help="Executor each scheduled run uses.",
 )
@@ -1061,7 +1072,7 @@ def _create_manual_dataset(
 @click.option("--dry-run", is_flag=True, help="Execute without appending rows or advancing cursors.")
 @click.option(
     "--executor",
-    type=click.Choice(["current-agent", "claude-code-headless", "script"]),
+    type=click.Choice(["current-agent", "script"]),
     default=None,
     help="Workflow executor.",
 )
@@ -1109,6 +1120,21 @@ def _create_manual_dataset(
 )
 @click.option("--verbose", is_flag=True, help="Include run artefact paths.")
 @click.option("--resume", default=None, help="Reserved run resume id.")
+@click.option(
+    "--answers",
+    "answers_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Recorded judgment answers (#186); re-run after a needs-judgment rc=10.",
+)
+@click.option(
+    "--strict/--no-strict",
+    default=False,
+    help=(
+        "Fail (non-zero) before execution if the installed workflow no longer "
+        "matches the digest it was pinned to; default warns and proceeds."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_run(
     name: str,
@@ -1128,9 +1154,11 @@ def dataset_run(
     publish_check_only: bool,
     verbose: bool,
     resume: str | None,
+    answers_path: str | None,
+    strict: bool,
     as_json: bool,
 ) -> None:
-    """Run the dataset workflow in dry-run, current-agent, or headless mode."""
+    """Run the dataset workflow in dry-run, current-agent, or script mode."""
     started = time.monotonic()
     if resume:
         click.echo("--resume is reserved for future interrupted-run recovery.", err=True)
@@ -1175,6 +1203,13 @@ def dataset_run(
         scope_payload["since_last_run"] = True
     if reconcile:
         scope_payload["reconcile"] = True
+    answers = None
+    if answers_path:
+        try:
+            answers = load_judgment_answers(answers_path)
+        except (ValueError, OSError) as exc:
+            click.echo(f"could not read --answers file: {exc}", err=True)
+            sys.exit(2)
     try:
         result = run_dataset_workflow(
             name,
@@ -1185,8 +1220,35 @@ def dataset_run(
             scheduled=scheduled,
             privacy_tier=privacy_tier,
             trail_freshness_policy=trail_freshness_policy,
+            answers=answers,
+            strict=strict,
         )
-    except (FileNotFoundError, ValueError, ExecutorUnavailableError, DatasetRunLockError) as exc:
+    except WorkflowNeedsJudgmentError as exc:
+        # #186 handshake: the workflow needs recorded judgments. Emit the
+        # structured requests + instruction and exit rc=10 (the slicing
+        # precedent). Under --json, stdout is pure JSON; otherwise the requests
+        # and instruction go to stderr as prose.
+        envelope = build_needs_judgment(
+            workflow=exc.workflow_name,
+            judgment_requests=exc.judgment_requests,
+        )
+        if as_json:
+            click.echo(_dump_json(envelope))
+        else:
+            for request in envelope["judgment_requests"]:
+                click.echo(
+                    f"[judgment] {request.get('id')}: {request.get('prompt')}",
+                    err=True,
+                )
+            click.echo(envelope["instruction"], err=True)
+        sys.exit(RC_NEEDS_JUDGMENT)
+    except (
+        FileNotFoundError,
+        ValueError,
+        ExecutorUnavailableError,
+        DatasetRunLockError,
+        WorkflowIntegrityError,
+    ) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
 

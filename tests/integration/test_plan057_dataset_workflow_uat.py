@@ -7,6 +7,11 @@ from click.testing import CliRunner
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import dataset_path
 
+from tests.integration._script_workflow import (
+    install_rows_workflow,
+    install_scriptless_workflow,
+)
+
 
 def _create_dataset(runner: CliRunner) -> None:
     result = runner.invoke(
@@ -67,10 +72,13 @@ def _single_fake_row() -> str:
     )
 
 
-def test_dataset_run_dry_run_real_run_and_current_agent_modes(monkeypatch):
+def test_dataset_run_dry_run_real_run_and_current_agent_modes():
     runner = CliRunner()
     _create_dataset(runner)
-    monkeypatch.setenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", _fake_rows())
+    # The dataset pins the caller's --workflow-digest; installing the row-emitter
+    # AFTER `dataset new` keeps that pin (dataset new only resolves an already
+    # installed package).
+    install_rows_workflow("grill-me-intent-curator", _fake_rows())
 
     dry = runner.invoke(
         dataset_group,
@@ -79,7 +87,7 @@ def test_dataset_run_dry_run_real_run_and_current_agent_modes(monkeypatch):
             "grill-me-intents",
             "--dry-run",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--limit",
             "5",
             "--verbose",
@@ -103,7 +111,7 @@ def test_dataset_run_dry_run_real_run_and_current_agent_modes(monkeypatch):
             "run",
             "grill-me-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--json",
         ],
     )
@@ -121,7 +129,7 @@ def test_dataset_run_dry_run_real_run_and_current_agent_modes(monkeypatch):
             "run",
             "grill-me-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--json",
         ],
     )
@@ -147,16 +155,16 @@ def test_dataset_run_dry_run_real_run_and_current_agent_modes(monkeypatch):
     ).read_text()
 
 
-def test_dataset_run_lock_prevents_overlapping_runs(monkeypatch):
+def test_dataset_run_lock_prevents_overlapping_runs():
     runner = CliRunner()
     _create_dataset(runner)
-    monkeypatch.setenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", _fake_rows())
+    install_rows_workflow("grill-me-intent-curator", _fake_rows())
     lock = dataset_path("grill-me-intents") / ".opentraces" / ".lock"
     lock.write_text("run_existing")
 
     result = runner.invoke(
         dataset_group,
-        ["run", "grill-me-intents", "--executor", "claude-code-headless", "--json"],
+        ["run", "grill-me-intents", "--executor", "script", "--json"],
     )
 
     assert result.exit_code == 3
@@ -296,10 +304,10 @@ def test_dataset_run_can_fail_on_stale_trail_freshness(monkeypatch):
     assert "Trace Trail projection is stale" in result.output
 
 
-def test_successful_scheduled_zero_row_run_advances_cursor(monkeypatch):
+def test_successful_scheduled_zero_row_run_advances_cursor():
     runner = CliRunner()
     _create_dataset(runner)
-    monkeypatch.setenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", "")
+    install_rows_workflow("grill-me-intent-curator", "")
 
     result = runner.invoke(
         dataset_group,
@@ -307,7 +315,7 @@ def test_successful_scheduled_zero_row_run_advances_cursor(monkeypatch):
             "run",
             "grill-me-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--scheduled",
             "--json",
         ],
@@ -328,7 +336,6 @@ def test_dataset_run_can_approve_new_rows_and_drive_publish_automation(
 ) -> None:
     runner = CliRunner()
     monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(tmp_path / "remotes"))
-    monkeypatch.setenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", _single_fake_row())
 
     created = runner.invoke(
         dataset_group,
@@ -343,6 +350,7 @@ def test_dataset_run_can_approve_new_rows_and_drive_publish_automation(
         ],
     )
     assert created.exit_code == 0, created.output
+    install_rows_workflow("auto-publish-curator", _single_fake_row())
 
     remote = runner.invoke(
         dataset_group,
@@ -363,7 +371,7 @@ def test_dataset_run_can_approve_new_rows_and_drive_publish_automation(
             "run",
             "auto-published-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--approve-new",
             "--publish-check-only",
             "--json",
@@ -388,7 +396,7 @@ def test_dataset_run_can_approve_new_rows_and_drive_publish_automation(
             "run",
             "auto-published-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--publish",
             "--json",
         ],
@@ -406,12 +414,14 @@ def test_dataset_run_can_approve_new_rows_and_drive_publish_automation(
     assert not (remote_root / ".opentraces").exists()
 
 
-def test_failed_scheduled_run_does_not_advance_cursor_and_writes_failed_summary(monkeypatch):
+def test_failed_scheduled_run_does_not_advance_cursor_and_writes_failed_summary():
     """A failing executor must leave cursors untouched and record status=failed."""
 
     runner = CliRunner()
     _create_dataset(runner)
-    monkeypatch.delenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", raising=False)
+    # A workflow whose script builder is missing fails the script executor with
+    # ExecutorUnavailableError — the stand-in for the old "executor unavailable".
+    install_scriptless_workflow("grill-me-intent-curator")
 
     result = runner.invoke(
         dataset_group,
@@ -419,7 +429,7 @@ def test_failed_scheduled_run_does_not_advance_cursor_and_writes_failed_summary(
             "run",
             "grill-me-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--scheduled",
             "--json",
         ],
@@ -440,4 +450,4 @@ def test_failed_scheduled_run_does_not_advance_cursor_and_writes_failed_summary(
     assert summary["run"]["status"] == "failed"
     assert summary["cursor_advanced"] is False
     log_text = (failed_runs[-1] / "log.txt").read_text()
-    assert "ExecutorUnavailableError" in log_text or "claude-code-headless" in log_text
+    assert "ExecutorUnavailableError" in log_text

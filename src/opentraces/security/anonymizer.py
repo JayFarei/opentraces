@@ -187,10 +187,59 @@ def _build_patterns(usernames: list[str]) -> list[tuple[re.Pattern, str]]:
     return patterns
 
 
+# Tail-consumer: after a username is hashed to the ``[ot-user-<8hex>]`` marker,
+# ``consume_tail`` collapses the home-path TAIL that follows the marker so
+# ``/Users/<name>/secret/.env`` leaks no structure. It matches the already
+# hashed marker form (detected usernames), and is idempotent by construction
+# (after one pass the marker has no trailing tail to re-consume). The tail runs
+# until the first whitespace / quote / angle-bracket delimiter, so it works on
+# paths EMBEDDED in prose and in quoted code.
+_MARKER_TAIL_RE = re.compile(
+    r"([/\\](?:Users|home)[/\\]\[ot-user-[0-9a-f]{8}\])"
+    r"(?:[/\\][^\s\"'`<>]+)"
+)
+
+# Structural home-path consume for the companion path (#143 / H6). Auto-detection
+# (``extract_usernames_from_paths``) requires a 3+ char ``[A-Za-z0-9_-]``
+# username, so it MISSES dotted (``jane.doe``) and short (``j``) names — their
+# home-path tail then survived even with ``consume_tail=True``. This rewrites ANY
+# raw ``/Users|home/<name>/<tail-until-delimiter>`` whose ``<name>`` matches the
+# username grammar ``[A-Za-z0-9._-]+`` (dots, hyphens, underscores, short names)
+# to the single hashed ``[ot-user-<hash>]`` token, regardless of whether the
+# name was auto-detected. The hashed marker begins with ``[`` (outside the name
+# class), so an already-rewritten segment is never re-matched — idempotent by
+# construction. Companion-only: the TraceRecord ``apply`` path never sets
+# ``consume_tail``, so this never runs there and trace digests are unchanged.
+_HOME_PATH_CONSUME_RE = re.compile(
+    r"([/\\](?:Users|home)[/\\])([A-Za-z0-9._-]+)"
+    r"(?:[/\\][^\s\"'`<>]+)"
+)
+
+
+def _consume_home_tail(text: str) -> str:
+    """Collapse home-path tails on the companion path.
+
+    Two idempotent passes: first drop the tail after an already-hashed
+    ``[ot-user-…]`` marker (the detected-username form), then structurally
+    hash+collapse any remaining raw ``/Users|home/<name>/<tail>`` whose ``<name>``
+    auto-detection missed (dotted / short). The marker form is inert under the
+    structural pattern, so re-running is a byte-identical no-op.
+    """
+    text = _MARKER_TAIL_RE.sub(r"\1", text)
+
+    def _hash_and_drop_tail(match: re.Match) -> str:
+        prefix, name = match.group(1), match.group(2)
+        return f"{prefix}{_anonymized_username(name)}"
+
+    return _HOME_PATH_CONSUME_RE.sub(_hash_and_drop_tail, text)
+
+
 def anonymize_paths(
     text: str,
     username: str | None = None,
     extra_usernames: list[str] | None = None,
+    *,
+    consume_tail: bool = False,
 ) -> str:
     """Anonymize user paths and bare usernames in text.
 
@@ -203,9 +252,15 @@ def anonymize_paths(
         text: The text to anonymize.
         username: Override the system username. If None, auto-detects.
         extra_usernames: Additional usernames to anonymize (e.g., GitHub handles).
+        consume_tail: When True, additionally collapse the WHOLE home-path tail
+            (``/Users|home/<name>/<tail-until-delimiter>``) to a single hashed
+            token — the aggressive companion mode. Default False keeps the
+            username-only behavior of the TraceRecord ``apply`` path so existing
+            trace digests / goldens are unchanged.
 
     Returns:
-        Text with user paths and bare usernames anonymized.
+        Text with user paths (and, when ``consume_tail``, their tails) and bare
+        usernames anonymized.
     """
     if not text:
         return text
@@ -236,7 +291,7 @@ def anonymize_paths(
     auto_only = auto_detected - set(unique_explicit)
 
     if not unique_explicit and not auto_only:
-        return text
+        return _consume_home_tail(text) if consume_tail else text
 
     # Full patterns (including hyphen-encoded and tilde) for explicit names
     patterns = _build_patterns(unique_explicit) if unique_explicit else []
@@ -255,6 +310,9 @@ def anonymize_paths(
     for uname in unique_explicit:
         hashed = _anonymized_username(uname)
         result = re.sub(re.escape(uname), hashed, result)
+
+    if consume_tail:
+        result = _consume_home_tail(result)
 
     return result
 

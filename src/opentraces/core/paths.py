@@ -19,9 +19,23 @@ Per-project, committable (lives in the repo):
     <repo>/.opentraces.json        # marker: project_id + portable policy
 """
 
+import os
 from pathlib import Path
 
-OPENTRACES_DIR = Path.home() / ".opentraces"
+# ``OT_OPENTRACES_DIR`` override (#188). The workflow script executor runs a
+# builder in an ISOLATED child whose ``$HOME`` is redirected to a throwaway dir,
+# so ``Path.home() / ".opentraces"`` would resolve to an empty bucket. A bundled
+# (first-party) template that must still reach the operator's real bucket is
+# handed the real bucket root via this env var; the freshly-imported ``paths``
+# module in the child resolves ``OPENTRACES_DIR`` from it. Third-party (file)
+# sources are NOT given the var, so their bucket path resolves to the isolated
+# empty HOME. Evaluated at import so a child process picks it up automatically.
+_OT_OPENTRACES_DIR_OVERRIDE = os.environ.get("OT_OPENTRACES_DIR")
+OPENTRACES_DIR = (
+    Path(_OT_OPENTRACES_DIR_OVERRIDE).expanduser()
+    if _OT_OPENTRACES_DIR_OVERRIDE
+    else Path.home() / ".opentraces"
+)
 CONFIG_PATH = OPENTRACES_DIR / "config.json"
 CREDENTIALS_PATH = OPENTRACES_DIR / "credentials"
 PROJECTS_DIR = OPENTRACES_DIR / "projects"

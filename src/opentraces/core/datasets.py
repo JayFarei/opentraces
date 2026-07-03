@@ -766,8 +766,17 @@ def _build_row_provenance(
     trace_record_ref = None
     if bucket_snapshot.get("capture_mode") != "deferred":
         trace_record_ref = _bucket_record_ref(source_refs.get("trace_id"))
+    run = run_provenance or {}
+    # #188 honesty labels (additive, still row_provenance.v1). ``reconstructable``
+    # is True only for a script / recorded-answer run (a raw agent emission is
+    # never appended through this path, so the conservative default is False);
+    # ``isolation`` carries the achieved sandbox tier the runner reported.
+    reconstructable = bool(run.get("reconstructable", False))
+    isolation = run.get("isolation") or {"sandbox_tier": "none"}
     return {
         "schema_version": "opentraces.dataset.row_provenance.v1",
+        "reconstructable": reconstructable,
+        "isolation": isolation,
         "row_id": row_id,
         "run_id": run_id,
         "dataset": dataset.name,

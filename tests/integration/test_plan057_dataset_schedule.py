@@ -4,8 +4,11 @@ import json
 
 from click.testing import CliRunner
 
+import yaml
+
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import create_dataset, dataset_path
+from opentraces.core.schedules import read_schedule
 
 
 def test_dataset_schedule_cli_manages_local_state_without_remote_publish():
@@ -25,7 +28,7 @@ def test_dataset_schedule_cli_manages_local_state_without_remote_publish():
             "--every",
             "2h",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--json",
         ],
     )
@@ -77,7 +80,7 @@ def test_dataset_schedule_cli_persists_publish_automation_trigger():
             "--every",
             "30m",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--approve-new",
             "--publish-check-only",
             "--json",
@@ -103,3 +106,39 @@ def test_dataset_schedule_cli_persists_publish_automation_trigger():
     assert resume_payload["schedule"]["trigger"]["approve_new"] is True
     assert resume_payload["schedule"]["trigger"]["publish"] == "check_only"
     assert "--approve-new" in trigger_file.read_text()
+
+
+def test_legacy_headless_schedule_still_loads_and_coerces_to_script():
+    """A schedule serialized before the M1 engine collapse (#185) carried
+    ``executor: claude-code-headless``. It must still deserialize (schema keeps
+    the value readable) and coerce onto the surviving ``script`` executor on
+    read, so the regenerated trigger names a valid executor rather than a
+    removed one."""
+    create_dataset(
+        "legacy-headless-schedule",
+        workflow_skill="legacy-curator",
+        workflow_digest="sha256:workflow",
+    )
+    root = dataset_path("legacy-headless-schedule") / ".opentraces"
+    root.mkdir(parents=True, exist_ok=True)
+    # Hand-write a pre-collapse schedule.yaml with the removed executor value.
+    (root / "schedule.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "dataset": "legacy-headless-schedule",
+                "enabled": True,
+                "every": "2h",
+                "executor": "claude-code-headless",
+                "trigger": {"backend": "local-file"},
+                "last_run_status": None,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    state = read_schedule("legacy-headless-schedule")
+    assert state.enabled is True
+    assert state.every == "2h"
+    # Accept-and-coerce: the legacy value maps onto the automated executor.
+    assert state.executor == "script"

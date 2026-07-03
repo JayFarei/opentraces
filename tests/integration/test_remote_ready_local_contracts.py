@@ -15,6 +15,8 @@ from opentraces.core.datasets import (
 )
 from opentraces.security import SECURITY_VERSION
 
+from tests.integration._script_workflow import install_rows_workflow
+
 
 def _trace(trace_id: str, content: str = "Analyze Hugging Face bucket sync") -> TraceRecord:
     return TraceRecord(
@@ -216,10 +218,6 @@ def test_remote_ready_dataset_run_review_and_row_provenance(monkeypatch, tmp_pat
         "opentraces.core.workflow_runner._trail_freshness_for_dataset",
         lambda _dataset, _scope: _current_trail_freshness(),
     )
-    monkeypatch.setenv(
-        "OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS",
-        _fake_dataset_rows(trace_id="trace-hf-dataset-1"),
-    )
 
     created = runner.invoke(
         main,
@@ -242,6 +240,9 @@ def test_remote_ready_dataset_run_review_and_row_provenance(monkeypatch, tmp_pat
     created_payload = json.loads(created.output)
     assert created_payload["dataset"]["manifest"]["remotes"] == {}
     assert created_payload["dataset"]["manifest"].get("active_remote") is None
+    install_rows_workflow(
+        "hf-sync-curator", _fake_dataset_rows(trace_id="trace-hf-dataset-1")
+    )
 
     result = runner.invoke(
         main,
@@ -250,7 +251,7 @@ def test_remote_ready_dataset_run_review_and_row_provenance(monkeypatch, tmp_pat
             "run",
             "hf-sync-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--privacy-tier",
             "medium",
             "--trail-freshness",
@@ -294,7 +295,7 @@ def test_remote_ready_dataset_run_review_and_row_provenance(monkeypatch, tmp_pat
     assert provenance["bucket"]["source_trace_record"]["trace_id"] == "trace-hf-dataset-1"
     assert provenance["privacy"]["privacy_tier"] == "medium"
     assert provenance["trail"]["freshness"][0]["last_synced_at"] == "2026-05-07T10:00:00Z"
-    assert provenance["run"]["executor"] == "claude-code-headless"
+    assert provenance["run"]["executor"] == "script"
 
     review = runner.invoke(main, ["dataset", "review", "hf-sync-intents", "--json"])
     assert review.exit_code == 0, review.output
@@ -325,10 +326,6 @@ def test_remote_ready_dataset_run_fail_policy_blocks_stale_trails(monkeypatch, t
             }
         ],
     )
-    monkeypatch.setenv(
-        "OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS",
-        _fake_dataset_rows(trace_id="trace-stale-trail"),
-    )
 
     created = runner.invoke(
         main,
@@ -345,6 +342,8 @@ def test_remote_ready_dataset_run_fail_policy_blocks_stale_trails(monkeypatch, t
     )
     assert created.exit_code == 0, created.output
 
+    # A stale trail with policy=fail short-circuits before the executor runs, so
+    # no row emitter needs to be installed.
     result = runner.invoke(
         main,
         [
@@ -352,7 +351,7 @@ def test_remote_ready_dataset_run_fail_policy_blocks_stale_trails(monkeypatch, t
             "run",
             "hf-stale-intents",
             "--executor",
-            "claude-code-headless",
+            "script",
             "--trail-freshness",
             "fail",
             "--json",

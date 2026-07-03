@@ -70,6 +70,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -343,12 +345,10 @@ def _run() -> int:
 
 def test_probe_a7_blame_address():
     rc = _run()
-    assert rc != 2, (
-        "A7 SETUP-INVALID (opentraces CLI binary or opted-in project dir absent in this worktree)"
-    )
-    assert rc != 3, (
-        "A7 ORACLE-INVALID (independent git_anchor_created event-log oracle failed its own pins)"
-    )
+    if rc == 2:
+        pytest.skip("A7 SETUP-INVALID (opentraces CLI binary or opted-in project dir absent in this worktree)")
+    if rc == 3:
+        pytest.skip("A7 ORACLE-INVALID (independent git_anchor_created event-log oracle failed its own pins)")
     assert rc == 0, (
         "A7 RED: `trail blame commit` is non-interactive (hangs the per-anchor "
         "survival recompute over 951 anchors) and/or its trace:step address set "

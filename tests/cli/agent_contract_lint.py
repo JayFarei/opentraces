@@ -82,6 +82,15 @@ READ_FAMILY_ROOTS = ("trace", "ctx", "trail", "bucket", "status", "doctor", "con
 # payload forms) and is enforced via L5_ARGGED_TARGETS below — required args
 # exclude it from the main sweep, so without that pass it would ESCAPE L5
 # rather than being exempt from it.
+# NOTE (#186): ``ot dataset run`` emits a NEW frozen consumer envelope,
+# ``opentraces.workflow.needs_judgment.v1``, on the rc=10 judgment handshake. It
+# is intentionally NOT registered below: ``dataset run`` is a WRITE verb with a
+# required ``NAME`` arg, so it is never reached by the L5 read-verb sweep (its
+# root ``dataset`` is not in READ_FAMILY_ROOTS and required_args() excludes it),
+# and this exception table is drift-guarded to contain ONLY ctx read surfaces
+# (test_frozen_exceptions_equal_ctx_frozen_set). Registering a non-ctx surface
+# here would break that guard; the envelope needs no L5 exemption because L5
+# never inspects it.
 FROZEN_ENVELOPE_EXCEPTIONS: dict[str, frozenset[str]] = {
     "ctx list": frozenset({"opentraces.ctx.list.v2"}),
     "ctx info": frozenset({"opentraces.ctx.info.v2"}),
