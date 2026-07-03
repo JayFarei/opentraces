@@ -1243,6 +1243,52 @@ def read_rows_by_id(name: str) -> dict[str, dict[str, Any]]:
     return rows
 
 
+def reproduce_train_lines(
+    dataset: LocalDataset,
+    rows: list[dict[str, Any]],
+    *,
+    privacy_tier: str | None = None,
+) -> list[str]:
+    """Project raw workflow rows into the canonical ``data/train.jsonl`` lines.
+
+    Mirrors :func:`append_rows`'s in-flight transform (sanitize -> validate ->
+    identity-dedup -> canonical JSON) WITHOUT any write, so ``dataset verify``
+    (#193) can BYTE-compare a side-effect-free re-run against the stored public
+    rows. The privacy-tier / tool resolution matches :func:`append_rows`, so a
+    reproduced line is byte-for-byte what an append would have written for the
+    same raw row.
+    """
+    default_privacy_tier = (
+        DEFAULT_PRIVACY_TIER
+        if dataset.manifest.publication_policy.review == "auto"
+        and not dataset.manifest.remotes
+        else "medium"
+    )
+    resolved_privacy_tier = normalize_privacy_tier(
+        privacy_tier, default=default_privacy_tier
+    )
+    schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
+    security_policy = dataset.manifest.security
+    policy_tools: list[str] | None = (
+        list(security_policy.enabled_tools) if security_policy.enabled_tools else None
+    )
+    seen: set[str] = set()
+    lines: list[str] = []
+    for row in rows:
+        sanitized = sanitize_dataset_row(
+            row, privacy_tier=resolved_privacy_tier, tools=policy_tools
+        )
+        candidate = sanitized.row
+        if validate_row(candidate, schema):
+            continue
+        identity_hash = row_identity_hash(candidate, dataset.manifest.identity)
+        if identity_hash in seen:
+            continue
+        seen.add(identity_hash)
+        lines.append(_canonical_json(candidate))
+    return lines
+
+
 def _row_mean_retention(row: dict[str, Any]) -> float | None:
     """Cluster F D8: mean retention across patches_with_survival.
 

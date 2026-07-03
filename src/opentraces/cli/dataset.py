@@ -1573,6 +1573,39 @@ def dataset_publish(
     click.echo(line)
 
 
+@dataset_group.command("verify", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_verify(name: str, as_json: bool) -> None:
+    """Replay the bound workflow and grade the dataset seal's explainability.
+
+    Re-executes the workflow against the bucket (with recorded answers) in a
+    side-effect-free mode and byte-compares the re-run to the stored rows,
+    classifying the outcome as ``reproduces`` / ``bucket-advanced`` /
+    ``integrity-failure``. An integrity failure exits non-zero.
+    """
+    from ..core.dataset_verify import verify_dataset, verify_envelope
+
+    try:
+        result = verify_dataset(name)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except (ExecutorUnavailableError, WorkflowIntegrityError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    envelope = verify_envelope(result)
+    if as_json:
+        click.echo(_dump_json(envelope))
+    else:
+        line = f"{result.verdict}: {result.detail}"
+        if result.verdict == "bucket-advanced":
+            line += f" (delta={len(result.delta)})"
+        click.echo(line)
+    if result.exit_code != 0:
+        sys.exit(result.exit_code)
+
+
 @dataset_group.command("approve", cls=OpentracesCommand, hidden=True)
 @click.argument("name")
 @click.argument("row_ids", nargs=-1)
