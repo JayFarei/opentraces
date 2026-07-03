@@ -44,6 +44,7 @@ from . import paths
 from .datasets import (
     AppendSummary,
     append_rows,
+    bucket_watermark,
     digest_payload,
     load_dataset,
     read_json,
@@ -105,6 +106,11 @@ class DatasetRunResult:
     run_record: DatasetRunRecord
     append_summary: AppendSummary
     cursor_advanced: bool
+    # #192: the delta scope of a ``--sync`` run (``None`` for a full run). Carries
+    # ``bucket_changed`` / ``candidate_scope`` (``none`` | ``delta``) plus the
+    # since/current watermarks so the fast-no-op vs only-the-delta acceptance is
+    # evidenced without re-reading the run summary.
+    delta_scope: dict[str, Any] | None = None
 
 
 def _is_deferred_provenance(provenance: dict[str, Any] | None) -> bool:
@@ -161,6 +167,7 @@ def run_dataset_workflow(
     trail_freshness_policy: str = "warn",
     answers: dict[str, Any] | None = None,
     strict: bool = False,
+    sync: bool = False,
 ) -> DatasetRunResult:
     dataset = load_dataset(name)
     selected_executor = executor or (
@@ -243,6 +250,34 @@ def run_dataset_workflow(
     # the builder reads packet["answers"] to finalize rows deterministically.
     if answers:
         dataset_context["answers"] = answers
+    # #192 --sync: turn the write-only cursor into a consumed WATERMARK over
+    # bucket position. Read the current bucket position (manifest digest + max
+    # status.written_at) and the last-synced watermark; when the digest is
+    # unchanged the projection is a fast no-op (zero candidates). Otherwise the
+    # watermark is threaded into the run packet so the projecting workflow
+    # self-filters to bucket data newer than the recorded position. ``--sync`` is
+    # only meaningful for the ``script`` projector (``current-agent`` returned
+    # above emits no bucket projection).
+    sync_block: dict[str, Any] | None = None
+    sync_short_circuit = False
+    run_watermark: dict[str, Any] | None = None
+    if sync and selected_executor == "script":
+        run_watermark = bucket_watermark()
+        stored_watermark = _read_cursor_watermark(dataset.path, dataset.manifest)
+        digest = run_watermark.get("manifest_digest")
+        sync_short_circuit = bool(
+            stored_watermark
+            and digest
+            and stored_watermark.get("manifest_digest") == digest
+        )
+        sync_block = {
+            "enabled": True,
+            "since": stored_watermark,
+            "last_write_at": (stored_watermark or {}).get("last_write_at"),
+            "current_manifest_digest": digest,
+            "bucket_changed": not sync_short_circuit,
+        }
+        dataset_context["sync"] = sync_block
     run_packet = _build_workflow_packet(
         workflow_name=dataset.manifest.workflow.skill,
         workflow_digest=workflow_digest,
@@ -256,6 +291,57 @@ def run_dataset_workflow(
     )
     _write_run_packet(run_dir, dataset.manifest, schema, run_packet)
     lock_path = dataset.path / ".opentraces" / ".lock"
+
+    if sync_short_circuit:
+        # Fast no-op: the bucket has not advanced since the last successful
+        # sync, so nothing is projected and the watermark is already current.
+        # No subprocess runs; the delta scope evidences the zero-candidate read.
+        with _dataset_lock(lock_path, run_id):
+            output_path.write_text("", encoding="utf-8")
+        delta_scope = {
+            "mode": "sync",
+            "bucket_changed": False,
+            "candidate_scope": "none",
+            "reason": "bucket_unchanged_since_last_sync",
+            "since": (sync_block or {}).get("since"),
+            "current": run_watermark,
+        }
+        append_summary = AppendSummary(
+            dataset_name=name,
+            run_id=run_id,
+            dry_run=dry_run,
+            emitted_count=0,
+        )
+        run_record = _run_record(
+            run_id=run_id,
+            dataset_name=name,
+            dry_run=dry_run,
+            executor=selected_executor,
+            scope=run_packet["scope"],
+            workflow_digest=workflow_digest,
+            schema_digest=schema_digest,
+            started_at=started_at,
+            append_summary=append_summary,
+            status="succeeded",
+        )
+        _write_run_summary(
+            run_dir,
+            run_record,
+            append_summary,
+            cursor_advanced=False,
+            reconstructable=True,
+            sandbox_tier=SANDBOX_TIER_NONE,
+            delta_scope=delta_scope,
+        )
+        return DatasetRunResult(
+            run_id=run_id,
+            run_dir=run_dir,
+            status="ok",
+            run_record=run_record,
+            append_summary=append_summary,
+            cursor_advanced=False,
+            delta_scope=delta_scope,
+        )
 
     if selected_executor == "current-agent":
         with _dataset_lock(lock_path, run_id):
@@ -341,7 +427,18 @@ def run_dataset_workflow(
             )
             cursor_advanced = False
             if not dry_run:
-                _advance_cursor(dataset.path, dataset.manifest, run_id)
+                # #192: stamp the bucket watermark alongside the write-only
+                # cursor. A full run establishes the baseline (so a later
+                # ``--sync`` has a position to compare against); a ``--sync`` run
+                # advances it to the position it just projected up to. Reuse the
+                # watermark already read for the sync decision when present.
+                advance_watermark = run_watermark or bucket_watermark()
+                _advance_cursor(
+                    dataset.path,
+                    dataset.manifest,
+                    run_id,
+                    watermark=advance_watermark,
+                )
                 cursor_advanced = True
     except WorkflowNeedsJudgmentError:
         # Not a failure: the builder asked for judgments (#186). Leave the run
@@ -391,6 +488,16 @@ def run_dataset_workflow(
         append_summary=append_summary,
         status="succeeded",
     )
+    delta_scope: dict[str, Any] | None = None
+    if sync_block is not None:
+        delta_scope = {
+            "mode": "sync",
+            "bucket_changed": True,
+            "candidate_scope": "delta",
+            "projected_since_write_at": sync_block.get("last_write_at"),
+            "since": sync_block.get("since"),
+            "current": run_watermark,
+        }
     _write_run_summary(
         run_dir,
         run_record,
@@ -398,6 +505,7 @@ def run_dataset_workflow(
         cursor_advanced=cursor_advanced,
         reconstructable=execution.reconstructable,
         sandbox_tier=execution.sandbox_tier,
+        delta_scope=delta_scope,
     )
     return DatasetRunResult(
         run_id=run_id,
@@ -406,6 +514,7 @@ def run_dataset_workflow(
         run_record=run_record,
         append_summary=append_summary,
         cursor_advanced=cursor_advanced,
+        delta_scope=delta_scope,
     )
 
 
@@ -531,6 +640,7 @@ def _write_run_summary(
     cursor_advanced: bool,
     reconstructable: bool = True,
     sandbox_tier: str = SANDBOX_TIER_NONE,
+    delta_scope: dict[str, Any] | None = None,
 ) -> None:
     validation_payload = {
         "validation_error_count": append_summary.validation_error_count,
@@ -546,6 +656,10 @@ def _write_run_summary(
         "reconstructable": reconstructable,
         "isolation": {"sandbox_tier": sandbox_tier},
     }
+    # #192: evidence the fast-no-op / only-the-delta scope of a ``--sync`` run.
+    # Absent for a full run so the pre-existing summary shape stays unchanged.
+    if delta_scope is not None:
+        summary_payload["delta_scope"] = delta_scope
     (run_dir / "validation.json").write_text(
         json.dumps(validation_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -556,19 +670,57 @@ def _write_run_summary(
     )
 
 
-def _advance_cursor(root: Path, manifest, run_id: str) -> None:
+def _cursor_query_name(manifest) -> str:
+    query = manifest.candidate_query
+    return query.name if query else "default"
+
+
+def _read_cursor_watermark(root: Path, manifest) -> dict[str, Any] | None:
+    """The last bucket watermark stamped for this dataset's query (#192).
+
+    ``None`` when no watermark has been recorded yet (a pre-#192 cursor, or a
+    dataset that has never had a successful run). Read-only and best-effort.
+    """
+    cursors_path = root / ".opentraces" / "cursors.yaml"
+    if not cursors_path.exists():
+        return None
+    try:
+        data = yaml.safe_load(cursors_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return None
+    entry = (data.get("queries") or {}).get(_cursor_query_name(manifest))
+    watermark = entry.get("watermark") if isinstance(entry, dict) else None
+    return watermark if isinstance(watermark, dict) else None
+
+
+def _advance_cursor(
+    root: Path,
+    manifest,
+    run_id: str,
+    *,
+    watermark: dict[str, Any] | None = None,
+) -> None:
     cursors_path = root / ".opentraces" / "cursors.yaml"
     data = yaml.safe_load(cursors_path.read_text(encoding="utf-8")) or {"queries": {}}
     queries = data.setdefault("queries", {})
     query = manifest.candidate_query
     query_name = query.name if query else "default"
-    queries[query_name] = {
+    entry: dict[str, Any] = {
         "query_fingerprint": digest_payload(
             query.model_dump(mode="json") if query else {"scope": "all-projects"}
         ),
         "last_successful_run_id": run_id,
         "last_successful_run_at": utc_now_str(),
     }
+    # #192: the consumed bucket watermark (manifest digest + max
+    # status.written_at). Additive to the write-only cursor, so a full run's
+    # observable projection/append behaviour is unchanged.
+    if watermark is not None:
+        entry["watermark"] = {
+            "manifest_digest": watermark.get("manifest_digest"),
+            "last_write_at": watermark.get("last_write_at"),
+        }
+    queries[query_name] = entry
     cursors_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     save_manifest(root, manifest)
 

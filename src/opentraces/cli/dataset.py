@@ -1171,6 +1171,16 @@ def _create_manual_dataset(
     help="How to handle stale Trace Trail projections during composition.",
 )
 @click.option("--since-last-run", is_flag=True, help="Use the dataset cursor.")
+@click.option(
+    "--sync",
+    "sync",
+    is_flag=True,
+    help=(
+        "Project only bucket data newer than the recorded watermark (a delta, "
+        "not a full re-run); advance the watermark on success. A no-op when the "
+        "bucket has not advanced since the last sync."
+    ),
+)
 @click.option("--reconcile", is_flag=True, help="Run a full reconciliation scan.")
 @click.option("--scheduled", is_flag=True, help="Mark this run as scheduler initiated.")
 @click.option(
@@ -1217,6 +1227,7 @@ def dataset_run(
     privacy_tier: str | None,
     trail_freshness_policy: str,
     since_last_run: bool,
+    sync: bool,
     reconcile: bool,
     scheduled: bool,
     approve_new: bool,
@@ -1271,6 +1282,8 @@ def dataset_run(
         scope_payload["trace_id"] = trace_id
     if since_last_run:
         scope_payload["since_last_run"] = True
+    if sync:
+        scope_payload["sync"] = True
     if reconcile:
         scope_payload["reconcile"] = True
     answers = None
@@ -1292,6 +1305,7 @@ def dataset_run(
             trail_freshness_policy=trail_freshness_policy,
             answers=answers,
             strict=strict,
+            sync=sync,
         )
     except WorkflowNeedsJudgmentError as exc:
         # #186 handshake: the workflow needs recorded judgments. Emit the
@@ -1332,6 +1346,8 @@ def dataset_run(
         "cursor_advanced": result.cursor_advanced,
         "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},
     }
+    if result.delta_scope is not None:
+        payload["delta_scope"] = result.delta_scope
     if approve_new and result.append_summary.row_ids:
         review_state = set_publication_review_status(
             name,

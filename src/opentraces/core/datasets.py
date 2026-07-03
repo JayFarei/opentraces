@@ -423,6 +423,41 @@ def write_source_provenance(root: Path | str, payload: dict[str, Any]) -> None:
     write_json(path, payload)
 
 
+def bucket_watermark() -> dict[str, Any]:
+    """Current bucket position for the dataset sync watermark (#192).
+
+    Pairs the transport-neutral bucket ``digest`` (the coarse "changed at all"
+    signal) with the max per-row ``status.written_at`` from the plan-087
+    accelerator (via :func:`_aggregate_status_from_rows`, the O(rows-in-memory)
+    read). This is READ-ONLY over the status accelerator — which is
+    DIGEST-EXCLUDED — so ``bucket_digest`` stays byte-identical.
+    """
+    from .bucket_store import _aggregate_status_from_rows, bucket_manifest
+
+    manifest = bucket_manifest(write=False, include_objects=False)
+    traces = manifest.get("traces") if isinstance(manifest, dict) else None
+    agg = _aggregate_status_from_rows(traces if isinstance(traces, list) else [])
+    return {
+        "manifest_digest": (
+            manifest.get("digest") if isinstance(manifest, dict) else None
+        ),
+        "last_write_at": agg.get("last_write_at"),
+    }
+
+
+def push_clearance_manifest() -> dict[str, Any]:
+    """A FRESH push-time bucket manifest snapshot for the egress clearance gate.
+
+    Dataset publish (#194) authorizes every selected row's source trace against
+    the SAME snapshot this returns (no TOCTOU). Kept as a named seam so the
+    clearance decision reads exactly one recompute of the bucket the publisher
+    is about to egress, and so tests can substitute a controlled snapshot.
+    """
+    from .bucket_store import bucket_manifest
+
+    return bucket_manifest(write=False, include_objects=False)
+
+
 def load_manifest(root: Path | str) -> DatasetManifest:
     root = Path(root)
     manifest_path = root / ".opentraces" / "manifest.yaml"
