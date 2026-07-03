@@ -74,6 +74,13 @@ Project one candidate row per trace in the private bucket.
 # templating pass leaves it byte-identical. Reads every bucket trace
 # envelope and emits one deterministic row per trace_id; append-path dedup
 # makes a --sync re-run grow the dataset by exactly the new trace's row.
+#
+# Rows are ordered by (timestamp_start, trace_id): the delta trace is
+# ingested AFTER the checkpoint's traces (and carries a far-future session
+# timestamp), so it always sorts LAST. That makes the stored append order
+# (originals, then the sync-appended delta) byte-identical to the verify
+# re-run's fully-sorted order — #193's hardened `reproduces` requires
+# ORDERED byte-identity, not set equality.
 [[steps]]
 type = "write_file"
 id = "write-builder"
@@ -85,8 +92,8 @@ import os
 
 otdir = os.environ.get("OT_OPENTRACES_DIR") or os.path.expanduser("~/.opentraces")
 troot = os.path.join(otdir, "bucket", "traces", "v1")
-rows = []
-for tj in sorted(glob.glob(os.path.join(troot, "*", "*", "trace.json"))):
+recs = []
+for tj in glob.glob(os.path.join(troot, "*", "*", "trace.json")):
     try:
         rec = json.load(open(tj, encoding="utf-8"))
     except Exception:
@@ -94,10 +101,13 @@ for tj in sorted(glob.glob(os.path.join(troot, "*", "*", "trace.json"))):
     tid = rec.get("trace_id")
     if not tid:
         continue
-    rows.append(dict(source_trace_id=tid, source_unit_id="tu:" + tid + ":trace", summary="trajectory for " + tid))
+    ts = rec.get("timestamp_start") or ""
+    recs.append((ts, tid))
+recs.sort()
 out = open(os.environ["OT_DATASET_OUTPUT"], "w", encoding="utf-8")
-for r in rows:
-    out.write(json.dumps(r, sort_keys=True) + "\n")
+for ts, tid in recs:
+    row = dict(source_trace_id=tid, source_unit_id="tu:" + tid + ":trace", summary="trajectory for " + tid)
+    out.write(json.dumps(row, sort_keys=True) + "\n")
 out.close()
 '''
 
@@ -161,7 +171,10 @@ import json
 from pathlib import Path
 
 sid = "sess-m2-delta"
-ts = "2026-07-03T09:00:00Z"
+# Far-future session timestamp so the delta trace always sorts LAST in the
+# builder's (timestamp_start, trace_id) order, keeping the stored append
+# order byte-identical to the verify re-run (see build_rows).
+ts = "2099-01-01T00:00:00Z"
 tool_id = "tud1"
 user = dict(type="user", sessionId=sid, timestamp=ts, cwd=str(Path.cwd().resolve()),
             message=dict(role="user", content="add a delta helper"))
