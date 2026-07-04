@@ -2929,12 +2929,13 @@ def ctx_anchor_for_step_cmd(
     examples=[
         "opentraces ctx backfill --dry-run",
         "opentraces ctx backfill --apply",
+        "opentraces ctx backfill --apply --only reproject,drop_dangling",
     ],
     see_also=[
         ("opentraces bucket repair", "full bucket rebuild from canonical state."),
     ],
     option_groups=[
-        ("Mode", ["dry_run", "apply"]),
+        ("Mode", ["dry_run", "apply", "only_kinds"]),
     ],
 )
 @click.option(
@@ -2953,8 +2954,20 @@ def ctx_anchor_for_step_cmd(
     help="Actually write the backfill (reproject stale companions, "
     "re-derive recoverable codex companions, drop unrecoverable dangling ids).",
 )
+@click.option(
+    "--only",
+    "only_kinds",
+    multiple=True,
+    help="Apply only the named action kinds (comma list and/or repeated "
+    "flag): reproject, codex_recover, drop_dangling. Excluded planned "
+    "actions are reported as deferred, never silently dropped. The "
+    "integrity cure (reproject + drop_dangling, no Git appends) never has "
+    "to wait on the codex_recover enrichment. Requires --apply.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
+def ctx_backfill_cmd(
+    dry_run: bool, do_apply: bool, only_kinds: tuple[str, ...], as_json: bool
+) -> None:
     """Re-project stale/empty Context Tree companions (issue #210).
 
     Re-observes every trace via the independent
@@ -2988,8 +3001,46 @@ def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
             click.echo(msg, err=True)
         sys.exit(2)
 
-    from ..core.context_backfill import apply_backfill, plan_backfill
+    from ..core.context_backfill import (
+        BACKFILL_ACTION_KINDS,
+        apply_backfill,
+        plan_backfill,
+    )
     from ..core.config import load_config
+
+    # PR #217 round 3 — --only scoping: apply only the named action kinds
+    # (comma list and/or repeated flag); everything else in the plan is
+    # reported as deferred, never silently dropped.
+    only: list[str] = []
+    for raw in only_kinds:
+        only.extend(s.strip() for s in raw.split(",") if s.strip())
+    if only and not do_apply:
+        msg = (
+            "ctx backfill: --only requires --apply (dry-run always reports "
+            "the FULL plan; scoping only restricts what gets applied)."
+        )
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
+    unknown_kinds = sorted(set(only) - set(BACKFILL_ACTION_KINDS))
+    if unknown_kinds:
+        msg = (
+            f"ctx backfill: unknown --only kind(s): {', '.join(unknown_kinds)} "
+            f"— valid kinds: {', '.join(BACKFILL_ACTION_KINDS)}"
+        )
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
 
     # Codex review critical #2 — a missing/corrupt event mirror used to be
     # silently read as "zero context events" (legitimately empty). It now
@@ -3026,7 +3077,9 @@ def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
         # event line (or an unreadable batch / missing mirror) raises BEFORE
         # any write. Surface it cleanly, rc=2, matching the plan-time guard.
         try:
-            result = apply_backfill(plan, project_paths=project_paths)
+            result = apply_backfill(
+                plan, project_paths=project_paths, only=only or None
+            )
         except (FileNotFoundError, ValueError) as exc:
             msg = f"ctx backfill: apply blocked (zero writes) — {exc}"
             if as_json:
@@ -3074,4 +3127,11 @@ def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
                 "(corrupt non-context event line(s) in the bucket events "
                 "mirror — skipped for this apply, never silently; consider "
                 "'opentraces bucket repair' to rebuild the mirror)"
+            )
+        deferred = result.get("deferred") or {}
+        if deferred:
+            click.echo(
+                "deferred: "
+                + ", ".join(f"{k}={len(v)}" for k, v in deferred.items())
+                + " (excluded by --only; run again with those kinds to apply)"
             )

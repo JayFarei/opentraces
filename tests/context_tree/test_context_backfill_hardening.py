@@ -309,8 +309,9 @@ def _make_extra_in_companion_case(world: _World) -> tuple[str, str]:
     return trace_id, phantom_id
 
 
-def _make_codex_recover_case(world: _World) -> str:
-    trace_id = "trace-codex-recover-1"
+def _make_codex_recover_case(
+    world: _World, trace_id: str = "trace-codex-recover-1"
+) -> str:
     record = _codex_record(trace_id)
     write_trace_record(
         record, project_slug=world.slug, source_layer="canonical", legacy_mirror=True,
@@ -555,3 +556,209 @@ class TestMirrorCorruptionPolicyOnApply:
         )
         report = audit_bucket(bucket_dir())
         assert report.total_traces == 0
+
+
+# --------------------------------------------------------------------------- #
+# Round 3 (real-bucket scale wall): codex_recover appended per TRACE, and on
+# a mature canonical log every append_event_batch triggers a multi-GB
+# whole-log snapshot rebuild (~6 appends / 45 min observed; 910 recoveries =
+# days). The cure is ONE append per project (chunked), a duplicate-append
+# guard for interrupted runs, and --only scoping so the integrity cure
+# (reproject + drop_dangling, zero Git appends) never waits on the
+# codex_recover enrichment.
+# --------------------------------------------------------------------------- #
+
+
+def _ref_sha(repo: Path) -> str | None:
+    from opentraces.core.trails.event_log import EVENT_LOG_REF
+
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", EVENT_LOG_REF],
+        cwd=repo, capture_output=True, text=True,
+    )
+    return proc.stdout.strip() or None
+
+
+def _count_append_calls(monkeypatch) -> list[dict]:
+    """Patch the real append_event_batch with a pass-through call counter."""
+    from opentraces.core.trails import event_log as event_log_mod
+
+    real_append = event_log_mod.append_event_batch
+    calls: list[dict] = []
+
+    def counting(cwd, drafts, *args, **kwargs):
+        calls.append({"cwd": Path(cwd), "n_drafts": len(list(drafts))})
+        return real_append(cwd, drafts, *args, **kwargs)
+
+    monkeypatch.setattr(event_log_mod, "append_event_batch", counting)
+    return calls
+
+
+class TestCodexRecoverBatchedPerProject:
+    def test_one_append_event_batch_call_per_project(self, tmp_path, monkeypatch):
+        """N planned recoveries in one project must produce exactly ONE
+        append_event_batch call (one snapshot rebuild), not N."""
+        world = _World(tmp_path)
+        id1 = _make_codex_recover_case(world, "trace-codex-batch-1")
+        id2 = _make_codex_recover_case(world, "trace-codex-batch-2")
+        id3 = _make_codex_recover_case(world, "trace-codex-batch-3")
+
+        plan = plan_backfill()
+        planned = {a.trace_id for a in plan.codex_recover}
+        assert {id1, id2, id3} <= planned
+
+        calls = _count_append_calls(monkeypatch)
+        result = apply_backfill(plan, project_paths={world.slug: world.project_dir})
+
+        assert len(calls) == 1, (
+            f"expected ONE append_event_batch call for the whole project, "
+            f"got {len(calls)}: {calls!r}"
+        )
+        recovered = {r["trace_id"] for r in result["codex_recover"]}
+        assert {id1, id2, id3} <= recovered
+
+        healed = audit_bucket(bucket_dir())
+        healed_by_id = {t.trace_id: t for t in healed.traces}
+        for tid in (id1, id2, id3):
+            assert healed_by_id[tid].classification == "consistent"
+
+    def test_interrupted_recovery_not_reappended(self, tmp_path, monkeypatch):
+        """Simulate the killed real-bucket run: a trace's recovered events
+        already landed on the canonical Git log (append succeeded, then the
+        run died before sync/stamp). Re-apply must NOT append duplicates --
+        sync-first + the duplicate-append guard complete the recovery with
+        ZERO new appends."""
+        from opentraces.capture.codex_cli.context_tree_capture import (
+            build_context_tree_projection_from_record,
+        )
+        from opentraces.core.trails.event_log import append_event_batch
+
+        world = _World(tmp_path)
+        trace_id = _make_codex_recover_case(world, "trace-codex-interrupted-1")
+
+        # The killed run's footprint: derive the same (deterministic)
+        # projection and append it to the canonical log; no sync, no stamp.
+        record = _codex_record(trace_id)
+        projection = build_context_tree_projection_from_record(record)
+        assert projection.drafts
+        append_event_batch(
+            world.project_dir, projection.drafts, writer="w2-backfill-codex-recover",
+        )
+
+        # The audit still sees an un-synced mirror -> legitimately_empty ->
+        # planned as codex_recover (this is exactly the re-plan after a kill).
+        plan = plan_backfill()
+        assert trace_id in {a.trace_id for a in plan.codex_recover}
+
+        ref_before = _ref_sha(world.project_dir)
+        calls = _count_append_calls(monkeypatch)
+        result = apply_backfill(plan, project_paths={world.slug: world.project_dir})
+
+        assert calls == [], (
+            f"interrupted recovery was re-appended (duplicate events on the "
+            f"append-only log): {calls!r}"
+        )
+        assert _ref_sha(world.project_dir) == ref_before, (
+            "canonical event log ref moved -- a duplicate append happened"
+        )
+
+        # And the recovery COMPLETED (stamp + companion), not just skipped.
+        entry = next(
+            r for r in result["codex_recover"] if r["trace_id"] == trace_id
+        )
+        assert entry["appended"] is False
+        healed = audit_bucket(bucket_dir())
+        healed_by_id = {t.trace_id: t for t in healed.traces}
+        assert healed_by_id[trace_id].classification == "consistent"
+        assert healed_by_id[trace_id].stamped_ids, (
+            "completing an interrupted recovery must still stamp the steps"
+        )
+
+    def test_appended_and_synced_replans_as_reproject_not_codex(self, tmp_path):
+        """The other interruption shape: append AND sync landed, stamp did
+        not. The audit sees mirror events with an empty companion ->
+        inconsistent -> planned as reproject, never re-planned as a fresh
+        codex_recover append."""
+        from opentraces.capture.codex_cli.context_tree_capture import (
+            build_context_tree_projection_from_record,
+        )
+        from opentraces.core.trails.event_log import append_event_batch
+
+        world = _World(tmp_path)
+        trace_id = _make_codex_recover_case(world, "trace-codex-synced-1")
+        record = _codex_record(trace_id)
+        projection = build_context_tree_projection_from_record(record)
+        append_event_batch(
+            world.project_dir, projection.drafts, writer="w2-backfill-codex-recover",
+        )
+        sync_events_mirror(world.project_dir, repo_id=world.slug)
+
+        plan = plan_backfill()
+        assert trace_id not in {a.trace_id for a in plan.codex_recover}
+        assert trace_id in {a.trace_id for a in plan.reproject}
+
+
+class TestOnlyScoping:
+    def test_only_filters_apply_and_reports_deferred(self, tmp_path):
+        """--only reproject,drop_dangling applies the integrity cure and
+        DEFERS (never silently drops) the codex enrichment."""
+        world = _World(tmp_path)
+        mixed_id, legit_ids, dangling_id = _make_mixed_defect_case(world)
+        codex_id = _make_codex_recover_case(world)
+
+        plan = plan_backfill()
+        assert mixed_id in {a.trace_id for a in plan.reproject}
+        assert mixed_id in {a.trace_id for a in plan.drop_dangling}
+        assert codex_id in {a.trace_id for a in plan.codex_recover}
+
+        result = apply_backfill(
+            plan,
+            project_paths={world.slug: world.project_dir},
+            only={"reproject", "drop_dangling"},
+        )
+
+        assert any(r["trace_id"] == mixed_id for r in result["reproject"])
+        assert any(r["trace_id"] == mixed_id for r in result["drop_dangling"])
+        assert result["codex_recover"] == []
+        assert result["deferred"] == {"codex_recover": [codex_id]}
+
+        healed = audit_bucket(bucket_dir())
+        healed_by_id = {t.trace_id: t for t in healed.traces}
+        assert healed_by_id[mixed_id].classification == "consistent"
+        # Deferred means untouched -- still recoverable later, not half-done.
+        assert healed_by_id[codex_id].classification == "legitimately_empty"
+
+    def test_only_rejects_unknown_kind(self, tmp_path):
+        world = _World(tmp_path)
+        _make_codex_recover_case(world)
+        plan = plan_backfill()
+        with pytest.raises(ValueError, match="unknown backfill action kind"):
+            apply_backfill(
+                plan, project_paths={world.slug: world.project_dir},
+                only={"bogus_kind"},
+            )
+
+    def test_only_cli_flag_applies_and_defers(self, tmp_path):
+        _ensure_empty_valid_bucket()
+        runner = CliRunner()
+        result = runner.invoke(
+            ctx_group,
+            ["backfill", "--apply", "--only", "reproject,drop_dangling", "--json"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_only_cli_flag_requires_apply_and_valid_kinds(self, tmp_path):
+        _ensure_empty_valid_bucket()
+        runner = CliRunner()
+        # --only without --apply is rejected (dry-run always shows the full plan).
+        r1 = CliRunner().invoke(
+            ctx_group, ["backfill", "--only", "reproject"], catch_exceptions=True,
+        )
+        assert r1.exit_code != 0
+        # Unknown kind is rejected.
+        r2 = runner.invoke(
+            ctx_group, ["backfill", "--apply", "--only", "bogus"],
+            catch_exceptions=True,
+        )
+        assert r2.exit_code != 0

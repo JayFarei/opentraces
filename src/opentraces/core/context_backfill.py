@@ -334,9 +334,113 @@ def _apply_reproject(
     return results
 
 
+# One append_event_batch call covers up to this many traces' recovered
+# drafts. On a mature canonical log every append triggers a whole-log
+# snapshot rebuild (multi-GB event_log_snapshot.pkl on the real repo), so
+# the append count — not the draft count — is the cost driver; a few
+# hundred traces per call keeps individual batches reasonable while staying
+# orders of magnitude below one-append-per-trace.
+_CODEX_APPEND_CHUNK = 200
+
+
+def _existing_context_node_ids_scoped(
+    trace_ids: set[str],
+) -> dict[str, set[str]]:
+    """Which context node ids already exist in the mirror for these traces?
+
+    Duplicate-append guard for INTERRUPTED codex recoveries (PR #217 round
+    3): a previous apply may have appended a trace's recovered events to
+    the canonical log (and possibly the mirror) before being killed.
+    Because :func:`build_context_tree_projection_from_record` is a pure
+    function of the record, the re-derived node ids are byte-comparable
+    with what an earlier run appended — when ALL of a trace's node ids are
+    already in the mirror, the append is skipped and the recovery is
+    COMPLETED idempotently (stamp + companion only), never duplicated on
+    the append-only log.
+
+    Same raw prefilter-then-parse pattern as :func:`_read_mirror_events_scoped`;
+    a corrupt line that looks like a ``context_node_observed`` event blocks
+    (it may hide the very node this guard is checking for).
+    """
+
+    import gzip
+    import json as _json
+
+    from .bucket_layout import events_v1_batches_dir
+    from .context_companions_audit import CONTEXT_NODE_OBSERVED
+
+    node_ids: dict[str, set[str]] = {}
+    batches_dir = events_v1_batches_dir()
+    if not batches_dir.exists():
+        # Nothing mirrored at all -> nothing was already appended. (The plan
+        # phase's audit already hard-blocks on a missing mirror, so this
+        # branch is defensive.)
+        return node_ids
+
+    for batch_path in sorted(batches_dir.glob("*.jsonl.gz")):
+        try:
+            with gzip.open(batch_path, "rt", encoding="utf-8") as f:
+                lines = f.readlines()
+        except (OSError, gzip.BadGzipFile) as exc:
+            raise ValueError(
+                f"unreadable events mirror batch {batch_path}: {exc} — a "
+                "corrupt batch cannot be silently skipped during apply"
+            ) from exc
+        for line_no, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line or CONTEXT_NODE_OBSERVED not in line:
+                continue
+            if not any(tid in line for tid in trace_ids):
+                continue
+            try:
+                d = _json.loads(line)
+            except _json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"corrupt context event line in events mirror batch "
+                    f"{batch_path} (line {line_no}): {exc} — refusing to "
+                    "apply (fail-closed): this may be the very node the "
+                    "duplicate-append guard is checking for"
+                ) from exc
+            if d.get("event_type") != CONTEXT_NODE_OBSERVED:
+                continue
+            payload = d.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            tid = d.get("trace_id") or payload.get("trace_id")
+            if tid in trace_ids:
+                nid = payload.get("node_id")
+                if nid:
+                    node_ids.setdefault(tid, set()).add(nid)
+    return node_ids
+
+
 def _apply_codex_recover(
     plan: BackfillPlan, *, project_paths: dict[str, Path]
-) -> tuple[list[dict[str, Any]], list[BackfillAction], list[dict[str, Any]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[BackfillAction],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Batched-per-project codex recovery (PR #217 round 3, #87/#121 class).
+
+    The first real-bucket run did one ``append_event_batch`` PER TRACE; on a
+    project with a mature canonical log each append triggers a multi-GB
+    whole-log snapshot rebuild (~6 appends in 45 minutes observed), so 910
+    recoveries would take days. ``append_event_batch`` is batch-oriented by
+    design: all of a project's recovered drafts now go through ONE call per
+    project (chunked at :data:`_CODEX_APPEND_CHUNK` traces), one snapshot
+    rebuild per project instead of one per trace. The per-trace bucket-side
+    re-projection stays (cheap), fed by ONE scoped mirror read instead of a
+    per-trace live-log walk.
+
+    Order per project: resolve -> sync-FIRST (lands any events a previous
+    interrupted run already appended to the canonical log into the mirror)
+    -> duplicate-append guard (skip re-appending traces whose node ids are
+    all mirrored already; their recovery is completed stamp-and-companion
+    only) -> chunked append -> post-append sync -> stamp/write/export.
+    """
+
     from .bucket_trace_records import (
         read_trace_record_object,
         trace_record_path,
@@ -349,96 +453,158 @@ def _apply_codex_recover(
         build_context_tree_projection_from_record,
     )
 
-    results = []
+    results: list[dict[str, Any]] = []
     skipped: list[BackfillAction] = []
     mirror_sync_failures: list[dict[str, Any]] = []
+    corrupt_lines: list[dict[str, Any]] = []
+    if not plan.codex_recover:
+        return results, skipped, mirror_sync_failures, corrupt_lines
+
+    # 1. Group planned recoveries by project.
+    groups: dict[str, list[BackfillAction]] = {}
     for action in plan.codex_recover:
-        project_dir = project_paths.get(action.project_slug)
+        groups.setdefault(action.project_slug, []).append(action)
+
+    # 2. Resolve live projects; sync-FIRST so the duplicate-append guard
+    # sees recoveries a previous interrupted run already appended to the
+    # canonical log but never mirrored (killed between append and sync).
+    live: dict[str, Path] = {}
+    for slug in sorted(groups):
+        actions = groups[slug]
+        project_dir = project_paths.get(slug)
         if project_dir is None or not Path(project_dir).is_dir():
-            skipped.append(
+            skipped.extend(
                 BackfillAction(
                     kind="skipped_no_live_project",
-                    trace_id=action.trace_id,
-                    project_slug=action.project_slug,
+                    trace_id=a.trace_id,
+                    project_slug=slug,
                     detail={"reason": "no live project checkout on this machine"},
                 )
+                for a in actions
             )
             continue
-
-        obj = read_trace_record_object(
-            trace_record_path(action.project_slug, action.trace_id)
-        )
-        if obj is None:
-            skipped.append(
-                BackfillAction(
-                    kind="skipped_no_live_project",
-                    trace_id=action.trace_id,
-                    project_slug=action.project_slug,
-                    detail={"reason": "no trace-record object on file"},
-                )
-            )
-            continue
-
-        record = obj.record
-        projection = build_context_tree_projection_from_record(record)
-        if not projection.drafts:
-            # Never fabricate: nothing survives re-derivation, leave empty.
-            continue
-
-        append_event_batch(
-            Path(project_dir),
-            projection.drafts,
-            writer="w2-backfill-codex-recover",
-        )
         try:
-            sync_events_mirror(Path(project_dir), repo_id=action.project_slug)
+            sync_events_mirror(Path(project_dir), repo_id=slug)
         except Exception as exc:
-            # Codex external review (PR #217, issue #210) critical #3 — this
-            # used to be a bare ``except Exception: pass``. The postcondition
-            # of this action (companion consistent with the shared bucket
-            # mirror) DEPENDS on the mirror sync succeeding: writing the
-            # per-trace companion/trace.json here regardless would make this
-            # trace's own export look correct locally (it is built straight
-            # off the live repo, not the mirror) while the bucket-wide
-            # events/v1 mirror the AUDIT and ``reproject`` trust stays
-            # unaware of the newly appended nodes — a future ``reproject``
-            # pass, trusting the (stale) mirror as authoritative, would then
-            # regress this very fix. So: never swallow the failure, and
-            # never half-apply. The freshly appended events already landed
-            # on the canonical append-only Git log (no data loss); we simply
-            # do NOT stamp trace.json / write the companion for this trace
-            # yet, leaving it exactly as it was (``legitimately_empty``) so
-            # the next backfill pass retries it whole once the mirror sync
-            # succeeds.
-            mirror_sync_failures.append({
-                "trace_id": action.trace_id,
-                "project_slug": action.project_slug,
-                "error": str(exc),
-            })
+            # Never swallow (round-2 critical #3): the whole project's
+            # recoveries are reported and left untouched — nothing appended,
+            # nothing stamped — cleanly retryable.
+            mirror_sync_failures.extend(
+                {"trace_id": a.trace_id, "project_slug": slug, "error": str(exc)}
+                for a in actions
+            )
             continue
+        live[slug] = Path(project_dir)
 
+    # 3. Duplicate-append guard: one scoped raw read across all live-planned
+    # traces (never one read per trace).
+    guard_ids = {a.trace_id for slug in live for a in groups[slug]}
+    existing_nodes: dict[str, set[str]] = (
+        _existing_context_node_ids_scoped(guard_ids) if guard_ids else {}
+    )
+
+    # 4. Per project: prepare, then ONE chunked append + ONE post-append sync.
+    completable: list[tuple[str, BackfillAction, Any, Any, bool]] = []
+    for slug in sorted(live):
+        project_dir = live[slug]
+        prepared: list[tuple[BackfillAction, Any, Any, bool]] = []
+        for action in groups[slug]:
+            obj = read_trace_record_object(
+                trace_record_path(slug, action.trace_id)
+            )
+            if obj is None:
+                skipped.append(
+                    BackfillAction(
+                        kind="skipped_no_live_project",
+                        trace_id=action.trace_id,
+                        project_slug=slug,
+                        detail={"reason": "no trace-record object on file"},
+                    )
+                )
+                continue
+            projection = build_context_tree_projection_from_record(obj.record)
+            if not projection.drafts:
+                # Never fabricate: nothing survives re-derivation, leave empty.
+                continue
+            node_ids = {n.node_id for n in projection.nodes}
+            already_mirrored = bool(node_ids) and node_ids <= existing_nodes.get(
+                action.trace_id, set()
+            )
+            prepared.append((action, obj, projection, not already_mirrored))
+
+        to_append = [p for p in prepared if p[3]]
+        appended_ok = True
+        if to_append:
+            for start in range(0, len(to_append), _CODEX_APPEND_CHUNK):
+                chunk = to_append[start : start + _CODEX_APPEND_CHUNK]
+                drafts = [
+                    draft
+                    for (_a, _o, proj, _n) in chunk
+                    for draft in proj.drafts
+                ]
+                append_event_batch(
+                    project_dir,
+                    drafts,
+                    writer="w2-backfill-codex-recover",
+                )
+            try:
+                sync_events_mirror(project_dir, repo_id=slug)
+            except Exception as exc:
+                # Appended to the canonical append-only log (no data loss)
+                # but not mirrored: surfaced, and the affected traces are NOT
+                # stamped — the next run's sync-first + duplicate-append
+                # guard completes them without re-appending.
+                mirror_sync_failures.extend(
+                    {"trace_id": a.trace_id, "project_slug": slug, "error": str(exc)}
+                    for (a, _o, _p, _n) in to_append
+                )
+                appended_ok = False
+
+        for action, obj, projection, needs_append in prepared:
+            if needs_append and not appended_ok:
+                continue
+            completable.append((slug, action, obj, projection, needs_append))
+
+    if not completable:
+        return results, skipped, mirror_sync_failures, corrupt_lines
+
+    # 5. ONE scoped mirror read feeds every completable trace's export —
+    # a per-trace read_events_for_trace() here would be the same
+    # O(traces × full-log-walk) wall on the live Git log.
+    export_ids = {action.trace_id for (_s, action, _o, _p, _n) in completable}
+    export_events, export_corrupt = _read_mirror_events_scoped(export_ids)
+    corrupt_lines.extend(export_corrupt)
+
+    # 6. Stamp + write + re-project per trace (bucket-side, cheap).
+    for slug, action, obj, projection, needs_append in completable:
+        record = obj.record
         step_map = projection.summary.get("step_node_id_map", {})
         for step in record.steps:
             nid = step_map.get(step.step_index)
             if nid:
                 step.context_node_id = nid
-
         write_trace_record(
             record,
-            project_slug=action.project_slug,
+            project_slug=slug,
             source_layer=obj.source_layer,
             legacy_mirror=bool(obj.envelope.get("legacy_mirror", True)),
         )
         project_per_trace_exports(
-            Path(project_dir),
-            project_slug=action.project_slug,
+            None,
+            project_slug=slug,
             trace_id=action.trace_id,
             record=record,
+            events=export_events,
+            events_authoritative=True,
+            mirror_fallback=False,
         )
-        results.append(
-            {"trace_id": action.trace_id, "applied": True, "node_count": len(projection.nodes)}
-        )
-    return results, skipped, mirror_sync_failures
+        results.append({
+            "trace_id": action.trace_id,
+            "applied": True,
+            "node_count": len(projection.nodes),
+            "appended": needs_append,
+        })
+    return results, skipped, mirror_sync_failures, corrupt_lines
 
 
 def _apply_drop_dangling(
@@ -500,8 +666,14 @@ def _apply_drop_dangling(
     return results
 
 
+BACKFILL_ACTION_KINDS = ("reproject", "codex_recover", "drop_dangling")
+
+
 def apply_backfill(
-    plan: BackfillPlan, *, project_paths: dict[str, Path] | None = None
+    plan: BackfillPlan,
+    *,
+    project_paths: dict[str, Path] | None = None,
+    only: "set[str] | list[str] | None" = None,
 ) -> dict[str, Any]:
     """Execute a previously computed :class:`BackfillPlan`.
 
@@ -510,27 +682,79 @@ def apply_backfill(
     canonical event log). Traces whose project is not resolvable are reported
     under ``skipped_no_live_project`` rather than silently attempted.
 
-    The mirror is read ONCE, scoped to the planned reproject + drop_dangling
-    trace ids (:func:`_read_mirror_events_scoped`), BEFORE any phase writes —
+    ``only`` restricts which action kinds are APPLIED (any subset of
+    :data:`BACKFILL_ACTION_KINDS`); planned actions of excluded kinds are
+    reported under ``deferred`` — never silently dropped. This is the PR
+    #217 round-3 scoping lever: the replayability-integrity cure
+    (``reproject`` + ``drop_dangling``, no Git appends) never has to wait
+    on the ``codex_recover`` enrichment, which appends to mature canonical
+    logs and can run separately/overnight.
+
+    The mirror is read ONCE per purpose, scoped to planned trace ids
+    (:func:`_read_mirror_events_scoped`), BEFORE the corresponding writes —
     so a blocking mirror-corruption error is fail-closed (zero writes), and
     the O(corpus) strict full-mirror materialization that crashed the first
     real-bucket apply is gone. Corrupt non-context mirror lines are counted
     and surfaced under ``mirror_corrupt_lines``, never silently skipped.
     """
 
-    scoped_ids = {a.trace_id for a in plan.reproject} | {
-        a.trace_id for a in plan.drop_dangling
-    }
+    if only is not None:
+        only_set = set(only)
+        unknown = only_set - set(BACKFILL_ACTION_KINDS)
+        if unknown:
+            raise ValueError(
+                f"unknown backfill action kind(s) {sorted(unknown)}; "
+                f"valid kinds: {', '.join(BACKFILL_ACTION_KINDS)}"
+            )
+    else:
+        only_set = set(BACKFILL_ACTION_KINDS)
+
+    run_reproject = "reproject" in only_set
+    run_codex = "codex_recover" in only_set
+    run_drop = "drop_dangling" in only_set
+
+    deferred: dict[str, list[str]] = {}
+    if not run_reproject and plan.reproject:
+        deferred["reproject"] = [a.trace_id for a in plan.reproject]
+    if not run_codex and plan.codex_recover:
+        deferred["codex_recover"] = [a.trace_id for a in plan.codex_recover]
+    if not run_drop and plan.drop_dangling:
+        deferred["drop_dangling"] = [a.trace_id for a in plan.drop_dangling]
+
+    scoped_ids: set[str] = set()
+    if run_reproject:
+        scoped_ids |= {a.trace_id for a in plan.reproject}
+    if run_drop:
+        scoped_ids |= {a.trace_id for a in plan.drop_dangling}
     shared_events: list[Any] = []
     mirror_corrupt_lines: list[dict[str, Any]] = []
     if scoped_ids:
         shared_events, mirror_corrupt_lines = _read_mirror_events_scoped(scoped_ids)
 
-    reproject_results = _apply_reproject(plan, shared_events=shared_events)
-    codex_results, codex_skipped, mirror_sync_failures = _apply_codex_recover(
-        plan, project_paths=project_paths or {}
+    reproject_results = (
+        _apply_reproject(plan, shared_events=shared_events) if run_reproject else []
     )
-    drop_results = _apply_drop_dangling(plan, shared_events=shared_events)
+    if run_codex:
+        codex_results, codex_skipped, mirror_sync_failures, codex_corrupt = (
+            _apply_codex_recover(plan, project_paths=project_paths or {})
+        )
+    else:
+        codex_results, codex_skipped, mirror_sync_failures, codex_corrupt = (
+            [], [], [], []
+        )
+    drop_results = (
+        _apply_drop_dangling(plan, shared_events=shared_events) if run_drop else []
+    )
+
+    # Merge corrupt-line reports from the two scoped reads, deduped by
+    # (batch, line) — the codex phase's post-append export read walks the
+    # same batches the reproject read did.
+    seen = {(c["batch"], c["line"]) for c in mirror_corrupt_lines}
+    for c in codex_corrupt:
+        key = (c["batch"], c["line"])
+        if key not in seen:
+            mirror_corrupt_lines.append(c)
+            seen.add(key)
 
     return {
         "reproject": reproject_results,
@@ -551,4 +775,7 @@ def apply_backfill(
         # never silent ("skip is a lie"). Corrupt CONTEXT lines never reach
         # here: they raise before any write.
         "mirror_corrupt_lines": mirror_corrupt_lines,
+        # PR #217 round 3: planned actions excluded by ``only`` — reported,
+        # never silently dropped.
+        "deferred": deferred,
     }
