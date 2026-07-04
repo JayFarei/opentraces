@@ -24,6 +24,11 @@ class ExecResult:
     duration_s: float
     cwd: str = ""
     timed_out: bool = False
+    # Peak resident set size of the executed child, in KILOBYTES, platform-
+    # normalized (macOS reports ``ru_maxrss`` in bytes, Linux in KB — the
+    # exact footgun that bit the reconciler memory check). ``None`` when the
+    # driver could not measure it (e.g. the binary was never spawned).
+    max_rss_kb: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -36,6 +41,7 @@ class ExecResult:
             "duration_s": round(self.duration_s, 4),
             "cwd": self.cwd,
             "timed_out": self.timed_out,
+            "max_rss_kb": self.max_rss_kb,
             "stdout": self.stdout,
             "stderr": self.stderr,
         }

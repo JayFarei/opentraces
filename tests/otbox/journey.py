@@ -1499,6 +1499,20 @@ def _k_duration_ms_max(spec, steps, ctx, driver, box):
     return have_ms <= want_ms, f"duration {have_ms:.0f}ms budget {want_ms:.0f}ms"
 
 
+def _k_max_rss_mb(spec, steps, ctx, driver, box):
+    # Per-step peak-RSS budget (megabytes). NF-lite sibling of duration_ms_max:
+    # uses the driver's own per-child rusage measurement, outside the code under
+    # test. A ceiling here is a catastrophic-regression catch (a command blowing
+    # up to multi-GB — the #87 hook-OOM shape), not a tight SLA.
+    step = _step_by_ref(steps, spec.get("step"))
+    kb = step.result.max_rss_kb if step.result else None
+    if kb is None:
+        return False, "no RSS measurement available for this step"
+    have_mb = kb / 1024.0
+    want_mb = float(spec["max"])
+    return have_mb <= want_mb, f"max RSS {have_mb:.0f}MB budget {want_mb:.0f}MB"
+
+
 def _k_path_exists(spec, steps, ctx, driver, box):
     path = str(spec["path"])
     if driver is not None and box is not None:
@@ -1546,6 +1560,7 @@ ASSERTION_KINDS: dict[str, Any] = {
     "stdout_json_greater_equal": _k_stdout_json_greater_equal,
     "stdout_json_contains": _k_stdout_json_contains,
     "duration_ms_max": _k_duration_ms_max,
+    "max_rss_mb": _k_max_rss_mb,
     "path_exists": _k_path_exists,
     "path_not_exists": _k_path_not_exists,
     "file_count_min": _k_file_count_min,

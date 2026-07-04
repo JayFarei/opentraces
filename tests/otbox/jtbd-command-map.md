@@ -108,6 +108,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **context-tree-otel-outcome** | validation | 2 + 3 | OTLP outcome journeys for replay, inspection, resume, and experiments |
 | **context-tree-temporal-anchor** | validation | 3 | Context Tree temporal anchor precision validation |
 | **trace-spine** | validation | 3 + 4 + 5 | TraceRecord spine and cross-substrate resolution validation |
+| **mature-bucket-perf-guard** | validation | 3 + 4 + 5 + 6 | Perf recurrence guard (issue #213): the four seal-family hot commands (`dataset run`, `capsule create`, `bucket status`, `trail track`) stay under catastrophic-regression duration + peak-RSS ceilings on a ~600-trace / ~50K-event mature bucket — the #87/#121/#137/#208 O(corpus) class caught in the nightly `scale` lane |
 
 | **capsule-dependency-unblock** | 1 → 9 | 3 + 6 | Seal a failing episode into a capsule, share/file it, watch the verdict flip when a dependency unblocks |
 | **trace-intelligence-compare** | 1/1 | 3 | Derive-on-demand A/B compare of two traces (`opentraces.trace_compare.v1`) |
