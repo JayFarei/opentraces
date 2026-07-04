@@ -429,3 +429,129 @@ class TestMirrorSyncFailureSurfaced:
             "a failed mirror sync must leave the trace untouched, ready for "
             "a clean retry -- never a companion that has outrun the mirror"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Real-bucket apply crash follow-up (PR #217): the reproject phase's
+# full-mirror strict materialization (list(read_events_mirror_batches()))
+# crashed the whole apply on ONE truncated non-context line, before writing
+# anything. The scoped reader must (a) skip-but-COUNT corrupt non-context
+# lines, (b) hard-block on corrupt context-looking lines (skip-is-a-lie),
+# and (c) never materialize the whole mirror through pydantic.
+# --------------------------------------------------------------------------- #
+
+
+def _seed_corrupt_batch(name: str, line: str) -> Path:
+    """Write a valid-gzip mirror batch whose single line is corrupt JSON."""
+    batches = bucket_dir() / "events" / "v1" / "batches"
+    batches.mkdir(parents=True, exist_ok=True)
+    path = batches / name
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        f.write(line + "\n")
+    return path
+
+
+# Mimics the real-bucket defect: an attribution event truncated mid-string
+# ("EOF while parsing a string"). No context event-type marker, no planned
+# trace_id substring.
+_TRUNCATED_NON_CONTEXT_LINE = (
+    '{"schema_version": "opentraces.trail_event.v1", '
+    '"event_type": "file_attribution", "ATTRIBUTION_VERSION": "1.0", '
+    '"payload": {"text": "truncated mid-str'
+)
+
+# A truncated CONTEXT event line -- the data a reproject may NEED.
+_TRUNCATED_CONTEXT_LINE = (
+    '{"schema_version": "opentraces.trail_event.v1", '
+    '"event_type": "context_node_observed", '
+    '"payload": {"node_id": "sha256:feedfeed", "trace_id": "trace-somewhere", '
+    '"content": "truncated mid-str'
+)
+
+
+class TestMirrorCorruptionPolicyOnApply:
+    def test_corrupt_non_context_line_is_counted_not_fatal(self, tmp_path):
+        """Apply must survive the real-bucket shape: one truncated
+        attribution line in the mirror, with real reproject + drop_dangling
+        work planned. The corrupt line is skipped but surfaced."""
+        world = _World(tmp_path)
+        trace_id, legit_ids, dangling_id = _make_mixed_defect_case(world)
+        corrupt_batch = _seed_corrupt_batch(
+            "999999999999-corrupt-nonctx.jsonl.gz", _TRUNCATED_NON_CONTEXT_LINE
+        )
+        assert corrupt_batch.exists()
+
+        plan = plan_backfill()
+        assert trace_id in {a.trace_id for a in plan.reproject}
+        assert trace_id in {a.trace_id for a in plan.drop_dangling}
+
+        # RED against the full-mirror strict reader: this raised a pydantic
+        # ValidationError on the truncated line before writing anything.
+        result = apply_backfill(plan, project_paths={world.slug: world.project_dir})
+
+        corrupt = result.get("mirror_corrupt_lines")
+        assert corrupt, (
+            f"corrupt mirror line was not surfaced in the apply report: {result!r}"
+        )
+        assert corrupt[0]["batch"] == "999999999999-corrupt-nonctx.jsonl.gz"
+        assert corrupt[0]["line"] == 1
+
+        # And the planned work actually healed despite the corruption.
+        healed = audit_bucket(bucket_dir())
+        healed_by_id = {t.trace_id: t for t in healed.traces}
+        assert healed_by_id[trace_id].classification == "consistent"
+        assert dangling_id not in healed_by_id[trace_id].stamped_ids
+        assert set(legit_ids) <= set(healed_by_id[trace_id].companion_node_ids)
+
+    def test_corrupt_context_line_blocks_apply_before_any_write(self, tmp_path):
+        """A corrupt line that LOOKS like a context event may be the very
+        data the reproject needs -- blocking, fail-closed, zero writes,
+        and the error names the batch file."""
+        world = _World(tmp_path)
+        trace_id, legit_ids, dangling_id = _make_mixed_defect_case(world)
+
+        # Plan BEFORE the corruption lands (the audit would otherwise block
+        # planning already -- this test targets the APPLY-path guard).
+        plan = plan_backfill()
+        assert trace_id in {a.trace_id for a in plan.reproject}
+        bytes_before = _companion_bytes(world.slug, trace_id)
+        trace_json = (
+            bucket_dir() / "traces" / "v1" / world.slug / trace_id / "trace.json"
+        )
+        trace_json_before = trace_json.read_bytes()
+
+        _seed_corrupt_batch(
+            "999999999999-corrupt-ctx.jsonl.gz", _TRUNCATED_CONTEXT_LINE
+        )
+
+        # RED discriminator: the old reader also raised here, but as a bare
+        # pydantic ValidationError that never named the batch file. The
+        # hardened reader raises a ValueError naming it.
+        with pytest.raises(ValueError, match="corrupt-ctx"):
+            apply_backfill(plan, project_paths={world.slug: world.project_dir})
+
+        # Fail-closed: zero writes happened.
+        assert _companion_bytes(world.slug, trace_id) == bytes_before
+        assert trace_json.read_bytes() == trace_json_before
+
+    def test_corrupt_context_line_blocks_the_audit_too(self, tmp_path):
+        """Same skip-is-a-lie rule at the audit/plan level: a corrupt
+        context-looking line means the mirror's context truth is unreadable
+        -- the audit must block, not silently under-count."""
+        _ensure_empty_valid_bucket()
+        _seed_corrupt_batch(
+            "999999999999-corrupt-ctx.jsonl.gz", _TRUNCATED_CONTEXT_LINE
+        )
+        with pytest.raises(ValueError, match="corrupt-ctx"):
+            audit_bucket(bucket_dir())
+
+    def test_corrupt_non_context_line_does_not_block_the_audit(self, tmp_path):
+        """The dual of the above: a truncated NON-context line (the real
+        bucket's actual defect) must not block planning -- the audit's
+        subject is context truth only."""
+        _ensure_empty_valid_bucket()
+        _seed_corrupt_batch(
+            "999999999999-corrupt-nonctx.jsonl.gz", _TRUNCATED_NON_CONTEXT_LINE
+        )
+        report = audit_bucket(bucket_dir())
+        assert report.total_traces == 0

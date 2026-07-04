@@ -147,13 +147,29 @@ def load_event_mirror_context_index(
                 "corrupt batch cannot be silently skipped, it may be hiding "
                 "the only record of context events for one or more traces"
             ) from exc
-        for line in lines:
+        for line_no, line in enumerate(lines, start=1):
             line = line.strip()
             if not line:
                 continue
             try:
                 d = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                # Line-level corruption policy (PR #217 real-bucket apply
+                # crash follow-up; same "skip is a lie" rule as the
+                # batch-level check above): a corrupt line that LOOKS like a
+                # context event (cheap string prefilter, no parse needed)
+                # may be the only record of a context node — blocking. A
+                # corrupt NON-context line (e.g. a truncated attribution
+                # event, as observed on the real bucket) is irrelevant to
+                # this context audit and is skipped here; the backfill APPLY
+                # path counts and surfaces those separately.
+                if any(marker in line for marker in CONTEXT_EVENT_TYPES):
+                    raise ValueError(
+                        f"corrupt context event line in events mirror batch "
+                        f"{batch_path} (line {line_no}): {exc} — a context "
+                        "event the audit cannot read is a blocking failure, "
+                        "not a pass"
+                    ) from exc
                 continue
             et = d.get("event_type")
             if et not in CONTEXT_EVENT_TYPES:

@@ -204,14 +204,119 @@ def plan_backfill(bucket_root: Path | None = None) -> BackfillPlan:
     )
 
 
-def _apply_reproject(plan: BackfillPlan) -> list[dict[str, Any]]:
-    from .bucket_events import read_events_mirror_batches
+def _read_mirror_events_scoped(
+    trace_ids: set[str],
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    """Bounded, corruption-honest read of the bucket events mirror.
+
+    PR #217 real-bucket apply crash follow-up. The previous apply path did
+    ``list(read_events_mirror_batches())`` — a full-mirror materialization
+    with strict per-line ``TrailEvent.model_validate_json`` over EVERY event
+    (~505K attribution/anchor events on the real bucket): the #87 O(corpus)
+    anti-pattern, and fatally fragile — one truncated line anywhere in the
+    mirror pydantic-crashed the whole apply before a single write.
+
+    This reader mirrors ``read_events_scoped``'s prefilter-then-validate
+    pattern: a cheap raw-substring prefilter (planned ``trace_ids``) decides
+    which lines are worth the pydantic model cost; only those are
+    materialized as ``TrailEvent``. The over-inclusive prefilter is
+    harmless — ``_events_for_trace_from_iter`` post-filters exactly, and it
+    also catches the plan-090 ``git_anchor_search_completed`` summary
+    events (top-level trace_id=None) because their ``results[]`` entries
+    carry the per-patch trace ids in the raw bytes.
+
+    Corruption policy (the lane's "skip is a lie" rule, applied honestly in
+    both directions):
+
+      - a batch that cannot be opened at all → blocking ``ValueError``
+        (consistent with the audit's batch-level rule);
+      - a corrupt line that LOOKS like a context event (cheap string
+        prefilter on the four context event-type markers) → blocking
+        ``ValueError`` naming the batch file — it may be the very data the
+        reproject NEEDS;
+      - a corrupt NON-context line (e.g. the truncated attribution event
+        observed on the real bucket) → skipped for reproject purposes but
+        COUNTED and returned so the apply report surfaces it as
+        ``mirror_corrupt_lines`` — never silent.
+
+    Returns ``(events, corrupt_lines)``.
+    """
+
+    import gzip
+    import json as _json
+
+    from .bucket_layout import events_v1_batches_dir
+    from .context_tree.contract import CONTEXT_EVENT_TYPES
+    from .trails import TrailEvent
+
+    events: list[Any] = []
+    corrupt_lines: list[dict[str, Any]] = []
+
+    batches_dir = events_v1_batches_dir()
+    if not batches_dir.exists():
+        raise FileNotFoundError(
+            f"event mirror batches dir missing at {batches_dir} — cannot "
+            "apply a backfill without the canonical mirror; run "
+            "'opentraces setup watcher tick' or 'opentraces bucket repair'"
+        )
+
+    def _looks_context(raw: str) -> bool:
+        return any(marker in raw for marker in CONTEXT_EVENT_TYPES)
+
+    for batch_path in sorted(batches_dir.glob("*.jsonl.gz")):
+        try:
+            with gzip.open(batch_path, "rt", encoding="utf-8") as f:
+                lines = f.readlines()
+        except (OSError, gzip.BadGzipFile) as exc:
+            raise ValueError(
+                f"unreadable events mirror batch {batch_path}: {exc} — a "
+                "corrupt batch cannot be silently skipped during apply"
+            ) from exc
+        for line_no, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                _json.loads(line)
+            except _json.JSONDecodeError as exc:
+                if _looks_context(line):
+                    raise ValueError(
+                        f"corrupt context event line in events mirror batch "
+                        f"{batch_path} (line {line_no}): {exc} — a context "
+                        "event the backfill may NEED is unreadable; refusing "
+                        "to apply (fail-closed, zero writes)"
+                    ) from exc
+                corrupt_lines.append({
+                    "batch": batch_path.name,
+                    "line": line_no,
+                    "error": str(exc),
+                })
+                continue
+            if not any(tid in line for tid in trace_ids):
+                continue
+            try:
+                events.append(TrailEvent.model_validate_json(line))
+            except Exception as exc:
+                if _looks_context(line):
+                    raise ValueError(
+                        f"invalid context event line in events mirror batch "
+                        f"{batch_path} (line {line_no}): {exc} — refusing to "
+                        "apply (fail-closed, zero writes)"
+                    ) from exc
+                corrupt_lines.append({
+                    "batch": batch_path.name,
+                    "line": line_no,
+                    "error": str(exc),
+                })
+    return events, corrupt_lines
+
+
+def _apply_reproject(
+    plan: BackfillPlan, *, shared_events: list[Any]
+) -> list[dict[str, Any]]:
     from .bucket_envelope import project_per_trace_exports
 
     results = []
-    if not plan.reproject:
-        return results
-    shared_events = list(read_events_mirror_batches())
     for action in plan.reproject:
         project_per_trace_exports(
             None,
@@ -219,6 +324,11 @@ def _apply_reproject(plan: BackfillPlan) -> list[dict[str, Any]]:
             trace_id=action.trace_id,
             events=shared_events,
             events_authoritative=True,
+            # shared_events IS the (scoped, corruption-vetted) mirror read —
+            # the interior issue-#28 fallback would be a redundant strict
+            # full-mirror re-read that can crash on a corrupt non-context
+            # line this apply already counted.
+            mirror_fallback=False,
         )
         results.append({"trace_id": action.trace_id, "applied": True})
     return results
@@ -331,7 +441,9 @@ def _apply_codex_recover(
     return results, skipped, mirror_sync_failures
 
 
-def _apply_drop_dangling(plan: BackfillPlan) -> list[dict[str, Any]]:
+def _apply_drop_dangling(
+    plan: BackfillPlan, *, shared_events: list[Any]
+) -> list[dict[str, Any]]:
     from .bucket_trace_records import (
         read_trace_record_object,
         trace_record_path,
@@ -366,6 +478,21 @@ def _apply_drop_dangling(plan: BackfillPlan) -> list[dict[str, Any]]:
             project_slug=action.project_slug,
             trace_id=action.trace_id,
             record=record,
+            # PR #217 apply-crash follow-up: previously this passed no
+            # events, so the interior issue-#28 fallback did a FULL strict
+            # mirror read PER dropped trace (O(N × corpus), and the same
+            # corrupt-line fragility as the reproject phase). The shared
+            # scoped read (whose trace_ids include the drop_dangling set)
+            # supplies whatever mirror events these traces have (usually
+            # none — that is what makes the ids dangling), and
+            # mirror_fallback=False keeps the interior full read off.
+            # events_authoritative=False preserves the prior anchor
+            # behavior byte-identically: the fallback path never set
+            # anchor_source_ok, so trace.json patches were (and stay)
+            # written verbatim, never de-attributed by this phase.
+            events=shared_events,
+            events_authoritative=False,
+            mirror_fallback=False,
         )
         results.append(
             {"trace_id": action.trace_id, "dropped": sorted(dangling)}
@@ -382,13 +509,28 @@ def apply_backfill(
     ``codex_recover`` action (it needs a live Git repo to append to the
     canonical event log). Traces whose project is not resolvable are reported
     under ``skipped_no_live_project`` rather than silently attempted.
+
+    The mirror is read ONCE, scoped to the planned reproject + drop_dangling
+    trace ids (:func:`_read_mirror_events_scoped`), BEFORE any phase writes —
+    so a blocking mirror-corruption error is fail-closed (zero writes), and
+    the O(corpus) strict full-mirror materialization that crashed the first
+    real-bucket apply is gone. Corrupt non-context mirror lines are counted
+    and surfaced under ``mirror_corrupt_lines``, never silently skipped.
     """
 
-    reproject_results = _apply_reproject(plan)
+    scoped_ids = {a.trace_id for a in plan.reproject} | {
+        a.trace_id for a in plan.drop_dangling
+    }
+    shared_events: list[Any] = []
+    mirror_corrupt_lines: list[dict[str, Any]] = []
+    if scoped_ids:
+        shared_events, mirror_corrupt_lines = _read_mirror_events_scoped(scoped_ids)
+
+    reproject_results = _apply_reproject(plan, shared_events=shared_events)
     codex_results, codex_skipped, mirror_sync_failures = _apply_codex_recover(
         plan, project_paths=project_paths or {}
     )
-    drop_results = _apply_drop_dangling(plan)
+    drop_results = _apply_drop_dangling(plan, shared_events=shared_events)
 
     return {
         "reproject": reproject_results,
@@ -404,4 +546,9 @@ def apply_backfill(
         # trace is left untouched (still legitimately_empty) so the next
         # backfill pass retries it whole.
         "mirror_sync_failures": mirror_sync_failures,
+        # PR #217 apply-crash follow-up: corrupt NON-context mirror lines the
+        # scoped read skipped for reproject purposes — counted and surfaced,
+        # never silent ("skip is a lie"). Corrupt CONTEXT lines never reach
+        # here: they raise before any write.
+        "mirror_corrupt_lines": mirror_corrupt_lines,
     }

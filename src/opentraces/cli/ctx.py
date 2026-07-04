@@ -3022,7 +3022,21 @@ def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
 
     result: dict[str, Any] | None = None
     if do_apply:
-        result = apply_backfill(plan, project_paths=project_paths)
+        # The apply's scoped mirror read is fail-closed: a corrupt CONTEXT
+        # event line (or an unreadable batch / missing mirror) raises BEFORE
+        # any write. Surface it cleanly, rc=2, matching the plan-time guard.
+        try:
+            result = apply_backfill(plan, project_paths=project_paths)
+        except (FileNotFoundError, ValueError) as exc:
+            msg = f"ctx backfill: apply blocked (zero writes) — {exc}"
+            if as_json:
+                _emit({
+                    "schema_version": "opentraces.ctx_backfill.v1",
+                    "error": msg,
+                })
+            else:
+                click.echo(msg, err=True)
+            sys.exit(2)
 
     if as_json:
         payload = {
@@ -3052,4 +3066,12 @@ def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
                 f"mirror_sync_failures: {len(mirror_sync_failures)} "
                 "(codex-recovered events appended to the canonical log but "
                 "not mirrored — safely retryable on the next backfill pass)"
+            )
+        mirror_corrupt_lines = result.get("mirror_corrupt_lines") or []
+        if mirror_corrupt_lines:
+            click.echo(
+                f"mirror_corrupt_lines: {len(mirror_corrupt_lines)} "
+                "(corrupt non-context event line(s) in the bucket events "
+                "mirror — skipped for this apply, never silently; consider "
+                "'opentraces bucket repair' to rebuild the mirror)"
             )

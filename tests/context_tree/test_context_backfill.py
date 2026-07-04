@@ -279,6 +279,7 @@ def test_backfill_end_to_end_on_synthetic_bucket(tmp_path: Path) -> None:
     assert result_2 == {
         "reproject": [], "codex_recover": [], "drop_dangling": [],
         "skipped_no_live_project": [], "mirror_sync_failures": [],
+        "mirror_corrupt_lines": [],
     }
 
     reproject_bytes_2 = _companion_bytes(world.slug, reproject_id)
