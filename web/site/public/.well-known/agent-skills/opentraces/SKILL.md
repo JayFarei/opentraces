@@ -387,6 +387,9 @@ opentraces dataset run <name>
 opentraces dataset run <name> --executor script --json
 opentraces dataset run <name> --approve-new --publish-check-only
 opentraces dataset run <name> --approve-new --publish
+opentraces dataset run <name> --facet model=anthropic/claude-sonnet-4 --json
+opentraces dataset run <name> --model anthropic/claude-sonnet-4 --json  # convenience alias for --facet model=...
+opentraces dataset run <name> --agent claude-code --facet agent.version=2.1.143 --json
 opentraces dataset review <name>
 opentraces dataset review approve <name> <row_id>
 opentraces dataset review reject <name> <row_id>
@@ -406,6 +409,16 @@ Manual review means rows remain local until approved. Automatic review policy
 may mark rows publishable, but remote egress is still explicit: publish is a
 separate user action. `dataset publish --min-retention` and `--exclude-state`
 filter rows by survival quality before staging.
+
+`dataset run --facet name=value` (repeatable; `--model`/`--agent` are
+convenience aliases for `--facet model=...`/`--facet agent.name=...`) scopes a
+run to traces whose model / harness name / harness version match, composing
+with `--scope`/`--project`/`--trace`. It reuses the `trace query --facet`
+name vocabulary and resolves entirely against the persisted bucket manifest
+(O(manifest), never a per-trace file open), so it costs the same regardless
+of corpus size. The run record's `facet_resolution` block reports the
+matched trace count and rows. A trace whose harness never captured a version
+is honestly excluded from a version scope (not a migration).
 
 ## Security Tools
 

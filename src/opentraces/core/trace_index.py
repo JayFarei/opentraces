@@ -1451,6 +1451,11 @@ def _skill_invocation_trace_facets(record: TraceRecord, project_slug: str) -> li
         facets.append(TraceFacet(name="provider.kind", value=provider, source="exact_schema"))
     if record.agent.model:
         facets.append(TraceFacet(name="model", value=record.agent.model, source="exact_schema"))
+    # #212 — dataset scoping by harness version needs the same facet at query
+    # time; null on traces where the source parser never captured a version
+    # (honest limitation, not a migration — see hermes.py's map_record).
+    if record.agent.version:
+        facets.append(TraceFacet(name="agent.version", value=record.agent.version, source="exact_schema"))
     return facets
 
 
@@ -3682,6 +3687,11 @@ def _trace_facets(
         facets.append(TraceFacet(name="provider.kind", value=provider, source="exact_schema"))
     if record.agent.model:
         facets.append(TraceFacet(name="model", value=record.agent.model, source="exact_schema"))
+    # #212 — first-class `trace query --facet agent.version=<v>` / dataset
+    # `--facet agent.version=<v>` scoping. Null when the source parser never
+    # captured a version; that trace simply does not match a version scope.
+    if record.agent.version:
+        facets.append(TraceFacet(name="agent.version", value=record.agent.version, source="exact_schema"))
     facets.append(
         TraceFacet(name="outcome.committed", value=record.outcome.committed, source="exact_schema")
     )
