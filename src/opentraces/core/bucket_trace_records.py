@@ -192,26 +192,37 @@ def iter_corpus_trace_records(
     ``write_trace_record`` failure can leave JSONL without a bucket object -- and
     for pre-v2 corpora not yet swept by ``sync_trace_records_from_local_stores``.
 
-    This sibling reader routes through :func:`trace_corpus.iter_sources` (the
-    same pointer/stat-cheap, deduped-by-trace_id, freshest-mtime-wins union that
-    ``trace get``/``trace query`` already resolve through), then hydrates each
-    winning source with :func:`trace_corpus.load_record`. Consumers that must
-    see every durable trace -- dataset row provenance, skill-invocation
+    This sibling reader routes through :func:`trace_corpus.iter_sources_ranked`
+    (the same pointer/stat-cheap, deduped-by-trace_id, freshest-mtime-wins union
+    that ``trace get``/``trace query`` already resolve through, but keeping
+    every candidate per trace_id instead of only the winner), then hydrates the
+    freshest candidate with :func:`trace_corpus.load_record`. Consumers that
+    must see every durable trace -- dataset row provenance, skill-invocation
     projection, verifier mining, the bundled skill-opt/pr-intent workflows --
     should use this instead of the bucket-tier-only enumerator (issue #211).
+
+    If the freshest candidate for a trace_id fails to hydrate (corrupt or
+    unreadable JSONL / bucket object -- ``load_record`` returns ``None``), this
+    falls back to the next-best candidate for the same trace_id in freshness
+    order, rather than dropping the trace. A corrupt newer source must never
+    silently shadow a valid older one (Codex review finding on PR #216, #211).
 
     Deliberately does NOT replace ``iter_trace_record_objects`` itself: the
     manifest/digest/prune/security-sweep callers must stay bucket-object-only or
     the digest invariant and prune semantics break.
     """
 
-    from .trace_corpus import iter_sources, load_record
+    from .trace_corpus import iter_sources_ranked, load_record
 
     out: list[BucketTraceRecord] = []
-    for source in iter_sources():
-        if project_slug is not None and source.project_slug != project_slug:
-            continue
-        obj = load_record(source)
+    for candidates in iter_sources_ranked():
+        obj = None
+        for source in candidates:
+            if project_slug is not None and source.project_slug != project_slug:
+                continue
+            obj = load_record(source)
+            if obj is not None:
+                break
         if obj is not None:
             out.append(obj)
     return out

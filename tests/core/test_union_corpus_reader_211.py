@@ -353,6 +353,67 @@ def test_union_count_equals_trace_corpus_source_count(tmp_path):
     assert union_count == source_count
 
 
+# ---------------------------------------------------------------------------
+# 5. Codex review follow-up (PR #216): a corrupt freshest source must not
+#    shadow an older valid one for the same trace_id.
+# ---------------------------------------------------------------------------
+
+
+def test_union_reader_falls_back_past_corrupt_freshest_source(tmp_path):
+    """RED-first regression for the Codex external review finding on PR #216
+    (issue #211, confirmed critical): ``trace_corpus.iter_sources()`` picks
+    exactly ONE freshest winner per trace_id before validation. Before this
+    fix, if that freshest winner was a corrupt/unreadable project JSONL,
+    ``load_record`` returned ``None`` and ``iter_corpus_trace_records`` silently
+    skipped the trace -- even though an OLDER valid bucket object exists for
+    the same trace_id. A corrupt newer JSONL must not shadow a valid bucket
+    object; the union reader must fall back to the next-best valid source for
+    the same trace_id, in freshness order, instead of dropping the trace.
+    """
+    import os
+    import time
+
+    from opentraces.core import trace_corpus
+    from opentraces.core.bucket_store import iter_corpus_trace_records, write_trace_record
+    from opentraces.core.config import get_project_traces_dir
+
+    trace_id = "c3c3c3c3-4444-4666-8777-888888888888"
+
+    project = tmp_path / "proj_shadow"
+    slug = _enroll_project(project, "9999999999999999dddddddddddddddd")
+
+    # Older VALID bucket object for this trace_id.
+    bucket_record = write_trace_record(
+        _trace(trace_id, content="Valid bucket-tier record (#211 regression)"),
+        project_slug=slug,
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    old_time = time.time() - 1000
+    os.utime(bucket_record.path, (old_time, old_time))
+
+    # Newer CORRUPT project JSONL for the SAME trace_id -- unparseable content,
+    # so it is the freshest source but never hydrates to a record.
+    jsonl_path = get_project_traces_dir(project) / f"{trace_id}.jsonl"
+    jsonl_path.write_text("{this is not valid json at all\n")
+    new_time = time.time()
+    os.utime(jsonl_path, (new_time, new_time))
+
+    # Sanity: trace_corpus really does pick the corrupt JSONL as the freshest
+    # winner, and it really fails to hydrate on its own.
+    winner = trace_corpus.resolve(trace_id)
+    assert winner is not None
+    assert winner.layer == trace_corpus.LAYER_PROJECT
+    assert trace_corpus.load_record(winner) is None
+
+    records = {o.trace_id: o.record for o in iter_corpus_trace_records()}
+    assert trace_id in records, (
+        "a corrupt freshest project JSONL silently shadowed a valid older "
+        "bucket object for the same trace_id (issue #211 Codex review finding)"
+    )
+    assert records[trace_id].task.description == "Valid bucket-tier record (#211 regression)"
+
+
 def test_bucket_maintenance_and_security_callers_stay_on_the_narrow_enumerator():
     """The keep-narrow list (issue #211 scope) must NOT have been touched:
     manifest build, security sweep, and prune all stay bucket-object-only.
