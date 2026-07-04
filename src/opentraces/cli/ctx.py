@@ -2915,3 +2915,246 @@ def ctx_anchor_for_step_cmd(
         )
         sys.exit(3)
     click.echo(commit_id)
+
+
+# --------------------------------------------------------------------------- #
+# ctx backfill (issue #210, seal-family W2)
+# --------------------------------------------------------------------------- #
+
+
+@ctx_group.command(
+    "backfill",
+    cls=OpentracesCommand,
+    hidden=True,  # issue #210 — maintenance verb; callable, off --help
+    examples=[
+        "opentraces ctx backfill --dry-run",
+        "opentraces ctx backfill --apply",
+        "opentraces ctx backfill --apply --only reproject,drop_dangling",
+    ],
+    see_also=[
+        ("opentraces bucket repair", "full bucket rebuild from canonical state."),
+    ],
+    option_groups=[
+        ("Mode", ["dry_run", "apply", "only_kinds"]),
+    ],
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    default=False,
+    help="Plan only; write nothing. This is the default even without the "
+    "flag — pass --apply to actually write.",
+)
+@click.option(
+    "--apply",
+    "do_apply",
+    is_flag=True,
+    default=False,
+    help="Actually write the backfill (reproject stale companions, "
+    "re-derive recoverable codex companions, drop unrecoverable dangling ids).",
+)
+@click.option(
+    "--only",
+    "only_kinds",
+    multiple=True,
+    help="Apply only the named action kinds (comma list and/or repeated "
+    "flag): reproject, codex_recover, drop_dangling. Excluded planned "
+    "actions are reported as deferred, never silently dropped. The "
+    "integrity cure (reproject + drop_dangling, no Git appends) never has "
+    "to wait on the codex_recover enrichment. Requires --apply.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def ctx_backfill_cmd(
+    dry_run: bool, do_apply: bool, only_kinds: tuple[str, ...], as_json: bool
+) -> None:
+    """Re-project stale/empty Context Tree companions (issue #210).
+
+    Re-observes every trace via the independent
+    ``opentraces.core.context_companions_audit`` engine and classifies each
+    defect into ``reproject`` (events already in the mirror, just re-run the
+    projection), ``codex_recover`` (record-derivable, needs a live project
+    checkout to append the recovered events), or ``drop_dangling`` (a
+    genuine append failure with nothing to recover — dangling ids are
+    cleared, never fabricated). ``--dry-run`` (default) only plans and
+    prints counts; ``--apply`` executes the plan.
+
+    Exit codes: 0 = fully applied (deferred/skipped/sync-failure entries are
+    informational — explicitly chosen or cleanly retryable); 2 = invalid
+    flags or a blocking mirror-corruption error (fail-closed, zero writes);
+    3 = partially blocked — one or more planned actions could not be
+    applied, each reported with a named reason under ``blocked``.
+    """
+
+    # Codex external review (PR #217, issue #210) critical #1 — --dry-run
+    # and --apply were both accepted, but only --apply was ever checked;
+    # passing both silently executed the write path anyway. --dry-run must
+    # NEVER be able to write against the user's real bucket, so reject the
+    # combination up front, before any planning or importing of the write
+    # path.
+    if dry_run and do_apply:
+        msg = (
+            "ctx backfill: --dry-run and --apply are mutually exclusive — "
+            "pass exactly one. --dry-run never writes; --apply is the only "
+            "flag that does. Refusing before any planning or writing."
+        )
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
+
+    from ..core.context_backfill import (
+        BACKFILL_ACTION_KINDS,
+        apply_backfill,
+        plan_backfill,
+    )
+    from ..core.config import load_config
+
+    # PR #217 round 3 — --only scoping: apply only the named action kinds
+    # (comma list and/or repeated flag); everything else in the plan is
+    # reported as deferred, never silently dropped.
+    only: list[str] = []
+    for raw in only_kinds:
+        only.extend(s.strip() for s in raw.split(",") if s.strip())
+    if only and not do_apply:
+        msg = (
+            "ctx backfill: --only requires --apply (dry-run always reports "
+            "the FULL plan; scoping only restricts what gets applied)."
+        )
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
+    unknown_kinds = sorted(set(only) - set(BACKFILL_ACTION_KINDS))
+    if unknown_kinds:
+        msg = (
+            f"ctx backfill: unknown --only kind(s): {', '.join(unknown_kinds)} "
+            f"— valid kinds: {', '.join(BACKFILL_ACTION_KINDS)}"
+        )
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
+
+    # Codex review critical #2 — a missing/corrupt event mirror used to be
+    # silently read as "zero context events" (legitimately empty). It now
+    # raises (FileNotFoundError / ValueError) from the independent audit;
+    # surface that as a clean blocking error here rather than a traceback,
+    # matching scripts/audit_context_companions.py's "a skip is an error"
+    # handling of the same engine.
+    try:
+        plan = plan_backfill()
+    except (FileNotFoundError, ValueError) as exc:
+        msg = f"ctx backfill: audit blocked (mirror unreadable) — {exc}"
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
+
+    counts = plan.counts()
+
+    project_paths: dict[str, Path] = {}
+    if do_apply:
+        cfg = load_config()
+        for path_str, reg in cfg.projects.items():
+            p = Path(path_str)
+            if p.is_dir():
+                project_paths[reg.slug] = p
+
+    result: dict[str, Any] | None = None
+    if do_apply:
+        # The apply's scoped mirror read is fail-closed: a corrupt CONTEXT
+        # event line (or an unreadable batch / missing mirror) raises BEFORE
+        # any write. Surface it cleanly, rc=2, matching the plan-time guard.
+        try:
+            result = apply_backfill(
+                plan, project_paths=project_paths, only=only or None
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            msg = f"ctx backfill: apply blocked (zero writes) — {exc}"
+            if as_json:
+                _emit({
+                    "schema_version": "opentraces.ctx_backfill.v1",
+                    "error": msg,
+                })
+            else:
+                click.echo(msg, err=True)
+            sys.exit(2)
+
+    # PR #217 round 4 contract: a planned-but-not-applied action without an
+    # explanation is forbidden; when any action is blocked the command exits
+    # rc=3 (partially blocked) so scripted callers cannot mistake a
+    # non-convergent apply for success. deferred (--only) and
+    # skipped/sync-failure entries stay informational (rc=0): they are
+    # explicitly chosen or cleanly retryable, not silent.
+    blocked = (result.get("blocked") or []) if result is not None else []
+
+    if as_json:
+        payload = {
+            "schema_version": "opentraces.ctx_backfill.v1",
+            "dry_run": not do_apply,
+            "audit_counts": plan.audit.counts(),
+            "plan_counts": counts,
+            "applied": result,
+        }
+        _emit(payload)
+        if blocked:
+            sys.exit(3)
+        return
+
+    click.echo("=== ctx backfill ===")
+    click.echo(f"mode: {'apply' if do_apply else 'dry-run'}")
+    click.echo(f"audit: {plan.audit.counts()}")
+    click.echo(f"plan:  {counts}")
+    if result is not None:
+        click.echo(
+            f"applied: reproject={len(result['reproject'])} "
+            f"codex_recover={len(result['codex_recover'])} "
+            f"drop_dangling={len(result['drop_dangling'])} "
+            f"skipped_no_live_project={len(result['skipped_no_live_project'])}"
+        )
+        mirror_sync_failures = result.get("mirror_sync_failures") or []
+        if mirror_sync_failures:
+            click.echo(
+                f"mirror_sync_failures: {len(mirror_sync_failures)} "
+                "(codex-recovered events appended to the canonical log but "
+                "not mirrored — safely retryable on the next backfill pass)"
+            )
+        mirror_corrupt_lines = result.get("mirror_corrupt_lines") or []
+        if mirror_corrupt_lines:
+            click.echo(
+                f"mirror_corrupt_lines: {len(mirror_corrupt_lines)} "
+                "(corrupt non-context event line(s) in the bucket events "
+                "mirror — skipped for this apply, never silently; consider "
+                "'opentraces bucket repair' to rebuild the mirror)"
+            )
+        deferred = result.get("deferred") or {}
+        if deferred:
+            click.echo(
+                "deferred: "
+                + ", ".join(f"{k}={len(v)}" for k, v in deferred.items())
+                + " (excluded by --only; run again with those kinds to apply)"
+            )
+        if blocked:
+            click.echo(f"blocked: {len(blocked)} (planned but NOT applied)")
+            for b in blocked:
+                click.echo(
+                    f"  - {b.get('kind')} {b.get('trace_id')}: {b.get('reason')}"
+                )
+            sys.exit(3)
