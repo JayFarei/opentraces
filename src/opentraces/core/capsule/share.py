@@ -15,6 +15,7 @@ import json
 import re
 import shutil
 import subprocess
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -247,6 +248,51 @@ def _companion_faces():
     )
 
 
+# #209 (W1): a REAL ``capsule create`` invocation calls ``build_mini_bucket``
+# TWICE for the exact same (bucket, slug, trace_ids, tools) — once inside
+# ``export.py::export_capsule`` purely to stamp ``mini_bucket_digest`` on the
+# envelope, and again from ``cli/capsule.py`` to materialize the actual mini-
+# bucket files. On an outlier (>=400 MB decompressed) trail companion each
+# call alone can cost tens of seconds, so the un-memoized double call was
+# roughly HALF of "capsule seal on an outlier trace takes minutes" — a second
+# lever alongside the parallel-dispatch chunking in ``companions.py``, closing
+# the same "capsule seal on outlier companions" bug the process-parallel
+# change targets, without touching sanitize_companion_dict/redact_companions
+# themselves (still exactly one code path for producing the redacted bytes;
+# this only skips a provably-identical repeat of that one path within a
+# single process). Bounded process-lifetime LRU (not unbounded — each entry
+# holds full companion blob bytes, so an unbounded cache across a long-lived
+# process such as a test session would grow without limit).
+_MINI_BUCKET_CACHE: "OrderedDict[tuple[Any, ...], dict[str, Any]]" = OrderedDict()
+_MINI_BUCKET_CACHE_MAXSIZE = 16
+
+
+def _mini_bucket_cache_key(
+    slug: str, trace_ids: Sequence[str], tools: Sequence[Any] | None
+) -> tuple[Any, ...] | None:
+    """A hashable projection of ``build_mini_bucket``'s ACTUAL inputs.
+
+    ``project_dir`` is deliberately excluded — the companion paths derive
+    solely from ``paths.bucket_dir()`` (a process-global), never from
+    ``project_dir`` (see ``build_mini_bucket``'s docstring) — so it carries no
+    information the output depends on. ``paths.bucket_dir()`` IS included so a
+    test suite that monkeypatches ``OPENTRACES_DIR`` between calls (a
+    per-process global mutation) never serves a stale cross-test hit. Returns
+    ``None`` (meaning "do not cache") when ``tools`` carries an ad-hoc tool
+    instance with no stable registry name — the same "cannot safely reduce
+    for a boundary crossing" case ``companions._tool_names_for_pool`` already
+    guards for the process-pool boundary.
+    """
+    from .. import paths as _paths
+    from .companions import _tool_names_for_pool, _UnpicklableToolsError
+
+    try:
+        tools_key = tuple(_tool_names_for_pool(tools)) if tools is not None else None
+    except _UnpicklableToolsError:
+        return None
+    return (str(_paths.bucket_dir()), slug, tuple(trace_ids), tools_key)
+
+
 def build_mini_bucket(
     project_dir: Path,
     slug: str,
@@ -264,10 +310,40 @@ def build_mini_bucket(
     companion blobs by content digest. Every trace is INDEPENDENTLY resolvable
     from its spine; ``mini_bucket_digest`` is a pure content hash (gzip- and
     machine-independent). Returns ``{files, manifest, digest, schema_version}``.
-    ``project_dir`` is accepted for symmetry with the export choke point; the
-    companion paths derive from ``paths.bucket_dir()`` (which honors test
-    ``OPENTRACES_DIR`` monkeypatching).
+
+    Memoized within one process (#209 W1) keyed on the bucket root + slug +
+    trace_ids + tools — the ONLY inputs the output actually depends on (see
+    ``_mini_bucket_cache_key``) — so a caller that (correctly) calls this
+    twice for the same scope within one CLI invocation pays the redaction
+    cost once. ``project_dir`` is accepted for symmetry with the export
+    choke point; the companion paths derive from ``paths.bucket_dir()``
+    (which honors test ``OPENTRACES_DIR`` monkeypatching).
     """
+
+    cache_key = _mini_bucket_cache_key(slug, trace_ids, tools)
+    if cache_key is not None:
+        cached = _MINI_BUCKET_CACHE.get(cache_key)
+        if cached is not None:
+            _MINI_BUCKET_CACHE.move_to_end(cache_key)
+            return cached
+
+    result = _build_mini_bucket_uncached(project_dir, slug, trace_ids, tools=tools)
+
+    if cache_key is not None:
+        _MINI_BUCKET_CACHE[cache_key] = result
+        if len(_MINI_BUCKET_CACHE) > _MINI_BUCKET_CACHE_MAXSIZE:
+            _MINI_BUCKET_CACHE.popitem(last=False)
+    return result
+
+
+def _build_mini_bucket_uncached(
+    project_dir: Path,
+    slug: str,
+    trace_ids: Sequence[str],
+    *,
+    tools: Sequence[Any] | None = None,
+) -> dict[str, Any]:
+    """The actual builder — see ``build_mini_bucket`` for the public contract."""
 
     from ..bucket_layout import _path_part
     from .companions import redact_companions

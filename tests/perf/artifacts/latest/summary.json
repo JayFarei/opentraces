@@ -83,6 +83,20 @@
     "target": "graph_api.load_inverse_blame",
     "tier": "small"
   },
+  "redact-companion-smoke": {
+    "budget_updated": false,
+    "cold_ms": 1899.247417,
+    "domain": "core",
+    "extra": {},
+    "lane": "smoke",
+    "max_rss_delta_mb": 2.71875,
+    "p50_ms": 1954.320584,
+    "p95_ms": 2007.888834,
+    "peak_rss_mb": 281.640625,
+    "python_heap_peak_mb": 27.79622173309326,
+    "target": "capsule.redact_companion_text",
+    "tier": "small"
+  },
   "scan-project-smoke": {
     "budget_updated": false,
     "cold_ms": 11924.476792,

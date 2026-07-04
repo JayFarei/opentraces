@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -51,6 +52,23 @@ def build_python_callable(
         return (
             lambda: _ib.compute(fixture.project_dir, trace_id),
             _metadata(fixture, scenario, trace_id=trace_id),
+        )
+    if target == "capsule.redact_companion_text":
+        # #209 (W1): forced serial dispatch. This budget guards the "cheap
+        # wins" (memoized pattern building, the entropy upper-bound skip, the
+        # anonymize_paths fast-path guard) against a throughput regression on
+        # every PR; it deliberately does NOT exercise the ProcessPoolExecutor
+        # path (spawning a pool per repetition would make a per-PR smoke
+        # budget slow and pool-startup-noisy) — the parallel win itself is
+        # proven separately by the real-CLI Part B throughput gate (#209).
+        os.environ["OPENTRACES_CAPSULE_REDACT_WORKERS"] = "1"
+        from opentraces.core.capsule.companions import redact_companion_text
+
+        assert fixture.companion_text is not None
+        text = fixture.companion_text
+        return (
+            lambda: redact_companion_text(text),
+            _metadata(fixture, scenario, companion_bytes=len(text.encode("utf-8"))),
         )
     raise ValueError(f"unsupported python target {target!r}")
 

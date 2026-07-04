@@ -55,6 +55,20 @@ class PerfFixture:
     head_sha: str | None
     blame_sha: str | None
     primary_trace_id: str | None
+    # #209 (W1): the raw (undecompressed-equivalent) companion JSONL text a
+    # redaction-throughput scenario sanitizes. ``None`` for every other
+    # fixture kind — added at the end with a default so this stays a
+    # backward-compatible widening, not a shape break, for every existing
+    # ``PerfFixture(...)`` call site.
+    companion_text: str | None = None
+
+
+REDACTION_TIER_CONFIG = {
+    # #209 (W1): sized comfortably past ``_PARALLEL_THRESHOLD_BYTES`` (4 MB)
+    # so the smoke scenario exercises real per-line sanitizer work at a scale
+    # that is still fast enough for a per-PR CI budget (single-digit seconds).
+    "small": {"raw_bytes": 6 * 1024 * 1024, "filler_lines": 800},
+}
 
 
 def build_fixture(base_dir: Path, home_dir: Path, fixture_name: str, tier: str) -> PerfFixture:
@@ -69,7 +83,73 @@ def build_fixture(base_dir: Path, home_dir: Path, fixture_name: str, tier: str) 
         return build_scan_fixture(base_dir, home_dir, tier)
     if fixture_name == "push_batch":
         return build_push_fixture(base_dir, home_dir, tier)
+    if fixture_name == "redaction_corpus":
+        return build_redaction_corpus_fixture(base_dir, home_dir, tier)
     raise ValueError(f"unknown fixture {fixture_name!r}")
+
+
+def build_redaction_corpus_fixture(base_dir: Path, home_dir: Path, tier: str) -> PerfFixture:
+    """A synthetic trail-companion JSONL body for the #209 (W1) redaction budget.
+
+    No project/git/state is needed to exercise ``redact_companion_text`` in
+    isolation, so this is the one fixture kind that leaves ``project_dir`` an
+    empty directory — only ``companion_text`` is consumed by the scenario's
+    python target. Content mirrors the committed Part A fixture's diversity
+    (secrets, home paths, a high-entropy string) at a size tuned per tier.
+    """
+    import random
+
+    config = REDACTION_TIER_CONFIG[tier]
+    project_dir = base_dir / "proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    rng = random.Random(209)
+    lines: list[str] = [
+        json.dumps({
+            "event_type": "tool_call",
+            "step": 1,
+            "cwd": "/repo/opentraces",
+            "content": "deploy token sk-live-PERFCORPUSAAAAAAAAAAAAAAAAAAAA leaked here",
+        }),
+        json.dumps({
+            "event_type": "tool_call",
+            "step": 2,
+            "cwd": "/Users/perfuser/secret/creds.env",
+            "content": "cat /Users/perfuser/secret/creds.env",
+        }),
+        json.dumps({
+            "event_type": "observation",
+            "step": 3,
+            "content": "".join(rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") for _ in range(48)),
+        }),
+    ]
+    target_bytes = config["raw_bytes"]
+    idx = 3
+    total = sum(len(l) + 1 for l in lines)
+    while total < target_bytes:
+        idx += 1
+        line = json.dumps({
+            "event_type": "tool_call" if idx % 2 else "observation",
+            "step": idx,
+            "cwd": "/repo/opentraces",
+            "content": f"routine filler content for step {idx}, nothing sensitive",
+        })
+        lines.append(line)
+        total += len(line) + 1
+
+    companion_text = "\n".join(lines) + "\n"
+    return PerfFixture(
+        home_dir=home_dir,
+        project_dir=project_dir,
+        staging_dir=project_dir,
+        state_path=project_dir / "state.json",
+        trace_ids=[],
+        commit_shas=[],
+        head_sha=None,
+        blame_sha=None,
+        primary_trace_id=None,
+        companion_text=companion_text,
+    )
 
 
 def build_stack_fixture(base_dir: Path, home_dir: Path, tier: str) -> PerfFixture:
