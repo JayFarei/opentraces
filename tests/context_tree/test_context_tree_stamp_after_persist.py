@@ -84,6 +84,7 @@ class TestClaudeStampAfterPersist:
     def test_step_node_id_map_populated_when_append_succeeds(self, tmp_path):
         from opentraces.capture.claude_code import context_tree_capture as m
 
+        _init_git_repo(tmp_path)
         transcript = _run_fixture("context-tree-linear", tmp_path)
         record = TraceRecord(
             trace_id="trace-stamp-claude-2",

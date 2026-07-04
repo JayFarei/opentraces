@@ -40,7 +40,7 @@ from typing import Any
 
 from opentraces_schema import TraceRecord
 
-from .context_companions_audit import AuditReport, TraceAudit, audit_bucket
+from .context_companions_audit import AuditReport, audit_bucket
 
 
 @dataclass
