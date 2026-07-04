@@ -90,6 +90,11 @@ SENTINEL_JOURNEYS = (
     # lifecycle and the capsule mini-bucket redaction floor.
     "dataset-sync-verify-publish",
     "capsule-redaction-floor-on-raw-companions",
+    # Seal-family W6 (#214) — ci-pr.yml runs this journey explicitly (see
+    # the dedicated "Seal-family W6 sentinel journey" step); listing it here
+    # keeps the catalogue's derived ci_lane metadata ("pr") in sync with
+    # where it actually runs instead of silently deriving "nightly".
+    "replay-contract-capture-completeness",
 )
 
 

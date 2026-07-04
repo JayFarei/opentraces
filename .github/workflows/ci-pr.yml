@@ -241,8 +241,10 @@ jobs:
       # RED-capability + vacuous-green regression lives at
       # tests/test_replay_completeness_sentinel.py (runs for free in fast
       # pre-merge). Explicit node-id here (not nightly-only) mirrors the v7-core
-      # precedent: hermetic c-context-tree-substrate box (fake-harness capture
-      # chain), ~20s.
+      # precedent: hermetic c-context-tree-substrate-fresh box (fake-harness
+      # capture chain, cache=False so every run re-exercises the current
+      # capture code rather than forking a cached snapshot — external-review
+      # fold-in, #215), ~20s.
       - name: Seal-family W6 sentinel journey (replay-contract capture-completeness)
         run: |
           python -m pytest \

@@ -19,6 +19,15 @@ so the audit's red-capability is proven, not asserted:
   * ``test_vacuous_green_guard_*`` prove the audit refuses to pass a context-capable
     source whose companion is empty (zero events is a lost capture, not "nothing
     to check"), while still passing a genuinely context-free source.
+  * ``test_audit_cli_exits_7_on_dangling_stamp_fault`` /
+    ``test_audit_cli_exits_0_on_consistent_world`` prove the full AUDIT CLI PATH
+    the journey actually runs (``scripts/audit_replay_completeness.py`` as a real
+    subprocess over an on-disk bucket layout), not just the ``classify_trace``
+    invariant in isolation: a genuine W2-shaped dangling stamp drives the
+    documented exit code 7 with the dangling reason in the JSON output, and the
+    SAME harness against a deliberately-consistent world (fault absent) exits 0
+    — proving the fault injection, not some other bug, is what flips the exit
+    code.
 
 Skip is a lie: nothing here degrades to a skip; a missing capture chain is a
 failure.
@@ -26,6 +35,7 @@ failure.
 
 from __future__ import annotations
 
+import gzip
 import json
 import subprocess
 import sys
@@ -315,3 +325,106 @@ def test_audit_cli_blocks_on_missing_mirror(tmp_path):
     (tdir / "trace.json").write_text(json.dumps({"trace_id": "t1", "steps": []}))
     rc = audit.main(["--bucket", str(bucket), "--trace-id", "t1", "--json"])
     assert rc == audit.EXIT_BLOCKED
+
+
+# --------------------------------------------------------------------------
+# The full audit CLI path (item 3, Codex external review on PR #215).
+#
+# Everything above exercises ``classify_trace`` — the invariant — directly.
+# The otbox journey never calls ``classify_trace``; it shells out to
+# ``scripts/audit_replay_completeness.py`` as a real subprocess over a real
+# on-disk bucket layout (``[[steps]] type = "shell" argv = ["{py_bin}",
+# ".../audit_replay_completeness.py", "--bucket", ..., "--trace-id", ...,
+# "--json"]``). These two tests build that exact on-disk shape by hand (a
+# ``bucket/traces/v1/<project>/<trace_id>/{trace.json,context.jsonl.gz}`` plus
+# a ``bucket/events/v1/batches/*.jsonl.gz`` mirror) and run the script the
+# same way the journey does, so the argparse plumbing, bucket-path
+# resolution, gzip reads, and exit-code wiring in ``main()`` are all proven,
+# not just the classifier they call into.
+# --------------------------------------------------------------------------
+_AUDIT_SCRIPT = _REPO_ROOT / "scripts" / "audit_replay_completeness.py"
+
+
+def _write_gz_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+
+
+def _build_cli_bucket(tmp_path: Path, *, trace_id: str, companion_has_node: bool) -> Path:
+    """Build a real bucket layout for one trace with a stamped context node.
+
+    ``companion_has_node=True`` -> the stamped node resolves inside the
+    trace's own companion (a consistent world, exit 0). ``False`` -> the
+    companion is empty while the event mirror still carries the event (the
+    exact W2 shape: a step lies about being replayable) -> exit 7.
+    """
+    bucket = tmp_path / "bucket"
+    trace_dir = bucket / "traces" / "v1" / "proj" / trace_id
+    trace_dir.mkdir(parents=True)
+    (trace_dir / "trace.json").write_text(
+        json.dumps(
+            {
+                "trace_id": trace_id,
+                "context_tree_summary": {"capture_methods": ["transcript_reconstruction"]},
+                "steps": [{"step_index": 1, "context_node_id": "node-A"}],
+            }
+        )
+    )
+    companion_rows = (
+        [{"event_type": "context_node_observed", "trace_id": trace_id,
+          "payload": {"node_id": "node-A"}}]
+        if companion_has_node
+        else []
+    )
+    _write_gz_jsonl(trace_dir / "context.jsonl.gz", companion_rows)
+    # The event mirror always carries the event — under the fault, the
+    # companion never received what the mirror already has (W2's shape:
+    # append_event_batch succeeded for the mirror's own bookkeeping path in
+    # some deployments, or a partial write left the mirror non-empty while
+    # the per-trace companion export never ran).
+    _write_gz_jsonl(
+        bucket / "events" / "v1" / "batches" / "0001-b.jsonl.gz",
+        [{"event_type": "context_node_observed", "trace_id": trace_id,
+          "payload": {"node_id": "node-A"}}],
+    )
+    return bucket
+
+
+def _run_audit_cli(bucket: Path, trace_id: str) -> tuple[int, dict]:
+    proc = subprocess.run(
+        [sys.executable, str(_AUDIT_SCRIPT), "--bucket", str(bucket),
+         "--trace-id", trace_id, "--json"],
+        capture_output=True, text=True, check=False,
+    )
+    payload = json.loads(proc.stdout)
+    return proc.returncode, payload
+
+
+def test_audit_cli_exits_0_on_consistent_world(tmp_path):
+    """Counter-proof: the SAME harness, fault absent, exits 0 (not vacuously red)."""
+    bucket = _build_cli_bucket(tmp_path, trace_id="w6-cli-clean", companion_has_node=True)
+    rc, payload = _run_audit_cli(bucket, "w6-cli-clean")
+    assert rc == audit.EXIT_OK, f"consistent world did not exit 0: {payload}"
+    assert payload["status"] == "consistent"
+    assert payload["ok"] is True
+    assert payload["dangling_node_ids"] == []
+
+
+def test_audit_cli_exits_7_on_dangling_stamp_fault(tmp_path):
+    """The real audit CLI subprocess, not just classify_trace, goes RED (exit 7).
+
+    Drives ``scripts/audit_replay_completeness.py`` as the journey's
+    ``companion-audit`` step does: a real subprocess over a real bucket
+    where the stamped ``context_node_id`` is absent from its own trace's
+    companion even though the event mirror has it — the documented failure
+    mode (exit code 7) with the dangling reason present in the JSON output.
+    """
+    bucket = _build_cli_bucket(tmp_path, trace_id="w6-cli-fault", companion_has_node=False)
+    rc, payload = _run_audit_cli(bucket, "w6-cli-fault")
+    assert rc == audit.EXIT_INCONSISTENT == 7, f"fault did not drive exit 7: {payload}"
+    assert payload["status"] == "inconsistent"
+    assert payload["ok"] is False
+    assert "node-A" in payload["dangling_node_ids"]
+    assert any("dangling" in r for r in payload["reasons"]), payload["reasons"]

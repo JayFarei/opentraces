@@ -10,14 +10,20 @@ NO other default-CI journey asserts the invariant W2's defect violated: that
 every stamped `Step.context_node_id` resolves inside its OWN trace's
 `context.jsonl.gz`. This one does, on the trace captured IN THIS RUN.
 
-Vehicle: `c-context-tree-substrate` is the captured-session-family sibling that
-runs the SAME real capture chain (composed from `c-installed-source`, real
-`opentraces setup git` + real git commits + real `_ingest-session`) but over a
-parentUuid-linked corpus, so the capture actually stamps per-step context nodes.
-The thinner `c-captured-real-session` corpus has no parentUuid links, so it
-yields a single root node and ZERO stamped steps — assertion (a) would be
-vacuously green there, which is exactly the theater this sentinel exists to
-prevent. See `[replay_contract]` below for the promised fidelity per method.
+Vehicle: `c-context-tree-substrate-fresh` is a `cache=False` sibling of the
+captured-session-family checkpoint `c-context-tree-substrate` — same delta,
+same corpora, same real capture chain (composed from `c-installed-source`,
+real `opentraces setup git` + real git commits + real `_ingest-session`) over a
+parentUuid-linked corpus, so the capture actually stamps per-step context
+nodes. It never forks from a cached snapshot: every resolve reruns the
+capture chain against the CURRENT code (external review fold-in, #215) —
+a cache hit on the shared, `cache=True` `c-context-tree-substrate` would let
+this sentinel pass green while forking a world built by an EARLIER checkout,
+exercising yesterday's capture code instead of today's. The thinner
+`c-captured-real-session` corpus has no parentUuid links, so it yields a
+single root node and ZERO stamped steps — assertion (a) would be vacuously
+green there, which is exactly the theater this sentinel exists to prevent.
+See `[replay_contract]` below for the promised fidelity per method.
 
 What it asserts on the fresh trace:
 
@@ -50,6 +56,11 @@ The RED-capability proof lives beside this journey as a frozen regression:
 ingest stamping with `append_event_batch` monkeypatched to fail (the exact W2
 fault) and asserts the audit goes inconsistent; the vacuous-green guard
 (emptied companion, zero-event context-capable source) is asserted there too.
+`classify_trace` is exercised directly by those tests; the full audit CLI
+path this journey actually runs (`audit_trace`/`main` over an on-disk
+bucket, exit code 7 on inconsistency) is separately proven by
+`test_audit_cli_exits_7_on_dangling_stamp_fault` /
+`test_audit_cli_exits_0_on_consistent_world` in the same file.
 """
 lane = "core"
 tier = 0
@@ -57,7 +68,9 @@ tier_label = "silver"
 trajectories = ["replay-contract-capture-completeness"]
 persona = "agent"
 requires = ["cli", "git"]
-from_checkpoints = ["c-context-tree-substrate"]
+# cache=False checkpoint (see checkpoints/_context_tree_substrate.py) —
+# never forks a cached snapshot, always reruns the real capture chain.
+from_checkpoints = ["c-context-tree-substrate-fresh"]
 
 # ---------------------------------------------------------------------
 # What replay fidelity IS promised, per capture method (scope 4 / #202).
