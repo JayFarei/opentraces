@@ -193,24 +193,39 @@ def test_hf_features_map_derives_new_environment_fields_additively():
 
 
 def test_hf_dataset_infos_version_tracks_the_minor_bump():
+    """Generic, bump-proof by design: whatever ``SCHEMA_VERSION`` currently is,
+    the HF dataset_infos version must track it exactly (derived from the live
+    symbol, not a literal pinned to the 0.8.0 bump this file exercises -- a
+    later additive bump, e.g. 0.9.0's #212 dataset-facet fields, must not
+    require touching this assertion)."""
     from opentraces.publish.huggingface.schema import _dataset_version_info
 
     info = _dataset_version_info()
     assert info["version_str"] == SCHEMA_VERSION
-    assert (info["major"], info["minor"], info["patch"]) == (0, 8, 0)
+    expected = tuple(int(part) for part in SCHEMA_VERSION.split("."))
+    assert (info["major"], info["minor"], info["patch"]) == expected
 
 
 # --------------------------------------------------------------------------- #
-# 4. MINOR recognized as additive-newer per the version policy.
+# 4. The 0.7.0 -> 0.8.0 bump itself was additive-newer per the version policy.
+#
+# These two checks are pinned to the HISTORICAL "0.8.0" string (not the live
+# ``SCHEMA_VERSION`` symbol) so they keep documenting THIS bump's specific
+# additive property regardless of later, unrelated MINOR bumps (e.g. 0.9.0's
+# #212 dataset-facet fields) -- the live-symbol equivalent of this check lives
+# in ``tests/test_trace_record_spine.py::test_schema_version_is_current``,
+# which IS meant to track the current version and is updated on every bump.
 # --------------------------------------------------------------------------- #
+
+_SCHEMA_VERSION_AT_THIS_BUMP = "0.8.0"
 
 
 def test_schema_version_is_the_one_minor_bump():
-    assert SCHEMA_VERSION == "0.8.0"
+    assert _SCHEMA_VERSION_AT_THIS_BUMP == "0.8.0"
 
 
 def test_minor_bump_over_070_is_additive_newer():
-    major, minor, patch = (int(p) for p in SCHEMA_VERSION.split("."))
+    major, minor, patch = (int(p) for p in _SCHEMA_VERSION_AT_THIS_BUMP.split("."))
     prev_major, prev_minor, prev_patch = 0, 7, 0
     assert major == prev_major, "additive MINOR must not bump MAJOR"
     assert minor == prev_minor + 1
@@ -239,9 +254,14 @@ def test_migrate_record_is_a_transparent_noop_across_070_to_080():
 
 
 def test_a_bumped_080_record_is_readable():
+    """Explicitly tag the record ``schema_version="0.8.0"`` (rather than
+    relying on the field's live-``SCHEMA_VERSION`` default) so this keeps
+    exercising the historical 0.8.0 Environment-pins shape unchanged across
+    later, unrelated MINOR bumps (e.g. 0.9.0's #212 dataset-facet fields)."""
     record = TraceRecord(
         trace_id="t-080",
         session_id="s-080",
+        schema_version="0.8.0",
         agent=Agent(name="claude-code"),
         environment=_pinned_environment(),
     )

@@ -1,3 +1,3 @@
 """Schema version for opentraces JSONL format."""
 
-SCHEMA_VERSION = "0.8.0"
+SCHEMA_VERSION = "0.9.0"

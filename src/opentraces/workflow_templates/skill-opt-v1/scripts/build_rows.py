@@ -71,9 +71,29 @@ def main() -> int:
     packet = json.loads(Path(packet_path).read_text(encoding="utf-8"))
     scope = packet.get("scope") or {}
     project_slug = scope.get("project_slug") or scope.get("project") or None
+    # #212 review fix (finding 1b): a faceted run resolves a
+    # ``candidate_trace_ids`` set on the packet (O(manifest), never opening a
+    # per-trace file to decide it); this builder must narrow to it instead of
+    # scanning/scoring every trace in the project regardless of scope.
+    # ``None`` means the run carried no facet scope -- every trace is in
+    # scope, matching the pre-#212 behaviour exactly. The import is lazy and
+    # best-effort: an installed ``opentraces`` predating #212 (or any other
+    # environment where the helper can't be imported) degrades to the
+    # pre-#212 unfiltered behaviour rather than crashing the whole
+    # projection -- the runner-level enforcement in
+    # ``core.datasets.append_rows`` is the authoritative backstop regardless
+    # of whether this builder can narrow its own scan.
+    try:
+        from opentraces.core.dataset_facets import candidate_trace_id_set
+
+        allowed_trace_ids = candidate_trace_id_set(packet)
+    except ImportError:
+        allowed_trace_ids = None
 
     out_lines: list[str] = []
     for obj in iter_corpus_trace_records(project_slug=project_slug):
+        if allowed_trace_ids is not None and obj.trace_id not in allowed_trace_ids:
+            continue
         try:
             assessment = assess_trace(obj.record)
         except Exception as exc:  # never let one bad trace abort the projection

@@ -238,11 +238,11 @@ class TestTraceRecordSpineShape:
         assert "patch" not in o2.model_dump()
 
     def test_schema_version_is_current(self):
-        # 0.8.0 adds the additive Environment pin fields (plan/seal M3, #200);
+        # 0.9.0 adds the additive dataset-run facet-scoping fields (#212);
         # the TraceRecord wire shape is otherwise unchanged.
-        assert SCHEMA_VERSION == "0.8.0"
+        assert SCHEMA_VERSION == "0.9.0"
         r = _minimal_record()
-        assert r.schema_version == "0.8.0"
+        assert r.schema_version == "0.9.0"
 
     def test_trace_record_jsonl_round_trip_preserves_patches(self):
         r = _minimal_record(

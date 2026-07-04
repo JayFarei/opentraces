@@ -251,6 +251,61 @@ def run_dataset_workflow(
     # the builder reads packet["answers"] to finalize rows deterministically.
     if answers:
         dataset_context["answers"] = answers
+    # #212: a ``--facet name=value`` scope refinement is resolved against the
+    # PERSISTED bucket manifest only (O(manifest) — the #87 anti-pattern this
+    # family cured was opening every trace's ``current.json``/``trace.json`` to
+    # filter; ``agent_name``/``agent_version``/``agent_model`` are already on
+    # every manifest row, so no per-trace file is opened here regardless of
+    # corpus size). The resolved match set is embedded in both the run packet
+    # (so a workflow script CAN consume ``candidate_trace_ids``) and the
+    # persisted/CLI-visible run record (so callers can assert selection
+    # correctness without re-deriving it).
+    #
+    # External review of issue #212 (finding 1a): this is the CANONICAL
+    # candidate-query resolution path, so it must read BOTH a facet scope
+    # persisted on the dataset at ``dataset new`` / schedule time
+    # (``dataset.manifest.candidate_query.facets``) and a runtime ``--facet``
+    # flag (``scope["facets"]``) — not just the latter. Without this merge a
+    # scheduled run with no CLI flags silently ignored its persisted facet
+    # scope (a no-op). Runtime flags win per-key on conflict (last-wins,
+    # matching the CLI's own repeated-``--facet`` semantics).
+    from .dataset_facets import merge_facet_scopes
+
+    candidate_query_model = dataset.manifest.candidate_query
+    persisted_facets = (
+        dict(candidate_query_model.facets)
+        if candidate_query_model is not None and candidate_query_model.facets
+        else {}
+    )
+    runtime_facets = (scope or {}).get("facets") if isinstance(scope, dict) else None
+    facet_query = merge_facet_scopes(persisted_facets, runtime_facets)
+    facet_resolution: dict[str, Any] | None = None
+    # External review of issue #212 (finding 1c): the allowed trace-id set a
+    # faceted run's emitted rows are validated against below (append_rows'
+    # ``allowed_trace_ids``) — the runner-level enforcement backstop for a
+    # workflow that ignores ``candidate_trace_ids`` and scans/emits every
+    # candidate anyway. ``None`` (not an empty set) means "no facet scope,
+    # every candidate is in scope" so an unfaceted run never filters rows.
+    allowed_trace_ids: set[str] | None = None
+    if facet_query:
+        from .dataset_facets import resolve_facet_candidates
+
+        matches = resolve_facet_candidates(
+            facet_query,
+            project_slug=(scope or {}).get("project"),
+            trace_id=(scope or {}).get("trace_id"),
+        )
+        facet_resolution = {
+            "facets": dict(facet_query),
+            "matched_count": len(matches),
+            "matched": matches,
+        }
+        dataset_context["facet_resolution"] = facet_resolution
+        dataset_context["candidate_trace_ids"] = [
+            {"project_slug": row["project_slug"], "trace_id": row["trace_id"]}
+            for row in matches
+        ]
+        allowed_trace_ids = {row["trace_id"] for row in matches}
     # #192 --sync: turn the write-only cursor into a consumed WATERMARK over
     # bucket position. Read the current bucket position (manifest digest + max
     # status.written_at) and the last-synced watermark; when the digest is
@@ -324,6 +379,7 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=append_summary,
             status="succeeded",
+            facet_resolution=facet_resolution,
         )
         _write_run_summary(
             run_dir,
@@ -364,6 +420,7 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=append_summary,
             status="succeeded",
+            facet_resolution=facet_resolution,
         )
         # current-agent is raw agent emission (the LLM's output is not a recorded
         # input), so it is honestly labeled reconstructable=False and carries no
@@ -425,6 +482,13 @@ def run_dataset_workflow(
                     "isolation": {"sandbox_tier": execution.sandbox_tier},
                 },
                 trail_freshness=trail_freshness,
+                # External review of issue #212 (finding 1c): enforcement, not
+                # advisory. A faceted run validates every emitted row's source
+                # trace id against the resolved facet-match set and rejects
+                # (never appends) anything outside it — the backstop for a
+                # workflow that ignores ``candidate_trace_ids`` on the run
+                # packet and scans/emits every candidate regardless of scope.
+                allowed_trace_ids=allowed_trace_ids,
             )
             cursor_advanced = False
             if not dry_run:
@@ -464,6 +528,7 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=empty_summary,
             status="failed",
+            facet_resolution=facet_resolution,
         )
         # Preserve any child stdout/stderr already captured by _execute_script
         # (the script's REAL error). The wrapper WorkflowScriptError message only
@@ -501,6 +566,7 @@ def run_dataset_workflow(
         started_at=started_at,
         append_summary=append_summary,
         status="succeeded",
+        facet_resolution=facet_resolution,
     )
     delta_scope: dict[str, Any] | None = None
     if sync_block is not None:
@@ -620,6 +686,7 @@ def _run_record(
     started_at: str,
     append_summary: AppendSummary,
     status: str = "succeeded",
+    facet_resolution: dict[str, Any] | None = None,
 ) -> DatasetRunRecord:
     return DatasetRunRecord(
         run_id=run_id,
@@ -637,6 +704,7 @@ def _run_record(
         duplicate_count=append_summary.duplicate_count,
         validation_error_count=append_summary.validation_error_count,
         status=status,
+        facet_resolution=facet_resolution,
         artefacts={
             "run_packet": "run_packet.json",
             "output_rows": "output_rows.jsonl",

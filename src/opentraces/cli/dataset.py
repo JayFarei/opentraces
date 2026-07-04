@@ -1165,6 +1165,23 @@ def _create_manual_dataset(
 )
 @click.option("--project", default=None, help="Project slug for --scope project.")
 @click.option("--trace", "trace_id", default=None, help="Trace ID for --scope trace.")
+@click.option(
+    "--facet",
+    "facet_filters",
+    multiple=True,
+    help=(
+        "Repeatable name=value metadata scope refinement, composing with "
+        "--scope/--project/--trace (issue #212) and with any facets "
+        "persisted on the dataset's candidate query. Narrowed to the subset "
+        "of the `trace query --facet` vocabulary resolvable at O(manifest) "
+        "cost: model, agent.name, agent.version. Any other name is rejected "
+        "with a pointer to `trace query --facet` for the full vocabulary. "
+        "Enforced end-to-end: emitted rows outside the resolved match set "
+        "are rejected, never appended."
+    ),
+)
+@click.option("--model", "facet_model", default=None, help="Convenience alias for --facet model=<value>.")
+@click.option("--agent", "facet_agent", default=None, help="Convenience alias for --facet agent.name=<value>.")
 @click.option("--limit", type=int, default=None, help="Candidate limit.")
 @click.option(
     "--privacy-tier",
@@ -1233,6 +1250,9 @@ def dataset_run(
     scope: str,
     project: str | None,
     trace_id: str | None,
+    facet_filters: tuple[str, ...],
+    facet_model: str | None,
+    facet_agent: str | None,
     limit: int | None,
     privacy_tier: str | None,
     trail_freshness_policy: str,
@@ -1285,11 +1305,32 @@ def dataset_run(
             return
         click.echo(payload["message"])
         return
+    from ..core.dataset_facets import parse_facet_filters, validate_facet_names
+
+    facets: dict[str, str] = {}
+    try:
+        facets.update(parse_facet_filters(facet_filters))
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+    if facet_model:
+        facets.setdefault("model", facet_model)
+    if facet_agent:
+        facets.setdefault("agent.name", facet_agent)
+    if facets:
+        try:
+            validate_facet_names(facets)
+        except ValueError as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(2)
+
     scope_payload = {"scope": scope}
     if project:
         scope_payload["project"] = project
     if trace_id:
         scope_payload["trace_id"] = trace_id
+    if facets:
+        scope_payload["facets"] = facets
     if since_last_run:
         scope_payload["since_last_run"] = True
     if sync:
@@ -1353,6 +1394,10 @@ def dataset_run(
         "run": {
             **result.run_record.model_dump(mode="json"),
             "would_append_count": result.append_summary.would_append_count,
+            # #212 review fix (finding 1c): rows the runner rejected because
+            # their source trace id fell outside a faceted run's resolved
+            # match set -- zero on every unfaceted run.
+            "facet_rejected_count": result.append_summary.facet_rejected_count,
         },
         "cursor_advanced": result.cursor_advanced,
         "telemetry": {"duration_ms": round((time.monotonic() - started) * 1000, 2)},

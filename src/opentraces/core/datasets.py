@@ -78,6 +78,12 @@ class AppendSummary:
     validation_error_count: int = 0
     validation_errors: list[dict[str, Any]] = field(default_factory=list)
     row_ids: list[str] = field(default_factory=list)
+    # External review of issue #212 (finding 1c): rows a faceted run rejected
+    # because their exposed source trace id fell outside the resolved facet
+    # match set (the runner-level enforcement backstop -- never appended, not
+    # a validation error). Zero on every unfaceted run.
+    facet_rejected_count: int = 0
+    facet_rejected_trace_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -667,6 +673,7 @@ def append_rows(
     privacy_tier: str | None = None,
     run_provenance: dict[str, Any] | None = None,
     trail_freshness: list[dict[str, Any]] | None = None,
+    allowed_trace_ids: set[str] | None = None,
 ) -> AppendSummary:
     dataset = load_dataset(name)
     default_privacy_tier = (
@@ -691,6 +698,8 @@ def append_rows(
     would_append_count = 0
     current_line = _line_count(dataset.path / "data" / "train.jsonl")
     row_security_by_id: dict[str, DatasetRowSecurity] = {}
+    facet_rejected_count = 0
+    facet_rejected_trace_ids: list[str] = []
 
     # When the dataset's security policy enables tools, they are authoritative
     # and run over every row. When the policy enables NOTHING (manual/ad-hoc
@@ -702,6 +711,21 @@ def append_rows(
     )
 
     for index, row in enumerate(rows, start=1):
+        # External review of issue #212 (finding 1c): facet scoping is
+        # ENFORCED here, not merely advisory. A workflow may ignore the run
+        # packet's ``candidate_trace_ids`` and scan/emit rows outside the
+        # resolved facet scope (the bundled skill-opt-v1 bug the review
+        # found); this is the backstop that rejects such rows before they
+        # are ever appended. Only rows whose provenance actually exposes a
+        # source trace id are checked -- a row with no discoverable trace id
+        # cannot be validated against the allowed set, so it passes through
+        # unfiltered (there is nothing here to reject it on).
+        if allowed_trace_ids is not None:
+            row_trace_id = _extract_row_source_refs(row).get("trace_id")
+            if row_trace_id and row_trace_id not in allowed_trace_ids:
+                facet_rejected_count += 1
+                facet_rejected_trace_ids.append(row_trace_id)
+                continue
         sanitized = sanitize_dataset_row(
             row, privacy_tier=resolved_privacy_tier, tools=policy_tools
         )
@@ -789,6 +813,8 @@ def append_rows(
         validation_error_count=len(validation_errors),
         validation_errors=validation_errors,
         row_ids=[entry.row_id for entry in appended_entries],
+        facet_rejected_count=facet_rejected_count,
+        facet_rejected_trace_ids=facet_rejected_trace_ids,
     )
 
 

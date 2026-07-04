@@ -59,6 +59,7 @@ from .bucket_store import (
     read_trace_record_object,
     sync_trace_records_from_local_stores,
 )
+from .facet_registry import FACET_AGENT_NAME, FACET_AGENT_VERSION, FACET_MODEL
 from .provenance import provenance_from_record, provenance_from_unit
 from .semantic import semantic_facets_for_trace
 from .skill_detection import SkillInvocation, detect_skill_invocations, trace_skill_names
@@ -1445,17 +1446,31 @@ def latest_units(units: list[TraceUnit]) -> list[TraceUnit]:
 
 
 def _skill_invocation_trace_facets(record: TraceRecord, project_slug: str) -> list[TraceFacet]:
-    """Return only the trace facets retained by ``_skill_invocation_units``."""
+    """Return only the trace facets retained by ``_skill_invocation_units``.
+
+    The three manifest-resolvable names (``model``/``agent.name``/
+    ``agent.version``) are emitted from the shared ``core.facet_registry``
+    constants rather than hardcoded literals, so this emitter and
+    ``dataset_facets.py``'s narrower allow-list cannot silently drift apart
+    (external review of issue #212, finding 4a).
+    """
 
     facets = [
         TraceFacet(name="project_slug", value=project_slug, source="exact_schema"),
-        TraceFacet(name="agent.name", value=record.agent.name, source="exact_schema"),
+        TraceFacet(name=FACET_AGENT_NAME, value=record.agent.name, source="exact_schema"),
     ]
     provider = _provider_kind(record)
     if provider:
         facets.append(TraceFacet(name="provider.kind", value=provider, source="exact_schema"))
     if record.agent.model:
-        facets.append(TraceFacet(name="model", value=record.agent.model, source="exact_schema"))
+        facets.append(TraceFacet(name=FACET_MODEL, value=record.agent.model, source="exact_schema"))
+    # #212 — dataset scoping by harness version needs the same facet at query
+    # time; null on traces where the source parser never captured a version
+    # (honest limitation, not a migration — see hermes.py's map_record).
+    if record.agent.version:
+        facets.append(
+            TraceFacet(name=FACET_AGENT_VERSION, value=record.agent.version, source="exact_schema")
+        )
     return facets
 
 
@@ -3687,6 +3702,11 @@ def _trace_facets(
         facets.append(TraceFacet(name="provider.kind", value=provider, source="exact_schema"))
     if record.agent.model:
         facets.append(TraceFacet(name="model", value=record.agent.model, source="exact_schema"))
+    # #212 — first-class `trace query --facet agent.version=<v>` / dataset
+    # `--facet agent.version=<v>` scoping. Null when the source parser never
+    # captured a version; that trace simply does not match a version scope.
+    if record.agent.version:
+        facets.append(TraceFacet(name="agent.version", value=record.agent.version, source="exact_schema"))
     facets.append(
         TraceFacet(name="outcome.committed", value=record.outcome.committed, source="exact_schema")
     )

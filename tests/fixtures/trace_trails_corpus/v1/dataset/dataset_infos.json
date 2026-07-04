@@ -604,9 +604,9 @@
     "license": "cc-by-4.0",
     "version": {
       "major": 0,
-      "minor": 8,
+      "minor": 9,
       "patch": 0,
-      "version_str": "0.8.0"
+      "version_str": "0.9.0"
     }
   }
 }

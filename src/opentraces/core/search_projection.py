@@ -51,7 +51,15 @@ SEARCH_PROJECTION_VERSION = "v1"
 # ``unindexed`` doc_id column. Old-schema (v1) builds lack this mapping and are
 # migrated by a one-time full rebuild on the next refresh (see
 # ``_build_has_rowid_mapping`` / ``refresh_search_projection``).
-SEARCH_DOC_SCHEMA_VERSION = "opentraces.search_doc.v2"
+# v2 -> v3 (#212): trace-level docs gained an `agent.version` facet (dataset
+# scoping by harness version, mirroring the existing `model`/`agent.name`
+# facets). Purely additive to the docs shape -- no new sqlite columns, no
+# schema/data migration required -- so this bump is a version-string record
+# for the vocabulary widening, not a trigger for the rowid-mapping migration
+# path (`_build_has_rowid_mapping`, which stays keyed to the v1->v2 structural
+# change). A plain `opentraces trace index rebuild` regenerates every doc's
+# facets fresh and is sufficient to pick the new facet up.
+SEARCH_DOC_SCHEMA_VERSION = "opentraces.search_doc.v3"
 SEARCH_MANIFEST_SCHEMA_VERSION = "opentraces.search_projection.v1"
 
 # Versioned corpus-hash algorithm (#5). ``corpus_hash`` is derived from an
