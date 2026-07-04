@@ -8,12 +8,22 @@ The sentinel is the independent audit in ``scripts/audit_replay_completeness.py`
 These tests exercise its ``classify_trace`` invariant against REAL capture output
 so the audit's red-capability is proven, not asserted:
 
-  * ``test_fault_injected_append_failure_is_RED`` drives the REAL Claude context
-    emitter (``emit_context_tree_events_from_record``) + the REAL ingest stamping
-    loop with ``append_event_batch`` monkeypatched to fail — reproducing the exact
-    W2 shape (steps stamped, nodes never persisted) — and asserts the sentinel
-    goes RED on assertion (a). Shown red against pre-W2 code (this branch is based
-    at the W2 merge-base), frozen so it stays red if the defect ever recurs.
+  * ``test_fault_injected_append_failure_is_RED`` used to drive the REAL Claude
+    context emitter (``emit_context_tree_events_from_record``) with
+    ``append_event_batch`` monkeypatched to fail, reproducing the W2 defect
+    shape (steps stamped, nodes never persisted) end-to-end. W2's actual fix
+    (seal/w2-companion-integrity) closed that exact hole: the emitter no
+    longer builds ``step_node_id_map`` before persistence succeeds, so the
+    fault injection can no longer coax the defect shape out of the real
+    capture path — the precondition this test asserted on (``step_map`` is
+    non-empty post-fault) is now vacuously false, because the bug it was
+    reproducing is cured. The sentinel itself must stay red-capable against
+    the DEFECT SHAPE regardless of which code path used to produce it, so the
+    test now constructs that shape directly: a ``TraceRecord`` whose steps
+    carry ``context_node_id`` stamps that were never appended to the
+    project's event log at all (written straight onto the record, mirroring
+    what a corrupted/partial write could still leave on disk). It asserts
+    the sentinel still goes RED on assertion (a) against that shape.
   * ``test_clean_capture_is_GREEN`` runs the same real capture WITHOUT the fault
     and asserts the sentinel is GREEN (nodes persist, stamps resolve).
   * ``test_vacuous_green_guard_*`` prove the audit refuses to pass a context-capable
@@ -130,13 +140,6 @@ def _make_project(tmp_path: Path, name: str = "proj") -> Path:
     return project
 
 
-def _record_for(map_keys) -> TraceRecord:
-    # Build steps whose step_index matches the emitter's active-path node
-    # counter, so the ingest stamping loop actually stamps (the defect surface).
-    steps = [Step(step_index=int(k), role="agent") for k in sorted(map_keys)]
-    return _trace_record("w6-red-trace", steps)
-
-
 def _apply_ingest_stamping(final_record: TraceRecord, step_map: dict) -> None:
     # This is the exact stamping ingest.py performs (core/ingest.py:383-387).
     # Reproduced verbatim so the test exercises the real defect surface: the
@@ -173,68 +176,53 @@ def _companion_signals_from_log(project: Path, trace_id: str):
     return node_ids, ctx_events
 
 
-def test_fault_injected_append_failure_is_RED(tmp_path, monkeypatch):
-    """Inject an append failure during real capture → dangling stamps → RED (a)."""
-    from opentraces.capture.claude_code import context_tree_capture as ctc
-    import opentraces.core.trails.event_log as event_log
+def test_fault_injected_append_failure_is_RED(tmp_path):
+    """Steps stamped with context_node_ids that were never persisted → RED (a).
 
+    W2 (seal/w2-companion-integrity, issue #210's actual fix) closed the
+    append-failure hole this test used to drive through the real emitter: it
+    now builds ``step_node_id_map`` only from what actually persisted, so an
+    injected ``append_event_batch`` failure can no longer be coaxed into
+    producing dangling stamps out of the real capture path — that WAS the
+    defect, and it's cured (see ``test_clean_capture_is_GREEN`` for the real,
+    cured, capture path). The sentinel's OWN invariant must still catch this
+    shape if it ever recurs through some other route (a corrupted write, a
+    future regression, a different capture source), so this test constructs
+    the defect input synthetically: a trace record whose steps carry
+    ``context_node_id`` stamps that were never appended to the project's
+    event log at all.
+    """
     project = _make_project(tmp_path)
-    transcript = project / "session.jsonl"
-    _write_transcript(transcript)
+    trace_id = "w6-red-trace"
 
-    # THE FAULT: append_event_batch fails (as W2 measured on real append-failure
-    # traces). The emitter swallows it (adds context_tree_not_captured) but has
-    # ALREADY built summary["step_node_id_map"] before the try/except.
-    def _boom(*a, **k):  # noqa: ANN001, ANN002, ANN003
-        raise RuntimeError("injected append_event_batch failure (W2 fault)")
-
-    monkeypatch.setattr(event_log, "append_event_batch", _boom)
-
-    # First, a fault-free dry pass to learn the emitter's step->node map keys so
-    # the trace record's steps line up (we then re-run under the fault). We do
-    # this on a throwaway project so no events persist to the real one.
-    dry_project = _make_project(tmp_path, name="dry_holder/proj")
-    dry_transcript = dry_project / "session.jsonl"
-    _write_transcript(dry_transcript)
-    dry_record = _trace_record("probe", [Step(step_index=i, role="agent") for i in range(8)])
-    monkeypatch.setattr(event_log, "append_event_batch",
-                        lambda *a, **k: None)  # no-op for the probe
-    probe = ctc.emit_context_tree_events_from_record(
-        project_dir=dry_project, final_record=dry_record, transcript_path=dry_transcript,
+    # THE DEFECT SHAPE, built by hand: steps stamped with context_node_id
+    # values that this project's event log has never seen.
+    final_record = _trace_record(
+        trace_id,
+        [
+            Step(step_index=0, role="agent", context_node_id="sha256:dangling-node-0"),
+            Step(step_index=1, role="agent", context_node_id="sha256:dangling-node-1"),
+        ],
     )
-    map_keys = list((probe.get("step_node_id_map") or {}).keys())
-    assert map_keys, "real emitter produced no step->node map from the parentUuid transcript"
-
-    # Now the real run UNDER THE FAULT.
-    monkeypatch.setattr(event_log, "append_event_batch", _boom)
-    final_record = _record_for(map_keys)
-    summary = ctc.emit_context_tree_events_from_record(
-        project_dir=project, final_record=final_record, transcript_path=transcript,
-    )
-
-    # Defect surface 1: the map is present even though persistence failed.
-    step_map = summary.get("step_node_id_map") or {}
-    assert step_map, "step_node_id_map must be populated pre-persist (the defect input)"
-    # Defect surface 2: ingest stamps the steps from that map anyway.
-    _apply_ingest_stamping(final_record, step_map)
     stamped = [s.context_node_id for s in final_record.steps if s.context_node_id]
-    assert stamped, "ingest stamping produced no stamped steps — cannot exercise assertion (a)"
+    assert stamped, "test setup must stamp at least one step with a dangling context_node_id"
 
-    # Reality: nothing persisted, so the companion is empty.
-    companion_nodes, companion_ctx = _companion_signals_from_log(project, final_record.trace_id)
-    assert companion_ctx == 0, "append failure must leave zero persisted context events"
+    # Reality: nothing was ever persisted for this trace (a fresh project's
+    # event log carries zero events).
+    companion_nodes, companion_ctx = _companion_signals_from_log(project, trace_id)
+    assert companion_ctx == 0, "an untouched project's event log must carry zero context events"
 
     # THE SENTINEL: it MUST go red on the dangling stamps.
     result = audit.classify_trace(
         stamped_ids=stamped,
         companion_node_ids=companion_nodes,
         companion_ctx_event_count=companion_ctx,
-        mirror_ctx_event_count=0,  # append failed => mirror empty too
-        context_capable=bool(summary.get("capture_methods")),
+        mirror_ctx_event_count=0,
+        context_capable=True,
     )
     assert result.status == "inconsistent", (
-        f"sentinel stayed {result.status!r} under the injected fault — it is asserting "
-        "the wrong thing"
+        f"sentinel stayed {result.status!r} against the dangling-stamp shape — it is "
+        "asserting the wrong thing"
     )
     assert not result.ok
     assert result.dangling_node_ids, "sentinel did not flag the dangling stamps"
