@@ -278,7 +278,7 @@ def test_backfill_end_to_end_on_synthetic_bucket(tmp_path: Path) -> None:
     result_2 = apply_backfill(plan_2, project_paths={world.slug: world.project_dir})
     assert result_2 == {
         "reproject": [], "codex_recover": [], "drop_dangling": [],
-        "skipped_no_live_project": [],
+        "skipped_no_live_project": [], "mirror_sync_failures": [],
     }
 
     reproject_bytes_2 = _companion_bytes(world.slug, reproject_id)
@@ -293,6 +293,14 @@ def test_backfill_end_to_end_on_synthetic_bucket(tmp_path: Path) -> None:
 def test_codex_recover_skipped_without_live_project(tmp_path: Path) -> None:
     world = _World(tmp_path)
     codex_id = _make_codex_recover_case(world)
+
+    # #210 review hardening: the audit now hard-blocks on a missing
+    # events/v1/batches mirror rather than reading it as "zero events" (see
+    # context_companions_audit.load_event_mirror_context_index). This
+    # synthetic project never appended a live Trail event, so establish an
+    # empty-but-present mirror directly, matching a bucket that has been
+    # through at least one watcher tick / sync.
+    (bucket_dir() / "events" / "v1" / "batches").mkdir(parents=True, exist_ok=True)
 
     plan = plan_backfill()
     assert codex_id in {a.trace_id for a in plan.codex_recover}

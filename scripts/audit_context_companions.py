@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         report = audit_bucket(bucket_root)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         print(f"AUDIT ERROR (blocking, not a pass): {exc}", file=sys.stderr)
         return 2
 

@@ -118,41 +118,57 @@ def load_event_mirror_context_index(
     JSON (not the ``TrailEvent`` pydantic model — this is a deliberately
     independent re-parse of the same bytes, not a reuse of the substrate's
     own read path).
+
+    Per issue #210's "a skip is a lie" principle: absence of readable mirror
+    data must never be mistaken for proof that zero context events exist. A
+    missing ``batches`` dir raises ``FileNotFoundError`` and an
+    unreadable/corrupt batch raises ``ValueError`` — both are hard, blocking
+    audit errors, never silently treated as "empty".
     """
 
     batches_dir = bucket_root / "events" / "v1" / "batches"
     context_count: dict[str, int] = {}
     node_ids: dict[str, set[str]] = {}
     if not batches_dir.exists():
-        return context_count, node_ids
+        raise FileNotFoundError(
+            f"event mirror batches dir missing at {batches_dir} — a missing "
+            "mirror cannot be treated as zero context events; run "
+            "'opentraces setup watcher tick' or 'opentraces bucket repair' "
+            "to (re)build it before auditing"
+        )
 
     for batch_path in sorted(batches_dir.glob("*.jsonl.gz")):
         try:
             with gzip.open(batch_path, "rt", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        d = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    et = d.get("event_type")
-                    if et not in CONTEXT_EVENT_TYPES:
-                        continue
-                    tid = d.get("trace_id")
-                    payload = d.get("payload")
-                    if not tid and isinstance(payload, dict):
-                        tid = payload.get("trace_id")
-                    if not tid:
-                        continue
-                    context_count[tid] = context_count.get(tid, 0) + 1
-                    if et == CONTEXT_NODE_OBSERVED and isinstance(payload, dict):
-                        nid = payload.get("node_id")
-                        if nid:
-                            node_ids.setdefault(tid, set()).add(nid)
-        except (OSError, gzip.BadGzipFile):
-            continue
+                lines = f.readlines()
+        except (OSError, gzip.BadGzipFile) as exc:
+            raise ValueError(
+                f"unreadable event mirror batch {batch_path}: {exc} — a "
+                "corrupt batch cannot be silently skipped, it may be hiding "
+                "the only record of context events for one or more traces"
+            ) from exc
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            et = d.get("event_type")
+            if et not in CONTEXT_EVENT_TYPES:
+                continue
+            tid = d.get("trace_id")
+            payload = d.get("payload")
+            if not tid and isinstance(payload, dict):
+                tid = payload.get("trace_id")
+            if not tid:
+                continue
+            context_count[tid] = context_count.get(tid, 0) + 1
+            if et == CONTEXT_NODE_OBSERVED and isinstance(payload, dict):
+                nid = payload.get("node_id")
+                if nid:
+                    node_ids.setdefault(tid, set()).add(nid)
     return context_count, node_ids
 
 

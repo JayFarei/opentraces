@@ -2967,10 +2967,49 @@ def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
     prints counts; ``--apply`` executes the plan.
     """
 
+    # Codex external review (PR #217, issue #210) critical #1 — --dry-run
+    # and --apply were both accepted, but only --apply was ever checked;
+    # passing both silently executed the write path anyway. --dry-run must
+    # NEVER be able to write against the user's real bucket, so reject the
+    # combination up front, before any planning or importing of the write
+    # path.
+    if dry_run and do_apply:
+        msg = (
+            "ctx backfill: --dry-run and --apply are mutually exclusive — "
+            "pass exactly one. --dry-run never writes; --apply is the only "
+            "flag that does. Refusing before any planning or writing."
+        )
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
+
     from ..core.context_backfill import apply_backfill, plan_backfill
     from ..core.config import load_config
 
-    plan = plan_backfill()
+    # Codex review critical #2 — a missing/corrupt event mirror used to be
+    # silently read as "zero context events" (legitimately empty). It now
+    # raises (FileNotFoundError / ValueError) from the independent audit;
+    # surface that as a clean blocking error here rather than a traceback,
+    # matching scripts/audit_context_companions.py's "a skip is an error"
+    # handling of the same engine.
+    try:
+        plan = plan_backfill()
+    except (FileNotFoundError, ValueError) as exc:
+        msg = f"ctx backfill: audit blocked (mirror unreadable) — {exc}"
+        if as_json:
+            _emit({
+                "schema_version": "opentraces.ctx_backfill.v1",
+                "error": msg,
+            })
+        else:
+            click.echo(msg, err=True)
+        sys.exit(2)
+
     counts = plan.counts()
 
     project_paths: dict[str, Path] = {}
@@ -3007,3 +3046,10 @@ def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
             f"drop_dangling={len(result['drop_dangling'])} "
             f"skipped_no_live_project={len(result['skipped_no_live_project'])}"
         )
+        mirror_sync_failures = result.get("mirror_sync_failures") or []
+        if mirror_sync_failures:
+            click.echo(
+                f"mirror_sync_failures: {len(mirror_sync_failures)} "
+                "(codex-recovered events appended to the canonical log but "
+                "not mirrored — safely retryable on the next backfill pass)"
+            )

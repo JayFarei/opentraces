@@ -121,8 +121,27 @@ def plan_backfill(bucket_root: Path | None = None) -> BackfillPlan:
 
     for t in report.inconsistent_traces():
         missing_from_companion = t.mirror_node_ids - t.companion_node_ids
+        extra_in_companion = t.companion_node_ids - t.mirror_node_ids
         unrecoverable = [nid for nid in t.dangling_ids if nid not in t.mirror_node_ids]
-        if missing_from_companion:
+
+        # Codex external review (PR #217, issue #210) critical #3 — a trace
+        # can carry BOTH defects at once (a stale/extra companion AND an
+        # unrecoverable dangling id). The previous if/elif planned at most
+        # one action per trace, so one of the two defects survived a full
+        # apply pass and the "second run is a byte-identical no-op"
+        # idempotency contract broke (a second dry-run still reported
+        # outstanding work). Every branch below is independent so a trace
+        # can land in both ``reproject`` and ``drop_dangling`` in the SAME
+        # plan, healed in ONE ``apply_backfill`` call.
+        actioned = False
+
+        # A node-id SET mismatch in EITHER direction is a stale-projection
+        # defect reproject fixes: missing_from_companion is the companion
+        # lagging the mirror, extra_in_companion is the companion carrying
+        # nodes the mirror doesn't (a previously silently-unplanned case —
+        # reprojecting from the authoritative mirror purges the phantom
+        # entries instead of leaving them planned as "no action").
+        if missing_from_companion or extra_in_companion:
             reproject.append(
                 BackfillAction(
                     kind="reproject",
@@ -130,11 +149,14 @@ def plan_backfill(bucket_root: Path | None = None) -> BackfillPlan:
                     project_slug=t.project_slug,
                     detail={
                         "missing_node_count": len(missing_from_companion),
+                        "extra_node_count": len(extra_in_companion),
                         "mirror_node_count": len(t.mirror_node_ids),
                     },
                 )
             )
-        elif unrecoverable:
+            actioned = True
+
+        if unrecoverable:
             drop_dangling.append(
                 BackfillAction(
                     kind="drop_dangling",
@@ -142,6 +164,18 @@ def plan_backfill(bucket_root: Path | None = None) -> BackfillPlan:
                     project_slug=t.project_slug,
                     detail={"dangling_ids": unrecoverable},
                 )
+            )
+            actioned = True
+
+        if not actioned:
+            # Should be unreachable given audit_trace's classification
+            # logic (every "inconsistent" trace has a dangling id and/or a
+            # node-set mismatch) — but never silently drop a flagged
+            # defect into "no action" if that invariant ever breaks.
+            raise RuntimeError(
+                f"inconsistent trace {t.trace_id!r} ({t.project_slug}) has no "
+                f"actionable defect classification — reasons={t.reasons!r}; "
+                "refusing to silently plan no action for a flagged defect"
             )
 
     for t in report.legitimately_empty_traces():
@@ -192,7 +226,7 @@ def _apply_reproject(plan: BackfillPlan) -> list[dict[str, Any]]:
 
 def _apply_codex_recover(
     plan: BackfillPlan, *, project_paths: dict[str, Path]
-) -> tuple[list[dict[str, Any]], list[BackfillAction]]:
+) -> tuple[list[dict[str, Any]], list[BackfillAction], list[dict[str, Any]]]:
     from .bucket_trace_records import (
         read_trace_record_object,
         trace_record_path,
@@ -207,6 +241,7 @@ def _apply_codex_recover(
 
     results = []
     skipped: list[BackfillAction] = []
+    mirror_sync_failures: list[dict[str, Any]] = []
     for action in plan.codex_recover:
         project_dir = project_paths.get(action.project_slug)
         if project_dir is None or not Path(project_dir).is_dir():
@@ -247,8 +282,30 @@ def _apply_codex_recover(
         )
         try:
             sync_events_mirror(Path(project_dir), repo_id=action.project_slug)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Codex external review (PR #217, issue #210) critical #3 — this
+            # used to be a bare ``except Exception: pass``. The postcondition
+            # of this action (companion consistent with the shared bucket
+            # mirror) DEPENDS on the mirror sync succeeding: writing the
+            # per-trace companion/trace.json here regardless would make this
+            # trace's own export look correct locally (it is built straight
+            # off the live repo, not the mirror) while the bucket-wide
+            # events/v1 mirror the AUDIT and ``reproject`` trust stays
+            # unaware of the newly appended nodes — a future ``reproject``
+            # pass, trusting the (stale) mirror as authoritative, would then
+            # regress this very fix. So: never swallow the failure, and
+            # never half-apply. The freshly appended events already landed
+            # on the canonical append-only Git log (no data loss); we simply
+            # do NOT stamp trace.json / write the companion for this trace
+            # yet, leaving it exactly as it was (``legitimately_empty``) so
+            # the next backfill pass retries it whole once the mirror sync
+            # succeeds.
+            mirror_sync_failures.append({
+                "trace_id": action.trace_id,
+                "project_slug": action.project_slug,
+                "error": str(exc),
+            })
+            continue
 
         step_map = projection.summary.get("step_node_id_map", {})
         for step in record.steps:
@@ -271,7 +328,7 @@ def _apply_codex_recover(
         results.append(
             {"trace_id": action.trace_id, "applied": True, "node_count": len(projection.nodes)}
         )
-    return results, skipped
+    return results, skipped, mirror_sync_failures
 
 
 def _apply_drop_dangling(plan: BackfillPlan) -> list[dict[str, Any]]:
@@ -328,7 +385,7 @@ def apply_backfill(
     """
 
     reproject_results = _apply_reproject(plan)
-    codex_results, codex_skipped = _apply_codex_recover(
+    codex_results, codex_skipped, mirror_sync_failures = _apply_codex_recover(
         plan, project_paths=project_paths or {}
     )
     drop_results = _apply_drop_dangling(plan)
@@ -341,4 +398,10 @@ def apply_backfill(
             {"trace_id": a.trace_id, "project_slug": a.project_slug, "detail": a.detail}
             for a in codex_skipped
         ],
+        # Codex external review (PR #217, issue #210) critical #3 — surfaced,
+        # never swallowed: a codex-recover whose sync_events_mirror() call
+        # failed is reported here instead of being silently absorbed. The
+        # trace is left untouched (still legitimately_empty) so the next
+        # backfill pass retries it whole.
+        "mirror_sync_failures": mirror_sync_failures,
     }
