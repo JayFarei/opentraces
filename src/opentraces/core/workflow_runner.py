@@ -251,6 +251,35 @@ def run_dataset_workflow(
     # the builder reads packet["answers"] to finalize rows deterministically.
     if answers:
         dataset_context["answers"] = answers
+    # #212: a ``--facet name=value`` scope refinement is resolved against the
+    # PERSISTED bucket manifest only (O(manifest) — the #87 anti-pattern this
+    # family cured was opening every trace's ``current.json``/``trace.json`` to
+    # filter; ``agent_name``/``agent_version``/``agent_model`` are already on
+    # every manifest row, so no per-trace file is opened here regardless of
+    # corpus size). The resolved match set is embedded in both the run packet
+    # (so a workflow script CAN consume ``candidate_trace_ids``) and the
+    # persisted/CLI-visible run record (so callers can assert selection
+    # correctness without re-deriving it).
+    facet_query = (scope or {}).get("facets") if isinstance(scope, dict) else None
+    facet_resolution: dict[str, Any] | None = None
+    if isinstance(facet_query, dict) and facet_query:
+        from .dataset_facets import resolve_facet_candidates
+
+        matches = resolve_facet_candidates(
+            facet_query,
+            project_slug=(scope or {}).get("project"),
+            trace_id=(scope or {}).get("trace_id"),
+        )
+        facet_resolution = {
+            "facets": dict(facet_query),
+            "matched_count": len(matches),
+            "matched": matches,
+        }
+        dataset_context["facet_resolution"] = facet_resolution
+        dataset_context["candidate_trace_ids"] = [
+            {"project_slug": row["project_slug"], "trace_id": row["trace_id"]}
+            for row in matches
+        ]
     # #192 --sync: turn the write-only cursor into a consumed WATERMARK over
     # bucket position. Read the current bucket position (manifest digest + max
     # status.written_at) and the last-synced watermark; when the digest is
@@ -324,6 +353,7 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=append_summary,
             status="succeeded",
+            facet_resolution=facet_resolution,
         )
         _write_run_summary(
             run_dir,
@@ -364,6 +394,7 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=append_summary,
             status="succeeded",
+            facet_resolution=facet_resolution,
         )
         # current-agent is raw agent emission (the LLM's output is not a recorded
         # input), so it is honestly labeled reconstructable=False and carries no
@@ -464,6 +495,7 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=empty_summary,
             status="failed",
+            facet_resolution=facet_resolution,
         )
         # Preserve any child stdout/stderr already captured by _execute_script
         # (the script's REAL error). The wrapper WorkflowScriptError message only
@@ -501,6 +533,7 @@ def run_dataset_workflow(
         started_at=started_at,
         append_summary=append_summary,
         status="succeeded",
+        facet_resolution=facet_resolution,
     )
     delta_scope: dict[str, Any] | None = None
     if sync_block is not None:
@@ -620,6 +653,7 @@ def _run_record(
     started_at: str,
     append_summary: AppendSummary,
     status: str = "succeeded",
+    facet_resolution: dict[str, Any] | None = None,
 ) -> DatasetRunRecord:
     return DatasetRunRecord(
         run_id=run_id,
@@ -637,6 +671,7 @@ def _run_record(
         duplicate_count=append_summary.duplicate_count,
         validation_error_count=append_summary.validation_error_count,
         status=status,
+        facet_resolution=facet_resolution,
         artefacts={
             "run_packet": "run_packet.json",
             "output_rows": "output_rows.jsonl",

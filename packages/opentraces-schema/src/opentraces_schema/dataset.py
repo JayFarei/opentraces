@@ -274,6 +274,13 @@ class DatasetCandidateQuery(BaseModel):
     scope: DatasetScope = "all-projects"
     args: dict[str, Any] = Field(default_factory=dict)
     incremental: dict[str, Any] = Field(default_factory=dict)
+    # #212 — a metadata refinement composing with ``scope``/``args`` rather
+    # than widening the closed ``DatasetScope`` enum. Keys reuse the
+    # ``TraceFacet`` name vocabulary already exposed by ``trace query
+    # --facet`` (``model``, ``agent.name``, ``agent.version``); values are
+    # matched case-insensitively against the persisted bucket manifest row for
+    # each candidate trace. Additive, default empty (no narrowing).
+    facets: dict[str, str] = Field(default_factory=dict)
 
 
 class DatasetSchedule(BaseModel):
@@ -401,6 +408,13 @@ class DatasetRunRecord(BaseModel):
     validation_error_count: int = Field(0, ge=0)
     status: DatasetRunStatus = "running"
     artefacts: dict[str, str] = Field(default_factory=dict)
+    # #212 — present only when the run's scope carried a ``facets`` predicate.
+    # ``{"facets": {...}, "matched_count": int, "matched": [{"project_slug",
+    # "trace_id", "agent_name", "agent_version", "agent_model"}, ...]}``,
+    # resolved O(manifest) against the persisted bucket manifest (never a
+    # per-trace ``trace.json``/``current.json`` open). Additive, default
+    # ``None`` for every unfaceted run.
+    facet_resolution: dict[str, Any] | None = None
 
 
 class DatasetRowIndexEntry(BaseModel):
