@@ -2978,6 +2978,12 @@ def ctx_backfill_cmd(
     genuine append failure with nothing to recover — dangling ids are
     cleared, never fabricated). ``--dry-run`` (default) only plans and
     prints counts; ``--apply`` executes the plan.
+
+    Exit codes: 0 = fully applied (deferred/skipped/sync-failure entries are
+    informational — explicitly chosen or cleanly retryable); 2 = invalid
+    flags or a blocking mirror-corruption error (fail-closed, zero writes);
+    3 = partially blocked — one or more planned actions could not be
+    applied, each reported with a named reason under ``blocked``.
     """
 
     # Codex external review (PR #217, issue #210) critical #1 — --dry-run
@@ -3091,6 +3097,14 @@ def ctx_backfill_cmd(
                 click.echo(msg, err=True)
             sys.exit(2)
 
+    # PR #217 round 4 contract: a planned-but-not-applied action without an
+    # explanation is forbidden; when any action is blocked the command exits
+    # rc=3 (partially blocked) so scripted callers cannot mistake a
+    # non-convergent apply for success. deferred (--only) and
+    # skipped/sync-failure entries stay informational (rc=0): they are
+    # explicitly chosen or cleanly retryable, not silent.
+    blocked = (result.get("blocked") or []) if result is not None else []
+
     if as_json:
         payload = {
             "schema_version": "opentraces.ctx_backfill.v1",
@@ -3100,6 +3114,8 @@ def ctx_backfill_cmd(
             "applied": result,
         }
         _emit(payload)
+        if blocked:
+            sys.exit(3)
         return
 
     click.echo("=== ctx backfill ===")
@@ -3135,3 +3151,10 @@ def ctx_backfill_cmd(
                 + ", ".join(f"{k}={len(v)}" for k, v in deferred.items())
                 + " (excluded by --only; run again with those kinds to apply)"
             )
+        if blocked:
+            click.echo(f"blocked: {len(blocked)} (planned but NOT applied)")
+            for b in blocked:
+                click.echo(
+                    f"  - {b.get('kind')} {b.get('trace_id')}: {b.get('reason')}"
+                )
+            sys.exit(3)

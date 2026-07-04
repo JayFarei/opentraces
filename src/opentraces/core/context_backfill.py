@@ -609,7 +609,7 @@ def _apply_codex_recover(
 
 def _apply_drop_dangling(
     plan: BackfillPlan, *, shared_events: list[Any]
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from .bucket_trace_records import (
         read_trace_record_object,
         trace_record_path,
@@ -617,28 +617,91 @@ def _apply_drop_dangling(
     )
     from .bucket_envelope import project_per_trace_exports
 
-    results = []
+    import json as _json
+
+    from .bucket_layout import trace_v1_json_path
+
+    results: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
     for action in plan.drop_dangling:
+        dangling = set(action.detail.get("dangling_ids") or [])
         obj = read_trace_record_object(
             trace_record_path(action.project_slug, action.trace_id)
         )
-        if obj is None:
-            continue
-        record = obj.record
-        dangling = set(action.detail.get("dangling_ids") or [])
+
+        # PR #217 round 4 (real-bucket convergence defect): the AUDIT derives
+        # dangling ids from the trace.json SPINE (bucket/traces/v1/.../
+        # trace.json) but this phase used to mutate ONLY the trace-record
+        # OBJECT store — and when the two diverge (no object record at all,
+        # or an object record that never carried the stamps), the old code
+        # hit a bare ``continue``: applied nothing, reported nothing, exit 0,
+        # and the next dry-run planned the same traces forever. A planned
+        # action that is neither applied nor reported blocked violates the
+        # lane's skip-is-a-lie rule. Resolution: prefer the object record
+        # when it actually carries the dangling stamps (the normal shape,
+        # keeps both stores consistent), otherwise fall back to the spine —
+        # the audit's own source of truth — and clear the stamps THERE.
+        record = None
+        source: str | None = None
+        if obj is not None and any(
+            s.context_node_id in dangling for s in obj.record.steps
+        ):
+            record = obj.record
+            source = "object"
+        else:
+            spine_path = trace_v1_json_path(action.project_slug, action.trace_id)
+            try:
+                payload = _json.loads(spine_path.read_text(encoding="utf-8"))
+                record = TraceRecord.model_validate(payload)
+                source = "spine"
+            except Exception as exc:
+                object_state = (
+                    "missing" if obj is None else "carries none of the dangling stamps"
+                )
+                blocked.append({
+                    "kind": "drop_dangling",
+                    "trace_id": action.trace_id,
+                    "project_slug": action.project_slug,
+                    "reason": (
+                        f"no usable record source: trace-record object store "
+                        f"{object_state}, and trace.json spine unreadable/"
+                        f"invalid: {exc}"
+                    ),
+                })
+                continue
+
         changed = False
         for step in record.steps:
             if step.context_node_id in dangling:
                 step.context_node_id = None
                 changed = True
         if not changed:
+            blocked.append({
+                "kind": "drop_dangling",
+                "trace_id": action.trace_id,
+                "project_slug": action.project_slug,
+                "reason": (
+                    "planned dangling ids not present in any record source "
+                    f"(checked {source}; object store "
+                    f"{'missing' if obj is None else 'present'}) — stale "
+                    "plan? re-run ctx backfill --dry-run"
+                ),
+            })
             continue
-        write_trace_record(
-            record,
-            project_slug=action.project_slug,
-            source_layer=obj.source_layer,
-            legacy_mirror=bool(obj.envelope.get("legacy_mirror", True)),
-        )
+
+        if source == "object":
+            # Normal shape: keep the object store and the spine consistent.
+            write_trace_record(
+                record,
+                project_slug=action.project_slug,
+                source_layer=obj.source_layer,
+                legacy_mirror=bool(obj.envelope.get("legacy_mirror", True)),
+            )
+        # source == "spine": if the object store has a record it never
+        # carried the stamps (already consistent with the cleared state) —
+        # leave it untouched; if there is no object record, never fabricate
+        # one. The spine + companions below are the audited surface.
+
         project_per_trace_exports(
             None,
             project_slug=action.project_slug,
@@ -661,9 +724,13 @@ def _apply_drop_dangling(
             mirror_fallback=False,
         )
         results.append(
-            {"trace_id": action.trace_id, "dropped": sorted(dangling)}
+            {
+                "trace_id": action.trace_id,
+                "dropped": sorted(dangling),
+                "source": source,
+            }
         )
-    return results
+    return results, blocked
 
 
 BACKFILL_ACTION_KINDS = ("reproject", "codex_recover", "drop_dangling")
@@ -742,9 +809,12 @@ def apply_backfill(
         codex_results, codex_skipped, mirror_sync_failures, codex_corrupt = (
             [], [], [], []
         )
-    drop_results = (
-        _apply_drop_dangling(plan, shared_events=shared_events) if run_drop else []
-    )
+    if run_drop:
+        drop_results, drop_blocked = _apply_drop_dangling(
+            plan, shared_events=shared_events
+        )
+    else:
+        drop_results, drop_blocked = [], []
 
     # Merge corrupt-line reports from the two scoped reads, deduped by
     # (batch, line) — the codex phase's post-append export read walks the
@@ -778,4 +848,10 @@ def apply_backfill(
         # PR #217 round 3: planned actions excluded by ``only`` — reported,
         # never silently dropped.
         "deferred": deferred,
+        # PR #217 round 4 (convergence contract): every planned action that
+        # was NOT applied and is not in deferred/skipped/sync-failures gets
+        # an explicit per-trace entry here with a named reason. An apply
+        # must never return a non-empty plan + an empty applied list
+        # silently; the CLI exits rc=3 when this list is non-empty.
+        "blocked": drop_blocked,
     }

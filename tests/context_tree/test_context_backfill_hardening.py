@@ -762,3 +762,169 @@ class TestOnlyScoping:
             catch_exceptions=True,
         )
         assert r2.exit_code != 0
+
+
+# --------------------------------------------------------------------------- #
+# Round 4 (real-bucket convergence defect): 3 traces stayed inconsistent
+# forever -- planned as drop_dangling on every dry-run, but apply returned
+# drop_dangling=[] and exit 0. Root cause: the audit derives dangling ids
+# from the trace.json SPINE, but _apply_drop_dangling mutated only the
+# trace-record OBJECT store and hit a bare `continue` when the object was
+# missing or never carried the stamps -- a planned action neither applied
+# nor reported blocked (skip-is-a-lie). Post-fix: the spine fallback
+# applies the drop, and anything genuinely unapplyable lands in `blocked`
+# with a named reason (CLI rc=3).
+# --------------------------------------------------------------------------- #
+
+
+def _seed_spine_only_dangling(world: _World, trace_id: str) -> str:
+    """The exact real-bucket shape (verified on 39cca3ad...): trace.json
+    stamped with context_node_ids, companion empty, ids absent from the
+    mirror AND the canonical log, and NO trace-record object-store entry."""
+    record = _claude_record(trace_id, n_steps=2)
+    record.steps[0].context_node_id = "sha256:" + "ad" * 32
+    # Spine + companions only -- deliberately NO write_trace_record call.
+    project_per_trace_exports(
+        None, project_slug=world.slug, trace_id=trace_id, record=record,
+    )
+    (bucket_dir() / "events" / "v1" / "batches").mkdir(parents=True, exist_ok=True)
+    return "sha256:" + "ad" * 32
+
+
+def _seed_divergent_object_dangling(world: _World, trace_id: str) -> str:
+    """Variant: an object-store record EXISTS but never carried the stamps;
+    only the trace.json spine has them (store divergence)."""
+    unstamped = _claude_record(trace_id, n_steps=2)
+    write_trace_record(
+        unstamped, project_slug=world.slug, source_layer="canonical",
+        legacy_mirror=True,
+    )
+    stamped = _claude_record(trace_id, n_steps=2)
+    stamped.steps[0].context_node_id = "sha256:" + "bd" * 32
+    project_per_trace_exports(
+        None, project_slug=world.slug, trace_id=trace_id, record=stamped,
+    )
+    (bucket_dir() / "events" / "v1" / "batches").mkdir(parents=True, exist_ok=True)
+    return "sha256:" + "bd" * 32
+
+
+class TestDropDanglingConvergence:
+    def test_spine_only_dangling_is_applied_not_silently_skipped(self, tmp_path):
+        world = _World(tmp_path)
+        trace_id = "trace-spine-only-dangling-1"
+        dangling_id = _seed_spine_only_dangling(world, trace_id)
+
+        baseline = audit_bucket(bucket_dir())
+        by_id = {t.trace_id: t for t in baseline.traces}
+        assert by_id[trace_id].classification == "inconsistent"
+        assert dangling_id in by_id[trace_id].dangling_ids
+
+        plan = plan_backfill()
+        assert trace_id in {a.trace_id for a in plan.drop_dangling}
+
+        result = apply_backfill(
+            plan,
+            project_paths={world.slug: world.project_dir},
+            only={"reproject", "drop_dangling"},
+        )
+
+        # RED against pre-fix code: drop_dangling came back [] with no
+        # explanation (the silent-no-op convergence defect).
+        applied = [r for r in result["drop_dangling"] if r["trace_id"] == trace_id]
+        assert applied, (
+            f"planned drop_dangling was silently skipped: {result!r}"
+        )
+        assert applied[0]["dropped"] == [dangling_id]
+        assert result.get("blocked") == []
+
+        # The audit converges: stamps cleared, honest empty companion,
+        # accepted loss -> legitimately_empty.
+        healed = audit_bucket(bucket_dir())
+        healed_by_id = {t.trace_id: t for t in healed.traces}
+        assert healed_by_id[trace_id].classification == "legitimately_empty"
+        assert healed_by_id[trace_id].stamped_ids == []
+
+        # And the next dry-run plans NOTHING for it (convergent).
+        plan_2 = plan_backfill()
+        assert trace_id not in {a.trace_id for a in plan_2.all_actions()}
+
+    def test_divergent_object_store_dangling_is_applied(self, tmp_path):
+        world = _World(tmp_path)
+        trace_id = "trace-divergent-object-1"
+        dangling_id = _seed_divergent_object_dangling(world, trace_id)
+
+        plan = plan_backfill()
+        assert trace_id in {a.trace_id for a in plan.drop_dangling}
+
+        result = apply_backfill(
+            plan, project_paths={world.slug: world.project_dir},
+        )
+        applied = [r for r in result["drop_dangling"] if r["trace_id"] == trace_id]
+        assert applied, (
+            f"divergent-object drop_dangling silently skipped: {result!r}"
+        )
+        assert applied[0]["dropped"] == [dangling_id]
+
+        healed = audit_bucket(bucket_dir())
+        healed_by_id = {t.trace_id: t for t in healed.traces}
+        assert healed_by_id[trace_id].classification == "legitimately_empty"
+
+        plan_2 = plan_backfill()
+        assert trace_id not in {a.trace_id for a in plan_2.all_actions()}
+
+    def test_unapplyable_planned_action_is_reported_blocked(self, tmp_path):
+        """If a planned action genuinely cannot be applied (here: the spine
+        vanished between plan and apply, and there is no object record), it
+        must land in `blocked` with a named reason -- never a silent
+        exit-0 no-op."""
+        world = _World(tmp_path)
+        trace_id = "trace-blocked-dangling-1"
+        _seed_spine_only_dangling(world, trace_id)
+
+        plan = plan_backfill()
+        assert trace_id in {a.trace_id for a in plan.drop_dangling}
+
+        spine = bucket_dir() / "traces" / "v1" / world.slug / trace_id / "trace.json"
+        spine.unlink()
+
+        result = apply_backfill(
+            plan, project_paths={world.slug: world.project_dir},
+        )
+        assert not any(
+            r["trace_id"] == trace_id for r in result["drop_dangling"]
+        )
+        blocked = result.get("blocked") or []
+        assert blocked, (
+            f"planned-but-unapplyable action was silently dropped: {result!r}"
+        )
+        assert blocked[0]["trace_id"] == trace_id
+        assert blocked[0]["kind"] == "drop_dangling"
+        assert "no usable record source" in blocked[0]["reason"]
+
+    def test_cli_exits_3_and_echoes_when_blocked(self, tmp_path, monkeypatch):
+        _ensure_empty_valid_bucket()
+
+        def _fake_apply(plan, *, project_paths=None, only=None):
+            return {
+                "reproject": [], "codex_recover": [], "drop_dangling": [],
+                "skipped_no_live_project": [], "mirror_sync_failures": [],
+                "mirror_corrupt_lines": [], "deferred": {},
+                "blocked": [{
+                    "kind": "drop_dangling",
+                    "trace_id": "trace-x",
+                    "project_slug": "proj",
+                    "reason": "no usable record source",
+                }],
+            }
+
+        monkeypatch.setattr(
+            "opentraces.core.context_backfill.apply_backfill", _fake_apply
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            ctx_group, ["backfill", "--apply"], catch_exceptions=True,
+        )
+        assert result.exit_code == 3, result.output
+        assert "blocked: 1" in result.output
+        assert "trace-x" in result.output
