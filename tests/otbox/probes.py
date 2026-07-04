@@ -236,10 +236,100 @@ def _probe_outlier_trail_companion_min_bytes(driver, box, value) -> ProbeResult:
     )
 
 
+def _probe_bucket_trace_envelopes_min(driver, box, value) -> ProbeResult:
+    """Issue #213 world-honesty guard (external review CRITICAL 2): count REAL
+    plan-080 v2 bucket objects on disk, not the builder's own state.json rows.
+
+    ``min_captured_traces`` counts ``projects/*/state.json`` entries — which the
+    cloner itself writes, so it is the builder's bookkeeping, not the world. A
+    world could carry 600 state rows while the object store / per-trace envelope
+    tree stayed near-empty, and the O(corpus) readers (the exact surfaces the
+    perf recurrence guard exists to catch) would then never see 600 records. This
+    re-measures BOTH the object-store spine
+    (``bucket/objects/traces/v1/**/current.json``, the whole-corpus scan surface
+    that pre-fix ``source_provenance_for_query`` pays per record) AND the
+    per-trace envelope tree (``bucket/traces/v1/*/*/trace.json``, the workflow
+    read surface), requires BOTH >= ``value``, and validates that a sampled
+    envelope actually parses to a record carrying a ``trace_id`` (no zero-byte /
+    truncated placeholder that inflates a naive file count).
+    """
+    need = int(value)
+    cmd = (
+        'objroot="$HOME/.opentraces/bucket/objects/traces/v1"; '
+        'envroot="$HOME/.opentraces/bucket/traces/v1"; '
+        'obj=$(find "$objroot" -name current.json 2>/dev/null | wc -l | tr -d " "); '
+        'env=$(find "$envroot" -name trace.json 2>/dev/null | wc -l | tr -d " "); '
+        'sample=$(find "$envroot" -name trace.json 2>/dev/null | head -1); '
+        'ok=0; '
+        'if [ -n "$sample" ]; then '
+        'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); '
+        'sys.exit(0 if isinstance(d, dict) and d.get(\'trace_id\') else 1)" '
+        '"$sample" 2>/dev/null && ok=1; fi; '
+        'echo "${obj:-0} ${env:-0} ${ok:-0}"'
+    )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    try:
+        obj_s, env_s, ok_s = (res.stdout or "").strip().split()
+        obj_n, env_n, sample_ok = int(obj_s), int(env_s), int(ok_s) == 1
+    except (ValueError, AttributeError):
+        return False, f"could not measure bucket trace envelopes (out={res.stdout!r})"
+    if obj_n < need:
+        return False, (
+            f"object store holds {obj_n} current.json record(s), precondition "
+            f"needs >= {need} (dishonest mature world — cloned state rows without "
+            f"real object-store envelopes)"
+        )
+    if env_n < need:
+        return False, (
+            f"per-trace envelope tree holds {env_n} trace.json envelope(s), "
+            f"precondition needs >= {need} (dishonest mature world)"
+        )
+    if not sample_ok:
+        return False, (
+            "a sampled per-trace trace.json did not parse to a record with a "
+            "trace_id (empty/truncated envelope — dishonest world)"
+        )
+    return True, (
+        f"bucket holds {obj_n} object-store record(s) + {env_n} per-trace "
+        f"envelope(s) >= {need}, sample parses"
+    )
+
+
+def _probe_trail_events_min(driver, box, value) -> ProbeResult:
+    """Issue #213 world-honesty guard (external review RECOMMENDATION B): the
+    ~50K-TrailEvent scale must be real in the events mirror.
+
+    Reads ``bucket/events/v1/index.json`` ``latest_event_sequence`` — the
+    product-maintained (``bucket repair``) monotonic head of the canonical event
+    log, so the events dimension can't silently shrink under a future builder
+    edit without failing this probe. Filesystem/JSON read, no CLI dependency.
+    """
+    need = int(value)
+    cmd = (
+        'idx="$HOME/.opentraces/bucket/events/v1/index.json"; '
+        '[ -f "$idx" ] && python3 -c "import json,sys; '
+        'print(int(json.load(open(sys.argv[1])).get(\'latest_event_sequence\') or 0))" '
+        '"$idx" 2>/dev/null || echo 0'
+    )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    try:
+        have = int((res.stdout or "").strip() or 0)
+    except (ValueError, AttributeError):
+        have = 0
+    if have >= need:
+        return True, f"events mirror head sequence is {have} >= {need}"
+    return False, (
+        f"events mirror head sequence is {have}, precondition needs >= {need} "
+        f"(dishonest mature world — the ~50K-event scale shrank)"
+    )
+
+
 PROBES: dict[str, Callable] = {
     "requires_survival_states": _probe_survival_states,
     "min_captured_traces": _probe_min_captured_traces,
     "outlier_trail_companion_min_bytes": _probe_outlier_trail_companion_min_bytes,
+    "bucket_trace_envelopes_min": _probe_bucket_trace_envelopes_min,
+    "trail_events_min": _probe_trail_events_min,
     "context_tree_built": _probe_context_tree_built,
     "otlp_receiver_running": _probe_otlp_receiver_running,
     "requires_branch_commits_min": _probe_branch_commits_min,

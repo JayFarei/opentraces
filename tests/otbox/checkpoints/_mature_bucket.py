@@ -50,23 +50,41 @@ Onto that provisional base this delta:
     step that triggers the (pre-fix) whole-corpus provenance snapshot.
 
 World-honesty guard: ``provides`` declares the dimensions and ``verify_provides``
-re-probes BOTH the >=600 trace count AND that the outlier companion is genuinely
->=50 MB. A world that lets pre-fix code pass the ``mature-bucket-perf`` journey
-budget is DISHONEST (cloned envelopes short-circuiting the O(N) paths); the
-red-proof against the pre-R1 lineage is the acceptance gate for this checkpoint.
+re-probes ALL of: the >=600 trace count, the outlier companion genuinely >=50 MB,
+the REAL plan-080 v2 object-store + per-trace envelope counts on disk
+(``bucket_trace_envelopes_min`` — never the builder's own state.json bookkeeping;
+external review CRITICAL 2), and the ~50K-event scale via the events-mirror head
+sequence (``trail_events_min`` — external review RECOMMENDATION B). A world that
+lets pre-fix code pass the ``mature-bucket-perf`` journey budget is DISHONEST
+(cloned envelopes short-circuiting the O(N) paths); the red-proof against the
+pre-R1 lineage is the acceptance gate for this checkpoint.
+
+Red-proof ARMING (external review CRITICAL 1): the ``maturescale`` dataset is
+created WITH a candidate query (``--query-name maturescale-query``). Without it,
+``dataset new`` binds ``candidate_query=None`` and ``dataset run``'s
+``_ensure_run_source_provenance`` returns early — the journey would never touch
+``source_provenance_for_query``, the exact whole-corpus scan the #208 wedge lived
+in, and a pre-R1 run would stay green on a disarmed world. With the query marker,
+deferred provenance is written at create time and the journey's FIRST
+``dataset run`` refreshes the real bucket snapshot through the wedge surface.
 
 Cold-build cost (measured on the maintainer laptop, darwin, python3.14 box
-interpreter): ~14 min wall (~857 s, dominated by the O(600 traces + 50K events)
-``bucket repair``) / ~0.6 GB peak RSS / ~105 MB compressed snapshot on disk.
-``cache=True`` + content-addressed snapshot make it a one-time cost locally; CI
-cold-builds it in the nightly ``scale`` lane only (never per-PR).
+interpreter, full ancestor chain + green journey run): ~13.4 min wall (~804 s,
+dominated by the O(600 traces + 50K events) ``bucket repair``) / ~105 MB
+compressed snapshot on disk. ``cache=True`` + content-addressed snapshot make it
+a one-time cost locally; CI cold-builds it in the nightly ``scale`` lane only
+(never per-PR).
 
-Red/green proof of the honest world (issue #213 loopcraft condition, run on the
-SAME built snapshot): the ``dataset run`` step is 0.61 s on merged
-``feat/seal-family`` HEAD (bounded readers) and 56.8 s on the pre-R1 lineage
-(parent of ea7506d913f, the whole-corpus ``source_provenance_for_query`` scan) —
-a ~93x gap that trips the 15 s ceiling on pre-fix code and clears it on HEAD.
-The world is honest: cloned envelopes do NOT short-circuit the O(N) path.
+Red/green proof of the honest ARMED world (issue #213 loopcraft condition,
+re-run 2026-07-04 after the external-review fixes invalidated the original red
+evidence, on the SAME built snapshot): the ``dataset run`` step is 0.61 s on
+this branch (bounded ``read_persisted_manifest_capped`` reader) and 50.3 s on
+the pre-R1 lineage (parent of ea7506d913f, the whole-corpus
+``source_provenance_for_query`` scan) — a ~83x gap that trips the 15 s ceiling
+on pre-fix code and clears it on HEAD. The world is honest: cloned envelopes do
+NOT short-circuit the O(N) path. The built world measured 241 non-empty / 360
+empty context companions (~60% empty, the real bucket's ratio) with events head
+sequence 50019.
 """
 
 from __future__ import annotations
@@ -88,9 +106,14 @@ _N_EVENTS = 50_000
 _OUTLIER_MIN_BYTES = 50 * 1024 * 1024
 # We aim a touch above the floor so gzip nondeterminism can never dip under it.
 _OUTLIER_TARGET_BYTES = 56 * 1024 * 1024
-# Fraction of clones that get a NON-empty context companion (~40%, so ~60%
-# stay empty — the real bucket's empty-context ratio).
-_CONTEXT_NONEMPTY_EVERY = 5  # 1-in-5 non-empty is ~20%; see _CONTEXT_NONEMPTY_MOD
+# Context-companion empty ratio (issue #213 external review, RECOMMENDATION A):
+# the real mature bucket is ~60% empty context companions (~1200/2000). We write
+# a NON-empty companion for _CONTEXT_NONEMPTY_NUM out of every _CONTEXT_NONEMPTY_DEN
+# clones -> 2/5 = 40% non-empty / 60% empty, matching the spec. (The prior
+# 1-in-5 modulo yielded 20% non-empty / 80% empty — dishonestly emptier than the
+# real world it mirrors.)
+_CONTEXT_NONEMPTY_NUM = 2
+_CONTEXT_NONEMPTY_DEN = 5
 
 
 def _check(result, label: str) -> None:
@@ -232,7 +255,8 @@ params = json.loads(Path(sys.argv[1]).read_text())
 slug = params["slug"]
 outlier_id = params["outlier_id"]
 outlier_target_bytes = int(params["outlier_target_bytes"])
-context_nonempty_mod = int(params["context_nonempty_mod"])
+context_nonempty_num = int(params["context_nonempty_num"])
+context_nonempty_den = int(params["context_nonempty_den"])
 n_clones = int(params["n_clones"])
 
 # ---- 1. the >=50 MB outlier trail companion ------------------------------
@@ -258,11 +282,12 @@ with open(outlier_path, "wb") as raw:
             gz.flush()
 outlier_bytes = outlier_path.stat().st_size
 
-# ---- 2. ~1-in-N non-empty context companions (~60% stay empty) -----------
+# ---- 2. ~40% non-empty context companions (~60% stay empty) --------------
+# Non-empty for NUM of every DEN clones (2/5 -> 40% non-empty, 60% empty).
 context_nonempty = 0
-if context_nonempty_mod > 0:
+if context_nonempty_num > 0 and context_nonempty_den > 0:
     for i in range(n_clones):
-        if i % context_nonempty_mod != 0:
+        if (i % context_nonempty_den) >= context_nonempty_num:
             continue
         tid = "mature-clone-%04d" % i
         ctx_line = json.dumps(
@@ -344,8 +369,6 @@ def _mature_delta(driver, box: Box) -> None:
         "project": project,
         "n_clones": _N_CLONES,
         "n_events": _N_EVENTS,
-        "outlier_target_bytes": _OUTLIER_TARGET_BYTES,
-        "context_nonempty_mod": _CONTEXT_NONEMPTY_EVERY,
     }
     params_path = f"{home}/_mature_bucket_params.json"
     script_path = f"{home}/_mature_bucket_cloner.py"
@@ -385,7 +408,8 @@ def _mature_delta(driver, box: Box) -> None:
         "slug": summary.get("slug"),
         "outlier_id": outlier_id,
         "outlier_target_bytes": _OUTLIER_TARGET_BYTES,
-        "context_nonempty_mod": _CONTEXT_NONEMPTY_EVERY,
+        "context_nonempty_num": _CONTEXT_NONEMPTY_NUM,
+        "context_nonempty_den": _CONTEXT_NONEMPTY_DEN,
         "n_clones": _N_CLONES,
     }
     comp_params_path = f"{home}/_mature_bucket_companion_params.json"
@@ -417,14 +441,33 @@ def _mature_delta(driver, box: Box) -> None:
     driver.put_text(box, f"{wf_root}/SKILL.md", _WORKFLOW_SKILL)
     driver.put_text(box, f"{wf_root}/scripts/build_rows.py", _WORKFLOW_BUILD_ROWS)
     driver.put_text(box, f"{project}/mature-schema.json", _WORKFLOW_SCHEMA)
+    # --query-name is LOAD-BEARING, not cosmetic (issue #213 external review,
+    # CRITICAL 1): without a candidate query `dataset new` binds
+    # candidate_query=None, and `run_dataset_workflow._ensure_run_source_provenance`
+    # returns early when candidate_query is None — so the journey's `dataset run`
+    # NEVER touches `source_provenance_for_query`, the exact whole-corpus scan the
+    # #208 wedge lived in. Binding a query marker writes DEFERRED source provenance
+    # at create time, so the first `dataset run` refreshes the real bucket snapshot
+    # through `source_provenance_for_query(candidate_query, include_bucket_snapshot=True)`
+    # — the O(corpus) path on pre-R1 code (bucket_manifest + trace_record_snapshot,
+    # two full model_validate passes over all ~600 records) and the O(1) persisted
+    # read on HEAD. This is what arms the red-proof.
     new = _cli_json(
         driver, box,
         "dataset", "new", "maturescale",
         "--workflow", "mature-bucket-curator",
         "--schema", f"{project}/mature-schema.json",
+        "--query-name", "maturescale-query",
+        "--query-scope", "all-projects",
         "--json",
         label="dataset new",
     )
+    if (new.get("dataset") or {}).get("manifest", {}).get("candidate_query") is None:
+        raise CheckpointError(
+            f"{_FAMILY}: dataset new did NOT bind a candidate_query — the #208 "
+            f"red-proof is disarmed (deferred source_provenance_for_query would "
+            f"never run). ({json.dumps(new)[:300]})"
+        )
     if (new.get("dataset") or {}).get("manifest", {}).get("workflow", {}).get("skill") != "mature-bucket-curator":
         raise CheckpointError(
             f"{_FAMILY}: dataset new did not bind the mature-bucket-curator workflow "
@@ -457,13 +500,23 @@ register(
             "c-bucket-spine-v2-one-trace-provisional cloned to ~600 plan-080 bucket "
             "traces + ~50K TrailEvents + one >=50 MB outlier trail companion + "
             "~60% empty context companions + a trusted deferred-provenance dataset "
-            "workflow. The scale-world perf recurrence guard (issue #213); "
-            "verify_provides re-probes the >=600 count AND the outlier >=50 MB."
+            "workflow ARMED with a candidate query (--query-name) so `dataset run` "
+            "hits source_provenance_for_query. The scale-world perf recurrence "
+            "guard (issue #213); verify_provides re-probes the >=600 count, the "
+            "outlier >=50 MB, the real v2 object-store/envelope counts, AND the "
+            ">=50K events-mirror head sequence."
         ),
         provides={
             "captured_traces": _N_CLONES,
             "context_tree_built": True,
             "outlier_trail_companion_min_bytes": _OUTLIER_MIN_BYTES,
+            # Issue #213 external review CRITICAL 2: re-probe REAL plan-080 v2
+            # bucket objects on disk (object-store current.json + per-trace
+            # trace.json envelopes), NOT the builder-written state.json rows.
+            "bucket_trace_envelopes_min": _N_CLONES,
+            # RECOMMENDATION B: re-probe the ~50K-event scale from the events
+            # mirror so the events dimension can't silently shrink.
+            "trail_events_min": _N_EVENTS,
         },
     )
 )

@@ -179,6 +179,17 @@ def verify_provides(driver: Driver, box: Box, cp: "Checkpoint") -> None:
         as_preconditions["outlier_trail_companion_min_bytes"] = int(
             provides["outlier_trail_companion_min_bytes"]
         )
+    # Issue #213 external review CRITICAL 2 — refuse to cache a world whose REAL
+    # plan-080 v2 object-store + per-trace envelope count is below the declared
+    # floor (state.json rows are the builder's own bookkeeping, not the world).
+    if provides.get("bucket_trace_envelopes_min"):
+        as_preconditions["bucket_trace_envelopes_min"] = int(
+            provides["bucket_trace_envelopes_min"]
+        )
+    # Issue #213 external review RECOMMENDATION B — refuse to cache a world whose
+    # events-mirror scale silently shrank below the declared ~50K floor.
+    if provides.get("trail_events_min"):
+        as_preconditions["trail_events_min"] = int(provides["trail_events_min"])
     if not as_preconditions:
         return
     failures = [

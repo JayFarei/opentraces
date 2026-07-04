@@ -49,6 +49,15 @@ context_tree_built = true
 # World-honesty guard: refuse to run against a mature world whose outlier
 # trail companion is not genuinely large (the O(companion) seal surface).
 outlier_trail_companion_min_bytes = 52428800
+# External-review CRITICAL 2: re-probe REAL plan-080 v2 bucket objects on disk
+# (object-store current.json + per-trace trace.json envelopes), NOT the
+# builder-written state.json rows — a world with 600 state rows but an empty
+# object store would let the O(corpus) readers this guard exists for see nothing.
+bucket_trace_envelopes_min = 600
+# External-review RECOMMENDATION B: the ~50K-TrailEvent scale must be real in
+# the events mirror (index.json head sequence) — the events dimension can't
+# silently shrink.
+trail_events_min = 50000
 
 # ---------------------------------------------------------------------
 # 1. dataset run — the #208 whole-corpus-provenance wedge surface.
