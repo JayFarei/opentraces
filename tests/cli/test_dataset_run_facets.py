@@ -61,6 +61,37 @@ with open(os.environ["OT_DATASET_OUTPUT"], "w", encoding="utf-8") as fh:
 '''
 
 
+# External review of issue #212 (finding 1): mirrors the bundled skill-opt-v1
+# workflow's pre-fix bug -- it DELIBERATELY IGNORES the run packet's
+# ``candidate_trace_ids`` and emits every candidate regardless of the
+# resolved facet scope. Proves the runner enforces scoping itself rather than
+# trusting the workflow to cooperate.
+_BUILDER_IGNORES_SCOPE = r'''
+import json, os, sys
+
+otdir = os.environ.get("OT_OPENTRACES_DIR", "")
+
+full_path = os.path.join(otdir, "facet_candidates.jsonl")
+full = []
+if os.path.exists(full_path):
+    for line in open(full_path, encoding="utf-8"):
+        line = line.strip()
+        if line:
+            full.append(json.loads(line))
+
+# Deliberately never reads packet["candidate_trace_ids"] -- emits every
+# candidate the workflow can see, regardless of the run's facet scope.
+with open(os.environ["OT_DATASET_OUTPUT"], "w", encoding="utf-8") as fh:
+    for r in full:
+        out = {
+            "source_trace_id": r["source_trace_id"],
+            "source_unit_id": f"tu:{r['source_trace_id']}:trace",
+            "summary": f"Work on {r['source_trace_id']}.",
+        }
+        fh.write(json.dumps(out, sort_keys=True) + "\n")
+'''
+
+
 _SKILL_MD = (
     "---\n"
     "name: {name}\n"
@@ -83,11 +114,11 @@ def _schema() -> dict:
     }
 
 
-def _install_workflow(name: str) -> str:
+def _install_workflow(name: str, builder: str = _BUILDER) -> str:
     pkg = workflows_dir() / name
     (pkg / "scripts").mkdir(parents=True, exist_ok=True)
     (pkg / "SKILL.md").write_text(_SKILL_MD.format(name=name), encoding="utf-8")
-    (pkg / "scripts" / "build_rows.py").write_text(_BUILDER, encoding="utf-8")
+    (pkg / "scripts" / "build_rows.py").write_text(builder, encoding="utf-8")
     return load_workflow(name).digest
 
 
@@ -143,15 +174,18 @@ def _seed_world(project_slug: str = "demo") -> None:
             fh.write(json.dumps({"project_slug": project_slug, "source_trace_id": trace_id}) + "\n")
 
 
-def _create_facet_dataset(name: str) -> None:
+def _create_facet_dataset(
+    name: str, *, builder: str = _BUILDER, candidate_query: dict | None = None
+) -> None:
     from opentraces.core.datasets import create_dataset
 
-    digest = _install_workflow(f"{name}-curator")
+    digest = _install_workflow(f"{name}-curator", builder=builder)
     create_dataset(
         name,
         workflow_skill=f"{name}-curator",
         workflow_digest=digest,
         row_schema=_schema(),
+        candidate_query=candidate_query,
     )
 
 
@@ -259,12 +293,18 @@ def test_model_and_agent_convenience_aliases() -> None:
 
 
 def test_unsupported_facet_name_is_a_loud_cli_error() -> None:
+    """External review of issue #212 (finding 4c): the error must say WHY the
+    name is rejected (not resolvable at O(manifest) cost) and point at
+    ``trace query --facet`` for the full vocabulary -- not just a bare
+    rejection."""
     _seed_world()
     _create_facet_dataset("facet-bad-name-run")
 
     code, payload = _run("facet-bad-name-run", "--facet", "survival.state=reverted")
     assert code == 2
     assert "unsupported --facet name" in payload["raw_output"]
+    assert "not resolvable at O(manifest) cost" in payload["raw_output"]
+    assert "trace query --facet" in payload["raw_output"]
 
 
 def test_malformed_facet_flag_is_a_loud_cli_error() -> None:
@@ -274,6 +314,64 @@ def test_malformed_facet_flag_is_a_loud_cli_error() -> None:
     code, payload = _run("facet-bad-syntax-run", "--facet", "missing-equals")
     assert code == 2
     assert "name=value" in payload["raw_output"]
+
+
+def test_scope_ignoring_workflow_rows_are_rejected_not_appended() -> None:
+    """External review of issue #212 (finding 1, criticals a/c): facet scoping
+    must be ENFORCED by the runner, not merely advisory. A workflow that
+    ignores ``candidate_trace_ids`` and scans/emits every candidate anyway
+    (the bundled skill-opt-v1 bug the review found) must still only append
+    rows inside the resolved facet scope -- the runner validates every
+    emitted row's source trace id against the allowed set and rejects
+    (never appends) anything outside it."""
+
+    _seed_world()
+    _create_facet_dataset("facet-enforce-run", builder=_BUILDER_IGNORES_SCOPE)
+
+    code, payload = _run(
+        "facet-enforce-run", "--facet", "model=anthropic/claude-sonnet-4"
+    )
+    assert code == 0, payload
+    resolution = payload["run"]["facet_resolution"]
+    assert resolution["matched_count"] == 2
+
+    # The builder emitted ALL 4 rows regardless of scope; the runner must
+    # have rejected the 2 outside the facet match, appending only the 2 in
+    # scope.
+    appended_ids = {row["source_trace_id"] for row in _read_appended_rows("facet-enforce-run")}
+    assert appended_ids == {"trace-claude-v1", "trace-claude-v2"}
+    assert payload["run"]["facet_rejected_count"] == 2
+
+
+def test_persisted_candidate_query_facets_are_honored_without_runtime_flag() -> None:
+    """External review of issue #212 (finding 1, critical a): the canonical
+    candidate-query resolution path must read a facet scope PERSISTED on the
+    dataset's ``candidate_query`` (set at ``dataset new`` / schedule time),
+    not just a runtime ``--facet`` CLI flag -- a scheduled run with no CLI
+    flags at all must still narrow by its persisted facets."""
+
+    _seed_world()
+    _create_facet_dataset(
+        "facet-persisted-run",
+        candidate_query={
+            "name": "facet-persisted-query",
+            "scope": "all-projects",
+            "facets": {"agent.name": "codex-cli"},
+        },
+    )
+
+    # No --facet flag on the CLI invocation at all.
+    code, payload = _run("facet-persisted-run")
+    assert code == 0, payload
+    resolution = payload["run"]["facet_resolution"]
+    assert resolution is not None, "persisted candidate_query.facets was ignored"
+    assert resolution["matched_count"] == 1
+    assert [row["trace_id"] for row in resolution["matched"]] == ["trace-codex"]
+
+    appended_ids = {
+        row["source_trace_id"] for row in _read_appended_rows("facet-persisted-run")
+    }
+    assert appended_ids == {"trace-codex"}
 
 
 def _read_appended_rows(name: str) -> list[dict]:

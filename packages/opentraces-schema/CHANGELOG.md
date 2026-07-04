@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.9.0] - 2026-07-04
+
+Adds the additive schema home for dataset-run metadata scope facets (issue
+#212, external-review fix for PR #218). Additive only; existing parsers
+continue to work and no migration is needed.
+
+See [RATIONALE-0.9.0.md](RATIONALE-0.9.0.md) for design notes.
+
+### Added
+
+**Dataset facet scoping (issue #212)**
+
+- `DatasetCandidateQuery.facets: dict[str, str]` — an optional, persisted
+  `name=value` metadata scope refinement (`model` / `agent.name` /
+  `agent.version`) narrowing a dataset's candidate query at `dataset new` /
+  schedule time, composing with the existing `scope`/`args`. Default empty
+  (no narrowing).
+- `DatasetRunRecord.facet_resolution: dict[str, Any] | None` — present only
+  when a run's effective facet scope (persisted `candidate_query.facets`
+  merged with a runtime `--facet` flag) was non-empty: `{"facets": {...},
+  "matched_count": int, "matched": [...]}`, the exact match set the run
+  resolved against the persisted bucket manifest. `None` (absent) on every
+  unfaceted run.
+
+### Changed
+
+- `SCHEMA_VERSION` bumped to `0.9.0` (additive MINOR per VERSION-POLICY.md).
+  Both new fields are optional and default to no-narrowing/absent, so an
+  existing pre-0.9.0 dataset manifest or run record validates unchanged.
+
 ## [0.8.0] - 2026-07-03
 
 Adds the additive schema home for exact dependency pins plus interpreter/CPU

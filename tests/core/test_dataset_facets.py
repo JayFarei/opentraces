@@ -377,3 +377,74 @@ def test_resolve_facet_candidates_red_capability_naive_scan_would_explode(
     real_matches = dataset_facets.resolve_facet_candidates({"agent.name": "codex-cli"})
     assert [row["trace_id"] for row in real_matches] == ["trace-codex"]
     assert count_real[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# External review of issue #212 (finding 2): the resolver must NEVER recompute
+# the manifest as a fallback (the #87 anti-pattern), not just avoid it on the
+# happy path. An absent/oversized/unreadable persisted manifest must fail
+# LOUDLY with a clear maintenance error and open ZERO per-trace files.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_facet_candidates_absent_manifest_raises_clear_error_and_opens_nothing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Traces exist in the object store (a fresh capture), but
+    ``bucket/manifest.json`` was never persisted (no ``bucket_manifest(write=
+    True)`` sweep yet) -- the exact world the pre-fix code silently degraded
+    on by calling ``bucket_manifest(write=False)``, which hydrates every
+    trace's ``current.json``. Resolution must instead fail with a clear,
+    actionable error and never open a single per-trace file."""
+
+    from opentraces.core.bucket_store import project_per_trace_exports
+    from opentraces.core.dataset_facets import (
+        FacetResolutionUnavailableError,
+        resolve_facet_candidates,
+    )
+
+    project_per_trace_exports(
+        tmp_path,
+        project_slug="demo",
+        trace_id="trace-claude-v1",
+        record=_trace(
+            "trace-claude-v1",
+            agent_name="claude-code",
+            agent_version="2.1.143",
+            agent_model="anthropic/claude-sonnet-4",
+        ),
+    )
+    # Deliberately NOT calling bucket_manifest(write=True) -- manifest.json
+    # does not exist yet.
+
+    count = _count_per_trace_file_reads(monkeypatch)
+    with pytest.raises(FacetResolutionUnavailableError, match="persisted bucket manifest"):
+        resolve_facet_candidates({"model": "anthropic/claude-sonnet-4"})
+    assert count[0] == 0, (
+        "resolve_facet_candidates fell back to a per-trace scan on an absent "
+        "manifest instead of failing loudly (the #87 anti-pattern this fix "
+        "closes)"
+    )
+
+
+def test_resolve_facet_candidates_unreadable_manifest_raises_clear_error_and_opens_nothing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Same contract for a corrupt/unreadable persisted manifest (not just an
+    absent one) -- both are ``read_persisted_manifest_capped`` states
+    (``"error"`` / ``"too_large"``) that must never trigger a full recompute."""
+
+    from opentraces.core.bucket_store import bucket_manifest, bucket_manifest_path
+    from opentraces.core.dataset_facets import (
+        FacetResolutionUnavailableError,
+        resolve_facet_candidates,
+    )
+
+    _seed_world(tmp_path)  # persists a valid manifest.json first
+    # Corrupt it in place -- simulates an unreadable/malformed persisted file.
+    bucket_manifest_path().write_text("not valid json {{{", encoding="utf-8")
+
+    count = _count_per_trace_file_reads(monkeypatch)
+    with pytest.raises(FacetResolutionUnavailableError, match="persisted bucket manifest"):
+        resolve_facet_candidates({"model": "anthropic/claude-sonnet-4"})
+    assert count[0] == 0
