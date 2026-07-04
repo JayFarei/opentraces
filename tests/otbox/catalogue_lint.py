@@ -68,6 +68,10 @@ PRECONDITION_VOCAB = frozenset(
         # Issue #42 — trail-mature precondition (entry 4).
         "git_repo_present",
         "post_commit_hook_installed",
+        # Issue #213 (seal-family W5) — the mature scale-world honesty guards.
+        "outlier_trail_companion_min_bytes",
+        "bucket_trace_envelopes_min",
+        "trail_events_min",
     }
 )
 

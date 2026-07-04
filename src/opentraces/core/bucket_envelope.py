@@ -81,6 +81,7 @@ from .bucket_trace_records import (
     _project_store_bucket_record as _project_store_bucket_record,
     _read_jsonl_trace_records as _read_jsonl_trace_records,
     _resolve_trace_record_pointer as _resolve_trace_record_pointer,
+    iter_corpus_trace_records as iter_corpus_trace_records,
     iter_trace_record_objects as iter_trace_record_objects,
     iter_trace_record_pointers as iter_trace_record_pointers,
     project_store_record_from_path as project_store_record_from_path,
@@ -520,6 +521,7 @@ def project_per_trace_exports(
     record: TraceRecord | None = None,
     events: list[Any] | None = None,
     events_authoritative: bool = True,
+    mirror_fallback: bool = True,
 ) -> dict[str, Any]:
     """Write the per-trace envelope under ``bucket/traces/v1/<proj>/<trace>/``.
 
@@ -543,6 +545,14 @@ def project_per_trace_exports(
     envelope is still written from canonical data. This makes the bucket
     self-sufficient: ``bucket repair`` / manifest rebuild no longer drop a
     trace that exists in the bucket but has no live opted-in project.
+
+    ``mirror_fallback=False`` disables that issue-#28 whole-mirror fallback
+    read. Callers whose ``events`` list IS a (scoped, corruption-vetted)
+    read of the same mirror — the ctx backfill apply phases (PR #217
+    real-bucket crash follow-up) — must pass ``False``: for them the
+    fallback would be a redundant O(full-mirror) strict re-read of bytes
+    they already read, and a strict re-read can crash on a corrupt
+    non-context line the scoped read deliberately (and reportedly) skipped.
 
     All gzipped files use ``mtime=0`` (Resolution H — deterministic).
     """
@@ -582,7 +592,7 @@ def project_per_trace_exports(
             anchor_source_ok = False
     trail_events, context_events = _events_for_trace_from_iter(events_iter, trace_id)
 
-    if not trail_events and not context_events:
+    if not trail_events and not context_events and mirror_fallback:
         try:
             mirror_events = list(read_events_mirror_batches())
         except (FileNotFoundError, ValueError, BucketLayoutError):

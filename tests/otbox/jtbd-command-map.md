@@ -66,6 +66,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **inspect-trace-context** | 1 → 2 | 3 | `trace map` for structural inspection |
 | **inspect-context-tree** | 1 → 9 | 3 | `ctx tree/show/step/reads/writes/diff/compactions/list/info` for what the model saw |
 | **resume-from-context** | 1 → 4 | 3 | `ctx prune/resume/resolve/anchor-for-step` for replay and handoff packets |
+| **replay-contract-capture-completeness** | 1 → 5 | 3 + 5 | Seal-family W6 (#214) sentinel — a fresh capture's `Step.context_node_id`s all resolve in its own `context.jsonl.gz`, then `ctx <trace>:<step>` / `ctx resume` / `trace partition --by s1` / `capsule create` all consume it (keeps W2 #210 permanent) |
 | **extract-bounded-evidence** ★ | 1 → 2 | 3 + 6 | `trace slice` for dataset workflows |
 | **skill-intelligence** ★ | 1 → N | 3 + 6 | `trace skills` → skill episodes / rollouts / eval-tasks projected into a dataset (the skill-intelligence consumer) |
 | **trace-index-rebuild-progress** | 1/1 | 3 | `trace index rebuild` under the `--progress`/heartbeat contract (plan 088) |
@@ -107,6 +108,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **context-tree-otel-outcome** | validation | 2 + 3 | OTLP outcome journeys for replay, inspection, resume, and experiments |
 | **context-tree-temporal-anchor** | validation | 3 | Context Tree temporal anchor precision validation |
 | **trace-spine** | validation | 3 + 4 + 5 | TraceRecord spine and cross-substrate resolution validation |
+| **mature-bucket-perf-guard** | validation | 3 + 4 + 5 + 6 | Perf recurrence guard (issue #213): the four seal-family hot commands (`dataset run`, `capsule create`, `bucket status`, `trail track`) stay under catastrophic-regression duration + peak-RSS ceilings on a ~600-trace / ~50K-event mature bucket — the #87/#121/#137/#208 O(corpus) class caught in the nightly `scale` lane |
 
 | **capsule-dependency-unblock** | 1 → 9 | 3 + 6 | Seal a failing episode into a capsule, share/file it, watch the verdict flip when a dependency unblocks |
 | **trace-intelligence-compare** | 1/1 | 3 | Derive-on-demand A/B compare of two traces (`opentraces.trace_compare.v1`) |

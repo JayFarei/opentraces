@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from opentraces.core.bucket_store import iter_trace_record_objects
+from opentraces.core.bucket_store import iter_corpus_trace_records
 from opentraces.consumers.skill_opt.engine import outcome_reward
 from opentraces.quality.engine import assess_trace
 
@@ -91,7 +91,7 @@ def main() -> int:
         allowed_trace_ids = None
 
     out_lines: list[str] = []
-    for obj in iter_trace_record_objects(project_slug=project_slug):
+    for obj in iter_corpus_trace_records(project_slug=project_slug):
         if allowed_trace_ids is not None and obj.trace_id not in allowed_trace_ids:
             continue
         try:

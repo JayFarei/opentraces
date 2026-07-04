@@ -13,10 +13,14 @@ the hermetic Layer-1 units (`test_from_session_codex` / the usage-episode
 suite) which resolve the written capsule.json; this journey pins the
 agent-facing envelope shape on a real captured trace.
 
-Tier 1 (opt-in).
+Tier 0 (default CI). Promoted from tier 1 by seal-family W6 (issue #214,
+scope-3 evaluation): it forks the default-CI `c-captured-real-session`
+checkpoint, needs no live HF and no heavy world, and passes green on the fresh
+capture — so the frozen `capsule.v1` envelope + redaction-floor guarantee is
+now gated on every PR rather than opt-in.
 """
 lane = "core"
-tier = 1
+tier = 0
 tier_label = "silver"
 persona = "agent"
 requires = ["cli", "git"]

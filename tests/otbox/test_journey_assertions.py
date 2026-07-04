@@ -49,6 +49,7 @@ def test_registry_covers_all_documented_kinds():
         "stdout_json_array_equals", "stdout_json_set_contains",
         "stdout_json_length_equals", "stdout_json_path_absent",
         "stdout_json_greater_equal", "stdout_json_contains", "duration_ms_max",
+        "max_rss_mb",
         "path_exists", "path_not_exists", "file_count_min",
     }
     assert expected == set(ASSERTION_KINDS)

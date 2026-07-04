@@ -156,3 +156,17 @@ perf_scenarios = []
 user_smoke_tests = []
 live_tests = []
 notes = "These workflows matter for correctness and release health, but they are integration-heavy and not the first-line representative profiling targets for UI/provenance optimization."
+
+[[journeys]]
+id = "capsule-seal-redaction"
+title = "Capsule seal companion redaction throughput (#209 W1)"
+priority = "primary"
+profiled = true
+doc_refs = [
+  "web/site/docs/docs/clients/trace-capsule.md",
+  "src/opentraces/core/capsule/companions.py",
+]
+perf_scenarios = ["redact-companion-smoke"]
+user_smoke_tests = []
+live_tests = []
+notes = "Guards the #209 W1 cheap wins (memoized anonymizer pattern building, the entropy upper-bound skip, the anonymize_paths fast-path guard) against a per-PR throughput regression on the companion-redaction hot loop that `capsule create` walks per face. Sized past the process-parallel dispatch threshold's line count but forced serial (OPENTRACES_CAPSULE_REDACT_WORKERS=1) so the smoke budget stays fast and pool-startup-noise-free; the parallel win itself (~4.8x at 8 workers) is proven separately by the real-CLI throughput gate against a >=400 MB outlier companion, which is too large for a per-PR smoke fixture."

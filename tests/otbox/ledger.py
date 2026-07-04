@@ -42,7 +42,7 @@ BEHAVIORAL_KINDS = frozenset(
     {"stdout_json", "stdout_json_equals_var", "stdout_json_array_equals",
      "stdout_json_set_contains", "stdout_json_length_equals",
      "stdout_json_greater_equal", "stdout_json_contains", "path_exists",
-     "file_count_min", "duration_ms_max"}
+     "file_count_min", "duration_ms_max", "max_rss_mb"}
 ) | NEGATIVE_KINDS
 
 
