@@ -2,7 +2,7 @@
        test test-premerge test-premerge-shard test-premerge-timing test-integration-shard \
        lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
-       otbox-matrix otbox-inventory otbox-gc otbox-agent-session otbox-live-hf release-gate \
+       otbox-matrix otbox-inventory otbox-gc otbox-agent-session otbox-live-hf otbox-scale release-gate \
        slicer-soft-evidence \
        capture-refresh \
        capture-refresh-check capture-refresh-all \
@@ -149,6 +149,15 @@ otbox-agent-session:
 # tests/otbox/README.md "Live HuggingFace lane".
 otbox-live-hf:
 	OT_OTBOX_LIVE_HF=1 $(OTBOX_PY) -m pytest tests/otbox/test_live_hf_slice.py -v
+
+# Issue #213 (seal-family W5) — the nightly `scale` lane. Cold-builds the
+# ~600-trace / ~50K-event `c-mature-bucket` world (5-12 min / 1.5-4 GB) and
+# runs the `mature-bucket-perf` perf recurrence guard: four seal-family hot
+# commands under catastrophic-regression duration + RSS ceilings. OFF the
+# per-PR gate and off default `pytest tests/otbox/`; gated behind
+# OT_OTBOX_SCALE=1. Runs in the nightly workflow only.
+otbox-scale:
+	OT_OTBOX_SCALE=1 $(OTBOX_PY) -m pytest tests/otbox/test_scale_lane.py -v -ra
 
 # Plan 071 — capture-refresh against a simulated-user scenario. The
 # default-CI safe value is `echo-meta` (uses the in-tree echo binary).

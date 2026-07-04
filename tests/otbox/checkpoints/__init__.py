@@ -172,6 +172,13 @@ def verify_provides(driver: Driver, box: Box, cp: "Checkpoint") -> None:
     # product bug with a lying checkpoint. Re-enable when the gap closes.
     if provides.get("branch_commits"):
         as_preconditions["requires_branch_commits_min"] = int(provides["branch_commits"])
+    # Issue #213 — the mature scale-world honesty guard: refuse to cache a world
+    # whose largest trail companion is below the declared floor (a dishonest
+    # world that would let pre-fix code short-circuit the O(companion) path).
+    if provides.get("outlier_trail_companion_min_bytes"):
+        as_preconditions["outlier_trail_companion_min_bytes"] = int(
+            provides["outlier_trail_companion_min_bytes"]
+        )
     if not as_preconditions:
         return
     failures = [
@@ -336,3 +343,5 @@ from . import _compacted_session  # noqa: E402,F401  (registers c-compacted-sess
 from . import _rewound_session  # noqa: E402,F401  (registers c-rewound-session)
 # Issue #93 — divergent install roots behind the integration runners.
 from . import _multi_install_mixed_runtime  # noqa: E402,F401  (registers c-multi-install-mixed-runtime)
+# Issue #213 (seal-family W5) — the mature scale-world perf recurrence guard.
+from . import _mature_bucket  # noqa: E402,F401  (registers c-mature-bucket)

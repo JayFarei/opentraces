@@ -201,9 +201,45 @@ def _probe_events_mirror_v1_populated(driver, box, value) -> ProbeResult:
     return False, "bucket events/v1 mirror is missing or empty"
 
 
+def _probe_outlier_trail_companion_min_bytes(driver, box, value) -> ProbeResult:
+    """Issue #213 world-honesty guard: the bucket's LARGEST ``trail.jsonl.gz``
+    companion must be at least ``value`` bytes.
+
+    A mature world that clones only manifest rows (no genuinely large outlier
+    companion) would let pre-fix, O(companion) seal code short-circuit and
+    stay green — the dishonest-world shape the red-proof exists to catch. This
+    re-measures the real file on disk (find | sort -nr) rather than trusting
+    the checkpoint's own claim.
+    """
+    need = int(value)
+    # `wc -c < file` is byte size, portable across macOS/Linux (no `stat`
+    # unit divergence) and per-file (no `wc` multi-file TOTAL line to mistake
+    # for the largest). find -print0 handles any path.
+    cmd = (
+        'biggest=0; '
+        'while IFS= read -r -d "" f; do '
+        'n=$(wc -c < "$f" 2>/dev/null || echo 0); '
+        '[ "$n" -gt "$biggest" ] && biggest=$n; '
+        'done < <(find "$HOME/.opentraces/bucket/traces/v1" -name "trail.jsonl.gz" -print0 2>/dev/null); '
+        'echo "$biggest"'
+    )
+    res = driver.exec(box, ["bash", "-lc", cmd])
+    try:
+        biggest = int((res.stdout or "").strip() or 0)
+    except (ValueError, AttributeError):
+        biggest = 0
+    if biggest >= need:
+        return True, f"largest trail companion is {biggest} bytes >= {need}"
+    return False, (
+        f"largest trail companion is {biggest} bytes, precondition needs >= {need} "
+        f"(dishonest mature world — no genuine outlier companion)"
+    )
+
+
 PROBES: dict[str, Callable] = {
     "requires_survival_states": _probe_survival_states,
     "min_captured_traces": _probe_min_captured_traces,
+    "outlier_trail_companion_min_bytes": _probe_outlier_trail_companion_min_bytes,
     "context_tree_built": _probe_context_tree_built,
     "otlp_receiver_running": _probe_otlp_receiver_running,
     "requires_branch_commits_min": _probe_branch_commits_min,
