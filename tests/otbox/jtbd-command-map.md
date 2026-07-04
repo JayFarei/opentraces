@@ -66,6 +66,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **inspect-trace-context** | 1 → 2 | 3 | `trace map` for structural inspection |
 | **inspect-context-tree** | 1 → 9 | 3 | `ctx tree/show/step/reads/writes/diff/compactions/list/info` for what the model saw |
 | **resume-from-context** | 1 → 4 | 3 | `ctx prune/resume/resolve/anchor-for-step` for replay and handoff packets |
+| **replay-contract-capture-completeness** | 1 → 5 | 3 + 5 | Seal-family W6 (#214) sentinel — a fresh capture's `Step.context_node_id`s all resolve in its own `context.jsonl.gz`, then `ctx <trace>:<step>` / `ctx resume` / `trace partition --by s1` / `capsule create` all consume it (keeps W2 #210 permanent) |
 | **extract-bounded-evidence** ★ | 1 → 2 | 3 + 6 | `trace slice` for dataset workflows |
 | **skill-intelligence** ★ | 1 → N | 3 + 6 | `trace skills` → skill episodes / rollouts / eval-tasks projected into a dataset (the skill-intelligence consumer) |
 | **trace-index-rebuild-progress** | 1/1 | 3 | `trace index rebuild` under the `--progress`/heartbeat contract (plan 088) |

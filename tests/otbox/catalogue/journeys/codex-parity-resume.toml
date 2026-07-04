@@ -3,6 +3,18 @@ description = """
 Plan 083 C7 scaffold: Codex resume/fork continuation parity. This
 names the release gate while the parser/resumer subplans finish the
 live artifact and checkpoint.
+
+BLOCKER (documented per seal-family W6 / issue #214 acceptance bar 4):
+this journey stays pending on ONE missing artifact — a real Codex
+resume/fork session capture committed at
+`tests/otbox/captures/codex-resume-continue/` — which is what lets the
+`c-captured-codex-resume-session` checkpoint restore instead of pending
+(see `tests/otbox/checkpoints/_captured_codex_pending.py:57-61`). It is
+NOT unblockable as a cheap chore: producing it requires driving the real
+`codex` binary through a resume/fork continuation and snapshotting the
+box (`make capture-refresh SCENARIO=codex-resume-continue`), which is
+outside default CI (real-agent lane). W6 did not fabricate the artifact;
+until that capture lands, this gate is honestly pending, not green.
 """
 lane = "core"
 tier = 0
