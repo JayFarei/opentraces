@@ -11,6 +11,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 
 # Usernames that commonly appear in paths but are not real people.
@@ -78,7 +79,23 @@ def _build_path_only_patterns(
     This is used for auto-detected usernames where we have high confidence
     the match is a real path but not enough confidence for the more
     ambiguous hyphen-encoded and tilde forms.
+
+    Memoized (#209 W1): thin wrapper over an ``lru_cache``d builder keyed by
+    the exact username tuple. ``anonymize_paths`` previously rebuilt this list
+    (a fresh ``re.compile`` per pattern) on EVERY call — profiled at a large
+    share of ``sanitize_companion_dict`` cumtime on big companions, since the
+    username set (system username + configured ``custom_redact_strings``) is
+    the same on nearly every call within one seal run. Same input tuple ->
+    the identical compiled ``Pattern`` objects, so output is byte-identical;
+    only the recompilation work is skipped on a cache hit.
     """
+    return list(_build_path_only_patterns_cached(tuple(usernames)))
+
+
+@lru_cache(maxsize=256)
+def _build_path_only_patterns_cached(
+    usernames: tuple[str, ...],
+) -> tuple[tuple[re.Pattern, str], ...]:
     patterns: list[tuple[re.Pattern, str]] = []
     for uname in usernames:
         escaped = re.escape(uname)
@@ -119,11 +136,22 @@ def _build_path_only_patterns(
             re.compile(rf"//wsl\.localhost/[^/]+/home/{escaped}/"),
             f"//wsl.localhost/distro/home/{hashed}/",
         ))
-    return patterns
+    return tuple(patterns)
 
 
 def _build_patterns(usernames: list[str]) -> list[tuple[re.Pattern, str]]:
-    """Build replacement patterns for a list of usernames."""
+    """Build replacement patterns for a list of usernames.
+
+    Memoized (#209 W1) the same way as :func:`_build_path_only_patterns` —
+    see its docstring for the rationale. Same input tuple -> byte-identical
+    compiled patterns, just built once per unique username set instead of
+    once per string leaf.
+    """
+    return list(_build_patterns_cached(tuple(usernames)))
+
+
+@lru_cache(maxsize=256)
+def _build_patterns_cached(usernames: tuple[str, ...]) -> tuple[tuple[re.Pattern, str], ...]:
     patterns: list[tuple[re.Pattern, str]] = []
     for uname in usernames:
         escaped = re.escape(uname)
@@ -184,7 +212,7 @@ def _build_patterns(usernames: list[str]) -> list[tuple[re.Pattern, str]]:
             f"~{hashed}",
         ))
 
-    return patterns
+    return tuple(patterns)
 
 
 # Tail-consumer: after a username is hashed to the ``[ot-user-<8hex>]`` marker,
@@ -295,6 +323,26 @@ def anonymize_paths(
         if u not in seen:
             seen.add(u)
             unique_explicit.append(u)
+
+    # Fast-path guard (#209 W1): every pattern this function can apply is
+    # gated on one of two literal substrings appearing in `text` — "users" or
+    # "home" (case-insensitively; that covers every macOS/Linux/Windows/WSL
+    # spelling ``_build_patterns``/``_build_path_only_patterns`` compile, and
+    # both ``_consume_home_tail`` regexes require the same literals) — or an
+    # explicit username appearing verbatim (required by the tilde form and
+    # the bare-username Layer 2 replacement). When NEITHER holds, no compiled
+    # pattern can match and ``_consume_home_tail`` is provably a no-op, so
+    # this returns exactly what the full path below would compute — just
+    # without paying for `extract_usernames_from_paths` (4 regex scans) or any
+    # pattern building. Profiled as the majority of leaves on a real
+    # companion (most strings carry no path/username at all).
+    lowered = text.lower()
+    if (
+        "users" not in lowered
+        and "home" not in lowered
+        and not any(u in text for u in unique_explicit)
+    ):
+        return text
 
     # Auto-detect additional usernames from path patterns in the text
     auto_detected = extract_usernames_from_paths(text)

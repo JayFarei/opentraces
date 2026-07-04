@@ -326,6 +326,18 @@ def _find_high_entropy(text: str, threshold: float = DEFAULT_ENTROPY_THRESHOLD) 
     matches: list[SecretMatch] = []
     for m in _HIGH_ENTROPY_RE.finditer(text):
         candidate = m.group()
+        # Upper-bound skip (#209 W1): the Shannon entropy of a string over `k`
+        # distinct symbols can never exceed log2(k) (achieved only by a
+        # perfectly uniform distribution over those symbols). So if even that
+        # best case already misses `threshold`, the real (weighted, and
+        # therefore <= the uniform bound) entropy computed by
+        # ``shannon_entropy`` below is GUARANTEED to miss it too — skipping
+        # the full per-char Shannon sum here can never flip a verdict, only
+        # skip a candidate that would fail anyway. Cheap: one `set()` + one
+        # `log2` versus a full weighted-sum pass over every char.
+        distinct = len(set(candidate))
+        if distinct == 0 or math.log2(distinct) < threshold:
+            continue
         if shannon_entropy(candidate) >= threshold:
             # Skip if it looks like a common word or path segment
             if candidate.isalpha() and candidate.islower():
