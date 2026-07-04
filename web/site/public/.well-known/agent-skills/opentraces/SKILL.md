@@ -22,7 +22,8 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
 - Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
 - Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`, plus the internal `opentraces workflow skill-intelligence` eval over skill episodes
-- Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove/security`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`. Per-dataset egress security is `opentraces dataset security <name> [--tool <t> --enable|--disable] [--unsafe-override --reason <text>]`.
+- Datasets: `opentraces dataset list/new/run/verify/review/publish/remote/schedule/status/remove/security`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`. Per-dataset egress security is `opentraces dataset security <name> [--tool <t> --enable|--disable] [--unsafe-override --reason <text>]`. `dataset verify <name>` replays the bound workflow against the bucket and classifies the result `reproduces`/`bucket-advanced`/`integrity-failure`.
+- Capsules (the seal-family's other seal, ADR-0008): `opentraces capsule create <ref>`, `capsule get <ref>` (read-only, stateless), `capsule import <ref>` (the explicit opt-in write), `capsule preview <trace_id>`, `capsule share [--publish]`, `capsule issue`, `capsule replay --against <ref>`, `capsule test <ref>`, `capsule verdict <issue_ref> --state <state>`, `capsule watch <issue_ref>`.
 - Skill verifier (trace-grounded reward for SkillOpt): `opentraces skill-verifier status/autoverify/align/score`
 - Security tools: `opentraces security tools list/info`, `opentraces security sanitize --tools <names>` or `--use-config`
 - OTLP capture source: `opentraces setup capture-otlp`, `opentraces capture-otlp start|stop|status|restart|flush`
@@ -403,12 +404,60 @@ opentraces dataset publish <name> --min-retention 0.5 --exclude-state lost
 opentraces dataset schedule list
 opentraces dataset schedule add <name> --every 1h --approve-new --publish-check-only
 opentraces dataset remove <name> --yes
+opentraces dataset verify <name> --json
 ```
 
 Manual review means rows remain local until approved. Automatic review policy
 may mark rows publishable, but remote egress is still explicit: publish is a
 separate user action. `dataset publish --min-retention` and `--exclude-state`
-filter rows by survival quality before staging.
+filter rows by survival quality before staging. `dataset verify <name>`
+re-executes the bound workflow against the bucket (with its recorded answers)
+in a side-effect-free mode and byte-compares the re-run to the stored rows —
+`reproduces` (byte-identical), `bucket-advanced` (bucket legitimately grew new
+eligible rows since the dataset was built), or `integrity-failure` (the
+seal's pure-function contract is broken; exits non-zero).
+
+## Capsules
+
+A capsule is the seal-family's other seal (ADR-0008): an immutable,
+URL-addressed, redacted mini-bucket of ONE scope (a whole trace, a step, or a
+`trace:A-B` span), byte-stable under re-seal with a deterministic
+`capsule_id`. Where a dataset is a growing, reviewed collection of rows, a
+capsule is a single frozen, shareable artifact. Nothing else in the system
+seals; a PR body, standup, or dashboard is a rendering of a projection, never
+a seal.
+
+```bash
+opentraces capsule create <trace_id>                      # whole trace
+opentraces capsule create <trace_id>:<step>               # point scope
+opentraces capsule create <trace_id>:<A>-<B>               # span scope
+opentraces capsule create <trace_id> --product <name>      # bind to one consumed product
+opentraces capsule get <ref> --json                        # read-only, stateless: file/https/hf:// -> envelope
+opentraces capsule get <ref> --summary                     # human markdown instead of JSON
+opentraces capsule import <ref> --json                      # explicit opt-in WRITE into the local bucket
+opentraces capsule preview <trace_id> --json                # egress dry-run: nothing written or published
+opentraces capsule share <trace_id> --copy                  # mint a shareable URL (local-only until --publish)
+opentraces capsule share <trace_id> --publish --repo <owner/name>
+opentraces capsule issue <trace_id> --publish --issue-repo <owner/name>  # file a GitHub issue carrying the capsule
+opentraces capsule replay <ref> --against <target_ref> --json  # build the maintainer-agent re-pose packet
+opentraces capsule test <ref> --against <target_ref> --json     # execute the captured repro under isolation
+opentraces capsule verdict <issue_ref> --state fixed --close     # record the replay outcome back onto the issue
+opentraces capsule watch <issue_ref> --timeout 300 --json         # poll for the issue's resolution
+```
+
+`capsule get` is READ-ONLY and STATELESS: it resolves a capsule ref and prints
+its frozen `capsule.json` envelope without creating any `~/.opentraces`,
+bucket, or project state. `capsule import` is the explicit opt-in WRITE: it
+materializes the carried spine into a schema-valid `TraceRecord` (reusing the
+capsule's trace id) plus its Trail companion, so an imported capsule projects
+natively through `trace get`/`map`/`slice`. `capsule preview` and `capsule
+share`/`capsule issue` (without `--publish`) write and publish NOTHING;
+`--publish` mints the real capsule through the same shared egress clearance
+predicate that gates bucket sync and dataset publish. Every replay packet
+leads with four named properties (`reproducible`, `gradable`, `scoped`,
+`sandboxed`) plus a derived `verdict_trust` weakest-link summary; on today's
+corpus every honest capsule reports `verdict_trust=floor`, which is the
+honesty contract working, not a gap.
 
 `dataset run --facet name=value` (repeatable; `--model`/`--agent` are
 convenience aliases for `--facet model=...`/`--facet agent.name=...`) scopes a
@@ -483,7 +532,14 @@ opentraces --json ctx tree <trace_id>
 opentraces security tools list --json
 opentraces --json dataset status <name>
 opentraces dataset security <name> --json
+opentraces dataset verify <name> --json
+opentraces capsule get <ref> --json
+opentraces capsule replay <ref> --json
 ```
+
+Capsule commands carry their own local `--json` flag rather than the global
+`opentraces --json <cmd>` prefix — pass it directly on the `capsule`
+subcommand.
 
 ## Troubleshooting
 
@@ -495,3 +551,5 @@ opentraces dataset security <name> --json
 | Trace Trail event log invalid | Run `opentraces doctor`; `opentraces trail rebuild` re-derives advisory projections |
 | Bucket not syncing | Run `opentraces setup bucket` to configure a remote, then `opentraces bucket remote status` |
 | Publish blocked | Run `opentraces dataset status <name> --json` and `opentraces dataset publish <name> --check-only` |
+| Dataset verify fails | `reproduces`/`bucket-advanced` are healthy; `integrity-failure` means the seal's pure-function contract broke |
+| Capsule share/issue refuses to publish | The shared egress clearance predicate is withholding an unscanned/not-cleared trace; run `opentraces bucket remote status` or re-scan, then retry |

@@ -5,7 +5,7 @@ by default for per-record sanitization. A bucket flow or workflow opts in to
 the tools it wants, either explicitly with `--tools` or by enabling tools in
 config and running with `--use-config`.
 
-Current pipeline version: `SECURITY_VERSION = 0.7.0`.
+Current pipeline version: `SECURITY_VERSION = 0.8.0`.
 
 ```bash
 opentraces security tools list

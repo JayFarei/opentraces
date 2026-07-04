@@ -19,14 +19,38 @@ source of truth.
 ## Current Version
 
 ```text
-0.7.0
+0.8.0
 ```
 
-`0.7.0` is additive: it introduces the dataset security policy contract
-(plan 092) without changing the `TraceRecord` wire shape, so existing trace
-parsers continue to work unchanged. `0.6.0` made `TraceRecord.patches[]` the
-authoritative output spine and removed `Outcome.patch`; consumers should join
-patch ids to the bucket Trail companion for full diff/history.
+`0.8.0` is additive: it gives `Environment` a structured home for exact
+dependency pins and runtime identity (issue #200/#155 Part A) without changing
+the `TraceRecord` wire shape, so existing trace parsers continue to work
+unchanged. `0.7.0` introduced the dataset security policy contract (plan 092);
+`0.6.0` made `TraceRecord.patches[]` the authoritative output spine and removed
+`Outcome.patch`; consumers should join patch ids to the bucket Trail companion
+for full diff/history.
+
+### 0.8.0
+
+- `PinRecord` model, a single resolved dependency pin: `name` (required),
+  `version`, `hash`, `marker`, `source` (all optional).
+- `Interpreter` model, runtime interpreter identity: `name`, `version` (both
+  optional).
+- `Environment.resolved_dependencies`, `list[PinRecord] | None`, default
+  `None`.
+- `Environment.interpreter`, `Interpreter | None`, default `None`.
+- `Environment.arch`, `Environment.platform`, `Environment.abi_tag`, optional
+  strings, default `None`.
+- **Honesty boundary**: these fields are a HOME for dependency pins and
+  runtime identity, not a resolver. Their presence never raises `env_tier` or
+  any capsule trust ordinal; no model in the schema package carries an
+  `env_tier` / `verdict_trust` / `oracle_trust` / `diff_trust` / `sandbox_tier`
+  field at all, that trust vocabulary lives entirely outside the schema. A
+  future resolver (issue #202) is the out-of-train follow-up that fills these
+  fields and lifts `env_tier` from `L0`.
+- `TraceRecord` wire shape unchanged; `migrate_record` is a transparent no-op
+  across the `0.7.0` -> `0.8.0` bump. See
+  [`RATIONALE-0.8.0.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/RATIONALE-0.8.0.md).
 
 ### 0.7.0
 
@@ -90,7 +114,7 @@ The security pipeline is versioned independently under
 `src/opentraces/security/version.py`.
 
 ```text
-SECURITY_VERSION = 0.7.0
+SECURITY_VERSION = 0.8.0
 ```
 
 `opentraces doctor --security` reports the active value and the enabled state

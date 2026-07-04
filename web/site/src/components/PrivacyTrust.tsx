@@ -207,7 +207,7 @@ export default function PrivacyTrust() {
           ))}
         </div>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>
-          {enabled.length === 0 ? "no tools enabled" : `${enabled.length} tools on`} {"·"} canonical order {"·"} SECURITY_VERSION 0.7.0
+          {enabled.length === 0 ? "no tools enabled" : `${enabled.length} tools on`} {"·"} canonical order {"·"} SECURITY_VERSION 0.8.0
         </span>
       </div>
 

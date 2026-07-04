@@ -3,6 +3,14 @@
 A dataset is a local HuggingFace-shaped row store produced by a workflow. It is
 not the raw trace bucket.
 
+Per the [Seal Family contract](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md)
+(ADR-0008), a dataset is one of exactly two things that "seal": a **growing,
+reviewed seal**, appended to under review gates, with every row carrying the
+full contract triple back to its source. (The other is a
+[capsule](../clients/trace-capsule.md), an immutable, URL-addressed seal of one
+scope.) A PR body, a standup, or a dashboard built from dataset rows is a
+*rendering* of the projection, not a seal.
+
 ## Create
 
 ```bash
@@ -32,6 +40,7 @@ opentraces dataset run my-dataset
 opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset run my-dataset --scope trace --trace <trace-id>
 opentraces dataset run my-dataset --since-last-run
+opentraces dataset run my-dataset --answers answers.json --json
 ```
 
 `dataset run` invokes the workflow and appends rows locally. It can read from
@@ -39,6 +48,65 @@ Trace Index candidates, a project scope, the current working directory, a
 specific trace, or the saved skill query from `dataset new --from-skill`.
 The `script` executor runs the workflow package's deterministic
 `scripts/build_rows.py` without a live agent.
+
+## Row Provenance: The Contract Triple
+
+Per ADR-0008, a projection is explainable iff it is a pure function of
+content-addressed inputs: `projection = f(scope_ref, workflow@digest,
+bucket_state@digest, answers)`. Every appended row records this as its
+provenance (`.opentraces/row_provenance.jsonl` inside the dataset directory,
+schema `opentraces.dataset.row_provenance.v2`):
+
+```json
+{
+  "ref": "<trace>:120-148",
+  "workflow": {"skill": "skill-command-trajectory-eval-v1", "digest": "sha256:…"},
+  "bucket": {"manifest_digest": "sha256:…", "snapshot_digest": "sha256:…"},
+  "answers": {"digest": "sha256:…", "recorded": {}},
+  "contract_triple": {
+    "workflow_digest": "sha256:…",
+    "bucket_digest": "sha256:…",
+    "answers_digest": "sha256:…"
+  },
+  "reconstructable": true,
+  "isolation": {"sandbox_tier": "none"}
+}
+```
+
+`reconstructable` is an honesty label on the run that produced the row: `true`
+for the `script` executor (a recorded, re-runnable transform) and `dry-run`,
+`false` for `current-agent` (raw agent emission is not a recorded input, so it
+is never claimed reconstructable). `contract_triple` is the convenience
+roll-up of the three content digests that pin the row; `answers` carries the
+fourth input, recorded judgment answers from a `--answers`-driven run (see
+[Dataset Workflows: the judgment handshake](workflow-templates.md#the-judgment-handshake-rc10)),
+digested even when empty so the triple is never partially populated.
+
+## Verify
+
+```bash
+opentraces dataset verify my-dataset --json
+```
+
+Re-executes the bound workflow against the bucket (with the recorded
+answers, from the same run packet the contract triple points at) in a
+side-effect-free mode, projects the re-run through the same
+sanitize/validate/dedup/canonical transform an append would apply, and
+byte-compares it against the stored `data/train.jsonl` rows. Classifies the
+outcome into exactly three honest verdicts:
+
+| Verdict | Meaning | Exit code |
+|---------|---------|-----------|
+| `reproduces` | The re-run rows are byte-identical to the stored rows | 0 |
+| `bucket-advanced` | Stored rows are a strict subset of the re-run and the bucket watermark moved past the recorded one (an explained delta) | 0 |
+| `integrity-failure` | A stored row was hand-mutated (its bytes no longer hash to the recorded `payload_hash`), or the rows differ with no watermark explanation | 7 |
+
+`--json` emits the frozen `opentraces.dataset.verify.v1` envelope
+(`verdict`, `stored_row_count`, `reproduced_row_count`, `byte_identical`,
+`delta`, `mutated_rows`, `recorded_watermark`, `current_watermark`, `detail`).
+The command never appends rows or advances a cursor/watermark; it is a pure
+read that enforces the integrity invariant on the transform (digested bytes
+== installed bytes == executed bytes).
 
 ## Dataset Security Policy
 

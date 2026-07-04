@@ -1,23 +1,44 @@
-"""``opentraces capsule`` — capture, redact, share, and open agent usage episodes.
+"""``opentraces capsule`` — seal, resolve, share, replay, and test agent usage episodes.
 
-A capsule is a privacy-bounded record of how one agent used one consumed product
-(an "Agent Experience Report"); a runnable repro/test is optional evidence. The
-underlying object stays ``opentraces.capsule.v1`` — the naming is presentation only.
+A capsule is the ADR-0008 immutable, URL-addressed seal: a privacy-bounded,
+redacted mini-bucket of one scope, byte-stable under re-seal, with a
+deterministic ``capsule_id``. A runnable repro/test is optional evidence. The
+underlying object stays ``opentraces.capsule.v1`` — the naming is presentation
+only.
 
-v1 share-first surface (plan 082; usage-episode generalisation plan 090):
+Current surface (plan 082/090/198; ``create``/``get``/``import`` added by the
+Seal Family / #208; ``export``/``open`` remain as hidden-but-callable legacy
+aliases of ``create``/``get``):
 
-* ``capsule export <trace>``        — build a local self-contained capsule (zero
-                                      remote config). stdout = the capsule.json path.
-* ``capsule open <ref> --json``     — the CONSUME verb. Resolve a capsule from a
-                                      file / https / hf:// ref and print the frozen
-                                      ``opentraces.capsule.v1`` envelope. The
-                                      maintainer agent's <5-step path.
-* ``capsule share <trace> --repo``  — mint the shareable URL (``--execute`` uploads
+* ``capsule create <ref>``          — seal a bounded, redacted, self-contained
+                                      capsule from a v7 address (trace / trace:step /
+                                      trace:A-B). stdout = the capsule.json path.
+* ``capsule get <ref> --json``      — READ-ONLY, STATELESS resolve of a capsule from a
+                                      file / https / hf:// ref; prints the frozen
+                                      ``opentraces.capsule.v1`` envelope. No
+                                      ~/.opentraces, bucket, or project state is created.
+* ``capsule import <ref>``          — the explicit opt-in WRITE: resolve a capsule and
+                                      materialize it into the local bucket as a
+                                      first-class trace.
+* ``capsule preview <trace>``       — show exactly what a publish WOULD ship (redaction
+                                      manifest, carried-section inventory, destinations)
+                                      without writing or publishing anything.
+* ``capsule share <trace> --repo``  — mint the shareable URL (``--publish`` uploads
                                       only capsule.json + capsule.md to HF). stdout =
                                       the URL. ``--copy`` to clipboard.
 * ``capsule issue create <trace>``  — render a GitHub issue body embedding the URL +
-                                      the ``capsule open`` command (``--execute`` files
+                                      the ``capsule get`` command (``--publish`` files
                                       it via ``gh``, idempotent on the capsule marker).
+* ``capsule replay <ref>``          — build a replay packet for a maintainer agent to
+                                      re-pose the intent against a post-fix ref.
+* ``capsule test <ref>``            — run the capsule AS A TEST (reproduce the failure
+                                      or confirm the fix) in an isolated checkout or the
+                                      hermetic bundle.
+* ``capsule verdict`` / ``watch``   — record / poll a replay verdict on the issue.
+
+Every egress path (``share --publish``, ``issue --publish``) runs the same
+clearance predicate before a byte leaves the machine (ADR-0008): a refusal
+moves zero bytes.
 
 Exit codes (house convention): 2 = precondition/tooling/export failure,
 3 = remote / gh failure.

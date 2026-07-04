@@ -30,6 +30,21 @@ opentraces dataset publish my-dataset --exclude-state lost --exclude-state never
 | `--exclude-state TEXT` | Drop rows containing a patch with this survival state; repeatable |
 | `--json` | Emit structured JSON |
 
+## One Clearance Predicate
+
+Per [ADR-0008](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md)
+§3, exactly one predicate decides whether a trace's bytes may leave the private
+bucket. `bucket sync push`, `dataset publish`, and `capsule share --publish` /
+`capsule issue --publish` all evaluate the SAME three-way clearance
+(`cleared` / `not_cleared` / `unknown`) instead of each re-implementing their
+own lock, and egress is never on by default for any of them. The check is
+evaluated against a push-time snapshot, not a check-then-copy race: a publish
+run indexes one manifest snapshot up front and every row in that run is
+authorized against it, so a trace cannot slip from cleared to not-cleared
+mid-run. Absence of a recorded clearance (`unknown`) is never coerced to
+"safe to leave", only a positive `cleared` state permits egress. A refusal
+moves zero bytes.
+
 ## Bucket Sync Is Separate
 
 ```bash

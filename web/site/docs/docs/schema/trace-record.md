@@ -6,7 +6,7 @@ The top-level record. One per JSONL line, one per agent trace.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.7.0"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.8.0"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
@@ -65,10 +65,39 @@ Model identifiers follow the `provider/model-name` convention.
       "branch": "main",
       "diff": "unified diff string or null"
     },
-    "language_ecosystem": ["typescript", "python"]
+    "language_ecosystem": ["typescript", "python"],
+    "resolved_dependencies": null,
+    "interpreter": null,
+    "arch": null,
+    "platform": null,
+    "abi_tag": null
   }
 }
 ```
+
+`resolved_dependencies` (`list<PinRecord> | null`), `interpreter`
+(`Interpreter | null`), `arch`, `platform`, and `abi_tag` (all optional
+strings) were added in 0.8.0. Every field defaults to `null` and is a
+structural HOME for a future dependency-pin resolver, not a resolver itself;
+their presence never raises `env_tier` or any other capsule trust ordinal.
+
+```json
+{
+  "environment": {
+    "resolved_dependencies": [
+      {"name": "requests", "version": "2.31.0", "hash": null, "marker": null, "source": null}
+    ],
+    "interpreter": {"name": "cpython", "version": "3.11.6"},
+    "arch": "arm64",
+    "platform": "macosx_14_0_arm64",
+    "abi_tag": "cp311"
+  }
+}
+```
+
+`PinRecord` requires only `name`; `version`, `hash`, `marker`, and `source` are
+all optional so a resolver that knows a dependency but not its exact version
+can still record it.
 
 ## System Prompts
 

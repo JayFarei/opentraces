@@ -83,7 +83,15 @@ class Interpreter(BaseModel):
 
 
 class Environment(BaseModel):
-    """Runtime environment metadata for filtering and reproducibility."""
+    """Runtime environment metadata for filtering and reproducibility.
+
+    Schema 0.8.0 (#200) also makes this the home for optional dependency-pin
+    and runtime-identity fields: ``resolved_dependencies`` (a list of
+    :class:`PinRecord`), ``interpreter`` (:class:`Interpreter`), ``arch``,
+    ``platform``, and ``abi_tag``. All five default to ``None`` and are a
+    HOME for pins, not a resolver, their presence never raises ``env_tier``
+    on its own (see ``RATIONALE-0.8.0.md``).
+    """
 
     os: str | None = None
     shell: str | None = None

@@ -75,7 +75,7 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
 | **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
-| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.7.0` field semantics |
+| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.8.0` field semantics |
 | **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
 | **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
 | **[Trace Capsule](/docs/clients/trace-capsule)** | Share a single trace as a reproducible capsule; use `opentraces capsule` for the full CLI surface |

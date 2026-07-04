@@ -19,6 +19,14 @@ The underlying object stays `opentraces.capsule.v1` throughout. The presentation
 reframe (command noun, `<!-- opentraces-capsule: <id> -->` wire markers, issue
 idempotency) is unchanged.
 
+Per the [Seal Family contract](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md) (ADR-0008),
+a capsule is one of exactly two things that "seal": an **immutable, URL-addressed
+seal** over one scope, byte-stable under re-seal, with a deterministic
+`capsule_id`. (The other is a [dataset](../workflow/datasets.md), a growing,
+reviewed seal of workflow-projected rows.) Everything else that carries capsule
+content, a rendered issue body, the capsule-worker HTML page, is a *rendering* of
+that seal, not a seal itself.
+
 ## What a Capsule Carries
 
 A capsule assembles four signals that make an episode replayable by intent, not
@@ -265,8 +273,13 @@ Additional safety properties:
 
 - **Counts-only manifest.** `redaction.manifest` aggregates counts by tool, severity,
   and field path. It never serializes `Finding.matched_text` (the literal secret value).
-- **Home-path scrub.** `/Users/<name>/` and bare username tokens are replaced with
-  `~` and `<user>` respectively.
+- **Home-path scrub.** The registry `path_anonymizer` tool (issue #143) rewrites
+  home paths tail-consuming: `/Users/<name>/secret/.env` becomes
+  `/Users/[ot-user-<8hex>]`, the whole tail gone, not just the username segment.
+  The operator's own identity tokens (login name, home-dir name) are hashed the
+  same way wherever they appear as bare tokens. The `[ot-user-<8hex>]` marker is
+  structurally inert (a leading `[` can never start a detected username), so the
+  scrub is idempotent by construction.
 - **Untrusted content.** `content_is_untrusted: true` on the envelope. The human render
   routes captured text through a sentinel/fence-breakout/heading-injection stripper.
 
@@ -341,7 +354,30 @@ https://huggingface.co/datasets/<owner>/<repo>/resolve/<commit-sha>/capsules/v1/
 
 `publish_capsule` uploads only `capsule.json` + `capsule.md` (not the whole private
 bucket). Pinning to the commit sha means the URL is immutable: the file it resolves
-to can never silently change.
+to can never silently change, the defining property of the capsule seal
+(ADR-0008: an immutable, URL-addressed seal, as opposed to the dataset's growing,
+reviewed seal).
+
+### Rendered View (capsule-worker)
+
+A published capsule also renders at a human-friendly URL served by a stateless
+Cloudflare Worker (`web/capsule-worker/`), a pure projection over the same frozen
+`opentraces.capsule.v1` object, with no re-derivation, no re-redaction, and one
+outbound fetch to the HF `capsule.json`:
+
+- `Accept: text/html` → a human page rendering the four signals honestly (untrusted
+  content escaped, redaction markers kept verbatim, excluded fields shown as
+  "excluded by author" not "broken").
+- Progressive JSON endpoints for no-CLI agents: `/summary` → `/index` → `/slice`
+  `/context` `/trail` `/repo` `/environment` → `/full`, plus `/skill`. `/full`
+  returns the upstream bytes verbatim, byte-identical to `capsule get --json`.
+- The worker never serves the heavy "environment" face (bundle tar, runtime pins,
+  lockfiles), only the name-only `environment` projection.
+- If the fetch/parse fails, it degrades to a pointer at the raw HF `/resolve/` URL
+  plus the CLI one-liner, rather than failing outright.
+
+Production domain wiring (`capsules.opentraces.ai`) is a deploy-time operation,
+independent of the capsule format itself.
 
 ## Self-Sufficiency
 
@@ -424,5 +460,6 @@ noted; `create` uses the narrower v7-address flag set documented under
 | `--setup-command <cmd>` | none | Setup/install step before the repro |
 | `--consume <spec>` | none | Record a consumed dependency (`[package\|service:]NAME=PIN\|URL`) |
 | `--bundle` | off | Embed a hermetic `git archive` source bundle |
+| `--product-full-span` | off | `preview` only: opt out of the `--product` radius cap and restore the unbounded min..max episode span (may be slow on large sessions) |
 | `--yes` | off | Skip the consent gate (share/issue only, for scripts/agents) |
 | `--json` | off | Emit JSON to stdout |

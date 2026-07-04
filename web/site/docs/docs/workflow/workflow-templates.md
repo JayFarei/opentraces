@@ -63,7 +63,41 @@ with:
 
 The dataset-free primitive is `execute_workflow(workflow_name, scope,
 output_path)`. Dataset runs wrap that primitive with manifest, cursor, review,
-and publication state.
+and publication state. This is the single execution seam: both the
+dataset-bound runner (`dataset run`) and the dataset-free primitive go through
+`execute_workflow`, so a workflow's judgment handshake, isolation, and
+sanitization behave identically whether or not a dataset manifest is involved.
+
+## The Judgment Handshake (rc=10)
+
+Per [ADR-0008](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md),
+judgment is an INPUT to a projection, not an exception to it. A workflow's
+`scripts/build_rows.py` that needs a judgment call (for example, grading
+whether an episode succeeded) does not resolve it inline: it writes structured
+`JudgmentRequest`s to the sidecar file named by `OT_JUDGMENT_SIDECAR` and exits
+with `RC_NEEDS_JUDGMENT` (10). The script executor detects the sidecar + `rc=10`
+and propagates the handshake up:
+
+```bash
+opentraces dataset run my-dataset --json
+# exits rc=10, prints:
+# [judgment] <request-id>: <prompt>
+```
+
+Answer each request, write them to a file, and re-run with `--answers`:
+
+```bash
+opentraces dataset run my-dataset --answers answers.json --json
+```
+
+The answers travel into the run packet (`packet["answers"]`) and are recorded
+in row provenance's `answers` block (see
+[Row Provenance: The Contract Triple](datasets.md#row-provenance-the-contract-triple)),
+so re-running with the same answers against the same bucket state is
+byte-identical: the projection stays a pure function of `(workflow, bucket
+state, answers)`. The `JudgmentRequest`/`JudgmentAnswer` shapes are reused
+verbatim from the `trace partition` slicing judgment handshake (schema
+`opentraces.slicing.judgment.v1`), one answer shape across the whole system.
 
 ## Evidence Inputs
 
