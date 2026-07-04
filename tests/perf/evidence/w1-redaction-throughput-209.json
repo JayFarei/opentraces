@@ -1,0 +1,28 @@
+{
+  "companion": {
+    "raw_bytes": 419430463,
+    "raw_mb": 400.00006008148193,
+    "target_mb": 400
+  },
+  "generated_at": "2026-07-04T15:11:54Z",
+  "machine": {
+    "cpu_count": 12,
+    "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "python": "3.14.4"
+  },
+  "parallel": {
+    "mb_per_s": 17.75701260287478,
+    "redactions_applied": 2492,
+    "seconds": 22.526315041119233,
+    "workers": 8
+  },
+  "schema_version": "opentraces.perf.evidence.w1_redaction_throughput.v1",
+  "serial": {
+    "mb_per_s": 3.135771032412574,
+    "redactions_applied": 2492,
+    "seconds": 127.56035308283754,
+    "workers": 1
+  },
+  "speedup": 5.662726142735311
+}

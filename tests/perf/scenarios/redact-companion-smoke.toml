@@ -1,0 +1,9 @@
+name = "redact-companion-smoke"
+domain = "core"
+lane = "smoke"
+adapter = "python"
+target = "capsule.redact_companion_text"
+fixture = "redaction_corpus"
+tier = "small"
+repetitions = 4
+warmups = 1
