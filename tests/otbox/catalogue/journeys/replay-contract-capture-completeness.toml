@@ -1,0 +1,292 @@
+name = "replay-contract-capture-completeness"
+description = """
+Seal-family W6 (issue #214) — the replay-contract sentinel. Proves that a
+FRESH capture (produced by the real fake-harness + `_ingest-session` +
+post-commit + watcher-tick chain, NOT a fixture) carries the context data its
+replay consumers need, and keeps W2's companion-integrity fix (issue #210)
+permanent.
+
+NO other default-CI journey asserts the invariant W2's defect violated: that
+every stamped `Step.context_node_id` resolves inside its OWN trace's
+`context.jsonl.gz`. This one does, on the trace captured IN THIS RUN.
+
+Vehicle: `c-context-tree-substrate` is the captured-session-family sibling that
+runs the SAME real capture chain (composed from `c-installed-source`, real
+`opentraces setup git` + real git commits + real `_ingest-session`) but over a
+parentUuid-linked corpus, so the capture actually stamps per-step context nodes.
+The thinner `c-captured-real-session` corpus has no parentUuid links, so it
+yields a single root node and ZERO stamped steps — assertion (a) would be
+vacuously green there, which is exactly the theater this sentinel exists to
+prevent. See `[replay_contract]` below for the promised fidelity per method.
+
+What it asserts on the fresh trace:
+
+  (a) Every `Step.context_node_id` resolves to a node line inside that trace's
+      own `context.jsonl.gz` — checked by the committed bucket-bytes audit
+      `scripts/audit_replay_completeness.py` (real subprocess, real exit code,
+      real JSON), which also cross-checks the companion's context-event count
+      against the bucket event mirror. The audit's `stamped_count >= 1` gate
+      makes the sentinel provably non-vacuous: there really is something to
+      resolve.
+  (b) The companion is non-empty because the source is context-capable
+      (`capture_methods` non-empty). A zero-event companion on a context-capable
+      source is a RED (`context_capable_empty`), never a pass.
+  (c) The real replay consumers all exit 0 on the fresh trace and reference
+      resolvable nodes: `ctx <trace>:<step>` (per-call context), `ctx resume`
+      (RL/resume packet), `trace partition --by s1` (slicing), `capsule create`
+      (seal).
+
+Per-capture-method honesty (scope 2): this world is the JSONL path
+(`capture_method = transcript_reconstruction`), so the sentinel asserts the
+JSONL path's HONEST completeness labels — messages + runtime_state are `full`,
+system + tool_registry are `approximated` — and never the byte-perfect claims
+only the `otel` path may make (CLAUDE.md Context Tree honest-scope). The
+`otel` completeness=full assertions belong to the OTel outcome journeys, which
+stay tier=1 pending the PTY runner (plan 078); this sentinel does not re-scope
+them.
+
+The RED-capability proof lives beside this journey as a frozen regression:
+`tests/test_replay_completeness_sentinel.py` drives the REAL context emitter +
+ingest stamping with `append_event_batch` monkeypatched to fail (the exact W2
+fault) and asserts the audit goes inconsistent; the vacuous-green guard
+(emptied companion, zero-event context-capable source) is asserted there too.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+trajectories = ["replay-contract-capture-completeness"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-substrate"]
+
+# ---------------------------------------------------------------------
+# What replay fidelity IS promised, per capture method (scope 4 / #202).
+# Kept explicit so the gap between "rebuildable from the bucket" (this
+# sentinel's floor) and "byte-exact replay under identical conditions"
+# (#202's pinned-replay tier, out of scope here) never blurs.
+# ---------------------------------------------------------------------
+[replay_contract]
+promise = "rebuildable-from-bucket"
+not_promised = "byte-exact-replay-under-identical-conditions (issue #202 owns that tier)"
+
+[replay_contract.transcript_reconstruction]
+system = "approximated"        # static core prompt body is never on disk
+tool_registry = "approximated" # built-in tool input_schemas reconstructed
+messages = "full"              # message history is reconstructed verbatim
+runtime_state = "full"
+note = "JSONL path (this world). Walk-back to a step returns a session-level approximation of system/tools; messages resolve verbatim."
+
+[replay_contract.otel]
+system = "full"                # OTEL_LOG_RAW_API_BODIES assembled prompt
+tool_registry = "full"         # full input_schemas on the wire
+messages = "full"
+sampling_params = "full"       # max_tokens/temperature/top_p/top_k/stream
+note = "Wire path (plan 078). completeness=full on system + tool schemas + sampling params. Asserted by the OTel outcome journeys (tier=1, PTY-runner-blocked), not here."
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — (a)+(b) the committed bucket-bytes audit. Real subprocess,
+# real exit code, real JSON. rc=0 iff the fresh trace is consistent;
+# stamped_count>=1 proves the check is NOT vacuous.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "companion-audit"
+argv = [
+  "{py_bin}",
+  "{repo_root}/scripts/audit_replay_completeness.py",
+  "--bucket", "{home}/.opentraces/bucket",
+  "--trace-id", "{trace_id}",
+  "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "companion-audit"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "companion-audit"
+path = "schema_version"
+equals = "opentraces.replay_audit.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "companion-audit"
+path = "status"
+equals = "consistent"
+
+[[assertions]]
+kind = "stdout_json"
+step = "companion-audit"
+path = "ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "companion-audit"
+path = "context_capable"
+equals = true
+
+# (a): no stamped context_node_id dangles outside the companion.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "companion-audit"
+path = "dangling_node_ids"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "companion-audit"
+path = "counts.inconsistent"
+equals = 0
+
+# Non-vacuous gate: this fresh capture really did stamp steps AND persist
+# the nodes they point at. Without this, a zero-stamp world would pass
+# assertion (a) trivially — the exact theater W6 forbids.
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "companion-audit"
+path = "stamped_count"
+min = 1
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "companion-audit"
+path = "companion_node_count"
+min = 1
+
+# (b) count cross-check: companion == event mirror for this trace.
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "companion-audit"
+path = "companion_ctx_event_count"
+min = 1
+
+# ---------------------------------------------------------------------
+# Step 2 — (a)+(c) via the REAL consumer verb: `ctx <trace>:<step>`
+# resolves the model input at a stamped step from the companion, and
+# labels each layer's completeness HONESTLY for the JSONL path.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-step-resolves"
+argv = ["ctx", "{trace_id}:{step_index}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-step-resolves"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-step-resolves"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-step-resolves"
+path = "node_id"
+equals_var = "target_node_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-step-resolves"
+path = "capture_method"
+equals = "transcript_reconstruction"
+
+# Honest per-method completeness (scope 2): messages verbatim, system +
+# tool_registry approximated — never a byte-perfect claim the JSONL path
+# cannot make.
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-step-resolves"
+path = "layers.messages.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-step-resolves"
+path = "layers.system.completeness"
+equals = "approximated"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-step-resolves"
+path = "layers.tool_registry.completeness"
+equals = "approximated"
+
+# ---------------------------------------------------------------------
+# Step 3 — (c) `ctx resume` on a resolvable node exits 0 and returns the
+# resume packet (RL / resume-from-step consumer).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-resume"
+argv = ["ctx", "resume", "{first_node_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-resume"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-resume"
+path = "node_id"
+equals_var = "first_node_id"
+
+# ---------------------------------------------------------------------
+# Step 4 — (c) `trace partition --by s1` tiles the fresh trace (slicing
+# consumer). s1 = user-turn is deterministic, so rc=0 with a full tiling.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-partition-s1"
+argv = ["trace", "partition", "--by", "s1", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-partition-s1"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-partition-s1"
+path = "schema_version"
+equals = "opentraces.slicing.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-partition-s1"
+path = "status"
+equals = "ok"
+
+# ---------------------------------------------------------------------
+# Step 5 — (c) a capsule seal exits 0 on the fresh trace (seal consumer).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "capsule-seal"
+argv = ["capsule", "create", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-seal"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "capsule-seal"
+path = "schema_version"
+equals = "opentraces.capsule.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "capsule-seal"
+path = "capsule_id"
