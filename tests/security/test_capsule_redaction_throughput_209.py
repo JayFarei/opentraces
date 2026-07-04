@@ -110,6 +110,65 @@ def test_gate_detects_a_single_flipped_byte():
 
 
 # --------------------------------------------------------------------------- #
+# gzip OS-byte determinism across Python versions (post-merge seam fix).
+#
+# The golden gates above compare gzip BYTES, so they inherit any
+# non-determinism in the compressor itself. CPython's stdlib has exactly one:
+# on Python >= 3.13, ``gzip.compress(data, mtime=0)`` force-normalizes the
+# gzip header's OS byte (offset 9) to 255; on Python < 3.13 the ``mtime == 0``
+# fast path returns ``zlib.compress(data, wbits=31)`` raw, which stamps the
+# platform zlib's OS id instead (0x03 on Linux, 0x13 on macOS builds). The
+# committed golden was written on 3.14 (0xff), so 3.12 CI diverged at byte 9
+# and NOWHERE else. ``_gzip_deterministic`` now forces byte 9 to 0xff itself,
+# making the promise hold across machines AND Python versions.
+# --------------------------------------------------------------------------- #
+
+
+def test_gzip_deterministic_forces_os_byte_to_0xff():
+    """Byte 9 of every ``_gzip_deterministic`` output is 0xff, on every Python."""
+    from opentraces.core._bucket_io import _gzip_deterministic
+
+    for payload in (b"", b"hello world", _raw_gz()):
+        out = _gzip_deterministic(payload)
+        assert out[9] == 0xFF, f"OS byte was {out[9]:#04x}, not the forced 0xff"
+        # The surgery must not corrupt the stream.
+        assert gzip.decompress(out) == payload
+
+
+def test_raw_stdlib_fast_path_does_not_guarantee_os_byte():
+    """Red-capability: why the explicit force exists.
+
+    Builds the exact bytes CPython < 3.13's ``gzip.compress(..., mtime=0)``
+    fast path returns (``zlib.compress(data, wbits=31)``) and shows the raw
+    stdlib path leaves the OS byte to the platform's zlib — i.e. WITHOUT the
+    force there is no cross-version guarantee. If a future stdlib change makes
+    zlib itself always emit 0xff here, this test documents that the guarantee
+    still must not be delegated to the stdlib (it differs across versions in
+    the wild today: 0x03 Linux CI, 0x13 macOS, 0xff via 3.13+ gzip.compress).
+    """
+    import zlib
+
+    from opentraces.core._bucket_io import _gzip_deterministic
+
+    payload = b"cross-version determinism probe"
+    raw_fast_path = zlib.compress(payload, level=6, wbits=31)
+    forced = _gzip_deterministic(payload)
+
+    # Same compressed stream either way — only the header OS byte may differ.
+    assert gzip.decompress(raw_fast_path) == payload
+    assert forced[:9] == raw_fast_path[:9]
+    assert forced[10:] == raw_fast_path[10:]
+    assert forced[9] == 0xFF
+    # The raw fast path's OS byte is whatever the platform zlib stamped; the
+    # helper's contract is that its own output is 0xff REGARDLESS of that.
+    if raw_fast_path[9] != 0xFF:
+        assert forced != raw_fast_path, (
+            "helper output must diverge from the raw fast path exactly when "
+            "the platform zlib stamps a non-0xff OS byte"
+        )
+
+
+# --------------------------------------------------------------------------- #
 # REC A / CRITICAL 1 — a bound tool instance must force the serial path
 # --------------------------------------------------------------------------- #
 

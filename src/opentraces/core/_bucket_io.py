@@ -58,10 +58,21 @@ def _gzip_deterministic(data: bytes) -> bytes:
 
     All gzipped surfaces (layer blobs, per-trace JSONL, event-log mirror)
     use this helper so two machines projecting the same content produce
-    byte-identical output.
+    byte-identical output — across machines AND across Python versions.
+
+    The OS byte (offset 9 of the gzip header) is explicitly forced to
+    ``0xff`` ("unknown", RFC 1952) because CPython's stdlib is not
+    self-consistent about it: on Python >= 3.13 ``gzip.compress(...,
+    mtime=0)`` normalizes the OS byte to 255, but on Python < 3.13 the
+    ``mtime == 0`` fast path returns ``zlib.compress(data, wbits=31)``
+    raw, leaking whatever OS id the platform's zlib build stamps (0x03 on
+    Linux, 0x13 elsewhere) — so the "same" call produced three different
+    bytes across CI, macOS dev, and 3.13+ machines. The single-byte
+    surgery below makes the output identical everywhere.
     """
 
-    return gzip.compress(data, mtime=0, compresslevel=6)
+    out = gzip.compress(data, mtime=0, compresslevel=6)
+    return out[:9] + b"\xff" + out[10:]
 
 
 def _atomic_write_gzip(path: Path, data: bytes) -> None:
