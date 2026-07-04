@@ -9,7 +9,27 @@ O(corpus) fallback and full-companion load this repo has shipped (#87, #121,
 ``c-mature-bucket`` closes that gap with a synthetic-but-honest mature world,
 built ON the plan-080 bucket layout (never the legacy ``seed.py`` layer, which
 does not exercise the bucket readers where this class lives). It composes onto
-``c-bucket-spine-v2-multi-trace-mixed`` (2 real captured, anchored traces) and:
+``c-bucket-spine-v2-one-trace-provisional`` (1 real captured trace on the
+plan-080 bucket layout) and:
+
+NOTE on the compose base (issue #213 lane, escalated): the issue names
+``c-bucket-spine-v2-multi-trace-mixed`` as the base. That base (and its
+``-one-trace-anchored`` ancestor) does NOT build on feat/seal-family HEAD in
+this environment: ``_anchor_first_trace`` asserts the manifest row's
+``summary.anchored_count >= 1``, but although the post-commit correlation
+succeeds (``notes_written: true``, tier ``tool_emitted``) AND a real
+``git_anchor_created`` event lands in the canonical event log, ``bucket repair``
+projects ``anchored_count: 0`` into the manifest — a pre-existing anchor→manifest
+projection discrepancy unrelated to this lane. The perf recurrence guard is
+ANCHOR-INDEPENDENT (all four steps — dataset run, capsule seal, bucket status,
+trail track — read the bucket corpus / event log, never a git anchor), and the
+whole-corpus wedge this checkpoint reproduces comes entirely from the 600 cloned
+object-store envelopes + 50K events + outlier companion added below. So we
+compose on the last buildable ancestor (``-one-trace-provisional``); the anchor
+dimension is escalated as a base-checkpoint blocker, not worked around in the
+budgets.
+
+Onto that provisional base this delta:
 
   * clones the real captured TraceRecord to ~600 plan-080 bucket traces —
     each a genuine object-store envelope (``objects/traces/v1/.../current.json``
@@ -35,10 +55,18 @@ re-probes BOTH the >=600 trace count AND that the outlier companion is genuinely
 budget is DISHONEST (cloned envelopes short-circuiting the O(N) paths); the
 red-proof against the pre-R1 lineage is the acceptance gate for this checkpoint.
 
-Cold-build cost (measured on the maintainer laptop, darwin/py3.14):
-    ~MEASURED_MINUTES min wall / ~MEASURED_GB GB peak. ``cache=True`` +
-    content-addressed snapshot make it a one-time cost locally; CI cold-builds
-    it in the nightly ``scale`` lane only (never per-PR).
+Cold-build cost (measured on the maintainer laptop, darwin, python3.14 box
+interpreter): ~14 min wall (~857 s, dominated by the O(600 traces + 50K events)
+``bucket repair``) / ~0.6 GB peak RSS / ~105 MB compressed snapshot on disk.
+``cache=True`` + content-addressed snapshot make it a one-time cost locally; CI
+cold-builds it in the nightly ``scale`` lane only (never per-PR).
+
+Red/green proof of the honest world (issue #213 loopcraft condition, run on the
+SAME built snapshot): the ``dataset run`` step is 0.61 s on merged
+``feat/seal-family`` HEAD (bounded readers) and 56.8 s on the pre-R1 lineage
+(parent of ea7506d913f, the whole-corpus ``source_provenance_for_query`` scan) —
+a ~93x gap that trips the 15 s ceiling on pre-fix code and clears it on HEAD.
+The world is honest: cloned envelopes do NOT short-circuit the O(N) path.
 """
 
 from __future__ import annotations
@@ -88,7 +116,6 @@ def _cli_json(driver, box: Box, *args: str, label: str) -> dict:
 # The in-box bulk cloner (runs under the box .testvenv against HEAD product code)
 # ---------------------------------------------------------------------------
 _CLONER_SRC = r'''
-import gzip
 import json
 import sys
 import time
@@ -100,18 +127,12 @@ from opentraces.core.bucket_trace_records import (
     write_trace_record,
 )
 from opentraces.core.bucket_envelope import _write_per_trace_envelope
-from opentraces.core.bucket_layout import (
-    trace_v1_context_path,
-    trace_v1_trail_path,
-)
 from opentraces.core.trails.event_log import append_event_batch
 from opentraces.core.trails.models import TrailEventDraft
 
 params = json.loads(Path(sys.argv[1]).read_text())
 n_clones = int(params["n_clones"])
 n_events = int(params["n_events"])
-outlier_target_bytes = int(params["outlier_target_bytes"])
-context_nonempty_mod = int(params["context_nonempty_mod"])
 project_dir = Path(params["project"])
 
 # ---- 0. resolve the template trace + project slug ------------------------
@@ -142,12 +163,14 @@ while emitted_events < n_events:
 
 # ---- 2. clone the record to ~600 bucket traces ---------------------------
 # Each clone lands BOTH in the object store (write_trace_record -> current.json,
-# the whole-corpus scan surface) AND as a per-trace envelope with empty
-# companions (_write_per_trace_envelope -> trace.json, the workflow read
-# surface + the reconcile "already present" marker so `bucket repair` never
-# re-projects it and never pays an O(events) per-trace walk).
+# the whole-corpus scan surface that pre-fix source_provenance_for_query pays
+# per record, TWICE) AND as a per-trace envelope (_write_per_trace_envelope ->
+# trace.json, the workflow read surface). Companions are written EMPTY here;
+# the outlier trail + the ~40% non-empty context companions are (re)written
+# AFTER `bucket repair` by the companion writer, because repair re-projects
+# every per-trace companion from the event log and the clones carry no
+# per-trace events — so a pre-repair large companion would be silently wiped.
 clone_ids = []
-context_nonempty = 0
 for i in range(n_clones):
     tid = "mature-clone-%04d" % i
     rec = base_record.model_copy(deep=True)
@@ -155,49 +178,12 @@ for i in range(n_clones):
     write_trace_record(rec, project_slug=slug, source_layer="otbox-mature-clone")
     _write_per_trace_envelope(slug, tid, rec, [], [])
     clone_ids.append(tid)
-    # ~1-in-N clones get a small NON-EMPTY context companion; the rest keep
-    # the empty companion _write_per_trace_envelope just wrote.
-    if context_nonempty_mod > 0 and (i % context_nonempty_mod == 0):
-        ctx_line = json.dumps(
-            {"trace_id": tid, "event_type": "otbox_context_filler", "payload": {"n": i}},
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        body = (ctx_line + "\n").encode("utf-8")
-        cp = trace_v1_context_path(slug, tid)
-        with gzip.GzipFile(filename="", mode="wb", fileobj=open(cp, "wb"), mtime=0) as gz:
-            gz.write(body)
-        context_nonempty += 1
 
-# ---- 3. one outlier trace with a >=50 MB trail.jsonl.gz companion --------
-# Overwrite the outlier clone's (currently empty) trail companion with a large,
-# poorly-compressible gzip stream of schema-shaped JSONL. Random hex per line
-# keeps gzip near 1:1 so we hit the byte floor without a multi-GB file.
+# The FIRST clone is the outlier target (its >=50 MB trail companion is planted
+# post-repair). Naming it here keeps the id stable for the companion writer.
 outlier_id = clone_ids[0]
-outlier_path = trace_v1_trail_path(slug, outlier_id)
-import os as _os
 
-with open(outlier_path, "wb") as raw:
-    with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
-        line_no = 0
-        while raw.tell() < outlier_target_bytes:
-            # ~64 KiB of incompressible hex per line, 8 lines per size check.
-            for _ in range(8):
-                blob = _os.urandom(65536).hex()
-                rec_line = json.dumps(
-                    {
-                        "trace_id": outlier_id,
-                        "event_type": "otbox_outlier_filler",
-                        "payload": {"n": line_no, "blob": blob},
-                    },
-                    separators=(",", ":"),
-                )
-                gz.write((rec_line + "\n").encode("utf-8"))
-                line_no += 1
-            gz.flush()
-outlier_bytes = outlier_path.stat().st_size
-
-# ---- 4. register the clones in the project state.json --------------------
+# ---- 3. register the clones in the project state.json --------------------
 # `min_captured_traces` counts state.json trace entries (the cross-layout
 # ground truth). These ARE captured traces of this world, so registering them
 # there is correct, not cosmetic.
@@ -218,9 +204,82 @@ print(json.dumps({
     "clones": len(clone_ids),
     "events_emitted": emitted_events,
     "outlier_trace_id": outlier_id,
+    "state_trace_count": len(state["traces"]),
+}))
+'''
+
+
+# ---------------------------------------------------------------------------
+# The post-repair companion writer (runs AFTER `bucket repair`, which
+# re-projects — and so empties — every per-trace companion). Plants the one
+# >=50 MB outlier trail companion + the ~40%-non-empty context companions the
+# real mature bucket exhibits. Nothing downstream re-projects these companions
+# after this point, so they persist into the cached snapshot.
+# ---------------------------------------------------------------------------
+_COMPANION_SRC = r'''
+import gzip
+import json
+import os
+import sys
+from pathlib import Path
+
+from opentraces.core.bucket_layout import (
+    trace_v1_context_path,
+    trace_v1_trail_path,
+)
+
+params = json.loads(Path(sys.argv[1]).read_text())
+slug = params["slug"]
+outlier_id = params["outlier_id"]
+outlier_target_bytes = int(params["outlier_target_bytes"])
+context_nonempty_mod = int(params["context_nonempty_mod"])
+n_clones = int(params["n_clones"])
+
+# ---- 1. the >=50 MB outlier trail companion ------------------------------
+# A poorly-compressible gzip stream of schema-shaped JSONL. Random hex per line
+# keeps gzip near 1:1 so we clear the byte floor without a multi-GB file.
+outlier_path = trace_v1_trail_path(slug, outlier_id)
+with open(outlier_path, "wb") as raw:
+    with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+        line_no = 0
+        while raw.tell() < outlier_target_bytes:
+            for _ in range(8):  # ~64 KiB incompressible hex per line
+                blob = os.urandom(65536).hex()
+                rec_line = json.dumps(
+                    {
+                        "trace_id": outlier_id,
+                        "event_type": "otbox_outlier_filler",
+                        "payload": {"n": line_no, "blob": blob},
+                    },
+                    separators=(",", ":"),
+                )
+                gz.write((rec_line + "\n").encode("utf-8"))
+                line_no += 1
+            gz.flush()
+outlier_bytes = outlier_path.stat().st_size
+
+# ---- 2. ~1-in-N non-empty context companions (~60% stay empty) -----------
+context_nonempty = 0
+if context_nonempty_mod > 0:
+    for i in range(n_clones):
+        if i % context_nonempty_mod != 0:
+            continue
+        tid = "mature-clone-%04d" % i
+        ctx_line = json.dumps(
+            {"trace_id": tid, "event_type": "otbox_context_filler", "payload": {"n": i}},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        body = (ctx_line + "\n").encode("utf-8")
+        cp = trace_v1_context_path(slug, tid)
+        with open(cp, "wb") as raw:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+                gz.write(body)
+        context_nonempty += 1
+
+print(json.dumps({
     "outlier_bytes": outlier_bytes,
     "context_nonempty": context_nonempty,
-    "state_trace_count": len(state["traces"]),
 }))
 '''
 
@@ -300,23 +359,57 @@ def _mature_delta(driver, box: Box) -> None:
         raise CheckpointError(
             f"{_FAMILY}: cloner emitted no summary ({cloned.stdout[-400:]!r})"
         ) from None
-    if int(summary.get("outlier_bytes") or 0) < _OUTLIER_MIN_BYTES:
-        raise CheckpointError(
-            f"{_FAMILY}: outlier trail companion is {summary.get('outlier_bytes')} bytes, "
-            f"< the {_OUTLIER_MIN_BYTES} floor — dishonest world"
-        )
+    outlier_id = summary.get("outlier_trace_id")
+    if not outlier_id:
+        raise CheckpointError(f"{_FAMILY}: cloner returned no outlier_trace_id")
 
     # 2. `bucket repair` mirrors the ~50K events into bucket/events/v1 and
-    #    rebuilds manifest.json with all ~600 rows (the O(1) read-model HEAD's
-    #    source_provenance_for_query reads). Envelopes already exist, so the
-    #    reconcile loop is a no-op (never an O(events) per-trace walk).
+    #    rebuilds manifest.json with all ~600 object-store rows (what the O(1)
+    #    read-model HEAD's source_provenance_for_query and `bucket status`
+    #    read). NOTE: repair RE-PROJECTS every per-trace companion from the
+    #    event log, so the clones' trail/context companions are emptied here —
+    #    the outlier + non-empty context companions are (re)written AFTER this
+    #    by the companion writer (step 3), never before.
     repair = _cli_json(driver, box, "bucket", "repair", "--json", label="bucket repair")
     if (repair.get("repair") or {}).get("errors"):
         raise CheckpointError(
             f"{_FAMILY}: bucket repair reported errors: {repair['repair']['errors']}"
         )
 
-    # 3. Install a trusted bucket-reading workflow + bind a dataset to it with
+    # 3. Post-repair companion writer: plant the >=50 MB outlier trail companion
+    #    and the ~40%-non-empty context companions. Repair does not run again in
+    #    this delta, so these persist into the cached snapshot. The outlier-bytes
+    #    honesty check lives HERE (not on the cloner's pre-repair write, which
+    #    repair would wipe).
+    comp_params = {
+        "slug": summary.get("slug"),
+        "outlier_id": outlier_id,
+        "outlier_target_bytes": _OUTLIER_TARGET_BYTES,
+        "context_nonempty_mod": _CONTEXT_NONEMPTY_EVERY,
+        "n_clones": _N_CLONES,
+    }
+    comp_params_path = f"{home}/_mature_bucket_companion_params.json"
+    comp_script_path = f"{home}/_mature_bucket_companions.py"
+    driver.put_text(box, comp_params_path, json.dumps(comp_params))
+    driver.put_text(box, comp_script_path, _COMPANION_SRC)
+    comp = driver.exec(box, [testvenv_py, comp_script_path, comp_params_path], cwd=project)
+    _check(comp, "companion writer")
+    try:
+        comp_summary = json.loads(comp.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise CheckpointError(
+            f"{_FAMILY}: companion writer emitted no summary ({comp.stdout[-400:]!r})"
+        ) from None
+    outlier_bytes = int(comp_summary.get("outlier_bytes") or 0)
+    if outlier_bytes < _OUTLIER_MIN_BYTES:
+        raise CheckpointError(
+            f"{_FAMILY}: outlier trail companion is {outlier_bytes} bytes, "
+            f"< the {_OUTLIER_MIN_BYTES} floor — dishonest world"
+        )
+    summary["outlier_bytes"] = outlier_bytes
+    summary["context_nonempty"] = comp_summary.get("context_nonempty")
+
+    # 5. Install a trusted bucket-reading workflow + bind a dataset to it with
     #    DEFERRED provenance (dataset new does NOT run it). The journey's first
     #    `dataset run` is the step that captures the bucket snapshot — the #208
     #    wedge surface on pre-fix code.
@@ -338,7 +431,7 @@ def _mature_delta(driver, box: Box) -> None:
             f"({json.dumps(new)[:300]})"
         )
 
-    # 4. Record the audit the journey templates read (largest companion, outlier
+    # 6. Record the audit the journey templates read (largest companion, outlier
     #    id, counts) and the runner-exposed session audit keys.
     audit = box.notes.setdefault("c_mature_bucket_audit", {})
     audit.update({
@@ -357,11 +450,11 @@ def _mature_delta(driver, box: Box) -> None:
 register(
     Checkpoint(
         name="c-mature-bucket",
-        composed_from="c-bucket-spine-v2-multi-trace-mixed",
+        composed_from="c-bucket-spine-v2-one-trace-provisional",
         delta=_mature_delta,
         cache=True,
         description=(
-            "c-bucket-spine-v2-multi-trace-mixed cloned to ~600 plan-080 bucket "
+            "c-bucket-spine-v2-one-trace-provisional cloned to ~600 plan-080 bucket "
             "traces + ~50K TrailEvents + one >=50 MB outlier trail companion + "
             "~60% empty context companions + a trusted deferred-provenance dataset "
             "workflow. The scale-world perf recurrence guard (issue #213); "
