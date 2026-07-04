@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 from opentraces.core.bucket_store import iter_trace_record_objects
-from opentraces.core.dataset_facets import candidate_trace_id_set
 from opentraces.consumers.skill_opt.engine import outcome_reward
 from opentraces.quality.engine import assess_trace
 
@@ -77,8 +76,19 @@ def main() -> int:
     # per-trace file to decide it); this builder must narrow to it instead of
     # scanning/scoring every trace in the project regardless of scope.
     # ``None`` means the run carried no facet scope -- every trace is in
-    # scope, matching the pre-#212 behaviour exactly.
-    allowed_trace_ids = candidate_trace_id_set(packet)
+    # scope, matching the pre-#212 behaviour exactly. The import is lazy and
+    # best-effort: an installed ``opentraces`` predating #212 (or any other
+    # environment where the helper can't be imported) degrades to the
+    # pre-#212 unfiltered behaviour rather than crashing the whole
+    # projection -- the runner-level enforcement in
+    # ``core.datasets.append_rows`` is the authoritative backstop regardless
+    # of whether this builder can narrow its own scan.
+    try:
+        from opentraces.core.dataset_facets import candidate_trace_id_set
+
+        allowed_trace_ids = candidate_trace_id_set(packet)
+    except ImportError:
+        allowed_trace_ids = None
 
     out_lines: list[str] = []
     for obj in iter_trace_record_objects(project_slug=project_slug):
