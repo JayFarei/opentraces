@@ -459,10 +459,23 @@ def bucket_watermark() -> dict[str, Any]:
     accelerator (via :func:`_aggregate_status_from_rows`, the O(rows-in-memory)
     read). This is READ-ONLY over the status accelerator — which is
     DIGEST-EXCLUDED — so ``bucket_digest`` stays byte-identical.
-    """
-    from .bucket_store import _aggregate_status_from_rows, bucket_manifest
 
-    manifest = bucket_manifest(write=False, include_objects=False)
+    Reads the persisted ``manifest.json`` O(1), the same size-independent read
+    ``bucket_status_fast`` (plan 087) uses, instead of ``bucket_manifest()``'s
+    O(N) in-memory reconcile scan over every trace record envelope. Falls back
+    to that full scan only when no usable persisted manifest exists (absent,
+    unparsable, or over the byte cap) — rare, since capture upserts the
+    manifest on every write.
+    """
+    from .bucket_store import (
+        _aggregate_status_from_rows,
+        bucket_manifest,
+        read_persisted_manifest_capped,
+    )
+
+    state, manifest = read_persisted_manifest_capped()
+    if state != "ok" or not isinstance(manifest, dict):
+        manifest = bucket_manifest(write=False, include_objects=False)
     traces = manifest.get("traces") if isinstance(manifest, dict) else None
     agg = _aggregate_status_from_rows(traces if isinstance(traces, list) else [])
     return {
@@ -1042,24 +1055,23 @@ def _bucket_record_ref(trace_id: Any) -> dict[str, Any] | None:
         return None
     try:
         from . import paths
-        from .bucket_store import iter_trace_record_objects
+        from .bucket_trace_records import read_bucket_record_for_trace
 
-        for obj in iter_trace_record_objects():
-            if obj.trace_id != trace_id:
-                continue
-            try:
-                object_path = obj.path.relative_to(paths.bucket_dir()).as_posix()
-            except ValueError:
-                object_path = str(obj.path)
-            return {
-                "trace_id": obj.trace_id,
-                "project_slug": obj.project_slug,
-                "record_hash": obj.record_hash,
-                "object_path": object_path,
-            }
+        obj = read_bucket_record_for_trace(trace_id)
+        if obj is None:
+            return None
+        try:
+            object_path = obj.path.relative_to(paths.bucket_dir()).as_posix()
+        except ValueError:
+            object_path = str(obj.path)
+        return {
+            "trace_id": obj.trace_id,
+            "project_slug": obj.project_slug,
+            "record_hash": obj.record_hash,
+            "object_path": object_path,
+        }
     except Exception:
         return None
-    return None
 
 
 def _first_str(mapping: dict[str, Any], *keys: str) -> str | None:
