@@ -178,6 +178,45 @@ def iter_trace_record_objects(
     return out
 
 
+def iter_corpus_trace_records(
+    project_slug: str | None = None,
+) -> list[BucketTraceRecord]:
+    """Return the winning ``BucketTraceRecord`` per trace across the FULL corpus.
+
+    ``iter_trace_record_objects`` only globs the bucket tier (v2 object + plan-079
+    legacy mirror). It never looks at the two project-local JSONL layers that
+    :mod:`trace_corpus` treats as first-class corpus members: project JSONL
+    (``projects/<slug>/traces/<id>.jsonl``, ``source_layer="canonical"``) and
+    staging JSONL. A project-local-only trace arises because ingest writes the
+    JSONL before the bucket object as separate non-atomic writes -- a
+    ``write_trace_record`` failure can leave JSONL without a bucket object -- and
+    for pre-v2 corpora not yet swept by ``sync_trace_records_from_local_stores``.
+
+    This sibling reader routes through :func:`trace_corpus.iter_sources` (the
+    same pointer/stat-cheap, deduped-by-trace_id, freshest-mtime-wins union that
+    ``trace get``/``trace query`` already resolve through), then hydrates each
+    winning source with :func:`trace_corpus.load_record`. Consumers that must
+    see every durable trace -- dataset row provenance, skill-invocation
+    projection, verifier mining, the bundled skill-opt/pr-intent workflows --
+    should use this instead of the bucket-tier-only enumerator (issue #211).
+
+    Deliberately does NOT replace ``iter_trace_record_objects`` itself: the
+    manifest/digest/prune/security-sweep callers must stay bucket-object-only or
+    the digest invariant and prune semantics break.
+    """
+
+    from .trace_corpus import iter_sources, load_record
+
+    out: list[BucketTraceRecord] = []
+    for source in iter_sources():
+        if project_slug is not None and source.project_slug != project_slug:
+            continue
+        obj = load_record(source)
+        if obj is not None:
+            out.append(obj)
+    return out
+
+
 def read_bucket_record_for_trace(trace_id: str) -> BucketTraceRecord | None:
     """Resolve one trace by trace_id from the durable read sources, or ``None``."""
 

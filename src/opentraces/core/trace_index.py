@@ -48,7 +48,7 @@ from .boilerplate import (
 )
 from .bucket_store import (
     bucket_manifest,
-    iter_trace_record_objects,
+    iter_corpus_trace_records,
     iter_trace_record_pointers,
     read_bucket_record_for_trace,
     read_trace_record_object,
@@ -1419,7 +1419,7 @@ def list_skill_invocation_units_from_records(
     """Project latest ``skill_invocation`` TraceUnits without a full map rebuild."""
 
     units: list[TraceUnit] = []
-    for obj in iter_trace_record_objects(project_slug=project_slug):
+    for obj in iter_corpus_trace_records(project_slug=project_slug):
         record = obj.record
         slug = obj.project_slug
         facets = _skill_invocation_trace_facets(record, slug)

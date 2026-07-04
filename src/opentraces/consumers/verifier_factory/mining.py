@@ -11,7 +11,7 @@ Reads only the existing read side: it reuses
 :func:`consumers.skill_intelligence.pipeline.audit_skill_invocations` and
 ``build_episode_rows`` (which themselves read
 ``trace_index.list_skill_invocation_units_from_records`` and
-``bucket_store.iter_trace_record_objects``). Nothing is written to the bucket.
+``bucket_store.iter_corpus_trace_records``). Nothing is written to the bucket.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any
 
 from ..skill_intelligence import pipeline as si
 from ...core._time import utc_now_str as _utc_now
-from ...core.bucket_store import iter_trace_record_objects
+from ...core.bucket_store import iter_corpus_trace_records
 from . import archetypes as arch
 from . import scorers
 from .schema import CANDIDATES_SCHEMA_VERSION, validate_candidates
@@ -205,7 +205,7 @@ def mine_verifier_candidates(
         total_units = int(audit.get("total_skill_invocation_units", 0))
         # Load TraceRecords once so detectors can use the real shell commands +
         # commit signal (Codex exec_command opacity) instead of only the projection.
-        records = {o.trace_id: o.record for o in iter_trace_record_objects(project_slug=project)}
+        records = {o.trace_id: o.record for o in iter_corpus_trace_records(project_slug=project)}
     else:
         counts_by_skill = {}
         total_units = 0

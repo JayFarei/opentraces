@@ -30,7 +30,7 @@ from opentraces.core.branch_context import (
     NO_LINEAGE_NO_TRACES,
     bucket_remote_url,
 )
-from opentraces.core.bucket_store import iter_trace_record_objects
+from opentraces.core.bucket_store import iter_corpus_trace_records
 from opentraces.core.bursts import detect_bursts
 from opentraces.core.entity_join import join_entities_to_traces
 from opentraces.core.llm_polish import polish_branch
@@ -187,7 +187,7 @@ def _build_burst_index(
 
     index: dict[str, list[tuple[str, Any, Any]]] = defaultdict(list)
     records_by_trace: dict[str, Any] = {}
-    for bucket_record in iter_trace_record_objects(project_slug=project_slug or None):
+    for bucket_record in iter_corpus_trace_records(project_slug=project_slug or None):
         records_by_trace[bucket_record.trace_id] = bucket_record
         try:
             trace_map = build_trace_map(bucket_record.record)
