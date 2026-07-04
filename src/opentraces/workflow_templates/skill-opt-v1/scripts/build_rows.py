@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from opentraces.core.bucket_store import iter_trace_record_objects
+from opentraces.core.bucket_store import iter_corpus_trace_records
 from opentraces.consumers.skill_opt.engine import outcome_reward
 from opentraces.quality.engine import assess_trace
 
@@ -73,7 +73,7 @@ def main() -> int:
     project_slug = scope.get("project_slug") or scope.get("project") or None
 
     out_lines: list[str] = []
-    for obj in iter_trace_record_objects(project_slug=project_slug):
+    for obj in iter_corpus_trace_records(project_slug=project_slug):
         try:
             assessment = assess_trace(obj.record)
         except Exception as exc:  # never let one bad trace abort the projection

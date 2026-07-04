@@ -81,6 +81,7 @@ from .bucket_trace_records import (
     _project_store_bucket_record as _project_store_bucket_record,
     _read_jsonl_trace_records as _read_jsonl_trace_records,
     _resolve_trace_record_pointer as _resolve_trace_record_pointer,
+    iter_corpus_trace_records as iter_corpus_trace_records,
     iter_trace_record_objects as iter_trace_record_objects,
     iter_trace_record_pointers as iter_trace_record_pointers,
     project_store_record_from_path as project_store_record_from_path,

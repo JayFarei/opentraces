@@ -311,6 +311,31 @@ def iter_sources() -> Iterator[CorpusSource]:
         yield winners[trace_id]
 
 
+def iter_sources_ranked() -> Iterator[list[CorpusSource]]:
+    """Yield every candidate for each ``trace_id``, ranked freshest-first.
+
+    Same union and per-trace_id grouping as :func:`iter_sources`, but keeps
+    every source instead of only the winner. A caller that needs a hydrated
+    record and finds the freshest candidate corrupt or unreadable can then fall
+    back to the next-best candidate in the same freshness order, instead of
+    treating "freshest fails to load" as "trace absent" (issue #211: a corrupt
+    newer JSONL must not shadow a valid older bucket object).
+
+    Ranking uses the exact total order :func:`_beats` applies pairwise, so the
+    first element of each yielded list is always the same winner
+    :func:`iter_sources` would report for that trace_id. Deterministic order
+    (trace_ids sorted). Cheap: no full record parse.
+    """
+
+    grouped: dict[str, list[CorpusSource]] = {}
+    for candidate in (*_bucket_candidates(), *_jsonl_candidates()):
+        grouped.setdefault(candidate.trace_id, []).append(candidate)
+    for trace_id in sorted(grouped):
+        candidates = grouped[trace_id]
+        candidates.sort(key=lambda c: (c.mtime_ns, _priority(c.layer), str(c.path)), reverse=True)
+        yield candidates
+
+
 def resolve(trace_id: str) -> CorpusSource | None:
     """Resolve the single winning source for ``trace_id``, or ``None``.
 
