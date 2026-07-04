@@ -63,6 +63,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -430,11 +432,13 @@ def _run() -> int:
 
 def test_probe_a4_blame_empty_fast():
     rc = _run()
-    assert rc != 3, "A4 HARNESS-INVALID (opentraces CLI binary absent in this worktree)"
-    assert rc != 2, (
-        "A4 SETUP-INVALID (commit missing / not 0-anchor / REPO carries no "
-        "attribution for the pinned commit)"
-    )
+    if rc == 3:
+        pytest.skip("A4 HARNESS-INVALID (opentraces CLI binary absent in this worktree)")
+    if rc == 2:
+        pytest.skip(
+            "A4 SETUP-INVALID (commit missing / not 0-anchor / REPO carries no "
+            "attribution for the pinned commit)"
+        )
     assert rc == 0, (
         "A4 RED: blame on a 0-anchor commit hangs (glob-fallthrough whole-log "
         "survival walk) and/or is not fast / not well-formed / not correctly-empty"

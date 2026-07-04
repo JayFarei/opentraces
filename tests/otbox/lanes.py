@@ -25,7 +25,7 @@ field is ``ci_lane``.
 
 from __future__ import annotations
 
-CI_LANES = ("pr", "nightly", "local-agents")
+CI_LANES = ("pr", "nightly", "local-agents", "scale")
 
 # Capability vocabulary comes from journey._capabilities(). These reflect what
 # each lane's runner ACTUALLY provides — the ubuntu nightly has tmux but NOT
@@ -40,6 +40,12 @@ LANE_CAPABILITIES: dict[str, frozenset[str]] = {
         {"cli", "git", "tmux", "termctrl", "tier1", "real_repl", "live_hf",
          "fetched_artifacts"}
     ),
+    # Issue #213 (seal-family W5) — the nightly-only scale lane. Cold-builds
+    # the ~600-trace / ~50K-event `c-mature-bucket` world (5-12 min / 1.5-4 GB)
+    # to guard the O(corpus) perf class (#87/#121/#137/#208) that is invisible
+    # on the 1-2 trace CI checkpoints. NEVER on the per-PR gate; gated behind
+    # OT_OTBOX_SCALE=1 via `make otbox-scale`.
+    "scale": frozenset({"cli", "git"}),
 }
 
 # Capabilities that legitimately vary by host or opt-in gate. A tier-0
@@ -86,6 +92,15 @@ SENTINEL_JOURNEYS = (
     "status-safety-gate",
     "trace-map-dive",
     "trail-lenses",
+    # Seal-family M2 (#180) — the dataset watermark/verify/publish-clearance
+    # lifecycle and the capsule mini-bucket redaction floor.
+    "dataset-sync-verify-publish",
+    "capsule-redaction-floor-on-raw-companions",
+    # Seal-family W6 (#214) — ci-pr.yml runs this journey explicitly (see
+    # the dedicated "Seal-family W6 sentinel journey" step); listing it here
+    # keeps the catalogue's derived ci_lane metadata ("pr") in sync with
+    # where it actually runs instead of silently deriving "nightly".
+    "replay-contract-capture-completeness",
 )
 
 

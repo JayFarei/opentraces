@@ -2,6 +2,17 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from tests._dataset_egress import neutralize_dataset_egress
+
+
+@pytest.fixture(autouse=True)
+def _clear_dataset_egress(monkeypatch):
+    # These plan-058 publish golden paths predate the #194 egress clearance gate
+    # and use synthetic trace ids with no bucket entry.
+    neutralize_dataset_egress(monkeypatch)
+
 
 def _row(summary: str, *, trace_id: str = "trace-1", unit_id: str | None = None) -> dict:
     return {

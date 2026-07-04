@@ -180,6 +180,20 @@ class HermesParser:
         row_metadata = row.get("metadata", {}) or {}
         model = row_metadata.get("model") or None  # None if unknown; don't fabricate placeholder
 
+        # #212 — harness version, where derivable. The Hermes ShareGPT rows
+        # observed to date carry no version-like key at all (only `model` /
+        # `timestamp` under `metadata`), so this stays None on today's corpus --
+        # an honest limitation, not a migration. Checking the handful of
+        # plausible key spellings future Hermes producers might use costs
+        # nothing and means a version signal flows through the day it appears,
+        # with no parser change required.
+        agent_version = (
+            row_metadata.get("version")
+            or row_metadata.get("agent_version")
+            or row_metadata.get("harness_version")
+            or None
+        )
+
         # Extract task description
         source_row = row.get("source_row", {}) or {}
         task_desc = source_row.get("original_prompt") or None
@@ -282,7 +296,7 @@ class HermesParser:
             timestamp_start=timestamp,
             execution_context="runtime",
             task=Task(description=task_desc, source=task_source),
-            agent=Agent(name="hermes-agent", model=model),
+            agent=Agent(name="hermes-agent", model=model, version=agent_version),
             system_prompts=system_prompts,
             tool_definitions=[],
             steps=steps,

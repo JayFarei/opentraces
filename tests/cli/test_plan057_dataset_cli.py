@@ -7,10 +7,15 @@ from click.testing import CliRunner
 from opentraces.cli import main
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import dataset_path
+from opentraces.core.workflows import create_workflow
 
 
 def test_dataset_cli_new_list_remove_round_trip(tmp_path):
     runner = CliRunner()
+    # #190: bind-time validation resolves the workflow BEFORE creating anything,
+    # so the bind must name a real installed workflow (the pre-#190 opaque
+    # bare-name bind is dead — see test_dataset_new_bogus_workflow_exits_2).
+    pkg = create_workflow("grill-me-intent-curator")
 
     created = runner.invoke(
         dataset_group,
@@ -21,8 +26,6 @@ def test_dataset_cli_new_list_remove_round_trip(tmp_path):
             "Intent summaries",
             "--workflow",
             "grill-me-intent-curator",
-            "--workflow-digest",
-            "sha256:workflow",
             "--json",
         ],
     )
@@ -30,6 +33,11 @@ def test_dataset_cli_new_list_remove_round_trip(tmp_path):
     created_payload = json.loads(created.output)
     assert created_payload["dataset"]["name"] == "grill-me-intents"
     assert created_payload["dataset"]["path"].endswith("grill-me-intents")
+    # The real resolved digest is pinned at bind time (never sha256:unconfigured).
+    workflow = created_payload["dataset"]["manifest"]["workflow"]
+    assert workflow["digest"] == pkg.digest
+    assert workflow["digest"].startswith("sha256:")
+    assert workflow["digest"] != "sha256:unconfigured"
 
     listed = runner.invoke(dataset_group, ["list", "--json"])
     assert listed.exit_code == 0, listed.output
@@ -40,6 +48,53 @@ def test_dataset_cli_new_list_remove_round_trip(tmp_path):
     removed = runner.invoke(dataset_group, ["remove", "grill-me-intents", "--yes", "--json"])
     assert removed.exit_code == 0, removed.output
     assert not dataset_path("grill-me-intents").exists()
+
+
+def test_dataset_new_bogus_workflow_exits_2_and_creates_nothing():
+    """#190: an unresolvable --workflow ref exits rc=2 (invalid usage) and binds
+    nothing — no dataset directory is created."""
+    runner = CliRunner()
+    created = runner.invoke(
+        dataset_group,
+        ["new", "doomed", "--workflow", "totally-bogus-workflow-nope", "--json"],
+    )
+    assert created.exit_code == 2, created.output
+    payload = json.loads(created.output)
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "workflow_unresolved"
+    assert not dataset_path("doomed").exists()
+
+
+def test_dataset_new_bogus_workflow_digest_override_still_exits_2():
+    """An explicit --workflow-digest no longer resurrects the opaque bare-name
+    bind #190 kills: an unresolvable name is rc=2 regardless of the digest flag."""
+    runner = CliRunner()
+    created = runner.invoke(
+        dataset_group,
+        [
+            "new",
+            "doomed2",
+            "--workflow",
+            "still-bogus",
+            "--workflow-digest",
+            "sha256:whatever",
+            "--json",
+        ],
+    )
+    assert created.exit_code == 2, created.output
+    assert not dataset_path("doomed2").exists()
+
+
+def test_dataset_new_without_workflow_requires_one():
+    """#190: the automated path requires a workflow; a bare `dataset new <name>`
+    with no --workflow / --rows-file / --from-skill exits rc=2, nothing created."""
+    runner = CliRunner()
+    created = runner.invoke(dataset_group, ["new", "no-workflow", "--json"])
+    assert created.exit_code == 2, created.output
+    payload = json.loads(created.output)
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "workflow_required"
+    assert not dataset_path("no-workflow").exists()
 
 
 def test_dataset_new_accepts_markdown_workflow_path(tmp_path):
@@ -93,6 +148,8 @@ def test_dataset_new_accepts_workflow_schema_without_seed_rows(tmp_path):
         encoding="utf-8",
     )
     runner = CliRunner()
+    # #190: the bound workflow must resolve at bind time.
+    create_workflow("hf-intent-trajectory-outcome")
 
     created = runner.invoke(
         dataset_group,

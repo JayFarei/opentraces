@@ -125,6 +125,14 @@ class TruffleHogDetector:
     def describe(self, cfg: Any) -> ToolInfo:
         is_on = self.enabled(cfg)
         version = find_trufflehog()
+        # Honest scope (#143 move 4): trufflehog has no per-string ``find()`` —
+        # its ``apply`` writes ``record.to_jsonl_line()`` to a tmp file and shells
+        # out, TraceRecord-shaped to the bone. For M1 it stays TraceRecord-only
+        # and does NOT run over ctx/trail companion dicts (a span-mapping
+        # scan_text adapter is deferred as brittle). It is therefore absent from
+        # the companion floor rather than silently giving a companion caller zero
+        # coverage.
+        companion_note = "TraceRecord-only (no ctx/trail companion coverage in M1)"
         if not is_on:
             state, detail = "disabled", None
         elif version is None:
@@ -132,7 +140,7 @@ class TruffleHogDetector:
             detail = "binary not found; run 'opentraces setup trufflehog --enable'"
         else:
             state = "enabled"
-            detail = f"{version}"
+            detail = f"{version}; {companion_note}"
         return ToolInfo(
             name=self.name,
             display_name=self.display_name,

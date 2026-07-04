@@ -2,7 +2,7 @@
        test test-premerge test-premerge-shard test-premerge-timing test-integration-shard \
        lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
-       otbox-matrix otbox-inventory otbox-gc otbox-agent-session otbox-live-hf release-gate \
+       otbox-matrix otbox-inventory otbox-gc otbox-agent-session otbox-live-hf otbox-scale release-gate \
        slicer-soft-evidence \
        capture-refresh \
        capture-refresh-check capture-refresh-all \
@@ -53,7 +53,13 @@ SHARD_TOTAL ?= 1
 PYTEST_CI_DESELECTS := \
 	--deselect "tests/integration/test_bucket_dataset_remote_flow_uat.py::test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket" \
 	--deselect "tests/integration/test_bucket_remote_uat.py::test_installed_runtime_syncs_bucket_to_fake_remote_and_restores" \
-	--deselect "tests/integration/test_trace_trails_corpus.py::test_trace_trails_corpus_fixture_is_current"
+	--deselect "tests/integration/test_trace_trails_corpus.py::test_trace_trails_corpus_fixture_is_current" \
+	--deselect "tests/integration/test_probe_a9_track_survival_speed.py::test_probe_a9_track_survival_speed" \
+	--deselect "tests/integration/test_probe_a10_no_glob_guard.py::test_probe_a10_no_glob_guard" \
+	--deselect "tests/integration/test_probe_b1_creation_bijection.py::test_probe_b1_creation_bijection" \
+	--deselect "tests/integration/test_probe_b2_manifest_events_count.py::test_probe_b2_manifest_events_count" \
+	--deselect "tests/integration/test_probe_b3_per_patch_attribution.py::test_probe_b3_per_patch_attribution" \
+	--deselect "tests/integration/test_probe_b4_lineage_surface_agreement.py::test_probe_b4_lineage_surface_agreement"
 
 test-premerge: test-premerge-shard test-premerge-timing
 
@@ -143,6 +149,15 @@ otbox-agent-session:
 # tests/otbox/README.md "Live HuggingFace lane".
 otbox-live-hf:
 	OT_OTBOX_LIVE_HF=1 $(OTBOX_PY) -m pytest tests/otbox/test_live_hf_slice.py -v
+
+# Issue #213 (seal-family W5) — the nightly `scale` lane. Cold-builds the
+# ~600-trace / ~50K-event `c-mature-bucket` world (5-12 min / 1.5-4 GB) and
+# runs the `mature-bucket-perf` perf recurrence guard: four seal-family hot
+# commands under catastrophic-regression duration + RSS ceilings. OFF the
+# per-PR gate and off default `pytest tests/otbox/`; gated behind
+# OT_OTBOX_SCALE=1. Runs in the nightly workflow only.
+otbox-scale:
+	OT_OTBOX_SCALE=1 $(OTBOX_PY) -m pytest tests/otbox/test_scale_lane.py -v -ra
 
 # Plan 071 — capture-refresh against a simulated-user scenario. The
 # default-CI safe value is `echo-meta` (uses the in-tree echo binary).

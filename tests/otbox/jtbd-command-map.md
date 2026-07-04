@@ -66,6 +66,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **inspect-trace-context** | 1 → 2 | 3 | `trace map` for structural inspection |
 | **inspect-context-tree** | 1 → 9 | 3 | `ctx tree/show/step/reads/writes/diff/compactions/list/info` for what the model saw |
 | **resume-from-context** | 1 → 4 | 3 | `ctx prune/resume/resolve/anchor-for-step` for replay and handoff packets |
+| **replay-contract-capture-completeness** | 1 → 5 | 3 + 5 | Seal-family W6 (#214) sentinel — a fresh capture's `Step.context_node_id`s all resolve in its own `context.jsonl.gz`, then `ctx <trace>:<step>` / `ctx resume` / `trace partition --by s1` / `capsule create` all consume it (keeps W2 #210 permanent) |
 | **extract-bounded-evidence** ★ | 1 → 2 | 3 + 6 | `trace slice` for dataset workflows |
 | **skill-intelligence** ★ | 1 → N | 3 + 6 | `trace skills` → skill episodes / rollouts / eval-tasks projected into a dataset (the skill-intelligence consumer) |
 | **trace-index-rebuild-progress** | 1/1 | 3 | `trace index rebuild` under the `--progress`/heartbeat contract (plan 088) |
@@ -107,6 +108,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **context-tree-otel-outcome** | validation | 2 + 3 | OTLP outcome journeys for replay, inspection, resume, and experiments |
 | **context-tree-temporal-anchor** | validation | 3 | Context Tree temporal anchor precision validation |
 | **trace-spine** | validation | 3 + 4 + 5 | TraceRecord spine and cross-substrate resolution validation |
+| **mature-bucket-perf-guard** | validation | 3 + 4 + 5 + 6 | Perf recurrence guard (issue #213): the four seal-family hot commands (`dataset run`, `capsule create`, `bucket status`, `trail track`) stay under catastrophic-regression duration + peak-RSS ceilings on a ~600-trace / ~50K-event mature bucket — the #87/#121/#137/#208 O(corpus) class caught in the nightly `scale` lane |
 
 | **capsule-dependency-unblock** | 1 → 9 | 3 + 6 | Seal a failing episode into a capsule, share/file it, watch the verdict flip when a dependency unblocks |
 | **trace-intelligence-compare** | 1/1 | 3 | Derive-on-demand A/B compare of two traces (`opentraces.trace_compare.v1`) |
@@ -279,6 +281,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `dataset security` | Curator inspects or edits one dataset's resolved security policy (seeded from the workflow contract): enabling optional tools or recording an unsafe override for a required tool. Owned by the dataset manifest, never a global config toggle | build-publishable-dataset (3/6) ★ | `dataset-security-workflow-seeding` | both |
 | `dataset run` | Curator executes the workflow against matching bucket traces so new rows land in the dataset | build-publishable-dataset (4/6) ★ | unowned | both |
 | `dataset status` | Curator inspects row counts by publication state to decide whether the dataset is ready for review | build-publishable-dataset (5/6) ★ | unowned | both |
+| `dataset verify` | Curator replays the bound workflow side-effect-free and byte-compares against the stored rows to grade the seal's explainability (reproduces / bucket-advanced / integrity-failure) before publishing | build-publishable-dataset (5/6) ★ | `build-publishable-dataset-shape` | both |
 | `dataset review` | Curator opens the row triage surface. Positional verbs (`approve` / `reject` / `reset`) drive the CLI persona; `--tui` and `--web` open alternate review-rows-tui / review-rows-web fronts | review-rows-cli (1/1) | `cli-publish-happy-path`, `tier1-cold-publish` | both |
 | `dataset approve` (hidden alias) | Agent or script bulk-approves rows programmatically, bypassing interactive review | review-rows-cli (1/1) | unowned | agent |
 | `dataset reject` (hidden alias) | Agent or script bulk-rejects rows programmatically | review-rows-cli (1/1) | unowned | agent |
@@ -307,6 +310,9 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | `skill-verifier autoverify` | Operator runs the factory's evidence-scored verification pass over a skill's episodes | skill-verifier-calibration (2/4) | `skill-verifier-factory-echo` | agent |
 | `skill-verifier align` | Operator aligns rubric criteria against human gold labels (calibration step) | skill-verifier-calibration (3/4) | `skill-verifier-command-smoke` | human |
 | `skill-verifier score` | Operator or loop scores a rollout against a calibrated rubric as a reward source | skill-verifier-calibration (4/4) | `skill-verifier-command-smoke` | agent |
+| `capsule create` | Developer seals a bounded, redacted, self-contained capsule from an agent session (v7 trace / trace:step / trace:A-B address) — the visible seal verb superseding `export` | capsule-dependency-unblock (1/9) | `capsule-command-smoke` | both |
+| `capsule get` | Consumer resolves a capsule (file / https / hf:// ref) and prints its envelope read-only, writing no bucket or project state | capsule-dependency-unblock (5/9) | `capsule-command-smoke` | both |
+| `capsule import` | Consumer resolves a capsule and writes it into the local bucket as a first-class trace so it projects natively via map / slice / trace get | capsule-dependency-unblock (5/9) | `capsule-command-smoke` | both |
 | `capsule export` | Developer seals a failing/usage episode (intent + context packet + slice + repo pin) into a capsule under .opentraces/ | capsule-dependency-unblock (1/9) | `capsule-dependency-unblock` | both |
 | `capsule preview` | Developer dry-runs the full redaction pipeline and reviews the counts-only manifest before anything leaves the machine | capsule-dependency-unblock (2/9) | `capsule-command-smoke` | human |
 | `capsule share` | Developer publishes the redacted capsule to HF (sha-pinned immutable URL) after the consent gate | capsule-dependency-unblock (3/9) | `capsule-dependency-unblock` | human |

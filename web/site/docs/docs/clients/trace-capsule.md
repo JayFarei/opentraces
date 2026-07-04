@@ -6,12 +6,26 @@ of a captured session so a maintainer agent or teammate can resolve the episode 
 a single command.
 
 A runnable repro test is **optional evidence, not the point**. Capsules with
-`test=null` are fully first-class: every verb (`export`, `preview`, `open`,
-`share`, `issue`) works identically whether or not the session had a failing command.
+`test=null` are fully first-class: every verb (`create`, `preview`, `get`,
+`import`, `share`, `issue`) works identically whether or not the session had a failing command.
+
+The seal/consume/write verbs are `capsule create` (seal), `capsule get`
+(read-only resolve), and `capsule import` (the explicit opt-in write into the
+local bucket). The pre-v7 spellings `capsule export` and `capsule open` still
+work (hidden from `--help`, kept callable so existing issue-embedded commands
+and scripts never break) — this doc uses the current names throughout.
 
 The underlying object stays `opentraces.capsule.v1` throughout. The presentation
 reframe (command noun, `<!-- opentraces-capsule: <id> -->` wire markers, issue
 idempotency) is unchanged.
+
+Per the [Seal Family contract](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md) (ADR-0008),
+a capsule is one of exactly two things that "seal": an **immutable, URL-addressed
+seal** over one scope, byte-stable under re-seal, with a deterministic
+`capsule_id`. (The other is a [dataset](../workflow/datasets.md), a growing,
+reviewed seal of workflow-projected rows.) Everything else that carries capsule
+content, a rendered issue body, the capsule-worker HTML page, is a *rendering* of
+that seal, not a seal itself.
 
 ## What a Capsule Carries
 
@@ -33,49 +47,46 @@ Optional additive keys (null-tolerant, absent on older capsules without error):
 
 ## Verbs
 
-### `capsule export` — build a local capsule
+### `capsule create` — seal a local capsule
 
 ```bash
-opentraces capsule export <trace-id> \
+opentraces capsule create <ref> \
+  [--from-step <n> --to-step <n>] \
   [--project <repo>] \
   [--product <name>] \
   [--include-prompts] \
-  [--test-command "pytest tests/test_foo.py -k failing"] \
-  [--expect-error "AssertionError"] \
-  [--setup-command "pip install -e ."] \
-  [--consume package:humanduration=git+https://github.com/o/r@v0.1.0] \
-  [--from-session <id> [--from-agent claude|codex]] \
-  [--product-full-span] \
+  [--repo-url <url>] \
   [--progress auto|plain|json|never] \
   [--out <dir>] \
   [--bundle] \
   [--json]
 ```
 
-Writes `capsules/v1/<id>/capsule.json` + `capsule.md` under `<project>/.opentraces/`.
+`<ref>` is a v7 address: a whole `<trace>`, a point `<trace>:<step>`, or a span
+`<trace>:A-B`. The address selects the scope directly — no step/radius flag
+soup; `--from-step`/`--to-step` is the equivalent explicit span seam. Writes
+`capsules/v1/<id>/capsule.json` + `capsule.md` under `<project>/.opentraces/`.
 Primary stdout is the `capsule.json` path. `--json` prints the full envelope.
-The `<trace-id>` is optional when `--from-session` is given (the two are mutually exclusive).
 
 - `--product <name>` binds the capsule to one consumed product and scopes the slice
-  to steps that reference it. If omitted and the session captured dependency names,
-  the CLI emits `--consume` hints to stderr (never auto-writes them).
+  to steps that reference it.
 - `--include-prompts` opts prompt-bearing fields (system prompt + per-step reasoning)
   IN; they are excluded by default (see [Layered Redaction](#layered-redaction)).
-- `--bundle` embeds a hermetic `git archive` at the pinned commit so the test runs
-  even if the commit is later unreachable.
-- `--from-session <id>` builds a capsule for the **current turn** from a live hook
-  sidecar instead of a retained trace id — it ingests the session first, then exports.
-  `--from-agent claude|codex` selects which sidecar; if the session isn't found or
-  isn't parseable the command prints a specific remediation (and Codex sidecars whose
-  rollout content isn't yet at the ingested path fall back to that remediation).
-- `--product-full-span` opts the `--product` slice out of the default radius clamp
-  (the bounded window that keeps a large session from slicing end-to-end). Use it
-  only when you need the full matched span.
+- `--bundle` embeds a hermetic `git archive` at the pinned commit so a later
+  `capsule test --from-bundle` runs even if the commit is later unreachable;
+  the shipped bundle bytes are secret-scanned before `share --publish` (see
+  [Bundle Safety and Sandbox](#bundle-safety-and-sandbox)).
 - `--progress auto|plain|json|never` reports stage/heartbeat to **stderr** during the
-  slow export phases (slice / context / trail-anchor projection); the `--json` envelope
-  on stdout stays clean. `auto` is quiet on a non-TTY. (Shared with the hidden-but-callable
-  `trace index rebuild` progress contract — the Trace Index self-maintains behind `trace query`
-  now, so this command no longer appears in `--help`.)
+  slow seal phases (slice / context / trail-anchor projection); the `--json` envelope
+  on stdout stays clean. `auto` is quiet on a non-TTY.
+
+`create` is the v7-address seal path; it does not (yet) declare a runnable test
+command, an explicit `--consume` spec, or seal from a live in-flight session.
+For those, the pre-v7 `capsule export` spelling stays callable (hidden from
+`--help`) with its full original flag set: `--test-command`, `--expect-error`,
+`--setup-command`, `--consume`, `--from-session [--from-agent claude|codex]`,
+and `--product-full-span`. Both verbs write the same `opentraces.capsule.v1`
+object; `export` is the richer flag surface, `create` is the v7-address one.
 
 ### `capsule preview` — inspect egress before anything leaves
 
@@ -96,18 +107,35 @@ Runs the full redaction pipeline, then prints:
 
 Writes and publishes **nothing**. This is the developer-approval checkpoint.
 
-### `capsule open` — the consume verb
+### `capsule get` — the read-only consume verb
 
 ```bash
-opentraces capsule open <ref> [--json] [--summary]
+opentraces capsule get <ref> [--json/--no-json] [--summary]
 ```
 
 Resolves a capsule from a file path, `https://` URL, or `hf://` ref. `--json` (the
 default) prints the frozen `opentraces.capsule.v1` envelope so a maintainer agent can
 parse it with zero bespoke code. `--summary` prints the human markdown instead.
+Read-only: no `~/.opentraces`, bucket, or project state is created, so a
+maintainer in a brand-new environment can `get` a capsule and read it.
 
 The `--json` flag is the default and is accepted explicitly so the command embedded
 in the issue body runs verbatim.
+
+### `capsule import` — the explicit opt-in write
+
+```bash
+opentraces capsule import <ref> [--source-layer <label>] [--json]
+```
+
+Resolves the same way as `get`, but WRITES the result into the local bucket as
+a first-class trace: the carried spine is materialized into a schema-valid
+`TraceRecord` under the reused trace id, and its recorded anchors into the
+per-trace Trail companion, so the imported capsule projects natively through
+`trace map` / `trace slice` / `trace get`. Same capsule id over an existing
+trace is an idempotent no-op; a different capsule id over the same trace
+scope-merges. `--source-layer` (default `capsule_import`) labels the
+provenance recorded on the imported record.
 
 ### `capsule share` — mint and optionally publish the URL
 
@@ -116,14 +144,18 @@ opentraces capsule share <trace-id> \
   [--repo <hf-owner/name>] \
   [--publish] [--private] \
   [--product <name>] [--include-prompts] \
-  [--bundle] [--copy] [--yes]
+  [--bundle] [--copy] [--yes] \
+  [--i-accept-bundle-findings]
 ```
 
 Without `--publish`: mints the shareable URL locally. Primary stdout is the URL.
 
 With `--publish`: uploads `capsule.json` + `capsule.md` (and the bundle if `--bundle`)
 to the HuggingFace dataset repo and pins the URL to the immutable publish commit sha.
-Before uploading, the consent gate runs (see [Consent Gate](#consent-gate)).
+Before uploading, the consent gate runs (see [Consent Gate](#consent-gate)) and, if
+`--bundle` was used, the shipped bundle bytes are secret-scanned (see
+[Bundle Safety and Sandbox](#bundle-safety-and-sandbox)); a finding blocks the
+publish (zero bytes out) unless `--i-accept-bundle-findings`.
 
 Default repo is `<you>/opentraces-capsules` (or `cfg.capsule_repo` if set). `--copy`
 copies the URL to the clipboard.
@@ -156,8 +188,10 @@ The consent gate runs before any egress (see [Consent Gate](#consent-gate)).
 opentraces capsule replay <ref> [--against HEAD] [--json]
 
 # Run the captured repro command as an executable test (requires test.command).
-opentraces capsule test <ref> [--against HEAD] [--from-bundle] \
-  [--with name=ver] [--matrix name=v1,v2,v3] [--verdict-to issue] [--json]
+opentraces capsule test <ref> [--against HEAD] [--repo-dir <dir>] [--from-bundle] \
+  [--inherit-env] [--timeout 180] [--yes] \
+  [--unsafe-run-on-host] [--i-own-isolation] \
+  [--with name=ver] [--matrix name=v1,v2,v3] [--verdict-to issue] [--close/--no-close] [--json]
 
 # Post a manual verdict to the issue.
 opentraces capsule verdict <issue-ref> --state fixed|reproduces|inconclusive \
@@ -170,7 +204,34 @@ opentraces capsule watch <issue-ref> [--timeout 300] [--json]
 `capsule test` exits early with a clear message if the capsule carries no test
 command; use `capsule replay` for intent-only sessions. `--matrix name=v1,v2`
 sweeps one consumed dependency and reports which version flips the verdict to `fixed`
-(`resolved_in`).
+(`resolved_in`). The repro is captured, untrusted input — `test` asks for
+confirmation before executing it (skip with `--yes`) and runs under
+`core/isolation.py`'s minimal env allowlist (see
+[Bundle Safety and Sandbox](#bundle-safety-and-sandbox)). A FOREIGN capsule's
+command is blocked from running on the host by default.
+
+### Replay Honesty: the Four Properties
+
+`capsule replay`'s packet leads with four named properties, each derived from
+a lattice-ranked factor (ADR-0008):
+
+| Property | Derived from | `ok` when |
+|----------|---------------|-----------|
+| `reproducible` | `env_tier` | `L3` or `L4` (hermetic env) |
+| `gradable` | `oracle_trust` | `captured_pass`, `captured_error`, or `declared` |
+| `scoped` | `diff_trust` | `exact` (the diff bounds exactly the sealed slice) |
+| `sandboxed` | `sandbox_tier` | any real isolation tier above `none` |
+
+`verdict_trust` (`floor` / `low` / `medium` / `high`) is the derived weakest-link
+summary — the `min()` over all four factors' lattice positions — kept on the
+packet for automation thresholds. **On today's corpus every honest capsule
+reports `verdict_trust: floor`** and refuses to claim `reproducible`: no
+dependency-pin resolver ships yet, so `env_tier` never rises off its `L0`
+floor. That is the honesty contract working as intended, not a bug — trust
+rises only when a factor's real underlying state rises (a future resolver for
+`env_tier`, a declared oracle or `captured_pass` for `oracle_trust`, a
+slice-scoped diff for `diff_trust`, real OS containment for `sandbox_tier`),
+never by relabelling a claim.
 
 ## The 3-Way Render Banner
 
@@ -212,8 +273,13 @@ Additional safety properties:
 
 - **Counts-only manifest.** `redaction.manifest` aggregates counts by tool, severity,
   and field path. It never serializes `Finding.matched_text` (the literal secret value).
-- **Home-path scrub.** `/Users/<name>/` and bare username tokens are replaced with
-  `~` and `<user>` respectively.
+- **Home-path scrub.** The registry `path_anonymizer` tool (issue #143) rewrites
+  home paths tail-consuming: `/Users/<name>/secret/.env` becomes
+  `/Users/[ot-user-<8hex>]`, the whole tail gone, not just the username segment.
+  The operator's own identity tokens (login name, home-dir name) are hashed the
+  same way wherever they appear as bare tokens. The `[ot-user-<8hex>]` marker is
+  structurally inert (a leading `[` can never start a detected username), so the
+  scrub is idempotent by construction.
 - **Untrusted content.** `content_is_untrusted: true` on the envelope. The human render
   routes captured text through a sentinel/fence-breakout/heading-injection stripper.
 
@@ -250,6 +316,33 @@ Proceed? [y/N]
 
 Pass `--yes` to bypass for scripts and agents.
 
+## Bundle Safety and Sandbox
+
+A `--bundle` embeds a hermetic `git archive` of the pinned commit, so
+`capsule test --from-bundle` runs even after the commit becomes unreachable.
+Before that bundle ships anywhere (`share --publish`, `issue --publish` with
+`--bundle`), the exact shipped bundle bytes are scanned for secrets (native
+TruffleHog over the extracted archive) as a publish GATE, never a trust
+factor: a finding blocks the publish with zero bytes out
+(`BundleSecretFindingError`) unless `--i-accept-bundle-findings` is passed to
+acknowledge and ship anyway. `bundle.secret_scan` is always stamped on the
+envelope — clean or blocked, never the secret byte itself. Well-known
+secret-bearing paths (`.env`, keys, certs, `.aws/`, `.netrc`) are excluded
+from the archive members before gzip, byte-identical when nothing matches.
+
+`capsule test` runs the repro under `core/isolation.py`'s isolated-subprocess
+primitive: an allowlist-only child environment (secrets never inherited), a
+redirected `$HOME`, and (where the OS supports it) a probed network-deny
+mechanism. The primitive stamps `sandbox_tier` honestly using the ADR-0008
+lattice vocabulary (`none`/S0, `jail`/S1, `container`/S2, `microvm`/S3);
+today it always reports `none` (S0) — a same-UID `$HOME` redirect is not real
+filesystem containment, so the tier never over-claims. Sandbox v1 adds a
+block-foreign-by-default GATE on top of that honest label: a FOREIGN
+capsule's captured command refuses to run on the host unless you pass
+`--unsafe-run-on-host` (no real containment) or `--i-own-isolation` (you
+assert you are already inside your own container/VM) — either way the
+stamped `sandbox_tier` stays `none` until real OS-level containment lands.
+
 ## URL Design
 
 The shareable URL points at one self-contained file, pinned to the immutable publish
@@ -261,15 +354,39 @@ https://huggingface.co/datasets/<owner>/<repo>/resolve/<commit-sha>/capsules/v1/
 
 `publish_capsule` uploads only `capsule.json` + `capsule.md` (not the whole private
 bucket). Pinning to the commit sha means the URL is immutable: the file it resolves
-to can never silently change.
+to can never silently change, the defining property of the capsule seal
+(ADR-0008: an immutable, URL-addressed seal, as opposed to the dataset's growing,
+reviewed seal).
+
+### Rendered View (capsule-worker)
+
+A published capsule also renders at a human-friendly URL served by a stateless
+Cloudflare Worker (`web/capsule-worker/`), a pure projection over the same frozen
+`opentraces.capsule.v1` object, with no re-derivation, no re-redaction, and one
+outbound fetch to the HF `capsule.json`:
+
+- `Accept: text/html` → a human page rendering the four signals honestly (untrusted
+  content escaped, redaction markers kept verbatim, excluded fields shown as
+  "excluded by author" not "broken").
+- Progressive JSON endpoints for no-CLI agents: `/summary` → `/index` → `/slice`
+  `/context` `/trail` `/repo` `/environment` → `/full`, plus `/skill`. `/full`
+  returns the upstream bytes verbatim, byte-identical to `capsule get --json`.
+- The worker never serves the heavy "environment" face (bundle tar, runtime pins,
+  lockfiles), only the name-only `environment` projection.
+- If the fetch/parse fails, it degrades to a pointer at the raw HF `/resolve/` URL
+  plus the CLI one-liner, rather than failing outright.
+
+Production domain wiring (`capsules.opentraces.ai`) is a deploy-time operation,
+independent of the capsule format itself.
 
 ## Self-Sufficiency
 
-`export` sources the context resume packet from the live Context Tree projection when
-present, and falls back to the trace's own bucket companion
-(`bucket/contexts/v1/<slug>/<trace>/nodes.jsonl` + layer blobs). A capsule resolves
-with zero access to the originating machine. Degraded captures produce a valid
-`closure_intent_only` capsule (recorded in `limitations`), never a crash.
+Sealing (`create` or `export`) sources the context resume packet from the live
+Context Tree projection when present, and falls back to the trace's own bucket
+companion (`bucket/contexts/v1/<slug>/<trace>/nodes.jsonl` + layer blobs). A
+capsule resolves with zero access to the originating machine. Degraded
+captures produce a valid `closure_intent_only` capsule (recorded in
+`limitations`), never a crash.
 
 ## Honest Capture Gaps
 
@@ -299,26 +416,35 @@ opentraces capsule preview <trace-id> \
   --product humanduration \
   --test-command "pytest tests/test_parse.py -k parse_iso"
 
-# 3. Export a local capsule.
+# 3. Seal a local capsule. `export` (hidden, still callable) is needed here for
+#    --test-command/--setup-command/--consume; the v7-address `create <ref>`
+#    covers the plain "just seal this scope" case with a narrower flag set.
 opentraces capsule export <trace-id> \
   --product humanduration \
   --test-command "pytest tests/test_parse.py -k parse_iso" \
   --setup-command "pip install -e ." \
   --consume "package:humanduration=git+https://github.com/owner/humanduration@main"
 
-# 4. Share it (publishes to HF, shows consent gate).
+# 4. Share it (publishes to HF, shows consent gate; blocked on a bundle
+#    secret-scan finding unless --i-accept-bundle-findings).
 opentraces capsule share <trace-id> --publish
 
 # 5. File a GitHub issue embedding the URL (consent gate runs again, once total).
 opentraces capsule issue <trace-id> --publish --yes
 
-# 6. A maintainer agent resolves it.
-opentraces capsule open https://huggingface.co/.../capsule.json --json
+# 6. A maintainer agent resolves it (read-only).
+opentraces capsule get https://huggingface.co/.../capsule.json --json
+
+# 7. The maintainer re-poses the intent and records what happened.
+opentraces capsule replay <trace-id> --against HEAD --json
+opentraces capsule verdict <issue-ref> --state fixed --close
 ```
 
 ## Accepted Command Options Reference
 
-All options below apply to `export`, `share`, `issue`, and `preview` unless noted:
+All options below apply to `export`, `share`, `issue`, and `preview` unless
+noted; `create` uses the narrower v7-address flag set documented under
+[`capsule create`](#capsule-create--seal-a-local-capsule) instead.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -334,5 +460,6 @@ All options below apply to `export`, `share`, `issue`, and `preview` unless note
 | `--setup-command <cmd>` | none | Setup/install step before the repro |
 | `--consume <spec>` | none | Record a consumed dependency (`[package\|service:]NAME=PIN\|URL`) |
 | `--bundle` | off | Embed a hermetic `git archive` source bundle |
+| `--product-full-span` | off | `preview` only: opt out of the `--product` radius cap and restore the unbounded min..max episode span (may be slow on large sessions) |
 | `--yes` | off | Skip the consent gate (share/issue only, for scripts/agents) |
 | `--json` | off | Emit JSON to stdout |

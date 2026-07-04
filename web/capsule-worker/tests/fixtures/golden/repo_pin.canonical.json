@@ -1,0 +1,8 @@
+{
+  "changed_files": [
+    "web/site/src/components/Hero.tsx"
+  ],
+  "commit_sha": "a2756fbc7c3edd2585d41df253b813fe9424e268",
+  "reachable_locally": true,
+  "remote_url": "https://github.com/JayFarei/opentraces"
+}

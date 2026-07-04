@@ -27,6 +27,14 @@ Rows are workflow-specific. A command-trajectory eval dataset and a PR intent
 summary dataset will not have the same row schema, even if they came from the
 same bucket traces.
 
+A dataset is a growing, reviewed seal (ADR-0008): each row was appended under
+review gates and carries its own provenance record back to the workflow
+digest, bucket state digest, and any recorded judgment answers that produced
+it (see [Row Provenance: The Contract Triple](../workflow/datasets.md#row-provenance-the-contract-triple)).
+Consumers relying on a dataset for grading or replay can check
+`opentraces dataset verify <name>` upstream of publication to confirm the
+published rows still reproduce from the recorded inputs.
+
 ## File-Oriented Access
 
 For published Hugging Face datasets, the third-party `hf-mount` tool can

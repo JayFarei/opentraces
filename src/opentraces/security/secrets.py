@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Sequence
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -95,10 +95,12 @@ _PATTERNS: list[dict] = [
         "description": "OpenAI project API key",
         "severity": "critical",
     },
-    # OpenAI generic key
+    # OpenAI generic key. The body admits a hyphen so ``sk-live-…`` /
+    # ``sk-<env>-…`` shapes are caught (issue #143 S3); the dummy-token allowlist
+    # (``sk-test``/``sk-example``/…) still excludes synthetic placeholders.
     {
         "name": "openai_api_key",
-        "pattern": re.compile(r"sk-[A-Za-z0-9]{20,}"),
+        "pattern": re.compile(r"sk-[A-Za-z0-9-]{20,}"),
         "description": "OpenAI API key (generic sk- prefix)",
         "severity": "critical",
     },
@@ -324,6 +326,18 @@ def _find_high_entropy(text: str, threshold: float = DEFAULT_ENTROPY_THRESHOLD) 
     matches: list[SecretMatch] = []
     for m in _HIGH_ENTROPY_RE.finditer(text):
         candidate = m.group()
+        # Upper-bound skip (#209 W1): the Shannon entropy of a string over `k`
+        # distinct symbols can never exceed log2(k) (achieved only by a
+        # perfectly uniform distribution over those symbols). So if even that
+        # best case already misses `threshold`, the real (weighted, and
+        # therefore <= the uniform bound) entropy computed by
+        # ``shannon_entropy`` below is GUARANTEED to miss it too — skipping
+        # the full per-char Shannon sum here can never flip a verdict, only
+        # skip a candidate that would fail anyway. Cheap: one `set()` + one
+        # `log2` versus a full weighted-sum pass over every char.
+        distinct = len(set(candidate))
+        if distinct == 0 or math.log2(distinct) < threshold:
+            continue
         if shannon_entropy(candidate) >= threshold:
             # Skip if it looks like a common word or path segment
             if candidate.isalpha() and candidate.islower():
@@ -364,8 +378,29 @@ def _luhn_check(number_str: str) -> bool:
 # Allowlist filtering
 # ---------------------------------------------------------------------------
 
-def _is_allowlisted(pattern_name: str, matched_text: str, full_text: str, start: int) -> bool:
-    """Check if a match is a known false positive."""
+def _is_allowlisted(
+    pattern_name: str,
+    matched_text: str,
+    full_text: str,
+    start: int,
+    *,
+    uuid_spans: Sequence[tuple[int, int]] | None = None,
+) -> bool:
+    """Check if a match is a known false positive.
+
+    ``uuid_spans`` (#209 W1, external review REC C): the ``phone_number``
+    branch below asks "is this match fully inside a UUID?" — pre-fix, that
+    scanned the ENTIRE ``full_text`` for UUIDs on EVERY phone-shaped match, an
+    O(matches * len(text)) blowup on a companion with many phone-shaped
+    substrings (timestamps, ids, etc.). ``scan_text`` now computes this list
+    ONCE per call (lazily, only once a phone match is actually seen) and
+    passes it in, making the cost O(len(text) + matches * len(uuid_spans))
+    instead — the exact same containment check, just computed once instead
+    of once per match, so match results are unchanged (detection-preserving,
+    no ``SECURITY_VERSION`` bump). ``None`` (any other caller, e.g.
+    ``entropy_tool.py``, which never triggers the ``phone_number`` branch)
+    falls back to the original per-call scan so behavior is unchanged there.
+    """
     if pattern_name == "email_address":
         return bool(_ALLOWLIST_EMAILS.search(matched_text))
 
@@ -401,10 +436,12 @@ def _is_allowlisted(pattern_name: str, matched_text: str, full_text: str, start:
         if len(digits) < 10:
             return True
         end = start + len(matched_text)
-        if any(
-            uuid.start() <= start and end <= uuid.end()
-            for uuid in _UUID_PATTERN.finditer(full_text)
-        ):
+        spans = (
+            uuid_spans
+            if uuid_spans is not None
+            else [(u.start(), u.end()) for u in _UUID_PATTERN.finditer(full_text)]
+        )
+        if any(u_start <= start and end <= u_end for u_start, u_end in spans):
             return True
         return False
 
@@ -452,12 +489,22 @@ def scan_text(
     matches: list[SecretMatch] = []
     seen_spans: set[tuple[int, int]] = set()
 
+    # #209 W1 (external review REC C): computed lazily, at most once, the
+    # first time a "phone_number" match is actually seen — the ONLY consumer
+    # of this list. Every other pattern's ``_is_allowlisted`` branch ignores
+    # ``uuid_spans`` entirely, so computing it any earlier (or for texts with
+    # zero phone-shaped matches) would just be wasted work.
+    uuid_spans: list[tuple[int, int]] | None = None
+
     for pat in _PATTERNS:
         for m in pat["pattern"].finditer(text):
             matched_text = m.group()
             start, end = m.start(), m.end()
 
-            if _is_allowlisted(pat["name"], matched_text, text, start):
+            if pat["name"] == "phone_number" and uuid_spans is None:
+                uuid_spans = [(u.start(), u.end()) for u in _UUID_PATTERN.finditer(text)]
+
+            if _is_allowlisted(pat["name"], matched_text, text, start, uuid_spans=uuid_spans):
                 continue
 
             span = (start, end)

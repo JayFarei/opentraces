@@ -25,12 +25,12 @@ def skill_verifier_group() -> None:
 
 def _load(skill: str, project: str | None):
     from ..consumers.skill_intelligence import pipeline as si
-    from ..core.bucket_store import iter_trace_record_objects
+    from ..core.bucket_store import iter_corpus_trace_records
 
     episodes = si.build_episode_rows(selected_skill=skill, min_rows=0, project=project)
     records = {
         o.trace_id: o.record
-        for o in iter_trace_record_objects(project_slug=project)
+        for o in iter_corpus_trace_records(project_slug=project)
         if o.trace_id in {str(e.get("source_trace_id") or "") for e in episodes}
     }
     return episodes, records

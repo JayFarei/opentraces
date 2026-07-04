@@ -23,9 +23,17 @@ line = record.to_jsonl_line()
 
 ## Version
 
-The schema version (`0.7.0`) lives in `src/opentraces_schema/version.py` as the
+The schema version (`0.8.0`) lives in `src/opentraces_schema/version.py` as the
 single source of truth. See [VERSION-POLICY.md](VERSION-POLICY.md) for semver
 semantics and the bump checklist.
+
+`0.8.0` adds the additive schema home for exact dependency pins plus
+interpreter/CPU identity on `Environment` (issue #200, seal-family M3): the
+`PinRecord` and `Interpreter` nested models, and
+`Environment.resolved_dependencies` / `.interpreter` / `.arch` / `.platform` /
+`.abi_tag`, all optional and absent by default. This is a home for pins, not a
+resolver or a trust lift, see
+[RATIONALE-0.8.0.md](RATIONALE-0.8.0.md) for the honesty boundary.
 
 `0.7.0` adds the additive dataset security policy contract
 (`WorkflowSecurityContract`, `DatasetSecurityPolicy`, `DatasetManifest.security`);
@@ -60,7 +68,7 @@ Every version of the schema ships with a rationale document explaining why each
 model and field exists, grounded in public standards (ATIF, Agent Trace, ADP, OTel)
 and empirical observations from real agent traces.
 
-The current rationale is [RATIONALE-0.7.0.md](RATIONALE-0.7.0.md). Each version
+The current rationale is [RATIONALE-0.8.0.md](RATIONALE-0.8.0.md). Each version
 has its own rationale file linked from the [CHANGELOG](CHANGELOG.md).
 
 ## Contributing
@@ -82,7 +90,8 @@ for details.
 - [CHANGELOG.md](CHANGELOG.md) - What changed in each version
 - [VERSION-POLICY.md](VERSION-POLICY.md) - What version numbers mean for a schema package
 - [FIELD-MAPPINGS.md](FIELD-MAPPINGS.md) - Field maps to ATIF, ADP, and OTel GenAI
-- [RATIONALE-0.7.0.md](RATIONALE-0.7.0.md) - Current rationale for v0.7.0 (dataset security policy)
+- [RATIONALE-0.8.0.md](RATIONALE-0.8.0.md) - Current rationale for v0.8.0 (dependency pins + interpreter identity)
+- [RATIONALE-0.7.0.md](RATIONALE-0.7.0.md) - Dataset security policy rationale
 - [RATIONALE-0.6.0.md](RATIONALE-0.6.0.md) - Trace patch spine rationale
 - [RATIONALE-0.5.0.md](RATIONALE-0.5.0.md) - Context Tree cross-reference rationale
 - [RATIONALE-0.4.0.md](RATIONALE-0.4.0.md) - Dataset/workflow and trace-index rationale

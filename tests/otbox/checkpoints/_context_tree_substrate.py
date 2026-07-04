@@ -335,3 +335,52 @@ register(
         },
     )
 )
+
+
+# ---------------------------------------------------------------------------
+# W6 (issue #214/#215, external-review fold-in) — cache-shaped vacuous-green
+# fix. `c-context-tree-substrate` above is `cache=True`: a snapshot hit forks
+# a world a PAST checkout built, entirely bypassing the capture chain
+# (`resolve_checkpoint` short-circuits on `cp.cache and snapshot_exists(...)`
+# in `checkpoints/__init__.py`). The replay-contract sentinel exists
+# specifically to prove the CURRENT code's capture chain stamps context
+# nodes correctly on a trace captured IN THIS RUN — a cached fork would let
+# it pass green while testing yesterday's code, the exact theater the
+# sentinel is built to forbid.
+#
+# This sibling checkpoint reuses the identical delta (same corpora, same
+# audit, same provides) but sets `cache=False`, so every resolve reruns the
+# real fake-harness + `_ingest-session` + post-commit chain unconditionally
+# — mirroring the established `c-captured-fresh-session` pattern (issue #54)
+# that sits next to the artifact-preferred `c-captured-real-session`. The
+# shared, cached `c-context-tree-substrate` is untouched and keeps serving
+# the other context-tree-* journeys, which assert STRUCTURE (branch shapes,
+# node counts) rather than "captured by the code under test right now" and
+# so are fine forking from a snapshot.
+register(
+    Checkpoint(
+        name="c-context-tree-substrate-fresh",
+        composed_from="c-installed-source",
+        delta=_context_tree_substrate_delta,
+        cache=False,
+        description=(
+            "c-context-tree-substrate, rebuilt unconditionally on every "
+            "resolve (no snapshot cache, no artifact restore): the world a "
+            "FRESH capture by the CURRENT code produces. Exists solely so "
+            "replay-contract-capture-completeness (issue #214/#215) "
+            "exercises the real capture chain every run instead of forking "
+            "a possibly-stale cached snapshot."
+        ),
+        requires=("cli", "git"),
+        provides={
+            "captured_traces": 3,
+            "survival_states": ["alive_on_path"],
+            "branch_commits": 3,
+            "context_tree_built": True,
+            "git_repo_present": True,
+            "post_commit_hook_installed": True,
+            "branch_types": ["root", "linear", "subagent_fork", "rewind_branch"],
+            "edit_commits": 3,
+        },
+    )
+)

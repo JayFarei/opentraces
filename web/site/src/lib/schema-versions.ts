@@ -503,8 +503,58 @@ const v070: SchemaVersion = {
   }),
 };
 
+const v080: SchemaVersion = {
+  version: "0.8.0",
+  date: "2026-07-03",
+  summary: "Seal family (ADR-0008), issue #200/#155 Part A. Adds a structured home for exact dependency pins and runtime interpreter identity on Environment. Purely additive; this is a home for future resolver output, not a resolver, and does not raise env_tier.",
+  highlights: [
+    "PinRecord: a single resolved dependency pin (name required; version, hash, marker, source all optional)",
+    "Interpreter: runtime interpreter identity (name, version), both optional",
+    "Environment.resolved_dependencies: list[PinRecord] | None, filled by the future #202 resolver",
+    "Environment.interpreter: Interpreter | None, the interpreter the session ran on",
+    "Environment.arch, Environment.platform, Environment.abi_tag: CPU/platform/ABI identity for the future L3 wheel-platform boundary",
+    "Honesty boundary: all five fields are absent by default and their presence never lifts env_tier or verdict_trust; every pre-0.8.0 record validates unchanged and migrate_record is a no-op",
+  ],
+  models: v070.models.map((m) => {
+    if (m.id === "environment") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields,
+          { name: "resolved_dependencies", type: "PinRecord[] | null", required: false, description: "Exact resolved dependency pins for the trace's closure. None until a resolver fills them; presence does not raise env_tier." },
+          { name: "interpreter", type: "Interpreter | null", required: false, description: "Runtime interpreter identity (name/version)." },
+          { name: "arch", type: "string | null", required: false, description: "CPU architecture, e.g. arm64, x86_64" },
+          { name: "platform", type: "string | null", required: false, description: "Platform tag, e.g. macosx_14_0_arm64, linux" },
+          { name: "abi_tag", type: "string | null", required: false, description: "Python ABI tag for the L3 wheel-platform boundary, e.g. cp311" },
+        ],
+      };
+    }
+    return m;
+  }).concat([
+    {
+      id: "pin-record", title: "PinRecord",
+      desc: "A single resolved dependency pin (name==version, optionally hashed). A structured home for a future resolver's output, not a resolver itself.",
+      fields: [
+        { name: "name", type: "string", required: true, description: "Dependency name" },
+        { name: "version", type: "string | null", required: false, description: "Exact resolved version, e.g. 2.31.0" },
+        { name: "hash", type: "string | null", required: false, description: "Artifact hash (e.g. sha256:...) for the future L3 wheel path" },
+        { name: "marker", type: "string | null", required: false, description: "PEP 508 environment marker, e.g. python_version >= '3.8'" },
+        { name: "source", type: "string | null", required: false, description: "Resolver/index the pin came from (routed through the redaction floor)" },
+      ],
+    },
+    {
+      id: "interpreter", title: "Interpreter",
+      desc: "Runtime interpreter identity (name + version, e.g. cpython 3.11.6).",
+      fields: [
+        { name: "name", type: "string | null", required: false, description: "Interpreter name, e.g. cpython, pypy" },
+        { name: "version", type: "string | null", required: false, description: "Interpreter version, e.g. 3.11.6" },
+      ],
+    },
+  ]),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v070, v060, v050, v040, v030, v020, v011, v010];
+export const versions: SchemaVersion[] = [v080, v070, v060, v050, v040, v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

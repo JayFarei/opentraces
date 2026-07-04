@@ -6,6 +6,80 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.9.0] - 2026-07-04
+
+Adds the additive schema home for dataset-run metadata scope facets (issue
+#212, external-review fix for PR #218). Additive only; existing parsers
+continue to work and no migration is needed.
+
+See [RATIONALE-0.9.0.md](RATIONALE-0.9.0.md) for design notes.
+
+### Added
+
+**Dataset facet scoping (issue #212)**
+
+- `DatasetCandidateQuery.facets: dict[str, str]` — an optional, persisted
+  `name=value` metadata scope refinement (`model` / `agent.name` /
+  `agent.version`) narrowing a dataset's candidate query at `dataset new` /
+  schedule time, composing with the existing `scope`/`args`. Default empty
+  (no narrowing).
+- `DatasetRunRecord.facet_resolution: dict[str, Any] | None` — present only
+  when a run's effective facet scope (persisted `candidate_query.facets`
+  merged with a runtime `--facet` flag) was non-empty: `{"facets": {...},
+  "matched_count": int, "matched": [...]}`, the exact match set the run
+  resolved against the persisted bucket manifest. `None` (absent) on every
+  unfaceted run.
+
+### Changed
+
+- `SCHEMA_VERSION` bumped to `0.9.0` (additive MINOR per VERSION-POLICY.md).
+  Both new fields are optional and default to no-narrowing/absent, so an
+  existing pre-0.9.0 dataset manifest or run record validates unchanged.
+
+## [0.8.0] - 2026-07-03
+
+Adds the additive schema home for exact dependency pins plus interpreter/CPU
+identity on `Environment` (issue #200, the seal-family M3 train's one MINOR
+bump). Additive only; existing parsers continue to work and no migration is
+needed.
+
+See [RATIONALE-0.8.0.md](RATIONALE-0.8.0.md) for design notes.
+
+### Added
+
+**Environment dependency-pin / runtime-identity fields (issue #200)**
+
+- `PinRecord` model — one resolved dependency pin (`name`, optional `version`,
+  `hash`, `marker`, `source`). A structured record rather than a bare
+  `name==version` string so a hash can ride the future L3 hermetic-wheel path
+  without a second schema bump.
+- `Interpreter` model — runtime interpreter identity (optional `name` +
+  `version`, e.g. cpython 3.11.6).
+- `Environment.resolved_dependencies: list[PinRecord] | None` — the structured
+  home for the exact pins a future resolver will emit. Absent (`None`) by
+  default.
+- `Environment.interpreter: Interpreter | None` — which interpreter the session
+  ran on. Absent by default.
+- `Environment.arch` / `Environment.platform` / `Environment.abi_tag` — optional
+  CPU architecture, platform tag, and Python ABI tag (the L3 wheel-platform
+  boundary). All absent by default.
+
+### Changed
+
+- `SCHEMA_VERSION` bumped to `0.8.0` (additive MINOR per VERSION-POLICY.md). All
+  new fields are optional and absent by default, so an existing pre-0.8.0 record
+  validates unchanged and `migrate_record` stays a transparent no-op across the
+  `0.7.0 -> 0.8.0` boundary. The model-driven HuggingFace features map
+  (`publish/huggingface/schema.py`) picks the new keys up for free.
+
+### Honesty boundary
+
+- These fields are a **home, not a trust lift.** Their mere presence does not
+  raise `env_tier` or any trust ordinal — `env_tier` stays at its `L0` floor
+  across the M3 stack. The resolver that fills the pins (and derives `L1`) is the
+  out-of-train follow-up. No schema model carries a trust/tier field; the trust
+  vocabulary is derived downstream.
+
 ## [0.7.0] - 2026-06-08
 
 Adds the dataset security policy contract: a workflow declares the security

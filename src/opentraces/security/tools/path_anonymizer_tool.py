@@ -29,6 +29,34 @@ class PathAnonymizerTransformer:
             return False
         return bool(getattr(block, "enabled", False))
 
+    def transform_text(
+        self,
+        text: str,
+        *,
+        cfg: Any = None,
+        extra_usernames: list[str] | None = None,
+        consume_tail: bool = True,
+    ) -> str:
+        """Per-string entry point for the companion path (#143 move 1).
+
+        Unlike a ``Detector.find() -> spans``, this is a transform-in-place:
+        it RETURNS the rewritten TEXT (``anonymize_paths`` already returns text),
+        and the companion walker mutates the leaf with the returned string. It
+        defaults to ``consume_tail=True`` (the aggressive home-path-tail mode)
+        so a single ctx/trail leaf can be anonymized without constructing a whole
+        ``TraceRecord``. The record-level ``apply`` below keeps the
+        username-only (``consume_tail=False``) behavior.
+        """
+        if not text:
+            return text
+        username = os.environ.get("USER") or os.environ.get("USERNAME") or None
+        extra = extra_usernames
+        if extra is None and cfg is not None:
+            extra = getattr(cfg, "custom_redact_strings", None) or None
+        return anonymize_paths(
+            text, username=username, extra_usernames=extra, consume_tail=consume_tail
+        )
+
     def apply(self, record: TraceRecord, ctx: ToolContext) -> ToolResult:
         cfg = ctx.cfg
         username = os.environ.get("USER") or os.environ.get("USERNAME") or None

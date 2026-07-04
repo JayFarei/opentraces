@@ -106,6 +106,24 @@
         }
       ],
       "environment": {
+        "abi_tag": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "arch": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "interpreter": {
+          "name": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "version": {
+            "_type": "Value",
+            "dtype": "string"
+          }
+        },
         "language_ecosystem": [
           {
             "_type": "Value",
@@ -116,6 +134,34 @@
           "_type": "Value",
           "dtype": "string"
         },
+        "platform": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "resolved_dependencies": [
+          {
+            "hash": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "marker": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "name": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "source": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "version": {
+              "_type": "Value",
+              "dtype": "string"
+            }
+          }
+        ],
         "shell": {
           "_type": "Value",
           "dtype": "string"
@@ -558,9 +604,9 @@
     "license": "cc-by-4.0",
     "version": {
       "major": 0,
-      "minor": 7,
+      "minor": 9,
       "patch": 0,
-      "version_str": "0.7.0"
+      "version_str": "0.9.0"
     }
   }
 }

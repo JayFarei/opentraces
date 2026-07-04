@@ -16,6 +16,14 @@ max_p95_ms = 350.0
 max_python_heap_peak_mb = 2.0
 max_rss_delta_mb = 1.0
 
+[redact-companion-smoke]
+max_cold_ms = 3200.0
+max_p50_ms = 3200.0
+max_p95_ms = 3200.0
+max_peak_rss_mb = 350.0
+max_python_heap_peak_mb = 45.0
+max_rss_delta_mb = 24.0
+
 [scan-project-smoke]
 max_p95_ms = 3500.0
 max_python_heap_peak_mb = 2.0

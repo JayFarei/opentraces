@@ -14,6 +14,17 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+
+import pytest
+
+from tests._dataset_egress import neutralize_dataset_egress
+
+
+@pytest.fixture(autouse=True)
+def _clear_dataset_egress(monkeypatch):
+    # This publish-then-load round-trip predates the #194 egress clearance gate
+    # and publishes synthetic trace ids with no bucket entry.
+    neutralize_dataset_egress(monkeypatch)
 from typing import Any
 
 import pytest

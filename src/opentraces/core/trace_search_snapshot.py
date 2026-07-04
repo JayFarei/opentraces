@@ -962,6 +962,59 @@ def list_skill_invocation_units(
         return _read()
 
 
+def list_skill_invocation_units_stale_ok(
+    *,
+    skill: str | None = None,
+    project: str | None = None,
+    limit: int | None = None,
+    path: Path | None = None,
+) -> list[TraceUnit]:
+    """Bounded skill-unit read that tolerates a dirty (stale) snapshot.
+
+    #208 perf-core round 2. ``list_skill_invocation_units`` (and the
+    ``search_traces`` read path it mirrors) never serve a ``stale`` snapshot
+    when the corpus is too large for an inline self-heal rebuild — the caller
+    is expected to fall through to ``opentraces trace index`` maintenance, or
+    (for the skill-intelligence audit, which has no per-skill filter and needs
+    every observed invocation) to a whole-corpus record scan. On a mature
+    bucket that whole-corpus scan is exactly the wedge #208 round 1 already
+    cured elsewhere: a bounded reader exists (the ``skill_invocations`` table
+    a search snapshot build already populated), it is just being routed
+    around.
+
+    This sibling reader extends the existing issue #91 "last-known-good"
+    precedent (``search_traces``'s serve-stale path, see
+    ``test_warm_rebuild_over_threshold_stale_serves_stale``) to skill-unit
+    listing: a dirty marker means "may be missing very recent invocations",
+    not "unreadable garbage", so a schema-valid snapshot stays servable
+    regardless of corpus size. Only a genuinely unservable snapshot
+    (``missing`` / ``unreadable`` / ``missing_schema`` / ``wrong_schema``)
+    raises ``SearchSnapshotNeedsRebuild`` here — the caller's cue that no
+    bounded reader is available and a full scan (or an explicit ``trace
+    index`` build) is the only option. ``skill=None`` returns invocations for
+    every skill, matching the audit's corpus-wide need.
+
+    Callers that persist row content (e.g. ``skill-episodes`` dataset rows)
+    should still hydrate real ``TraceRecord``s per matched ``trace_id`` (the
+    existing bounded ``_records_for_units`` lookup) and drop any unit whose
+    record no longer resolves — a stale snapshot can reference a trace that
+    has since been pruned from the bucket, and this reader does not filter
+    that on its own.
+    """
+
+    snapshot_path = path or default_snapshot_path()
+    if not snapshot_path.exists():
+        raise SearchSnapshotNeedsRebuild("missing", path=snapshot_path)
+    with _connect_readonly(snapshot_path) as conn:
+        _verify_snapshot(conn, snapshot_path, allow_stale=True)
+        return _query_skill_invocation_units(
+            conn,
+            skill=skill,
+            project=project,
+            limit=limit,
+        )
+
+
 def candidate_packet_for_hit(
     hit: SearchHit,
     *,
@@ -1775,12 +1828,15 @@ def _skill_usage_breakdown(
 def _query_skill_invocation_units(
     conn: sqlite3.Connection,
     *,
-    skill: str,
+    skill: str | None,
     project: str | None,
     limit: int | None,
 ) -> list[TraceUnit]:
-    where = ["si.skill_name = ?", "traces.latest_generation = 1"]
-    params: list[Any] = [skill]
+    where = ["traces.latest_generation = 1"]
+    params: list[Any] = []
+    if skill:
+        where.append("si.skill_name = ?")
+        params.append(skill)
     if project:
         where.append("si.project_slug = ?")
         params.append(project)

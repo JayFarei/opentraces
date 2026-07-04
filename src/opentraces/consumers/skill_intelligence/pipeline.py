@@ -20,7 +20,6 @@ from opentraces_schema import TraceFacet, TraceRecord, TraceUnit
 
 from ...core import trace_index
 from ...core._time import utc_now_str as _utc_now
-from ...core.bucket_store import iter_trace_record_objects
 from ..skill_opt import engine as skill_opt
 from ..skill_opt.proposers import default_proposer
 from ..skill_opt.rerollout import FakeReRolloutRunner, ReRolloutTask
@@ -135,7 +134,23 @@ def _refresh_skill_units(
     index_path: Path | None = None,
 ) -> list[TraceUnit]:
     if index_path is None:
-        return trace_index.list_skill_invocation_units_from_records(project_slug=project)
+        # #208 perf-core round 2: prefer the bounded, stale-tolerant search
+        # snapshot reader over the whole-corpus record scan. This caller has
+        # no per-skill filter (it needs every observed invocation for the
+        # audit breakdown), but "every invocation" is still a small, already
+        # -persisted SQL table read, not a reason to hydrate every TraceRecord
+        # in the bucket. Only fall back to the full scan when the snapshot
+        # itself is unusable (missing / unreadable / wrong schema) — a
+        # genuine "no bounded reader exists" gap, not this one.
+        from ...core.trace_search_snapshot import (
+            SearchSnapshotNeedsRebuild,
+            list_skill_invocation_units_stale_ok,
+        )
+
+        try:
+            return list_skill_invocation_units_stale_ok(project=project)
+        except SearchSnapshotNeedsRebuild:
+            return trace_index.list_skill_invocation_units_from_records(project_slug=project)
     db_path = index_path or trace_index.default_index_path()
     if db_path.exists():
         trace_index.refresh_index(db_path)
@@ -306,26 +321,50 @@ def build_episode_rows(
 
     if index_path is None:
         try:
-            from ...core.trace_search_snapshot import list_skill_invocation_units
+            from ...core.trace_search_snapshot import (
+                SearchSnapshotNeedsRebuild,
+                list_skill_invocation_units,
+            )
 
             units = list_skill_invocation_units(
                 skill=selected_skill,
                 project=project,
             )
             rows = [_episode_row_from_unit(unit, None) for unit in units]
-        except Exception:
-            records = _records_by_trace_id(project)
-            rows = [
-                _episode_row_from_unit(unit, records.get(unit.trace_id))
+        except SearchSnapshotNeedsRebuild:
+            # #208 perf-core — only the units the search snapshot couldn't
+            # serve fall through here; real errors from the snapshot read
+            # (e.g. a corrupt index) are no longer swallowed by a bare
+            # ``except Exception`` and surface to the caller.
+            matched_units = [
+                unit
                 for unit in _refresh_skill_units(project=project, index_path=index_path)
                 if _unit_skill(unit) == selected_skill
             ]
+            records = _records_for_units(matched_units)
+            # #208 perf-core round 2: the units feeding this branch can now
+            # come from ``list_skill_invocation_units_stale_ok`` (a dirty
+            # snapshot), which can reference a trace that has since been
+            # pruned from the bucket. Drop those rather than emit a
+            # degraded/ghost row — a unit with no resolvable record is not a
+            # real episode. This is a no-op whenever the units came from the
+            # live-corpus fallback (every trace_id it emits resolves).
+            rows = [
+                _episode_row_from_unit(unit, records[unit.trace_id])
+                for unit in matched_units
+                if unit.trace_id in records
+            ]
     else:
-        records = _records_by_trace_id(project)
-        rows = [
-            _episode_row_from_unit(unit, records.get(unit.trace_id))
+        matched_units = [
+            unit
             for unit in _refresh_skill_units(project=project, index_path=index_path)
             if _unit_skill(unit) == selected_skill
+        ]
+        records = _records_for_units(matched_units)
+        rows = [
+            _episode_row_from_unit(unit, records[unit.trace_id])
+            for unit in matched_units
+            if unit.trace_id in records
         ]
     rows.sort(key=lambda row: (row["source_trace_id"], row["source_unit_id"]))
     if len(rows) < min_rows:
@@ -333,11 +372,26 @@ def build_episode_rows(
     return rows
 
 
-def _records_by_trace_id(project: str | None) -> dict[str, TraceRecord]:
-    return {
-        obj.trace_id: obj.record
-        for obj in iter_trace_record_objects(project_slug=project)
-    }
+def _records_for_units(units: Sequence[TraceUnit]) -> dict[str, TraceRecord]:
+    """Bounded per-unit trace fetch (#208 perf-core): O(units), not O(corpus).
+
+    Replaces the old whole-corpus ``iter_trace_record_objects`` scan with one
+    bounded lookup per distinct ``trace_id`` actually referenced by ``units``,
+    via the same durable-read-sources resolver ``read_bucket_record_for_trace``
+    uses. Returns an identical record for every ``trace_id`` a full-corpus scan
+    would have found — only the amount of I/O changes.
+    """
+    from ...core.bucket_trace_records import read_bucket_record_for_trace
+
+    records: dict[str, TraceRecord] = {}
+    for unit in units:
+        trace_id = unit.trace_id
+        if trace_id in records:
+            continue
+        bucket_record = read_bucket_record_for_trace(trace_id)
+        if bucket_record is not None:
+            records[trace_id] = bucket_record.record
+    return records
 
 
 def _episode_row_from_unit(unit: TraceUnit, record: TraceRecord | None) -> dict[str, Any]:

@@ -166,6 +166,40 @@ def test_dataset_run_record_and_row_index_entry_are_stable_json_contracts():
     }
 
 
+def test_row_index_entry_carries_lineage_ref_inside_free_provenance_dict():
+    """#191 (M2): the first-class span ref rides inside the free-form
+    ``provenance`` dict — the frozen ``DatasetRowIndexEntry`` schema gains NO new
+    top-level field (the train's one MINOR bump is reserved for M3)."""
+    entry = DatasetRowIndexEntry(
+        row_id="row_ref",
+        identity_hash="sha256:identity",
+        payload_hash="sha256:payload",
+        schema_digest="sha256:schema",
+        data_file="data/train.jsonl",
+        line=1,
+        run_id="run_ref",
+        appended_at="2026-07-02T12:00:00Z",
+        source_trace_id="9f8e7d6c-1234-4abc-8def-0123456789ab",
+        provenance={
+            "schema_version": "opentraces.dataset.row_provenance.v2",
+            "ref": "9f8e7d6c-1234-4abc-8def-0123456789ab:3-9",
+            "source_refs": {
+                "trace_id": "9f8e7d6c-1234-4abc-8def-0123456789ab",
+                "step_range": [3, 9],
+                "ref": "9f8e7d6c-1234-4abc-8def-0123456789ab:3-9",
+                "ref_valid": True,
+            },
+        },
+    )
+    # No top-level ``ref`` / ``span_ref`` field exists on the model.
+    dumped = entry.model_dump(mode="json")
+    assert "ref" not in dumped
+    assert "span_ref" not in dumped
+    assert dumped["provenance"]["ref"] == "9f8e7d6c-1234-4abc-8def-0123456789ab:3-9"
+    restored = DatasetRowIndexEntry.model_validate_json(entry.model_dump_json())
+    assert restored == entry
+
+
 def test_plan057_literal_boundaries_reject_deferred_or_unknown_modes():
     with pytest.raises(ValidationError):
         ExecutorConfig(default="remote-cloud")
@@ -178,6 +212,48 @@ def test_plan057_literal_boundaries_reject_deferred_or_unknown_modes():
 
     with pytest.raises(ValidationError):
         WorkflowRef(skill="missing-digest", digest="")
+
+
+# --- M1 engine collapse (#185): script default + headless back-compat --------
+
+
+def test_script_is_the_automated_default_executor():
+    """The engine collapse makes ``script`` the automated default executor
+    (``current-agent`` remains the development/human-in-the-loop path)."""
+    config = ExecutorConfig()
+    assert config.default == "script"
+    assert config.development == "current-agent"
+    # ``script`` is an accepted executor value for both surfaces.
+    assert ExecutorConfig(default="script").default == "script"
+    assert DatasetSchedule(enabled=True, every="2h", executor="script").executor == "script"
+
+
+def test_legacy_headless_executor_value_still_deserializes():
+    """The permanently-dead ``claude-code-headless`` executor was removed from
+    the engine, but the value stays READABLE on ``ExecutorName`` so schedules,
+    executor configs, and run records serialized before the collapse still load
+    (and round-trip) instead of failing validation."""
+    config = ExecutorConfig(default="claude-code-headless")
+    assert config.default == "claude-code-headless"
+
+    schedule = DatasetSchedule.model_validate(
+        {"enabled": True, "every": "2h", "executor": "claude-code-headless"}
+    )
+    assert schedule.executor == "claude-code-headless"
+    restored = DatasetSchedule.model_validate_json(schedule.model_dump_json())
+    assert restored == schedule
+
+    run = DatasetRunRecord(
+        run_id="run_legacy",
+        dataset_name="legacy",
+        dry_run=False,
+        executor="claude-code-headless",
+        scope={"scope": "all-projects"},
+        workflow_digest="sha256:workflow",
+        schema_digest="sha256:schema",
+        started_at="2026-04-28T12:00:00Z",
+    )
+    assert run.model_dump(mode="json")["executor"] == "claude-code-headless"
 
 
 # --- Plan 092 Track 2: dataset security policy schema ------------------------

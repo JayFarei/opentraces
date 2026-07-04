@@ -1,0 +1,165 @@
+name = "mature-bucket-perf"
+description = """
+Seal-family W5 (issue #213): the perf recurrence guard on a MATURE bucket.
+
+#87, #121, #137 and #208 share one biography — invisible in CI, found on the
+real mature bucket. The largest committed CI checkpoint holds 1-2 traces; the
+real bucket holds ~2,075. This journey runs the four seal-family hot commands
+against `c-mature-bucket` (~600 plan-080 bucket traces, ~50K TrailEvents, one
+>=50 MB outlier trail companion, ~60% empty context companions) and asserts each
+completes under a CATASTROPHIC-regression ceiling AND a peak-RSS ceiling.
+
+The ceilings are 10-20x healthy — deliberately NOT a ratcheting baseline and
+with NO `--update-baselines` mechanism (a laptop ratchet is exactly how the
+200s hang slipped through). A breach here is the #208-wedge shape reproduced in
+miniature, not an SLA miss.
+
+The RED-proof for this verifier: run these SAME steps on the SAME built
+checkpoint against the pre-R1 lineage (parent of ea7506d913f) — the
+`dataset run` step MUST exceed its duration budget. If it stays green on
+pre-fix code the world is dishonest (cloned envelopes short-circuiting the
+O(N) paths), fix the checkpoint builder, not the budgets.
+
+Steps (each asserts returncode==0, then a duration ceiling, then an RSS ceiling):
+  1. `dataset run maturescale --executor script`  <15s / <2 GB  (the #208 wedge:
+     the first run captures the bucket snapshot via source_provenance_for_query).
+  2. `capsule create <normal trace>`               <20s / <2 GB  (seals a NORMAL
+     trace for now; the outlier-seal step is a W1-gated follow-up).
+  3. `bucket status --json`                         <5s  / <1 GB  (plan-087 O(1)
+     persisted-manifest read; a re-bloat to the O(N) scan trips this).
+  4. `trail track --all --json`                    <15s / <1.5 GB (bounded
+     event-log read on the 50K-event log).
+
+Nightly `scale` lane ONLY — cold-builds the ~600-trace world (5-12 min).
+Explicitly OFF the per-PR gate and off default `pytest tests/otbox/`; gated
+behind OT_OTBOX_SCALE=1 via `make otbox-scale`.
+"""
+lane = "core"
+ci_lane = "scale"
+tier = 0
+tier_label = "gold"
+trajectories = ["mature-bucket-perf-guard"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-mature-bucket"]
+
+[preconditions]
+min_captured_traces = 600
+context_tree_built = true
+# World-honesty guard: refuse to run against a mature world whose outlier
+# trail companion is not genuinely large (the O(companion) seal surface).
+outlier_trail_companion_min_bytes = 52428800
+# External-review CRITICAL 2: re-probe REAL plan-080 v2 bucket objects on disk
+# (object-store current.json + per-trace trace.json envelopes), NOT the
+# builder-written state.json rows — a world with 600 state rows but an empty
+# object store would let the O(corpus) readers this guard exists for see nothing.
+bucket_trace_envelopes_min = 600
+# External-review RECOMMENDATION B: the ~50K-TrailEvent scale must be real in
+# the events mirror (index.json head sequence) — the events dimension can't
+# silently shrink.
+trail_events_min = 50000
+
+# ---------------------------------------------------------------------
+# 1. dataset run — the #208 whole-corpus-provenance wedge surface.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "dataset-run"
+argv = ["dataset", "run", "maturescale", "--executor", "script", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-run"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-run"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "duration_ms_max"
+step = "dataset-run"
+max = 15000
+
+[[assertions]]
+kind = "max_rss_mb"
+step = "dataset-run"
+max = 2048
+
+# ---------------------------------------------------------------------
+# 2. capsule create — seals a NORMAL trace (the base captured trace).
+#    The outlier-seal step is a W1-gated follow-up (parallel redaction).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "capsule-seal"
+argv = ["capsule", "create", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-seal"
+equals = 0
+
+[[assertions]]
+kind = "duration_ms_max"
+step = "capsule-seal"
+max = 20000
+
+[[assertions]]
+kind = "max_rss_mb"
+step = "capsule-seal"
+max = 2048
+
+# ---------------------------------------------------------------------
+# 3. bucket status — plan-087 O(1) persisted-manifest read.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-status"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_greater_equal"
+step = "bucket-status"
+path = "bucket.trace_count"
+min = 600
+
+[[assertions]]
+kind = "duration_ms_max"
+step = "bucket-status"
+max = 5000
+
+[[assertions]]
+kind = "max_rss_mb"
+step = "bucket-status"
+max = 1024
+
+# ---------------------------------------------------------------------
+# 4. trail track --all — bounded read over the 50K-event log.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trail-track"
+argv = ["trail", "track", "--all", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trail-track"
+equals = 0
+
+[[assertions]]
+kind = "duration_ms_max"
+step = "trail-track"
+max = 15000
+
+[[assertions]]
+kind = "max_rss_mb"
+step = "trail-track"
+max = 1536

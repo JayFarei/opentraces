@@ -1,30 +1,37 @@
 """Run harness for local dataset workflow skills.
 
-Two execution surfaces live here:
+One execution seam lives here (the M1 engine collapse, #185):
 
-* ``run_dataset_workflow`` — the dataset-bound runner. Uses agent-skill
-  executors (``current-agent`` writes RUN.md instructions, ``claude-code-headless``
-  invokes the Claude CLI). Owned by ``ot dataset run``.
-* ``execute_workflow`` — the dataset-free primitive. Uses a deterministic
-  ``script`` executor that subprocess-runs ``scripts/build_rows.py`` from the
-  workflow package, with the run packet on stdin/env. Used by non-dataset
-  consumers like the branch-context PR consumer in ``core.branch_context``.
+* ``execute_workflow`` — the single workflow-execution primitive. It runs a
+  deterministic ``script`` executor that subprocess-runs
+  ``scripts/build_rows.py`` from the workflow package, with the versioned
+  ``opentraces.workflow.run_packet.v1`` run packet handed over on the
+  environment (``OT_RUN_PACKET``/``OT_DATASET_OUTPUT``). ``_execute_script`` is
+  the ONE script-execution seam; #188 routes its subprocess boundary through the
+  shared isolation primitive (``core.isolation.run_isolated``) with a scrubbed
+  env and an honest ``sandbox_tier``. Used directly by non-dataset consumers
+  like the branch-context PR consumer in ``core.branch_context``.
+* ``run_dataset_workflow`` — the dataset-bound runner. It is lifecycle
+  bookkeeping (locks, run dirs, cursors, append, run records) *around*
+  ``execute_workflow``: it builds the one versioned run packet (a superset that
+  additionally carries the dataset fields templates and the lifecycle read),
+  writes the dataset run artifacts, then hands execution to
+  ``execute_workflow``. The ``current-agent`` executor stays a lifecycle-only
+  branch (writes ``RUN.md`` instructions, executes no script) — it is the
+  labeled human-in-the-loop path, not a second executor.
 
-The two share workflow-package loading and JSONL output reading, but they
-have different lifecycle semantics (dataset bookkeeping vs. write-and-return)
-and so live as siblings rather than one calling the other. A future refactor
-can collapse them once a third consumer arrives and the shared shape is
-clearly load-bearing.
+The previously-dead ``claude-code-headless`` executor (a permanent stub that
+never produced rows) and its fake-rows environment test-injection hook were
+removed in the collapse.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
-import shutil
-import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from opentraces.core._time import utc_now_str
 from pathlib import Path
@@ -34,9 +41,11 @@ import yaml
 
 from opentraces_schema import DatasetRunRecord
 
+from . import paths
 from .datasets import (
     AppendSummary,
     append_rows,
+    bucket_watermark,
     digest_payload,
     load_dataset,
     read_json,
@@ -45,7 +54,20 @@ from .datasets import (
     source_provenance_for_query,
     write_source_provenance,
 )
-from .workflows import WorkflowPackage, load_workflow, resolve_workflow_reference
+from .isolation import SANDBOX_TIER_NONE, IsolationReport, run_isolated
+from .workflow_judgment import (
+    OT_JUDGMENT_SIDECAR_ENV,
+    RC_NEEDS_JUDGMENT,
+    read_sidecar_requests,
+)
+from .workflows import (
+    WorkflowIntegrityError,
+    WorkflowPackage,
+    is_trusted_workflow,
+    load_workflow,
+    resolve_workflow_reference,
+    verify_workflow_digest,
+)
 
 
 class ExecutorUnavailableError(RuntimeError):
@@ -60,6 +82,23 @@ class WorkflowScriptError(RuntimeError):
     """Raised when a workflow's script executor exits non-zero."""
 
 
+class WorkflowNeedsJudgmentError(RuntimeError):
+    """Raised when a workflow's builder exits ``rc=10`` with a judgment sidecar.
+
+    This is the #186 handshake, NOT a failure: the builder needs recorded
+    judgments to produce deterministic rows. Carries the workflow name and the
+    structured ``judgment_requests`` the builder wrote so the CLI can render the
+    ``opentraces.workflow.needs_judgment.v1`` envelope and exit ``rc=10``.
+    """
+
+    def __init__(self, workflow_name: str, judgment_requests: list[dict[str, Any]]):
+        self.workflow_name = workflow_name
+        self.judgment_requests = judgment_requests
+        super().__init__(
+            f"workflow '{workflow_name}' needs {len(judgment_requests)} judgment(s)"
+        )
+
+
 @dataclass(frozen=True)
 class DatasetRunResult:
     run_id: str
@@ -68,6 +107,11 @@ class DatasetRunResult:
     run_record: DatasetRunRecord
     append_summary: AppendSummary
     cursor_advanced: bool
+    # #192: the delta scope of a ``--sync`` run (``None`` for a full run). Carries
+    # ``bucket_changed`` / ``candidate_scope`` (``none`` | ``delta``) plus the
+    # since/current watermarks so the fast-no-op vs only-the-delta acceptance is
+    # evidenced without re-reading the run summary.
+    delta_scope: dict[str, Any] | None = None
 
 
 def _is_deferred_provenance(provenance: dict[str, Any] | None) -> bool:
@@ -122,12 +166,15 @@ def run_dataset_workflow(
     scheduled: bool = False,
     privacy_tier: str | None = None,
     trail_freshness_policy: str = "warn",
+    answers: dict[str, Any] | None = None,
+    strict: bool = False,
+    sync: bool = False,
 ) -> DatasetRunResult:
     dataset = load_dataset(name)
     selected_executor = executor or (
         dataset.manifest.executor.development if dry_run else dataset.manifest.executor.default
     )
-    if selected_executor not in {"current-agent", "claude-code-headless", "script"}:
+    if selected_executor not in {"current-agent", "script"}:
         raise ValueError(f"unsupported executor: {selected_executor}")
 
     run_id = _new_run_id()
@@ -153,15 +200,39 @@ def run_dataset_workflow(
             + (f": {projects}" if projects else "")
         )
     output_path = run_dir / "output_rows.jsonl"
-    run_packet = {
+    # For the ``script`` executor, resolve the workflow package up front so the
+    # single execution seam (``execute_workflow``) runs the exact package the
+    # dataset pins. ``current-agent`` executes no script, so it never resolves
+    # (and must not require) an installed package.
+    workflow_package = (
+        _workflow_package_for_dataset(dataset)
+        if selected_executor == "script"
+        else None
+    )
+    # Run-time integrity re-verify (#187): the recomputed digest of the package
+    # about to execute must match the digest the dataset pinned. Non-strict
+    # warns and proceeds; strict is fatal BEFORE any run artifact is written or
+    # the subprocess runs. current-agent resolves no package, so there is
+    # nothing to verify there.
+    if workflow_package is not None:
+        verify_workflow_digest(
+            workflow_package.digest,
+            dataset.manifest.workflow.digest,
+            workflow_name=dataset.manifest.workflow.skill,
+            strict=strict,
+        )
+    # ONE versioned run packet (opentraces.workflow.run_packet.v1). The dataset
+    # runner builds it as a SUPERSET: the versioned base shape plus the dataset
+    # fields templates read (``scope`` is in the base; ``candidate_query`` is
+    # added here) and the lifecycle/provenance fields (``source_provenance``,
+    # ``security``, ``privacy_tier``, ``trail_freshness``...). Adding keys keeps
+    # it frozen-envelope safe (still .v1); nothing is removed.
+    dataset_context = {
         "run_id": run_id,
         "dataset_name": dataset.name,
         "dataset_path": str(dataset.path),
         "dry_run": dry_run,
         "scheduled": scheduled,
-        "executor": selected_executor,
-        "schema_path": str(dataset.path / dataset.manifest.schema_ref.path),
-        "output_path": str(output_path),
         "workflow": dataset.manifest.workflow.model_dump(mode="json"),
         "candidate_query": (
             dataset.manifest.candidate_query.model_dump(mode="json")
@@ -169,15 +240,165 @@ def run_dataset_workflow(
             else None
         ),
         "source_provenance": source_provenance,
-        "scope": scope or {"scope": "all-projects"},
         "limit": limit,
         "privacy_tier": privacy_tier,
         "security": dataset.manifest.security.model_dump(mode="json"),
         "trail_freshness_policy": trail_freshness_policy,
         "trail_freshness": trail_freshness,
     }
+    # #186: recorded judgments are the fourth contract input. Persisting them in
+    # the run packet is what makes the projection f(workflow, bucket, answers) —
+    # the builder reads packet["answers"] to finalize rows deterministically.
+    if answers:
+        dataset_context["answers"] = answers
+    # #212: a ``--facet name=value`` scope refinement is resolved against the
+    # PERSISTED bucket manifest only (O(manifest) — the #87 anti-pattern this
+    # family cured was opening every trace's ``current.json``/``trace.json`` to
+    # filter; ``agent_name``/``agent_version``/``agent_model`` are already on
+    # every manifest row, so no per-trace file is opened here regardless of
+    # corpus size). The resolved match set is embedded in both the run packet
+    # (so a workflow script CAN consume ``candidate_trace_ids``) and the
+    # persisted/CLI-visible run record (so callers can assert selection
+    # correctness without re-deriving it).
+    #
+    # External review of issue #212 (finding 1a): this is the CANONICAL
+    # candidate-query resolution path, so it must read BOTH a facet scope
+    # persisted on the dataset at ``dataset new`` / schedule time
+    # (``dataset.manifest.candidate_query.facets``) and a runtime ``--facet``
+    # flag (``scope["facets"]``) — not just the latter. Without this merge a
+    # scheduled run with no CLI flags silently ignored its persisted facet
+    # scope (a no-op). Runtime flags win per-key on conflict (last-wins,
+    # matching the CLI's own repeated-``--facet`` semantics).
+    from .dataset_facets import merge_facet_scopes
+
+    candidate_query_model = dataset.manifest.candidate_query
+    persisted_facets = (
+        dict(candidate_query_model.facets)
+        if candidate_query_model is not None and candidate_query_model.facets
+        else {}
+    )
+    runtime_facets = (scope or {}).get("facets") if isinstance(scope, dict) else None
+    facet_query = merge_facet_scopes(persisted_facets, runtime_facets)
+    facet_resolution: dict[str, Any] | None = None
+    # External review of issue #212 (finding 1c): the allowed trace-id set a
+    # faceted run's emitted rows are validated against below (append_rows'
+    # ``allowed_trace_ids``) — the runner-level enforcement backstop for a
+    # workflow that ignores ``candidate_trace_ids`` and scans/emits every
+    # candidate anyway. ``None`` (not an empty set) means "no facet scope,
+    # every candidate is in scope" so an unfaceted run never filters rows.
+    allowed_trace_ids: set[str] | None = None
+    if facet_query:
+        from .dataset_facets import resolve_facet_candidates
+
+        matches = resolve_facet_candidates(
+            facet_query,
+            project_slug=(scope or {}).get("project"),
+            trace_id=(scope or {}).get("trace_id"),
+        )
+        facet_resolution = {
+            "facets": dict(facet_query),
+            "matched_count": len(matches),
+            "matched": matches,
+        }
+        dataset_context["facet_resolution"] = facet_resolution
+        dataset_context["candidate_trace_ids"] = [
+            {"project_slug": row["project_slug"], "trace_id": row["trace_id"]}
+            for row in matches
+        ]
+        allowed_trace_ids = {row["trace_id"] for row in matches}
+    # #192 --sync: turn the write-only cursor into a consumed WATERMARK over
+    # bucket position. Read the current bucket position (manifest digest + max
+    # status.written_at) and the last-synced watermark; when the digest is
+    # unchanged the projection is a fast no-op (zero candidates). Otherwise the
+    # watermark is threaded into the run packet so the projecting workflow
+    # self-filters to bucket data newer than the recorded position. ``--sync`` is
+    # only meaningful for the ``script`` projector (``current-agent`` returned
+    # above emits no bucket projection).
+    sync_block: dict[str, Any] | None = None
+    sync_short_circuit = False
+    run_watermark: dict[str, Any] | None = None
+    if sync and selected_executor == "script":
+        run_watermark = bucket_watermark()
+        stored_watermark = _read_cursor_watermark(dataset.path, dataset.manifest)
+        digest = run_watermark.get("manifest_digest")
+        sync_short_circuit = bool(
+            stored_watermark
+            and digest
+            and stored_watermark.get("manifest_digest") == digest
+        )
+        sync_block = {
+            "enabled": True,
+            "since": stored_watermark,
+            "last_write_at": (stored_watermark or {}).get("last_write_at"),
+            "current_manifest_digest": digest,
+            "bucket_changed": not sync_short_circuit,
+        }
+        dataset_context["sync"] = sync_block
+    run_packet = _build_workflow_packet(
+        workflow_name=dataset.manifest.workflow.skill,
+        workflow_digest=workflow_digest,
+        workflow_path=str(workflow_package.path) if workflow_package else None,
+        schema_path=str(dataset.path / dataset.manifest.schema_ref.path),
+        scope=scope or {"scope": "all-projects"},
+        output_path=output_path,
+        executor=selected_executor,
+        started_at=started_at,
+        dataset_context=dataset_context,
+    )
     _write_run_packet(run_dir, dataset.manifest, schema, run_packet)
     lock_path = dataset.path / ".opentraces" / ".lock"
+
+    if sync_short_circuit:
+        # Fast no-op: the bucket has not advanced since the last successful
+        # sync, so nothing is projected and the watermark is already current.
+        # No subprocess runs; the delta scope evidences the zero-candidate read.
+        with _dataset_lock(lock_path, run_id):
+            output_path.write_text("", encoding="utf-8")
+        delta_scope = {
+            "mode": "sync",
+            "bucket_changed": False,
+            "candidate_scope": "none",
+            "reason": "bucket_unchanged_since_last_sync",
+            "since": (sync_block or {}).get("since"),
+            "current": run_watermark,
+        }
+        append_summary = AppendSummary(
+            dataset_name=name,
+            run_id=run_id,
+            dry_run=dry_run,
+            emitted_count=0,
+        )
+        run_record = _run_record(
+            run_id=run_id,
+            dataset_name=name,
+            dry_run=dry_run,
+            executor=selected_executor,
+            scope=run_packet["scope"],
+            workflow_digest=workflow_digest,
+            schema_digest=schema_digest,
+            started_at=started_at,
+            append_summary=append_summary,
+            status="succeeded",
+            facet_resolution=facet_resolution,
+        )
+        _write_run_summary(
+            run_dir,
+            run_record,
+            append_summary,
+            cursor_advanced=False,
+            reconstructable=True,
+            sandbox_tier=SANDBOX_TIER_NONE,
+            delta_scope=delta_scope,
+        )
+        return DatasetRunResult(
+            run_id=run_id,
+            run_dir=run_dir,
+            status="ok",
+            run_record=run_record,
+            append_summary=append_summary,
+            cursor_advanced=False,
+            delta_scope=delta_scope,
+        )
 
     if selected_executor == "current-agent":
         with _dataset_lock(lock_path, run_id):
@@ -199,8 +420,19 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=append_summary,
             status="succeeded",
+            facet_resolution=facet_resolution,
         )
-        _write_run_summary(run_dir, run_record, append_summary, cursor_advanced=False)
+        # current-agent is raw agent emission (the LLM's output is not a recorded
+        # input), so it is honestly labeled reconstructable=False and carries no
+        # isolation tier — no script ran in the shared isolation primitive.
+        _write_run_summary(
+            run_dir,
+            run_record,
+            append_summary,
+            cursor_advanced=False,
+            reconstructable=False,
+            sandbox_tier=SANDBOX_TIER_NONE,
+        )
         return DatasetRunResult(
             run_id=run_id,
             run_dir=run_dir,
@@ -211,16 +443,25 @@ def run_dataset_workflow(
         )
 
     try:
-        if selected_executor == "script":
-            output_path.write_text("", encoding="utf-8")
-            _execute_script(
-                _workflow_package_for_dataset(dataset),
-                run_dir,
-                output_path,
-                run_packet,
-            )
-        else:
-            _execute_claude_code_headless(run_packet, output_path)
+        # The dataset runner is lifecycle bookkeeping AROUND the single
+        # execution seam: hand the resolved package + superset run packet to
+        # ``execute_workflow`` (which owns ``_execute_script``, the one
+        # subprocess boundary). ``current-agent`` returned above and never
+        # reaches here.
+        execution = execute_workflow(
+            dataset.manifest.workflow.skill,
+            scope=run_packet["scope"],
+            output_path=output_path,
+            executor="script",
+            run_dir=run_dir,
+            run_packet=run_packet,
+            workflow_package=workflow_package,
+            strict=strict,
+            # The dataset runner already ran the authoritative digest verify
+            # above (against the manifest pin, before writing artifacts); do not
+            # re-verify inside the seam and double-warn.
+            verify_digest=False,
+        )
         rows = _read_output_rows(output_path)
         with _dataset_lock(lock_path, run_id):
             append_summary = append_rows(
@@ -235,13 +476,40 @@ def run_dataset_workflow(
                     "executor": selected_executor,
                     "scope": run_packet["scope"],
                     "limit": limit,
+                    # #188 honesty labels: a script run IS reconstructable, and
+                    # the achieved isolation tier is what the primitive reported.
+                    "reconstructable": execution.reconstructable,
+                    "isolation": {"sandbox_tier": execution.sandbox_tier},
                 },
                 trail_freshness=trail_freshness,
+                # External review of issue #212 (finding 1c): enforcement, not
+                # advisory. A faceted run validates every emitted row's source
+                # trace id against the resolved facet-match set and rejects
+                # (never appends) anything outside it — the backstop for a
+                # workflow that ignores ``candidate_trace_ids`` on the run
+                # packet and scans/emits every candidate regardless of scope.
+                allowed_trace_ids=allowed_trace_ids,
             )
             cursor_advanced = False
             if not dry_run:
-                _advance_cursor(dataset.path, dataset.manifest, run_id)
+                # #192: stamp the bucket watermark alongside the write-only
+                # cursor. A full run establishes the baseline (so a later
+                # ``--sync`` has a position to compare against); a ``--sync`` run
+                # advances it to the position it just projected up to. Reuse the
+                # watermark already read for the sync decision when present.
+                advance_watermark = run_watermark or bucket_watermark()
+                _advance_cursor(
+                    dataset.path,
+                    dataset.manifest,
+                    run_id,
+                    watermark=advance_watermark,
+                )
                 cursor_advanced = True
+    except WorkflowNeedsJudgmentError:
+        # Not a failure: the builder asked for judgments (#186). Leave the run
+        # packet + sidecar in place and propagate rc=10 to the CLI without
+        # marking the run failed.
+        raise
     except Exception as exc:
         empty_summary = AppendSummary(
             dataset_name=name,
@@ -260,11 +528,32 @@ def run_dataset_workflow(
             started_at=started_at,
             append_summary=empty_summary,
             status="failed",
+            facet_resolution=facet_resolution,
         )
-        (run_dir / "log.txt").write_text(
-            f"{type(exc).__name__}: {exc}\n", encoding="utf-8"
+        # Preserve any child stdout/stderr already captured by _execute_script
+        # (the script's REAL error). The wrapper WorkflowScriptError message only
+        # points back at this same log.txt, so clobbering it here would destroy
+        # the one diagnostic a failed workflow leaves behind.
+        log_file = run_dir / "log.txt"
+        existing = (
+            log_file.read_text(encoding="utf-8") if log_file.exists() else ""
         )
-        _write_run_summary(run_dir, failed_record, empty_summary, cursor_advanced=False)
+        summary_line = f"{type(exc).__name__}: {exc}\n"
+        if existing.strip():
+            log_file.write_text(
+                f"{existing.rstrip()}\n\n# run outcome\n{summary_line}",
+                encoding="utf-8",
+            )
+        else:
+            log_file.write_text(summary_line, encoding="utf-8")
+        _write_run_summary(
+            run_dir,
+            failed_record,
+            empty_summary,
+            cursor_advanced=False,
+            reconstructable=True,
+            sandbox_tier=SANDBOX_TIER_NONE,
+        )
         raise
     run_record = _run_record(
         run_id=run_id,
@@ -277,8 +566,27 @@ def run_dataset_workflow(
         started_at=started_at,
         append_summary=append_summary,
         status="succeeded",
+        facet_resolution=facet_resolution,
     )
-    _write_run_summary(run_dir, run_record, append_summary, cursor_advanced=cursor_advanced)
+    delta_scope: dict[str, Any] | None = None
+    if sync_block is not None:
+        delta_scope = {
+            "mode": "sync",
+            "bucket_changed": True,
+            "candidate_scope": "delta",
+            "projected_since_write_at": sync_block.get("last_write_at"),
+            "since": sync_block.get("since"),
+            "current": run_watermark,
+        }
+    _write_run_summary(
+        run_dir,
+        run_record,
+        append_summary,
+        cursor_advanced=cursor_advanced,
+        reconstructable=execution.reconstructable,
+        sandbox_tier=execution.sandbox_tier,
+        delta_scope=delta_scope,
+    )
     return DatasetRunResult(
         run_id=run_id,
         run_dir=run_dir,
@@ -286,6 +594,7 @@ def run_dataset_workflow(
         run_record=run_record,
         append_summary=append_summary,
         cursor_advanced=cursor_advanced,
+        delta_scope=delta_scope,
     )
 
 
@@ -294,23 +603,6 @@ def _workflow_package_for_dataset(dataset) -> WorkflowPackage:
     if isinstance(source, str) and source:
         return resolve_workflow_reference(source)
     return load_workflow(dataset.manifest.workflow.skill)
-
-
-def _execute_claude_code_headless(run_packet: dict[str, Any], output_path: Path) -> None:
-    fake_rows = os.environ.get("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS")
-    if fake_rows is not None:
-        output_path.write_text(fake_rows.rstrip("\n") + "\n", encoding="utf-8")
-        return
-    executable = shutil.which("claude")
-    if not executable:
-        raise ExecutorUnavailableError(
-            "claude-code-headless executor is unavailable. Install Claude Code or "
-            "set OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS for recorded local tests."
-        )
-    raise ExecutorUnavailableError(
-        "claude-code-headless executor seam is available, but real invocation is not "
-        "enabled by default in Plan 57 tests."
-    )
 
 
 def _trail_freshness_for_dataset(dataset, scope: dict[str, Any]) -> list[dict[str, Any]]:
@@ -394,6 +686,7 @@ def _run_record(
     started_at: str,
     append_summary: AppendSummary,
     status: str = "succeeded",
+    facet_resolution: dict[str, Any] | None = None,
 ) -> DatasetRunRecord:
     return DatasetRunRecord(
         run_id=run_id,
@@ -411,6 +704,7 @@ def _run_record(
         duplicate_count=append_summary.duplicate_count,
         validation_error_count=append_summary.validation_error_count,
         status=status,
+        facet_resolution=facet_resolution,
         artefacts={
             "run_packet": "run_packet.json",
             "output_rows": "output_rows.jsonl",
@@ -426,6 +720,9 @@ def _write_run_summary(
     append_summary: AppendSummary,
     *,
     cursor_advanced: bool,
+    reconstructable: bool = True,
+    sandbox_tier: str = SANDBOX_TIER_NONE,
+    delta_scope: dict[str, Any] | None = None,
 ) -> None:
     validation_payload = {
         "validation_error_count": append_summary.validation_error_count,
@@ -435,7 +732,16 @@ def _write_run_summary(
         "run": run_record.model_dump(mode="json"),
         "append": append_summary.__dict__,
         "cursor_advanced": cursor_advanced,
+        # #188 honesty labels (additive): whether this run's rows can be
+        # reconstructed by replaying the recorded inputs, and the achieved
+        # isolation tier of the script executor.
+        "reconstructable": reconstructable,
+        "isolation": {"sandbox_tier": sandbox_tier},
     }
+    # #192: evidence the fast-no-op / only-the-delta scope of a ``--sync`` run.
+    # Absent for a full run so the pre-existing summary shape stays unchanged.
+    if delta_scope is not None:
+        summary_payload["delta_scope"] = delta_scope
     (run_dir / "validation.json").write_text(
         json.dumps(validation_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -446,19 +752,57 @@ def _write_run_summary(
     )
 
 
-def _advance_cursor(root: Path, manifest, run_id: str) -> None:
+def _cursor_query_name(manifest) -> str:
+    query = manifest.candidate_query
+    return query.name if query else "default"
+
+
+def _read_cursor_watermark(root: Path, manifest) -> dict[str, Any] | None:
+    """The last bucket watermark stamped for this dataset's query (#192).
+
+    ``None`` when no watermark has been recorded yet (a pre-#192 cursor, or a
+    dataset that has never had a successful run). Read-only and best-effort.
+    """
+    cursors_path = root / ".opentraces" / "cursors.yaml"
+    if not cursors_path.exists():
+        return None
+    try:
+        data = yaml.safe_load(cursors_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return None
+    entry = (data.get("queries") or {}).get(_cursor_query_name(manifest))
+    watermark = entry.get("watermark") if isinstance(entry, dict) else None
+    return watermark if isinstance(watermark, dict) else None
+
+
+def _advance_cursor(
+    root: Path,
+    manifest,
+    run_id: str,
+    *,
+    watermark: dict[str, Any] | None = None,
+) -> None:
     cursors_path = root / ".opentraces" / "cursors.yaml"
     data = yaml.safe_load(cursors_path.read_text(encoding="utf-8")) or {"queries": {}}
     queries = data.setdefault("queries", {})
     query = manifest.candidate_query
     query_name = query.name if query else "default"
-    queries[query_name] = {
+    entry: dict[str, Any] = {
         "query_fingerprint": digest_payload(
             query.model_dump(mode="json") if query else {"scope": "all-projects"}
         ),
         "last_successful_run_id": run_id,
         "last_successful_run_at": utc_now_str(),
     }
+    # #192: the consumed bucket watermark (manifest digest + max
+    # status.written_at). Additive to the write-only cursor, so a full run's
+    # observable projection/append behaviour is unchanged.
+    if watermark is not None:
+        entry["watermark"] = {
+            "manifest_digest": watermark.get("manifest_digest"),
+            "last_write_at": watermark.get("last_write_at"),
+        }
+    queries[query_name] = entry
     cursors_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     save_manifest(root, manifest)
 
@@ -492,10 +836,47 @@ def _new_run_id() -> str:
 
 _WORKFLOW_SCRIPT_RELPATH = Path("scripts") / "build_rows.py"
 
+logger = logging.getLogger(__name__)
+
+# DEFECT A (#188 regression): the shared isolation primitive defaults to a 180s
+# wall-clock timeout. That floor is fine for a foreign capsule repro but WRONG
+# for a dataset projection, which legitimately walks thousands of bucket traces
+# and can run well past three minutes. On origin/main the workflow subprocess had
+# no timeout at all. We restore a generous default here (raisable per-run via the
+# ``execute_workflow(timeout=...)`` param or the ``OT_WORKFLOW_TIMEOUT`` seconds
+# env override) so a long projection can complete while a genuinely hung script
+# is still eventually reaped.
+DEFAULT_WORKFLOW_TIMEOUT = 3600.0
+_WORKFLOW_TIMEOUT_ENV = "OT_WORKFLOW_TIMEOUT"
+
+
+def _resolve_workflow_timeout(explicit: float | None) -> float:
+    """Effective script timeout: explicit arg > env override > generous default."""
+    if explicit is not None:
+        return float(explicit)
+    raw = os.environ.get(_WORKFLOW_TIMEOUT_ENV)
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a number; falling back to the %.0fs default",
+                _WORKFLOW_TIMEOUT_ENV,
+                raw,
+                DEFAULT_WORKFLOW_TIMEOUT,
+            )
+    return DEFAULT_WORKFLOW_TIMEOUT
+
 
 @dataclass(frozen=True)
 class WorkflowExecutionResult:
-    """Outcome of one ``execute_workflow`` invocation."""
+    """Outcome of one ``execute_workflow`` invocation.
+
+    ``reconstructable`` / ``sandbox_tier`` are the #188 honesty labels: a
+    ``script`` run (including a recorded-answer #186 run) is reconstructable,
+    and ``sandbox_tier`` is the isolation the shared primitive actually achieved
+    (``none`` / ``jail`` in M1).
+    """
 
     workflow_name: str
     workflow_digest: str
@@ -505,6 +886,11 @@ class WorkflowExecutionResult:
     started_at: str
     finished_at: str
     scope: dict[str, Any]
+    reconstructable: bool = True
+    sandbox_tier: str = SANDBOX_TIER_NONE
+    # Non-fatal, surfaced diagnostics (e.g. an untrusted workflow that produced
+    # zero rows because it has no bucket access — DEFECT B). Empty on a clean run.
+    warnings: list[str] = field(default_factory=list)
 
 
 def execute_workflow(
@@ -514,14 +900,22 @@ def execute_workflow(
     output_path: Path,
     executor: str = "script",
     extra_env: dict[str, str] | None = None,
+    run_dir: Path | None = None,
+    run_packet: dict[str, Any] | None = None,
+    workflow_package: WorkflowPackage | None = None,
+    answers: dict[str, Any] | None = None,
+    strict: bool = False,
+    verify_digest: bool = True,
+    timeout: float | None = None,
 ) -> WorkflowExecutionResult:
     """Run a workflow's deterministic builder, write rows to ``output_path``.
 
-    This is the dataset-free primitive. Unlike ``run_dataset_workflow`` it
-    does not append to a dataset, advance cursors, or hold a dataset lock.
-    It loads the workflow package, writes a ``run_packet.json`` next to the
-    output, invokes the script executor, then returns the row count and
-    provenance.
+    This is the SINGLE workflow-execution seam (M1 collapse, #185).
+    ``run_dataset_workflow`` wraps it with dataset lifecycle bookkeeping;
+    non-dataset consumers (e.g. the branch-context PR consumer) call it
+    directly. It loads the workflow package, writes a versioned
+    ``run_packet.json`` next to the output, invokes the ONE script executor
+    (``_execute_script``), then returns the row count and provenance.
 
     Parameters
     ----------
@@ -541,6 +935,27 @@ def execute_workflow(
         Currently only ``"script"`` is supported. The script executor runs
         ``<workflow.path>/scripts/build_rows.py`` as a subprocess with
         ``OT_RUN_PACKET`` and ``OT_DATASET_OUTPUT`` env vars set.
+    run_dir, run_packet, workflow_package:
+        Lifecycle hooks for the dataset runner. When ``run_dataset_workflow``
+        drives this seam it supplies its own ``run_dir`` (the dataset run
+        directory), the already-built superset ``run_packet`` (and thus owns
+        writing the dataset run artifacts), and the pre-resolved
+        ``workflow_package`` (which may resolve a config-pinned source, not
+        just an installed name). Direct primitive callers leave these ``None``
+        and get the minimal versioned packet written next to the output.
+    strict, verify_digest:
+        Run-time integrity controls (#187). When ``verify_digest`` and a
+        ``run_packet`` with a pinned ``workflow_digest`` are present, the bytes
+        about to execute are re-verified against that pin before the subprocess:
+        ``strict`` makes a mismatch fatal (:class:`WorkflowIntegrityError`),
+        otherwise it warns. The dataset runner sets ``verify_digest=False``
+        because it verifies against the manifest pin itself.
+    timeout:
+        Wall-clock seconds before the workflow script is killed. ``None`` uses
+        the generous ``DEFAULT_WORKFLOW_TIMEOUT`` (raisable via the
+        ``OT_WORKFLOW_TIMEOUT`` env override) so a large-bucket projection that
+        legitimately runs past the isolation primitive's 180s floor can finish
+        (DEFECT A / #188 regression). A hung script is still eventually reaped.
     """
 
     if executor != "script":
@@ -548,25 +963,57 @@ def execute_workflow(
             f"unsupported executor: {executor} (execute_workflow only supports 'script')"
         )
 
-    workflow = load_workflow(workflow_name)
+    workflow = workflow_package if workflow_package is not None else load_workflow(workflow_name)
+    # Run-time integrity re-verify (#187) at the single execution seam: when a
+    # caller supplies a run packet with a pinned ``workflow_digest``, the bytes
+    # about to run must recompute to it. Fatal under strict BEFORE the
+    # subprocess; warn otherwise. The dataset runner verifies against the
+    # manifest pin itself and passes ``verify_digest=False`` to avoid a
+    # double-warn. Pure primitive callers pass no run packet (nothing pinned).
+    if verify_digest and run_packet is not None:
+        verify_workflow_digest(
+            workflow.digest,
+            run_packet.get("workflow_digest"),
+            workflow_name=workflow.name,
+            strict=strict,
+        )
     output_path = output_path.expanduser()
-    run_dir = output_path.parent
+    run_dir = run_dir if run_dir is not None else output_path.parent
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    started_at = utc_now_str()
-    run_packet = _build_workflow_packet(
-        workflow=workflow,
-        scope=scope,
-        output_path=output_path,
-        executor=executor,
-        started_at=started_at,
-    )
-    _write_workflow_packet(run_dir, run_packet)
+    if run_packet is None:
+        started_at = utc_now_str()
+        schema_path = workflow.path / "schemas" / "row.schema.json"
+        run_packet = _build_workflow_packet(
+            workflow_name=workflow.name,
+            workflow_digest=workflow.digest,
+            workflow_path=str(workflow.path),
+            schema_path=str(schema_path) if schema_path.exists() else None,
+            scope=scope,
+            output_path=output_path,
+            executor=executor,
+            started_at=started_at,
+            answers=answers,
+        )
+        _write_workflow_packet(run_dir, run_packet)
+    else:
+        # The dataset runner already built the superset packet and wrote the
+        # dataset run artifacts; do not re-author or overwrite them here.
+        started_at = str(run_packet.get("started_at") or utc_now_str())
+
     output_path.write_text("", encoding="utf-8")
 
-    _execute_script(workflow, run_dir, output_path, run_packet, extra_env=extra_env)
+    isolation = _execute_script(
+        workflow,
+        run_dir,
+        output_path,
+        run_packet,
+        extra_env=extra_env,
+        timeout=_resolve_workflow_timeout(timeout),
+    )
 
     rows = _read_output_rows(output_path)
+    warnings = _diagnose_empty_run(workflow, rows)
     finished_at = utc_now_str()
     return WorkflowExecutionResult(
         workflow_name=workflow.name,
@@ -577,29 +1024,80 @@ def execute_workflow(
         started_at=started_at,
         finished_at=finished_at,
         scope=scope,
+        # A script / recorded-answer run IS reconstructable; the sandbox_tier is
+        # whatever the shared isolation primitive honestly reported (#188).
+        reconstructable=True,
+        sandbox_tier=isolation.sandbox_tier,
+        warnings=warnings,
     )
+
+
+def _diagnose_empty_run(
+    workflow: WorkflowPackage,
+    rows: list[dict[str, Any]],
+) -> list[str]:
+    """Surface the DEFECT B silent-empty case as an actionable warning.
+
+    An UNTRUSTED (external-directory) workflow is deliberately handed NO
+    ``OT_OPENTRACES_DIR`` (#188 / C2), so its ``paths.OPENTRACES_DIR`` resolves
+    inside the isolated throwaway HOME -> an empty bucket -> zero rows with rc=0.
+    Left silent that reads as a successful empty dataset. Name the cause instead.
+    A TRUSTED workflow that legitimately finds zero rows is NOT flagged (it had
+    real bucket access; empty is a real answer).
+    """
+    if rows:
+        return []
+    if is_trusted_workflow(workflow):
+        return []
+    message = (
+        f"workflow '{workflow.name}' produced ZERO rows and is untrusted "
+        "(resolved from an external directory), so it ran with NO bucket access "
+        "(OT_OPENTRACES_DIR is withheld from untrusted sources) against an "
+        "isolated empty bucket. Install it as a first-party workflow "
+        "('opentraces workflow create') if it must read your captured traces."
+    )
+    logger.warning(message)
+    return [message]
 
 
 def _build_workflow_packet(
     *,
-    workflow: WorkflowPackage,
+    workflow_name: str,
+    workflow_digest: str,
+    workflow_path: str | None,
+    schema_path: str | None,
     scope: dict[str, Any],
     output_path: Path,
     executor: str,
     started_at: str,
+    dataset_context: dict[str, Any] | None = None,
+    answers: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    schema_path = workflow.path / "schemas" / "row.schema.json"
-    return {
+    """Build the ONE versioned run packet (opentraces.workflow.run_packet.v1).
+
+    The base shape is the primitive packet. ``dataset_context`` (when the
+    dataset runner supplies it) merges in the dataset-only keys — a strict
+    superset that only ADDS keys, so the envelope stays frozen at ``.v1``.
+    ``answers`` (#186) is persisted when present so the builder can finalize its
+    rows deterministically and replay is f(workflow, bucket, answers).
+    """
+
+    packet: dict[str, Any] = {
         "schema_version": "opentraces.workflow.run_packet.v1",
-        "workflow_name": workflow.name,
-        "workflow_digest": workflow.digest,
-        "workflow_path": str(workflow.path),
-        "schema_path": str(schema_path) if schema_path.exists() else None,
+        "workflow_name": workflow_name,
+        "workflow_digest": workflow_digest,
+        "workflow_path": workflow_path,
+        "schema_path": schema_path,
         "executor": executor,
         "scope": scope,
         "output_path": str(output_path),
         "started_at": started_at,
     }
+    if answers:
+        packet["answers"] = answers
+    if dataset_context:
+        packet.update(dataset_context)
+    return packet
 
 
 def _write_workflow_packet(
@@ -625,40 +1123,85 @@ def _execute_script(
     output_path: Path,
     run_packet: dict[str, Any],
     extra_env: dict[str, str] | None = None,
-) -> None:
+    timeout: float = DEFAULT_WORKFLOW_TIMEOUT,
+) -> IsolationReport:
+    """Run a workflow's ``build_rows.py`` through the shared isolation primitive.
+
+    This is the ONE subprocess seam (#185). #188 routes it through
+    ``core.isolation.run_isolated``, which is the actual subprocess boundary: the
+    child env is built from an ALLOWLIST (parent secrets never inherited), only
+    the ``OT_*`` contract vars reach it, and ``$HOME`` is redirected to a
+    throwaway dir. TRUSTED (first-party, by PROVENANCE — under the bundled
+    templates dir or the installed-workflow registry) templates still reach the
+    operator's bucket via an explicit ``OT_OPENTRACES_DIR`` and run with network
+    allowed; UNTRUSTED sources (an external directory, regardless of its
+    ``source_type`` shape) get full network-deny and NO bucket var (#188 / C2).
+    Returns the honest :class:`IsolationReport`.
+
+    #186 handshake: the child is handed an ``OT_JUDGMENT_SIDECAR`` path; when the
+    builder needs judgments it writes its JudgmentRequests there and exits
+    ``rc=10``. That combination raises :class:`WorkflowNeedsJudgmentError` (a
+    handshake, not a failure) rather than :class:`WorkflowScriptError`.
+    """
     script = workflow.path / _WORKFLOW_SCRIPT_RELPATH
     if not script.exists():
         raise ExecutorUnavailableError(
             f"workflow '{workflow.name}' has no {_WORKFLOW_SCRIPT_RELPATH} "
             "(script executor requires a deterministic builder)"
         )
-    env = os.environ.copy()
-    env["OT_RUN_PACKET"] = str(run_dir / "run_packet.json")
-    env["OT_DATASET_OUTPUT"] = str(output_path)
-    env["OT_WORKFLOW_PATH"] = str(workflow.path)
+
+    # #188 / C2: trust is by PROVENANCE (bundled-templates dir or the installed
+    # registry), NOT the dir-vs-file ``source_type`` shape — an external
+    # directory resolves as ``package`` yet must stay untrusted.
+    bundled = is_trusted_workflow(workflow)
+    sidecar_path = run_dir / "judgment_requests.json"
+    # ONLY the OT_* contract vars reach the scrubbed child (plus the isolation
+    # primitive's own PATH/LANG/... allowlist). Nothing else — not the parent's
+    # secrets, not the parent HOME.
+    allow_env: dict[str, str] = {
+        "OT_RUN_PACKET": str(run_dir / "run_packet.json"),
+        "OT_DATASET_OUTPUT": str(output_path),
+        "OT_WORKFLOW_PATH": str(workflow.path),
+        OT_JUDGMENT_SIDECAR_ENV: str(sidecar_path),
+    }
+    if bundled:
+        # First-party templates import opentraces and read the bucket; the
+        # scrubbed HOME would hide it, so hand over the real bucket root.
+        allow_env["OT_OPENTRACES_DIR"] = str(paths.OPENTRACES_DIR)
     if extra_env:
-        env.update(extra_env)
+        allow_env.update(extra_env)
+
+    network = "allow" if bundled else "deny"
+    source_trust = "trusted" if bundled else "untrusted"
+
     log_path = run_dir / "log.txt"
     try:
-        completed = subprocess.run(
+        result = run_isolated(
             [sys.executable, str(script)],
-            env=env,
             cwd=str(workflow.path),
-            capture_output=True,
-            text=True,
-            check=False,
+            allow_env=allow_env,
+            network=network,
+            source_trust=source_trust,
+            timeout=timeout,
         )
     except OSError as exc:
         raise ExecutorUnavailableError(
             f"unable to invoke workflow script {script}: {exc}"
         ) from exc
+
     log_payload = (
-        f"# stdout\n{completed.stdout or ''}\n\n"
-        f"# stderr\n{completed.stderr or ''}\n"
+        f"# stdout\n{result.stdout or ''}\n\n"
+        f"# stderr\n{result.stderr or ''}\n"
     )
     log_path.write_text(log_payload, encoding="utf-8")
-    if completed.returncode != 0:
+
+    # #186: rc=10 + a written sidecar is the judgment handshake, not a failure.
+    if result.returncode == RC_NEEDS_JUDGMENT and sidecar_path.exists():
+        requests = read_sidecar_requests(sidecar_path)
+        raise WorkflowNeedsJudgmentError(workflow.name, requests)
+    if result.returncode != 0:
         raise WorkflowScriptError(
             f"workflow '{workflow.name}' script exited "
-            f"{completed.returncode}: see {log_path}"
+            f"{result.returncode}: see {log_path}"
         )
+    return result.achieved

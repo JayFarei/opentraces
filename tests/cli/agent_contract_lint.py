@@ -55,7 +55,15 @@ PROMPT_BYTES = ("[y/N]", "[Y/n]", "Proceed?", "Trust and run it?", "choose", "�
 
 # Read-verb family roots (L5/L6): the surfaces whose --json output an agent
 # reads as data. Write/control verbs (setup*, dataset run, auth) are excluded.
-READ_FAMILY_ROOTS = ("trace", "ctx", "trail", "bucket", "status", "doctor", "config")
+# The M2 seal-family (#180) added ``dataset`` and ``capsule`` — both are
+# agent-facing read families, so the uniform L5 header is now enforced across
+# their no-required-arg read verbs (``dataset list`` / ``dataset schedule
+# list`` carry ``opentraces.dataset.list.v1`` / ``.schedule_list.v1``). NOTE:
+# the argged read verbs the two families add (``dataset verify <name>``,
+# ``capsule get <ref>``) are NOT reached by this root — the main sweep skips
+# required-arg commands — so root membership alone does not L5-check them (see
+# the L5_ARGGED_TARGETS note below for why they are not opted in there).
+READ_FAMILY_ROOTS = ("trace", "ctx", "trail", "bucket", "status", "doctor", "config", "dataset", "capsule")
 
 # FROZEN_ENVELOPE_EXCEPTIONS — the frozen downstream-consumer surfaces (replay /
 # RL / viewer / dashboards / Slack / PR) whose --json byte-shape is a
@@ -82,6 +90,15 @@ READ_FAMILY_ROOTS = ("trace", "ctx", "trail", "bucket", "status", "doctor", "con
 # payload forms) and is enforced via L5_ARGGED_TARGETS below — required args
 # exclude it from the main sweep, so without that pass it would ESCAPE L5
 # rather than being exempt from it.
+# NOTE (#186): ``ot dataset run`` emits a NEW frozen consumer envelope,
+# ``opentraces.workflow.needs_judgment.v1``, on the rc=10 judgment handshake. It
+# is intentionally NOT registered below: ``dataset run`` is a WRITE verb with a
+# required ``NAME`` arg, so it is never reached by the L5 read-verb sweep (its
+# root ``dataset`` is not in READ_FAMILY_ROOTS and required_args() excludes it),
+# and this exception table is drift-guarded to contain ONLY ctx read surfaces
+# (test_frozen_exceptions_equal_ctx_frozen_set). Registering a non-ctx surface
+# here would break that guard; the envelope needs no L5 exemption because L5
+# never inspects it.
 FROZEN_ENVELOPE_EXCEPTIONS: dict[str, frozenset[str]] = {
     "ctx list": frozenset({"opentraces.ctx.list.v2"}),
     "ctx info": frozenset({"opentraces.ctx.info.v2"}),
@@ -483,6 +500,23 @@ HANG_CLUSTER: list[tuple[str, list[str]]] = [
 # verb. Both blame invocation forms are listed because the bare
 # ``trail blame <sha>`` resolves through _BlameGroup to the same ``commit``
 # subcommand — one header regression must fail both names.
+# M2 seal-family (#180): the two new argged read verbs are intentionally NOT
+# opted in here, for opposite reasons, each covered by a dedicated envelope
+# test instead:
+#   * ``dataset verify <name>`` emits the clean uniform header
+#     (``opentraces.dataset.verify.v1`` with ``status``) and WOULD pass L5, but
+#     the non-vacuity contract (test_argged_l5_pass_is_nonvacuous_on_seeded_world)
+#     requires the target to exit 0 on the shared seeded fixture, which for
+#     verify means a fully-bound, byte-reproducing dataset (builder + train.jsonl
+#     + candidates) too heavy/fragile to seed here. Its frozen envelope is pinned
+#     by tests/cli/test_dataset_verify.py.
+#   * ``capsule get <ref>`` returns the FROZEN ``opentraces.capsule.v1`` consumer
+#     envelope, which by contract carries NO top-level ``status`` (adding one
+#     breaks byte-compatibility with viewer/issue-body/replay). It cannot satisfy
+#     L5's status requirement, and the only exemption path
+#     (FROZEN_ENVELOPE_EXCEPTIONS) is drift-guarded to the ctx frozen set ONLY, so
+#     opting it in would hard-fail the gate. Its shape is pinned by
+#     tests/test_capsule.py.
 L5_ARGGED_TARGETS: list[tuple[str, list[str]]] = [
     ("trail blame commit", ["trail", "blame", "commit", "HEAD"]),
     ("trail blame", ["trail", "blame", "HEAD"]),

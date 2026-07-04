@@ -1,23 +1,44 @@
-"""``opentraces capsule`` — capture, redact, share, and open agent usage episodes.
+"""``opentraces capsule`` — seal, resolve, share, replay, and test agent usage episodes.
 
-A capsule is a privacy-bounded record of how one agent used one consumed product
-(an "Agent Experience Report"); a runnable repro/test is optional evidence. The
-underlying object stays ``opentraces.capsule.v1`` — the naming is presentation only.
+A capsule is the ADR-0008 immutable, URL-addressed seal: a privacy-bounded,
+redacted mini-bucket of one scope, byte-stable under re-seal, with a
+deterministic ``capsule_id``. A runnable repro/test is optional evidence. The
+underlying object stays ``opentraces.capsule.v1`` — the naming is presentation
+only.
 
-v1 share-first surface (plan 082; usage-episode generalisation plan 090):
+Current surface (plan 082/090/198; ``create``/``get``/``import`` added by the
+Seal Family / #208; ``export``/``open`` remain as hidden-but-callable legacy
+aliases of ``create``/``get``):
 
-* ``capsule export <trace>``        — build a local self-contained capsule (zero
-                                      remote config). stdout = the capsule.json path.
-* ``capsule open <ref> --json``     — the CONSUME verb. Resolve a capsule from a
-                                      file / https / hf:// ref and print the frozen
-                                      ``opentraces.capsule.v1`` envelope. The
-                                      maintainer agent's <5-step path.
-* ``capsule share <trace> --repo``  — mint the shareable URL (``--execute`` uploads
+* ``capsule create <ref>``          — seal a bounded, redacted, self-contained
+                                      capsule from a v7 address (trace / trace:step /
+                                      trace:A-B). stdout = the capsule.json path.
+* ``capsule get <ref> --json``      — READ-ONLY, STATELESS resolve of a capsule from a
+                                      file / https / hf:// ref; prints the frozen
+                                      ``opentraces.capsule.v1`` envelope. No
+                                      ~/.opentraces, bucket, or project state is created.
+* ``capsule import <ref>``          — the explicit opt-in WRITE: resolve a capsule and
+                                      materialize it into the local bucket as a
+                                      first-class trace.
+* ``capsule preview <trace>``       — show exactly what a publish WOULD ship (redaction
+                                      manifest, carried-section inventory, destinations)
+                                      without writing or publishing anything.
+* ``capsule share <trace> --repo``  — mint the shareable URL (``--publish`` uploads
                                       only capsule.json + capsule.md to HF). stdout =
                                       the URL. ``--copy`` to clipboard.
 * ``capsule issue create <trace>``  — render a GitHub issue body embedding the URL +
-                                      the ``capsule open`` command (``--execute`` files
+                                      the ``capsule get`` command (``--publish`` files
                                       it via ``gh``, idempotent on the capsule marker).
+* ``capsule replay <ref>``          — build a replay packet for a maintainer agent to
+                                      re-pose the intent against a post-fix ref.
+* ``capsule test <ref>``            — run the capsule AS A TEST (reproduce the failure
+                                      or confirm the fix) in an isolated checkout or the
+                                      hermetic bundle.
+* ``capsule verdict`` / ``watch``   — record / poll a replay verdict on the issue.
+
+Every egress path (``share --publish``, ``issue --publish``) runs the same
+clearance predicate before a byte leaves the machine (ADR-0008): a refusal
+moves zero bytes.
 
 Exit codes (house convention): 2 = precondition/tooling/export failure,
 3 = remote / gh failure.
@@ -33,6 +54,7 @@ from pathlib import Path
 import click
 
 import opentraces.cli as _cli
+from ._options import project_dir_option
 from ._progress import build_cli_progress, progress_option
 from .capsule_export_helpers import (
     _do_export,
@@ -78,11 +100,17 @@ def _egress_destinations(hf_repo, gh_repo) -> list[str]:
     return dests
 
 
-def _confirm_egress(destinations, manifest, business_logic_findings, assume_yes) -> None:
-    """Shared developer-approval gate before any public egress (plan 090). Names the
-    destinations and summarizes redaction/exclusion. ``--yes`` bypasses for
-    scripts/agents; a 'no' aborts with exit 1. Applied to BOTH share --publish and
-    issue --publish (previously only issue confirmed)."""
+def _confirm_egress(
+    destinations, manifest, business_logic_findings, assume_yes, carried_inventory=None
+) -> None:
+    """Shared developer-approval gate before any public egress (plan 090 / #198).
+
+    Names the destinations, summarizes redaction/exclusion, and renders the
+    carried-section inventory (counts + surfaces, never bytes) so the developer
+    approves with full sight of exactly what would ship. Explicit approve is
+    required; ``--yes`` is the ONLY auto-approve; a 'no' aborts with exit 1. Under
+    ``--json`` / a non-TTY it refuses-with-hint (ADR-0007 L2), emitting zero
+    prompt bytes. Applied to BOTH share --publish and issue --publish."""
 
     if assume_yes:
         return
@@ -101,9 +129,35 @@ def _confirm_egress(destinations, manifest, business_logic_findings, assume_yes)
         f"{manifest.get('fields_excluded', 0)} prompt fields excluded.",
         err=True,
     )
+    if carried_inventory:
+        click.echo(
+            "  carried: "
+            f"{carried_inventory.get('steps', 0)} steps · "
+            f"{carried_inventory.get('trail_anchors', 0)} trail anchors · "
+            f"context layers {carried_inventory.get('context_layers') or '(none)'} · "
+            f"test={carried_inventory.get('has_test')} · "
+            f"mini_bucket_digest={carried_inventory.get('mini_bucket_digest') or '(none)'}",
+            err=True,
+        )
     if not click.confirm("Proceed?", default=False):
         click.echo("aborted.", err=True)
         sys.exit(1)
+
+
+def _preflight_clearance_or_exit(capsule) -> None:
+    """#198 — refuse egress (before prompting/minting) when a source trace is not
+    cleared, so the human is never asked to approve something that cannot leave."""
+
+    from ..core.capsule.share import (
+        CapsuleClearanceError,
+        enforce_capsule_clearance,
+    )
+
+    try:
+        enforce_capsule_clearance(capsule)
+    except CapsuleClearanceError as exc:
+        click.echo(f"capsule publish refused: {exc}", err=True)
+        sys.exit(3)
 
 
 def _infer_issue_repo(capsule) -> str | None:
@@ -159,10 +213,41 @@ def _maybe_build_bundle(capsule, project, make_bundle):
     return data
 
 
-def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
-    """Publish to HF (capsule.json + capsule.md + bundle when present). Exits on error."""
+def _build_mini_bucket_for(project, trace_id):
+    """Build the scoped, redacted mini-bucket for one trace (or None on failure).
 
-    from ..core.capsule.share import publish_capsule
+    Shared by the publish paths so the mini-bucket the capsule's digest claims is
+    threaded into ``publish_capsule`` and actually uploaded (#197 H4)."""
+
+    try:
+        from ..core.capsule.share import build_mini_bucket
+        from ..core.config import get_project_dir
+
+        return build_mini_bucket(project, get_project_dir(project).name, [trace_id])
+    except Exception:  # pragma: no cover - mini-bucket is additive, never fatal
+        return None
+
+
+def _publish_and_url(
+    capsule, *, hf_repo, token, private, bundle_bytes=None, mini_bucket=None,
+    i_accept_bundle_findings=False,
+):
+    """Publish to HF (capsule.json + capsule.md + bundle + mini-bucket when present). Exits on error.
+
+    The CLI is THE egress door, so it always demands clearance (``require_clearance``):
+    a capsule sourced from an unscanned/withheld trace refuses with zero bytes out.
+
+    #157 — a bundle carrying a secret is BLOCKED by default (zero bytes out). The
+    producer may explicitly acknowledge and override that block via
+    ``i_accept_bundle_findings`` (the override records ``acknowledged=True`` on the
+    shipped ``bundle.secret_scan``); the default stays closed.
+    """
+
+    from ..core.capsule.share import (
+        BundleSecretFindingError,
+        CapsuleClearanceError,
+        publish_capsule,
+    )
 
     tok = _hf_token(token)
     if not tok:
@@ -173,7 +258,14 @@ def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
         )
         sys.exit(2)
     try:
-        info = publish_capsule(capsule, repo_id=hf_repo, token=tok, private=private, bundle_bytes=bundle_bytes)
+        info = publish_capsule(
+            capsule, repo_id=hf_repo, token=tok, private=private,
+            bundle_bytes=bundle_bytes, require_clearance=True, mini_bucket=mini_bucket,
+            i_accept_bundle_findings=i_accept_bundle_findings,
+        )
+    except (CapsuleClearanceError, BundleSecretFindingError) as exc:
+        click.echo(f"capsule publish refused: {exc}", err=True)
+        sys.exit(3)
     except Exception as exc:
         click.echo(f"capsule publish failed: {exc}", err=True)
         sys.exit(3)
@@ -191,7 +283,7 @@ def capsule_group() -> None:
     """
 
 
-@capsule_group.command("export")
+@capsule_group.command("export", hidden=True)
 @click.argument("trace_id", required=False, default=None)
 @_export_options
 @click.option("--from-session", "from_session", default=None, metavar="SESSION_ID",
@@ -260,18 +352,96 @@ def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comm
     click.echo(str(arts["json"]))  # primary stdout = the capsule path
 
 
-@capsule_group.command("open")
+@capsule_group.command("create")
 @click.argument("ref")
-@click.option("--json/--no-json", "as_json", default=True, show_default=True,
-              help="Emit the frozen capsule envelope as JSON (the agent contract).")
-@click.option("--summary", is_flag=True, help="Print the human markdown instead of JSON.")
-def open_cmd(ref, as_json, summary):
-    """Resolve a capsule (file / https / hf:// ref) and print its envelope.
+@click.option("--from-step", "from_step", type=int, default=None,
+              help="Seal an explicit step span (with --to-step). The slice selects the "
+                   "scope; the anchor step is derived from it.")
+@click.option("--to-step", "to_step", type=int, default=None, help="End of the --from-step span.")
+@click.option("--step", type=int, default=None, hidden=True)
+@click.option("--node", "node_id", default=None, hidden=True)
+@click.option("--radius", type=int, default=4, hidden=True)
+@click.option("--repo-url", default=None, help="Override the public repo remote URL recorded in the pin.")
+@project_dir_option
+@click.option("--product", default=None, metavar="NAME",
+              help="Bind the capsule to ONE consumed product (the usage-episode anchor).")
+@click.option("--include-prompts", "include_prompts", is_flag=True, default=False,
+              help="Include prompt-bearing fields (system prompt + reasoning). Excluded by default.")
+@click.option("--test-command", "test_command", default=None, hidden=True)
+@click.option("--expect-error", "expect_error", default=None, hidden=True)
+@click.option("--setup-command", "setup_command", default=None, hidden=True)
+@click.option("--consume", "consume_specs", multiple=True, hidden=True)
+@progress_option
+@click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=None,
+              help="Output dir (default: <project>/.opentraces/capsules).")
+@click.option("--bundle", "make_bundle", is_flag=True,
+              help="Embed a hermetic source bundle (git archive at the pin).")
+@click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
+def create_cmd(ref, from_step, to_step, step, node_id, radius, repo_url, project_dir,
+               product, include_prompts, test_command, expect_error, setup_command,
+               consume_specs, progress_mode, out, make_bundle, as_json):
+    """Seal a bounded, redacted, self-contained capsule from an agent session.
 
-    This is the agent-to-agent consume verb: one command, structured JSON out,
-    zero bespoke parsing. The ``--json`` flag is the default and is accepted
-    explicitly so the command embedded in the issue body runs verbatim.
+    REF is a v7 address: a whole ``<trace>``, a point ``<trace>:<step>``, or a
+    span ``<trace>:A-B``. The address selects the scope — no step/radius flag
+    soup. ``--from-step/--to-step`` is the equivalent explicit span seam.
     """
+
+    from ..core.capsule.share import write_capsule_dir
+    from ._address import parse_address
+
+    parsed = parse_address(ref)
+    if parsed is None:
+        raise click.UsageError(f"could not parse capsule ref {ref!r} (expected trace | trace:step | trace:A-B)")
+    resolved_trace = parsed.trace_part
+    # The address selector overrides the flags (the visible seam). A bare trace
+    # keeps the focal default; ``:N`` is a point; ``:A-B`` is a span.
+    selector = parsed.selector
+    if isinstance(selector, tuple):
+        from_step, to_step = selector
+    elif isinstance(selector, int):
+        step = selector
+    # ``last`` (str selector) is a deferred slot; fall through to the focal default.
+
+    reporter = build_cli_progress("capsule create", progress_mode)
+    capsule, project = _do_export(
+        resolved_trace, step, node_id, radius, repo_url, project_dir,
+        test_command, expect_error, setup_command, consume_specs, product, include_prompts,
+        progress=reporter, from_step=from_step, to_step=to_step,
+    )
+    reporter.done()
+    bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
+    dest = out or (project / ".opentraces" / "capsules")
+    # #197 — materialize the scoped, redacted mini-bucket next to capsule.json.
+    mini = None
+    try:
+        from ..core.capsule.share import build_mini_bucket
+        from ..core.config import get_project_dir
+
+        mini = build_mini_bucket(project, get_project_dir(project).name, [resolved_trace])
+    except Exception:  # pragma: no cover - mini-bucket is additive, never fatal
+        mini = None
+    arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes, mini_bucket=mini)
+    if as_json:
+        click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
+        return
+    manifest = (capsule.get("redaction") or {}).get("manifest") or {}
+    click.echo(
+        f"capsule {capsule['capsule_id']} · {(capsule.get('summary') or {}).get('title','')[:80]}\n"
+        f"  redaction: floor {manifest.get('floor')} ran · "
+        f"{manifest.get('redactions_applied',0)} redactions · "
+        f"{manifest.get('home_paths_scrubbed',0)} paths scrubbed\n"
+        f"  env_tier: {(capsule.get('source') or {}).get('env_tier')} · "
+        f"verdict_trust: {(capsule.get('source') or {}).get('verdict_trust')}\n"
+        f"  mini_bucket_digest: {capsule.get('mini_bucket_digest') or '(none)'}\n"
+        f"  md: {arts['md']}",
+        err=True,
+    )
+    click.echo(str(arts["json"]))  # primary stdout = the capsule path
+
+
+def _resolve_and_print_capsule(ref, summary):
+    """Shared resolve+print body for ``capsule get`` (and the hidden ``open``)."""
 
     from ..core.capsule.contract import CapsuleSchemaAheadError
     from ..core.capsule.render import render_capsule_markdown
@@ -292,6 +462,79 @@ def open_cmd(ref, as_json, summary):
         click.echo(render_capsule_markdown(capsule))
         return
     click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
+
+
+@capsule_group.command("get")
+@click.argument("ref")
+@click.option("--json/--no-json", "as_json", default=True, show_default=True,
+              help="Emit the frozen capsule envelope as JSON (the agent contract).")
+@click.option("--summary", is_flag=True, help="Print the human markdown instead of JSON.")
+def get_cmd(ref, as_json, summary):
+    """Resolve a capsule (file / https / hf:// ref) and print its envelope.
+
+    Read-only: no ~/.opentraces, bucket, or project state is created — a
+    maintainer in a brand-new environment can ``get`` a capsule and read it.
+    (``capsule import`` is the explicit opt-in that writes it into the bucket.)
+    """
+
+    _resolve_and_print_capsule(ref, summary)
+
+
+@capsule_group.command("open", hidden=True)
+@click.argument("ref")
+@click.option("--json/--no-json", "as_json", default=True, show_default=True,
+              help="Emit the frozen capsule envelope as JSON (the agent contract).")
+@click.option("--summary", is_flag=True, help="Print the human markdown instead of JSON.")
+def open_cmd(ref, as_json, summary):
+    """Legacy alias for ``capsule get`` (hidden-but-callable; the issue-body
+    embedded ``opentraces capsule open <url> --json`` still resolves verbatim)."""
+
+    _resolve_and_print_capsule(ref, summary)
+
+
+@capsule_group.command("import")
+@click.argument("ref")
+@click.option("--source-layer", "source_layer", default="capsule_import", show_default=True,
+              help="Provenance label recorded on the imported bucket record.")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit the frozen opentraces.capsule.import.v1 report as JSON.")
+def import_cmd(ref, source_layer, as_json):
+    """Resolve a capsule and WRITE it into the local bucket as a first-class trace.
+
+    The explicit opt-in write (unlike ``get``): the carried spine is materialized
+    into a schema-valid TraceRecord under the reused trace id, its recorded anchors
+    into the per-trace Trail companion, so the imported capsule projects natively
+    (``map`` / ``slice`` / ``trace get``). Collisions: same capsule id is an
+    idempotent no-op; a different capsule id over the same trace scope-merges.
+    """
+
+    from ..core.capsule.contract import CapsuleSchemaAheadError
+    from ..core.capsule.import_ import CapsuleImportError, import_capsule
+    from ..core.capsule.share import CapsuleResolveError, resolve_capsule
+
+    try:
+        capsule = resolve_capsule(ref)
+    except CapsuleSchemaAheadError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+    except (CapsuleResolveError, ValueError) as exc:
+        click.echo(f"not a resolvable opentraces capsule: {exc}", err=True)
+        sys.exit(2)
+    try:
+        report = import_capsule(capsule, source_layer=source_layer)
+    except CapsuleImportError as exc:
+        click.echo(f"capsule import failed: {exc}", err=True)
+        sys.exit(2)
+    if as_json:
+        click.echo(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    click.echo(
+        f"{report['status']} · trace {report['trace_id']} · capsule {report['capsule_id']}\n"
+        f"  trail anchors: {report['trail_anchor_count']}"
+        + (f" · conflicts: {len(report['conflicts'])}" if report.get("conflicts") else ""),
+        err=True,
+    )
+    click.echo(report["trace_id"])  # primary stdout = the imported trace id
 
 
 @capsule_group.command("preview")
@@ -327,11 +570,16 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
     )
     reporter.done()
     telemetry_stages = reporter.telemetry()
+    from ..core.capsule.share import carried_section_inventory
+
     manifest = (capsule.get("redaction") or {}).get("manifest") or {}
     privacy_scope = capsule.get("privacy_scope") or {}
     by_field_path = manifest.get("by_field_path") or {}
     by_tool = manifest.get("by_tool") or {}
     excluded = manifest.get("excluded_field_paths") or []
+    # #198 — the carried-section inventory (counts + surfaces, never leaked bytes):
+    # exactly what a publish WOULD ship, so the developer approves with full sight.
+    inventory = carried_section_inventory(capsule)
     # Destinations that WOULD receive it (display-only; nothing is contacted here).
     destinations = _egress_destinations(_default_hf_repo(None), _infer_issue_repo(capsule))
 
@@ -351,6 +599,7 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
             },
             "business_logic": {"findings": by_tool.get("business_logic", 0)},
             "privacy_scope": privacy_scope,
+            "carried_inventory": inventory,
             "destinations": destinations,
             # Issue #98 — additive per-stage progress telemetry (stderr-only
             # progress events do not pollute this stdout payload; this block is
@@ -378,6 +627,13 @@ def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_com
     click.echo("  privacy scope:")
     for k, v in privacy_scope.items():
         click.echo(f"    {k}: {v}")
+    click.echo(
+        "  carried sections (counts + surfaces, no bytes): "
+        f"{inventory['steps']} steps · {inventory['trail_anchors']} trail anchors · "
+        f"context layers {inventory['context_layers'] or '(none)'} · "
+        f"test={inventory['has_test']} · bundle={inventory['has_bundle']} · "
+        f"mini_bucket_digest={inventory['mini_bucket_digest'] or '(none)'}"
+    )
     click.echo("  destinations that WOULD receive it (not contacted):")
     for d in destinations or ["(none configured)"]:
         click.echo(f"    {d}")
@@ -400,8 +656,10 @@ def _clip(do_copy, url):
 @click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the shareable URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
+@click.option("--i-accept-bundle-findings", "i_accept_bundle_findings", is_flag=True,
+              help="Acknowledge + override a bundle secret-scan block (records acknowledged=True and ships the bundle anyway). Default: blocked.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, publish, private, make_bundle, do_copy, assume_yes, token):
+def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, publish, private, make_bundle, do_copy, assume_yes, i_accept_bundle_findings, token):
     """Mint a shareable capsule URL (add --publish to upload it)."""
 
     from ..core.capsule.share import (
@@ -421,10 +679,21 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
             click.echo("could not determine an HF repo; pass --repo <owner/name>.", err=True)
             sys.exit(2)
         # Plan 090: share --publish now shares the consent gate (was issue-only).
+        # #198: refuse an unscanned/withheld source BEFORE prompting or minting.
+        _preflight_clearance_or_exit(capsule)
+        from ..core.capsule.share import carried_section_inventory
+
         _manifest = (capsule.get("redaction") or {}).get("manifest") or {}
         _bl = (_manifest.get("by_tool") or {}).get("business_logic", 0)
-        _confirm_egress(_egress_destinations(repo, None), _manifest, _bl, assume_yes)
-        url, human, info = _publish_and_url(capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes)
+        _confirm_egress(
+            _egress_destinations(repo, None), _manifest, _bl, assume_yes,
+            carried_inventory=carried_section_inventory(capsule),
+        )
+        url, human, info = _publish_and_url(
+            capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes,
+            mini_bucket=_build_mini_bucket_for(project, trace_id),
+            i_accept_bundle_findings=i_accept_bundle_findings,
+        )
         click.echo(f"published {cid} (rev {info['revision'][:12]}) · {human}", err=True)
     elif repo:
         url = mint_capsule_url(repo, cid)
@@ -447,8 +716,10 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
 @click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
+@click.option("--i-accept-bundle-findings", "i_accept_bundle_findings", is_flag=True,
+              help="Acknowledge + override a bundle secret-scan block (records acknowledged=True and ships the bundle anyway). Default: blocked.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, token):
+def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, i_accept_bundle_findings, token):
     """Render the GitHub issue body for a capsule, or file it with --publish.
 
     The HF repo defaults to ``<you>/opentraces-capsules`` and the issue repo is
@@ -504,11 +775,22 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
 
     # Explicit public-destination consent — shared with share --publish (plan 090).
     # Names both destinations + the redaction summary. --yes bypasses for agents.
+    # #198: refuse an unscanned/withheld source BEFORE prompting or minting.
+    _preflight_clearance_or_exit(capsule)
+    from ..core.capsule.share import carried_section_inventory
+
     _manifest = (capsule.get("redaction") or {}).get("manifest") or {}
     _bl = (_manifest.get("by_tool") or {}).get("business_logic", 0)
-    _confirm_egress(_egress_destinations(repo, target_repo), _manifest, _bl, assume_yes)
+    _confirm_egress(
+        _egress_destinations(repo, target_repo), _manifest, _bl, assume_yes,
+        carried_inventory=carried_section_inventory(capsule),
+    )
 
-    url, human, _info = _publish_and_url(capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes)
+    url, human, _info = _publish_and_url(
+        capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes,
+        mini_bucket=_build_mini_bucket_for(project, trace_id),
+        i_accept_bundle_findings=i_accept_bundle_findings,
+    )
     body = render_issue_body(capsule, capsule_url=url, human_url=human)
     _clip(do_copy, url)
     summary_title = (capsule.get("summary") or {}).get("title") or "session"
@@ -643,6 +925,10 @@ def replay_cmd(ref, target_ref, as_json):
               help="Inherit the full host env (default: minimal allowlist + throwaway HOME).")
 @click.option("--timeout", type=int, default=180, show_default=True, help="Command timeout (seconds).")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the untrusted-command confirmation.")
+@click.option("--unsafe-run-on-host", "unsafe_run_on_host", is_flag=True,
+              help="Override the FOREIGN-capsule sandbox block and run its captured command on the host with NO real containment (sandbox_tier=none). Default: foreign capsules are blocked.")
+@click.option("--i-own-isolation", "i_own_isolation", is_flag=True,
+              help="Assert you are running inside your own container/VM so a foreign capsule may execute (still stamps the honest sandbox_tier=none).")
 @click.option("--with", "with_specs", multiple=True, metavar="NAME=VER|SPEC|URL",
               help="Override a CONSUMED dependency (repeatable): library upgrade or API endpoint.")
 @click.option("--matrix", "matrix", default=None, metavar="NAME=v1,v2,…",
@@ -651,7 +937,7 @@ def replay_cmd(ref, target_ref, as_json):
 @click.option("--close/--no-close", default=False, help="Close the issue on a `fixed` verdict.")
 @click.option("--json", "as_json", is_flag=True, help="Emit the full test result as JSON.")
 def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assume_yes,
-             with_specs, matrix, verdict_issue, close, as_json):
+             unsafe_run_on_host, i_own_isolation, with_specs, matrix, verdict_issue, close, as_json):
     """Run the capsule AS A TEST: reproduce the failure or confirm the fix.
 
     The repro runs in an isolated checkout (a git worktree of the target ref, or
@@ -665,7 +951,11 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
 
     from ..core.capsule.consumes import ConsumeError, parse_matrix, parse_with
     from ..core.capsule.contract import CapsuleSchemaAheadError
-    from ..core.capsule.run import CapsuleTestError, run_capsule_test
+    from ..core.capsule.run import (
+        CapsuleTestError,
+        SandboxNotOwnedError,
+        run_capsule_test,
+    )
     from ..core.capsule.share import CapsuleResolveError, resolve_capsule
 
     try:
@@ -695,6 +985,26 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
 
     bundle_path = _resolve_bundle_path(ref, capsule) if from_bundle else None
     repo = Path(repo_dir or Path.cwd()).resolve()
+    # Local repo identity for the #157 foreign-capsule sandbox gate. Matches the
+    # slug export stamps into ``source.project_slug`` (get_project_dir(...).name),
+    # so a capsule sourced from a DIFFERENT project is recognized as foreign and
+    # blocked by default unless the producer overrides with the flags below.
+    #
+    # #208: an un-``init``'d directory (fresh clone, ~/Downloads) has NO provable
+    # local identity — ``get_project_dir`` raises ``NotOptedInError``. We MUST NOT
+    # treat that as "own repo": ``local_slug=None`` is the honest "unknown identity"
+    # signal that ``run_capsule_test`` now fails CLOSED on for a DECLARED foreign
+    # source slug. So a foreign capsule from an un-init'd directory is refused, not
+    # silently executed on the host.
+    from ..core.config import NotOptedInError, get_project_dir
+
+    try:
+        local_slug = get_project_dir(repo).name or None
+    except NotOptedInError:
+        # No opentraces identity here → unknown local identity → fail closed below.
+        local_slug = None
+    except Exception:  # pragma: no cover - slug derivation is best-effort
+        local_slug = None
     where = (
         f"the capsule's source bundle ({(capsule.get('bundle') or {}).get('source_sha','')[:12]})"
         if bundle_path else f"an isolated checkout of `{target_ref}` in {repo}"
@@ -720,7 +1030,8 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
         return run_capsule_test(
             capsule, repo_dir=(None if bundle_path else repo), target_ref=target_ref,
             bundle_path=bundle_path, timeout=timeout, inherit_env=inherit_env,
-            with_overrides=(merged or None),
+            with_overrides=(merged or None), local_slug=local_slug,
+            i_own_isolation=i_own_isolation, unsafe_run_on_host=unsafe_run_on_host,
         )
 
     icons = {"fixed": "🟢", "reproduces": "🔴", "inconclusive": "🟡"}
@@ -735,6 +1046,9 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
                              "exit_code": r.get("exit_code"), "reason": r.get("reason")})
                 if r["verdict"] == "fixed" and resolved_in is None:
                     resolved_in = ver
+        except SandboxNotOwnedError as exc:
+            click.echo(f"capsule test refused: {exc}", err=True)
+            sys.exit(3)
         except CapsuleTestError as exc:
             click.echo(f"capsule test could not run: {exc}", err=True)
             sys.exit(2)
@@ -756,6 +1070,9 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
     # --- Single run (optionally with --with overrides) ------------------------
     try:
         result = _run()
+    except SandboxNotOwnedError as exc:
+        click.echo(f"capsule test refused: {exc}", err=True)
+        sys.exit(3)
     except CapsuleTestError as exc:
         click.echo(f"capsule test could not run: {exc}", err=True)
         sys.exit(2)

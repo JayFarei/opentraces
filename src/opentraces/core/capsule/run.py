@@ -22,6 +22,7 @@ eliminate, the blast radius. A container/microVM sandbox is the next step.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import shutil
 import subprocess
@@ -31,8 +32,11 @@ import venv as _venv
 from pathlib import Path
 from typing import Any, Iterator
 
+from ..isolation import SANDBOX_TIER_NONE as _SANDBOX_TIER
 from .consumes import consumes_used, resolve_consumes
 from .oracle import classify_result
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 180
 _OUTPUT_TAIL = 2000
@@ -43,9 +47,80 @@ _ENV_ALLOW = (
     "SHELL", "TEMP", "TMP", "SystemRoot", "WINDIR",
 )
 
+# --- sandbox v1 (#157) ----------------------------------------------------- #
+# ``_SANDBOX_TIER`` (imported above as ``SANDBOX_TIER_NONE``) is the HONEST tier
+# this run ever emits. v1 is ALWAYS S0 "none": the env-scrub + throwaway-$HOME S0
+# stack provides NO real filesystem containment (a same-UID child still reads the
+# operator's real HOME / bucket by absolute path — the M1 lesson,
+# ``core/isolation.py``). Claiming any tier above ``none`` would OVER-CLAIM; the
+# ``jail`` / ``container`` / ``microvm`` rungs are M3 spike-gated, never
+# relabelled. Reusing the isolation module's vocabulary keeps the two honest S0
+# surfaces from drifting.
+
 
 class CapsuleTestError(RuntimeError):
     pass
+
+
+class SandboxNotOwnedError(CapsuleTestError):
+    """A FOREIGN capsule was asked to execute on the host with no isolation and
+    no explicit override (ADR-0008 §5 / #157 sandbox v1). Sandbox v1 provides no
+    real containment, so running a foreign capsule's captured command on the host
+    is a deliberate, acknowledged act — never the silent default."""
+
+
+class BundleHashMismatchError(CapsuleTestError):
+    """A capsule's source bundle does not match the sha256 the capsule pins; a
+    tampered bundle is REFUSED before it is extracted or executed (#157)."""
+
+
+def _host_isolation_detected() -> bool:
+    """True when this process is already inside a container / VM boundary.
+
+    A foreign capsule is safe to run WITHOUT an explicit override when the host
+    itself is the sandbox (Docker / OCI / systemd-nspawn / k8s). Probes the
+    well-known markers only; never claims isolation it cannot observe.
+    """
+
+    if Path("/.dockerenv").exists():
+        return True
+    if os.environ.get("container"):
+        return True
+    try:
+        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        cgroup = ""
+    return any(marker in cgroup for marker in ("docker", "kubepods", "containerd", "lxc"))
+
+
+def _capsule_is_foreign(capsule: dict[str, Any], local_slug: str | None) -> bool:
+    """Fail-CLOSED foreignness (#157 H4, hardened in #208). A capsule that DECLARES
+    a ``source.project_slug`` is NOT foreign only when we can PROVE it is ours — i.e.
+    we know our own local identity AND it is EQUAL to the declared slug. Any declared
+    slug we cannot prove is ours is FOREIGN and blocked (unless overridden):
+
+    * declared slug, local identity, EQUAL           → not foreign (own capsule);
+    * declared slug, local identity, MISMATCH         → foreign (spoofed/other repo);
+    * declared slug, NO local identity (empty/None)   → foreign — we cannot prove
+      ownership, so we must fail CLOSED (the #208 fix: this branch used to return
+      False and let a foreign capsule execute from any un-``init``'d directory);
+    * NO declared source slug at all                  → not foreign when we also have
+      no identity (nothing to be foreign *to*); still treated as foreign when we DO
+      have a known local identity (a producer that omitted provenance, #157 H4).
+
+    Every run stamps the honest ``sandbox_tier="none"`` label regardless of this
+    verdict — foreignness only gates whether the captured command may execute."""
+
+    src_slug = str(((capsule.get("source") or {}).get("project_slug")) or "").strip()
+    local = str(local_slug or "").strip()
+    if not src_slug:
+        # No declared provenance: foreign only when we HAVE an identity to be
+        # foreign to; with no identity either there is nothing to compare against.
+        return bool(local)
+    if not local:
+        # A DECLARED source slug we cannot prove is ours ⇒ FOREIGN. Fail CLOSED.
+        return True
+    return src_slug != local
 
 
 def _safe_env(home: Path, inherit: bool, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -254,6 +329,9 @@ def run_capsule_test(
     timeout: int = DEFAULT_TIMEOUT,
     inherit_env: bool = False,
     with_overrides: dict[str, str] | None = None,
+    local_slug: str | None = None,
+    i_own_isolation: bool = False,
+    unsafe_run_on_host: bool = False,
 ) -> dict[str, Any]:
     """Execute the capsule's repro and return a deterministic verdict.
 
@@ -264,6 +342,15 @@ def run_capsule_test(
     CONSUMED dependency for this run — the dependency-unblock axis (plan 089).
     Each ``package`` consume is installed in an isolated venv; each ``service``
     consume's endpoint is injected as the client's env var.
+
+    Sandbox v1 (#157): a FOREIGN capsule (``source.project_slug`` differs from
+    ``local_slug``) is BLOCKED from executing on the host unless the operator
+    owns the isolation (``i_own_isolation`` / already inside a container) or
+    explicitly accepts the risk (``unsafe_run_on_host``); an OWN-repo capsule
+    only WARNS so the re-test loop stays frictionless. A bundle whose bytes do
+    not match the capsule's pinned sha256 is REFUSED before extraction. Every run
+    stamps the HONEST ``sandbox_tier="none"`` (S0 — no real containment) on the
+    result AND at the top-level ``capsule["sandbox_tier"]`` key the U1 clamp reads.
     """
 
     test = capsule.get("test") or {}
@@ -274,11 +361,54 @@ def run_capsule_test(
             "target_ref": target_ref,
         }
 
+    # --- sandbox v1 ownership gate (#157) -------------------------------- #
+    if _capsule_is_foreign(capsule, local_slug):
+        if not (i_own_isolation or unsafe_run_on_host or _host_isolation_detected()):
+            src_slug = (capsule.get("source") or {}).get("project_slug")
+            raise SandboxNotOwnedError(
+                f"refusing to run a FOREIGN capsule on the host: its source project "
+                f"({src_slug!r}) is not this repo ({local_slug!r}). Sandbox v1 provides "
+                "NO real filesystem containment, so a foreign capsule's captured command "
+                "could read your host by absolute path. Re-run inside a container "
+                "(i_own_isolation=True) or accept the risk (unsafe_run_on_host=True)."
+            )
+    elif local_slug and (capsule.get("source") or {}).get("project_slug"):
+        # Own-repo capsule (slug matches): WARN-not-block — the frictionless
+        # dependency-unblock / re-test-HEAD loop. The tier stays honestly ``none``.
+        logger.warning(
+            "running an OWN-repo capsule on the host under sandbox_tier=none "
+            "(no real filesystem containment); this is the frictionless re-test path."
+        )
+
+    # --- bundle integrity HARD gate (#157) ------------------------------- #
+    # A tampered bundle is REFUSED before it is extracted or executed. verify_bundle
+    # now REQUIRES a pinned sha256 (#157 H5): a bundle whose bytes are present but
+    # carry NO pinned hash is unbound and is refused here rather than run.
+    if bundle_path is not None:
+        from .share import verify_bundle
+
+        expected_sha256 = (capsule.get("bundle") or {}).get("sha256")
+        if not verify_bundle(Path(bundle_path), expected_sha256):
+            raise BundleHashMismatchError(
+                f"capsule bundle at {bundle_path} does not match the sha256 the capsule "
+                "pins; refusing to extract or run a tampered bundle."
+            )
+
+    # Honest sandbox_tier label (#157): the run's own S0 self-report, stamped on the
+    # capsule dict as a truthful record of THIS run's isolation. Replay's trust
+    # computation (core/capsule/replay.py::_derive_trust_factors, C1) never reads
+    # this field OFF a capsule — a producer could pre-stamp it — it trusts only a
+    # LOCAL run_result threaded by the caller; here that tier is honestly ``none``,
+    # so a foreign-capsule verdict floors either way. Determined by the run
+    # ENVIRONMENT (S0), not the outcome.
+    capsule["sandbox_tier"] = _SANDBOX_TIER
+
     with _consumes_setup(capsule, with_overrides, timeout) as (extra_env, used, cerr):
         if cerr:
             return {
                 "runnable": True, "verdict": "inconclusive", "reason": cerr,
                 "command": test["command"], "consumes_used": used, "target_ref": target_ref,
+                "sandbox_tier": _SANDBOX_TIER,
             }
         if bundle_path is not None:
             with _bundle_extracted(Path(bundle_path)) as run_dir:
@@ -296,7 +426,13 @@ def run_capsule_test(
             result["target_ref"] = target_ref
         if used:
             result["consumes_used"] = used
+        result["sandbox_tier"] = _SANDBOX_TIER
         return result
 
 
-__all__ = ["CapsuleTestError", "run_capsule_test"]
+__all__ = [
+    "CapsuleTestError",
+    "SandboxNotOwnedError",
+    "BundleHashMismatchError",
+    "run_capsule_test",
+]

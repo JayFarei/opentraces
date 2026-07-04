@@ -28,6 +28,11 @@ def suggest_consumes(
     silently tagged onto a capsule. Returns human-facing hint lines like
     ``package:<name>=``; ``TraceRecord.dependencies`` is name-only (no captured
     versions), so the pin is intentionally left blank for the developer to fill.
+
+    Applies the same ``_is_valid_dependency`` gate used for import-derived
+    dependencies, so shell operators / redirection tokens / stdlib pseudo-modules
+    that slipped into a trace's captured dependencies never surface as
+    ``--consume`` candidates.
     """
 
     declared = {str(d).strip().lower() for d in (already_declared or set())}
@@ -35,7 +40,7 @@ def suggest_consumes(
     hints: list[str] = []
     for dep in dependencies or []:
         name = str(dep).strip()
-        if not name:
+        if not name or not _is_valid_dependency(name, None):
             continue
         key = name.lower()
         if key in declared or key in seen:
@@ -177,6 +182,12 @@ def extract_dependencies(project_path: str | Path) -> list[str]:
     return sorted(all_deps)
 
 
+# Shell control/redirection tokens (``&&``, ``||``, ``|``, ``;``, ``>``, ``>>``,
+# ``<``, ``2>&1``, ``2>``, ...) that can land in an install command's tail and
+# must never be treated as package names.
+_SHELL_OPERATOR_RE = re.compile(r"^\d*(?:&{1,2}|\|{1,2}|;|>{1,2}|<{1,2})[\d&|;<>]*$")
+
+
 def extract_dependencies_from_steps(steps: list[Step]) -> list[str]:
     """Extract dependency names from Bash tool calls that install packages.
 
@@ -214,11 +225,16 @@ def extract_dependencies_from_steps(steps: list[Step]) -> list[str]:
                     # Split on spaces and filter out flags (starting with -)
                     for token in raw.split():
                         token = token.strip()
-                        if token and not token.startswith("-"):
-                            # Strip version specifiers
-                            name = re.split(r"[@>=<~!]", token)[0]
-                            if name:
-                                deps.add(name)
+                        if not token or token.startswith("-"):
+                            continue
+                        if _SHELL_OPERATOR_RE.match(token):
+                            # Shell control/redirection tokens (e.g. "&&", "2>&1"),
+                            # not package names -- see e.g. "pip install X 2>&1".
+                            continue
+                        # Strip version specifiers
+                        name = re.split(r"[@>=<~!]", token)[0]
+                        if name and not _SHELL_OPERATOR_RE.match(name):
+                            deps.add(name)
 
     return sorted(deps)
 
@@ -445,6 +461,11 @@ def _normalize_js_package(raw: str) -> str | None:
 def _is_valid_dependency(name: str, project_name: str | None) -> bool:
     """Apply three-stage filtering to determine if a name is a valid dependency."""
     if not name:
+        return False
+
+    # Shell control/redirection tokens and bare digits (e.g. from a captured
+    # "cmd 2>&1" tail) are never package names.
+    if _SHELL_OPERATOR_RE.match(name) or name.isdigit():
         return False
 
     # Well-known packages always pass

@@ -161,7 +161,15 @@ def test_snapshot_restore_rewrites_trace_index_sqlite_paths(driver):
 
 @pytest.mark.parametrize(
     "journey_name",
-    [j["name"] for j in available_journeys() if j["tier"] == 0],
+    # Issue #213 — the `scale` CI lane cold-builds the multi-minute
+    # `c-mature-bucket` world; it is OFF this default sweep (and the per-PR
+    # gate) and runs ONLY under `make otbox-scale` (OT_OTBOX_SCALE=1). It is
+    # still tier 0, so exclude it by lane, not by tier.
+    [
+        j["name"]
+        for j in available_journeys()
+        if j["tier"] == 0 and j["ci_lane"] != "scale"
+    ],
 )
 def test_tier0_catalogue_journey(driver, journey_name):
     """Every Tier 0 catalogue journey must PASS. Host/opt-in capability gaps

@@ -90,7 +90,7 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
 | **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
-| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.7.0` field semantics |
+| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.8.0` field semantics |
 | **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
 | **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
 | **[Trace Capsule](/docs/clients/trace-capsule)** | Share a single trace as a reproducible capsule; use `opentraces capsule` for the full CLI surface |
@@ -537,12 +537,13 @@ always win, so no verb can ever be shadowed.
 
 The CLI collapsed from 8 visible `trace` verbs to 4 (`query` / `get` / `map` / `slice`) and lifted `trail blame pr` to top-level `trail pr`; every demoted verb (`trace skills`, `trace index`, `trace partition`, `trace compare`, `trace teleport`, `trace discover`, `bucket status`, `bucket manifest`, `bucket remote`, `bucket rebuild`, `bucket replay`, `bucket prune`, `bucket prefetch`, `setup bucket`, `setup upgrade`, `setup uninstall`, `setup llm-review`, `ctx tree`/`show`/`step`/`reads`/`writes`/`list`/`info`) stays callable and `--json`-scriptable, hidden from `--help`, never removed.
 
-### Dataset Workflow, Dataset, Security, Capture
+### Dataset Workflow, Dataset, Capsule, Security, Capture
 
 | Command | What it does |
 |---------|---------------|
 | `workflow` | Manage local dataset workflow skill packages |
 | `dataset` | Manage local executable datasets and row publication |
+| `capsule` | Seal, resolve, share, and replay a Trace Capsule (an immutable, URL-addressed episode) |
 | `security` | Optional privacy/security utilities |
 | `capture-otlp` | Run and control the OTLP receiver capture source |
 | `git-backfill` | Retroactively correlate old commits to retained traces |
@@ -1026,8 +1027,10 @@ opentraces dataset review reset my-dataset <row-id>
 opentraces dataset review approve my-dataset --all
 opentraces dataset remote create my-dataset owner/team-traces --private
 opentraces dataset remote list my-dataset --verbose
+opentraces dataset remote visibility my-dataset owner/team-traces --public
 opentraces dataset publish my-dataset --check-only
 opentraces dataset publish my-dataset
+opentraces dataset verify my-dataset --json
 opentraces dataset schedule add my-dataset --every 1h --approve-new --publish-check-only
 opentraces dataset schedule list
 opentraces dataset remove my-dataset --yes
@@ -1054,6 +1057,55 @@ tools toggle with `--tool <name> --enable|--disable`; a required tool can only b
 disabled with `--unsafe-override` (and an optional `--reason`) when the workflow
 contract permits it. `dataset publish --check-only` blocks rows when a dataset's
 required security tools are not satisfied.
+
+`dataset remote visibility <name> [<remote>] --private|--public` flips a bound
+HuggingFace dataset remote between private and public.
+
+`dataset verify <name> [--json]` replays the bound workflow (with recorded
+judgment answers) in a side-effect-free mode and byte-compares the re-run
+against the stored rows, classifying the outcome as `reproduces` /
+`bucket-advanced` / `integrity-failure` (non-zero exit). It never appends rows
+or advances a cursor. See [Dataset Rows: Verify](/docs/workflow/datasets#verify)
+for the full contract.
+
+`dataset run --answers <file>` re-runs after a workflow exits `rc=10`
+needs-judgment (schema `opentraces.workflow.needs_judgment.v1`), the same
+handshake shape `trace slice --by` uses. See
+[Dataset Workflows: The Judgment Handshake](/docs/workflow/workflow-templates#the-judgment-handshake-rc10).
+
+## Capsule
+
+```bash
+opentraces capsule create <trace-id>[:<step>|:<A>-<B>] --json
+opentraces capsule preview <trace-id> --product <name>
+opentraces capsule get <ref> --json
+opentraces capsule get <ref> --summary
+opentraces capsule import <ref> --json
+opentraces capsule share <trace-id> --publish --yes
+opentraces capsule issue <trace-id> --publish --yes
+opentraces capsule replay <ref> --against HEAD --json
+opentraces capsule test <ref> --against HEAD --json
+opentraces capsule verdict <issue-ref> --state fixed --close
+opentraces capsule watch <issue-ref> --timeout 300 --json
+```
+
+A capsule is a privacy-bounded, redacted, self-contained record of one agent
+episode: the immutable, URL-addressed seal in the [Seal Family
+contract](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md)
+(ADR-0008). `create` seals it (the v7-address form; the pre-v7 `export`
+spelling stays callable, hidden, with a richer flag set). `get` is the
+read-only resolve verb (file / `https://` / `hf://` ref); `import` is the
+explicit opt-in write into the local bucket. `share` mints/publishes the
+shareable URL; `issue` renders/files the GitHub issue embedding it. `replay`
+builds a re-pose packet for a maintainer agent; `test` runs the captured repro
+as an executable test; `verdict` posts the outcome back to the issue; `watch`
+polls the issue for resolution. Every verb works identically whether or not
+the session had a failing command (`test=null` capsules are first-class).
+
+Full command reference, the redaction floor, the `capsule_replay.v1` four
+honesty properties (`reproducible`/`gradable`/`scoped`/`sandboxed`) plus the
+derived `verdict_trust`, and the capsule-worker rendered URL are documented at
+[Trace Capsule](/docs/clients/trace-capsule).
 
 ## Security Tools
 
@@ -2220,7 +2272,41 @@ with:
 
 The dataset-free primitive is `execute_workflow(workflow_name, scope,
 output_path)`. Dataset runs wrap that primitive with manifest, cursor, review,
-and publication state.
+and publication state. This is the single execution seam: both the
+dataset-bound runner (`dataset run`) and the dataset-free primitive go through
+`execute_workflow`, so a workflow's judgment handshake, isolation, and
+sanitization behave identically whether or not a dataset manifest is involved.
+
+## The Judgment Handshake (rc=10)
+
+Per [ADR-0008](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md),
+judgment is an INPUT to a projection, not an exception to it. A workflow's
+`scripts/build_rows.py` that needs a judgment call (for example, grading
+whether an episode succeeded) does not resolve it inline: it writes structured
+`JudgmentRequest`s to the sidecar file named by `OT_JUDGMENT_SIDECAR` and exits
+with `RC_NEEDS_JUDGMENT` (10). The script executor detects the sidecar + `rc=10`
+and propagates the handshake up:
+
+```bash
+opentraces dataset run my-dataset --json
+# exits rc=10, prints:
+# [judgment] <request-id>: <prompt>
+```
+
+Answer each request, write them to a file, and re-run with `--answers`:
+
+```bash
+opentraces dataset run my-dataset --answers answers.json --json
+```
+
+The answers travel into the run packet (`packet["answers"]`) and are recorded
+in row provenance's `answers` block (see
+[Row Provenance: The Contract Triple](datasets.md#row-provenance-the-contract-triple)),
+so re-running with the same answers against the same bucket state is
+byte-identical: the projection stays a pure function of `(workflow, bucket
+state, answers)`. The `JudgmentRequest`/`JudgmentAnswer` shapes are reused
+verbatim from the `trace partition` slicing judgment handshake (schema
+`opentraces.slicing.judgment.v1`), one answer shape across the whole system.
 
 ## Evidence Inputs
 
@@ -2324,6 +2410,14 @@ and what sanitization are required for its objective.
 A dataset is a local HuggingFace-shaped row store produced by a workflow. It is
 not the raw trace bucket.
 
+Per the [Seal Family contract](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md)
+(ADR-0008), a dataset is one of exactly two things that "seal": a **growing,
+reviewed seal**, appended to under review gates, with every row carrying the
+full contract triple back to its source. (The other is a
+[capsule](../clients/trace-capsule.md), an immutable, URL-addressed seal of one
+scope.) A PR body, a standup, or a dashboard built from dataset rows is a
+*rendering* of the projection, not a seal.
+
 ## Create
 
 ```bash
@@ -2353,6 +2447,7 @@ opentraces dataset run my-dataset
 opentraces dataset run opentraces-episodes --executor script --json
 opentraces dataset run my-dataset --scope trace --trace <trace-id>
 opentraces dataset run my-dataset --since-last-run
+opentraces dataset run my-dataset --answers answers.json --json
 ```
 
 `dataset run` invokes the workflow and appends rows locally. It can read from
@@ -2360,6 +2455,65 @@ Trace Index candidates, a project scope, the current working directory, a
 specific trace, or the saved skill query from `dataset new --from-skill`.
 The `script` executor runs the workflow package's deterministic
 `scripts/build_rows.py` without a live agent.
+
+## Row Provenance: The Contract Triple
+
+Per ADR-0008, a projection is explainable iff it is a pure function of
+content-addressed inputs: `projection = f(scope_ref, workflow@digest,
+bucket_state@digest, answers)`. Every appended row records this as its
+provenance (`.opentraces/row_provenance.jsonl` inside the dataset directory,
+schema `opentraces.dataset.row_provenance.v2`):
+
+```json
+{
+  "ref": "<trace>:120-148",
+  "workflow": {"skill": "skill-command-trajectory-eval-v1", "digest": "sha256:…"},
+  "bucket": {"manifest_digest": "sha256:…", "snapshot_digest": "sha256:…"},
+  "answers": {"digest": "sha256:…", "recorded": {}},
+  "contract_triple": {
+    "workflow_digest": "sha256:…",
+    "bucket_digest": "sha256:…",
+    "answers_digest": "sha256:…"
+  },
+  "reconstructable": true,
+  "isolation": {"sandbox_tier": "none"}
+}
+```
+
+`reconstructable` is an honesty label on the run that produced the row: `true`
+for the `script` executor (a recorded, re-runnable transform) and `dry-run`,
+`false` for `current-agent` (raw agent emission is not a recorded input, so it
+is never claimed reconstructable). `contract_triple` is the convenience
+roll-up of the three content digests that pin the row; `answers` carries the
+fourth input, recorded judgment answers from a `--answers`-driven run (see
+[Dataset Workflows: the judgment handshake](workflow-templates.md#the-judgment-handshake-rc10)),
+digested even when empty so the triple is never partially populated.
+
+## Verify
+
+```bash
+opentraces dataset verify my-dataset --json
+```
+
+Re-executes the bound workflow against the bucket (with the recorded
+answers, from the same run packet the contract triple points at) in a
+side-effect-free mode, projects the re-run through the same
+sanitize/validate/dedup/canonical transform an append would apply, and
+byte-compares it against the stored `data/train.jsonl` rows. Classifies the
+outcome into exactly three honest verdicts:
+
+| Verdict | Meaning | Exit code |
+|---------|---------|-----------|
+| `reproduces` | The re-run rows are byte-identical to the stored rows | 0 |
+| `bucket-advanced` | Stored rows are a strict subset of the re-run and the bucket watermark moved past the recorded one (an explained delta) | 0 |
+| `integrity-failure` | A stored row was hand-mutated (its bytes no longer hash to the recorded `payload_hash`), or the rows differ with no watermark explanation | 7 |
+
+`--json` emits the frozen `opentraces.dataset.verify.v1` envelope
+(`verdict`, `stored_row_count`, `reproduced_row_count`, `byte_identical`,
+`delta`, `mutated_rows`, `recorded_watermark`, `current_watermark`, `detail`).
+The command never appends rows or advances a cursor/watermark; it is a pure
+read that enforces the integrity invariant on the transform (digested bytes
+== installed bytes == executed bytes).
 
 ## Dataset Security Policy
 
@@ -2549,6 +2703,21 @@ opentraces dataset publish my-dataset --exclude-state lost --exclude-state never
 | `--exclude-state TEXT` | Drop rows containing a patch with this survival state; repeatable |
 | `--json` | Emit structured JSON |
 
+## One Clearance Predicate
+
+Per [ADR-0008](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md)
+§3, exactly one predicate decides whether a trace's bytes may leave the private
+bucket. `bucket sync push`, `dataset publish`, and `capsule share --publish` /
+`capsule issue --publish` all evaluate the SAME three-way clearance
+(`cleared` / `not_cleared` / `unknown`) instead of each re-implementing their
+own lock, and egress is never on by default for any of them. The check is
+evaluated against a push-time snapshot, not a check-then-copy race: a publish
+run indexes one manifest snapshot up front and every row in that run is
+authorized against it, so a trace cannot slip from cleared to not-cleared
+mid-run. Absence of a recorded clearance (`unknown`) is never coerced to
+"safe to leave", only a positive `cleared` state permits egress. A refusal
+moves zero bytes.
+
 ## Bucket Sync Is Separate
 
 ```bash
@@ -2672,6 +2841,14 @@ for row in ds["train"]:
 Rows are workflow-specific. A command-trajectory eval dataset and a PR intent
 summary dataset will not have the same row schema, even if they came from the
 same bucket traces.
+
+A dataset is a growing, reviewed seal (ADR-0008): each row was appended under
+review gates and carries its own provenance record back to the workflow
+digest, bucket state digest, and any recorded judgment answers that produced
+it (see [Row Provenance: The Contract Triple](../workflow/datasets.md#row-provenance-the-contract-triple)).
+Consumers relying on a dataset for grading or replay can check
+`opentraces dataset verify <name>` upstream of publication to confirm the
+published rows still reproduce from the recorded inputs.
 
 ## File-Oriented Access
 
@@ -2833,12 +3010,26 @@ of a captured session so a maintainer agent or teammate can resolve the episode 
 a single command.
 
 A runnable repro test is **optional evidence, not the point**. Capsules with
-`test=null` are fully first-class: every verb (`export`, `preview`, `open`,
-`share`, `issue`) works identically whether or not the session had a failing command.
+`test=null` are fully first-class: every verb (`create`, `preview`, `get`,
+`import`, `share`, `issue`) works identically whether or not the session had a failing command.
+
+The seal/consume/write verbs are `capsule create` (seal), `capsule get`
+(read-only resolve), and `capsule import` (the explicit opt-in write into the
+local bucket). The pre-v7 spellings `capsule export` and `capsule open` still
+work (hidden from `--help`, kept callable so existing issue-embedded commands
+and scripts never break) — this doc uses the current names throughout.
 
 The underlying object stays `opentraces.capsule.v1` throughout. The presentation
 reframe (command noun, `<!-- opentraces-capsule: <id> -->` wire markers, issue
 idempotency) is unchanged.
+
+Per the [Seal Family contract](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md) (ADR-0008),
+a capsule is one of exactly two things that "seal": an **immutable, URL-addressed
+seal** over one scope, byte-stable under re-seal, with a deterministic
+`capsule_id`. (The other is a [dataset](../workflow/datasets.md), a growing,
+reviewed seal of workflow-projected rows.) Everything else that carries capsule
+content, a rendered issue body, the capsule-worker HTML page, is a *rendering* of
+that seal, not a seal itself.
 
 ## What a Capsule Carries
 
@@ -2860,49 +3051,46 @@ Optional additive keys (null-tolerant, absent on older capsules without error):
 
 ## Verbs
 
-### `capsule export` — build a local capsule
+### `capsule create` — seal a local capsule
 
 ```bash
-opentraces capsule export <trace-id> \
+opentraces capsule create <ref> \
+  [--from-step <n> --to-step <n>] \
   [--project <repo>] \
   [--product <name>] \
   [--include-prompts] \
-  [--test-command "pytest tests/test_foo.py -k failing"] \
-  [--expect-error "AssertionError"] \
-  [--setup-command "pip install -e ."] \
-  [--consume package:humanduration=git+https://github.com/o/r@v0.1.0] \
-  [--from-session <id> [--from-agent claude|codex]] \
-  [--product-full-span] \
+  [--repo-url <url>] \
   [--progress auto|plain|json|never] \
   [--out <dir>] \
   [--bundle] \
   [--json]
 ```
 
-Writes `capsules/v1/<id>/capsule.json` + `capsule.md` under `<project>/.opentraces/`.
+`<ref>` is a v7 address: a whole `<trace>`, a point `<trace>:<step>`, or a span
+`<trace>:A-B`. The address selects the scope directly — no step/radius flag
+soup; `--from-step`/`--to-step` is the equivalent explicit span seam. Writes
+`capsules/v1/<id>/capsule.json` + `capsule.md` under `<project>/.opentraces/`.
 Primary stdout is the `capsule.json` path. `--json` prints the full envelope.
-The `<trace-id>` is optional when `--from-session` is given (the two are mutually exclusive).
 
 - `--product <name>` binds the capsule to one consumed product and scopes the slice
-  to steps that reference it. If omitted and the session captured dependency names,
-  the CLI emits `--consume` hints to stderr (never auto-writes them).
+  to steps that reference it.
 - `--include-prompts` opts prompt-bearing fields (system prompt + per-step reasoning)
   IN; they are excluded by default (see [Layered Redaction](#layered-redaction)).
-- `--bundle` embeds a hermetic `git archive` at the pinned commit so the test runs
-  even if the commit is later unreachable.
-- `--from-session <id>` builds a capsule for the **current turn** from a live hook
-  sidecar instead of a retained trace id — it ingests the session first, then exports.
-  `--from-agent claude|codex` selects which sidecar; if the session isn't found or
-  isn't parseable the command prints a specific remediation (and Codex sidecars whose
-  rollout content isn't yet at the ingested path fall back to that remediation).
-- `--product-full-span` opts the `--product` slice out of the default radius clamp
-  (the bounded window that keeps a large session from slicing end-to-end). Use it
-  only when you need the full matched span.
+- `--bundle` embeds a hermetic `git archive` at the pinned commit so a later
+  `capsule test --from-bundle` runs even if the commit is later unreachable;
+  the shipped bundle bytes are secret-scanned before `share --publish` (see
+  [Bundle Safety and Sandbox](#bundle-safety-and-sandbox)).
 - `--progress auto|plain|json|never` reports stage/heartbeat to **stderr** during the
-  slow export phases (slice / context / trail-anchor projection); the `--json` envelope
-  on stdout stays clean. `auto` is quiet on a non-TTY. (Shared with the hidden-but-callable
-  `trace index rebuild` progress contract — the Trace Index self-maintains behind `trace query`
-  now, so this command no longer appears in `--help`.)
+  slow seal phases (slice / context / trail-anchor projection); the `--json` envelope
+  on stdout stays clean. `auto` is quiet on a non-TTY.
+
+`create` is the v7-address seal path; it does not (yet) declare a runnable test
+command, an explicit `--consume` spec, or seal from a live in-flight session.
+For those, the pre-v7 `capsule export` spelling stays callable (hidden from
+`--help`) with its full original flag set: `--test-command`, `--expect-error`,
+`--setup-command`, `--consume`, `--from-session [--from-agent claude|codex]`,
+and `--product-full-span`. Both verbs write the same `opentraces.capsule.v1`
+object; `export` is the richer flag surface, `create` is the v7-address one.
 
 ### `capsule preview` — inspect egress before anything leaves
 
@@ -2923,18 +3111,35 @@ Runs the full redaction pipeline, then prints:
 
 Writes and publishes **nothing**. This is the developer-approval checkpoint.
 
-### `capsule open` — the consume verb
+### `capsule get` — the read-only consume verb
 
 ```bash
-opentraces capsule open <ref> [--json] [--summary]
+opentraces capsule get <ref> [--json/--no-json] [--summary]
 ```
 
 Resolves a capsule from a file path, `https://` URL, or `hf://` ref. `--json` (the
 default) prints the frozen `opentraces.capsule.v1` envelope so a maintainer agent can
 parse it with zero bespoke code. `--summary` prints the human markdown instead.
+Read-only: no `~/.opentraces`, bucket, or project state is created, so a
+maintainer in a brand-new environment can `get` a capsule and read it.
 
 The `--json` flag is the default and is accepted explicitly so the command embedded
 in the issue body runs verbatim.
+
+### `capsule import` — the explicit opt-in write
+
+```bash
+opentraces capsule import <ref> [--source-layer <label>] [--json]
+```
+
+Resolves the same way as `get`, but WRITES the result into the local bucket as
+a first-class trace: the carried spine is materialized into a schema-valid
+`TraceRecord` under the reused trace id, and its recorded anchors into the
+per-trace Trail companion, so the imported capsule projects natively through
+`trace map` / `trace slice` / `trace get`. Same capsule id over an existing
+trace is an idempotent no-op; a different capsule id over the same trace
+scope-merges. `--source-layer` (default `capsule_import`) labels the
+provenance recorded on the imported record.
 
 ### `capsule share` — mint and optionally publish the URL
 
@@ -2943,14 +3148,18 @@ opentraces capsule share <trace-id> \
   [--repo <hf-owner/name>] \
   [--publish] [--private] \
   [--product <name>] [--include-prompts] \
-  [--bundle] [--copy] [--yes]
+  [--bundle] [--copy] [--yes] \
+  [--i-accept-bundle-findings]
 ```
 
 Without `--publish`: mints the shareable URL locally. Primary stdout is the URL.
 
 With `--publish`: uploads `capsule.json` + `capsule.md` (and the bundle if `--bundle`)
 to the HuggingFace dataset repo and pins the URL to the immutable publish commit sha.
-Before uploading, the consent gate runs (see [Consent Gate](#consent-gate)).
+Before uploading, the consent gate runs (see [Consent Gate](#consent-gate)) and, if
+`--bundle` was used, the shipped bundle bytes are secret-scanned (see
+[Bundle Safety and Sandbox](#bundle-safety-and-sandbox)); a finding blocks the
+publish (zero bytes out) unless `--i-accept-bundle-findings`.
 
 Default repo is `<you>/opentraces-capsules` (or `cfg.capsule_repo` if set). `--copy`
 copies the URL to the clipboard.
@@ -2983,8 +3192,10 @@ The consent gate runs before any egress (see [Consent Gate](#consent-gate)).
 opentraces capsule replay <ref> [--against HEAD] [--json]
 
 # Run the captured repro command as an executable test (requires test.command).
-opentraces capsule test <ref> [--against HEAD] [--from-bundle] \
-  [--with name=ver] [--matrix name=v1,v2,v3] [--verdict-to issue] [--json]
+opentraces capsule test <ref> [--against HEAD] [--repo-dir <dir>] [--from-bundle] \
+  [--inherit-env] [--timeout 180] [--yes] \
+  [--unsafe-run-on-host] [--i-own-isolation] \
+  [--with name=ver] [--matrix name=v1,v2,v3] [--verdict-to issue] [--close/--no-close] [--json]
 
 # Post a manual verdict to the issue.
 opentraces capsule verdict <issue-ref> --state fixed|reproduces|inconclusive \
@@ -2997,7 +3208,34 @@ opentraces capsule watch <issue-ref> [--timeout 300] [--json]
 `capsule test` exits early with a clear message if the capsule carries no test
 command; use `capsule replay` for intent-only sessions. `--matrix name=v1,v2`
 sweeps one consumed dependency and reports which version flips the verdict to `fixed`
-(`resolved_in`).
+(`resolved_in`). The repro is captured, untrusted input — `test` asks for
+confirmation before executing it (skip with `--yes`) and runs under
+`core/isolation.py`'s minimal env allowlist (see
+[Bundle Safety and Sandbox](#bundle-safety-and-sandbox)). A FOREIGN capsule's
+command is blocked from running on the host by default.
+
+### Replay Honesty: the Four Properties
+
+`capsule replay`'s packet leads with four named properties, each derived from
+a lattice-ranked factor (ADR-0008):
+
+| Property | Derived from | `ok` when |
+|----------|---------------|-----------|
+| `reproducible` | `env_tier` | `L3` or `L4` (hermetic env) |
+| `gradable` | `oracle_trust` | `captured_pass`, `captured_error`, or `declared` |
+| `scoped` | `diff_trust` | `exact` (the diff bounds exactly the sealed slice) |
+| `sandboxed` | `sandbox_tier` | any real isolation tier above `none` |
+
+`verdict_trust` (`floor` / `low` / `medium` / `high`) is the derived weakest-link
+summary — the `min()` over all four factors' lattice positions — kept on the
+packet for automation thresholds. **On today's corpus every honest capsule
+reports `verdict_trust: floor`** and refuses to claim `reproducible`: no
+dependency-pin resolver ships yet, so `env_tier` never rises off its `L0`
+floor. That is the honesty contract working as intended, not a bug — trust
+rises only when a factor's real underlying state rises (a future resolver for
+`env_tier`, a declared oracle or `captured_pass` for `oracle_trust`, a
+slice-scoped diff for `diff_trust`, real OS containment for `sandbox_tier`),
+never by relabelling a claim.
 
 ## The 3-Way Render Banner
 
@@ -3039,8 +3277,13 @@ Additional safety properties:
 
 - **Counts-only manifest.** `redaction.manifest` aggregates counts by tool, severity,
   and field path. It never serializes `Finding.matched_text` (the literal secret value).
-- **Home-path scrub.** `/Users/<name>/` and bare username tokens are replaced with
-  `~` and `<user>` respectively.
+- **Home-path scrub.** The registry `path_anonymizer` tool (issue #143) rewrites
+  home paths tail-consuming: `/Users/<name>/secret/.env` becomes
+  `/Users/[ot-user-<8hex>]`, the whole tail gone, not just the username segment.
+  The operator's own identity tokens (login name, home-dir name) are hashed the
+  same way wherever they appear as bare tokens. The `[ot-user-<8hex>]` marker is
+  structurally inert (a leading `[` can never start a detected username), so the
+  scrub is idempotent by construction.
 - **Untrusted content.** `content_is_untrusted: true` on the envelope. The human render
   routes captured text through a sentinel/fence-breakout/heading-injection stripper.
 
@@ -3077,6 +3320,33 @@ Proceed? [y/N]
 
 Pass `--yes` to bypass for scripts and agents.
 
+## Bundle Safety and Sandbox
+
+A `--bundle` embeds a hermetic `git archive` of the pinned commit, so
+`capsule test --from-bundle` runs even after the commit becomes unreachable.
+Before that bundle ships anywhere (`share --publish`, `issue --publish` with
+`--bundle`), the exact shipped bundle bytes are scanned for secrets (native
+TruffleHog over the extracted archive) as a publish GATE, never a trust
+factor: a finding blocks the publish with zero bytes out
+(`BundleSecretFindingError`) unless `--i-accept-bundle-findings` is passed to
+acknowledge and ship anyway. `bundle.secret_scan` is always stamped on the
+envelope — clean or blocked, never the secret byte itself. Well-known
+secret-bearing paths (`.env`, keys, certs, `.aws/`, `.netrc`) are excluded
+from the archive members before gzip, byte-identical when nothing matches.
+
+`capsule test` runs the repro under `core/isolation.py`'s isolated-subprocess
+primitive: an allowlist-only child environment (secrets never inherited), a
+redirected `$HOME`, and (where the OS supports it) a probed network-deny
+mechanism. The primitive stamps `sandbox_tier` honestly using the ADR-0008
+lattice vocabulary (`none`/S0, `jail`/S1, `container`/S2, `microvm`/S3);
+today it always reports `none` (S0) — a same-UID `$HOME` redirect is not real
+filesystem containment, so the tier never over-claims. Sandbox v1 adds a
+block-foreign-by-default GATE on top of that honest label: a FOREIGN
+capsule's captured command refuses to run on the host unless you pass
+`--unsafe-run-on-host` (no real containment) or `--i-own-isolation` (you
+assert you are already inside your own container/VM) — either way the
+stamped `sandbox_tier` stays `none` until real OS-level containment lands.
+
 ## URL Design
 
 The shareable URL points at one self-contained file, pinned to the immutable publish
@@ -3088,15 +3358,39 @@ https://huggingface.co/datasets/<owner>/<repo>/resolve/<commit-sha>/capsules/v1/
 
 `publish_capsule` uploads only `capsule.json` + `capsule.md` (not the whole private
 bucket). Pinning to the commit sha means the URL is immutable: the file it resolves
-to can never silently change.
+to can never silently change, the defining property of the capsule seal
+(ADR-0008: an immutable, URL-addressed seal, as opposed to the dataset's growing,
+reviewed seal).
+
+### Rendered View (capsule-worker)
+
+A published capsule also renders at a human-friendly URL served by a stateless
+Cloudflare Worker (`web/capsule-worker/`), a pure projection over the same frozen
+`opentraces.capsule.v1` object, with no re-derivation, no re-redaction, and one
+outbound fetch to the HF `capsule.json`:
+
+- `Accept: text/html` → a human page rendering the four signals honestly (untrusted
+  content escaped, redaction markers kept verbatim, excluded fields shown as
+  "excluded by author" not "broken").
+- Progressive JSON endpoints for no-CLI agents: `/summary` → `/index` → `/slice`
+  `/context` `/trail` `/repo` `/environment` → `/full`, plus `/skill`. `/full`
+  returns the upstream bytes verbatim, byte-identical to `capsule get --json`.
+- The worker never serves the heavy "environment" face (bundle tar, runtime pins,
+  lockfiles), only the name-only `environment` projection.
+- If the fetch/parse fails, it degrades to a pointer at the raw HF `/resolve/` URL
+  plus the CLI one-liner, rather than failing outright.
+
+Production domain wiring (`capsules.opentraces.ai`) is a deploy-time operation,
+independent of the capsule format itself.
 
 ## Self-Sufficiency
 
-`export` sources the context resume packet from the live Context Tree projection when
-present, and falls back to the trace's own bucket companion
-(`bucket/contexts/v1/<slug>/<trace>/nodes.jsonl` + layer blobs). A capsule resolves
-with zero access to the originating machine. Degraded captures produce a valid
-`closure_intent_only` capsule (recorded in `limitations`), never a crash.
+Sealing (`create` or `export`) sources the context resume packet from the live
+Context Tree projection when present, and falls back to the trace's own bucket
+companion (`bucket/contexts/v1/<slug>/<trace>/nodes.jsonl` + layer blobs). A
+capsule resolves with zero access to the originating machine. Degraded
+captures produce a valid `closure_intent_only` capsule (recorded in
+`limitations`), never a crash.
 
 ## Honest Capture Gaps
 
@@ -3126,26 +3420,35 @@ opentraces capsule preview <trace-id> \
   --product humanduration \
   --test-command "pytest tests/test_parse.py -k parse_iso"
 
-# 3. Export a local capsule.
+# 3. Seal a local capsule. `export` (hidden, still callable) is needed here for
+#    --test-command/--setup-command/--consume; the v7-address `create <ref>`
+#    covers the plain "just seal this scope" case with a narrower flag set.
 opentraces capsule export <trace-id> \
   --product humanduration \
   --test-command "pytest tests/test_parse.py -k parse_iso" \
   --setup-command "pip install -e ." \
   --consume "package:humanduration=git+https://github.com/owner/humanduration@main"
 
-# 4. Share it (publishes to HF, shows consent gate).
+# 4. Share it (publishes to HF, shows consent gate; blocked on a bundle
+#    secret-scan finding unless --i-accept-bundle-findings).
 opentraces capsule share <trace-id> --publish
 
 # 5. File a GitHub issue embedding the URL (consent gate runs again, once total).
 opentraces capsule issue <trace-id> --publish --yes
 
-# 6. A maintainer agent resolves it.
-opentraces capsule open https://huggingface.co/.../capsule.json --json
+# 6. A maintainer agent resolves it (read-only).
+opentraces capsule get https://huggingface.co/.../capsule.json --json
+
+# 7. The maintainer re-poses the intent and records what happened.
+opentraces capsule replay <trace-id> --against HEAD --json
+opentraces capsule verdict <issue-ref> --state fixed --close
 ```
 
 ## Accepted Command Options Reference
 
-All options below apply to `export`, `share`, `issue`, and `preview` unless noted:
+All options below apply to `export`, `share`, `issue`, and `preview` unless
+noted; `create` uses the narrower v7-address flag set documented under
+[`capsule create`](#capsule-create--seal-a-local-capsule) instead.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -3161,6 +3464,7 @@ All options below apply to `export`, `share`, `issue`, and `preview` unless note
 | `--setup-command <cmd>` | none | Setup/install step before the repro |
 | `--consume <spec>` | none | Record a consumed dependency (`[package\|service:]NAME=PIN\|URL`) |
 | `--bundle` | off | Embed a hermetic `git archive` source bundle |
+| `--product-full-span` | off | `preview` only: opt out of the `--product` radius cap and restore the unbounded min..max episode span (may be slow on large sessions) |
 | `--yes` | off | Skip the consent gate (share/issue only, for scripts/agents) |
 | `--json` | off | Emit JSON to stdout |
 
@@ -3181,7 +3485,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 
 ```json
 {
-  "schema_version": "0.7.0",
+  "schema_version": "0.8.0",
   "trace_id": "uuid",
   "session_id": "uuid",
   "content_hash": "<sha256-hex>",
@@ -3255,7 +3559,7 @@ The top-level record. One per JSONL line, one per agent trace.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.7.0"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.8.0"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
@@ -3314,10 +3618,39 @@ Model identifiers follow the `provider/model-name` convention.
       "branch": "main",
       "diff": "unified diff string or null"
     },
-    "language_ecosystem": ["typescript", "python"]
+    "language_ecosystem": ["typescript", "python"],
+    "resolved_dependencies": null,
+    "interpreter": null,
+    "arch": null,
+    "platform": null,
+    "abi_tag": null
   }
 }
 ```
+
+`resolved_dependencies` (`list<PinRecord> | null`), `interpreter`
+(`Interpreter | null`), `arch`, `platform`, and `abi_tag` (all optional
+strings) were added in 0.8.0. Every field defaults to `null` and is a
+structural HOME for a future dependency-pin resolver, not a resolver itself;
+their presence never raises `env_tier` or any other capsule trust ordinal.
+
+```json
+{
+  "environment": {
+    "resolved_dependencies": [
+      {"name": "requests", "version": "2.31.0", "hash": null, "marker": null, "source": null}
+    ],
+    "interpreter": {"name": "cpython", "version": "3.11.6"},
+    "arch": "arm64",
+    "platform": "macosx_14_0_arm64",
+    "abi_tag": "cp311"
+  }
+}
+```
+
+`PinRecord` requires only `name`; `version`, `hash`, `marker`, and `source` are
+all optional so a resolver that knows a dependency but not its exact version
+can still record it.
 
 ## System Prompts
 
@@ -3898,14 +4231,38 @@ source of truth.
 ## Current Version
 
 ```text
-0.7.0
+0.8.0
 ```
 
-`0.7.0` is additive: it introduces the dataset security policy contract
-(plan 092) without changing the `TraceRecord` wire shape, so existing trace
-parsers continue to work unchanged. `0.6.0` made `TraceRecord.patches[]` the
-authoritative output spine and removed `Outcome.patch`; consumers should join
-patch ids to the bucket Trail companion for full diff/history.
+`0.8.0` is additive: it gives `Environment` a structured home for exact
+dependency pins and runtime identity (issue #200/#155 Part A) without changing
+the `TraceRecord` wire shape, so existing trace parsers continue to work
+unchanged. `0.7.0` introduced the dataset security policy contract (plan 092);
+`0.6.0` made `TraceRecord.patches[]` the authoritative output spine and removed
+`Outcome.patch`; consumers should join patch ids to the bucket Trail companion
+for full diff/history.
+
+### 0.8.0
+
+- `PinRecord` model, a single resolved dependency pin: `name` (required),
+  `version`, `hash`, `marker`, `source` (all optional).
+- `Interpreter` model, runtime interpreter identity: `name`, `version` (both
+  optional).
+- `Environment.resolved_dependencies`, `list[PinRecord] | None`, default
+  `None`.
+- `Environment.interpreter`, `Interpreter | None`, default `None`.
+- `Environment.arch`, `Environment.platform`, `Environment.abi_tag`, optional
+  strings, default `None`.
+- **Honesty boundary**: these fields are a HOME for dependency pins and
+  runtime identity, not a resolver. Their presence never raises `env_tier` or
+  any capsule trust ordinal; no model in the schema package carries an
+  `env_tier` / `verdict_trust` / `oracle_trust` / `diff_trust` / `sandbox_tier`
+  field at all, that trust vocabulary lives entirely outside the schema. A
+  future resolver (issue #202) is the out-of-train follow-up that fills these
+  fields and lifts `env_tier` from `L0`.
+- `TraceRecord` wire shape unchanged; `migrate_record` is a transparent no-op
+  across the `0.7.0` -> `0.8.0` bump. See
+  [`RATIONALE-0.8.0.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/RATIONALE-0.8.0.md).
 
 ### 0.7.0
 
@@ -3969,7 +4326,7 @@ The security pipeline is versioned independently under
 `src/opentraces/security/version.py`.
 
 ```text
-SECURITY_VERSION = 0.7.0
+SECURITY_VERSION = 0.8.0
 ```
 
 `opentraces doctor --security` reports the active value and the enabled state
@@ -3992,7 +4349,7 @@ by default for per-record sanitization. A bucket flow or workflow opts in to
 the tools it wants, either explicitly with `--tools` or by enabling tools in
 config and running with `--use-config`.
 
-Current pipeline version: `SECURITY_VERSION = 0.7.0`.
+Current pipeline version: `SECURITY_VERSION = 0.8.0`.
 
 ```bash
 opentraces security tools list
@@ -4334,6 +4691,21 @@ workflow projection over that evidence; they do not rewrite the original agent
 transcript or the raw capture bucket unless the workflow explicitly writes a
 new sanitized artifact.
 
+## Companion Sanitization (ctx / trail)
+
+The Context Tree (`ContextLayer` / `context_resume_packet`) and Trace Trail
+(`TrailEvent`) substrate shapes are inlined into capsules and, when a workflow
+reads them, into dataset rows. `companion_field_type(path)` classifies each
+inlined ctx/trail leaf onto the existing four-member field-type taxonomy (plus
+an `is_path_leaf` flag), so a `cwd` leaf gets path-anonymized, a chat message
+gets routed as NER-relevant prose, and a tool-registry description is treated
+as tool input, instead of the whole substrate falling into one generic
+`general` bucket. `sanitize_companion_dict` (a sibling of the record-level
+`sanitize_dict`) is the walker that applies this per-leaf. The default
+companion floor mirrors the dataset row floor: `regex`, `entropy`,
+`business_logic`, plus `path_anonymizer` running in its tail-consuming mode
+over every string leaf.
+
 ## Dataset Required Tools And Provenance
 
 A dataset carries a resolved security policy in its manifest, seeded from its
@@ -4357,12 +4729,26 @@ Before: export OPENAI_API_KEY=sk-abc123...
 After:  export OPENAI_API_KEY=[REDACTED]
 ```
 
-Path anonymization is a transformer:
+Path anonymization is a transformer. The default (record-level) mode hashes
+just the username segment to an unambiguous, idempotent `[ot-user-<8hex>]`
+marker:
 
 ```text
 Before: /Users/alice/src/client-project/
-After:  /Users/[REDACTED]/src/client-project/
+After:  /Users/[ot-user-3f2a9c1d]/src/client-project/
 ```
+
+A tail-consuming mode (`consume_tail=True`, used by capsules and the ctx/trail
+companion sanitizer) collapses the whole home-path tail instead of just the
+username, so no downstream path structure leaks:
+
+```text
+Before: /Users/alice/secret/.env
+After:  /Users/[ot-user-3f2a9c1d]
+```
+
+The marker's leading `[` cannot start a detected username, so a second pass
+over already-anonymized text is a no-op.
 
 ## Custom Strings
 
@@ -4582,11 +4968,35 @@ opentraces dataset publish my-import --to my-org/dataset
 ```
 
 Workflow-driven runs (`opentraces dataset new my-dataset --workflow my-workflow
---schema schema.json`, then `opentraces dataset run my-dataset`) are designed to
-execute inside an agent session with `--executor current-agent`. The
-`--executor claude-code-headless` choice is a reserved seam: it currently exits
-with an executor-unavailable error instead of invoking Claude Code, so it is
-not yet a working CI pattern.
+--schema schema.json`, then `opentraces dataset run my-dataset`) have two
+executors. `--executor current-agent` is the human/agent-in-the-loop path: it
+writes `RUN.md` instructions and executes no script, so it needs a live agent
+session and is not a CI pattern by itself. `--executor script` is the
+deterministic CI path: it subprocess-runs the workflow package's
+`scripts/build_rows.py` with the run packet on `OT_RUN_PACKET`/
+`OT_DATASET_OUTPUT`, under an isolated-subprocess primitive (allowlisted env,
+redirected `$HOME`) with no live agent required — this is the executor CI
+should use for a workflow-backed dataset:
+
+```bash
+opentraces dataset run my-dataset --executor script --json
+```
+
+Before executing, the run re-verifies the installed workflow package's digest
+against the digest the dataset pinned; a mismatch warns by default or, under
+`--strict`, fails the run before anything executes:
+
+```bash
+opentraces dataset run my-dataset --executor script --strict --json
+```
+
+The historical `claude-code-headless` executor value was a permanent stub
+that never produced rows; it has been removed (the workflow engine collapse,
+seal-family M1) and `dataset run --executor` now only accepts
+`current-agent`/`script`. The value stays readable on old serialized records
+so they still deserialize, and a recurring `dataset schedule` trigger stored
+against the removed value is coerced onto `script` when its next run command
+is regenerated.
 
 ## Health Checks
 

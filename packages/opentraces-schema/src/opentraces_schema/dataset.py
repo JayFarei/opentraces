@@ -7,7 +7,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-ExecutorName = Literal["current-agent", "claude-code-headless"]
+# ``script`` is the automated default executor (deterministic subprocess builder).
+# ``claude-code-headless`` was the permanently-stubbed headless executor removed in
+# the M1 engine collapse (#185); its value stays READABLE here so schedules and run
+# records serialized before the collapse still deserialize. ``current-agent`` is the
+# labeled human-in-the-loop lifecycle path.
+ExecutorName = Literal["current-agent", "claude-code-headless", "script"]
 DatasetScope = Literal["all-projects", "project", "cwd", "trace"]
 DatasetIdentityMode = Literal["payload_hash", "fields"]
 DatasetRunStatus = Literal["running", "succeeded", "failed", "cancelled"]
@@ -232,7 +237,7 @@ class ExecutorConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    default: ExecutorName = "claude-code-headless"
+    default: ExecutorName = "script"
     development: ExecutorName = "current-agent"
     timeout_minutes: int = Field(30, ge=1)
     budget_usd: float | None = Field(default=None, ge=0)
@@ -269,6 +274,13 @@ class DatasetCandidateQuery(BaseModel):
     scope: DatasetScope = "all-projects"
     args: dict[str, Any] = Field(default_factory=dict)
     incremental: dict[str, Any] = Field(default_factory=dict)
+    # #212 — a metadata refinement composing with ``scope``/``args`` rather
+    # than widening the closed ``DatasetScope`` enum. Keys reuse the
+    # ``TraceFacet`` name vocabulary already exposed by ``trace query
+    # --facet`` (``model``, ``agent.name``, ``agent.version``); values are
+    # matched case-insensitively against the persisted bucket manifest row for
+    # each candidate trace. Additive, default empty (no narrowing).
+    facets: dict[str, str] = Field(default_factory=dict)
 
 
 class DatasetSchedule(BaseModel):
@@ -278,7 +290,7 @@ class DatasetSchedule(BaseModel):
 
     enabled: bool = False
     every: str | None = None
-    executor: ExecutorName = "claude-code-headless"
+    executor: ExecutorName = "script"
 
     @model_validator(mode="after")
     def _enabled_requires_every(self) -> "DatasetSchedule":
@@ -396,6 +408,13 @@ class DatasetRunRecord(BaseModel):
     validation_error_count: int = Field(0, ge=0)
     status: DatasetRunStatus = "running"
     artefacts: dict[str, str] = Field(default_factory=dict)
+    # #212 — present only when the run's scope carried a ``facets`` predicate.
+    # ``{"facets": {...}, "matched_count": int, "matched": [{"project_slug",
+    # "trace_id", "agent_name", "agent_version", "agent_model"}, ...]}``,
+    # resolved O(manifest) against the persisted bucket manifest (never a
+    # per-trace ``trace.json``/``current.json`` open). Additive, default
+    # ``None`` for every unfaceted run.
+    facet_resolution: dict[str, Any] | None = None
 
 
 class DatasetRowIndexEntry(BaseModel):

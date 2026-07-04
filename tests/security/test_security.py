@@ -283,6 +283,53 @@ class TestPhoneNumber:
         matches = scan_text("Trace id 32d155bf-68de-4f4a-9a14-5a9337198712")
         assert not any(m.pattern_name == "phone_number" for m in matches)
 
+    def test_many_phone_matches_stays_linear_not_quadratic(self):
+        """#209 (W1) REC C: pre-fix, ``_is_allowlisted``'s ``phone_number``
+        branch rescanned the ENTIRE text for UUIDs on EVERY phone-shaped
+        match (``secrets.py`` ~406-423 pre-fix), an O(matches * len(text))
+        blowup on a companion with many phone-shaped substrings (timestamps,
+        order ids, etc.) — confirmed quadratic against the frozen merge-base
+        module: 500 matches took ~0.08s, 8000 matches took ~21s (a ~260x
+        blowup for a 16x input, the O(n^2) signature). The fix precomputes
+        the UUID span list once (lazily, on first phone match) instead of
+        once per match, making the cost O(len(text) + matches * uuid_count).
+        This asserts near-LINEAR scaling (4x input -> well under 4x^2 = 16x
+        time) without pinning an absolute wall-clock budget (flaky across
+        CI hardware) — a bounded ratio check that still catches a quadratic
+        regression.
+        """
+        import time
+
+        def build_text(n: int) -> str:
+            return "\n".join(
+                f"call us at 555-{(i % 900) + 100:03d}-{(i * 7) % 9000 + 1000:04d} re order {i}"
+                for i in range(n)
+            )
+
+        small = build_text(500)
+        large = build_text(2000)  # 4x the input
+
+        t0 = time.perf_counter()
+        small_matches = scan_text(small)
+        t_small = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        large_matches = scan_text(large)
+        t_large = time.perf_counter() - t0
+
+        assert len(small_matches) == 500
+        assert len(large_matches) == 2000
+
+        # A true O(n^2) implementation scales ~16x for a 4x input; a linear
+        # (or even n*log(n)) implementation scales close to 4x. Budget a
+        # generous 10x ceiling — comfortably below quadratic, comfortably
+        # above linear-plus-noise — so this is a complexity-class gate, not
+        # a wall-clock benchmark.
+        assert t_large < max(t_small * 10, 0.05), (
+            f"phone_number allowlist scaling looks quadratic again: "
+            f"small(n=500)={t_small:.4f}s large(n=2000)={t_large:.4f}s"
+        )
+
 
 # ===================================================================
 # secrets.py -- Shannon entropy

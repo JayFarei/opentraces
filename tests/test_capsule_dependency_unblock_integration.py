@@ -19,6 +19,14 @@ from world import build_humanduration_repo  # noqa: E402
 
 from opentraces.core.capsule.export import export_capsule  # noqa: E402
 from opentraces.core.capsule.run import run_capsule_test  # noqa: E402
+
+
+def _run_own(cap, **kwargs):
+    """Re-test an OWN capsule (#208 fail-closed foreign gate): pass ``local_slug``
+    == the capsule's own ``source.project_slug``, as the CLI does from the repo."""
+
+    slug = (cap.get("source") or {}).get("project_slug")
+    return run_capsule_test(cap, local_slug=slug, **kwargs)
 from opentraces.core.capsule.share import build_capsule_bundle  # noqa: E402
 
 
@@ -59,15 +67,15 @@ def test_real_capture_to_dependency_unblock(tmp_path):
     #    Overrides carry the full file:// spec (applied verbatim at run time, never
     #    stored/redacted), mirroring a maintainer naming the version to test.
     spec = {v: f"git+file://{lib['repo']}@{v}" for v in ("v0.1.0", "v0.2.0")}
-    r_bug = run_capsule_test(capsule, bundle_path=bundle, with_overrides={"humanduration": spec["v0.1.0"]})
-    r_fix = run_capsule_test(capsule, bundle_path=bundle, with_overrides={"humanduration": spec["v0.2.0"]})
+    r_bug = _run_own(capsule, bundle_path=bundle, with_overrides={"humanduration": spec["v0.1.0"]})
+    r_fix = _run_own(capsule, bundle_path=bundle, with_overrides={"humanduration": spec["v0.2.0"]})
     assert r_bug["verdict"] == "reproduces", r_bug
     assert r_fix["verdict"] == "fixed", r_fix
 
     # 5. Matrix resolves to the fixed version (what `--matrix` reports as resolved_in).
     resolved_in = next(
         (v for v in ("v0.1.0", "v0.2.0")
-         if run_capsule_test(capsule, bundle_path=bundle,
+         if _run_own(capsule, bundle_path=bundle,
                              with_overrides={"humanduration": spec[v]})["verdict"] == "fixed"),
         None,
     )

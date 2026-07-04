@@ -184,6 +184,34 @@ class TestMapRecord:
         user_steps = [s for s in record.steps if s.role == "user"]
         assert all(s.model is None for s in user_steps)
 
+    def test_agent_version_absent_stays_null(self):
+        """#212: today's Hermes rows carry no version-like key under
+        `metadata` at all -- an honest limitation, not a migration."""
+        parser = HermesParser()
+        record = parser.map_record(_make_hermes_row(), 0)
+        assert record.agent.version is None
+
+    def test_agent_version_extracted_when_present(self):
+        """#212: a future Hermes producer that DOES stamp a version key
+        flows through with no parser change required."""
+        parser = HermesParser()
+        row = _make_hermes_row(
+            metadata={
+                "model": "z-ai/glm-5",
+                "timestamp": "2026-03-15T10:00:00Z",
+                "version": "1.4.0",
+            }
+        )
+        record = parser.map_record(row, 0)
+        assert record.agent.version == "1.4.0"
+
+    def test_agent_version_alternate_key_spellings(self):
+        parser = HermesParser()
+        for key in ("agent_version", "harness_version"):
+            row = _make_hermes_row(metadata={"model": "z-ai/glm-5", key: "9.9.9"})
+            record = parser.map_record(row, 0)
+            assert record.agent.version == "9.9.9", key
+
 
 # ---------------------------------------------------------------------------
 # XML parsing tests

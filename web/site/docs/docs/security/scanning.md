@@ -48,6 +48,21 @@ workflow projection over that evidence; they do not rewrite the original agent
 transcript or the raw capture bucket unless the workflow explicitly writes a
 new sanitized artifact.
 
+## Companion Sanitization (ctx / trail)
+
+The Context Tree (`ContextLayer` / `context_resume_packet`) and Trace Trail
+(`TrailEvent`) substrate shapes are inlined into capsules and, when a workflow
+reads them, into dataset rows. `companion_field_type(path)` classifies each
+inlined ctx/trail leaf onto the existing four-member field-type taxonomy (plus
+an `is_path_leaf` flag), so a `cwd` leaf gets path-anonymized, a chat message
+gets routed as NER-relevant prose, and a tool-registry description is treated
+as tool input, instead of the whole substrate falling into one generic
+`general` bucket. `sanitize_companion_dict` (a sibling of the record-level
+`sanitize_dict`) is the walker that applies this per-leaf. The default
+companion floor mirrors the dataset row floor: `regex`, `entropy`,
+`business_logic`, plus `path_anonymizer` running in its tail-consuming mode
+over every string leaf.
+
 ## Dataset Required Tools And Provenance
 
 A dataset carries a resolved security policy in its manifest, seeded from its
@@ -71,12 +86,26 @@ Before: export OPENAI_API_KEY=sk-abc123...
 After:  export OPENAI_API_KEY=[REDACTED]
 ```
 
-Path anonymization is a transformer:
+Path anonymization is a transformer. The default (record-level) mode hashes
+just the username segment to an unambiguous, idempotent `[ot-user-<8hex>]`
+marker:
 
 ```text
 Before: /Users/alice/src/client-project/
-After:  /Users/[REDACTED]/src/client-project/
+After:  /Users/[ot-user-3f2a9c1d]/src/client-project/
 ```
+
+A tail-consuming mode (`consume_tail=True`, used by capsules and the ctx/trail
+companion sanitizer) collapses the whole home-path tail instead of just the
+username, so no downstream path structure leaks:
+
+```text
+Before: /Users/alice/secret/.env
+After:  /Users/[ot-user-3f2a9c1d]
+```
+
+The marker's leading `[` cannot start a detected username, so a second pass
+over already-anonymized text is a no-op.
 
 ## Custom Strings
 

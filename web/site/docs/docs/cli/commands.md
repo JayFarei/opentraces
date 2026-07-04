@@ -58,12 +58,13 @@ always win, so no verb can ever be shadowed.
 
 The CLI collapsed from 8 visible `trace` verbs to 4 (`query` / `get` / `map` / `slice`) and lifted `trail blame pr` to top-level `trail pr`; every demoted verb (`trace skills`, `trace index`, `trace partition`, `trace compare`, `trace teleport`, `trace discover`, `bucket status`, `bucket manifest`, `bucket remote`, `bucket rebuild`, `bucket replay`, `bucket prune`, `bucket prefetch`, `setup bucket`, `setup upgrade`, `setup uninstall`, `setup llm-review`, `ctx tree`/`show`/`step`/`reads`/`writes`/`list`/`info`) stays callable and `--json`-scriptable, hidden from `--help`, never removed.
 
-### Dataset Workflow, Dataset, Security, Capture
+### Dataset Workflow, Dataset, Capsule, Security, Capture
 
 | Command | What it does |
 |---------|---------------|
 | `workflow` | Manage local dataset workflow skill packages |
 | `dataset` | Manage local executable datasets and row publication |
+| `capsule` | Seal, resolve, share, and replay a Trace Capsule (an immutable, URL-addressed episode) |
 | `security` | Optional privacy/security utilities |
 | `capture-otlp` | Run and control the OTLP receiver capture source |
 | `git-backfill` | Retroactively correlate old commits to retained traces |
@@ -547,8 +548,10 @@ opentraces dataset review reset my-dataset <row-id>
 opentraces dataset review approve my-dataset --all
 opentraces dataset remote create my-dataset owner/team-traces --private
 opentraces dataset remote list my-dataset --verbose
+opentraces dataset remote visibility my-dataset owner/team-traces --public
 opentraces dataset publish my-dataset --check-only
 opentraces dataset publish my-dataset
+opentraces dataset verify my-dataset --json
 opentraces dataset schedule add my-dataset --every 1h --approve-new --publish-check-only
 opentraces dataset schedule list
 opentraces dataset remove my-dataset --yes
@@ -575,6 +578,55 @@ tools toggle with `--tool <name> --enable|--disable`; a required tool can only b
 disabled with `--unsafe-override` (and an optional `--reason`) when the workflow
 contract permits it. `dataset publish --check-only` blocks rows when a dataset's
 required security tools are not satisfied.
+
+`dataset remote visibility <name> [<remote>] --private|--public` flips a bound
+HuggingFace dataset remote between private and public.
+
+`dataset verify <name> [--json]` replays the bound workflow (with recorded
+judgment answers) in a side-effect-free mode and byte-compares the re-run
+against the stored rows, classifying the outcome as `reproduces` /
+`bucket-advanced` / `integrity-failure` (non-zero exit). It never appends rows
+or advances a cursor. See [Dataset Rows: Verify](/docs/workflow/datasets#verify)
+for the full contract.
+
+`dataset run --answers <file>` re-runs after a workflow exits `rc=10`
+needs-judgment (schema `opentraces.workflow.needs_judgment.v1`), the same
+handshake shape `trace slice --by` uses. See
+[Dataset Workflows: The Judgment Handshake](/docs/workflow/workflow-templates#the-judgment-handshake-rc10).
+
+## Capsule
+
+```bash
+opentraces capsule create <trace-id>[:<step>|:<A>-<B>] --json
+opentraces capsule preview <trace-id> --product <name>
+opentraces capsule get <ref> --json
+opentraces capsule get <ref> --summary
+opentraces capsule import <ref> --json
+opentraces capsule share <trace-id> --publish --yes
+opentraces capsule issue <trace-id> --publish --yes
+opentraces capsule replay <ref> --against HEAD --json
+opentraces capsule test <ref> --against HEAD --json
+opentraces capsule verdict <issue-ref> --state fixed --close
+opentraces capsule watch <issue-ref> --timeout 300 --json
+```
+
+A capsule is a privacy-bounded, redacted, self-contained record of one agent
+episode: the immutable, URL-addressed seal in the [Seal Family
+contract](https://github.com/JayFarei/opentraces/blob/main/docs/adr/0008-seal-family-contract.md)
+(ADR-0008). `create` seals it (the v7-address form; the pre-v7 `export`
+spelling stays callable, hidden, with a richer flag set). `get` is the
+read-only resolve verb (file / `https://` / `hf://` ref); `import` is the
+explicit opt-in write into the local bucket. `share` mints/publishes the
+shareable URL; `issue` renders/files the GitHub issue embedding it. `replay`
+builds a re-pose packet for a maintainer agent; `test` runs the captured repro
+as an executable test; `verdict` posts the outcome back to the issue; `watch`
+polls the issue for resolution. Every verb works identically whether or not
+the session had a failing command (`test=null` capsules are first-class).
+
+Full command reference, the redaction floor, the `capsule_replay.v1` four
+honesty properties (`reproducible`/`gradable`/`scoped`/`sandboxed`) plus the
+derived `verdict_trust`, and the capsule-worker rendered URL are documented at
+[Trace Capsule](/docs/clients/trace-capsule).
 
 ## Security Tools
 

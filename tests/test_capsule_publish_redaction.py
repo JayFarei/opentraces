@@ -96,6 +96,9 @@ def test_publish_capsule_cannot_emit_unredacted(monkeypatch):
     info = publish_capsule(
         _unredacted_capsule_with_secret(),
         repo_id="someone/opentraces-capsules", token="fake-token",
+        # This test exercises the redaction gate, not the egress door; opt out of
+        # the (now default-on) clearance check explicitly (#198 C1).
+        require_clearance=False,
     )
 
     assert "capsule_json" in captured, "upload_folder was not called"
@@ -144,6 +147,9 @@ def test_published_capsule_json_is_sha_pinned(monkeypatch):
     info = publish_capsule(
         _unredacted_capsule_with_secret(),
         repo_id="someone/opentraces-capsules", token="fake-token",
+        # This test exercises the redaction gate, not the egress door; opt out of
+        # the (now default-on) clearance check explicitly (#198 C1).
+        require_clearance=False,
     )
 
     # The folder upload (oid not yet known) still carries the stale main/None share.

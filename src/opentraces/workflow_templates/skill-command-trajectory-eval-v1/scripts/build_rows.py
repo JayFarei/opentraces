@@ -1,59 +1,83 @@
-"""Build compact command trajectory eval rows from raw evidence rows."""
+"""Build compact command trajectory eval rows from raw evidence rows.
+
+Redaction is intentionally NOT this template's job. The append-path floor
+(``security/dataset_rows.py::sanitize_dataset_row``, invoked by
+``datasets.append_rows`` over every row) is the single, non-overridable
+sanitization story for bundled workflow templates -- see docs/adr/0008 §1.8
+and issue #189. This module only *shapes* text into a compact, single-line,
+length-bounded form for a readable row; it never scrubs secrets, home paths,
+or numbers itself, because a second hand-rolled redaction path is exactly the
+drift the floor exists to prevent. A template that genuinely needs mid-flight
+scrubbing (this one does not -- the append path already sanitizes every row)
+should call the CLI sanitize surface (``opentraces security sanitize``)
+instead of hand-rolling its own.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
+import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 
-DEFAULT_SOURCE = (
-    Path.home()
-    / ".opentraces"
-    / "datasets"
-    / "skill-command-trajectories"
-    / "data"
-    / "train.jsonl"
-)
+def _bucket_root() -> Path:
+    """Resolve the opentraces bucket root under the OT_* env contract.
+
+    The scrubbed script executor hands the real bucket over as
+    ``OT_OPENTRACES_DIR`` (HOME is redirected to a throwaway), so prefer it and
+    fall back to ``~/.opentraces`` only for a direct/manual invocation with no
+    env contract.
+    """
+    env = os.environ.get("OT_OPENTRACES_DIR")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".opentraces"
+
+
+def _default_source() -> Path:
+    return (
+        _bucket_root()
+        / "datasets"
+        / "skill-command-trajectories"
+        / "data"
+        / "train.jsonl"
+    )
+
+
+def _env_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    return Path(value).expanduser() if value else None
+
+
+def _packet_limit() -> int | None:
+    """Optional row cap read from the run packet (the dataset runner sets it)."""
+    packet = _env_path("OT_RUN_PACKET")
+    if packet is None:
+        return None
+    try:
+        payload = json.loads(packet.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = payload.get("limit")
+    return value if isinstance(value, int) else None
+
+
 BODY_PREFIX = "Base directory for this skill:"
 BODY_SKILL_RE = re.compile(r"Base directory for this skill:\s+\S*/skills/([^\s/]+)")
-ABS_PROJECT_RE = re.compile(
-    r"^/Users/[^/]+/(?:src/tries|Development|\\.codex/worktrees)/[^/]+/"
-)
-HIGH_ENTROPY_TOKEN_RE = re.compile(r"[A-Za-z0-9_=-]{20,}")
-LONG_NUMBER_RE = re.compile(r"\d{10,}")
-
-
-def shannon_entropy(text: str) -> float:
-    if not text:
-        return 0.0
-    counts: dict[str, int] = {}
-    for ch in text:
-        counts[ch] = counts.get(ch, 0) + 1
-    length = len(text)
-    return -sum((count / length) * math.log2(count / length) for count in counts.values())
-
-
-def redact_high_entropy_tokens(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        token = match.group(0)
-        if shannon_entropy(token) >= 4.5:
-            return "<TOKEN>"
-        return token
-
-    return HIGH_ENTROPY_TOKEN_RE.sub(replace, text)
 
 
 def compact_text(value: object, *, limit: int = 1600) -> str:
+    """Coerce ``value`` to a single-line, length-bounded string.
+
+    Formatting only: collapses newlines/whitespace and truncates. No
+    redaction happens here -- see the module docstring.
+    """
     text = "" if value is None else str(value)
     text = text.replace("\r", " ").replace("\n", " ")
-    text = ABS_PROJECT_RE.sub("", text)
-    text = re.sub(r"/Users/[^/\s]+/", "<HOME>/", text)
-    text = redact_high_entropy_tokens(text)
-    text = LONG_NUMBER_RE.sub("<NUM>", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
 
@@ -68,9 +92,12 @@ def body_skill_name(value: object) -> str:
 
 
 def normalize_path(value: str) -> str:
-    path = ABS_PROJECT_RE.sub("", value or "")
-    path = re.sub(r"^/Users/[^/]+/", "<HOME>/", path)
-    return path
+    """Return ``value`` as a plain string.
+
+    Home-path / username scrubbing is the append-path floor's job
+    (``path_anonymizer``), not this template's -- see the module docstring.
+    """
+    return value or ""
 
 
 def unique_sorted(values: list[str]) -> list[str]:
@@ -193,17 +220,43 @@ def read_rows(source: Path, *, limit: int | None = None) -> list[dict[str, Any]]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
-    parser.add_argument("--output", type=Path, required=True)
+    # --source / --output are optional overrides for direct/test invocation; the
+    # workflow contract drives them via env (OT_DATASET_OUTPUT / OT_OPENTRACES_DIR).
+    parser.add_argument("--source", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
-    rows = read_rows(args.source.expanduser(), limit=args.limit)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as stream:
+    output = args.output or _env_path("OT_DATASET_OUTPUT")
+    if output is None:
+        parser.error("no output path: set OT_DATASET_OUTPUT or pass --output")
+    source = (args.source or _default_source()).expanduser()
+    limit = args.limit if args.limit is not None else _packet_limit()
+
+    if args.source is None and not source.exists():
+        # No explicit --source, and the upstream trajectories dataset this
+        # template evaluates has not been produced yet on this bucket. Fail
+        # soft: this is the ONE bundled template, so it must not crash a
+        # fresh install out of the box -- emit zero rows and explain why.
+        print(
+            "no rows: this template evaluates the upstream "
+            "'skill-command-trajectories' dataset, which has not been "
+            f"produced yet (expected at {source}). Run the workflow that "
+            "produces it first, or pass --source <path> to point at an "
+            "existing trajectories JSONL.",
+            file=sys.stderr,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("", encoding="utf-8")
+        print(f"emitted 0 row(s) -> {output}")
+        return 0
+
+    rows = read_rows(source, limit=limit)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as stream:
         for row in rows:
             stream.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
-    print(f"emitted {len(rows)} row(s) -> {args.output}")
+    print(f"emitted {len(rows)} row(s) -> {output}")
     return 0
 
 

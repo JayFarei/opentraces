@@ -268,7 +268,7 @@ def test_mutant_self_report_valid_gap_is_caught_by_recompute(monkeypatch):
 # acceptance #8 — derive-on-demand: NO captured-schema bump
 # --------------------------------------------------------------------------
 def test_no_schema_version_bump():
-    assert SCHEMA_VERSION == "0.7.0", "Trace Slicer Library is derive-on-demand; do not bump SCHEMA_VERSION"
+    assert SCHEMA_VERSION == "0.9.0", "Trace Slicer Library is derive-on-demand; do not bump SCHEMA_VERSION for slicing (0.9.0 is the #212 dataset-facet MINOR, unrelated to this module)"
     assert slicing.SLICING_SCHEMA_VERSION == "opentraces.slicing.v1"
 
 

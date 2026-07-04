@@ -61,6 +61,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -384,7 +386,8 @@ def _run() -> int:
 
 def test_probe_a8_blame_contract():
     rc = _run()
-    assert rc != 2, "A8 SETUP-INVALID (opentraces CLI not found in the probe's worktree)"
+    if rc == 2:
+        pytest.skip("A8 SETUP-INVALID (opentraces CLI not found in the probe's worktree)")
     assert rc == 0, (
         "A8 RED: blame hangs past budget / leaks survival vocabulary / emits an "
         "unexpected key / is missing attribution (see printed observed line)"

@@ -1,0 +1,19 @@
+{
+  "by_tool": {
+    "entropy": 2,
+    "regex": 3
+  },
+  "findings_total": 5,
+  "floor_satisfied": true,
+  "home_paths_scrubbed": 84,
+  "lines": 406,
+  "redactions_applied": 5,
+  "schema_version": "opentraces.capsule.companion_redaction.v1",
+  "security_version": "0.8.0",
+  "tools_applied": [
+    "regex",
+    "entropy",
+    "business_logic",
+    "path_anonymizer"
+  ]
+}

@@ -167,6 +167,7 @@ from .bucket_envelope import (
     _trace_ids_for_project,
     _write_per_trace_envelope,
     canonical_anchor_maps,
+    iter_corpus_trace_records,
     iter_trace_record_objects,
     iter_trace_record_pointers,
     iter_traces_v2,
