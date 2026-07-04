@@ -24,6 +24,19 @@ path calls it once per byte-balanced chunk in a worker process. Because it is
 the exact same code either way, chunk count can never change WHICH bytes come
 out the other end — only how many processes did the work — which is what
 keeps the two paths byte-identical (the #209 Part A gate).
+
+External review on PR #220 (critical 1): parallel dispatch is gated on
+``tools is None`` — the DEFAULT registry path (``COMPANION_FLOOR``), which
+every worker reconstructs byte-identically from the registry with zero
+cross-process state. An explicit ``tools`` argument may carry a BOUND tool
+instance (e.g. ``LLMPIIDetectorTool().with_detector(...)``, exercised by
+``tests/test_capsule_mini_bucket.py``'s NER test) that cannot be reduced to a
+bare registry name without losing the injected state — a worker re-resolving
+"llm_pii" by name would silently run the UNBOUND default instead, a real
+under-redaction risk, not just a byte-identity nuisance. Rather than try to
+prove per-tool picklability, ANY explicit ``tools`` argument now forces the
+serial in-process path unconditionally, exactly matching pre-#209 behavior
+for that case (correctness over cleverness).
 """
 
 from __future__ import annotations
@@ -68,36 +81,6 @@ _DEFAULT_MAX_WORKERS = 8
 # function + args across, at the cost of a per-pool import; forced uniformly
 # here so behavior does not depend on which OS the seal runs on.
 _MP_CONTEXT = multiprocessing.get_context("spawn")
-
-
-class _UnpicklableToolsError(Exception):
-    """Raised when a ``tools`` entry cannot be reduced to a registry name.
-
-    Custom ad-hoc tool *instances* (not the registry singletons resolved by
-    name) cannot be safely handed across a process boundary — a worker
-    process has no way to reconstruct them. Rather than guess, dispatch falls
-    back to the always-correct serial path whenever this is raised.
-    """
-
-
-def _tool_names_for_pool(tools: Sequence[Any] | None) -> list[str] | None:
-    """Reduce a ``tools`` argument to bare registry names for cross-process
-    dispatch (each worker re-resolves them via the registry). ``None`` means
-    "let each worker default to ``COMPANION_FLOOR``", matching the serial
-    path's own ``tools=None`` behavior.
-    """
-    if tools is None:
-        return None
-    names: list[str] = []
-    for t in tools:
-        if isinstance(t, str):
-            names.append(t)
-            continue
-        name = getattr(t, "name", None)
-        if not isinstance(name, str) or not name:
-            raise _UnpicklableToolsError(repr(t))
-        names.append(name)
-    return names
 
 
 def _worker_count() -> int:
@@ -162,11 +145,10 @@ def _sanitize_lines(
     chunking only changes how many times / where it runs.
 
     Module-level (not a closure) so it is picklable for
-    ``ProcessPoolExecutor`` dispatch; ``tools`` must therefore already be
-    ``None`` or a list of bare registry-name strings when called from a
-    worker (see ``_tool_names_for_pool``) — the in-process serial call may
-    still pass through actual tool instances, mirroring the pre-#209
-    behavior exactly.
+    ``ProcessPoolExecutor`` dispatch. Only ever called with ``tools=None``
+    from a worker (see ``redact_companion_text``'s dispatch gate below) — the
+    in-process serial call may still pass through actual tool instances,
+    mirroring the pre-#209 behavior exactly.
     """
     from ...security.pipeline import sanitize_companion_dict
 
@@ -244,9 +226,13 @@ def _sanitize_lines(
 
 def _run_chunks_parallel(
     chunks: list[list[str]],
-    tool_names: list[str] | None,
     workers: int,
 ) -> list[tuple[list[str], dict[str, Any]]]:
+    """Dispatch ``chunks`` across a process pool. Always ``tools=None`` per
+    chunk (see ``redact_companion_text``): the only path ever parallelized is
+    the default-registry path, so there is nothing to reduce/reconstruct
+    across the process boundary — each worker just runs ``COMPANION_FLOOR``.
+    """
     from concurrent.futures import ProcessPoolExecutor
 
     max_workers = max(1, min(workers, len(chunks)))
@@ -255,7 +241,7 @@ def _run_chunks_parallel(
         # completion order — this ordered-reassembly guarantee is what keeps
         # concatenation below identical to a single-process pass, even though
         # workers may finish in any order.
-        return list(pool.map(_sanitize_lines, chunks, repeat(tool_names)))
+        return list(pool.map(_sanitize_lines, chunks, repeat(None)))
 
 
 def _empty_manifest(security_version: str | None) -> dict[str, Any]:
@@ -285,10 +271,15 @@ def redact_companion_text(
     the redacted body + an aggregate counts+types manifest (never a literal
     secret — the substrate manifest is already ``matched_text``-free).
 
-    Large companions (>= 4 MB) are chunked by size and sanitized across a
-    process pool (#209 W1); small ones run the identical per-line logic
-    in-process with no pool overhead. See module docstring for why this stays
-    byte-identical either way.
+    Large companions (>= 4 MB) on the DEFAULT registry path (``tools=None``)
+    are chunked by size and sanitized across a process pool (#209 W1); every
+    other case — small companions, or ANY explicit ``tools`` argument — runs
+    the identical per-line logic in-process with no pool overhead. An
+    explicit ``tools`` argument never parallelizes (external review, PR #220
+    critical 1): a bound tool instance cannot be safely handed to a worker
+    process without losing its injected state, so that case always takes the
+    always-correct serial path, matching pre-#209 behavior exactly. See the
+    module docstring for why this stays byte-identical either way.
     """
 
     # Lazy import keeps the module leaf-light and avoids importing the whole
@@ -301,15 +292,12 @@ def redact_companion_text(
     raw_lines = text.split("\n")
 
     workers = _worker_count()
-    use_parallel = workers >= 2 and len(text) >= _PARALLEL_THRESHOLD_BYTES
+    use_parallel = (
+        tool_list is None
+        and workers >= 2
+        and len(text) >= _PARALLEL_THRESHOLD_BYTES
+    )
     chunks: list[list[str]] | None = None
-    tool_names: list[str] | None = None
-
-    if use_parallel:
-        try:
-            tool_names = _tool_names_for_pool(tool_list)
-        except _UnpicklableToolsError:
-            use_parallel = False
 
     if use_parallel:
         num_chunks = max(1, workers * _CHUNKS_PER_WORKER)
@@ -319,7 +307,7 @@ def redact_companion_text(
             use_parallel = False
 
     if use_parallel and chunks is not None:
-        partials = _run_chunks_parallel(chunks, tool_names, workers)
+        partials = _run_chunks_parallel(chunks, workers)
     else:
         partials = [_sanitize_lines(raw_lines, tool_list)]
 

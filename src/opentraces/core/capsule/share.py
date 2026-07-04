@@ -9,6 +9,7 @@ byte-identical to what was shared.
 
 from __future__ import annotations
 
+import copy
 import gzip
 import hashlib
 import json
@@ -249,7 +250,7 @@ def _companion_faces():
 
 
 # #209 (W1): a REAL ``capsule create`` invocation calls ``build_mini_bucket``
-# TWICE for the exact same (bucket, slug, trace_ids, tools) — once inside
+# TWICE for the exact same (bucket, slug, trace_ids) — once inside
 # ``export.py::export_capsule`` purely to stamp ``mini_bucket_digest`` on the
 # envelope, and again from ``cli/capsule.py`` to materialize the actual mini-
 # bucket files. On an outlier (>=400 MB decompressed) trail companion each
@@ -263,13 +264,45 @@ def _companion_faces():
 # single process). Bounded process-lifetime LRU (not unbounded — each entry
 # holds full companion blob bytes, so an unbounded cache across a long-lived
 # process such as a test session would grow without limit).
+#
+# External review on PR #220 (critical 2): the pre-fix key was
+# ``(bucket_dir, slug, trace_ids, tool_names)`` — it did NOT cover the raw
+# companion CONTENT, so if a companion's bytes changed between two calls
+# within one process (a test rewriting a fixture, a concurrent writer) the
+# second call would silently return the FIRST call's stale redacted
+# bytes/digest instead of re-reading and re-redacting the new content. Two
+# changes close this: (1) the cache is now scoped to the tools=None DEFAULT
+# path only — the only path every production call site (``export.py`` +
+# ``cli/capsule.py``, the exact double-call this cache exists for) actually
+# uses, mirroring companions.py's critical-1 fix so there is never a "same
+# key, different bound tool instance" collision to worry about; (2) the key
+# includes a content digest of every companion face actually read for the
+# scope, so any byte change forces a cache miss by construction. Every read
+# also returns a defensive deep copy, so a caller mutating a result can never
+# corrupt the cached entry for a later hit.
 _MINI_BUCKET_CACHE: "OrderedDict[tuple[Any, ...], dict[str, Any]]" = OrderedDict()
 _MINI_BUCKET_CACHE_MAXSIZE = 16
 
 
+def _read_companion_bytes(slug: str, trace_id: str) -> dict[str, bytes]:
+    """Read raw (gzip) companion bytes for one trace, keyed by face name.
+
+    A missing companion reads as ``b""`` (mirrors ``_build_mini_bucket_uncached``'s
+    own read). Reading here once lets the cache-key content digest and the
+    actual build share the same bytes instead of a second disk read per face.
+    """
+    result: dict[str, bytes] = {}
+    for face, path_fn in _companion_faces():
+        raw_path = path_fn(slug, trace_id)
+        result[face] = raw_path.read_bytes() if raw_path.exists() else b""
+    return result
+
+
 def _mini_bucket_cache_key(
-    slug: str, trace_ids: Sequence[str], tools: Sequence[Any] | None
-) -> tuple[Any, ...] | None:
+    slug: str,
+    trace_ids: Sequence[str],
+    raw_by_trace: dict[str, dict[str, bytes]],
+) -> tuple[Any, ...]:
     """A hashable projection of ``build_mini_bucket``'s ACTUAL inputs.
 
     ``project_dir`` is deliberately excluded — the companion paths derive
@@ -277,20 +310,20 @@ def _mini_bucket_cache_key(
     ``project_dir`` (see ``build_mini_bucket``'s docstring) — so it carries no
     information the output depends on. ``paths.bucket_dir()`` IS included so a
     test suite that monkeypatches ``OPENTRACES_DIR`` between calls (a
-    per-process global mutation) never serves a stale cross-test hit. Returns
-    ``None`` (meaning "do not cache") when ``tools`` carries an ad-hoc tool
-    instance with no stable registry name — the same "cannot safely reduce
-    for a boundary crossing" case ``companions._tool_names_for_pool`` already
-    guards for the process-pool boundary.
+    per-process global mutation) never serves a stale cross-test hit. The
+    trailing content-digest tuple is the #220 critical-2 fix: a sha256 of
+    each companion face's raw bytes (``None`` for a missing companion), in
+    the same (trace, face) order they were read — any content change at all
+    changes this tuple, so a stale hit is no longer possible.
     """
     from .. import paths as _paths
-    from .companions import _tool_names_for_pool, _UnpicklableToolsError
 
-    try:
-        tools_key = tuple(_tool_names_for_pool(tools)) if tools is not None else None
-    except _UnpicklableToolsError:
-        return None
-    return (str(_paths.bucket_dir()), slug, tuple(trace_ids), tools_key)
+    content_digest = tuple(
+        hashlib.sha256(raw_by_trace[tid][face]).hexdigest() if raw_by_trace[tid][face] else None
+        for tid in trace_ids
+        for face, _ in _companion_faces()
+    )
+    return (str(_paths.bucket_dir()), slug, tuple(trace_ids), content_digest)
 
 
 def build_mini_bucket(
@@ -311,29 +344,41 @@ def build_mini_bucket(
     from its spine; ``mini_bucket_digest`` is a pure content hash (gzip- and
     machine-independent). Returns ``{files, manifest, digest, schema_version}``.
 
-    Memoized within one process (#209 W1) keyed on the bucket root + slug +
-    trace_ids + tools — the ONLY inputs the output actually depends on (see
+    Memoized within one process (#209 W1), scoped to the ``tools=None``
+    default-registry path only — every production call site uses exactly
+    that path, and an explicit ``tools`` argument (which may carry a bound
+    instance with no stable cache identity) always takes the uncached,
+    always-correct path instead. The cache key is the bucket root + slug +
+    trace_ids + a content digest of every companion byte actually read (#220
+    critical 2) — the ONLY inputs the output actually depends on (see
     ``_mini_bucket_cache_key``) — so a caller that (correctly) calls this
     twice for the same scope within one CLI invocation pays the redaction
-    cost once. ``project_dir`` is accepted for symmetry with the export
-    choke point; the companion paths derive from ``paths.bucket_dir()``
-    (which honors test ``OPENTRACES_DIR`` monkeypatching).
+    cost once, and any in-process content change is never served stale.
+    Every return is a defensive deep copy so a caller can freely mutate its
+    result without corrupting the cache. ``project_dir`` is accepted for
+    symmetry with the export choke point; the companion paths derive from
+    ``paths.bucket_dir()`` (which honors test ``OPENTRACES_DIR`` monkeypatching).
     """
 
-    cache_key = _mini_bucket_cache_key(slug, trace_ids, tools)
-    if cache_key is not None:
-        cached = _MINI_BUCKET_CACHE.get(cache_key)
-        if cached is not None:
-            _MINI_BUCKET_CACHE.move_to_end(cache_key)
-            return cached
+    if tools is not None:
+        return _build_mini_bucket_uncached(project_dir, slug, trace_ids, tools=tools)
 
-    result = _build_mini_bucket_uncached(project_dir, slug, trace_ids, tools=tools)
+    raw_by_trace = {tid: _read_companion_bytes(slug, tid) for tid in trace_ids}
+    cache_key = _mini_bucket_cache_key(slug, trace_ids, raw_by_trace)
 
-    if cache_key is not None:
-        _MINI_BUCKET_CACHE[cache_key] = result
-        if len(_MINI_BUCKET_CACHE) > _MINI_BUCKET_CACHE_MAXSIZE:
-            _MINI_BUCKET_CACHE.popitem(last=False)
-    return result
+    cached = _MINI_BUCKET_CACHE.get(cache_key)
+    if cached is not None:
+        _MINI_BUCKET_CACHE.move_to_end(cache_key)
+        return copy.deepcopy(cached)
+
+    result = _build_mini_bucket_uncached(
+        project_dir, slug, trace_ids, tools=None, raw_by_trace=raw_by_trace
+    )
+
+    _MINI_BUCKET_CACHE[cache_key] = result
+    if len(_MINI_BUCKET_CACHE) > _MINI_BUCKET_CACHE_MAXSIZE:
+        _MINI_BUCKET_CACHE.popitem(last=False)
+    return copy.deepcopy(result)
 
 
 def _build_mini_bucket_uncached(
@@ -342,8 +387,14 @@ def _build_mini_bucket_uncached(
     trace_ids: Sequence[str],
     *,
     tools: Sequence[Any] | None = None,
+    raw_by_trace: dict[str, dict[str, bytes]] | None = None,
 ) -> dict[str, Any]:
-    """The actual builder — see ``build_mini_bucket`` for the public contract."""
+    """The actual builder — see ``build_mini_bucket`` for the public contract.
+
+    ``raw_by_trace``, when supplied, is the ALREADY-READ raw companion bytes
+    per trace (keyed by face) — avoids a second disk read when the caller
+    already read them to compute the cache-key content digest.
+    """
 
     from ..bucket_layout import _path_part
     from .companions import redact_companions
@@ -361,9 +412,13 @@ def _build_mini_bucket_uncached(
     for tid in trace_ids:
         companions: dict[str, Any] = {}
         face_digests: dict[str, str | None] = {}
+        trace_raw = raw_by_trace.get(tid) if raw_by_trace is not None else None
         for face, path_fn in _companion_faces():
-            raw_path = path_fn(slug, tid)
-            raw = raw_path.read_bytes() if raw_path.exists() else b""
+            if trace_raw is not None:
+                raw = trace_raw.get(face, b"")
+            else:
+                raw_path = path_fn(slug, tid)
+                raw = raw_path.read_bytes() if raw_path.exists() else b""
             gz, redaction = redact_companions(raw, tools=tools)
             content = gzip.decompress(gz) if gz else b""
             if content:
