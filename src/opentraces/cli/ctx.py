@@ -2915,3 +2915,95 @@ def ctx_anchor_for_step_cmd(
         )
         sys.exit(3)
     click.echo(commit_id)
+
+
+# --------------------------------------------------------------------------- #
+# ctx backfill (issue #210, seal-family W2)
+# --------------------------------------------------------------------------- #
+
+
+@ctx_group.command(
+    "backfill",
+    cls=OpentracesCommand,
+    hidden=True,  # issue #210 — maintenance verb; callable, off --help
+    examples=[
+        "opentraces ctx backfill --dry-run",
+        "opentraces ctx backfill --apply",
+    ],
+    see_also=[
+        ("opentraces bucket repair", "full bucket rebuild from canonical state."),
+    ],
+    option_groups=[
+        ("Mode", ["dry_run", "apply"]),
+    ],
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    default=False,
+    help="Plan only; write nothing. This is the default even without the "
+    "flag — pass --apply to actually write.",
+)
+@click.option(
+    "--apply",
+    "do_apply",
+    is_flag=True,
+    default=False,
+    help="Actually write the backfill (reproject stale companions, "
+    "re-derive recoverable codex companions, drop unrecoverable dangling ids).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def ctx_backfill_cmd(dry_run: bool, do_apply: bool, as_json: bool) -> None:
+    """Re-project stale/empty Context Tree companions (issue #210).
+
+    Re-observes every trace via the independent
+    ``opentraces.core.context_companions_audit`` engine and classifies each
+    defect into ``reproject`` (events already in the mirror, just re-run the
+    projection), ``codex_recover`` (record-derivable, needs a live project
+    checkout to append the recovered events), or ``drop_dangling`` (a
+    genuine append failure with nothing to recover — dangling ids are
+    cleared, never fabricated). ``--dry-run`` (default) only plans and
+    prints counts; ``--apply`` executes the plan.
+    """
+
+    from ..core.context_backfill import apply_backfill, plan_backfill
+    from ..core.config import load_config
+
+    plan = plan_backfill()
+    counts = plan.counts()
+
+    project_paths: dict[str, Path] = {}
+    if do_apply:
+        cfg = load_config()
+        for path_str, reg in cfg.projects.items():
+            p = Path(path_str)
+            if p.is_dir():
+                project_paths[reg.slug] = p
+
+    result: dict[str, Any] | None = None
+    if do_apply:
+        result = apply_backfill(plan, project_paths=project_paths)
+
+    if as_json:
+        payload = {
+            "schema_version": "opentraces.ctx_backfill.v1",
+            "dry_run": not do_apply,
+            "audit_counts": plan.audit.counts(),
+            "plan_counts": counts,
+            "applied": result,
+        }
+        _emit(payload)
+        return
+
+    click.echo("=== ctx backfill ===")
+    click.echo(f"mode: {'apply' if do_apply else 'dry-run'}")
+    click.echo(f"audit: {plan.audit.counts()}")
+    click.echo(f"plan:  {counts}")
+    if result is not None:
+        click.echo(
+            f"applied: reproject={len(result['reproject'])} "
+            f"codex_recover={len(result['codex_recover'])} "
+            f"drop_dangling={len(result['drop_dangling'])} "
+            f"skipped_no_live_project={len(result['skipped_no_live_project'])}"
+        )

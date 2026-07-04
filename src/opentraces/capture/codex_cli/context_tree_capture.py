@@ -96,18 +96,37 @@ def emit_context_tree_events_from_record(
 
     ``transcript_path`` is accepted for parity with the Claude builder and the
     ingest hook, but this slice intentionally relies on the parsed TraceRecord.
+
+    Issue #210 (seal-family W2, stamp-after-persist): ``_build_step_nodes``
+    (called by :func:`build_context_tree_projection_from_record`) stamps
+    ``final_record.steps[*].context_node_id`` as a side effect of building the
+    projection -- a contract locked in by
+    ``tests/capture/test_codex_context_tree_capture.py`` for direct callers of
+    the builder. But at THIS orchestrator boundary (the one ``core/ingest.py``
+    and the W2 backfill actually call) those stamps must not survive an
+    ``append_event_batch`` failure: if the backing ``context_node_observed``
+    events never made it into the canonical event log, the stamped ids would
+    dangle -- resolving to nothing in the trace's own bucket companion. So the
+    pre-call ids are snapshotted and restored on failure before the exception
+    propagates.
     """
 
     del transcript_path
+    pre_stamp_ids = [step.context_node_id for step in final_record.steps]
     projection = build_context_tree_projection_from_record(final_record)
     if projection.drafts:
         from ...core.trails.event_log import append_event_batch
 
-        append_event_batch(
-            Path(project_dir),
-            projection.drafts,
-            writer="codex-context-tree-capture",
-        )
+        try:
+            append_event_batch(
+                Path(project_dir),
+                projection.drafts,
+                writer="codex-context-tree-capture",
+            )
+        except Exception:
+            for step, original_id in zip(final_record.steps, pre_stamp_ids):
+                step.context_node_id = original_id
+            raise
     return projection.summary
 
 

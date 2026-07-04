@@ -1056,10 +1056,17 @@ def emit_context_tree_events_from_record(
             {layer.capture_method for layer in layers}
         )
 
-        # R10 cross-substrate join: surface the active-path step_index ->
-        # node_id map so ingest can populate Step.context_node_id on the
-        # final_record's steps before the staging JSONL is written.
-        summary["step_node_id_map"] = {
+        # R10 cross-substrate join: the active-path step_index -> node_id map
+        # ingest uses to populate Step.context_node_id on the final_record's
+        # steps before the staging JSONL is written. Issue #210 (seal-family
+        # W2): this is computed here but NOT written onto ``summary`` yet --
+        # it is only exposed to the caller (see below) after the backing
+        # ``context_node_observed`` events have actually been persisted to
+        # the canonical event log. Stamping steps with node ids that never
+        # made it to the log (a swallowed append failure) is exactly the
+        # replayability defect this lane fixes: a Step.context_node_id must
+        # never dangle.
+        candidate_step_node_id_map = {
             n.step_index: n.node_id
             for n in nodes
             if n.step_index is not None and n.branch_type in ("root", "linear", "compaction_fork")
@@ -1086,6 +1093,11 @@ def emit_context_tree_events_from_record(
                 exc_info=True,
             )
             summary["capture_limitations"].append("context_tree_not_captured")
+        else:
+            # Append succeeded: the events are durable in the canonical log,
+            # so it is now safe to expose the step->node map for ingest to
+            # stamp onto final_record.steps.
+            summary["step_node_id_map"] = candidate_step_node_id_map
 
     except Exception as exc:  # noqa: BLE001
         logger.warning(
