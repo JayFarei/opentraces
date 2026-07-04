@@ -234,6 +234,20 @@ jobs:
             "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[dataset-sync-verify-publish]" \
             "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[capsule-redaction-floor-on-raw-companions]" \
             -q
+      # Seal-family W6 (#214) replay-contract sentinel. Proves a FRESH capture
+      # carries the context its replay consumers need — every stamped
+      # `Step.context_node_id` resolves inside its own `context.jsonl.gz` — and
+      # keeps W2's companion-integrity fix (#210) permanent. The frozen
+      # RED-capability + vacuous-green regression lives at
+      # tests/test_replay_completeness_sentinel.py (runs for free in fast
+      # pre-merge). Explicit node-id here (not nightly-only) mirrors the v7-core
+      # precedent: hermetic c-context-tree-substrate box (fake-harness capture
+      # chain), ~20s.
+      - name: Seal-family W6 sentinel journey (replay-contract capture-completeness)
+        run: |
+          python -m pytest \
+            "tests/otbox/test_otbox_slice.py::test_tier0_catalogue_journey[replay-contract-capture-completeness]" \
+            -q
 
   capsule-worker:
     name: capsule-worker vitest
