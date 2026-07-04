@@ -320,6 +320,39 @@ def test_workflow_build_rows_scripts_use_the_union_reader(script_path):
     assert "iter_corpus_trace_records" in source
 
 
+def test_union_count_equals_trace_corpus_source_count(tmp_path):
+    """Acceptance bar #3: executes #140's cross-store-consistency principle for
+    this reader -- ``iter_corpus_trace_records()``'s count must equal
+    ``trace_corpus.iter_sources()``'s count on the same mixed world (one
+    bucket-object trace, one project-local-only trace, one staging-only
+    trace), so this reader can never silently drop or double-count a layer.
+    """
+    from opentraces.core import paths, trace_corpus
+    from opentraces.core.bucket_store import iter_corpus_trace_records, write_trace_record
+
+    write_trace_record(
+        _trace("bucket-object-trace-211"),
+        project_slug="demo211",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+
+    project = tmp_path / "proj211"
+    _enroll_project(project, "8888888888888888cccccccccccccccc")
+    _write_project_local_only_trace(project, _trace(PROJECT_ONLY_TRACE_ID))
+
+    staging_only_id = "b2b2b2b2-3333-4555-8666-777777777777"
+    staging_path = paths.STAGING_DIR
+    staging_path.mkdir(parents=True, exist_ok=True)
+    (staging_path / f"{staging_only_id}.jsonl").write_text(
+        _trace(staging_only_id).model_dump_json() + "\n"
+    )
+
+    source_count = sum(1 for _ in trace_corpus.iter_sources())
+    union_count = len(iter_corpus_trace_records())
+    assert union_count == source_count
+
+
 def test_bucket_maintenance_and_security_callers_stay_on_the_narrow_enumerator():
     """The keep-narrow list (issue #211 scope) must NOT have been touched:
     manifest build, security sweep, and prune all stay bucket-object-only.

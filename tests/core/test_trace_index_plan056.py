@@ -418,9 +418,12 @@ def test_direct_skill_invocation_reader_skips_full_trace_facets(monkeypatch):
         raise AssertionError("direct skill reader should not build semantic facets")
 
     monkeypatch.setattr(trace_index, "semantic_facets_for_trace", fail_semantic_facets)
+    # list_skill_invocation_units_from_records reads through the union corpus
+    # reader (#211), not the bucket-object-only enumerator; patch the function
+    # it actually calls.
     monkeypatch.setattr(
         trace_index,
-        "iter_trace_record_objects",
+        "iter_corpus_trace_records",
         lambda project_slug=None: [bucket_object],
     )
 
