@@ -153,6 +153,46 @@ def test_bucket_watermark_reads_manifest_digest_and_last_write_at(monkeypatch):
     assert wm["last_write_at"] == "2026-03-01T00:00:00Z"
 
 
+def test_bucket_watermark_reads_persisted_manifest_not_full_corpus_scan(monkeypatch):
+    """``bucket_watermark`` reads the persisted ``manifest.json`` O(1) via the
+    same ``read_persisted_manifest_capped`` reader ``bucket_status_fast`` uses,
+    never the O(N) ``bucket_manifest()`` in-memory reconcile scan, when a
+    usable persisted manifest already exists.
+
+    Regression test for the perf-round-3 fix: ``bucket_watermark`` used to
+    call ``bucket_manifest(write=False, include_objects=False)`` (heal=True
+    default -- a full-corpus reconcile scan) on every dataset run, even though
+    the size-independent persisted-manifest read was already available and
+    used elsewhere (plan 087's ``bucket_status_fast``).
+    """
+    from opentraces.core import bucket_store, datasets
+
+    write_trace_record = bucket_store.write_trace_record
+    from opentraces_schema import Agent, Step, TraceRecord
+
+    record = TraceRecord(
+        trace_id="c0ffee00-dead-4eef-beef-1234567890ab",
+        session_id="session-watermark-proof",
+        agent=Agent(name="claude-code"),
+        task={"description": "watermark bounded-read proof"},
+        steps=[Step(step_index=1, role="user", content="hello")],
+    )
+    write_trace_record(record, project_slug="watermark-proof", source_layer="capture")
+    bucket_store.bucket_manifest(write=True, include_objects=False)
+
+    def _boom(**_kwargs):
+        raise AssertionError(
+            "bucket_manifest() called -- bucket_watermark must read the "
+            "persisted manifest.json, not run the full-corpus reconcile scan"
+        )
+
+    monkeypatch.setattr(bucket_store, "bucket_manifest", _boom)
+
+    wm = datasets.bucket_watermark()
+    assert wm["manifest_digest"] is not None
+    assert wm["last_write_at"] is not None
+
+
 def test_full_run_stamps_watermark_and_projects_everything(monkeypatch):
     from opentraces.core import workflow_runner
 

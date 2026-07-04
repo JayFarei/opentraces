@@ -240,3 +240,60 @@ def test_explicit_step_range_field_is_preserved_verbatim():
     assert refs["unit_id"] == "tu:one"
     assert refs["slice_id"] == "slice-1"
     assert refs["step_range"] == {"start": 2, "end": 5}
+
+
+def test_bucket_record_ref_resolves_via_bounded_reader_not_full_corpus_scan(monkeypatch):
+    """Row provenance resolves a trace's bucket record via the O(1)-per-trace
+    ``read_bucket_record_for_trace`` reader, never via a full-corpus scan.
+
+    Regression test for the perf-round-3 fix: ``_bucket_record_ref`` used to
+    call ``iter_trace_record_objects()`` (whole-bucket scan) to resolve ONE
+    known ``trace_id`` on every appended row's provenance -- a known-scope
+    lookup running an unbounded primitive. Monkeypatching the full-scan
+    function to raise proves the bounded path is what actually resolves it.
+    """
+    from opentraces.core import bucket_store
+    from opentraces.core.bucket_trace_records import write_trace_record
+    from opentraces.core.datasets import (
+        append_rows,
+        create_dataset,
+        read_row_provenance,
+    )
+    from opentraces_schema import Agent, Step, TraceRecord
+
+    trace_id = "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
+    record = TraceRecord(
+        trace_id=trace_id,
+        session_id=f"session-{trace_id}",
+        agent=Agent(name="claude-code"),
+        task={"description": "bounded-reader proof record"},
+        steps=[Step(step_index=1, role="user", content="hello")],
+    )
+    write_trace_record(record, project_slug="bounded-reader-proof", source_layer="capture")
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError(
+            "iter_trace_record_objects() called -- _bucket_record_ref must "
+            "resolve via the bounded per-trace reader, not a full-corpus scan"
+        )
+
+    monkeypatch.setattr(bucket_store, "iter_trace_record_objects", _boom)
+
+    create_dataset(
+        "bounded-ref",
+        workflow_skill="bounded-ref-curator",
+        workflow_digest="sha256:wf-bounded",
+        row_schema=_field_schema(),
+    )
+    row = {
+        "source_trace_id": trace_id,
+        "source_unit_id": "tu:one",
+        "summary": "A row whose provenance must resolve the bucket record.",
+    }
+    append_rows("bounded-ref", [row], run_id="run_1")
+
+    provenance = next(iter(read_row_provenance("bounded-ref").values()))
+    ref = provenance["bucket"]["source_trace_record"]
+    assert ref is not None, "expected the bounded reader to resolve the trace"
+    assert ref["trace_id"] == trace_id
+    assert ref["project_slug"] == "bounded-reader-proof"
