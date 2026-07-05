@@ -553,8 +553,30 @@ const v080: SchemaVersion = {
   ]),
 };
 
+const v090: SchemaVersion = {
+  version: "0.9.0",
+  date: "2026-07-04",
+  summary: "Dataset facet scoping (issue #212, external-review fix for PR #218). Adds an optional metadata scope refinement to a dataset's persisted candidate query and its resolved match set to each run record. Purely additive; the TraceRecord wire shape is untouched entirely, this bump only touches the local dataset-lifecycle models.",
+  highlights: [
+    "DatasetCandidateQuery.facets: dict[str, str], an optional persisted name=value metadata scope refinement (model / agent.name / agent.version) narrowing a dataset's candidate query at `dataset new` / schedule time, composing with the existing scope/args. Default empty (no narrowing).",
+    "DatasetRunRecord.facet_resolution: dict[str, Any] | None, present only when a run's effective facet scope was non-empty: {\"facets\": {...}, \"matched_count\": int, \"matched\": [...]}. None (absent) on every unfaceted run.",
+    "Existing pre-0.9.0 dataset manifests and run records validate unchanged; no migration is needed",
+  ],
+  models: v080.models.map((m) => {
+    if (m.id === "trace-record") {
+      return {
+        ...m,
+        fields: m.fields.map((f) =>
+          f.name === "schema_version" ? { ...f, description: 'e.g. "0.9.0"' } : f,
+        ),
+      };
+    }
+    return m;
+  }),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v080, v070, v060, v050, v040, v030, v020, v011, v010];
+export const versions: SchemaVersion[] = [v090, v080, v070, v060, v050, v040, v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

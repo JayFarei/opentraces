@@ -19,16 +19,33 @@ source of truth.
 ## Current Version
 
 ```text
-0.8.0
+0.9.0
 ```
 
-`0.8.0` is additive: it gives `Environment` a structured home for exact
-dependency pins and runtime identity (issue #200/#155 Part A) without changing
-the `TraceRecord` wire shape, so existing trace parsers continue to work
-unchanged. `0.7.0` introduced the dataset security policy contract (plan 092);
-`0.6.0` made `TraceRecord.patches[]` the authoritative output spine and removed
-`Outcome.patch`; consumers should join patch ids to the bucket Trail companion
-for full diff/history.
+`0.9.0` is additive: it gives `DatasetCandidateQuery` and `DatasetRunRecord` an
+optional metadata scope facet (`facets` / `facet_resolution`) for `dataset run
+--facet` narrowing, without changing the `TraceRecord` wire shape, so existing
+trace parsers continue to work unchanged. `0.8.0` gave `Environment` a
+structured home for exact dependency pins and runtime identity (issue
+#200/#155 Part A); `0.7.0` introduced the dataset security policy contract
+(plan 092); `0.6.0` made `TraceRecord.patches[]` the authoritative output spine
+and removed `Outcome.patch`; consumers should join patch ids to the bucket
+Trail companion for full diff/history.
+
+### 0.9.0
+
+- `DatasetCandidateQuery.facets`, `dict[str, str]`, default `{}`. An optional
+  persisted `name=value` metadata scope refinement (`model` / `agent.name` /
+  `agent.version`) narrowing a dataset's candidate query at `dataset new` /
+  schedule time, composing with the existing `scope`/`args`.
+- `DatasetRunRecord.facet_resolution`, `dict[str, Any] | None`, default
+  `None`. Present only when a run's effective facet scope was non-empty:
+  `{"facets": {...}, "matched_count": int, "matched": [...]}`. `None`
+  (absent) on every unfaceted run.
+- Purely additive, local dataset-lifecycle models only; `TraceRecord` and
+  every captured-trace model are untouched. No migration is needed, an
+  existing pre-0.9.0 dataset manifest or run record validates unchanged. See
+  [`RATIONALE-0.9.0.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/RATIONALE-0.9.0.md).
 
 ### 0.8.0
 

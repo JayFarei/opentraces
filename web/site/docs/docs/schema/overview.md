@@ -13,7 +13,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 
 ```json
 {
-  "schema_version": "0.8.0",
+  "schema_version": "0.9.0",
   "trace_id": "uuid",
   "session_id": "uuid",
   "content_hash": "<sha256-hex>",

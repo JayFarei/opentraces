@@ -90,7 +90,7 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
 | **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
-| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.8.0` field semantics |
+| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.9.0` field semantics |
 | **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
 | **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
 | **[Trace Capsule](/docs/clients/trace-capsule)** | Share a single trace as a reproducible capsule; use `opentraces capsule` for the full CLI surface |
@@ -3485,7 +3485,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 
 ```json
 {
-  "schema_version": "0.8.0",
+  "schema_version": "0.9.0",
   "trace_id": "uuid",
   "session_id": "uuid",
   "content_hash": "<sha256-hex>",
@@ -3559,7 +3559,7 @@ The top-level record. One per JSONL line, one per agent trace.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.8.0"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.9.0"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
@@ -4231,16 +4231,33 @@ source of truth.
 ## Current Version
 
 ```text
-0.8.0
+0.9.0
 ```
 
-`0.8.0` is additive: it gives `Environment` a structured home for exact
-dependency pins and runtime identity (issue #200/#155 Part A) without changing
-the `TraceRecord` wire shape, so existing trace parsers continue to work
-unchanged. `0.7.0` introduced the dataset security policy contract (plan 092);
-`0.6.0` made `TraceRecord.patches[]` the authoritative output spine and removed
-`Outcome.patch`; consumers should join patch ids to the bucket Trail companion
-for full diff/history.
+`0.9.0` is additive: it gives `DatasetCandidateQuery` and `DatasetRunRecord` an
+optional metadata scope facet (`facets` / `facet_resolution`) for `dataset run
+--facet` narrowing, without changing the `TraceRecord` wire shape, so existing
+trace parsers continue to work unchanged. `0.8.0` gave `Environment` a
+structured home for exact dependency pins and runtime identity (issue
+#200/#155 Part A); `0.7.0` introduced the dataset security policy contract
+(plan 092); `0.6.0` made `TraceRecord.patches[]` the authoritative output spine
+and removed `Outcome.patch`; consumers should join patch ids to the bucket
+Trail companion for full diff/history.
+
+### 0.9.0
+
+- `DatasetCandidateQuery.facets`, `dict[str, str]`, default `{}`. An optional
+  persisted `name=value` metadata scope refinement (`model` / `agent.name` /
+  `agent.version`) narrowing a dataset's candidate query at `dataset new` /
+  schedule time, composing with the existing `scope`/`args`.
+- `DatasetRunRecord.facet_resolution`, `dict[str, Any] | None`, default
+  `None`. Present only when a run's effective facet scope was non-empty:
+  `{"facets": {...}, "matched_count": int, "matched": [...]}`. `None`
+  (absent) on every unfaceted run.
+- Purely additive, local dataset-lifecycle models only; `TraceRecord` and
+  every captured-trace model are untouched. No migration is needed, an
+  existing pre-0.9.0 dataset manifest or run record validates unchanged. See
+  [`RATIONALE-0.9.0.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/RATIONALE-0.9.0.md).
 
 ### 0.8.0
 
