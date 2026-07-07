@@ -14,6 +14,9 @@ import { useEffect, useRef, useState } from "react";
 // Logical canvas width = the real Hub main-column width (1280 − 260px sidebar),
 // so the chromeless content renders pixel-faithfully with zero reflow, then the
 // whole panel is CSS-scaled to fit the (TOC-narrowed) tour column.
+// A view denser than this (e.g. the capsules table, ~1212px) can override it via
+// `canvasWidth` so it renders at its natural width and scales down uniformly
+// instead of clipping its right-hand columns inside the narrower default canvas.
 const CANVAS_W = 1020;
 // Below this rendered width the scaled app is unreadable → show the mobile note.
 const MIN_WIDTH = 520;
@@ -83,6 +86,8 @@ export interface HubFeatureFrameProps {
   pr?: string;
   /** Logical canvas height (px) for this feature — tuned per view. */
   height: number;
+  /** Logical canvas width (px) override for dense views — defaults to CANVAS_W. */
+  canvasWidth?: number;
   /** Accessible label for the live region. */
   label: string;
 }
@@ -96,8 +101,10 @@ export default function HubFeatureFrame({
   trace,
   pr,
   height,
+  canvasWidth,
   label,
 }: HubFeatureFrameProps) {
+  const canvasW = canvasWidth ?? CANVAS_W;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [scale, setScale] = useState(0);
@@ -127,11 +134,11 @@ export default function HubFeatureFrame({
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth;
-      if (w > 0) setScale(w / CANVAS_W);
+      if (w > 0) setScale(w / canvasW);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [canvasW]);
 
   // Windowed mount with hysteresis: mount when within ~600px of the viewport,
   // and only UNMOUNT once it's >1600px away. The gap means normal up/down
@@ -191,7 +198,7 @@ export default function HubFeatureFrame({
     return () => obs.disconnect();
   }, []);
 
-  const renderedWidth = scale * CANVAS_W;
+  const renderedWidth = scale * canvasW;
   const tooNarrow = scale > 0 && renderedWidth < MIN_WIDTH;
   const viewportHeight = scale > 0 ? height * scale : Math.min(height, 520);
 
@@ -228,7 +235,7 @@ export default function HubFeatureFrame({
                 if (slotHeld.current) { releaseBoot(); slotHeld.current = false; }
               }}
               style={{
-                width: CANVAS_W,
+                width: canvasW,
                 height,
                 transform: `scale(${scale})`,
                 transformOrigin: "top left",

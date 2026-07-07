@@ -46,6 +46,7 @@ function FeatureCard({ feature }: { feature: HubFeature }) {
             tab={feature.tab}
             pr={feature.pr}
             height={feature.height}
+            canvasWidth={feature.canvasWidth}
             label={feature.heading}
           />
         )}

@@ -11,6 +11,9 @@ export interface HubFeature {
   bullets: string[];
   /** Logical canvas height (px) for the chromeless view, tuned per feature. */
   height: number;
+  /** Logical canvas width (px) override for dense views (e.g. the capsules
+   * table is ~1212px wide); defaults to the shared 1020px canvas. */
+  canvasWidth?: number;
   /** Renders a bespoke stage component instead of the chromeless iframe embed. */
   custom?: "slicer";
   // Embed params:
@@ -137,7 +140,12 @@ export const HUB_FEATURE_GROUPS: HubFeatureGroup[] = [
         heading: "Capsules Replay On Main",
         body: "Seal a failing agent session into a replayable capsule, attach it to a repo issue, and re-pose the intent against current main. The verdict moves from fails @sha to passes @main on its own.",
         bullets: ["live verdict vs main", "dependency-version matrix", "scrubbed before sharing"],
-        height: 600,
+        // The capsules table is a wide, data-dense view (~1212px). Render it on a
+        // canvas matching its natural width so the right-hand columns don't clip;
+        // the frame scales it down uniformly. Height is bumped to keep the rendered
+        // card a comparable size at the smaller scale (and show a fuller table).
+        height: 760,
+        canvasWidth: 1280,
         view: "capsules",
       },
       {

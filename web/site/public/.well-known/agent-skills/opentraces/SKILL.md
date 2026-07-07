@@ -16,8 +16,9 @@ publishes reviewed dataset rows to HuggingFace remotes.
 
 - Global setup: `opentraces setup`, `opentraces auth login`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
-- Trace retrieval and search: `opentraces trace query`, `opentraces trace skills`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
+- Trace retrieval and search: `opentraces trace query`, `opentraces trace skills`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace partition`, `opentraces trace get`, `opentraces trace teleport`
 - Trace Intelligence: `opentraces trace map|get --waste`, `opentraces trace map|get --run-intel`, `opentraces trace compare`
+- Trace slicing: `opentraces trace partition --by <s1|s2|s3|s4> --json` decomposes a trace into a tiling array of trajectories (`opentraces.slicing.v1`). S1 user-turn + S2 change-burst are deterministic; S3 milestone + S4 subgoal are cheap-LLM. With `--by s3|s4` and the default `--judge agent`, if judgments are needed the command exits `rc=10` printing `JudgmentRequest`s — answer them, write `{"answers": [{"id","decision","confidence"}]}` to a file, and re-run with `--answers <file>` for the final tiling at `rc=0`.
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
 - Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
@@ -123,6 +124,8 @@ opentraces trace skills --skill grill-me --json
 opentraces trace index --json
 opentraces trace map <trace_id> --candidate <unit_id> --json
 opentraces trace slice <trace_id> --template bursts --json
+opentraces trace partition <trace_id> --by s1 --json          # tiling Trajectory[] (opentraces.slicing.v1)
+opentraces trace partition <trace_id> --by s3 --json          # cheap-LLM: rc=10 -> answer -> --answers <file> -> rc=0
 opentraces trace get <trace_id> --json
 opentraces trace get <trace_id> --remote-bucket --json
 opentraces trace map <trace_id> --waste --json

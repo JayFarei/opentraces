@@ -40,7 +40,9 @@ const EMBED_CSS_BODY = `/* @ot-embed-seam — site-owned, NOT part of the Claude
    The Claude design's own app.css is left untouched; this overlay is preserved
    across design re-imports (the sync job never overwrites it). */
 .app-shell[data-embed="1"] { grid-template-columns: 1fr; }
-.app-shell[data-embed="1"] .main { height: 100vh; }
+/* No topbar in embed mode, so the main scroll area reclaims its 56px and the
+ * conversation scrollers (which subtract --main-chrome) fill the full canvas. */
+.app-shell[data-embed="1"] .main { --main-chrome: 0px; height: 100vh; }
 `;
 
 // ── The seam, as ordered transforms over the raw export's index.html ──────────
@@ -181,6 +183,59 @@ const SEAMED_TOPBAR_CLOSE = `          onBack={() => setView("traces-landing")}
         />
         )}`;
 
+// Conversation-tab header compaction. The design's sticky header (description +
+// spine) collapses on scroll, but only the trail tab (which scrolls .main) wires
+// it up; the conversation tab scrolls its own .conv-main, so the effect never
+// fired there. We extract one shared handler and drive it from BOTH scrollers,
+// gating .main off in the conversation tab so the two don't fight over the state.
+// (CSS half lives in applyConvCssPatch.) Anchored on `handleJumpLatest`, which is
+// stable design code present across exports.
+const RAW_JUMPLATEST = `  const handleJumpLatest = () => {
+    const stream = document.getElementById("conv-stream");
+    stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
+  };`;
+
+const SEAMED_JUMPLATEST = `  const handleJumpLatest = () => {
+    const stream = document.getElementById("conv-stream");
+    stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
+  };
+  /* @ot-embed-seam:start — sticky-header compaction shared by both trace
+     scrollers. The trail tab scrolls .main; the conversation tab scrolls its own
+     .conv-main, so wire both to one handler. Hysteresis: compact past 48px,
+     restore below 12px. */
+  const applyHeaderCompact = (y) => {
+    setHeaderCompact(prev => {
+      if (!prev && y > 48) return true;
+      if (prev && y < 12) return false;
+      return prev;
+    });
+  };
+  /* @ot-embed-seam:end */`;
+
+const RAW_MAIN_ONSCROLL = `        <div className="main" ref={mainScrollRef} onScroll={(e) => {
+          const y = e.currentTarget.scrollTop;
+          // Hysteresis: enter compact past 48px, leave only below 12px — a
+          // single threshold flip-flops while the header height animates.
+          setHeaderCompact(prev => {
+            if (!prev && y > 48) return true;
+            if (prev && y < 12) return false;
+            return prev;
+          });
+        }}>`;
+
+const SEAMED_MAIN_ONSCROLL = `        <div className="main" ref={mainScrollRef} onScroll={(e) => {
+          /* @ot-embed-seam: the conversation tab scrolls .conv-main, not .main;
+             let it own compaction so the two scrollers do not fight. */
+          if (view === "trace" && activeTab === "conversation") return;
+          applyHeaderCompact(e.currentTarget.scrollTop);
+        }}>`;
+
+const RAW_CONVMAIN = `                  <div className="conv-main" id="conv-main">`;
+
+const SEAMED_CONVMAIN = `                  <div className="conv-main" id="conv-main"
+                    /* @ot-embed-seam: drive header compaction from the conversation scroller */
+                    onScroll={(e) => applyHeaderCompact(e.currentTarget.scrollTop)}>`;
+
 function applySeam(html) {
   let out = html;
   const steps = [];
@@ -222,6 +277,11 @@ function applySeam(html) {
       `activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} />`,
       `activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} initialPull={HUB_INIT.pullId} /* @ot-embed-seam: deep-link opens a PR detail */ />`,
       "initialPull={HUB_INIT.pullId}"],
+    ["conv-compaction shared handler", RAW_JUMPLATEST, SEAMED_JUMPLATEST, "const applyHeaderCompact ="],
+    ["conv-compaction .main gate", RAW_MAIN_ONSCROLL, SEAMED_MAIN_ONSCROLL,
+      "the conversation tab scrolls .conv-main, not .main"],
+    ["conv-compaction .conv-main wiring", RAW_CONVMAIN, SEAMED_CONVMAIN,
+      "drive header compaction from the conversation scroller"],
   ]) {
     if (out.includes(markerIfApplied)) { steps.push(`${name} present (skip)`); continue; }
     if (!out.includes(raw)) throw new Error(`anchor missing: ${name}. Design structure changed — re-review seam.`);
@@ -253,6 +313,39 @@ function applyPullsPatch() {
   return "apply pulls PR-default";
 }
 
+// CSS half of the conversation-tab header-compaction fix (the JS half is in
+// applySeam). Ties the bounded conversation scrollers to the live sticky-header
+// height (--gh-top, maintained by the design's own ResizeObserver) so they fill
+// exactly below the header and grow as it compacts — making the stream "move up"
+// like the trail view. --main-chrome carries the topbar height (0 in embed mode,
+// set by _embed.css). Idempotent + loud-fail, like the index.html seam.
+const APP_CSS = join(HUB, "app.css");
+const RAW_MAIN_CSS = `.main {
+  height: calc(100vh - 56px);
+  overflow-y: auto;`;
+const SEAMED_MAIN_CSS = `.main {
+  /* @ot-embed-seam: topbar height reserved above the scroll area; 0 in embed
+     mode (set by _embed.css). The conversation scrollers subtract this + the
+     live sticky-header height so they grow as the header compacts on scroll. */
+  --main-chrome: 56px;
+  height: calc(100vh - var(--main-chrome));
+  overflow-y: auto;`;
+const RAW_CONV_MAXH = `max-height: calc(100vh - 280px);`;
+const SEAMED_CONV_MAXH = `max-height: calc(100vh - var(--main-chrome, 56px) - var(--gh-top, 396px));`;
+
+function applyConvCssPatch() {
+  if (!existsSync(APP_CSS)) return "app.css missing (skip)";
+  let css = readFileSync(APP_CSS, "utf8");
+  const before = css;
+  if (css.includes("--main-chrome:")) return "conv-compaction CSS present (skip)";
+  if (!css.includes(RAW_MAIN_CSS)) throw new Error("anchor missing: .main height rule (app.css). Design structure changed — re-review the conv-compaction CSS patch.");
+  if (!css.includes(RAW_CONV_MAXH)) throw new Error("anchor missing: .conv-main/.conv-side max-height (app.css). Design structure changed — re-review the conv-compaction CSS patch.");
+  css = css.replace(RAW_MAIN_CSS, SEAMED_MAIN_CSS).split(RAW_CONV_MAXH).join(SEAMED_CONV_MAXH);
+  if (css === before) return "conv-compaction CSS no-op";
+  writeFileSync(APP_CSS, css);
+  return "apply conv-compaction CSS";
+}
+
 function cmdApply() {
   if (!existsSync(INDEX)) { console.error(`✗ ${INDEX} not found — run the design pull first (see scripts/SYNC-HUB.md).`); process.exit(2); }
   if (!existsSync(EMBED_CSS)) { writeFileSync(EMBED_CSS, EMBED_CSS_BODY); console.log("· wrote public/hub-preview/_embed.css"); }
@@ -262,6 +355,7 @@ function cmdApply() {
   if (out !== html) { writeFileSync(INDEX, out); console.log("✓ embed seam applied to index.html"); }
   else console.log("✓ index.html already fully seamed (no change)");
   console.log(`  · ${applyPullsPatch()}`);
+  console.log(`  · ${applyConvCssPatch()}`);
 }
 
 // Guard against a mis-mapped pull: a *.css that actually holds JS/JSX, a *.jsx

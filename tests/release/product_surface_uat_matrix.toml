@@ -1,7 +1,7 @@
 schema_version = "opentraces.product_surface_uat_matrix.v1"
 nav_source = "web/site/docs/mkdocs.yml"
 docs_root = "web/site/docs/docs"
-goal_log = "kb/projects/opentraces/product-surface-uat-goal.md"
+goal_log = "kb/projects/product-surface-uat-goal.md"
 
 [release_constraints]
 default_ci_offline_safe = true
@@ -22,7 +22,7 @@ evidence = [
   "otbox:mixed-agent-bucket-parity",
   "pytest:tests/cli/test_help_renderer.py",
   "pytest:tests/integration/test_plan057_dataset_workflow_uat.py",
-  "log:kb/projects/opentraces/plan-083-run-log.md",
+  "log:kb/projects/plan-083-run-log.md",
 ]
 
 [[page]]
@@ -470,7 +470,7 @@ evidence = [
   "pytest:tests/release/test_product_surface_uat_matrix.py",
   "pytest:tests/capture/test_registry.py",
   "pytest:tests/cli/test_help_renderer.py",
-  "log:kb/projects/opentraces/plan-083-run-log.md",
+  "log:kb/projects/plan-083-run-log.md",
 ]
 
 [[page]]

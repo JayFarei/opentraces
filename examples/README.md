@@ -4,9 +4,8 @@
 
 Every committed example must be safe for the public repository and include a
 clear task: what the example demonstrates, what input it expects, how to run or
-inspect it, and what output to expect. If an artifact contains real bucket
-content, local paths, private prompts, release logs, or work-in-progress notes,
-keep it in `kb/projects/opentraces/runs/` instead.
+inspect it, and what output to expect. Do not commit real bucket content, local
+paths, private prompts, release logs, or work-in-progress notes here.
 
 ## Included examples
 

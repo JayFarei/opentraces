@@ -748,7 +748,11 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 
 /* ─────────────  Main scroll area  ───────────── */
 .main {
-  height: calc(100vh - 56px);
+  /* @ot-embed-seam: topbar height reserved above the scroll area; 0 in embed
+     mode (set by _embed.css). The conversation scrollers subtract this + the
+     live sticky-header height so they grow as the header compacts on scroll. */
+  --main-chrome: 56px;
+  height: calc(100vh - var(--main-chrome));
   overflow-y: auto;
   /* always reserve the scrollbar gutter so short pages (e.g. Spotlight) don't
    * shift the centered content sideways vs tall, scrolling pages */
@@ -1291,13 +1295,13 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
   padding: 20px 28px 80px 28px;
   border-right: 1px solid var(--border);
   overflow-y: auto;
-  max-height: calc(100vh - 280px);
+  max-height: calc(100vh - var(--main-chrome, 56px) - var(--gh-top, 396px));
 }
 .conv-side {
   padding: 18px 16px;
   display: flex; flex-direction: column; gap: 18px;
   overflow-y: auto;
-  max-height: calc(100vh - 280px);
+  max-height: calc(100vh - var(--main-chrome, 56px) - var(--gh-top, 396px));
 }
 
 /* Conversation messages */

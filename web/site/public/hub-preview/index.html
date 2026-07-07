@@ -333,6 +333,18 @@ function App() {
     const stream = document.getElementById("conv-stream");
     stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
   };
+  /* @ot-embed-seam:start — sticky-header compaction shared by both trace
+     scrollers. The trail tab scrolls .main; the conversation tab scrolls its own
+     .conv-main, so wire both to one handler. Hysteresis: compact past 48px,
+     restore below 12px. */
+  const applyHeaderCompact = (y) => {
+    setHeaderCompact(prev => {
+      if (!prev && y > 48) return true;
+      if (prev && y < 12) return false;
+      return prev;
+    });
+  };
+  /* @ot-embed-seam:end */
 
   return (
     <div className="app-shell" data-embed={embed ? "1" : "0"} data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
@@ -380,14 +392,10 @@ function App() {
         )}
 
         <div className="main" ref={mainScrollRef} onScroll={(e) => {
-          const y = e.currentTarget.scrollTop;
-          // Hysteresis: enter compact past 48px, leave only below 12px — a
-          // single threshold flip-flops while the header height animates.
-          setHeaderCompact(prev => {
-            if (!prev && y > 48) return true;
-            if (prev && y < 12) return false;
-            return prev;
-          });
+          /* @ot-embed-seam: the conversation tab scrolls .conv-main, not .main;
+             let it own compaction so the two scrollers do not fight. */
+          if (view === "trace" && activeTab === "conversation") return;
+          applyHeaderCompact(e.currentTarget.scrollTop);
         }}>
           {view === "traces-landing" && (
             <TracesLanding onSelectTrace={openTrace} onSelectDataset={(id) => openDataset(id, "overview")} onCompare={openCompare} />
@@ -448,7 +456,9 @@ function App() {
               )}
               {activeTab === "conversation" && (
                 <div className="conv-shell">
-                  <div className="conv-main" id="conv-main">
+                  <div className="conv-main" id="conv-main"
+                    /* @ot-embed-seam: drive header compaction from the conversation scroller */
+                    onScroll={(e) => applyHeaderCompact(e.currentTarget.scrollTop)}>
                     <ConversationView
                       steps={trace.steps}
                       filters={filters}

@@ -6,7 +6,7 @@ This file is the EXECUTABLE source of truth for the release gate
 vendored in-repo for the same reason as `tests/otbox/jtbd-command-map.md`:
 a gate whose SSoT lives in the gitignored `kb/` cannot run in any clean
 checkout. The narrative draft remains at
-`kb/projects/opentraces/otbox-claims-ledger-draft.md`; THIS file is what the
+`kb/projects/otbox-claims-ledger-draft.md`; THIS file is what the
 gate reads. The spec-journey map (`tests/otbox/claims_map.py`, J1-J18) is a
 sibling at journey granularity — this ledger is claim-granular and may cite
 the same catalogue journeys.

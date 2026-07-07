@@ -3,4 +3,6 @@
    The Claude design's own app.css is left untouched; this overlay is preserved
    across design re-imports (the sync job never overwrites it). */
 .app-shell[data-embed="1"] { grid-template-columns: 1fr; }
-.app-shell[data-embed="1"] .main { height: 100vh; }
+/* No topbar in embed mode, so the main scroll area reclaims its 56px and the
+ * conversation scrollers (which subtract --main-chrome) fill the full canvas. */
+.app-shell[data-embed="1"] .main { --main-chrome: 0px; height: 100vh; }

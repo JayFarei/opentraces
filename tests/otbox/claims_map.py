@@ -1,6 +1,6 @@
 """Journey-contract map: spec journeys J1-J18 -> otbox verifier journeys.
 
-The spec skeleton (kb/projects/opentraces/otbox-spec-skeleton.md) defines 18
+The spec skeleton (kb/projects/otbox-spec-skeleton.md) defines 18
 user journeys. This map binds each to the catalogue journeys that verify it;
 the claims ledger derives each spec journey's STATUS from the executed-
 evidence run ledger (never from this file — the map only says what counts

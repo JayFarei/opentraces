@@ -23,6 +23,9 @@ web/site/.vercel/
 .desloppify/
 
 kb/
+
+# OpenEnv: private environment-product nested checkout (plain repo, never a submodule).
+/openenv/
 .opentraces/staging/
 .opentraces/config.json
 

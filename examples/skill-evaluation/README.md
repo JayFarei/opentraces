@@ -40,5 +40,5 @@ healthy status may honestly be `blocked_*` until trustworthy labels exist.
 ## Public Safety
 
 The committed packet is synthetic. Real bucket-derived skill episodes, rollout
-notes, and verifier-factory artifacts stay in the private knowledge base unless
-they are explicitly redacted into a public fixture.
+notes, and verifier-factory artifacts are not committed here unless they are
+explicitly redacted into a public fixture.
