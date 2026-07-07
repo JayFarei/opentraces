@@ -842,9 +842,10 @@ def detect_subagent_forks(
     tool_use, look for a sibling JSONL under
     ``transcript_path.with_suffix("")/subagents/<stem>.jsonl`` paired
     with ``<stem>.meta.json``. The pairing convention matches
-    ``parse.py::_load_subagent``: match the parent Task tool_use's
-    ``input.description`` against the meta file's ``description`` field.
-    When matched, resolve the child JSONL's ``sessionId`` from its
+    ``parse.py::_load_subagent``: prefer the parent Task tool_use's
+    unique ``id`` against the meta file's ``toolUseId`` field, then
+    fall back to ``input.description`` for older meta files. When
+    matched, resolve the child JSONL's ``sessionId`` from its
     ``system.init`` record. When unmatched, emit a SubagentFork with
     ``subagent_jsonl_path=None`` and an empty ``subagent_session_id``
     so the orchestrator can surface ``subagent_session_unreachable``
@@ -853,7 +854,7 @@ def detect_subagent_forks(
     forks: list[SubagentFork] = []
 
     # Discover candidate Task tool_use records on the parent session.
-    task_records: list[tuple[JsonlRecord, dict[str, Any]]] = []
+    task_records: list[tuple[JsonlRecord, dict[str, Any], str]] = []
     for rec in graph.records:
         if rec.record_type != "assistant" or not rec.uuid:
             continue
@@ -867,14 +868,23 @@ def detect_subagent_forks(
             if block.get("type") == "tool_use" and block.get("name") == "Task":
                 task_input = block.get("input") or {}
                 if isinstance(task_input, dict):
-                    task_records.append((rec, task_input))
+                    tool_use_id = block.get("id")
+                    task_records.append((
+                        rec,
+                        task_input,
+                        tool_use_id if isinstance(tool_use_id, str) else "",
+                    ))
                 break  # one Task tool_use per assistant record is the norm
 
     if not task_records:
         return forks
 
-    # Build the description -> jsonl_path map from the subagents/ dir.
+    # Build lookup maps from the subagents/ dir. Modern meta files carry
+    # toolUseId, which is unique per Task tool_use; older files only have
+    # the free-text description.
     subagents_dir = transcript_path.with_suffix("") / "subagents"
+    tool_use_id_to_jsonl: dict[str, Path] = {}
+    tool_use_id_to_session_id: dict[str, str] = {}
     description_to_jsonl: dict[str, Path] = {}
     description_to_session_id: dict[str, str] = {}
     if subagents_dir.exists():
@@ -885,14 +895,10 @@ def detect_subagent_forks(
                 continue
             if not isinstance(meta, dict):
                 continue
-            description = meta.get("description")
-            if not isinstance(description, str):
-                continue
             # Resolve sibling JSONL: <stem>.meta.json -> <stem>.jsonl.
             jsonl_path = meta_file.with_suffix("").with_suffix(".jsonl")
             if not jsonl_path.exists():
                 continue
-            description_to_jsonl[description] = jsonl_path
             # Prefer the session_id from the JSONL's system.init record;
             # fall back to the meta file's session_id field if present.
             session_id = _read_subagent_session_id(jsonl_path)
@@ -900,14 +906,31 @@ def detect_subagent_forks(
                 meta_session_id = meta.get("session_id")
                 if isinstance(meta_session_id, str):
                     session_id = meta_session_id
-            if session_id:
-                description_to_session_id[description] = session_id
 
-    for rec, task_input in task_records:
+            meta_tool_use_id = meta.get("toolUseId")
+            if isinstance(meta_tool_use_id, str) and meta_tool_use_id:
+                tool_use_id_to_jsonl[meta_tool_use_id] = jsonl_path
+                if session_id:
+                    tool_use_id_to_session_id[meta_tool_use_id] = session_id
+                continue
+            if "toolUseId" in meta:
+                continue
+
+            description = meta.get("description")
+            if not isinstance(description, str):
+                continue
+            description_to_jsonl.setdefault(description, jsonl_path)
+            if session_id:
+                description_to_session_id.setdefault(description, session_id)
+
+    for rec, task_input, tool_use_id in task_records:
         description = task_input.get("description")
         jsonl_path: Path | None = None
         subagent_session_id = ""
-        if isinstance(description, str):
+        if tool_use_id:
+            jsonl_path = tool_use_id_to_jsonl.get(tool_use_id)
+            subagent_session_id = tool_use_id_to_session_id.get(tool_use_id, "")
+        if jsonl_path is None and isinstance(description, str):
             jsonl_path = description_to_jsonl.get(description)
             subagent_session_id = description_to_session_id.get(description, "")
         forks.append(SubagentFork(
