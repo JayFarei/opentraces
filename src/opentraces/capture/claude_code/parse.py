@@ -1075,10 +1075,31 @@ class ClaudeCodeParser:
         subagent_type = input_data.get("subagent_type", "general")
         description = input_data.get("description", "")
 
-        # Try to find matching subagent file via meta.json
+        # Pass 1: match by toolUseId, which is unique per tool_use and
+        # unambiguous, unlike description (multiple dispatches can share
+        # identical free-text descriptions).
         for meta_file in subagents_dir.glob("*.meta.json"):
             try:
                 meta = json.loads(meta_file.read_text())
+            except (json.JSONDecodeError, OSError) as e:
+                logger.debug("Skipping subagent state file: %s", e)
+                continue
+            if meta.get("toolUseId") == tool_call.tool_call_id:
+                jsonl_file = meta_file.with_suffix("").with_suffix(".jsonl")
+                if jsonl_file.exists():
+                    return self._inline_subagent(
+                        jsonl_file, parent_step_index, parent_steps,
+                        system_prompts, depth, subagent_type, visited_sessions,
+                        seen_request_keys=seen_request_keys,
+                    )
+
+        # Pass 2: fall back to description matching for legacy meta files
+        # that predate the toolUseId field.
+        for meta_file in subagents_dir.glob("*.meta.json"):
+            try:
+                meta = json.loads(meta_file.read_text())
+                if "toolUseId" in meta:
+                    continue  # already tried in pass 1
                 if meta.get("description") == description:
                     jsonl_file = meta_file.with_suffix("").with_suffix(".jsonl")
                     if jsonl_file.exists():
