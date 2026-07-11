@@ -24,6 +24,16 @@ logger = logging.getLogger("opentraces.otlp.raw_body_watcher")
 # first sight.
 _STABILITY_WINDOW_S = 0.2
 
+# An unpaired ``*.request.json`` older than this has almost certainly lost its
+# pairing chance: on real Claude Code output responses are written under a
+# ``req_<id>.response.json`` name that this filename pairer cannot match
+# (plan-078 gap (i)), so the pair never completes. Once past the deadline we
+# negative-cache the request_id so it permanently leaves the scan set instead
+# of being re-stat'd on every 200ms poll forever (issue #251). The
+# content-based #158 flush path (``capture-otlp flush --from-raw-bodies``) does
+# not depend on this watcher's pairing, so nothing downstream is lost.
+_PAIRING_DEADLINE_S = 3600.0
+
 
 class RawBodyWatcher:
     """Poll a raw-bodies dir; fire callback on each request/response pair.
@@ -31,12 +41,21 @@ class RawBodyWatcher:
     Plan 080 §5 raw-body lifecycle (TTL sweep):
       * Default retention is ``delete``: the emitter unlinks the source
         pair on the success path immediately after events are appended.
-        The watcher's periodic sweep is a safety net for orphans (e.g.
-        bodies whose envelopes never arrived, so the emitter never saw
-        them).
+        Because the filename pairing never completes on real Claude Code
+        output (plan-078 gap (i)), the emitter mostly never sees a pair,
+        so orphans accumulate. The orphan safety net is config-gated and
+        DEFAULT OFF (issue #251): only when
+        ``capture.otlp.raw_body_orphan_ttl_days`` is set does the periodic
+        sweep delete orphan bodies older than that many days — an unset
+        TTL keeps the corpus for retroactive ``flush --from-raw-bodies``.
       * ``keep_N_days``: the periodic sweep deletes pairs older than N
         days. The emitter does NOT delete on success.
       * ``keep_forever``: the sweep is a no-op.
+
+    Per-poll cost (issue #251): a poll whose watched-dir mtime is
+    unchanged short-circuits before globbing, and an unpaired request
+    older than ``_PAIRING_DEADLINE_S`` is negative-cached so it leaves the
+    scan set permanently instead of being re-stat'd on every poll.
     """
 
     # How often to walk the dir for retention sweep (cheap stat()-only
@@ -49,17 +68,26 @@ class RawBodyWatcher:
         on_body_pair: Callable[[str, dict, dict], None],
         poll_interval_s: float = 0.2,
         retention: str | None = None,
+        orphan_ttl_days: int | None = None,
     ) -> None:
         self.dir_path = Path(dir_path)
         self._on_body_pair = on_body_pair
         self._poll_interval_s = poll_interval_s
         self._retention = retention  # None => resolve from config at sweep time
+        # None => resolve from config at sweep time; a resolved int gates the
+        # orphan sweep under ``delete`` retention (issue #251), default OFF.
+        self._orphan_ttl_days = orphan_ttl_days
         self._seen: set[str] = set()
+        # mtime of the watched dir at the end of the last scan; a poll whose
+        # dir mtime is unchanged short-circuits the whole scan (issue #251).
+        # ``None`` forces the very first scan to always run.
+        self._last_dir_mtime: float | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_retention_sweep_at: float = 0.0
         self.pairs_seen = 0  # doctor surface (R11)
         self.retention_swept_files = 0  # cumulative file-delete count
+        self.stale_skipped = 0  # doctor surface: negative-cached unpaired reqs
 
     @property
     def dir_size_bytes(self) -> int:
@@ -112,15 +140,36 @@ class RawBodyWatcher:
     def _sweep_retention(self, *, now: float | None = None) -> int:
         """Delete bodies per the configured retention policy.
 
-        Returns the number of files removed in THIS sweep. ``delete``
-        and ``keep_forever`` are no-ops here (the former is handled by
-        the emitter on the success path; the latter retains
-        indefinitely). ``keep_N_days`` walks the dir and removes pairs
+        Returns the number of files removed in THIS sweep. ``keep_forever``
+        is always a no-op. ``keep_N_days`` walks the dir and removes pairs
         older than N days based on mtime.
+
+        ``delete`` is a no-op UNLESS an orphan TTL is configured (issue
+        #251). Under ``delete`` the emitter unlinks pairs on the success
+        path, but on real Claude Code output the watcher's filename pairing
+        never succeeds (plan-078 gap (i)), so orphan bodies accumulate
+        unbounded. The orphan TTL is the safety net the class docstring
+        already promises: when set, orphans older than N days are swept.
+        It is DEFAULT OFF — an unset TTL keeps today's no-op behaviour so a
+        user's captured corpus stays available for retroactive
+        ``flush --from-raw-bodies``.
         """
         policy = self._resolve_retention()
-        if policy in ("delete", "keep_forever"):
+        if policy == "keep_forever":
             return 0
+        if policy == "delete":
+            ttl_days = self._resolve_orphan_ttl_days()
+            if ttl_days is None:
+                return 0
+            removed = prune_dir_older_than(self.dir_path, ttl_days, now=now)
+            self.retention_swept_files += removed
+            if removed:
+                logger.info(
+                    "raw-body orphan sweep: deleted %d orphan files older than "
+                    "%d days under %s",
+                    removed, ttl_days, self.dir_path,
+                )
+            return removed
         days = _parse_keep_n_days(policy)
         if days is None:
             return 0
@@ -149,18 +198,69 @@ class RawBodyWatcher:
         except Exception:
             return "delete"
 
-    def _scan_once(self) -> None:
-        now = time.time()
+    def _resolve_orphan_ttl_days(self) -> int | None:
+        """Return the orphan-TTL day count, or None if unset (sweep OFF).
+
+        An explicit constructor value wins; otherwise resolve from config.
+        Any failure degrades to None (no sweep) — the data-safe default:
+        the watcher never deletes a user's corpus unless they asked for it.
+        """
+        if self._orphan_ttl_days is not None:
+            return self._orphan_ttl_days
+        try:
+            from ...core.config import (
+                get_capture_otlp_raw_body_orphan_ttl_days,
+                load_config,
+            )
+        except Exception:
+            return None
+        try:
+            return get_capture_otlp_raw_body_orphan_ttl_days(load_config())
+        except Exception:
+            return None
+
+    def _scan_once(self, *, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        # Dir-mtime short-circuit: on APFS (and every fs we target) a
+        # directory's mtime advances when entries are added or removed, so an
+        # unchanged mtime means no new bodies landed since the last scan and
+        # the whole glob is wasted work. The first scan (``_last_dir_mtime is
+        # None``) always runs; any stat failure falls through to scanning.
+        try:
+            dir_mtime = self.dir_path.stat().st_mtime
+        except OSError:
+            dir_mtime = None
+        if (
+            dir_mtime is not None
+            and self._last_dir_mtime is not None
+            and dir_mtime == self._last_dir_mtime
+        ):
+            return
+        # A present pair that fails the stability window is deferred to a
+        # later poll. If that happens and NO other file lands, the dir mtime
+        # never changes, so recording it here would let the short-circuit
+        # swallow the pair forever (the last pair of an idle session would
+        # never fire). Track the deferral and suppress the mtime record so
+        # the next poll rescans, matching the old always-retry behaviour.
+        deferred_unstable = False
         for req_path in sorted(self.dir_path.glob("*.request.json")):
             request_id = req_path.name[: -len(".request.json")]
             if request_id in self._seen:
                 continue
             resp_path = self.dir_path / f"{request_id}.response.json"
             if not resp_path.exists():
+                # No response yet. If the request has sat unpaired past the
+                # deadline its pairing will never complete (plan-078 gap (i)),
+                # so negative-cache it: it permanently leaves the scan set
+                # instead of being re-stat'd on every poll forever (#251).
+                if self._is_stale_unpaired(req_path, now):
+                    self._seen.add(request_id)
+                    self.stale_skipped += 1
                 continue
             if not (
                 self._is_stable(req_path, now) and self._is_stable(resp_path, now)
             ):
+                deferred_unstable = True
                 continue
             try:
                 request_body = json.loads(req_path.read_text(encoding="utf-8"))
@@ -179,6 +279,21 @@ class RawBodyWatcher:
                     "on_body_pair callback failed for request_id=%s", request_id
                 )
             self._seen.add(request_id)
+        # Remember the dir mtime we just scanned so the next unchanged poll
+        # short-circuits. Recorded after the walk (not before) so a body that
+        # lands mid-scan still bumps the mtime and forces a re-scan next poll.
+        # Skipped when a pair was deferred for instability (see above): that
+        # pair needs a rescan the dir mtime alone would not trigger.
+        if dir_mtime is not None and not deferred_unstable:
+            self._last_dir_mtime = dir_mtime
+
+    @staticmethod
+    def _is_stale_unpaired(path: Path, now: float) -> bool:
+        """True if an unpaired request file is older than the pairing deadline."""
+        try:
+            return (now - path.stat().st_mtime) >= _PAIRING_DEADLINE_S
+        except OSError:
+            return False
 
     @staticmethod
     def _is_stable(path: Path, now: float) -> bool:

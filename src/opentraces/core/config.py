@@ -941,6 +941,26 @@ def get_capture_otlp_raw_body_retention(cfg: Config) -> str:
     return raw
 
 
+def get_capture_otlp_raw_body_orphan_ttl_days(cfg: Config) -> int | None:
+    """Return the orphan-body TTL in days, or None if the sweep is OFF.
+
+    Issue #251: under ``delete`` retention the watcher's filename pairing
+    never completes on real Claude Code output (plan-078 gap (i)), so orphan
+    raw bodies accumulate unbounded. This opt-in TTL lets the periodic sweep
+    delete orphans older than N days. It is DEFAULT OFF (``None``): an unset
+    value keeps every captured body available for retroactive
+    ``capture-otlp flush --from-raw-bodies``. Values < 1 are treated as unset.
+    """
+    raw = getattr(cfg.capture.otlp, "raw_body_orphan_ttl_days", None)
+    if raw is None:
+        return None
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 1 else None
+
+
 def parse_raw_body_retention_days(retention: str) -> int | None:
     """Parse ``keep_N_days`` -> N. Returns None for ``delete`` / ``keep_forever``.
 

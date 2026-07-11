@@ -170,6 +170,17 @@ class CaptureOTLPConfig(BaseModel):
             "'keep_7_days'), or 'keep_forever'. See plan 080 §5."
         ),
     )
+    raw_body_orphan_ttl_days: int | None = Field(
+        None,
+        description=(
+            "Opt-in orphan-body sweep (issue #251). Under 'delete' retention "
+            "the watcher's filename pairing never completes on real Claude "
+            "Code output (plan-078 gap (i)), so orphan bodies accumulate. When "
+            "set, the periodic sweep deletes orphans older than this many "
+            "days. Default None: OFF, so the corpus stays available for "
+            "retroactive 'capture-otlp flush --from-raw-bodies'."
+        ),
+    )
 
     model_config = {"extra": "ignore"}
 
