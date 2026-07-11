@@ -25,11 +25,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Iterable, Iterator
 
 from ...core.context_tree import CAPTURE_METHOD_OTEL
 from ...core.context_tree.raw_blobs import (
-    materialize_message_blobs,
+    materialize_message_blobs_incremental,
     message_content_hash,
 )
 from .mapper import map_otlp_envelope, map_raw_request_body
@@ -232,19 +232,26 @@ def _build_messages_manifest(messages: list[Any]) -> tuple[list[dict[str, Any]],
 
 
 def _build_layers_and_nodes_from_steps(
-    steps: list[dict[str, Any]],
+    steps: Iterable[dict[str, Any]],
     *,
     trace_id: str,
     project_slug: str,
 ) -> tuple[list[Any], list[Any], dict[str, Any]]:
     """Build per-llm-request ContextLayer + ContextNode objects + raw blobs.
 
-    ``steps`` is an ordered list of per-llm-request dicts (one node each), each
-    carrying ``request_body`` (system / tools / messages the model saw) and an
+    ``steps`` is an ordered *iterable* of per-llm-request dicts (one node each),
+    each carrying ``request_body`` (system / tools / messages the model saw) and an
     optional ``response_body`` (usage / output). This is the per-step shape both
     the raw-body reconstruction path and the live buffer produce — keying by
     llm-request (not per-turn ``prompt.id``) so two steps in one turn become two
     distinct nodes with distinct message manifests.
+
+    Streams the input (issue #252): each step's (wire-cumulative) body is consumed
+    to build its layers/node, its per-message blobs are materialized *incrementally*
+    against a shared content-hash set, and the body is then dropped before the next
+    step — so peak memory is ``O(one body)``, not ``O(sum of all bodies)``. The
+    resulting layers/nodes hold only content-addressed manifests (message *text*
+    lives on disk in the raw/ blobs), so accumulating them stays ``O(N x small)``.
 
     Materializes per-message raw content blobs under ``project_slug`` so each
     manifest ``content_hash`` resolves to its text (content-addressed, deduped
@@ -254,9 +261,10 @@ def _build_layers_and_nodes_from_steps(
 
     layers: list[Any] = []
     nodes: list[Any] = []
-    all_message_payloads: list[Any] = []
-    if not steps:
-        return layers, nodes, {"written": 0, "deduped": 0}
+    # Shared across all steps so dedup counting matches a one-shot
+    # ``materialize_message_blobs`` over the concatenated payloads.
+    seen_hashes: dict[str, None] = {}
+    blobs_written = 0
 
     parent_id: str | None = None
     for idx, step in enumerate(steps):
@@ -267,7 +275,6 @@ def _build_layers_and_nodes_from_steps(
         messages = request_body.get("messages") or []
         tools = request_body.get("tools") or []
         usage = (response_body or {}).get("usage") or {}
-        all_message_payloads.extend(messages)
 
         manifest, span_first, span_last = _build_messages_manifest(messages)
 
@@ -346,9 +353,24 @@ def _build_layers_and_nodes_from_steps(
         nodes.append(node)
         parent_id = node.node_id
 
-    # Materialize per-message content blobs (the one missing write): each
-    # manifest content_hash now resolves to its text, deduped across steps.
-    blob_report = materialize_message_blobs(project_slug, all_message_payloads)
+        # Materialize this step's per-message content blobs immediately (the one
+        # missing write): each manifest content_hash resolves to its text, deduped
+        # across steps via the shared ``seen_hashes`` set. Done per-step so the
+        # message payloads are never accumulated across the whole session.
+        blobs_written += materialize_message_blobs_incremental(
+            project_slug, messages, seen=seen_hashes
+        )
+
+        # Drop this step's body before the next iteration so peak memory stays
+        # O(one body) — nothing above retains ``request_body`` / ``messages``
+        # (layers hold only content-addressed manifests, not message text).
+        del step, request_body, response_body, messages, system_blocks, tools
+
+    blob_report = {
+        "written": blobs_written,
+        "deduped": len(seen_hashes),
+        "content_hashes": list(seen_hashes.keys()),
+    }
     return layers, nodes, blob_report
 
 
@@ -427,7 +449,7 @@ def _seq_key(value: Any) -> tuple[int, int]:
 
 def _steps_from_body_ref_events(
     events: list[dict[str, Any]], raw_bodies_dir: Path | None
-) -> list[dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     """Build per-llm-request steps from OTel api_*_body body-ref log events (W3).
 
     Each ``api_request_body`` log marks one llm-request (one node); the matching
@@ -436,21 +458,26 @@ def _steps_from_body_ref_events(
     ordered by ``event.sequence`` within the turn; each request pairs with the
     first not-yet-consumed response after it in that ordering (a response is
     consumed on match, so two requests can never bind to the same response).
-    The full request / response bodies are read
-    off disk from their ``body_ref`` paths (defensively: a missing body file
-    yields an empty body for that side).
+
+    Streams (issue #252): the request/response *body-ref pairing* runs eagerly
+    (the events are tiny), but the full request / response bodies are read off
+    disk lazily — one step at a time, at yield time — so the whole session's
+    (wire-cumulative) bodies are never held at once. A missing body file yields
+    an empty body for that side.
 
     Steps are globally ordered by request ``event.sequence`` (session-monotonic)
-    so ``step_index`` reflects true chronological per-llm-request order. The
-    returned dicts match ``ReconstructedStep.to_snapshot_step``'s shape, so they
-    feed ``_build_layers_and_nodes_from_steps`` unchanged — turning the live
-    snapshot path into per-llm-request capture instead of per-turn.
+    so ``step_index`` reflects true chronological per-llm-request order. Yields
+    dicts matching ``ReconstructedStep.to_snapshot_step``'s shape, so they feed
+    ``_build_layers_and_nodes_from_steps`` unchanged — turning the live snapshot
+    path into per-llm-request capture instead of per-turn.
     """
     groups: dict[Any, list[dict[str, Any]]] = {}
     for ev in events:
         groups.setdefault(ev.get("prompt_id"), []).append(ev)
 
-    collected: list[tuple[tuple[int, int], dict[str, Any]]] = []
+    # Eagerly pair requests to responses using only the tiny ref events (no body
+    # reads yet). Each entry carries the resolved body-ref paths + ids.
+    pairings: list[tuple[tuple[int, int], dict[str, Any]]] = []
     for group in groups.values():
         ordered = sorted(group, key=lambda e: _seq_key(e.get("sequence")))
         consumed: set[int] = set()
@@ -465,24 +492,42 @@ def _steps_from_body_ref_events(
                     response = ordered[resp_idx]
                     consumed.add(resp_idx)
                     break
+            ref_name = Path(str(ev.get("body_ref") or "")).name
+            pairings.append(
+                (
+                    _seq_key(ev.get("sequence")),
+                    {
+                        "request_body_ref": ev.get("body_ref"),
+                        "ref_name": ref_name,
+                        "response_body_ref": response.get("body_ref") if response else None,
+                        "request_id": response.get("request_id") if response else None,
+                    },
+                )
+            )
+
+    pairings.sort(key=lambda t: t[0])
+
+    def _generate() -> Iterator[dict[str, Any]]:
+        for step_index, (_key, meta) in enumerate(pairings):
             request_body = _read_json_file(
-                _resolve_body_path(ev.get("body_ref"), raw_bodies_dir)
+                _resolve_body_path(meta["request_body_ref"], raw_bodies_dir)
             )
             if not isinstance(request_body, dict):
                 request_body = {}
             response_body = None
-            request_id = None
-            if response is not None:
-                request_id = response.get("request_id")
+            if meta["response_body_ref"] is not None:
                 response_body = _read_json_file(
-                    _resolve_body_path(response.get("body_ref"), raw_bodies_dir)
+                    _resolve_body_path(meta["response_body_ref"], raw_bodies_dir)
                 )
                 if not isinstance(response_body, dict):
                     response_body = None
+            # request_id comes from the response *event* (present whenever a
+            # response was paired), independent of whether its body parsed.
+            request_id = meta["request_id"]
             finish_reasons: list[str] = []
             if response_body and response_body.get("stop_reason"):
                 finish_reasons = [response_body["stop_reason"]]
-            ref_name = Path(str(ev.get("body_ref") or "")).name
+            ref_name = meta["ref_name"]
             transcript_uuid = (
                 ref_name[: -len(".request.json")]
                 if ref_name.endswith(".request.json")
@@ -491,27 +536,17 @@ def _steps_from_body_ref_events(
             previous_message_id = (request_body.get("diagnostics") or {}).get(
                 "previous_message_id"
             )
-            collected.append(
-                (
-                    _seq_key(ev.get("sequence")),
-                    {
-                        "step_index": 0,  # reassigned after global ordering
-                        "transcript_uuid": transcript_uuid,
-                        "request_id": request_id,
-                        "request_body": request_body,
-                        "response_body": response_body,
-                        "previous_message_id": previous_message_id,
-                        "finish_reasons": finish_reasons,
-                    },
-                )
-            )
+            yield {
+                "step_index": step_index,
+                "transcript_uuid": transcript_uuid,
+                "request_id": request_id,
+                "request_body": request_body,
+                "response_body": response_body,
+                "previous_message_id": previous_message_id,
+                "finish_reasons": finish_reasons,
+            }
 
-    collected.sort(key=lambda t: t[0])
-    steps: list[dict[str, Any]] = []
-    for step_index, (_key, step) in enumerate(collected):
-        step["step_index"] = step_index
-        steps.append(step)
-    return steps
+    return _generate()
 
 
 # --------------------------------------------------------------------------- #
@@ -531,12 +566,16 @@ def flush_session_to_project(
     session_id: str,
     buffer: OTLPCaptureBuffer | None = None,
     snapshot: dict[str, Any] | None = None,
-    steps: list[dict[str, Any]] | None = None,
+    steps: Iterable[dict[str, Any]] | None = None,
     raw_bodies_dir: Path | None = None,
     raw_body_retention: str | None = None,
     project_to_bucket: bool = True,
 ) -> dict[str, Any]:
     """Append context_* events for one OTel session into project_dir's event log.
+
+    ``steps`` may be a one-shot generator (issue #252): it is consumed exactly
+    once, by ``_build_layers_and_nodes_from_steps``, which streams it so a whole
+    wire-cumulative session is never materialized at once. Do not re-iterate it.
 
     Either ``buffer`` (in-process) or ``snapshot`` (cross-process,
     rehydrated from disk via :func:`load_snapshot_from_disk`) must be

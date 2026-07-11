@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,13 @@ logger = logging.getLogger("opentraces.otlp.reconstruct")
 # optional whitespace around the colon (Claude Code emits compact, but other
 # serializers space it) so the match is robust to formatting.
 _SESSION_RE = re.compile(rb'session_id\\"\s*:\s*\\"([0-9a-fA-F-]{8,})')
+
+# ``diagnostics.previous_message_id`` is a real (unescaped) JSON string field on
+# the request body. We pull just this tiny value out of the raw bytes during the
+# scan pass so the scan never has to parse (and hold) the whole wire-cumulative
+# body — parsing is deferred to yield time, one body at a time. ``null`` (no
+# prior message) simply does not match and yields ``None``.
+_PREV_MSG_RE = re.compile(rb'"previous_message_id"\s*:\s*"([^"]+)"')
 
 
 @dataclass
@@ -73,11 +81,23 @@ def _session_of(raw: bytes) -> str | None:
     return m.group(1).decode() if m else None
 
 
+def _prev_message_id_of(raw: bytes) -> str | None:
+    m = _PREV_MSG_RE.search(raw)
+    return m.group(1).decode() if m else None
+
+
 def _scan_request_files_for_session(
     raw_dir: Path, session_id: str
-) -> list[tuple[float, Path, dict[str, Any]]]:
-    """Return ``(mtime, path, body)`` for every request file in the session."""
-    out: list[tuple[float, Path, dict[str, Any]]] = []
+) -> list[tuple[float, Path, str | None]]:
+    """Return lightweight ``(mtime, path, previous_message_id)`` per session request.
+
+    Streaming pass (issue #252): only the tiny ``previous_message_id`` (needed for
+    the response-index chain) is pulled from each file's bytes via regex — the
+    full wire-cumulative body is NEVER parsed or held here. Parsing is deferred to
+    :meth:`_ReconstructedSteps.__getitem__`, so peak memory over the scan is
+    ``O(one file's bytes)``, not ``O(sum of all bodies)``.
+    """
+    out: list[tuple[float, Path, str | None]] = []
     with os.scandir(raw_dir) as it:
         for entry in it:
             name = entry.name
@@ -89,15 +109,13 @@ def _scan_request_files_for_session(
                 continue
             if _session_of(raw) != session_id:
                 continue
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
+            prev_msg = _prev_message_id_of(raw)
             try:
                 mtime = entry.stat().st_mtime
             except OSError:
                 mtime = 0.0
-            out.append((mtime, Path(entry.path), body))
+            out.append((mtime, Path(entry.path), prev_msg))
+            del raw
     out.sort(key=lambda t: (t[0], t[1].name))
     return out
 
@@ -150,53 +168,87 @@ def _build_response_index(
     return found
 
 
+class _ReconstructedSteps(Sequence):
+    """Lazy, indexable sequence of :class:`ReconstructedStep` (issue #252).
+
+    Holds only lightweight per-step metadata (mtime/path/previous_message_id) plus
+    the tiny paired response bodies. The heavy wire-cumulative *request* body is
+    read+parsed on demand in :meth:`__getitem__` and never retained, so iterating
+    the whole session peaks at ``O(one body)`` instead of ``O(sum of all bodies)``.
+
+    It is a real ``Sequence`` (supports ``len()`` and indexing) so existing
+    callers — the CLI's ``[s.to_snapshot_step() for s in recon]`` and the
+    ``steps[k].request_body`` unit tests — keep working unchanged. To actually
+    *stream*, iterate it into a generator (``(s.to_snapshot_step() for s in recon)``)
+    and hand that to the builder, which drops each body after use.
+    """
+
+    def __init__(
+        self,
+        *,
+        scanned: list[tuple[float, Path, str | None]],
+        produced_ids: list[str | None],
+        resp_index: dict[str, dict[str, Any]],
+    ) -> None:
+        self._scanned = scanned
+        self._produced_ids = produced_ids
+        self._resp_index = resp_index
+
+    def __len__(self) -> int:
+        return len(self._scanned)
+
+    def __getitem__(self, index: int) -> ReconstructedStep:
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self._scanned)))]
+        if index < 0:
+            index += len(self._scanned)
+        _mtime, path, prev_msg = self._scanned[index]
+        try:
+            body = json.loads(Path(path).read_bytes())
+        except (OSError, json.JSONDecodeError):
+            body = {}
+        produced_id = self._produced_ids[index]
+        matched = self._resp_index.get(produced_id) if produced_id else None
+        response_body = matched["body"] if matched else None
+        request_id = matched["request_id"] if matched else None
+        finish_reasons: list[str] = []
+        if response_body and response_body.get("stop_reason"):
+            finish_reasons = [response_body["stop_reason"]]
+        return ReconstructedStep(
+            step_index=index,
+            transcript_uuid=path.name[: -len(".request.json")],
+            request_id=request_id,
+            request_body=body if isinstance(body, dict) else {},
+            response_body=response_body,
+            previous_message_id=prev_msg,
+            finish_reasons=finish_reasons,
+        )
+
+
 def reconstruct_steps_from_raw_bodies(
     session_id: str, raw_dir: Path
-) -> list[ReconstructedStep]:
+) -> Sequence[ReconstructedStep]:
     """Reconstruct ordered per-step context for one session from raw bodies.
 
-    Pure content/metadata pairing — no live receiver, no OTel envelopes. Returns
-    an empty list when the session has no request files in ``raw_dir``.
+    Pure content/metadata pairing — no live receiver, no OTel envelopes. Returns a
+    lazy :class:`_ReconstructedSteps` (a real ``Sequence``, falsy/empty when the
+    session has no request files in ``raw_dir``) whose request bodies are parsed on
+    demand, so a whole session is never materialized at once (issue #252).
     """
     raw_dir = Path(raw_dir)
     if not raw_dir.exists():
-        return []
-    requests = _scan_request_files_for_session(raw_dir, session_id)
-    if not requests:
-        return []
+        return _ReconstructedSteps(scanned=[], produced_ids=[], resp_index={})
+    scanned = _scan_request_files_for_session(raw_dir, session_id)
+    if not scanned:
+        return _ReconstructedSteps(scanned=[], produced_ids=[], resp_index={})
 
     # produced_response_id(step k) == previous_message_id(step k+1)
-    needed_ids: set[str] = set()
-    for k in range(len(requests) - 1):
-        pmi = (requests[k + 1][2].get("diagnostics") or {}).get("previous_message_id")
-        if pmi:
-            needed_ids.add(pmi)
+    produced_ids: list[str | None] = [
+        scanned[k + 1][2] if k + 1 < len(scanned) else None
+        for k in range(len(scanned))
+    ]
+    needed_ids: set[str] = {pid for pid in produced_ids if pid}
     resp_index = _build_response_index(raw_dir, needed_ids)
-
-    steps: list[ReconstructedStep] = []
-    for k, (_mtime, path, body) in enumerate(requests):
-        produced_id = None
-        if k < len(requests) - 1:
-            produced_id = (
-                requests[k + 1][2].get("diagnostics") or {}
-            ).get("previous_message_id")
-        matched = resp_index.get(produced_id) if produced_id else None
-        response_body = matched["body"] if matched else None
-        request_id = matched["request_id"] if matched else None
-        finish_reasons = []
-        if response_body and response_body.get("stop_reason"):
-            finish_reasons = [response_body["stop_reason"]]
-        steps.append(
-            ReconstructedStep(
-                step_index=k,
-                transcript_uuid=path.name[: -len(".request.json")],
-                request_id=request_id,
-                request_body=body,
-                response_body=response_body,
-                previous_message_id=(body.get("diagnostics") or {}).get(
-                    "previous_message_id"
-                ),
-                finish_reasons=finish_reasons,
-            )
-        )
-    return steps
+    return _ReconstructedSteps(
+        scanned=scanned, produced_ids=produced_ids, resp_index=resp_index
+    )

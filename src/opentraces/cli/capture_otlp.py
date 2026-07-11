@@ -921,7 +921,12 @@ def capture_otlp_flush_cmd(
             project_dir=project,
             trace_id=trace_id,
             session_id=session,
-            steps=[s.to_snapshot_step() for s in recon],
+            # Generator, not a list: reconstruct_steps_from_raw_bodies returns a
+            # lazy Sequence and flush consumes steps exactly once, so this streams
+            # one wire-cumulative body at a time instead of materializing the whole
+            # session at once (issue #252). `if not recon` above stays valid — the
+            # lazy Sequence implements __len__.
+            steps=(s.to_snapshot_step() for s in recon),
         )
     else:
         safe = session.replace("/", "_").replace("\\", "_")

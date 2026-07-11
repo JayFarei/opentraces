@@ -90,16 +90,20 @@ def write_message_content_blob(project_slug: str, payload: Any) -> str:
     return content_hash
 
 
-def materialize_message_blobs(
-    project_slug: str, payloads: Iterable[Any]
-) -> dict[str, Any]:
-    """Write raw blobs for every message payload; dedup by content hash.
+def materialize_message_blobs_incremental(
+    project_slug: str, payloads: Iterable[Any], *, seen: dict[str, None]
+) -> int:
+    """Write raw blobs for ``payloads``, deduping against a caller-owned ``seen`` set.
 
-    Returns ``{written, deduped, content_hashes}`` where ``content_hashes`` is
-    the de-duplicated set actually persisted. Errors on individual writes are
-    logged and swallowed so capture never fails on a blob-store hiccup.
+    The streaming counterpart of :func:`materialize_message_blobs` (issue #252):
+    the caller threads one ``seen`` dict across many small ``payloads`` batches
+    (e.g. per-step, one step at a time) so peak memory never holds the whole
+    session's messages at once, while the dedup semantics are identical to a
+    single one-shot call over the concatenation — a hash already in ``seen`` (from
+    an earlier batch *or* an earlier payload in this batch) is skipped; the first
+    occurrence is written. ``seen`` is mutated in place; returns the number of
+    blobs written by THIS call.
     """
-    seen: dict[str, None] = {}
     written = 0
     for payload in payloads:
         try:
@@ -117,6 +121,20 @@ def materialize_message_blobs(
             written += 1
         except OSError as exc:  # pragma: no cover - disk hiccup
             logger.warning("could not write message blob %s: %s", content_hash, exc)
+    return written
+
+
+def materialize_message_blobs(
+    project_slug: str, payloads: Iterable[Any]
+) -> dict[str, Any]:
+    """Write raw blobs for every message payload; dedup by content hash.
+
+    Returns ``{written, deduped, content_hashes}`` where ``content_hashes`` is
+    the de-duplicated set actually persisted. Errors on individual writes are
+    logged and swallowed so capture never fails on a blob-store hiccup.
+    """
+    seen: dict[str, None] = {}
+    written = materialize_message_blobs_incremental(project_slug, payloads, seen=seen)
     return {
         "written": written,
         "deduped": len(seen),
