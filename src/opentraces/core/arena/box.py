@@ -82,6 +82,8 @@ _CRABBOX_HOST_CANDIDATES = (
     "localhost",
     "127.0.0.1",
 )
+
+
 def _host_scope_may_apply(patterns: Sequence[str] | None) -> bool:
     """Approximate the Host scopes Crabbox may traverse during warmup.
 
@@ -146,9 +148,7 @@ def _subprocess_runner(
     )
 
 
-_CONTAINER_PROVIDERS = frozenset(
-    {"local-container", "e2b", "modal", "cloudflare"}
-)
+_CONTAINER_PROVIDERS = frozenset({"local-container", "e2b", "modal", "cloudflare"})
 _MICROVM_PROVIDERS = frozenset({"firecracker", "apple-vm", "proxmox"})
 _UNCONTAINED_PROVIDERS = frozenset({"ssh", "host", "direct"})
 
@@ -241,7 +241,9 @@ class CrabboxRuntime:
                     "timed_out": True,
                 }
             )
-            raise CrabboxRefusal("crabbox_timeout", f"bounded command timed out: {argv[1]}") from exc
+            raise CrabboxRefusal(
+                "crabbox_timeout", f"bounded command timed out: {argv[1]}"
+            ) from exc
         self._diagnostics.append(
             {
                 "operation": _operation_name(argv),
@@ -275,9 +277,7 @@ class CrabboxRuntime:
         host_patterns: list[str] | None = None
         global_ignored: set[str] = set()
         local_ignored: set[str] = set()
-        for raw_line in self.ssh_config.read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines():
+        for raw_line in self.ssh_config.read_text(encoding="utf-8", errors="replace").splitlines():
             line = raw_line.split("#", 1)[0].strip()
             if not line:
                 continue
@@ -290,9 +290,7 @@ class CrabboxRuntime:
                 continue
             if directive == "ignoreunknown":
                 patterns = {
-                    pattern
-                    for value in values
-                    for pattern in value.replace(",", " ").split()
+                    pattern for value in values for pattern in value.replace(",", " ").split()
                 }
                 if host_patterns is None:
                     global_ignored.update(patterns)
@@ -346,19 +344,15 @@ class CrabboxRuntime:
             try:
                 facts = json.loads(inspected.stdout)
             except json.JSONDecodeError as exc:
-                raise CrabboxRefusal(
-                    "lease_inspect_invalid", "inspect did not emit JSON"
-                ) from exc
+                raise CrabboxRefusal("lease_inspect_invalid", "inspect did not emit JSON") from exc
             if not isinstance(facts, Mapping):
-                raise CrabboxRefusal(
-                    "lease_inspect_invalid", "inspect did not emit an object"
-                )
-            if inspected.returncode != 0 or not facts.get("ready") or facts.get(
-                "state"
-            ) not in {"leased", "ready"}:
-                raise CrabboxRefusal(
-                    "lease_not_ready", "inspect did not report a ready lease"
-                )
+                raise CrabboxRefusal("lease_inspect_invalid", "inspect did not emit an object")
+            if (
+                inspected.returncode != 0
+                or not facts.get("ready")
+                or facts.get("state") not in {"leased", "ready"}
+            ):
+                raise CrabboxRefusal("lease_not_ready", "inspect did not report a ready lease")
             required_facts = (
                 "id",
                 "slug",
@@ -368,18 +362,13 @@ class CrabboxRuntime:
                 "sshPort",
                 "sshKey",
             )
-            if any(
-                facts.get(name) is None or facts.get(name) == ""
-                for name in required_facts
-            ):
+            if any(facts.get(name) is None or facts.get(name) == "" for name in required_facts):
                 raise CrabboxRefusal(
                     "lease_inspect_incomplete", "inspect omitted required lease facts"
                 )
             labels = facts.get("labels")
             if not isinstance(labels, Mapping) or not labels.get("image"):
-                raise CrabboxRefusal(
-                    "lease_inspect_incomplete", "inspect omitted labels.image"
-                )
+                raise CrabboxRefusal("lease_inspect_incomplete", "inspect omitted labels.image")
             observed_provider = str(facts["provider"])
             observed_image = str(labels["image"])
             if observed_provider != self.provider:
@@ -495,6 +484,66 @@ class CrabboxRuntime:
             timing=timing,
         )
 
+    def copy_into_box(
+        self,
+        box: Box,
+        source: Path,
+        destination: str,
+        *,
+        timeout: float = 120,
+    ) -> str:
+        """Copy one exact host file into the leased box."""
+
+        source = Path(source).resolve(strict=True)
+        destination_path = Path(destination)
+        staged = (
+            f"/tmp/opentraces-copy-{hashlib.sha256(str(destination).encode()).hexdigest()[:12]}"
+        )
+        copied = self._call(
+            [
+                "scp",
+                "-F",
+                "/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                box.ssh_key,
+                "-P",
+                box.ssh_port,
+                str(source),
+                f"{box.ssh_user}@{box.ssh_host}:{staged}",
+            ],
+            timeout=timeout,
+        )
+        if copied.returncode != 0:
+            raise CrabboxRefusal("app_state_copy_failed", copied.stderr.strip())
+        installed = self._call(
+            [
+                "ssh",
+                "-F",
+                "/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                box.ssh_key,
+                "-p",
+                box.ssh_port,
+                f"{box.ssh_user}@{box.ssh_host}",
+                "sudo",
+                "sh",
+                "-c",
+                shlex.quote(
+                    f"mkdir -p {shlex.quote(str(destination_path.parent))} && "
+                    f"install -m 0755 {shlex.quote(staged)} {shlex.quote(destination)} && "
+                    f"rm -f {shlex.quote(staged)}"
+                ),
+            ],
+            timeout=timeout,
+        )
+        if installed.returncode != 0:
+            raise CrabboxRefusal("app_state_copy_failed", installed.stderr.strip())
+        return destination
+
     def materialize(self, box: Box, app_state: str, *, repository: Path) -> dict[str, Any]:
         """Materialize the first concrete recipe from locally built wheels."""
 
@@ -502,7 +551,11 @@ class CrabboxRuntime:
             timing_path = self._timing_path(repository, "base-provides")
             probe = self.exec(
                 box,
-                ["sh", "-c", "command -v python3 && command -v git && command -v curl && command -v script"],
+                [
+                    "sh",
+                    "-c",
+                    "command -v python3 && command -v git && command -v curl && command -v script",
+                ],
                 timeout=30,
                 timing_path=timing_path,
             )
@@ -532,24 +585,7 @@ class CrabboxRuntime:
             digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
             digests.append(digest)
             remote = f"/tmp/{wheel.name}"
-            copied = self._call(
-                [
-                    "scp",
-                    "-F",
-                    "/dev/null",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-i",
-                    box.ssh_key,
-                    "-P",
-                    box.ssh_port,
-                    str(wheel),
-                    f"{box.ssh_user}@{box.ssh_host}:{remote}",
-                ],
-                timeout=120,
-            )
-            if copied.returncode != 0:
-                raise CrabboxRefusal("app_state_copy_failed", copied.stderr.strip())
+            self.copy_into_box(box, wheel, remote, timeout=120)
             remote_wheels.append(remote)
         timing = self._timing_path(repository, "materialize")
         install = self.exec(
@@ -641,11 +677,7 @@ class CrabboxRuntime:
                 archive.extractall(extracted, members=safe, filter="data")
             else:
                 archive.extractall(extracted, members=safe)
-        return {
-            path.name: path
-            for path in extracted.rglob("*")
-            if path.is_file()
-        }
+        return {path.name: path for path in extracted.rglob("*") if path.is_file()}
 
     def _release_id(self, lease_id: str, *, provider: str) -> None:
         stopped = self._call(

@@ -91,5 +91,8 @@ def test_publish_reaches_hf_remote(bench):
             "--json",
             env=hf.env,
         )
-        assert published.returncode == 0, published.stderr
+        if os.environ.get("OT_BENCH_HF_DOWN_CONTROL") == "1":
+            assert published.returncode != 0, "publish unexpectedly reached a stopped world"
+        else:
+            assert published.returncode == 0, published.stderr
         run.verify(publish_commit_is_witnessed, hf=hf)
