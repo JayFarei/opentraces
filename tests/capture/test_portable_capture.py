@@ -572,6 +572,96 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
     )
 
 
+def test_persistent_telemetry_finalizes_a_fresh_daemon_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentraces.capture.otlp.emitter import OTLPCaptureBuffer, write_snapshot
+    from opentraces.core import paths as capture_paths
+
+    runtime_root = tmp_path / "persistent-runtime"
+    monkeypatch.setattr(capture_paths, "OPENTRACES_DIR", runtime_root)
+    project = _git_project(tmp_path / "project")
+    session_id = str(uuid.uuid4())
+    trace_id = str(uuid.uuid4())
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("telemetry",),
+            required_sources=("telemetry",),
+            session_id=session_id,
+            trace_id=trace_id,
+            result_dir=tmp_path / "persistent-result",
+        )
+    )
+    buffer = OTLPCaptureBuffer()
+    buffer.handle_envelope(
+        {
+            "received_at": time.time(),
+            "signal": "traces",
+            "path": "/v1/traces",
+            "raw_size": 1,
+            "body": {
+                "resourceSpans": [
+                    {
+                        "resource": {
+                            "attributes": [
+                                {
+                                    "key": "session.id",
+                                    "value": {"stringValue": session_id},
+                                }
+                            ]
+                        },
+                        "scopeSpans": [
+                            {
+                                "spans": [
+                                    {
+                                        "name": "claude_code.llm_request",
+                                        "attributes": [
+                                            {
+                                                "key": "session.id",
+                                                "value": {
+                                                    "stringValue": session_id
+                                                },
+                                            },
+                                            {
+                                                "key": "prompt.id",
+                                                "value": {
+                                                    "stringValue": "prompt-1"
+                                                },
+                                            },
+                                            {
+                                                "key": "request_id",
+                                                "value": {
+                                                    "stringValue": "req_persistent_1"
+                                                },
+                                            },
+                                        ],
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+    snapshot_path = runtime_root / "otel-sessions" / f"{session_id}.json"
+    assert write_snapshot(buffer, session_id, snapshot_path) is True
+
+    result = capture.finish(deadline=time.monotonic() + 5.0)
+
+    telemetry = result.source("telemetry")
+    assert result.completeness == "complete"
+    assert telemetry.completeness == "full"
+    assert telemetry.details["snapshot_quiescent"] is False
+    assert telemetry.details["snapshot_semantics"] == "persistent_generation"
+    assert telemetry.details["snapshot_generation"] == 1
+    assert telemetry.details["accepted_envelopes"] == 1
+
+
 def test_persistent_and_leased_capture_have_normalized_material_parity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1072,7 +1162,7 @@ def test_parity_rejects_each_empty_required_companion_family_independently(
     assert f"empty_{empty_family}_companion" in report.differences
 
 
-def test_named_security_policy_is_applied_and_observed(tmp_path: Path) -> None:
+def test_explicit_security_tools_are_applied_and_observed(tmp_path: Path) -> None:
     project = _git_project(tmp_path / "project")
     source = _write_session(project, "security-policy-session")
 
@@ -1085,14 +1175,13 @@ def test_named_security_policy_is_applied_and_observed(tmp_path: Path) -> None:
             required_sources=("session_jsonl", "bucket"),
             session_id="security-policy-session",
             session_path=source,
-            security_policy="basic",
+            security_tools=("regex", "entropy"),
             result_dir=tmp_path / "result",
         )
     ).finish(deadline=time.monotonic() + 10.0)
 
     assert result.security == {
-        "policy": "basic",
-        "declared_policy": "basic",
+        "configuration": "explicit",
         "configured_tools": ["regex", "entropy"],
         "tools_applied": ["regex", "entropy"],
         "effective_tools": ["regex", "entropy"],
@@ -1103,15 +1192,15 @@ def test_named_security_policy_is_applied_and_observed(tmp_path: Path) -> None:
     assert json.loads(trace_path.read_text())["security"]["scanned"] is True
 
 
-def test_unknown_security_policy_is_refused_before_capture(tmp_path: Path) -> None:
+def test_capture_plan_refuses_top_level_security_tiers(tmp_path: Path) -> None:
     project = _git_project(tmp_path / "project")
-    with pytest.raises(ValueError, match="unknown capture security policy"):
+    with pytest.raises((TypeError, ValueError), match="security_policy"):
         CapturePlan(
             project=project,
             workspace=project,
             placement="persistent",
             requested_sources=("watcher",),
-            security_policy="not-a-real-policy",
+            security_policy="off",  # type: ignore[call-arg]
         )
 
 
@@ -1127,16 +1216,29 @@ def test_security_result_does_not_claim_observation_when_no_sanitized_record_exi
             placement="leased",
             requested_sources=("watcher",),
             required_sources=("watcher",),
-            security_policy="basic",
+            security_tools=("regex", "entropy"),
             result_dir=tmp_path / "result",
         )
     ).finish(deadline=time.monotonic() + 5.0)
 
-    assert result.security["declared_policy"] == "basic"
+    assert result.security["configuration"] == "explicit"
     assert result.security["configured_tools"] == ["regex", "entropy"]
     assert result.security["tools_applied"] == []
     assert result.security["observed"] is False
     assert any("security applied-state" in item for item in result.limitations)
+
+
+def test_security_tool_configuration_is_owned_outside_the_cli() -> None:
+    from opentraces.core.config import Config
+    from opentraces.security.config import (
+        enabled_security_tool_names,
+        set_security_tools_exact,
+    )
+
+    cfg = Config()
+    set_security_tools_exact(cfg, ("regex", "entropy"))
+
+    assert enabled_security_tool_names(cfg) == ["regex", "entropy"]
 
 
 def test_persistent_bindings_report_actual_installed_claude_hooks(
@@ -1267,6 +1369,50 @@ def test_required_non_self_observation_rejects_unrelated_live_process(
     assert unrelated.provenance["product_under_test"]["pid_alive"] is True
     assert unrelated.provenance["product_under_test"]["caller_claim"] == runtime_version
     assert any("executable" in item for item in unrelated.limitations)
+
+
+def test_required_non_self_observation_rejects_launcher_as_inert_argv(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    from opentraces import __version__ as runtime_version
+
+    product_command = _write_identifiable_product_command(
+        tmp_path / "opentraces-product"
+    )
+    product = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(10)",
+            str(product_command),
+        ]
+    )
+    try:
+        inert = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=("watcher",),
+                required_sources=("watcher",),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                product_under_test_version=runtime_version,
+                product_under_test_version_probe=(
+                    str(product_command),
+                    "--version",
+                ),
+                result_dir=tmp_path / "inert-argv",
+            )
+        ).finish(deadline=time.monotonic() + 5.0)
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    assert inert.completeness == "partial"
+    assert inert.provenance["separation"]["proven"] is False
+    assert any("executed launcher" in item for item in inert.limitations)
 
 
 def test_required_non_self_observation_uses_observed_product_identity_and_version(
