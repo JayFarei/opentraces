@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from click.testing import CliRunner
 
 from opentraces.cli import main
@@ -291,6 +292,145 @@ def test_nonzero_pytest_preserves_an_existing_named_setup_refusal(
     }
 
 
+@pytest.mark.parametrize(
+    ("verdict", "reason", "expected_exit"),
+    [
+        ("pass", None, 0),
+        ("fail", {"code": "assertion_failed", "message": "product red"}, 1),
+        ("skip", {"code": "absent_prerequisite", "message": "dependency absent"}, 0),
+    ],
+)
+def test_teardown_only_failure_preserves_primary_outcome_and_names_cleanup_evidence(
+    tmp_path: Path,
+    monkeypatch,
+    verdict: str,
+    reason: dict[str, str] | None,
+    expected_exit: int,
+) -> None:
+    from opentraces.cli import bench_cli
+
+    scenario = _scenario(tmp_path)
+    store_root = tmp_path / "runs" / "v1"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        result = build_result(
+            run_id=draft.run_id,
+            claim="Install is healthy on a fresh box.",
+            nodeid=target,
+            source_ref="source/scenario.py",
+            execution_mode="direct",
+            started_at="2026-07-13T12:00:00Z",
+            duration_ms=1,
+            execution_status="complete",
+            verdict=verdict,
+            reason=reason,
+            verifiers=[],
+            evidence={"complete": True, "requirements": []},
+            recordings={"rewatchable": False, "channels": []},
+            artifacts=[],
+            capture=None,
+            pins={},
+        )
+        draft.stage_result(result)
+        return SimpleNamespace(
+            returncode=1,
+            stdout="teardown output\n",
+            stderr="cleanup failed\n",
+            phase_reports=[
+                {"nodeid": target, "when": "call", "outcome": "passed"},
+                {"nodeid": target, "when": "teardown", "outcome": "failed"},
+            ],
+        )
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    invoked = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "run",
+            f"{scenario}::test_install",
+            "--store-root",
+            str(store_root),
+            "--json",
+        ],
+    )
+
+    assert invoked.exit_code == expected_exit, invoked.output
+    summary = json.loads(invoked.output)
+    stored = json.loads((store_root / summary["run_id"] / "result.json").read_text())
+    assert stored["execution_status"] == "complete"
+    assert stored["verdict"] == verdict
+    assert stored["reason"] == reason
+    assert stored["evidence"]["complete"] is False
+    assert stored["evidence"]["requirements"][-1]["name"] == "pytest.cleanup"
+    diagnostic = next(item for item in stored["artifacts"] if item["kind"] == "pytest_diagnostics")
+    assert diagnostic["phase_report_ref"] == "artifacts/pytest/phases.json"
+
+
+def test_call_phase_failure_after_adjudication_forces_error_null(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from opentraces.cli import bench_cli
+
+    scenario = _scenario(tmp_path)
+    store_root = tmp_path / "runs" / "v1"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        result = build_result(
+            run_id=draft.run_id,
+            claim="Install is healthy on a fresh box.",
+            nodeid=target,
+            source_ref="source/scenario.py",
+            execution_mode="direct",
+            started_at="2026-07-13T12:00:00Z",
+            duration_ms=1,
+            execution_status="complete",
+            verdict="pass",
+            reason=None,
+            verifiers=[],
+            evidence={"complete": True, "requirements": []},
+            recordings={"rewatchable": False, "channels": []},
+            artifacts=[],
+            capture=None,
+            pins={},
+        )
+        draft.stage_result(result)
+        return SimpleNamespace(
+            returncode=1,
+            stdout="call output\n",
+            stderr="call failed\n",
+            phase_reports=[{"nodeid": target, "when": "call", "outcome": "failed"}],
+        )
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    invoked = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "run",
+            f"{scenario}::test_install",
+            "--store-root",
+            str(store_root),
+            "--json",
+        ],
+    )
+
+    assert invoked.exit_code == 1, invoked.output
+    summary = json.loads(invoked.output)
+    stored = json.loads((store_root / summary["run_id"] / "result.json").read_text())
+    assert stored["execution_status"] == "error"
+    assert stored["verdict"] is None
+    assert stored["reason"]["code"] == "pytest_call_failed"
+
+
 def test_run_pytest_captures_child_output(monkeypatch, tmp_path: Path) -> None:
     from opentraces.cli import bench_cli
 
@@ -298,6 +438,12 @@ def test_run_pytest_captures_child_output(monkeypatch, tmp_path: Path) -> None:
 
     def fake_run(command, **kwargs):
         observed.update(kwargs)
+        report_path = Path(kwargs["env"]["OT_BENCH_PYTEST_PHASE_REPORT"])
+        report_path.write_text(
+            '{"nodeid":"test_demo.py::test_demo","when":"call","outcome":"passed"}\n'
+            '{"nodeid":"test_demo.py::test_demo","when":"teardown","outcome":"failed"}\n',
+            encoding="utf-8",
+        )
         return SimpleNamespace(returncode=7, stdout="captured out", stderr="captured err")
 
     monkeypatch.setattr(bench_cli.subprocess, "run", fake_run)
@@ -309,3 +455,7 @@ def test_run_pytest_captures_child_output(monkeypatch, tmp_path: Path) -> None:
     assert outcome.returncode == 7
     assert outcome.stdout == "captured out"
     assert outcome.stderr == "captured err"
+    assert outcome.phase_reports == [
+        {"nodeid": "test_demo.py::test_demo", "when": "call", "outcome": "passed"},
+        {"nodeid": "test_demo.py::test_demo", "when": "teardown", "outcome": "failed"},
+    ]

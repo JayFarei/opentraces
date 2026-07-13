@@ -108,6 +108,61 @@ def test_storage_failure_retains_the_provisional_outcome_in_recovery(
     assert not (store.root / draft.run_id / "result.json").exists()
 
 
+def test_manifest_write_failure_recovers_the_provisional_outcome_from_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    draft = store.begin()
+    provisional = _result(draft.run_id, verdict="fail")
+    original_write_json = draft.write_json
+
+    def fail_manifest_write(relative: str | Path, payload: dict) -> Path:
+        if str(relative) == ".integrity.json":
+            raise OSError("disk refused integrity manifest")
+        return original_write_json(relative, payload)
+
+    monkeypatch.setattr(draft, "write_json", fail_manifest_write)
+
+    with pytest.raises(StorageFinalizeError) as caught:
+        draft.finalize(provisional)
+
+    recovery = caught.value.recovery_path
+    recovered = json.loads((recovery / "provisional_result.json").read_text())
+    assert recovered["verdict"] == "fail"
+    assert recovered["execution_status"] == "complete"
+    assert not (store.root / draft.run_id).exists()
+    assert not (store.index_root / f"{draft.run_id}.json").exists()
+
+
+def test_staging_move_failure_recovers_the_provisional_outcome_from_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    draft = store.begin()
+    provisional = _result(draft.run_id, verdict="skip")
+    staging_path = draft.path
+    original_replace = Path.replace
+    failed_once = False
+
+    def fail_first_staging_move(path: Path, target: Path) -> Path:
+        nonlocal failed_once
+        if path == staging_path and not failed_once:
+            failed_once = True
+            raise OSError("disk refused staging move")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_first_staging_move)
+
+    with pytest.raises(StorageFinalizeError) as caught:
+        draft.finalize(provisional)
+
+    recovery = caught.value.recovery_path
+    recovered = json.loads((recovery / "provisional_result.json").read_text())
+    assert recovered["verdict"] == "skip"
+    assert not (store.root / draft.run_id).exists()
+    assert not (store.index_root / f"{draft.run_id}.json").exists()
+
+
 def test_source_record_copies_executed_source_and_identity(tmp_path: Path) -> None:
     scenario = tmp_path / "test_scenario.py"
     scenario.write_text('def test_claim(bench):\n    """A claim."""\n', encoding="utf-8")

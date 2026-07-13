@@ -65,6 +65,19 @@ class ReleaseFailingRuntime(FakeBoxRuntime):
         raise RuntimeError("release boom")
 
 
+class SensitiveReleaseRuntime(FakeBoxRuntime):
+    def release(self, box: Box) -> None:
+        raise RuntimeError("cleanup token=release-token at /home/private/lease.json")
+
+
+class SensitiveSetupRuntime(FakeBoxRuntime):
+    def lease(self) -> Box:
+        raise RuntimeError(
+            '{"credential":"setup-credential","path":"/Users/private/setup.json",'
+            '"operation":"warmup"}'
+        )
+
+
 class RealShellRecordingRuntime(FakeBoxRuntime):
     def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         completed = subprocess.run(
@@ -369,6 +382,62 @@ def test_box_lifecycle_diagnostics_are_part_of_the_finalized_exhaust(tmp_path: P
     }
     payload = json.loads((run.final_path / artifact["path"]).read_text())
     assert payload["events"][0]["operation"] == "warmup"
+
+
+def test_setup_failure_reason_sanitizes_structured_credentials_and_host_paths(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=SensitiveSetupRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="setup-credential"):
+        with bench.run(app_state="install-only"):
+            pass
+
+    final_path = next(bench.store.root.glob("run_*"))
+    serialized = (final_path / "result.json").read_text(encoding="utf-8")
+    assert "setup-credential" not in serialized
+    assert "/Users/private/setup.json" not in serialized
+    assert "[redacted]" in serialized
+    assert "[host-path]" in serialized
+    assert "warmup" in serialized
+
+
+def test_verifier_and_release_diagnostics_share_secret_and_path_sanitization(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=SensitiveReleaseRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def verifier_crashes(run):
+        raise RuntimeError("verifier secret=verifier-secret at /tmp/private/verifier.json")
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verifier_crashes)
+
+    result_text = (run.final_path / "result.json").read_text(encoding="utf-8")
+    artifact_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (run.final_path / "artifacts").rglob("*")
+        if path.is_file()
+    )
+    serialized = result_text + artifact_text
+    assert "verifier-secret" not in serialized
+    assert "release-token" not in serialized
+    assert "/tmp/private/verifier.json" not in serialized
+    assert "/home/private/lease.json" not in serialized
+    assert "[redacted]" in serialized
+    assert "[host-path]" in serialized
+    assert "verifier" in serialized
+    assert "cleanup" in serialized
     assert payload["events"][0]["stdout"] == "ready\n"
 
 

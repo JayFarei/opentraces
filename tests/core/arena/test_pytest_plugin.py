@@ -9,6 +9,27 @@ from opentraces.core.arena.pytest_plugin import _scenario_source
 from opentraces.core.arena.run_store import RunStore
 
 
+def test_pytest_adapter_records_call_and_teardown_phases(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from opentraces.core.arena import pytest_plugin
+
+    report_path = tmp_path / "phases.jsonl"
+    monkeypatch.setenv("OT_BENCH_PYTEST_PHASE_REPORT", str(report_path))
+
+    pytest_plugin.pytest_runtest_logreport(
+        SimpleNamespace(nodeid="test_demo.py::test_demo", when="call", outcome="passed")
+    )
+    pytest_plugin.pytest_runtest_logreport(
+        SimpleNamespace(nodeid="test_demo.py::test_demo", when="teardown", outcome="failed")
+    )
+
+    assert [json.loads(line) for line in report_path.read_text().splitlines()] == [
+        {"nodeid": "test_demo.py::test_demo", "when": "call", "outcome": "passed"},
+        {"nodeid": "test_demo.py::test_demo", "when": "teardown", "outcome": "failed"},
+    ]
+
+
 def test_scenario_outside_misconfigured_repository_persists_a_private_path(
     tmp_path: Path,
 ) -> None:
