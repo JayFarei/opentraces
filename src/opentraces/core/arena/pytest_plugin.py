@@ -25,13 +25,20 @@ def _git(repository: Path, *args: str) -> str | None:
     return value if completed.returncode == 0 and value else None
 
 
+def _public_scenario_path(source_path: Path, repository: Path) -> str:
+    """Return a repository coordinate or a content-derived private fallback."""
+
+    try:
+        return source_path.relative_to(repository).as_posix()
+    except ValueError:
+        digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        return f"external/{digest[:12]}{source_path.suffix}"
+
+
 def _scenario_source(request: pytest.FixtureRequest, repository: Path) -> ScenarioSource:
     function = request.node.function
     source_path = Path(str(request.node.path)).resolve()
-    try:
-        scenario_path = source_path.relative_to(repository).as_posix()
-    except ValueError:
-        scenario_path = source_path.as_posix()
+    scenario_path = _public_scenario_path(source_path, repository)
     remote = _git(repository, "remote", "get-url", "origin")
     repository_identity = remote or repository.name
     diff = subprocess.run(

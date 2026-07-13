@@ -158,10 +158,10 @@ class BenchRun:
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
 
-    def _source_ref(self, fn: Callable[..., Any]) -> dict[str, str]:
-        path_value = inspect.getsourcefile(fn)
+    def _source_ref(self, source_object: object) -> dict[str, str]:
+        path_value = inspect.getsourcefile(source_object)
         if path_value is None:
-            raise RuntimeError(f"cannot locate verifier source for {fn!r}")
+            raise RuntimeError(f"cannot locate verifier source for {source_object!r}")
         path = Path(path_value).resolve()
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         try:
@@ -173,11 +173,45 @@ class BenchRun:
             "digest": f"sha256:{digest}",
         }
 
+    def _verifier_source_refs(self, verifier: Callable[..., Any]) -> list[dict[str, str]]:
+        """Return the verifier and its direct, statically referenced Python sources.
+
+        This is deliberately a one-level source closure, not dependency packaging:
+        ``inspect.getclosurevars`` exposes only globals/nonlocals named by the
+        verifier's code, and source-bearing functions, classes, methods, or modules
+        among those values are recorded. A helper's own imports are not traversed.
+        """
+
+        refs = [self._source_ref(verifier)]
+        try:
+            closure = inspect.getclosurevars(inspect.unwrap(verifier))
+        except TypeError:
+            return refs
+        source_objects = [*closure.globals.values(), *closure.nonlocals.values()]
+        dependencies: list[dict[str, str]] = []
+        for source_object in source_objects:
+            if not (
+                inspect.ismodule(source_object)
+                or inspect.isfunction(source_object)
+                or inspect.ismethod(source_object)
+                or inspect.isclass(source_object)
+            ):
+                continue
+            try:
+                ref = self._source_ref(source_object)
+            except (OSError, RuntimeError, TypeError):
+                continue
+            if ref not in refs and ref not in dependencies:
+                dependencies.append(ref)
+        refs.extend(sorted(dependencies, key=lambda item: (item["path"], item["digest"])))
+        return refs
+
     def verify(self, verifier: Callable[..., Any], /, **inputs: Any) -> dict[str, Any]:
         if self.draft is None:
             raise RuntimeError("BenchRun is not active")
         started = time.monotonic()
-        source_ref = self._source_ref(verifier)
+        source_refs = self._verifier_source_refs(verifier)
+        source_ref = source_refs[0]
         reason: dict[str, str] | None = None
         evidence_refs: list[str] = []
         try:
@@ -203,12 +237,22 @@ class BenchRun:
             "reason": reason,
         }
         self.verifiers.append(record)
-        if source_ref not in self.verifier_sources:
-            self.verifier_sources.append(source_ref)
+        for ref in source_refs:
+            if ref not in self.verifier_sources:
+                self.verifier_sources.append(ref)
         self.draft.write_json("source/verifiers.json", {"sources": self.verifier_sources})
         return record
 
     def _outcome_from_verifiers(self) -> tuple[str, str | None, dict[str, str] | None]:
+        if not self.verifiers:
+            return (
+                "error",
+                None,
+                {
+                    "code": "no_verifiers_called",
+                    "message": "bench adjudication requires at least one run.verify call",
+                },
+            )
         errors = [item for item in self.verifiers if item["status"] == "error"]
         if errors:
             return "error", None, errors[0]["reason"]
