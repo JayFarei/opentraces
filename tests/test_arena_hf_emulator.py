@@ -222,7 +222,7 @@ print(json.dumps({
 
 
 def test_real_hf_client_auth_settings_listing_and_delete(tmp_path: Path) -> None:
-    with running_emulator(tmp_path) as (endpoint, _ledger_path):
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
         first_credential = _request_json(
             f"{endpoint}/_emulate/credentials", payload={"name": "bench"}
         )
@@ -346,6 +346,27 @@ print(json.dumps({
         "missing_error": "RepositoryNotFoundError",
         "recreated_files": [],
         "recreated_sha": "0" * 40,
+    }
+    ledger_rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+    update_row = next(
+        row
+        for row in ledger_rows
+        if row["operation_id"] == "updateSettings"
+        and row["response"]["status"] == 200
+    )
+    delete_row = next(
+        row
+        for row in ledger_rows
+        if row["operation_id"] == "deleteRepo" and row["response"]["status"] == 200
+    )
+    assert update_row["request"] == {
+        "gated": "manual",
+        "private": False,
+    }
+    assert delete_row["request"] == {
+        "name": "settings",
+        "organization": "bench",
+        "type": "dataset",
     }
 
 
