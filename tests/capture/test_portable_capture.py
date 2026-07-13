@@ -12,6 +12,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+import pytest
+
 from opentraces.capture import Capture, CapturePlan
 from opentraces.capture.parity import compare_placements, write_parity_report
 
@@ -450,6 +452,12 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
     assert result.source("telemetry").status == "finalized"
     assert result.source("telemetry").completeness == "full"
     assert result.source("telemetry").details["nodes_count"] == 1
+    assert result.source("telemetry").details["snapshot_quiescent"] is True
+    assert result.source("telemetry").details["snapshot_generation"] >= 1
+    assert (
+        result.source("telemetry").details["accepted_envelopes"]
+        == result.source("telemetry").details["snapshot_generation"]
+    )
     assert result.view("model_boundary").completeness == "full"
 
     from opentraces.core.context_tree import CONTEXT_NODE_OBSERVED
@@ -643,7 +651,7 @@ def test_parity_preserves_semantic_attribution_range_content_hashes(
     assert "canonical_trace" in report.differences
 
 
-def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
+def test_bucket_companions_preserve_canonical_bytes_and_parity_normalizes_safely(
     tmp_path: Path,
 ) -> None:
     from opentraces.core.context_tree import CONTEXT_LAYER_CAPTURED
@@ -732,10 +740,8 @@ def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
         rows += _read_companion(trace_path.with_name("trail.jsonl.gz"))
         assert len(rows) >= 2
         material = json.dumps(rows, sort_keys=True)
-        assert "/Users/shared-dev" not in material
-        assert "sk-live-" not in material
-        assert "[ot-user-" in material
-        assert "[REDACTED]" in material
+        assert "/Users/shared-dev" in material
+        assert "sk-live-" in material
         assert all(row["content_hash"] == payload_content_hash(row["payload"]) for row in rows)
 
     report = compare_placements(
@@ -763,6 +769,134 @@ def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
         assert "/Users/shared-dev" in json.dumps(
             [event.payload for event in canonical], sort_keys=True
         )
+
+
+@pytest.mark.parametrize("empty_family", ["context", "trail"])
+def test_parity_rejects_each_empty_required_companion_family_independently(
+    tmp_path: Path,
+    empty_family: str,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "family-parity-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=projects[placement],
+                    workspace=projects[placement],
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="family-parity-session",
+                    session_path=source,
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    for result in results:
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        for family in ("context", "trail"):
+            body = b"" if family == empty_family else b'{"payload":{"proof":"substantive"}}\n'
+            with trace_path.with_name(f"{family}.jsonl.gz").open("wb") as raw:
+                with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped:
+                    zipped.write(body)
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.matches is False
+    assert f"empty_{empty_family}_companion" in report.differences
+
+
+def test_named_security_policy_is_applied_and_observed(tmp_path: Path) -> None:
+    project = _git_project(tmp_path / "project")
+    source = _write_session(project, "security-policy-session")
+
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl", "bucket"),
+            required_sources=("session_jsonl", "bucket"),
+            session_id="security-policy-session",
+            session_path=source,
+            security_policy="basic",
+            result_dir=tmp_path / "result",
+        )
+    ).finish(deadline=time.monotonic() + 10.0)
+
+    assert result.security == {
+        "policy": "basic",
+        "effective_tools": ["regex", "entropy"],
+        "observed": True,
+        "raw_body_retention": "delete",
+    }
+    trace_path = Path(result.source("bucket").details["trace_path"])
+    assert json.loads(trace_path.read_text())["security"]["scanned"] is True
+
+
+def test_unknown_security_policy_is_refused_before_capture(tmp_path: Path) -> None:
+    project = _git_project(tmp_path / "project")
+    with pytest.raises(ValueError, match="unknown capture security policy"):
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("watcher",),
+            security_policy="not-a-real-policy",
+        )
+
+
+def test_required_non_self_observation_is_enforced_and_can_be_proven(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    unproven = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("watcher",),
+            required_sources=("watcher",),
+            require_observer_separation=True,
+            result_dir=tmp_path / "unproven",
+        )
+    ).finish(deadline=time.monotonic() + 5.0)
+    assert unproven.completeness == "partial"
+    assert unproven.provenance["separation"]["required"] is True
+    assert unproven.provenance["separation"]["proven"] is False
+
+    product = subprocess.Popen(["sleep", "10"])
+    try:
+        proven = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=("watcher",),
+                required_sources=("watcher",),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                result_dir=tmp_path / "proven",
+            )
+        ).finish(deadline=time.monotonic() + 5.0)
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    assert proven.completeness == "complete"
+    assert proven.provenance["separation"]["proven"] is True
+    assert proven.provenance["observer"]["pid"] != proven.provenance["product_under_test"]["pid"]
 
 
 def test_display_label_parity_requires_matching_labeler_provenance(
