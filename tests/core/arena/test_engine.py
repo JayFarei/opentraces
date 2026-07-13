@@ -266,6 +266,53 @@ def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Pat
     )
 
 
+def test_absolute_evidence_ref_inside_run_is_stored_as_a_persisted_relative_ref(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def verifier(run):
+        run.draft.write_text("artifacts/proof.txt", "persisted proof\n")
+        return {"evidence_refs": [str(run.draft.path / "artifacts/proof.txt")]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verifier)
+
+    assert run.result["verdict"] == "pass"
+    assert run.result["verifiers"][0]["evidence_refs"] == ["artifacts/proof.txt"]
+    assert (run.final_path / "artifacts/proof.txt").is_file()
+
+
+def test_evidence_ref_outside_run_is_rejected_without_leaking_host_path(tmp_path: Path) -> None:
+    host_file = tmp_path / "private" / "host-secret.txt"
+    host_file.parent.mkdir()
+    host_file.write_text("secret\n")
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def verifier(run):
+        return {"evidence_refs": [str(host_file)]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verifier)
+
+    serialized = json.dumps(run.result)
+    assert run.result["execution_status"] == "error"
+    assert run.result["verdict"] is None
+    assert run.result["verifiers"][0]["evidence_refs"] == []
+    assert run.result["verifiers"][0]["reason"]["code"] == "invalid_evidence_ref"
+    assert str(host_file) not in serialized
+
+
 def test_assertion_failure_is_a_functional_fail_not_machinery_error(tmp_path: Path) -> None:
     bench = Bench(
         source=_scenario(tmp_path),
