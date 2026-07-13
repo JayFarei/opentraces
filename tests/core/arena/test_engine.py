@@ -587,20 +587,37 @@ def test_assertion_failure_is_a_functional_fail_not_machinery_error(tmp_path: Pa
     )
 
     with bench.run(app_state="install-only") as run:
-        assert False, "the product condition was false"
+        assert False, (
+            "the product condition was false with token=assertion-secret "
+            "at /Users/private/assertion.py"
+        )
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["execution_status"] == "complete"
     assert result["verdict"] == "fail"
     assert result["reason"]["code"] == "assertion_failed"
     assert result["verifiers"] == []
+    artifact = next(
+        item for item in result["artifacts"] if item["kind"] == "assertion_failure"
+    )
+    observed = json.loads((run.final_path / artifact["path"]).read_text())
+    assert observed["type"] == "AssertionError"
+    assert observed["location"]["path"]
+    assert observed["location"]["line"] > 0
+    assert "the product condition was false" in observed["message"]
+    assert "AssertionError" in observed["traceback"]
+    serialized = json.dumps({"result": result, "artifact": observed})
+    assert "assertion-secret" not in serialized
+    assert "/Users/private/assertion.py" not in serialized
+    assert "[redacted]" in serialized
+    assert "[host-path]" in serialized
     assert result["evidence"] == {
         "complete": True,
         "requirements": [
             {
                 "name": "scenario.assertion",
                 "complete": True,
-                "evidence_refs": ["source/scenario.py"],
+                "evidence_refs": [artifact["path"]],
             }
         ],
     }

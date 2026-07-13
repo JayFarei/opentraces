@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -79,6 +81,24 @@ def test_external_post_finalize_mutation_is_detected(tmp_path: Path) -> None:
     output.write_text("tampered", encoding="utf-8")
 
     with pytest.raises(RunIntegrityError, match="actions/0001/stdout"):
+        store.verify(finalized)
+
+
+def test_only_root_final_markers_are_excluded_from_integrity(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    draft = store.begin()
+    draft.write_json("actions/0001/result.json", {"returncode": 0})
+    draft.write_json("artifacts/.integrity.json", {"scope": "nested"})
+
+    finalized = draft.finalize(_result(draft.run_id))
+    manifest = json.loads((finalized / ".integrity.json").read_text())
+
+    assert "actions/0001/result.json" in manifest["files"]
+    assert "artifacts/.integrity.json" in manifest["files"]
+    nested_result = finalized / "actions" / "0001" / "result.json"
+    nested_result.chmod(0o600)
+    nested_result.write_text('{"returncode": 3}\n', encoding="utf-8")
+    with pytest.raises(RunIntegrityError, match="actions/0001/result.json"):
         store.verify(finalized)
 
 
@@ -196,6 +216,82 @@ def test_index_failure_occurs_before_result_becomes_the_finalization_marker(
     recovered = json.loads((recovery / "provisional_result.json").read_text())
     assert recovered["verdict"] == "pass"
     assert not index_path.exists()
+
+
+@pytest.mark.parametrize("phase", ["move", "index", "before_result"])
+def test_killed_finalization_is_reconciled_without_losing_the_outcome(
+    tmp_path: Path, phase: str
+) -> None:
+    root = tmp_path / "runs" / "v1"
+    script = r'''
+import os
+import sys
+from pathlib import Path
+
+import opentraces.core.arena.run_store as run_store_module
+from opentraces.core.arena.contract import build_result
+from opentraces.core.arena.run_store import RunStore
+
+root = Path(sys.argv[1])
+phase = sys.argv[2]
+store = RunStore(root)
+draft = store.begin()
+result = build_result(
+    run_id=draft.run_id,
+    claim="A killed finalization preserves its outcome.",
+    nodeid="tests/scenarios/test_store.py::test_killed",
+    source_ref="source/scenario.py",
+    execution_mode="direct",
+    started_at="2026-07-13T12:00:00Z",
+    duration_ms=1,
+    execution_status="complete",
+    verdict="fail",
+    reason={"code": "assertion_failed", "message": "red"},
+    verifiers=[],
+    evidence={"complete": True, "requirements": []},
+    recordings={"rewatchable": False, "channels": []},
+    artifacts=[],
+    capture=None,
+    pins={},
+)
+final_path = store.root / draft.run_id
+index_path = store.index_root / f"{draft.run_id}.json"
+if phase == "move":
+    original_replace = Path.replace
+    def killed_after_move(path, target):
+        moved = original_replace(path, target)
+        if path == draft.path and Path(target) == final_path:
+            os._exit(86)
+        return moved
+    Path.replace = killed_after_move
+elif phase == "index":
+    original_write = run_store_module._atomic_write_json
+    def killed_after_index(path, payload):
+        original_write(path, payload)
+        if Path(path) == index_path:
+            os._exit(86)
+    run_store_module._atomic_write_json = killed_after_index
+else:
+    draft._write_result = lambda path, payload: os._exit(86)
+draft.finalize(result)
+'''
+    killed = subprocess.run(
+        [sys.executable, "-c", script, str(root), phase],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert killed.returncode == 86, killed.stderr
+    store = RunStore(root)
+    reconciled = store.reconcile()
+    assert len(reconciled) == 1
+    final_path = reconciled[0]
+    result = json.loads((final_path / "result.json").read_text())
+    assert result["verdict"] == "fail"
+    assert result["reason"]["code"] == "assertion_failed"
+    assert store.verify(final_path) is True
+    assert not list((root / ".transactions").glob("*.json"))
 
 
 def test_source_record_copies_executed_source_and_identity(tmp_path: Path) -> None:
