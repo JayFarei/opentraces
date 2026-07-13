@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+import hashlib
+import inspect
+import json
+from pathlib import Path
+
+import pytest
+
+from opentraces.core.arena.box import Box, BoxCommandResult
+from opentraces.core.arena.contract import result_exit_code
+from opentraces.core.arena.emulate.huggingface.runtime import (
+    app_state_digest,
+    emulator_binary_pin,
+)
+from opentraces.core.arena.engine import Bench, ScenarioSource
+from opentraces.core.arena.page import render_evidence_page
+from opentraces.core.arena.run_store import RunStore
+from tests.arena.scenarios import test_publish_reaches_hf_remote as scenario_2
+
+
+_BASE_APP_STATE = {
+    "name": "install-only",
+    "digest": "sha256:installed-product",
+    "provides": ["cli", "script"],
+}
+_COMMIT_ROW = {
+    "method": "POST",
+    "operation_id": "commit",
+    "path": "/api/datasets/bench/scenario-2/commit/main",
+    "request": {"repo_id": "bench/scenario-2", "revision": "main"},
+    "response": {"commit_oid": "a" * 40, "status": 200},
+}
+
+
+class WorldRuntime:
+    """Small black-box runtime double for the one supported world sidecar."""
+
+    crabbox_version = "0.38.0"
+
+    def __init__(self, raw_ledger: bytes = b"") -> None:
+        self.raw_ledger = raw_ledger
+        self.live = False
+        self.events: list[str] = []
+        self.copied: tuple[Path, str] | None = None
+
+    def lease(self) -> Box:
+        return Box(
+            id="box-1",
+            slug="box-1",
+            provider="local-container",
+            sandbox_tier="container",
+            ssh_host="127.0.0.1",
+            ssh_user="crabbox",
+            ssh_port="22",
+            ssh_key="/tmp/key",
+            image="ubuntu:24.04",
+        )
+
+    def materialize(self, box: Box, app_state: str, *, repository: Path) -> dict:
+        assert app_state == "install-only"
+        return {**_BASE_APP_STATE, "provides": list(_BASE_APP_STATE["provides"])}
+
+    def copy_into_box(
+        self,
+        box: Box,
+        source: Path,
+        destination: str,
+        *,
+        timeout: float = 120,
+    ) -> str:
+        self.events.append("copy")
+        self.copied = (Path(source), destination)
+        return destination
+
+    def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+        rendered = " ".join(map(str, argv))
+        if "sha256sum" in rendered:
+            assert self.copied is not None
+            self.events.append("sha256")
+            digest = hashlib.sha256(self.copied[0].read_bytes()).hexdigest()
+            stdout, returncode = f"{digest}  {self.copied[1]}\n", 0
+        elif "_emulate/manifest" in rendered:
+            self.events.append("readiness")
+            stdout, returncode = ('{"id":"huggingface"}\n', 0) if self.live else ("", 7)
+        elif "setsid" in rendered or "hf-emulator" in rendered and "kill" not in rendered:
+            self.live = True
+            self.events.append("start")
+            stdout, returncode = "", 0
+        elif "kill" in rendered:
+            self.live = False
+            self.events.append("stop")
+            stdout, returncode = "", 0
+        elif "dataset publish" in rendered:
+            if self.live:
+                self.raw_ledger = (json.dumps(_COMMIT_ROW, separators=(",", ":")) + "\n").encode()
+                stdout, returncode = '{"published":true}\n', 0
+            else:
+                stdout, returncode = "", 1
+        else:
+            stdout, returncode = "{}\n", 0
+        return BoxCommandResult(
+            argv=list(map(str, argv)),
+            returncode=returncode,
+            stdout=stdout,
+            stderr="emulator unavailable\n" if returncode else "",
+            timing={"schemaVersion": 1, "timing": {"exitCode": returncode}},
+        )
+
+    def collect(self, box: Box, globs, *, destination: Path, repository: Path):
+        assert all("/_emulate/ledger" not in str(pattern) for pattern in globs)
+        self.events.append("collect")
+        destination.mkdir(parents=True, exist_ok=True)
+        target = destination / "huggingface.jsonl"
+        target.write_bytes(self.raw_ledger)
+        return {"huggingface.jsonl": target}
+
+    def release(self, box: Box) -> None:
+        self.events.append("release")
+
+
+def _source() -> ScenarioSource:
+    path = Path(inspect.getsourcefile(scenario_2.test_publish_reaches_hf_remote) or "")
+    return ScenarioSource(
+        nodeid=f"{path.as_posix()}::test_publish_reaches_hf_remote",
+        claim="Publishing a dataset reaches the configured Hugging Face remote.",
+        source_path=path,
+        scenario_path="tests/arena/scenarios/test_publish_reaches_hf_remote.py",
+        repository="JayFarei/opentraces",
+        commit="product-commit",
+        dirty_diff_digest=None,
+    )
+
+
+def _bench(tmp_path: Path, runtime: WorldRuntime) -> Bench:
+    return Bench(
+        source=_source(),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=Path(__file__).resolve().parents[3],
+    )
+
+
+def test_scenario_2_source_freezes_the_claim_public_journey_and_down_control() -> None:
+    function = scenario_2.test_publish_reaches_hf_remote
+    assert inspect.getdoc(function).split("\n\n", 1)[0] == (
+        "Publishing a dataset reaches the configured Hugging Face remote."
+    )
+    source = inspect.getsource(function)
+    for public_call in (
+        'run.emulate("huggingface")',
+        '"dataset",\n            "new"',
+        '"dataset",\n            "review",\n            "approve"',
+        '"dataset",\n            "remote",\n            "create"',
+        '"dataset",\n            "publish"',
+        "env=hf.env",
+        'os.environ.get("OT_BENCH_HF_DOWN_CONTROL")',
+        "hf.stop()",
+    ):
+        assert public_call in source
+
+
+def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+    bench = _bench(tmp_path, runtime)
+
+    with bench.run(app_state="install-only") as run:
+        hf = run.emulate("huggingface")
+        assert hf.env == {
+            "HF_ENDPOINT": "http://127.0.0.1:14318",
+            "HF_TOKEN": hf.env["HF_TOKEN"],
+        }
+        assert hf.env["HF_TOKEN"].startswith("hf_")
+        runtime.raw_ledger = (json.dumps(_COMMIT_ROW, separators=(",", ":")) + "\n").encode()
+        run.verify(scenario_2.publish_commit_is_witnessed, hf=hf)
+
+    expected_binary_pin = emulator_binary_pin(binary).to_dict()
+    result = json.loads((run.final_path / "result.json").read_text(encoding="utf-8"))
+    stored_ledger = run.final_path / "ledgers" / "huggingface.jsonl"
+    assert stored_ledger.read_bytes() == runtime.raw_ledger
+    assert result["verdict"] == "pass"
+    assert result["verifiers"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
+    assert result["pins"]["emulators"] == {"huggingface": expected_binary_pin}
+    assert result["pins"]["app_state"] == {
+        "name": "install-only",
+        "digest": app_state_digest(_BASE_APP_STATE, hf_emulator=emulator_binary_pin(binary)),
+        "provides": ["cli", "script", "hf-emulator"],
+        "emulators": {"huggingface": expected_binary_pin},
+    }
+    assert runtime.copied == (binary, "/opt/bench/emulators/opentraces-hf-emulator")
+    assert runtime.events.index("copy") < runtime.events.index("sha256")
+    assert runtime.events.index("sha256") < runtime.events.index("start")
+    assert runtime.events.index("start") < runtime.events.index("readiness")
+    assert runtime.events.index("collect") < runtime.events.index("release")
+    assert runtime.events.index("stop") < runtime.events.index("release")
+    assert runtime.events.count("collect") == 1
+    assert runtime.events.count("stop") == 1
+
+    page = render_evidence_page(run.final_path)
+    frozen_page = page.read_text(encoding="utf-8")
+    assert "World" in frozen_page
+    assert "huggingface" in frozen_page
+    assert expected_binary_pin["sha256"] in frozen_page
+    assert "ledgers/huggingface.jsonl" in frozen_page
+
+
+def test_run_emulate_refuses_every_unregistered_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"binary")
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+    bench = _bench(tmp_path, runtime)
+
+    with bench.run(app_state="install-only") as run:
+        with pytest.raises(ValueError, match="unknown emulator.*github"):
+            run.emulate("github")
+
+    assert "start" not in runtime.events
+    assert "copy" not in runtime.events
+
+
+def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    monkeypatch.setenv("OT_BENCH_HF_DOWN_CONTROL", "1")
+    runtime = WorldRuntime()
+    bench = _bench(tmp_path, runtime)
+
+    scenario_2.test_publish_reaches_hf_remote(bench)
+
+    run_path = next(path for path in bench.store.root.glob("run_*") if path.is_dir())
+    result = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
+    ledger_rows = [
+        json.loads(line)
+        for line in (run_path / "ledgers/huggingface.jsonl").read_text().splitlines()
+    ]
+    assert result["scenario"]["source_ref"] == "source/scenario.py"
+    assert result["scenario"]["claim"] == (
+        "Publishing a dataset reaches the configured Hugging Face remote."
+    )
+    assert result["execution_status"] == "complete"
+    assert result["verdict"] == "fail"
+    assert result["reason"]["code"] == "assertion_failed"
+    assert result_exit_code(result) == 1
+    assert not any(row.get("operation_id") == "commit" for row in ledger_rows)
+    assert runtime.events.count("start") == 1
+    assert runtime.events.count("release") == 1
