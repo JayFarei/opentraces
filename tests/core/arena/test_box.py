@@ -175,6 +175,16 @@ def test_cleanup_failure_keeps_inspect_refusal_primary_and_records_stop_diagnost
     assert len(stop_diagnostics) == 1
     assert stop_diagnostics[0]["returncode"] == 1
     assert stop_diagnostics[0]["stderr"] == "cleanup failed\n"
+    cleanup_diagnostics = [
+        row for row in runtime.diagnostic_records() if row["operation"] == "cleanup"
+    ]
+    assert cleanup_diagnostics == [
+        {
+            "operation": "cleanup",
+            "code": "release_failed",
+            "message": "release_failed: cleanup failed",
+        }
+    ]
 
 
 def test_ssh_probe_refusal_stops_the_lease_once(tmp_path: Path) -> None:

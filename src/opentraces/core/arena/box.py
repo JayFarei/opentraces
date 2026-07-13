@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value
+from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value, sanitize_reason
 
 
 PINNED_CRABBOX_VERSION = "0.38.0"
@@ -315,62 +315,89 @@ class CrabboxRuntime:
         if not match:
             raise CrabboxRefusal("lease_identity_missing", "warmup did not report a cbx_ lease id")
         lease_id = match.group(0)
-        inspected = self._call(
-            [
-                self.command,
-                "inspect",
-                "--id",
-                lease_id,
-                "--provider",
-                self.provider,
-                "--json",
-            ],
-            timeout=30,
-        )
         try:
-            facts = json.loads(inspected.stdout)
-        except json.JSONDecodeError as exc:
-            raise CrabboxRefusal("lease_inspect_invalid", "inspect did not emit JSON") from exc
-        if inspected.returncode != 0 or not facts.get("ready") or facts.get("state") not in {
-            "leased",
-            "ready",
-        }:
-            raise CrabboxRefusal("lease_not_ready", "inspect did not report a ready lease")
-        box = Box(
-            id=str(facts["id"]),
-            slug=str(facts["slug"]),
-            provider=self.provider,
-            sandbox_tier=sandbox_tier_for_provider(self.provider),
-            ssh_host=str(facts["sshHost"]),
-            ssh_user=str(facts["sshUser"]),
-            ssh_port=str(facts["sshPort"]),
-            ssh_key=str(facts["sshKey"]),
-        )
-        ssh_probe = self._call(
-            [
-                "ssh",
-                "-F",
-                "/dev/null",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=5",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-i",
-                box.ssh_key,
-                "-p",
-                box.ssh_port,
-                f"{box.ssh_user}@{box.ssh_host}",
-                "true",
-            ],
-            timeout=10,
-        )
-        if ssh_probe.returncode != 0:
+            inspected = self._call(
+                [
+                    self.command,
+                    "inspect",
+                    "--id",
+                    lease_id,
+                    "--provider",
+                    self.provider,
+                    "--json",
+                ],
+                timeout=30,
+            )
             try:
-                self.release(box)
-            finally:
+                facts = json.loads(inspected.stdout)
+            except json.JSONDecodeError as exc:
+                raise CrabboxRefusal(
+                    "lease_inspect_invalid", "inspect did not emit JSON"
+                ) from exc
+            if not isinstance(facts, Mapping):
+                raise CrabboxRefusal(
+                    "lease_inspect_invalid", "inspect did not emit an object"
+                )
+            if inspected.returncode != 0 or not facts.get("ready") or facts.get(
+                "state"
+            ) not in {"leased", "ready"}:
+                raise CrabboxRefusal(
+                    "lease_not_ready", "inspect did not report a ready lease"
+                )
+            required_facts = ("id", "slug", "sshHost", "sshUser", "sshPort", "sshKey")
+            if any(
+                facts.get(name) is None or facts.get(name) == ""
+                for name in required_facts
+            ):
+                raise CrabboxRefusal(
+                    "lease_inspect_incomplete", "inspect omitted required lease facts"
+                )
+            box = Box(
+                id=str(facts["id"]),
+                slug=str(facts["slug"]),
+                provider=self.provider,
+                sandbox_tier=sandbox_tier_for_provider(self.provider),
+                ssh_host=str(facts["sshHost"]),
+                ssh_user=str(facts["sshUser"]),
+                ssh_port=str(facts["sshPort"]),
+                ssh_key=str(facts["sshKey"]),
+            )
+            ssh_probe = self._call(
+                [
+                    "ssh",
+                    "-F",
+                    "/dev/null",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=5",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-i",
+                    box.ssh_key,
+                    "-p",
+                    box.ssh_port,
+                    f"{box.ssh_user}@{box.ssh_host}",
+                    "true",
+                ],
+                timeout=10,
+            )
+            if ssh_probe.returncode != 0:
                 raise CrabboxRefusal("ssh_probe_failed", SSH_REMEDY)
+        except Exception:
+            try:
+                self._release_id(lease_id, provider=self.provider)
+            except Exception as cleanup_error:
+                self._diagnostics.append(
+                    {
+                        "operation": "cleanup",
+                        **sanitize_reason(
+                            getattr(cleanup_error, "code", "release_failed"),
+                            cleanup_error,
+                        ),
+                    }
+                )
+            raise
         return box
 
     def exec(
@@ -574,10 +601,13 @@ class CrabboxRuntime:
             if path.is_file()
         }
 
-    def release(self, box: Box) -> None:
+    def _release_id(self, lease_id: str, *, provider: str) -> None:
         stopped = self._call(
-            [self.command, "stop", "--id", box.id, "--provider", box.provider],
+            [self.command, "stop", "--id", lease_id, "--provider", provider],
             timeout=60,
         )
         if stopped.returncode != 0:
             raise CrabboxRefusal("release_failed", (stopped.stderr or stopped.stdout).strip())
+
+    def release(self, box: Box) -> None:
+        self._release_id(box.id, provider=box.provider)
