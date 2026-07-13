@@ -54,6 +54,10 @@ class BenchSkip(RuntimeError):
         self.code = code
 
 
+class EvidenceReferenceError(ValueError):
+    """A verifier referenced material outside the immutable run exhaust."""
+
+
 class Bench:
     """Thin factory bound to one discovered scenario source."""
 
@@ -213,6 +217,20 @@ class BenchRun:
         refs.extend(sorted(dependencies, key=lambda item: (item["path"], item["digest"])))
         return refs
 
+    def _persisted_evidence_ref(self, value: object) -> str:
+        if self.draft is None:
+            raise RuntimeError("BenchRun is not active")
+        raw = Path(str(value))
+        candidate = raw if raw.is_absolute() else self.draft.path / raw
+        try:
+            resolved = candidate.resolve(strict=True)
+            relative = resolved.relative_to(self.draft.path.resolve())
+        except (OSError, ValueError) as exc:
+            raise EvidenceReferenceError("evidence reference is not persisted in this run") from exc
+        if not resolved.is_file():
+            raise EvidenceReferenceError("evidence reference must identify a persisted file")
+        return relative.as_posix()
+
     def verify(self, verifier: Callable[..., Any], /, **inputs: Any) -> dict[str, Any]:
         if self.draft is None:
             raise RuntimeError("BenchRun is not active")
@@ -224,7 +242,10 @@ class BenchRun:
         try:
             returned = verifier(self, **inputs)
             if isinstance(returned, Mapping):
-                evidence_refs = [str(item) for item in returned.get("evidence_refs", [])]
+                evidence_refs = [
+                    self._persisted_evidence_ref(item)
+                    for item in returned.get("evidence_refs", [])
+                ]
             status = "pass"
         except BenchSkip as exc:
             status = "skip"
@@ -232,6 +253,13 @@ class BenchRun:
         except AssertionError as exc:
             status = "fail"
             reason = {"code": "assertion_failed", "message": str(exc) or "assertion failed"}
+        except EvidenceReferenceError:
+            evidence_refs = []
+            status = "error"
+            reason = {
+                "code": "invalid_evidence_ref",
+                "message": "verifier evidence must reference a persisted file in this run",
+            }
         except Exception as exc:
             status = "error"
             reason = {"code": "verifier_error", "message": f"{type(exc).__name__}: {exc}"}
