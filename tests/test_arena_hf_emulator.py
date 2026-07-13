@@ -555,6 +555,8 @@ def test_real_hf_client_can_read_immutable_content_after_later_commits(
             endpoint,
             """
 import json
+import os
+import urllib.request
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from huggingface_hub import HfApi
@@ -582,10 +584,22 @@ with TemporaryDirectory() as cache:
         cache_dir=cache,
     )
     old_content = Path(old_path).read_text()
+
+def resolved_commit(revision):
+    request = urllib.request.Request(
+        f"{os.environ['HF_ENDPOINT']}/datasets/bench/history/resolve/{revision}/value.txt",
+        method="HEAD",
+        headers={"Authorization": "Bearer hf_bench_user_token"},
+    )
+    with urllib.request.urlopen(request) as response:
+        return response.headers["X-Repo-Commit"]
+
 print(json.dumps({
     "first_oid": first.oid,
     "second_oid": second.oid,
     "old_content": old_content,
+    "old_resolved_commit": resolved_commit(first.oid),
+    "main_resolved_commit": resolved_commit("main"),
     "old_tree": api.list_repo_files(
         "bench/history", repo_type="dataset", revision=first.oid
     ),
@@ -597,6 +611,8 @@ print(json.dumps({
     payload = json.loads(result.stdout)
     assert payload["first_oid"] != payload["second_oid"]
     assert payload["old_content"] == "first"
+    assert payload["old_resolved_commit"] == payload["first_oid"]
+    assert payload["main_resolved_commit"] == payload["second_oid"]
     assert payload["old_tree"] == ["value.txt"]
 
 
