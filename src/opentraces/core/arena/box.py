@@ -60,6 +60,7 @@ class Box:
     ssh_user: str
     ssh_port: str
     ssh_key: str
+    image: str | None = None
 
 
 @dataclass(frozen=True)
@@ -145,14 +146,25 @@ def _subprocess_runner(
     )
 
 
+_CONTAINER_PROVIDERS = frozenset(
+    {"local-container", "e2b", "modal", "cloudflare"}
+)
+_MICROVM_PROVIDERS = frozenset({"firecracker", "apple-vm", "proxmox"})
+_UNCONTAINED_PROVIDERS = frozenset({"ssh", "host", "direct"})
+
+
 def sandbox_tier_for_provider(provider: str) -> str:
     """Classify containment ourselves; provider metadata is never a trust tier."""
 
-    if provider in {"firecracker", "apple-vm", "proxmox"}:
+    if provider in _MICROVM_PROVIDERS:
         return "microvm"
-    if provider in {"ssh", "host", "direct"}:
+    if provider in _CONTAINER_PROVIDERS:
+        return "container"
+    if provider in _UNCONTAINED_PROVIDERS:
         return "none"
-    return "container"
+    # A new provider has no reviewed containment classification. Unknown must
+    # never inherit the default provider's stronger tier.
+    return "none"
 
 
 class CrabboxRuntime:
@@ -307,11 +319,14 @@ class CrabboxRuntime:
             self.image,
         ]
         warmup = self._call(warmup_argv, timeout=600)
+        match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
         if warmup.returncode != 0:
-            raise CrabboxRefusal(
+            primary = CrabboxRefusal(
                 "lease_failed", (warmup.stderr or warmup.stdout or "crabbox warmup failed").strip()
             )
-        match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
+            if match:
+                self._best_effort_release_after_refusal(match.group(0), provider=self.provider)
+            raise primary
         if not match:
             raise CrabboxRefusal("lease_identity_missing", "warmup did not report a cbx_ lease id")
         lease_id = match.group(0)
@@ -344,7 +359,15 @@ class CrabboxRuntime:
                 raise CrabboxRefusal(
                     "lease_not_ready", "inspect did not report a ready lease"
                 )
-            required_facts = ("id", "slug", "sshHost", "sshUser", "sshPort", "sshKey")
+            required_facts = (
+                "id",
+                "slug",
+                "provider",
+                "sshHost",
+                "sshUser",
+                "sshPort",
+                "sshKey",
+            )
             if any(
                 facts.get(name) is None or facts.get(name) == ""
                 for name in required_facts
@@ -352,15 +375,33 @@ class CrabboxRuntime:
                 raise CrabboxRefusal(
                     "lease_inspect_incomplete", "inspect omitted required lease facts"
                 )
+            labels = facts.get("labels")
+            if not isinstance(labels, Mapping) or not labels.get("image"):
+                raise CrabboxRefusal(
+                    "lease_inspect_incomplete", "inspect omitted labels.image"
+                )
+            observed_provider = str(facts["provider"])
+            observed_image = str(labels["image"])
+            if observed_provider != self.provider:
+                raise CrabboxRefusal(
+                    "lease_provider_mismatch",
+                    "inspect provider does not match the requested provider",
+                )
+            if observed_image != self.image:
+                raise CrabboxRefusal(
+                    "lease_image_mismatch",
+                    "inspect labels.image does not match the requested image",
+                )
             box = Box(
                 id=str(facts["id"]),
                 slug=str(facts["slug"]),
-                provider=self.provider,
-                sandbox_tier=sandbox_tier_for_provider(self.provider),
+                provider=observed_provider,
+                sandbox_tier=sandbox_tier_for_provider(observed_provider),
                 ssh_host=str(facts["sshHost"]),
                 ssh_user=str(facts["sshUser"]),
                 ssh_port=str(facts["sshPort"]),
                 ssh_key=str(facts["sshKey"]),
+                image=observed_image,
             )
             ssh_probe = self._call(
                 [
@@ -385,20 +426,25 @@ class CrabboxRuntime:
             if ssh_probe.returncode != 0:
                 raise CrabboxRefusal("ssh_probe_failed", SSH_REMEDY)
         except Exception:
-            try:
-                self._release_id(lease_id, provider=self.provider)
-            except Exception as cleanup_error:
-                self._diagnostics.append(
-                    {
-                        "operation": "cleanup",
-                        **sanitize_reason(
-                            getattr(cleanup_error, "code", "release_failed"),
-                            cleanup_error,
-                        ),
-                    }
-                )
+            self._best_effort_release_after_refusal(lease_id, provider=self.provider)
             raise
         return box
+
+    def _best_effort_release_after_refusal(self, lease_id: str, *, provider: str) -> None:
+        """Release a named partial lease without replacing its primary refusal."""
+
+        try:
+            self._release_id(lease_id, provider=provider)
+        except Exception as cleanup_error:
+            self._diagnostics.append(
+                {
+                    "operation": "cleanup",
+                    **sanitize_reason(
+                        getattr(cleanup_error, "code", "release_failed"),
+                        cleanup_error,
+                    ),
+                }
+            )
 
     def exec(
         self,

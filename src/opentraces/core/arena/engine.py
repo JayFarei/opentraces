@@ -430,7 +430,7 @@ class BenchRun:
         box_pin = (
             {
                 "provider": self.box.provider,
-                "image": getattr(self.bench.box_runtime, "image", None),
+                "image": self.box.image,
                 "sandbox_tier": self.box.sandbox_tier,
                 "runtime": {
                     "name": "crabbox",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shlex
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..box import Box, CrabboxRuntime
+from ..diagnostics import sanitize_diagnostic_value
 from ..run_store import RunDraft
 from ..recording import RecordingConversionError, convert_script_cast
 
@@ -122,14 +124,59 @@ class TerminalDrive:
             "-c",
             recording_command,
         ]
-        observed = self.runtime.exec(
-            self.box,
-            recorded_argv,
-            cwd=self.repository,
-            env=environment,
-            timeout=timeout,
-            timing_path=self.draft.path / action / "timing.json",
-        )
+        timing_path = self.draft.path / action / "timing.json"
+        try:
+            observed = self.runtime.exec(
+                self.box,
+                recorded_argv,
+                cwd=self.repository,
+                env=environment,
+                timeout=timeout,
+                timing_path=timing_path,
+            )
+        except Exception as exc:
+            duration_ms = max(0, int((time.monotonic() - started) * 1000))
+            timeout_error = self._timeout_error(exc)
+            stdout = self._exception_stream(exc, "stdout", "output")
+            stderr = self._exception_stream(exc, "stderr")
+            timing = self._read_partial_timing(timing_path)
+            self.draft.write_text(f"{action}/stdout", stdout)
+            self.draft.write_text(f"{action}/stderr", stderr)
+            self.draft.write_json(f"{action}/timing.json", timing)
+            if timeout_error is not None:
+                reason = {
+                    "code": "terminal_timeout",
+                    "message": f"terminal command exceeded its {timeout:g} second timeout",
+                }
+            else:
+                reason = {
+                    "code": "terminal_exec_error",
+                    "message": sanitize_diagnostic_value(
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                }
+            self.draft.write_json(
+                result_ref,
+                {
+                    "execution_status": "error",
+                    "returncode": None,
+                    "duration_ms": duration_ms,
+                    "stdout_ref": f"{action}/stdout",
+                    "stderr_ref": f"{action}/stderr",
+                    "timing_ref": f"{action}/timing.json",
+                    "reason": reason,
+                },
+            )
+            self._recording_channels.append(
+                {
+                    "kind": "terminal",
+                    "complete": False,
+                    "path": None,
+                    "reason": reason["message"],
+                }
+            )
+            self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
+            raise
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         self.draft.write_text(f"{action}/stdout", observed.stdout)
         self.draft.write_text(f"{action}/stderr", observed.stderr)
@@ -207,6 +254,45 @@ class TerminalDrive:
             invocation_ref=invocation_ref,
             result_ref=result_ref,
         )
+
+    @staticmethod
+    def _exception_chain(exc: BaseException) -> list[BaseException]:
+        chain: list[BaseException] = []
+        current: BaseException | None = exc
+        while current is not None and current not in chain:
+            chain.append(current)
+            current = current.__cause__ or current.__context__
+        return chain
+
+    @classmethod
+    def _timeout_error(cls, exc: BaseException) -> subprocess.TimeoutExpired | None:
+        for candidate in cls._exception_chain(exc):
+            if isinstance(candidate, subprocess.TimeoutExpired):
+                return candidate
+        return None
+
+    @classmethod
+    def _exception_stream(cls, exc: BaseException, *names: str) -> str:
+        for candidate in cls._exception_chain(exc):
+            for name in names:
+                value = getattr(candidate, name, None)
+                if value is None:
+                    continue
+                if isinstance(value, bytes):
+                    return value.decode("utf-8", errors="replace")
+                return str(value)
+        return ""
+
+    @staticmethod
+    def _read_partial_timing(path: Path) -> dict[str, Any]:
+        if not path.is_file():
+            return {}
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"invalid": True}
+        sanitized = sanitize_diagnostic_value(value)
+        return dict(sanitized) if isinstance(sanitized, Mapping) else {"invalid": True}
 
     def recording_summary(self) -> dict[str, Any]:
         if not self._recording_channels:
