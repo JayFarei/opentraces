@@ -449,7 +449,32 @@ Bun.serve({
         .split("\n")
         .filter(Boolean)
         .map((line) => JSON.parse(line) as { key: string; value: Record<string, unknown> });
-      const repoFiles = new Map(filesAtRevision(repo, commitMatch[2]) ?? []);
+      const revision = decodeURIComponent(commitMatch[2]);
+      const header = items.find((item) => item.key === "header");
+      const parentCommit =
+        header?.value.parentCommit === undefined
+          ? undefined
+          : String(header.value.parentCommit);
+      const addressedHead = revision === "main" ? repo.headOid : revision;
+      const commitRequest = {
+        repo_id: repoId,
+        revision,
+        parent_commit: parentCommit,
+        files: items
+          .filter((item) => item.key === "file")
+          .map((item) => String(item.value.path)),
+      };
+      if (parentCommit !== undefined && parentCommit !== addressedHead) {
+        appendLedger(request, "commit", 409, commitRequest, {
+          current_head: addressedHead,
+        });
+        return errorResponse(
+          "Conflict",
+          "A commit has happened since. Please refresh and try again.",
+          409,
+        );
+      }
+      const repoFiles = new Map(filesAtRevision(repo, revision) ?? []);
       const oid = createHash("sha1")
         .update(repo.headOid)
         .update(rawPayload)
@@ -482,13 +507,7 @@ Bun.serve({
         request,
         "commit",
         200,
-        {
-          repo_id: repoId,
-          revision: decodeURIComponent(commitMatch[2]),
-          files: items
-            .filter((item) => item.key === "file")
-            .map((item) => String(item.value.path)),
-        },
+        commitRequest,
         { commit_oid: oid },
       );
       return jsonResponse({
