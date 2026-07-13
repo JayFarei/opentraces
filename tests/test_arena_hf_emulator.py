@@ -915,6 +915,79 @@ print(json.dumps({
     assert payload["old_tree"] == ["value.txt"]
 
 
+def test_real_hf_client_parent_commit_chains_and_rejects_a_stale_parent(
+    tmp_path: Path,
+) -> None:
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
+        result = _run_hf_client(
+            endpoint,
+            """
+import json
+from huggingface_hub import CommitOperationAdd, HfApi
+from huggingface_hub.errors import HfHubHTTPError
+
+api = HfApi(token="hf_bench_user_token")
+api.create_repo("bench/parent-commit", repo_type="dataset")
+initial_head = api.dataset_info("bench/parent-commit").sha
+first = api.create_commit(
+    repo_id="bench/parent-commit",
+    repo_type="dataset",
+    operations=[CommitOperationAdd(path_in_repo="first.txt", path_or_fileobj=b"first")],
+    commit_message="first",
+    parent_commit=initial_head,
+)
+second = api.create_commit(
+    repo_id="bench/parent-commit",
+    repo_type="dataset",
+    operations=[CommitOperationAdd(path_in_repo="second.txt", path_or_fileobj=b"second")],
+    commit_message="second",
+    parent_commit=first.oid,
+)
+try:
+    api.create_commit(
+        repo_id="bench/parent-commit",
+        repo_type="dataset",
+        operations=[CommitOperationAdd(path_in_repo="stale.txt", path_or_fileobj=b"stale")],
+        commit_message="stale",
+        parent_commit=first.oid,
+    )
+except HfHubHTTPError as error:
+    conflict = [
+        error.response.status_code,
+        error.response.headers["x-error-code"],
+    ]
+else:
+    conflict = None
+after = api.dataset_info("bench/parent-commit")
+print(json.dumps({
+    "initial_head": initial_head,
+    "first_oid": first.oid,
+    "second_oid": second.oid,
+    "conflict": conflict,
+    "after_head": after.sha,
+    "after_files": api.list_repo_files("bench/parent-commit", repo_type="dataset"),
+}))
+""",
+        )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["first_oid"] != payload["initial_head"]
+    assert payload["second_oid"] != payload["first_oid"]
+    assert payload["conflict"] == [409, "Conflict"]
+    assert payload["after_head"] == payload["second_oid"]
+    assert payload["after_files"] == ["first.txt", "second.txt"]
+
+    commit_rows = [
+        json.loads(line)
+        for line in ledger_path.read_text().splitlines()
+        if json.loads(line)["operation_id"] == "commit"
+    ]
+    assert [row["response"]["status"] for row in commit_rows] == [200, 200, 409]
+    assert commit_rows[-1]["request"]["parent_commit"] == payload["first_oid"]
+    assert "commit_oid" not in commit_rows[-1]["response"]
+
+
 def test_real_hf_client_uploads_inline_without_lfs_or_xet(tmp_path: Path) -> None:
     with running_emulator(tmp_path) as (endpoint, ledger_path):
         result = _run_hf_client(
