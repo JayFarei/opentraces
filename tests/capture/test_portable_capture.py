@@ -562,6 +562,75 @@ def test_parity_dereferences_message_content_before_comparing_hashes(
     assert "context_companion" in report.differences
 
 
+def test_parity_preserves_semantic_attribution_range_content_hashes(
+    tmp_path: Path,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "attribution-hash-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=projects[placement],
+                    workspace=projects[placement],
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="attribution-hash-session",
+                    session_path=source,
+                    observer_version="observer-pin",
+                    product_under_test_version="product-pin",
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    for result, semantic_hash in zip(
+        results,
+        ("murmur3:left-range", "murmur3:right-range"),
+        strict=True,
+    ):
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+        trace["attribution"] = {
+            "experimental": False,
+            "files": [
+                {
+                    "path": "src/example.py",
+                    "conversations": [
+                        {
+                            "contributor": {"type": "ai", "model_id": "test-model"},
+                            "ranges": [
+                                {
+                                    "start_line": 1,
+                                    "end_line": 3,
+                                    "content_hash": semantic_hash,
+                                    "confidence": "high",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        trace_path.write_text(json.dumps(trace, indent=2, sort_keys=True) + "\n")
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.matches is False
+    assert report.canonical_trace_match is False
+    assert "canonical_trace" in report.differences
+
+
 def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
     tmp_path: Path,
 ) -> None:
