@@ -6,6 +6,7 @@ from pathlib import Path
 from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.engine import Bench, ScenarioSource, extract_claim
 from opentraces.core.arena.run_store import RunStore
+from tests.core.arena.fixtures.verifier_helper import assert_healthy_payload
 
 
 class FakeBoxRuntime:
@@ -112,6 +113,35 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
     assert runtime.released is True
 
 
+def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Path) -> None:
+    runtime = FakeBoxRuntime()
+    repository = Path(__file__).resolve().parents[3]
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=repository,
+    )
+
+    def doctor_is_healthy(run):
+        observed = run.terminal.exec("opentraces", "doctor", "--json")
+        assert_healthy_payload(observed.json)
+        return {"evidence_refs": [observed.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(doctor_is_healthy)
+
+    manifest = json.loads((run.final_path / "source" / "verifiers.json").read_text())
+    sources = {item["path"]: item["digest"] for item in manifest["sources"]}
+    assert set(sources) == {
+        "tests/core/arena/test_engine.py",
+        "tests/core/arena/fixtures/verifier_helper.py",
+    }
+    assert sources["tests/core/arena/fixtures/verifier_helper.py"] == (
+        "sha256:dd2cbc2ba78532dc9258b96fb0aaebaa42e41650ff85c53077680f8184ce9a1e"
+    )
+
+
 def test_assertion_failure_is_a_functional_fail_not_machinery_error(tmp_path: Path) -> None:
     bench = Bench(
         source=_scenario(tmp_path),
@@ -129,7 +159,7 @@ def test_assertion_failure_is_a_functional_fail_not_machinery_error(tmp_path: Pa
     assert result["reason"]["code"] == "assertion_failed"
 
 
-def test_missing_cast_is_not_rewatchable_and_does_not_rewrite_pass(tmp_path: Path) -> None:
+def test_attempt_without_a_called_verifier_cannot_claim_a_pass(tmp_path: Path) -> None:
     bench = Bench(
         source=_scenario(tmp_path),
         store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
@@ -138,7 +168,38 @@ def test_missing_cast_is_not_rewatchable_and_does_not_rewrite_pass(tmp_path: Pat
     )
 
     with bench.run(app_state="install-only") as run:
-        run.terminal.exec("true")
+        run.terminal.exec("opentraces", "doctor", "--json")
+
+    result = json.loads((run.final_path / "result.json").read_text())
+    assert result["execution_status"] == "error"
+    assert result["verdict"] is None
+    assert result["reason"]["code"] == "no_verifiers_called"
+    assert result["evidence"] == {
+        "complete": False,
+        "requirements": [
+            {
+                "name": "bench.adjudication",
+                "complete": False,
+                "evidence_refs": [],
+            }
+        ],
+    }
+
+
+def test_missing_cast_is_not_rewatchable_and_does_not_rewrite_pass(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def command_succeeds(run):
+        observed = run.terminal.exec("true")
+        assert observed.returncode == 0
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(command_succeeds)
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["verdict"] == "pass"
@@ -155,8 +216,12 @@ def test_each_terminal_action_produces_an_asciicast_playlist_marker(tmp_path: Pa
         repository_path=tmp_path,
     )
 
+    def command_succeeds(run):
+        observed = run.terminal.exec("printf", "ok")
+        assert observed.returncode == 0
+
     with bench.run(app_state="install-only") as run:
-        run.terminal.exec("printf", "ok")
+        run.verify(command_succeeds)
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["verdict"] == "pass"

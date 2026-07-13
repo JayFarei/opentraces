@@ -63,8 +63,13 @@ def test_four_honesty_outcomes_are_distinguishable_on_disk_and_page(
 ) -> None:
     bench = _bench(tmp_path)
 
+    def verifier_succeeds(run):
+        return {"evidence_refs": []}
+
     def execute():
         with bench.run(app_state="base-only") as run:
+            if outcome == "pass":
+                run.verify(verifier_succeeds)
             if outcome == "fail":
                 assert False, "forced functional red"
             if outcome == "skip":
