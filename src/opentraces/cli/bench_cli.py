@@ -14,6 +14,7 @@ import click
 
 from ..core import paths
 from ..core.arena.contract import result_exit_code
+from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
 
 
@@ -140,6 +141,12 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
     run_path = store.root / created[0]
     result: dict[str, Any] = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
     exit_code = result_exit_code(result)
+    page_path: Path | None = None
+    page_error: str | None = None
+    try:
+        page_path = render_evidence_page(run_path)
+    except Exception as exc:
+        page_error = f"{type(exc).__name__}: {exc}"
     summary = {
         "status": "ok" if exit_code == 0 else "failed",
         "claim": claim,
@@ -148,6 +155,8 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
         "run_id": result["run_id"],
         "run_path": str(run_path),
         "result_ref": str(run_path / "result.json"),
+        "page": str(page_path) if page_path is not None else None,
+        "page_error": page_error,
     }
     if as_json:
         click.echo(json.dumps(summary, ensure_ascii=False, sort_keys=True))
@@ -156,5 +165,8 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
         click.echo(f"verdict: {result['verdict'] or 'error'}")
         click.echo(f"run: {run_path}")
         click.echo(f"result: {run_path / 'result.json'}")
+        click.echo(f"page: {page_path if page_path is not None else 'unavailable'}")
+        if page_error:
+            click.echo(f"page render warning: {page_error}", err=True)
     if exit_code:
         raise click.exceptions.Exit(exit_code)

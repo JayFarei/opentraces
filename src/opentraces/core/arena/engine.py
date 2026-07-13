@@ -246,17 +246,21 @@ class BenchRun:
             reason=reason,
             verifiers=self.verifiers,
             evidence={"complete": evidence_complete, "requirements": evidence_requirements},
-            recordings={
-                "rewatchable": False,
-                "channels": [
-                    {
-                        "kind": "terminal",
-                        "complete": False,
-                        "path": None,
-                        "reason": "terminal cast not produced",
-                    }
-                ],
-            },
+            recordings=(
+                self.terminal.recording_summary()
+                if hasattr(self, "terminal")
+                else {
+                    "rewatchable": False,
+                    "channels": [
+                        {
+                            "kind": "terminal",
+                            "complete": False,
+                            "path": None,
+                            "reason": "terminal cast not produced",
+                        }
+                    ],
+                }
+            ),
             artifacts=[],
             capture=None,
             pins={

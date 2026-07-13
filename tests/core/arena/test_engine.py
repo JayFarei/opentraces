@@ -42,6 +42,17 @@ class FakeBoxRuntime:
         self.released = True
 
 
+class RecordingBoxRuntime(FakeBoxRuntime):
+    def collect(self, box, globs, *, destination, repository):
+        files = destination / "files"
+        files.mkdir(parents=True)
+        timing = files / Path(globs[0]).name
+        typescript = files / Path(globs[1]).name
+        timing.write_text("0.010 4\n", encoding="utf-8")
+        typescript.write_bytes(b"ok\r\n")
+        return {timing.name: timing, typescript.name: typescript}
+
+
 def _scenario(tmp_path: Path) -> ScenarioSource:
     source = tmp_path / "test_install.py"
     source.write_text(
@@ -112,3 +123,44 @@ def test_assertion_failure_is_a_functional_fail_not_machinery_error(tmp_path: Pa
     assert result["execution_status"] == "complete"
     assert result["verdict"] == "fail"
     assert result["reason"]["code"] == "assertion_failed"
+
+
+def test_missing_cast_is_not_rewatchable_and_does_not_rewrite_pass(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.terminal.exec("true")
+
+    result = json.loads((run.final_path / "result.json").read_text())
+    assert result["verdict"] == "pass"
+    assert result["recordings"]["rewatchable"] is False
+    assert result["recordings"]["channels"][0]["complete"] is False
+    assert "cast" in result["recordings"]["channels"][0]["reason"]
+
+
+def test_each_terminal_action_produces_an_asciicast_playlist_marker(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.terminal.exec("printf", "ok")
+
+    result = json.loads((run.final_path / "result.json").read_text())
+    assert result["verdict"] == "pass"
+    assert result["recordings"]["rewatchable"] is True
+    marker = result["recordings"]["channels"][0]["casts"][0]
+    assert marker["ordinal"] == 1
+    assert marker["label"] == "printf ok"
+    assert marker["cast_ref"] == "recordings/terminal-0001.cast"
+    assert marker["duration_ms"] >= 0
+    cast = run.final_path / "recordings" / "terminal-0001.cast"
+    assert json.loads(cast.read_text().splitlines()[0])["version"] == 2

@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import subprocess
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -334,6 +335,56 @@ class CrabboxRuntime:
             "name": app_state,
             "digest": f"sha256:{app_digest}",
             "provides": ["cli", "script"],
+        }
+
+    def collect(
+        self,
+        box: Box,
+        globs: Sequence[str],
+        *,
+        destination: Path,
+        repository: Path,
+    ) -> dict[str, Path]:
+        """Collect one lease tarball immediately, before Crabbox overwrites it."""
+
+        command = [
+            self.command,
+            "run",
+            "--id",
+            box.id,
+            "--reclaim",
+            "--no-sync",
+            "--provider",
+            box.provider,
+        ]
+        for pattern in globs:
+            if Path(pattern).is_absolute():
+                raise ValueError("Crabbox artifact globs must be workdir-relative")
+            command.extend(["--artifact-glob", pattern])
+        command.extend(["--", ":"])
+        collected = self._call(command, cwd=repository, timeout=120)
+        if collected.returncode != 0:
+            return {}
+        source_tar = repository / ".crabbox" / "runs" / box.id / f"{box.id}-artifacts.tgz"
+        if not source_tar.is_file():
+            return {}
+        destination.mkdir(parents=True, exist_ok=True)
+        frozen_tar = destination / "collected.tgz"
+        source_tar.replace(frozen_tar)
+        extracted = destination / "files"
+        extracted.mkdir()
+        with tarfile.open(frozen_tar, "r:gz") as archive:
+            safe = []
+            for member in archive.getmembers():
+                member_path = Path(member.name)
+                if member_path.is_absolute() or ".." in member_path.parts or member.issym():
+                    continue
+                safe.append(member)
+            archive.extractall(extracted, members=safe, filter="data")
+        return {
+            path.name: path
+            for path in extracted.rglob("*")
+            if path.is_file()
         }
 
     def release(self, box: Box) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from typing import Any, Mapping
 
 from ..box import Box, CrabboxRuntime
 from ..run_store import RunDraft
+from ..recording import RecordingConversionError, convert_script_cast
 
 
 def _utc_now() -> str:
@@ -49,6 +51,8 @@ class TerminalDrive:
         self.draft = draft
         self.repository = repository
         self._ordinal = 0
+        self._recording_channels: list[dict[str, Any]] = []
+        self._markers: list[dict[str, Any]] = []
 
     @staticmethod
     def _env_pins(env: Mapping[str, str]) -> dict[str, str]:
@@ -85,9 +89,23 @@ class TerminalDrive:
             },
         )
         started = time.monotonic()
+        remote_base = f".opentraces-bench/terminal-{self._ordinal:04d}"
+        remote_timing = f"{remote_base}.timing"
+        remote_typescript = f"{remote_base}.typescript"
+        recorded_argv = [
+            "script",
+            "-q",
+            "--return",
+            "--log-timing",
+            remote_timing,
+            "--log-out",
+            remote_typescript,
+            "--command",
+            shlex.join(argv),
+        ]
         observed = self.runtime.exec(
             self.box,
-            list(argv),
+            recorded_argv,
             cwd=self.repository,
             env=environment,
             timeout=timeout,
@@ -107,6 +125,60 @@ class TerminalDrive:
                 "timing_ref": f"{action}/timing.json",
             },
         )
+        channel: dict[str, Any]
+        collect = getattr(self.runtime, "collect", None)
+        if collect is None:
+            channel = {
+                "kind": "terminal",
+                "complete": False,
+                "path": None,
+                "reason": "cast collection unavailable",
+            }
+        else:
+            raw_destination = self.draft.path / "recordings" / "raw" / f"{self._ordinal:04d}"
+            files = collect(
+                self.box,
+                [remote_timing, remote_typescript],
+                destination=raw_destination,
+                repository=self.repository,
+            )
+            timing_raw = files.get(Path(remote_timing).name)
+            typescript_raw = files.get(Path(remote_typescript).name)
+            if timing_raw is None or typescript_raw is None:
+                channel = {
+                    "kind": "terminal",
+                    "complete": False,
+                    "path": None,
+                    "reason": "cast artifacts were not collected",
+                }
+            else:
+                try:
+                    cast = convert_script_cast(typescript_raw, timing_raw)
+                    cast_ref = f"recordings/terminal-{self._ordinal:04d}.cast"
+                    self.draft.write_bytes(cast_ref, cast)
+                    channel = {
+                        "kind": "terminal",
+                        "complete": True,
+                        "path": cast_ref,
+                        "reason": None,
+                    }
+                    self._markers.append(
+                        {
+                            "ordinal": self._ordinal,
+                            "label": " ".join(argv),
+                            "cast_ref": cast_ref,
+                            "duration_ms": duration_ms,
+                        }
+                    )
+                except (OSError, RecordingConversionError) as exc:
+                    channel = {
+                        "kind": "terminal",
+                        "complete": False,
+                        "path": None,
+                        "reason": f"cast conversion failed: {exc}",
+                    }
+        self._recording_channels.append(channel)
+        self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
         return TerminalResult(
             argv=list(argv),
             returncode=observed.returncode,
@@ -116,3 +188,45 @@ class TerminalDrive:
             invocation_ref=invocation_ref,
             result_ref=result_ref,
         )
+
+    def recording_summary(self) -> dict[str, Any]:
+        if not self._recording_channels:
+            return {
+                "rewatchable": False,
+                "channels": [
+                    {
+                        "kind": "terminal",
+                        "complete": False,
+                        "path": None,
+                        "reason": "no terminal action was recorded",
+                    }
+                ],
+            }
+        complete = all(channel["complete"] for channel in self._recording_channels)
+        if complete:
+            return {
+                "rewatchable": True,
+                "channels": [
+                    {
+                        "kind": "terminal",
+                        "complete": True,
+                        "path": "recordings/playlist.json",
+                        "reason": None,
+                        "casts": self._markers,
+                    }
+                ],
+                "timeline_ref": "recordings/playlist.json",
+            }
+        reasons = [channel["reason"] for channel in self._recording_channels if channel["reason"]]
+        return {
+            "rewatchable": False,
+            "channels": [
+                {
+                    "kind": "terminal",
+                    "complete": False,
+                    "path": None,
+                    "reason": "; ".join(reasons),
+                }
+            ],
+            "timeline_ref": "recordings/playlist.json",
+        }
