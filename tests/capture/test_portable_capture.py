@@ -6,6 +6,7 @@ import json
 import gzip
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -572,7 +573,7 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
     )
 
 
-def test_persistent_telemetry_finalizes_a_fresh_daemon_generation(
+def test_persistent_telemetry_refuses_unacknowledged_finish_tail(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -651,14 +652,65 @@ def test_persistent_telemetry_finalizes_a_fresh_daemon_generation(
     )
     snapshot_path = capture_paths.otel_staging_dir() / f"{session_id}.json"
     assert write_snapshot(buffer, session_id, snapshot_path) is True
+    buffer.handle_envelope(
+        {
+            "received_at": time.time(),
+            "signal": "traces",
+            "path": "/v1/traces",
+            "raw_size": 1,
+            "body": {
+                "resourceSpans": [
+                    {
+                        "resource": {
+                            "attributes": [
+                                {
+                                    "key": "session.id",
+                                    "value": {"stringValue": session_id},
+                                }
+                            ]
+                        },
+                        "scopeSpans": [
+                            {
+                                "spans": [
+                                    {
+                                        "name": "claude_code.llm_request",
+                                        "attributes": [
+                                            {
+                                                "key": "session.id",
+                                                "value": {
+                                                    "stringValue": session_id
+                                                },
+                                            },
+                                            {
+                                                "key": "prompt.id",
+                                                "value": {
+                                                    "stringValue": "prompt-2"
+                                                },
+                                            },
+                                            {
+                                                "key": "request_id",
+                                                "value": {
+                                                    "stringValue": "req_persistent_2"
+                                                },
+                                            },
+                                        ],
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+    assert buffer.snapshot_session(session_id)["snapshot_generation"] == 2
 
     result = capture.finish(deadline=time.monotonic() + 5.0)
 
     telemetry = result.source("telemetry")
-    assert result.completeness == "complete"
-    assert telemetry.completeness == "full"
-    assert telemetry.details["snapshot_quiescent"] is False
-    assert telemetry.details["snapshot_semantics"] == "persistent_generation"
+    assert result.completeness == "partial"
+    assert telemetry.completeness == "missing"
+    assert any("finish-tail" in item for item in telemetry.limitations)
     assert telemetry.details["snapshot_generation"] == 1
     assert telemetry.details["accepted_envelopes"] == 1
 
@@ -1317,6 +1369,28 @@ else:
     return path
 
 
+def _write_runtime_sensitive_product_command(path: Path) -> Path:
+    path.write_text(
+        """#!/bin/sh
+if [ "$1" = "--version" ]; then
+    runtime="$(ps -p $$ -o command=)"
+    case "$runtime" in
+        *bash*) echo 1.2.3 ;;
+        *) echo 7.8.9 ;;
+    esac
+elif [ "$1" = "serve" ]; then
+    trap 'exit 0' TERM INT
+    while :; do sleep 1; done
+else
+    exit 2
+fi
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def test_required_non_self_observation_rejects_unrelated_live_process(
     tmp_path: Path,
 ) -> None:
@@ -1414,6 +1488,46 @@ def test_required_non_self_observation_rejects_launcher_as_inert_argv(
     assert inert.completeness == "partial"
     assert inert.provenance["separation"]["proven"] is False
     assert any("executed launcher" in item for item in inert.limitations)
+
+
+def test_required_non_self_observation_probes_the_observed_script_runtime(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    product_command = _write_runtime_sensitive_product_command(
+        tmp_path / "opentraces-product"
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    product = subprocess.Popen([bash, str(product_command), "serve"])
+    try:
+        mismatched_runtime = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=("watcher",),
+                required_sources=("watcher",),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                product_under_test_version="7.8.9",
+                product_under_test_version_probe=(
+                    str(product_command),
+                    "--version",
+                ),
+                result_dir=tmp_path / "mismatched-runtime",
+            )
+        ).finish(deadline=time.monotonic() + 5.0)
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    attestation = mismatched_runtime.provenance["product_under_test"]
+    assert mismatched_runtime.completeness == "partial"
+    assert mismatched_runtime.provenance["separation"]["proven"] is False
+    assert mismatched_runtime.product_under_test_version == "1.2.3"
+    assert attestation["version"] == "1.2.3"
+    assert any("version probe mismatch" in item for item in mismatched_runtime.limitations)
 
 
 def test_required_non_self_observation_uses_observed_product_identity_and_version(
