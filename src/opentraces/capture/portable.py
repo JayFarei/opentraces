@@ -148,6 +148,7 @@ class CaptureResult:
     trace_refs: tuple[str, ...]
     security: dict[str, Any]
     result_path: str
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def source(self, name: str) -> CaptureSourceResult:
         for source in self.sources:
@@ -227,18 +228,20 @@ class CaptureSession:
 
         finalized_by_name: dict[str, CaptureSourceResult] = {}
         requested = set(self.plan.requested_sources)
-        for source in _FINALIZATION_ORDER:
-            if source not in requested:
-                continue
+        ordered_sources = [source for source in _FINALIZATION_ORDER if source in requested]
+        for index, source in enumerate(ordered_sources):
             if time.monotonic() >= deadline:
                 finalized_by_name[source] = self._timed_out(
                     source, "finalization deadline exhausted"
                 )
                 continue
+            sources_left = len(ordered_sources) - index
+            remaining = max(0.0, deadline - time.monotonic())
+            source_deadline = time.monotonic() + (remaining / sources_left)
             if source == "telemetry":
-                finalized = self._finalize_telemetry(deadline)
+                finalized = self._finalize_telemetry(source_deadline)
             else:
-                finalized = self._run_isolated_finalizer(source, deadline)
+                finalized = self._run_isolated_finalizer(source, source_deadline)
             finalized_by_name[source] = finalized
             trace_id = finalized.details.get("trace_id")
             if trace_id and trace_id not in self._trace_refs:
@@ -253,11 +256,30 @@ class CaptureSession:
         complete = bool(source_results) and all(
             source.completeness == "full" for source in source_results
         )
-        limitations = tuple(
+        source_limitations = tuple(
             limitation
             for source in source_results
             for limitation in source.limitations
         )
+        provenance = {
+            "observer": {
+                "version": __version__,
+                "derivation": "runtime",
+                "caller_claim": self.plan.observer_version,
+            },
+            "product_under_test": {
+                "version": self.plan.product_under_test_version,
+                "derivation": "caller_claim",
+            },
+            "separation": {
+                "proven": False,
+                "reason": "observer and product process separation was not attested",
+            },
+        }
+        provenance_limitations = (
+            "non-self-observation separation is not proven for this capture",
+        )
+        limitations = (*source_limitations, *provenance_limitations)
         result_path = self._result_dir / "capture_result.json"
         result = CaptureResult(
             schema_version=CAPTURE_RESULT_SCHEMA,
@@ -274,6 +296,7 @@ class CaptureSession:
                 "policy": self.plan.security_policy,
                 "raw_body_retention": self.plan.raw_body_retention,
             },
+            provenance=provenance,
             result_path=str(result_path),
         )
         _atomic_write_json(result_path, result.to_dict())
@@ -343,7 +366,8 @@ class CaptureSession:
             "session_id": self.plan.session_id,
             "session_path": str(self.plan.session_path) if self.plan.session_path else None,
             "trace_id": self._trace_refs[-1] if self._trace_refs else None,
-            "remaining_seconds": max(0.0, deadline - time.monotonic()),
+            "remaining_seconds": max(0.0, deadline - time.monotonic() - 0.05),
+            "deadline_monotonic": max(time.monotonic(), deadline - 0.05),
             "security_policy": self.plan.security_policy,
             "raw_body_retention": self.plan.raw_body_retention,
             "open_details": self._open_details.get(source) or {},
@@ -464,6 +488,7 @@ class Capture:
 
     @staticmethod
     def open(plan: CapturePlan) -> CaptureSession:
+        lifecycle_opened_at = time.time()
         if not plan.project.is_dir():
             raise FileNotFoundError(f"capture project does not exist: {plan.project}")
         if not plan.workspace.is_dir():
@@ -488,6 +513,9 @@ class Capture:
         limitations: dict[str, list[str]] = {}
         open_details: dict[str, dict[str, Any]] = {}
         if "telemetry" in plan.requested_sources:
+            open_details["telemetry"] = {
+                "opened_at_unix": lifecycle_opened_at,
+            }
             if plan.placement == "leased":
                 endpoint, owned, reason = _start_leased_receiver(
                     capture_root=capture_root,
@@ -518,42 +546,62 @@ class Capture:
             from .fs_watcher.runtime import poll_project_once
 
             watcher_state_path = result_dir / "runtime" / "watcher-state.json"
-            try:
-                baseline = poll_project_once(
-                    plan.project,
-                    state_path=watcher_state_path,
-                    exclude_paths=[plan.session_path] if plan.session_path else None,
-                    writer="portable-capture-watcher",
-                )
-                baseline_proven = watcher_state_path.is_file()
+            root_details = {
+                "observed_root": str(plan.project),
+                "declared_workspace": str(plan.workspace),
+            }
+            if plan.workspace != plan.project:
                 open_details["watcher"] = {
-                    "state_path": str(watcher_state_path),
-                    "poll_succeeded": True,
-                    "baseline_proven": baseline_proven,
-                    "baseline_initialized": baseline.baseline_initialized,
-                    "paths_seen": baseline.paths_seen,
-                    "skipped_paths": baseline.skipped_paths,
-                }
-                if not baseline_proven:
-                    limitations.setdefault("watcher", []).append(
-                        "watcher baseline could not be established at Capture.open"
-                    )
-            except Exception as exc:  # noqa: BLE001 - persisted honesty boundary
-                open_details["watcher"] = {
+                    **root_details,
                     "state_path": str(watcher_state_path),
                     "poll_succeeded": False,
                     "baseline_proven": False,
+                    "root_binding_proven": False,
                 }
                 limitations.setdefault("watcher", []).append(
-                    "watcher baseline failed at Capture.open: "
-                    f"{type(exc).__name__}: {exc}"
+                    "declared workspace differs from the watcher observed root"
                 )
+            else:
+                try:
+                    baseline = poll_project_once(
+                        plan.project,
+                        state_path=watcher_state_path,
+                        exclude_paths=[plan.session_path] if plan.session_path else None,
+                        writer="portable-capture-watcher",
+                    )
+                    baseline_proven = watcher_state_path.is_file()
+                    open_details["watcher"] = {
+                        **root_details,
+                        "state_path": str(watcher_state_path),
+                        "poll_succeeded": True,
+                        "baseline_proven": baseline_proven,
+                        "baseline_initialized": baseline.baseline_initialized,
+                        "paths_seen": baseline.paths_seen,
+                        "skipped_paths": baseline.skipped_paths,
+                        "root_binding_proven": True,
+                    }
+                    if not baseline_proven:
+                        limitations.setdefault("watcher", []).append(
+                            "watcher baseline could not be established at Capture.open"
+                        )
+                except Exception as exc:  # noqa: BLE001 - persisted honesty boundary
+                    open_details["watcher"] = {
+                        **root_details,
+                        "state_path": str(watcher_state_path),
+                        "poll_succeeded": False,
+                        "baseline_proven": False,
+                        "root_binding_proven": True,
+                    }
+                    limitations.setdefault("watcher", []).append(
+                        "watcher baseline failed at Capture.open: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
 
         bindings = CaptureBindings(
             env=env,
             otlp_endpoint=endpoint,
             raw_bodies_dir=str(raw_bodies),
-            watched_roots=(str(plan.workspace),),
+            watched_roots=(str(plan.project),),
         )
         return CaptureSession(
             plan,

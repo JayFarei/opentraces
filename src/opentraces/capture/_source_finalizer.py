@@ -89,13 +89,28 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
     from ..core.paths import otel_staging_dir, raw_bodies_dir
 
     snapshot_path = otel_staging_dir() / f"{session_id}.json"
-    remaining = max(0.0, float(request.get("remaining_seconds") or 0.0))
-    deadline = time.monotonic() + remaining
-    while not snapshot_path.is_file() and time.monotonic() < deadline:
+    opened_at = float((request.get("open_details") or {}).get("opened_at_unix") or 0.0)
+    deadline = _request_deadline(request)
+    snapshot: dict[str, Any] | None = None
+    last_envelope_at: float | None = None
+    while time.monotonic() < deadline:
+        if snapshot_path.is_file():
+            candidate = load_snapshot_from_disk(snapshot_path)
+            raw_last = candidate.get("last_envelope_at")
+            last_envelope_at = float(raw_last) if raw_last is not None else None
+            if last_envelope_at is not None and last_envelope_at >= opened_at:
+                snapshot = candidate
+                break
         time.sleep(min(0.03, max(0.0, deadline - time.monotonic())))
-    if not snapshot_path.is_file():
-        return _missing("telemetry receiver produced no session snapshot")
-    snapshot = load_snapshot_from_disk(snapshot_path)
+    if snapshot is None:
+        return _missing(
+            "telemetry receiver produced no fresh session snapshot after Capture.open",
+            details={
+                "snapshot_path": str(snapshot_path),
+                "lifecycle_opened_at": opened_at,
+                "last_envelope_at": last_envelope_at,
+            },
+        )
     report = flush_session_to_project(
         project_dir=Path(request["project"]),
         trace_id=trace_id,
@@ -125,6 +140,17 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
 
     project = Path(request["project"])
     open_details = request.get("open_details") or {}
+    root_details = {
+        "observed_root": str(open_details.get("observed_root") or project),
+        "declared_workspace": str(
+            open_details.get("declared_workspace") or request.get("workspace") or ""
+        ),
+    }
+    if open_details.get("root_binding_proven") is False:
+        return _missing(
+            "declared workspace differs from the watcher observed root",
+            details=root_details,
+        )
     state_path = open_details.get("state_path")
     poll_succeeded = open_details.get("poll_succeeded") is True
     baseline_proven = open_details.get("baseline_proven") is True
@@ -132,6 +158,7 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
         return _missing(
             "watcher baseline was not proven at Capture.open",
             details={
+                **root_details,
                 "open_poll_succeeded": poll_succeeded,
                 "open_baseline_proven": baseline_proven,
                 "open_baseline_initialized": open_details.get(
@@ -146,6 +173,7 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
         return _missing(
             "watcher state was absent at final drain; lifecycle coverage is unproven",
             details={
+                **root_details,
                 "open_poll_succeeded": True,
                 "open_baseline_proven": True,
                 "open_baseline_initialized": open_details.get(
@@ -163,6 +191,7 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
         "evidence_refs": [],
         "limitations": [],
         "details": {
+            **root_details,
             "open_poll_succeeded": True,
             "open_baseline_proven": True,
             "open_baseline_initialized": open_details.get("baseline_initialized"),
@@ -180,10 +209,9 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
 def _finalize_git(request: dict[str, Any]) -> dict[str, Any]:
     from ..core.trails.maturation import mature_trails
 
-    remaining = max(0.0, float(request.get("remaining_seconds") or 0.0))
     summary = mature_trails(
         Path(request["project"]),
-        deadline=time.monotonic() + remaining,
+        deadline=_request_deadline(request),
     )
     details = summary.to_dict()
     limitations = list(summary.errors)
@@ -290,6 +318,14 @@ def _missing(reason: str, *, details: dict[str, Any] | None = None) -> dict[str,
         "limitations": [reason],
         "details": details or {},
     }
+
+
+def _request_deadline(request: dict[str, Any]) -> float:
+    absolute = request.get("deadline_monotonic")
+    if absolute is not None:
+        return float(absolute)
+    remaining = max(0.0, float(request.get("remaining_seconds") or 0.0))
+    return time.monotonic() + remaining
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

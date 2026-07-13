@@ -73,50 +73,72 @@ def compare_placements(
     } == {view.name: view.completeness for view in leased.views}
     persistent_trace = _read_json(persistent_path)
     leased_trace = _read_json(leased_path)
-    replacements = {
+    persistent_replacements = {
         str(persistent_path.parents[4]): "<bucket-root>",
-        str(leased_path.parents[4]): "<bucket-root>",
         persistent.trace_refs[0]: "<trace-id>",
+    }
+    leased_replacements = {
+        str(leased_path.parents[4]): "<bucket-root>",
         leased.trace_refs[0]: "<trace-id>",
     }
-    for root in (*persistent_roots, *leased_roots):
+    for root in persistent_roots:
         resolved_root = Path(root).resolve()
-        replacements[str(resolved_root)] = "<workspace>"
-        replacements[resolved_root.name] = "<workspace-name>"
+        persistent_replacements[str(resolved_root)] = "<workspace>"
+        persistent_replacements[resolved_root.name] = "<workspace-name>"
+    for root in leased_roots:
+        resolved_root = Path(root).resolve()
+        leased_replacements[str(resolved_root)] = "<workspace>"
+        leased_replacements[resolved_root.name] = "<workspace-name>"
 
-    persistent_norm = _normalize(persistent_trace, replacements, domain="trace")
-    leased_norm = _normalize(leased_trace, replacements, domain="trace")
+    persistent_norm = _normalize(
+        persistent_trace, persistent_replacements, domain="trace"
+    )
+    leased_norm = _normalize(leased_trace, leased_replacements, domain="trace")
     trace_match = persistent_norm == leased_norm
     security_match = _normalize(
-        persistent_trace.get("security") or {}, replacements, domain="semantic"
-    ) == _normalize(leased_trace.get("security") or {}, replacements)
+        persistent_trace.get("security") or {},
+        persistent_replacements,
+        domain="semantic",
+    ) == _normalize(
+        leased_trace.get("security") or {},
+        leased_replacements,
+        domain="semantic",
+    )
 
+    persistent_context_raw = _read_jsonl_gz(
+        persistent_path.with_name("context.jsonl.gz")
+    )
+    leased_context_raw = _read_jsonl_gz(leased_path.with_name("context.jsonl.gz"))
     persistent_context = _normalize(
         _resolve_content_references(
-            _read_jsonl_gz(persistent_path.with_name("context.jsonl.gz")),
+            persistent_context_raw,
             persistent_path,
-            replacements,
+            persistent_replacements,
         ),
-        replacements,
+        persistent_replacements,
         domain="companion",
     )
     leased_context = _normalize(
         _resolve_content_references(
-            _read_jsonl_gz(leased_path.with_name("context.jsonl.gz")),
+            leased_context_raw,
             leased_path,
-            replacements,
+            leased_replacements,
         ),
-        replacements,
+        leased_replacements,
         domain="companion",
     )
+    persistent_trail_raw = _read_jsonl_gz(
+        persistent_path.with_name("trail.jsonl.gz")
+    )
+    leased_trail_raw = _read_jsonl_gz(leased_path.with_name("trail.jsonl.gz"))
     persistent_trail = _normalize(
-        _read_jsonl_gz(persistent_path.with_name("trail.jsonl.gz")),
-        replacements,
+        persistent_trail_raw,
+        persistent_replacements,
         domain="companion",
     )
     leased_trail = _normalize(
-        _read_jsonl_gz(leased_path.with_name("trail.jsonl.gz")),
-        replacements,
+        leased_trail_raw,
+        leased_replacements,
         domain="companion",
     )
     context_match = persistent_context == leased_context
@@ -133,6 +155,20 @@ def compare_placements(
         differences.append("trail_companion")
     if not security_match:
         differences.append("security")
+    companions_required = (
+        persistent.source("bucket").required and leased.source("bucket").required
+    )
+    required_companions_all_empty = not any(
+        (
+            persistent_context_raw,
+            leased_context_raw,
+            persistent_trail_raw,
+            leased_trail_raw,
+        )
+    )
+    if companions_required and required_companions_all_empty:
+        differences.append("empty_context_companion")
+        differences.append("empty_trail_companion")
 
     limitations: list[str] = []
     span_match: bool | None = None
