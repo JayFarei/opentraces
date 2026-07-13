@@ -78,6 +78,25 @@ class SensitiveSetupRuntime(FakeBoxRuntime):
         )
 
 
+_CREDENTIAL_SHAPES = (
+    "private_key=private-value "
+    "ssh_key: ssh-value "
+    "api_token=api-value "
+    "OPENAI_API_KEY=openai-value "
+    "SERVICE_OPENAI_API_KEY=prefixed-value "
+    "Authorization: Bearer bearer-value; "
+    "tokenization completed; secret scanner healthy; credential policy loaded"
+)
+
+
+class CredentialShapeRuntime(FakeBoxRuntime):
+    def diagnostic_records(self) -> list[dict]:
+        return [{"operation": "inspect", "stderr": _CREDENTIAL_SHAPES}]
+
+    def release(self, box: Box) -> None:
+        raise RuntimeError(_CREDENTIAL_SHAPES)
+
+
 class RealShellRecordingRuntime(FakeBoxRuntime):
     def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         completed = subprocess.run(
@@ -439,6 +458,48 @@ def test_verifier_and_release_diagnostics_share_secret_and_path_sanitization(
     assert "[host-path]" in serialized
     assert "verifier" in serialized
     assert "cleanup" in serialized
+
+
+def test_sensitive_assignment_shapes_are_redacted_without_erasing_ordinary_words(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=CredentialShapeRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def verifier_crashes(run):
+        raise RuntimeError(_CREDENTIAL_SHAPES)
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verifier_crashes)
+
+    result_text = (run.final_path / "result.json").read_text(encoding="utf-8")
+    diagnostic = next(
+        item for item in run.result["artifacts"] if item["kind"] == "lifecycle_diagnostics"
+    )
+    artifact_text = (run.final_path / diagnostic["path"]).read_text(encoding="utf-8")
+    for persisted in (result_text, artifact_text):
+        for secret in (
+            "private-value",
+            "ssh-value",
+            "api-value",
+            "openai-value",
+            "prefixed-value",
+            "bearer-value",
+        ):
+            assert secret not in persisted
+        assert "private_key=[redacted]" in persisted
+        assert "ssh_key: [redacted]" in persisted
+        assert "api_token=[redacted]" in persisted
+        assert "OPENAI_API_KEY=[redacted]" in persisted
+        assert "SERVICE_OPENAI_API_KEY=[redacted]" in persisted
+        assert "Authorization: Bearer [redacted]" in persisted
+        assert "tokenization completed" in persisted
+        assert "secret scanner healthy" in persisted
+        assert "credential policy loaded" in persisted
 
 
 def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Path) -> None:
