@@ -327,15 +327,12 @@ Bun.serve({
         return errorResponse("InvalidToken", "invalid access token", 401);
       }
       const author = new URL(request.url).searchParams.get("author");
-      const result = [...repos.values()]
-        .filter((repo) => {
-          const owner = repo.repoId.split("/")[0];
-          if (author !== null && owner !== author) return false;
-          const publiclyReadable = !repo.private && repo.gated === false;
-          const ownedByCaller = identity !== undefined && owner === identity.name;
-          return publiclyReadable || ownedByCaller;
-        })
-        .map(datasetInfo);
+      const result =
+        identity === undefined || (author !== null && author !== identity.name)
+          ? []
+          : [...repos.values()]
+              .filter((repo) => repo.repoId.startsWith(`${identity.name}/`))
+              .map(datasetInfo);
       appendLedger(request, "listDatasets", 200);
       return jsonResponse(result);
     }
