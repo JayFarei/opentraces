@@ -135,15 +135,28 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
     generation = int(snapshot.get("snapshot_generation") or 0)
     accepted = int(snapshot.get("accepted_envelopes") or 0)
     quiescent = snapshot.get("snapshot_quiescent") is True
-    if not quiescent or generation < 1 or generation != accepted:
+    if generation < 1 or generation != accepted:
         return _missing(
-            "telemetry snapshot is not a quiescent finish-time generation",
+            "telemetry snapshot generation is incomplete",
             details={
                 "snapshot_quiescent": quiescent,
                 "snapshot_generation": generation,
                 "accepted_envelopes": accepted,
             },
         )
+    if ingress_quiesced and not quiescent:
+        return _missing(
+            "telemetry snapshot is not a quiescent finish-time generation",
+            details={
+                "snapshot_quiescent": False,
+                "snapshot_generation": generation,
+                "accepted_envelopes": accepted,
+                "ingress_quiesced": True,
+            },
+        )
+    snapshot_semantics = (
+        "leased_quiescent_generation" if ingress_quiesced else "persistent_generation"
+    )
     report = flush_session_to_project(
         project_dir=Path(request["project"]),
         trace_id=trace_id,
@@ -159,7 +172,8 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
         )
     report.update(
         {
-            "snapshot_quiescent": True,
+            "snapshot_quiescent": quiescent,
+            "snapshot_semantics": snapshot_semantics,
             "snapshot_generation": generation,
             "accepted_envelopes": accepted,
         }
@@ -370,20 +384,21 @@ def _request_deadline(request: dict[str, Any]) -> float:
 
 
 def _resolve_security_policy(request: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-    """Resolve one existing named policy to an explicit config for this child."""
+    """Resolve configured or explicit per-tool flags for this child."""
 
-    from ..cli._security_flags import (
-        apply_bucket_security_policy,
-        enabled_security_tool_names,
-    )
     from ..core.config import load_config
+    from ..security.config import (
+        enabled_security_tool_names,
+        set_security_tools_exact,
+    )
 
-    requested = str(request.get("security_policy") or "configured")
     cfg = load_config()
-    if requested != "configured":
-        apply_bucket_security_policy(cfg, requested)
+    requested = request.get("security_tools")
+    configuration = "configured" if requested is None else "explicit"
+    if requested is not None:
+        set_security_tools_exact(cfg, requested)
     return cfg, {
-        "requested_policy": requested,
+        "configuration": configuration,
         "configured_tools": enabled_security_tool_names(cfg),
         "observed": False,
     }

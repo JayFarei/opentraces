@@ -24,6 +24,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from .. import __version__
+from ..security.config import SECURITY_TOOL_NAMES
 
 CapturePlacement = Literal["persistent", "leased"]
 CaptureSourceName = Literal[
@@ -39,9 +40,6 @@ SourceStatus = Literal["finalized", "partial", "unavailable", "timed_out"]
 
 CAPTURE_RESULT_SCHEMA = "opentraces.capture.result.v1"
 _KNOWN_SOURCES = frozenset({"session_jsonl", "telemetry", "watcher", "git", "bucket"})
-_KNOWN_SECURITY_POLICIES = frozenset(
-    {"configured", "off", "basic", "recommended", "strict"}
-)
 _FINALIZATION_ORDER: tuple[CaptureSourceName, ...] = (
     "session_jsonl",
     "telemetry",
@@ -74,7 +72,7 @@ class CapturePlan:
     session_id: str | None = None
     session_path: Path | None = None
     trace_id: str | None = None
-    security_policy: str = "configured"
+    security_tools: tuple[str, ...] | None = None
     raw_body_retention: str = "delete"
     require_observer_separation: bool = False
     product_under_test_pid: int | None = None
@@ -94,10 +92,15 @@ class CapturePlan:
             raise ValueError("observer_version must be pinned")
         if not self.product_under_test_version.strip():
             raise ValueError("product_under_test_version must be pinned")
-        if self.security_policy not in _KNOWN_SECURITY_POLICIES:
+        security_tools = (
+            None
+            if self.security_tools is None
+            else tuple(dict.fromkeys(str(name) for name in self.security_tools))
+        )
+        unknown_security_tools = set(security_tools or ()) - set(SECURITY_TOOL_NAMES)
+        if unknown_security_tools:
             raise ValueError(
-                f"unknown capture security policy {self.security_policy!r}; "
-                f"choose one of: {', '.join(sorted(_KNOWN_SECURITY_POLICIES))}"
+                f"unknown security tool(s): {', '.join(sorted(unknown_security_tools))}"
             )
         if self.product_under_test_pid is not None and self.product_under_test_pid <= 0:
             raise ValueError("product_under_test_pid must be positive")
@@ -108,6 +111,7 @@ class CapturePlan:
         object.__setattr__(self, "workspace", Path(self.workspace).resolve())
         object.__setattr__(self, "requested_sources", requested)
         object.__setattr__(self, "required_sources", required)
+        object.__setattr__(self, "security_tools", security_tools)
         object.__setattr__(self, "product_under_test_version_probe", version_probe)
         if self.result_dir is not None:
             object.__setattr__(self, "result_dir", Path(self.result_dir).resolve())
@@ -389,8 +393,15 @@ class CaptureSession:
             limitations=limitations,
             trace_refs=tuple(self._trace_refs),
             security={
-                "policy": self.plan.security_policy,
-                "declared_policy": self.plan.security_policy,
+                "configuration": (
+                    declared_security[0].get("configuration", "configured")
+                    if declared_security
+                    else (
+                        "explicit"
+                        if self.plan.security_tools is not None
+                        else "configured"
+                    )
+                ),
                 "configured_tools": configured_tools,
                 "tools_applied": tools_applied,
                 # Backward-compatible alias; its value now comes from the
@@ -494,6 +505,7 @@ class CaptureSession:
         report_path = finalizers / f"{source}.report.json"
         request = {
             "source": source,
+            "placement": self.plan.placement,
             "project": str(self.plan.project),
             "workspace": str(self.plan.workspace),
             "actor": self.plan.actor,
@@ -502,7 +514,11 @@ class CaptureSession:
             "trace_id": self._trace_refs[-1] if self._trace_refs else None,
             "remaining_seconds": max(0.0, deadline - time.monotonic() - 0.05),
             "deadline_monotonic": max(time.monotonic(), deadline - 0.05),
-            "security_policy": self.plan.security_policy,
+            "security_tools": (
+                list(self.plan.security_tools)
+                if self.plan.security_tools is not None
+                else None
+            ),
             "raw_body_retention": self.plan.raw_body_retention,
             "open_details": self._open_details.get(source) or {},
             "requested_sources": list(self.plan.requested_sources),
@@ -588,7 +604,10 @@ class CaptureSession:
         if source != "telemetry" or not self.plan.session_id:
             return generic
         snapshot_path = (
-            self._capture_root / "otel-sessions" / f"{self.plan.session_id}.json"
+            self._capture_root
+            / "staging"
+            / "otel"
+            / f"{self.plan.session_id}.json"
         )
         try:
             snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
@@ -601,7 +620,10 @@ class CaptureSession:
         last_envelope_at = float(raw_last) if raw_last is not None else None
         if last_envelope_at is None or last_envelope_at < opened_at:
             return "telemetry receiver produced no fresh session snapshot after Capture.open"
-        if snapshot.get("snapshot_quiescent") is not True:
+        ingress_quiesced = (
+            self._open_details.get("telemetry", {}).get("ingress_quiesced") is True
+        )
+        if ingress_quiesced and snapshot.get("snapshot_quiescent") is not True:
             return "telemetry snapshot is not a quiescent finish-time generation"
         return generic
 
@@ -1031,22 +1053,42 @@ def _observe_process_identity(pid: int | None) -> dict[str, Any]:
     return observed
 
 
-def _command_references_launcher(command: str | None, launcher: Path) -> bool:
+def _command_executes_launcher(
+    command: str | None,
+    *,
+    launcher: Path,
+    runtimes: tuple[Path, ...],
+) -> bool:
+    """Prove the launcher occupies the executable/script slot in argv."""
+
     if not command:
         return False
     try:
         words = shlex.split(command)
     except ValueError:
         words = command.split()
-    for word in words:
-        if os.sep not in word:
-            continue
+    if not words:
+        return False
+
+    def matches(word: str, expected: Path) -> bool:
+        candidate = word if os.sep in word else shutil.which(word)
+        if candidate is None:
+            return False
         try:
-            if Path(word).resolve(strict=True) == launcher:
-                return True
+            return Path(candidate).resolve(strict=True) == expected
         except OSError:
-            continue
-    return False
+            return False
+
+    if matches(words[0], launcher):
+        return True
+    # A shebang script is represented by the interpreter followed immediately
+    # by the executed script.  A later occurrence is data (for example the
+    # inert argv after ``python -c``) and cannot bind process identity.
+    return (
+        len(words) >= 2
+        and any(matches(words[0], runtime) for runtime in runtimes)
+        and matches(words[1], launcher)
+    )
 
 
 _VERSION_RE = re.compile(r"(?<![A-Za-z0-9])\d+\.\d+\.\d+(?:[A-Za-z0-9.+-]*)")
@@ -1092,29 +1134,32 @@ def _attest_product_process(
         if launcher_path is None or launcher_identity is None:
             limitations.append("product version probe executable could not be resolved")
         else:
-            runtime_identity = _file_identity(_launcher_runtime_path(launcher_path))
+            runtime_path = _launcher_runtime_path(launcher_path)
+            runtime_identity = _file_identity(runtime_path)
             probe_record["executable"] = runtime_identity
             observed_executable = observed["executable"]
-            runtime_matches = bool(
-                observed_executable
-                and runtime_identity
-                and observed_executable["digest"] == runtime_identity["digest"]
-            )
-            launcher_matches = bool(
+            native_launcher_matches = bool(
                 observed_executable
                 and observed_executable["digest"] == launcher_identity["digest"]
-            ) or _command_references_launcher(observed["command"], launcher_path)
-            # macOS framework Python may report the app-bundle runtime binary
-            # rather than the shebang interpreter path. The exact, digested
-            # launcher still binds the process when it is present in the
-            # observed command; native binaries bind directly by digest.
-            identity_bound = launcher_matches and (
-                runtime_matches
-                or _command_references_launcher(observed["command"], launcher_path)
+                and observed_executable["path"] == launcher_identity["path"]
             )
+            executed_launcher = _command_executes_launcher(
+                observed["command"],
+                launcher=launcher_path,
+                runtimes=(
+                    runtime_path,
+                    *(
+                        (Path(observed_executable["path"]),)
+                        if observed_executable
+                        else ()
+                    ),
+                ),
+            )
+            identity_bound = native_launcher_matches or executed_launcher
             if not identity_bound:
                 limitations.append(
-                    "product executable identity does not match the version probe executable"
+                    "product executable process is not bound to the executed launcher "
+                    "used by the version probe"
                 )
 
             remaining = max(0.0, deadline - time.monotonic())

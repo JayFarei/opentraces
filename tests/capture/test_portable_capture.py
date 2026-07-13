@@ -581,6 +581,7 @@ def test_persistent_telemetry_finalizes_a_fresh_daemon_generation(
 
     runtime_root = tmp_path / "persistent-runtime"
     monkeypatch.setattr(capture_paths, "OPENTRACES_DIR", runtime_root)
+    monkeypatch.setattr(capture_paths, "STAGING_DIR", runtime_root / "staging")
     project = _git_project(tmp_path / "project")
     session_id = str(uuid.uuid4())
     trace_id = str(uuid.uuid4())
@@ -648,7 +649,7 @@ def test_persistent_telemetry_finalizes_a_fresh_daemon_generation(
             },
         }
     )
-    snapshot_path = runtime_root / "otel-sessions" / f"{session_id}.json"
+    snapshot_path = capture_paths.otel_staging_dir() / f"{session_id}.json"
     assert write_snapshot(buffer, session_id, snapshot_path) is True
 
     result = capture.finish(deadline=time.monotonic() + 5.0)
