@@ -49,6 +49,13 @@ def _result(**overrides):
         "pins": {},
     }
     values.update(overrides)
+    if values["execution_status"] == "error" and "evidence" not in overrides:
+        values["evidence"] = {
+            "complete": False,
+            "requirements": [
+                {"name": "bench.adjudication", "complete": False, "evidence_refs": []}
+            ],
+        }
     return build_result(**values)
 
 

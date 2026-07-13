@@ -58,6 +58,33 @@ def _validate_status(
         _require_reason(reason, for_status=verdict)
 
 
+def _validate_evidence(*, execution_status: str, evidence: object) -> None:
+    if not isinstance(evidence, dict) or not {"complete", "requirements"}.issubset(evidence):
+        raise ResultContractError("evidence requires complete and requirements")
+    complete = evidence["complete"]
+    requirements = evidence["requirements"]
+    if not isinstance(complete, bool) or not isinstance(requirements, list):
+        raise ResultContractError("evidence has invalid complete or requirements values")
+
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping):
+            raise ResultContractError("evidence requirements must be objects")
+        name = requirement.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ResultContractError("incomplete evidence requires a named requirement")
+        if not isinstance(requirement.get("complete"), bool):
+            raise ResultContractError("evidence requirement complete must be a boolean")
+        if not isinstance(requirement.get("evidence_refs"), list):
+            raise ResultContractError("evidence requirement evidence_refs must be an array")
+
+    if not complete and not requirements:
+        raise ResultContractError("incomplete evidence requires a named requirement")
+    if requirements and complete != all(requirement["complete"] for requirement in requirements):
+        raise ResultContractError("evidence complete must agree with its requirements")
+    if execution_status == "error" and complete:
+        raise ResultContractError("machinery error requires incomplete evidence")
+
+
 def build_result(
     *,
     run_id: str,
@@ -89,10 +116,7 @@ def build_result(
     _validate_status(execution_status=execution_status, verdict=verdict, reason=reason)
     if not isinstance(verifiers, list):
         raise ResultContractError("verifiers must be an array")
-    if not isinstance(evidence, dict) or set(evidence) < {"complete", "requirements"}:
-        raise ResultContractError("evidence requires complete and requirements")
-    if not isinstance(evidence["complete"], bool) or not isinstance(evidence["requirements"], list):
-        raise ResultContractError("evidence has invalid complete or requirements values")
+    _validate_evidence(execution_status=execution_status, evidence=evidence)
     if not isinstance(recordings, dict) or set(recordings) < {"rewatchable", "channels"}:
         raise ResultContractError("recordings requires rewatchable and channels")
     if not isinstance(recordings["rewatchable"], bool) or not isinstance(
