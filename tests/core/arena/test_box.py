@@ -14,6 +14,7 @@ from opentraces.core.arena.box import (
     Box,
     CrabboxRefusal,
     CrabboxRuntime,
+    sandbox_tier_for_provider,
 )
 
 
@@ -82,6 +83,96 @@ def test_lease_pins_version_image_tmpdir_and_runs_both_preflights(tmp_path: Path
     ]
     assert ssh[:3] == ["ssh", "-F", "/dev/null"]
     assert box.sandbox_tier == "container"
+    assert box.provider == "local-container"
+    assert box.image == PINNED_LOCAL_IMAGE
+
+
+def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primary_failure(
+    tmp_path: Path,
+) -> None:
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(
+                ["crabbox", "warmup"],
+                rc=1,
+                stdout="bootstrap failed after lease=cbx_abc123\n",
+            ),
+            _completed(["crabbox", "stop"], rc=1, stderr="cleanup also failed\n"),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="lease_failed") as caught:
+        runtime.lease()
+
+    assert caught.value.code == "lease_failed"
+    stop_calls = [call[0] for call in runner.calls if call[0][1:2] == ["stop"]]
+    assert stop_calls == [
+        [
+            "crabbox",
+            "stop",
+            "--id",
+            "cbx_abc123",
+            "--provider",
+            "local-container",
+        ]
+    ]
+    assert runtime.diagnostic_records()[-1] == {
+        "operation": "cleanup",
+        "code": "release_failed",
+        "message": "release_failed: cleanup also failed",
+    }
+
+
+@pytest.mark.parametrize(
+    ("patch", "refusal_code"),
+    [
+        ({"provider": "firecracker"}, "lease_provider_mismatch"),
+        ({"labels": {"image": "ubuntu:26.04"}}, "lease_image_mismatch"),
+    ],
+)
+def test_lease_refuses_requested_vs_observed_provider_or_image_mismatch(
+    tmp_path: Path,
+    patch: dict,
+    refusal_code: str,
+) -> None:
+    facts = json.loads(_inspect())
+    facts.update(patch)
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout="ready lease=cbx_abc123\n"),
+            _completed(["crabbox", "inspect"], stdout=json.dumps(facts)),
+            _completed(["crabbox", "stop"]),
+        ]
+    )
+
+    with pytest.raises(CrabboxRefusal, match=refusal_code) as caught:
+        CrabboxRuntime(
+            runner=runner,
+            home=tmp_path,
+            ssh_config=tmp_path / "missing",
+        ).lease()
+
+    assert caught.value.code == refusal_code
+    assert sum(call[0][1:2] == ["stop"] for call in runner.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        ("local-container", "container"),
+        ("cloudflare", "container"),
+        ("firecracker", "microvm"),
+        ("ssh", "none"),
+        ("new-unreviewed-provider", "none"),
+    ],
+)
+def test_sandbox_tier_uses_an_explicit_non_escalating_provider_map(
+    provider: str, expected: str
+) -> None:
+    assert sandbox_tier_for_provider(provider) == expected
 
 
 def test_version_drift_is_a_loud_named_refusal(tmp_path: Path) -> None:

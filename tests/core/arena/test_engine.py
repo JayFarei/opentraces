@@ -11,6 +11,7 @@ import pytest
 from opentraces import __version__
 from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.engine import Bench, ScenarioSource, extract_claim
+from opentraces.core.arena.page import render_evidence_page
 from opentraces.core.arena.run_store import RunStore
 from tests.core.arena.fixtures.verifier_helper import assert_healthy_payload
 
@@ -30,6 +31,7 @@ class FakeBoxRuntime:
             ssh_user="crabbox",
             ssh_port="22",
             ssh_key="/tmp/fake",
+            image="ubuntu:24.04",
         )
 
     def materialize(self, box: Box, app_state: str, *, repository: Path) -> dict:
@@ -130,7 +132,9 @@ class RealShellRecordingRuntime(FakeBoxRuntime):
 
 
 class DiagnosticRuntime(FakeBoxRuntime):
-    image = "ubuntu:24.04"
+    # Requested configuration is not an observation. The result must use the
+    # image returned by inspect through Box.image, not this value.
+    image = "requested-but-not-observed:latest"
     crabbox_version = "0.38.0"
 
     def diagnostic_records(self) -> list[dict]:
@@ -222,6 +226,80 @@ def test_terminal_action_honors_the_remote_cwd_that_it_records(tmp_path: Path) -
     invocation = json.loads((run.final_path / "actions/0001/invocation.json").read_text())
     assert invocation["cwd"] == "/tmp"
     assert "cd /tmp" in " ".join(runtime.commands[0])
+
+
+def test_terminal_timeout_persists_complete_failure_exhaust_and_page_before_propagating(
+    tmp_path: Path,
+) -> None:
+    class TimingOutRuntime(FakeBoxRuntime):
+        def exec(self, box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+            timing_path.parent.mkdir(parents=True, exist_ok=True)
+            timing_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "timing": {"commandMs": 250, "exitCode": None},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            raise subprocess.TimeoutExpired(
+                cmd=list(argv),
+                timeout=timeout,
+                output="partial stdout before timeout\n",
+                stderr="partial stderr before timeout\n",
+            )
+
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=TimingOutRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        with bench.run(app_state="install-only") as run:
+            run.terminal.exec("slow-command", timeout=0.25)
+
+    final_path = next(bench.store.root.glob("run_*"))
+    action = final_path / "actions" / "0001"
+    assert (action / "stdout").read_text(encoding="utf-8") == (
+        "partial stdout before timeout\n"
+    )
+    assert (action / "stderr").read_text(encoding="utf-8") == (
+        "partial stderr before timeout\n"
+    )
+    assert json.loads((action / "timing.json").read_text(encoding="utf-8")) == {
+        "schemaVersion": 1,
+        "timing": {"commandMs": 250, "exitCode": None},
+    }
+    action_result = json.loads((action / "result.json").read_text(encoding="utf-8"))
+    assert action_result == {
+        "execution_status": "error",
+        "returncode": None,
+        "duration_ms": action_result["duration_ms"],
+        "stdout_ref": "actions/0001/stdout",
+        "stderr_ref": "actions/0001/stderr",
+        "timing_ref": "actions/0001/timing.json",
+        "reason": {
+            "code": "terminal_timeout",
+            "message": "terminal command exceeded its 0.25 second timeout",
+        },
+    }
+    assert action_result["duration_ms"] >= 0
+    result = json.loads((final_path / "result.json").read_text(encoding="utf-8"))
+    assert result["execution_status"] == "error"
+    assert result["verdict"] is None
+    page = render_evidence_page(final_path)
+    page_html = page.read_text(encoding="utf-8")
+    assert "rc=None" in page_html
+    for relative in (
+        "actions/0001/result.json",
+        "actions/0001/stdout",
+        "actions/0001/stderr",
+        "actions/0001/timing.json",
+    ):
+        assert relative in page_html
 
 
 def test_terminal_recording_survives_a_real_shell_with_a_non_default_remote_cwd(
