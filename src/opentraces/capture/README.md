@@ -8,6 +8,8 @@ This module collapses the former top-level `agents/`, `parsers/`, and `installer
 
 - `_base.py` — cross-agent protocols: `SessionParser`, `ProjectSessionDiscoverer`, `SessionPathIdentifier`, `AgentResumer`, `FormatImporter`, `HookInstaller`, and `ParseOutcome`.
 - `tool_boundary.py` — adapter-facing Trace Trails worktree observation at tool lifecycle boundaries. Agent hooks call this interface; `fs_watcher/` owns only path/blob observation.
+- `portable.py` — the placement-neutral `Capture.open(plan)` lifecycle used by persistent installations and leased workspaces. It owns bounded source finalization and emits a frozen, source-honest `CaptureResult`.
+- `parity.py` — verification-only raw-material comparison across persistent and leased placement; its normalization is deliberately outside the capture path.
 - `claude_code/` — Claude Code adapter.
   - `parse.py` — `ClaudeCodeParser` (live session parser).
   - `hooks/` — `on_stop`, `on_compact`, `on_tool_use`. Copied to `~/.claude/hooks/` by `opentraces setup claude-code`.
@@ -59,4 +61,5 @@ Parser specs for new harnesses must also define how command and skill surfaces a
 
 - [`docs/integration/capture-integration.md`](../../../web/site/docs/docs/integration/capture-integration.md) — full contributor spec with the Codex CLI reference implementation.
 - Root `CLAUDE.md` — full project structure and Trace Trails decisions.
+- [`LEASED_PROVISIONING.md`](LEASED_PROVISIONING.md) — leased-box spike evidence, source inventory, and known capture limits.
 - `src/opentraces/publish/README.md` — the outbound boundary (symmetric to this one).
