@@ -126,22 +126,33 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
     project = Path(request["project"])
     open_details = request.get("open_details") or {}
     state_path = open_details.get("state_path")
-    baseline_proven = open_details.get("baseline_initialized") is True
-    if not state_path or not baseline_proven:
+    poll_succeeded = open_details.get("poll_succeeded") is True
+    baseline_proven = open_details.get("baseline_proven") is True
+    if not state_path or not poll_succeeded or not baseline_proven:
         return _missing(
             "watcher baseline was not proven at Capture.open",
             details={
-                "open_baseline_initialized": bool(baseline_proven),
+                "open_poll_succeeded": poll_succeeded,
+                "open_baseline_proven": baseline_proven,
+                "open_baseline_initialized": open_details.get(
+                    "baseline_initialized"
+                ),
                 "state_path": state_path,
             },
         )
     poll = poll_project_once(project, state_path=Path(state_path))
-    if poll.baseline_initialized:
+    final_state_present = Path(state_path).is_file()
+    if poll.baseline_initialized or not final_state_present:
         return _missing(
             "watcher state was absent at final drain; lifecycle coverage is unproven",
             details={
-                "open_baseline_initialized": True,
-                "final_baseline_initialized": True,
+                "open_poll_succeeded": True,
+                "open_baseline_proven": True,
+                "open_baseline_initialized": open_details.get(
+                    "baseline_initialized"
+                ),
+                "final_baseline_initialized": poll.baseline_initialized,
+                "final_state_present": final_state_present,
                 "state_path": state_path,
             },
         )
@@ -152,8 +163,11 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
         "evidence_refs": [],
         "limitations": [],
         "details": {
-            "open_baseline_initialized": True,
+            "open_poll_succeeded": True,
+            "open_baseline_proven": True,
+            "open_baseline_initialized": open_details.get("baseline_initialized"),
             "final_baseline_initialized": poll.baseline_initialized,
+            "final_state_present": final_state_present,
             "state_path": state_path,
             "paths_seen": poll.paths_seen,
             "observations": len(poll.observations),

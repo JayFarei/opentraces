@@ -525,17 +525,25 @@ class Capture:
                     exclude_paths=[plan.session_path] if plan.session_path else None,
                     writer="portable-capture-watcher",
                 )
+                baseline_proven = watcher_state_path.is_file()
                 open_details["watcher"] = {
                     "state_path": str(watcher_state_path),
+                    "poll_succeeded": True,
+                    "baseline_proven": baseline_proven,
                     "baseline_initialized": baseline.baseline_initialized,
                     "paths_seen": baseline.paths_seen,
                     "skipped_paths": baseline.skipped_paths,
                 }
-                if not baseline.baseline_initialized:
+                if not baseline_proven:
                     limitations.setdefault("watcher", []).append(
                         "watcher baseline could not be established at Capture.open"
                     )
             except Exception as exc:  # noqa: BLE001 - persisted honesty boundary
+                open_details["watcher"] = {
+                    "state_path": str(watcher_state_path),
+                    "poll_succeeded": False,
+                    "baseline_proven": False,
+                }
                 limitations.setdefault("watcher", []).append(
                     "watcher baseline failed at Capture.open: "
                     f"{type(exc).__name__}: {exc}"
