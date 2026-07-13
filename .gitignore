@@ -44,6 +44,7 @@ skills-lock.json
 .coverage
 .context/
 tmp/
+$tmp/
 .spec
 
 # Ad-hoc run logs are private by default. Promote sanitized, task ready
