@@ -1,0 +1,63 @@
+A2 Hugging Face emulator real-box transcript
+Observed: 2026-07-13T18:40:11Z
+Source commit: d676fd98797045b6fb9cda095ef4e1a8edae9cda
+
+This transcript is sanitized. It contains no credentials or developer-machine
+paths. Angle-bracketed values name local transfer artifacts.
+
+$ crabbox warmup --provider local-container --local-container-image ubuntu:24.04 --ttl 30m
+provisioning provider=local-container lease=cbx_153bcab2cb3d slug=crimson-prawn runtime=docker image=ubuntu:24.04 keep=true
+container 56c6865adbca has no published SSH port
+
+$ docker logs 56c6865adbca
+/bin/sh: 0: cannot open /tmp/crabbox-bootstrap/bootstrap.sh: No such file
+
+Crabbox 0.38.0 allocated the lease but hit a bootstrap-bind race before SSH
+readiness. The proof therefore used an explicit fresh replacement container,
+labelled with the allocated lease id, and did not claim a successful managed
+Crabbox sync:
+
+$ docker run --platform linux/arm64 -d --name ot-a2-cbx-153bcab2cb3d --label crabbox_lease=cbx_153bcab2cb3d ubuntu:24.04 sleep infinity
+509f4913a0f828efc3a5251e72e89c5bc3cf7d99763494dda65e6ec9c9c5477d
+
+$ python -c 'build_hf_emulator_binary(<compiled-binary>)'
+[3ms] bundle 1 modules
+[0ms] compile <compiled-binary> bun-linux-aarch64-v1.3.6
+sha256=8253384aeb8eb13a72c02dcbbd4b952b8de5cb6aba6f09c3d7e11e3b5bd1bc7e
+size_bytes=94084504
+
+$ docker cp <source-archive> ot-a2-cbx-153bcab2cb3d:/tmp/source.tar
+$ docker cp <compiled-binary> ot-a2-cbx-153bcab2cb3d:/usr/local/bin/opentraces-hf-emulator
+$ docker exec ot-a2-cbx-153bcab2cb3d sh -lc 'uname -m; ldd --version | head -1; sha256sum /usr/local/bin/opentraces-hf-emulator; stat -c %s /usr/local/bin/opentraces-hf-emulator'
+aarch64
+ldd (Ubuntu GLIBC 2.39-0ubuntu8.7) 2.39
+8253384aeb8eb13a72c02dcbbd4b952b8de5cb6aba6f09c3d7e11e3b5bd1bc7e  /usr/local/bin/opentraces-hf-emulator
+94084504
+
+$ python -m pip install -e packages/opentraces-schema -e . pytest huggingface-hub==1.10.2 hf-xet==1.4.3
+$ python -c 'print the two installed contract package versions'
+huggingface-hub=1.10.2
+hf-xet=1.4.3
+
+$ OPENTRACES_HF_EMULATOR_BINARY=/usr/local/bin/opentraces-hf-emulator OPENTRACES_RUNTIME_FREE_BOX=1 python -m pytest -q tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py
+..........s.                                                             [100%]
+11 passed, 1 skipped in 1.99s
+
+The one skip is the explicitly opted-in compiled-build test. This runtime-free
+box executes every server contract against the precompiled pinned binary; the
+path-scoped CI job has Bun 1.3.6 and executes all 12 tests without that opt-in.
+
+$ PORT=4318 LEDGER_PATH=/work/hf-ledger.jsonl /usr/local/bin/opentraces-hf-emulator
+$ curl -fsS http://127.0.0.1:4318/_emulate/manifest | <select-readiness-fields>
+{"auth":[{"id":"user-token","status":"supported","title":"User access token","type":"bearer-token","validation":"minted-or-baseline-state"}],"controlPlane":{"credentials":"POST /_emulate/credentials","reset":"POST /_emulate/reset","seed":"POST /_emulate/seed"},"id":"huggingface","operation_count":12}
+
+$ HF_ENDPOINT=http://127.0.0.1:4318 python -c '<publish one TraceRecord through HFUploader>'
+{"success":true,"trace_count":1,"shard_name":"traces_20260713T183912Z_2012ebf2.jsonl"}
+
+$ python -c '<select the last commit row from /work/hf-ledger.jsonl>'
+{"method":"POST","operation_id":"commit","path":"/api/datasets/bench/scenario-2/commit/main","request":{"files":["data/traces_20260713T183912Z_2012ebf2.jsonl"],"repo_id":"bench/scenario-2","revision":"main"},"request_id":"req_7","response":{"commit_oid":"ad7cee0a5ed0f6b097ba3a16c3b867bffa63cb10","status":200}}
+
+$ pkill -f /usr/local/bin/opentraces-hf-emulator
+$ HF_ENDPOINT=http://127.0.0.1:4318 python -c '<HFUploader.ensure_repo_exists negative control>'
+returncode=1
+httpx.ConnectError: [Errno 111] Connection refused

@@ -1,7 +1,9 @@
 {
   "schema_version": "opentraces.bench.manual-proof.v1",
-  "observed_at": "2026-07-13T17:33:35Z",
+  "observed_at": "2026-07-13T18:40:11Z",
+  "source_commit": "d676fd98797045b6fb9cda095ef4e1a8edae9cda",
   "box": {
+    "lease_id": "cbx_153bcab2cb3d",
     "provider": "local-container",
     "image": "ubuntu:24.04",
     "architecture": "aarch64",
@@ -10,8 +12,8 @@
   "binary": {
     "bun_version": "1.3.6",
     "target": "bun-linux-arm64",
-    "size_bytes": 94080616,
-    "sha256": "dbd4b739ee61abd812b9820b66e2a6330dc8cbb5d28c353289a6c32bfb183e08"
+    "size_bytes": 94084504,
+    "sha256": "8253384aeb8eb13a72c02dcbbd4b952b8de5cb6aba6f09c3d7e11e3b5bd1bc7e"
   },
   "readiness": {
     "path": "/_emulate/manifest",
@@ -21,17 +23,17 @@
   "contract_tests": {
     "huggingface_hub": "1.10.2",
     "hf_xet": "1.4.3",
-    "passed": 10,
+    "passed": 11,
     "skipped": 1,
     "skip_reason": "The runtime-free box intentionally has no Bun build toolchain."
   },
   "product_publish": {
     "success": true,
     "trace_count": 1,
-    "shard_name": "traces_20260713T173335Z_d086d70f.jsonl",
+    "shard_name": "traces_20260713T183912Z_2012ebf2.jsonl",
     "ledger_operation_id": "commit",
     "ledger_path": "/api/datasets/bench/scenario-2/commit/main",
-    "commit_oid": "d0bf0f9d5b170387b93aa4c42cc04c22b9df4687"
+    "commit_oid": "ad7cee0a5ed0f6b097ba3a16c3b867bffa63cb10"
   },
   "emulator_down_control": {
     "observed": "red",
@@ -46,7 +48,7 @@
     "installed_size_bytes": 94066858
   },
   "materialization": {
-    "path": "direct-scp",
-    "reason": "The repository rsync candidate contained a pre-existing broken skill symlink."
+    "path": "direct-container-recovery",
+    "reason": "Crabbox 0.38.0 allocated the named local-container lease, but its bootstrap bind raced and the managed container exited before SSH became ready. The proof used a fresh linux/arm64 Ubuntu 24.04 container labelled with that lease id; the sanitized transcript records both the failed managed bootstrap and the recovery commands."
   }
 }
