@@ -68,6 +68,16 @@ def _finalize_session(request: dict[str, Any]) -> dict[str, Any]:
         "trace_id": result.trace_id,
         "error": result.error,
     }
+    if result.error or not result.trace_id:
+        return _missing(result.error or "ingest produced no trace", details=details)
+    return {
+        "status": "finalized",
+        "completeness": "full",
+        "evidence_refs": [str(Path(path))],
+        "limitations": [],
+        "details": details,
+        "trace_id": result.trace_id,
+    }
 
 
 def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
@@ -106,16 +116,6 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
         "limitations": [],
         "details": report,
         "trace_id": trace_id,
-    }
-    if result.error or not result.trace_id:
-        return _missing(result.error or "ingest produced no trace", details=details)
-    return {
-        "status": "finalized",
-        "completeness": "full",
-        "evidence_refs": [str(Path(path))],
-        "limitations": [],
-        "details": details,
-        "trace_id": result.trace_id,
     }
 
 
