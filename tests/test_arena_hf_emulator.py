@@ -1228,6 +1228,49 @@ print(json.dumps({
     )
 
 
+def test_pinned_client_can_validate_the_dataset_card_before_folder_upload(
+    tmp_path: Path,
+) -> None:
+    """The public dataset publish path validates README metadata before commit."""
+
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
+        result = _run_hf_client(
+            endpoint,
+            """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from huggingface_hub import HfApi
+
+api = HfApi(token="hf_bench_user_token")
+api.create_repo("bench/folder-publish", repo_type="dataset")
+with TemporaryDirectory() as raw:
+    folder = Path(raw)
+    (folder / "README.md").write_text("---\\nlicense: mit\\n---\\n# Proof\\n")
+    (folder / "data.jsonl").write_text('{"proof":true}\\n')
+    api.upload_folder(
+        repo_id="bench/folder-publish",
+        repo_type="dataset",
+        folder_path=folder,
+        commit_message="folder proof",
+    )
+""",
+        )
+
+    assert result.returncode == 0, result.stderr
+    rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+    assert any(
+        row["method"] == "POST"
+        and row["path"] == "/api/validate-yaml"
+        and row["response"]["status"] == 200
+        for row in rows
+    )
+    assert any(
+        row["operation_id"] == "commit"
+        and row["request"]["repo_id"] == "bench/folder-publish"
+        for row in rows
+    )
+
+
 def test_opentraces_publish_is_red_when_emulator_is_down() -> None:
     unavailable_endpoint = f"http://127.0.0.1:{_free_port()}"
     result = _run_hf_client(
