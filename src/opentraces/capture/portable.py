@@ -35,6 +35,13 @@ SourceStatus = Literal["finalized", "partial", "unavailable", "timed_out"]
 
 CAPTURE_RESULT_SCHEMA = "opentraces.capture.result.v1"
 _KNOWN_SOURCES = frozenset({"session_jsonl", "telemetry", "watcher", "git", "bucket"})
+_FINALIZATION_ORDER: tuple[CaptureSourceName, ...] = (
+    "session_jsonl",
+    "telemetry",
+    "watcher",
+    "git",
+    "bucket",
+)
 _SOURCE_VIEW: dict[str, CaptureViewName] = {
     "telemetry": "model_boundary",
     "session_jsonl": "harness",
@@ -123,6 +130,12 @@ class CaptureViewResult:
 
 @dataclass(frozen=True)
 class CaptureResult:
+    """Frozen capture outcome.
+
+    ``sources`` preserves the caller's ``CapturePlan.requested_sources`` order
+    even though finalization runs in dependency order internally.
+    """
+
     schema_version: str
     module_version: str
     placement: CapturePlacement
@@ -175,6 +188,7 @@ class CaptureSession:
         capture_root: Path,
         processes: dict[str, _OwnedProcess],
         open_limitations: dict[str, list[str]],
+        open_details: dict[str, dict[str, Any]],
     ) -> None:
         self.plan = plan
         self.bindings = bindings
@@ -182,6 +196,7 @@ class CaptureSession:
         self._capture_root = capture_root
         self._processes = processes
         self._open_limitations = open_limitations
+        self._open_details = open_details
         self._finished: CaptureResult | None = None
         self._trace_refs = list([plan.trace_id] if plan.trace_id is not None else [])
 
@@ -210,21 +225,28 @@ class CaptureSession:
         if deadline is None:
             deadline = time.monotonic() + 30.0
 
-        source_results: list[CaptureSourceResult] = []
-        for source in self.plan.requested_sources:
+        finalized_by_name: dict[str, CaptureSourceResult] = {}
+        requested = set(self.plan.requested_sources)
+        for source in _FINALIZATION_ORDER:
+            if source not in requested:
+                continue
             if time.monotonic() >= deadline:
-                source_results.append(
-                    self._timed_out(source, "finalization deadline exhausted")
+                finalized_by_name[source] = self._timed_out(
+                    source, "finalization deadline exhausted"
                 )
                 continue
             if source == "telemetry":
-                source_results.append(self._finalize_telemetry(deadline))
+                finalized = self._finalize_telemetry(deadline)
             else:
                 finalized = self._run_isolated_finalizer(source, deadline)
-                source_results.append(finalized)
-                trace_id = finalized.details.get("trace_id")
-                if trace_id and trace_id not in self._trace_refs:
-                    self._trace_refs.append(str(trace_id))
+            finalized_by_name[source] = finalized
+            trace_id = finalized.details.get("trace_id")
+            if trace_id and trace_id not in self._trace_refs:
+                self._trace_refs.append(str(trace_id))
+
+        source_results = [
+            finalized_by_name[source] for source in self.plan.requested_sources
+        ]
 
         self._stop_processes(deadline)
         views = _summarize_views(source_results)
@@ -324,6 +346,7 @@ class CaptureSession:
             "remaining_seconds": max(0.0, deadline - time.monotonic()),
             "security_policy": self.plan.security_policy,
             "raw_body_retention": self.plan.raw_body_retention,
+            "open_details": self._open_details.get(source) or {},
         }
         _atomic_write_json(request_path, request)
         stdout = (finalizers / f"{source}.stdout").open("ab")
@@ -463,6 +486,7 @@ class Capture:
         endpoint: str | None = None
         processes: dict[str, _OwnedProcess] = {}
         limitations: dict[str, list[str]] = {}
+        open_details: dict[str, dict[str, Any]] = {}
         if "telemetry" in plan.requested_sources:
             if plan.placement == "leased":
                 endpoint, owned, reason = _start_leased_receiver(
@@ -490,6 +514,33 @@ class Capture:
                 }
             )
 
+        if "watcher" in plan.requested_sources:
+            from .fs_watcher.runtime import poll_project_once
+
+            watcher_state_path = result_dir / "runtime" / "watcher-state.json"
+            try:
+                baseline = poll_project_once(
+                    plan.project,
+                    state_path=watcher_state_path,
+                    exclude_paths=[plan.session_path] if plan.session_path else None,
+                    writer="portable-capture-watcher",
+                )
+                open_details["watcher"] = {
+                    "state_path": str(watcher_state_path),
+                    "baseline_initialized": baseline.baseline_initialized,
+                    "paths_seen": baseline.paths_seen,
+                    "skipped_paths": baseline.skipped_paths,
+                }
+                if not baseline.baseline_initialized:
+                    limitations.setdefault("watcher", []).append(
+                        "watcher baseline could not be established at Capture.open"
+                    )
+            except Exception as exc:  # noqa: BLE001 - persisted honesty boundary
+                limitations.setdefault("watcher", []).append(
+                    "watcher baseline failed at Capture.open: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
         bindings = CaptureBindings(
             env=env,
             otlp_endpoint=endpoint,
@@ -503,6 +554,7 @@ class Capture:
             capture_root=capture_root,
             processes=processes,
             open_limitations=limitations,
+            open_details=open_details,
         )
 
 

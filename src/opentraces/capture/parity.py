@@ -92,10 +92,20 @@ def compare_placements(
     ) == _normalize(leased_trace.get("security") or {}, replacements)
 
     persistent_context = _normalize(
-        _read_jsonl_gz(persistent_path.with_name("context.jsonl.gz")), replacements
+        _resolve_content_references(
+            _read_jsonl_gz(persistent_path.with_name("context.jsonl.gz")),
+            persistent_path,
+            replacements,
+        ),
+        replacements,
     )
     leased_context = _normalize(
-        _read_jsonl_gz(leased_path.with_name("context.jsonl.gz")), replacements
+        _resolve_content_references(
+            _read_jsonl_gz(leased_path.with_name("context.jsonl.gz")),
+            leased_path,
+            replacements,
+        ),
+        replacements,
     )
     persistent_trail = _normalize(
         _read_jsonl_gz(persistent_path.with_name("trail.jsonl.gz")), replacements
@@ -127,10 +137,18 @@ def compare_placements(
         span_match = _span_coordinates(left_spans) == _span_coordinates(right_spans)
         if not span_match:
             differences.append("slicer_spans")
-        if persistent_labeler_provenance == leased_labeler_provenance:
+        if _matching_pinned_provenance(
+            persistent_labeler_provenance, leased_labeler_provenance
+        ):
             display_label_match = _display_labels(left_spans) == _display_labels(right_spans)
             if not display_label_match:
                 differences.append("display_labels")
+        elif not _pinned_provenance(persistent_labeler_provenance) or not _pinned_provenance(
+            leased_labeler_provenance
+        ):
+            limitations.append(
+                "display labels were not compared because labeler provenance is not pinned"
+            )
         else:
             limitations.append(
                 "display labels were not compared because labeler provenance differs"
@@ -208,6 +226,84 @@ def _read_jsonl_gz(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _resolve_content_references(
+    value: Any,
+    trace_path: Path,
+    replacements: dict[str, str],
+    *,
+    path: tuple[str, ...] = (),
+) -> Any:
+    """Replace message content hashes with normalized referenced identity.
+
+    Trail envelope hashes remain transport identity and are normalized away
+    later.  A hash inside a ``messages`` manifest is semantic, so parity must
+    dereference its raw blob, normalize placement paths in the content, and
+    compare the resulting digest. Missing/corrupt references remain visible as
+    unresolved identity rather than silently disappearing.
+    """
+    if isinstance(value, dict):
+        resolved: dict[str, Any] = {}
+        for key, child in value.items():
+            child_path = (*path, key)
+            if (
+                key == "content_hash"
+                and isinstance(child, str)
+                and "messages" in path
+            ):
+                content = _read_referenced_content(trace_path, child)
+                if content is None:
+                    resolved["unresolved_content_hash"] = child
+                else:
+                    normalized_content = _normalize(content, replacements)
+                    resolved["referenced_content_digest"] = _digest(normalized_content)
+                continue
+            resolved[key] = _resolve_content_references(
+                child,
+                trace_path,
+                replacements,
+                path=child_path,
+            )
+        return resolved
+    if isinstance(value, list):
+        return [
+            _resolve_content_references(
+                child,
+                trace_path,
+                replacements,
+                path=(*path, "[]"),
+            )
+            for child in value
+        ]
+    return value
+
+
+def _read_referenced_content(trace_path: Path, content_hash: str) -> Any | None:
+    prefix = "sha256:"
+    if not content_hash.startswith(prefix):
+        return None
+    digest = content_hash.removeprefix(prefix)
+    if len(digest) != 64:
+        return None
+    project_slug = trace_path.parent.parent.name
+    blob = (
+        trace_path.parents[4]
+        / "blobs"
+        / "v1"
+        / project_slug
+        / "raw"
+        / digest[:2]
+        / f"{digest}.json.gz"
+    )
+    try:
+        with gzip.open(blob, "rb") as handle:
+            material = handle.read()
+        if hashlib.sha256(material).hexdigest() != digest:
+            return None
+        return json.loads(material)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
 _IDENTITY_ONLY_KEYS = frozenset(
     {
         "trace_id",
@@ -255,6 +351,21 @@ def _span_coordinates(spans: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _display_labels(spans: Iterable[dict[str, Any]]) -> list[Any]:
     return [span.get("label") for span in spans]
+
+
+def _pinned_provenance(value: dict[str, Any] | None) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("model")
+        and value.get("version")
+    )
+
+
+def _matching_pinned_provenance(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> bool:
+    return _pinned_provenance(left) and _pinned_provenance(right) and left == right
 
 
 def _digest(value: Any) -> str:

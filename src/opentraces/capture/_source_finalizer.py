@@ -124,7 +124,27 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
     from ..core.trails.reconciler import reconcile_watcher_observations
 
     project = Path(request["project"])
-    poll = poll_project_once(project)
+    open_details = request.get("open_details") or {}
+    state_path = open_details.get("state_path")
+    baseline_proven = open_details.get("baseline_initialized") is True
+    if not state_path or not baseline_proven:
+        return _missing(
+            "watcher baseline was not proven at Capture.open",
+            details={
+                "open_baseline_initialized": bool(baseline_proven),
+                "state_path": state_path,
+            },
+        )
+    poll = poll_project_once(project, state_path=Path(state_path))
+    if poll.baseline_initialized:
+        return _missing(
+            "watcher state was absent at final drain; lifecycle coverage is unproven",
+            details={
+                "open_baseline_initialized": True,
+                "final_baseline_initialized": True,
+                "state_path": state_path,
+            },
+        )
     reconciled = reconcile_watcher_observations(project)
     return {
         "status": "finalized",
@@ -132,7 +152,9 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
         "evidence_refs": [],
         "limitations": [],
         "details": {
-            "baseline_initialized": poll.baseline_initialized,
+            "open_baseline_initialized": True,
+            "final_baseline_initialized": poll.baseline_initialized,
+            "state_path": state_path,
             "paths_seen": poll.paths_seen,
             "observations": len(poll.observations),
             "mutations": len(poll.mutations),
@@ -168,12 +190,43 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
         return _missing("bucket projection requires a finalized trace id")
     from ..core.bucket_store import (
         bucket_manifest_path,
+        project_context_tree_to_bucket,
+        project_per_trace_exports,
+        read_trace_record_object,
+        sync_trail_events_from_repo,
+        trace_record_path,
         trace_v1_json_path,
+        upsert_manifest_trace_row,
     )
     from ..core.config import get_project_dir
 
     project = Path(request["project"])
     project_slug = get_project_dir(project).name
+    record_obj = read_trace_record_object(trace_record_path(project_slug, trace_id))
+    if record_obj is None:
+        return _missing(
+            "bucket projection requires the canonical trace record",
+            details={"trace_id": trace_id, "project_slug": project_slug},
+        )
+
+    mirror = sync_trail_events_from_repo(project, repo_id=project_slug)
+    context_projection = project_context_tree_to_bucket(
+        project,
+        project_slug=project_slug,
+        trace_id=trace_id,
+    )
+    companion_projection = project_per_trace_exports(
+        project,
+        project_slug=project_slug,
+        trace_id=trace_id,
+        record=record_obj.record,
+    )
+    manifest_row = upsert_manifest_trace_row(
+        project,
+        project_slug=project_slug,
+        trace_id=trace_id,
+        record=record_obj.record,
+    )
     trace_path = trace_v1_json_path(project_slug, trace_id)
     manifest_path = bucket_manifest_path()
     missing = [
@@ -207,6 +260,10 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
             "manifest_path": str(manifest_path),
             "project_slug": project_slug,
             "security": trace.get("security") or {},
+            "events_mirror": mirror,
+            "context_projection": context_projection,
+            "companion_projection": companion_projection,
+            "manifest_row_written": manifest_row is not None,
         },
     }
 

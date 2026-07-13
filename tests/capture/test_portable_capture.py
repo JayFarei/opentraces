@@ -531,6 +531,7 @@ def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
     from opentraces.core.context_tree import CONTEXT_LAYER_CAPTURED
     from opentraces.core.context_tree.models import build_layer
     from opentraces.core.trails import TrailEventDraft, append_event_batch
+    from opentraces.core.trails.event_log import read_events
     from opentraces.core.trails.models import payload_content_hash
 
     projects = {
@@ -541,6 +542,7 @@ def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
     for placement in ("persistent", "leased"):
         project = projects[placement]
         source = _write_session(project, "sanitized-companion-session")
+        initial_result_dir = tmp_path / f"{placement}-initial"
         initial = Capture.open(
             CapturePlan(
                 project=project,
@@ -552,7 +554,7 @@ def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
                 session_path=source,
                 observer_version="observer-pin",
                 product_under_test_version="product-pin",
-                result_dir=tmp_path / f"{placement}-initial",
+                result_dir=initial_result_dir,
             )
         ).finish(deadline=time.monotonic() + 10.0)
         trace_id = initial.trace_refs[0]
@@ -595,7 +597,13 @@ def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
                     trace_id=trace_id,
                     observer_version="observer-pin",
                     product_under_test_version="product-pin",
-                    result_dir=tmp_path / f"{placement}-projection",
+                    # A leased placement's bucket belongs to its lease root;
+                    # reopening that same placement must retain that root.
+                    result_dir=(
+                        initial_result_dir
+                        if placement == "leased"
+                        else tmp_path / "persistent-projection"
+                    ),
                 )
             ).finish(deadline=time.monotonic() + 10.0)
         )
@@ -620,6 +628,23 @@ def test_bucket_companions_are_substantive_sanitized_and_placement_equal(
     )
     assert report.context_companion_match is True
     assert report.trail_companion_match is True
+
+    for project in projects.values():
+        canonical = [
+            event
+            for event in read_events(project, verify=True)
+            if event.writer == "portable-capture-test"
+        ]
+        assert len(canonical) == 2
+        assert all(
+            event.content_hash == payload_content_hash(event.payload)
+            for event in canonical
+        )
+        # Sanitization is an outbound companion concern. The private canonical
+        # log remains byte-identical and preserves its content-address chain.
+        assert "/Users/shared-dev" in json.dumps(
+            [event.payload for event in canonical], sort_keys=True
+        )
 
 
 def test_display_label_parity_requires_matching_labeler_provenance(
