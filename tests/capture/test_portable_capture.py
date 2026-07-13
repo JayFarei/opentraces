@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import os
 import subprocess
+import sys
 import time
 import urllib.request
 import uuid
@@ -1192,7 +1193,28 @@ def test_persistent_bindings_name_unavailable_hook_integration(
     assert "not installed" in session.bindings.hook_commands_reason
 
 
-def test_required_non_self_observation_is_enforced_and_can_be_proven(
+def _write_identifiable_product_command(path: Path) -> Path:
+    path.write_text(
+        f"""#!{sys.executable}
+import sys
+import time
+
+import opentraces
+
+if sys.argv[1:] == ["--version"]:
+    print(opentraces.__version__)
+elif sys.argv[1:] == ["serve"]:
+    time.sleep(10)
+else:
+    raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def test_required_non_self_observation_rejects_unrelated_live_process(
     tmp_path: Path,
 ) -> None:
     project = _git_project(tmp_path / "project")
@@ -1211,7 +1233,51 @@ def test_required_non_self_observation_is_enforced_and_can_be_proven(
     assert unproven.provenance["separation"]["required"] is True
     assert unproven.provenance["separation"]["proven"] is False
 
+    from opentraces import __version__ as runtime_version
+
+    product_command = _write_identifiable_product_command(
+        tmp_path / "opentraces-product"
+    )
     product = subprocess.Popen(["sleep", "10"])
+    try:
+        unrelated = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=("watcher",),
+                required_sources=("watcher",),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                product_under_test_version=runtime_version,
+                product_under_test_version_probe=(
+                    str(product_command),
+                    "--version",
+                ),
+                result_dir=tmp_path / "unrelated",
+            )
+        ).finish(deadline=time.monotonic() + 5.0)
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    assert unrelated.completeness == "partial"
+    assert unrelated.provenance["separation"]["proven"] is False
+    assert unrelated.provenance["product_under_test"]["pid_alive"] is True
+    assert unrelated.provenance["product_under_test"]["caller_claim"] == runtime_version
+    assert any("executable" in item for item in unrelated.limitations)
+
+
+def test_required_non_self_observation_uses_observed_product_identity_and_version(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    from opentraces import __version__ as runtime_version
+
+    product_command = _write_identifiable_product_command(
+        tmp_path / "opentraces-product"
+    )
+    product = subprocess.Popen([str(product_command), "serve"])
     try:
         proven = Capture.open(
             CapturePlan(
@@ -1222,6 +1288,11 @@ def test_required_non_self_observation_is_enforced_and_can_be_proven(
                 required_sources=("watcher",),
                 require_observer_separation=True,
                 product_under_test_pid=product.pid,
+                product_under_test_version=runtime_version,
+                product_under_test_version_probe=(
+                    str(product_command),
+                    "--version",
+                ),
                 result_dir=tmp_path / "proven",
             )
         ).finish(deadline=time.monotonic() + 5.0)
@@ -1229,9 +1300,20 @@ def test_required_non_self_observation_is_enforced_and_can_be_proven(
         product.terminate()
         product.wait(timeout=2.0)
 
+    attestation = proven.provenance["product_under_test"]
     assert proven.completeness == "complete"
+    assert proven.product_under_test_version == runtime_version
     assert proven.provenance["separation"]["proven"] is True
-    assert proven.provenance["observer"]["pid"] != proven.provenance["product_under_test"]["pid"]
+    assert proven.provenance["observer"]["pid"] != attestation["pid"]
+    assert attestation["derivation"] == "runtime_attestation"
+    assert attestation["version"] == runtime_version
+    assert attestation["caller_claim"] == runtime_version
+    assert attestation["executable"]["path"]
+    assert attestation["executable"]["digest"].startswith("sha256:")
+    assert attestation["launcher"]["path"] == str(product_command.resolve())
+    assert attestation["launcher"]["digest"].startswith("sha256:")
+    assert "opentraces" in attestation["command"]
+    assert attestation["version_probe"]["status"] == "observed"
 
 
 def test_display_label_parity_requires_matching_labeler_provenance(
