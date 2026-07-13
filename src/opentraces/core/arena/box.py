@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -71,6 +72,89 @@ class BoxCommandResult:
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
+_CRABBOX_HOST_CANDIDATES = (
+    "crabbox",
+    "crabbox.local",
+    "cbx_probe",
+    "localhost",
+    "127.0.0.1",
+)
+_SENSITIVE_KEY_PARTS = ("credential", "secret", "token", "password", "privatekey", "sshkey")
+_HOST_PATH_RE = re.compile(r"(?:(?:/Users|/home|/private|/tmp)/[^\s\"']+)")
+
+
+def _host_scope_may_apply(patterns: Sequence[str] | None) -> bool:
+    """Approximate the Host scopes Crabbox may traverse during warmup.
+
+    Literal third-party blocks such as ``Host github.com`` are irrelevant,
+    while wildcard/global and Crabbox/loopback blocks remain conservative.
+    Negated patterns follow OpenSSH's "a negation wins" matching rule.
+    """
+
+    if patterns is None:
+        return True
+    positive = [pattern for pattern in patterns if not pattern.startswith("!")]
+    negative = [pattern[1:] for pattern in patterns if pattern.startswith("!")]
+    for candidate in _CRABBOX_HOST_CANDIDATES:
+        if not any(fnmatch.fnmatchcase(candidate, pattern) for pattern in positive):
+            continue
+        if any(fnmatch.fnmatchcase(candidate, pattern) for pattern in negative):
+            continue
+        return True
+    return False
+
+
+def _ignored(keyword: str, patterns: set[str]) -> bool:
+    return any(fnmatch.fnmatchcase(keyword.lower(), pattern.lower()) for pattern in patterns)
+
+
+def _sanitize_payload(value: Any) -> Any:
+    """Retain observation shape while excluding credentials and host paths."""
+
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for raw_key, child in value.items():
+            key = str(raw_key)
+            compact = key.lower().replace("_", "").replace("-", "")
+            if any(part in compact for part in _SENSITIVE_KEY_PARTS) or compact in {
+                "hostpath",
+                "home",
+                "cwd",
+            }:
+                sanitized[key] = "[redacted]"
+            else:
+                sanitized[key] = _sanitize_payload(child)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in value]
+    if isinstance(value, str):
+        return _HOST_PATH_RE.sub("[host-path]", value)
+    return value
+
+
+def _sanitize_timing(value: Any) -> Any:
+    """Timing records are numeric evidence; redact all free-form strings."""
+
+    sanitized = _sanitize_payload(value)
+    if isinstance(sanitized, Mapping):
+        return {str(key): _sanitize_timing(child) for key, child in sanitized.items()}
+    if isinstance(sanitized, list):
+        return [_sanitize_timing(item) for item in sanitized]
+    if isinstance(sanitized, str):
+        return sanitized if sanitized in {"[redacted]", "[host-path]"} else "[redacted]"
+    return sanitized
+
+
+def _sanitize_diagnostic_text(text: str) -> str:
+    if not text:
+        return text
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return _HOST_PATH_RE.sub("[host-path]", text)
+    return json.dumps(_sanitize_payload(payload), sort_keys=True)
+
+
 def _operation_name(argv: Sequence[str]) -> str:
     if not argv:
         return "unknown"
@@ -129,6 +213,7 @@ class CrabboxRuntime:
         self.image = image
         self.command = command
         self._diagnostics: list[dict[str, Any]] = []
+        self._run_evidence_root: Path | None = None
         self.child_env = dict(os.environ)
         tmpdir = self.home / "crabbox-tmp"
         tmpdir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +221,24 @@ class CrabboxRuntime:
         colima_socket = self.home / ".colima" / "default" / "docker.sock"
         if "DOCKER_HOST" not in self.child_env and colima_socket.exists():
             self.child_env["DOCKER_HOST"] = f"unix://{colima_socket}"
+
+    def configure_run_evidence(self, run_root: Path) -> None:
+        """Route Crabbox timing records into the pending run's custody."""
+
+        self._run_evidence_root = Path(run_root)
+
+    def _timing_path(self, repository: Path, name: str) -> Path:
+        if self._run_evidence_root is not None:
+            return self._run_evidence_root / "artifacts" / "crabbox-timing" / f"{name}.json"
+        return repository / ".crabbox" / f"bench-{name}-timing.json"
+
+    def _evidence_ref(self, path: Path) -> str | None:
+        if self._run_evidence_root is None:
+            return None
+        try:
+            return path.relative_to(self._run_evidence_root).as_posix()
+        except ValueError:
+            return None
 
     def _call(
         self,
@@ -156,8 +259,8 @@ class CrabboxRuntime:
                 {
                     "operation": _operation_name(argv),
                     "returncode": None,
-                    "stdout": str(exc.stdout or ""),
-                    "stderr": str(exc.stderr or ""),
+                    "stdout": _sanitize_diagnostic_text(str(exc.stdout or "")),
+                    "stderr": _sanitize_diagnostic_text(str(exc.stderr or "")),
                     "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                     "timed_out": True,
                 }
@@ -167,8 +270,8 @@ class CrabboxRuntime:
             {
                 "operation": _operation_name(argv),
                 "returncode": completed.returncode,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
+                "stdout": _sanitize_diagnostic_text(completed.stdout),
+                "stderr": _sanitize_diagnostic_text(completed.stderr),
                 "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                 "timed_out": False,
             }
@@ -193,15 +296,40 @@ class CrabboxRuntime:
     def _assert_ssh_config(self) -> None:
         if not self.ssh_config.is_file():
             return
-        text = self.ssh_config.read_text(encoding="utf-8", errors="replace")
-        bad = re.search(r"(?im)^\s*(UseKeychain|AddKeysToKeychain)\b", text)
-        guarded = re.search(
-            r"(?im)^\s*IgnoreUnknown\s+[^\n]*UseKeychain[^\n]*AddKeysToKeychain", text
-        ) or re.search(
-            r"(?im)^\s*IgnoreUnknown\s+[^\n]*AddKeysToKeychain[^\n]*UseKeychain", text
-        )
-        if bad and not guarded:
-            raise CrabboxRefusal("ssh_config_incompatible", SSH_REMEDY)
+        host_patterns: list[str] | None = None
+        global_ignored: set[str] = set()
+        local_ignored: set[str] = set()
+        for raw_line in self.ssh_config.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            directive = parts[0].lower()
+            values = parts[1:]
+            if directive == "host":
+                host_patterns = values
+                local_ignored = set()
+                continue
+            if directive == "ignoreunknown":
+                patterns = {
+                    pattern
+                    for value in values
+                    for pattern in value.replace(",", " ").split()
+                }
+                if host_patterns is None:
+                    global_ignored.update(patterns)
+                elif _host_scope_may_apply(host_patterns):
+                    local_ignored.update(patterns)
+                continue
+            if directive not in {"usekeychain", "addkeystokeychain"}:
+                continue
+            if not _host_scope_may_apply(host_patterns):
+                continue
+            canonical = "UseKeychain" if directive == "usekeychain" else "AddKeysToKeychain"
+            if not _ignored(canonical, global_ignored | local_ignored):
+                raise CrabboxRefusal("ssh_config_incompatible", SSH_REMEDY)
 
     def lease(self) -> Box:
         self._assert_version()
@@ -311,9 +439,17 @@ class CrabboxRuntime:
         timing: dict[str, Any] = {}
         if timing_path.is_file():
             try:
-                timing = json.loads(timing_path.read_text(encoding="utf-8"))
+                timing = _sanitize_timing(json.loads(timing_path.read_text(encoding="utf-8")))
+                timing_path.write_text(
+                    json.dumps(timing, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                )
             except json.JSONDecodeError:
                 timing = {"invalid": True}
+        if self._diagnostics:
+            self._diagnostics[-1]["timing"] = timing
+            timing_ref = self._evidence_ref(timing_path)
+            if timing_ref is not None:
+                self._diagnostics[-1]["timing_ref"] = timing_ref
         return BoxCommandResult(
             argv=command,
             returncode=completed.returncode,
@@ -326,20 +462,25 @@ class CrabboxRuntime:
         """Materialize the first concrete recipe from locally built wheels."""
 
         if app_state == "base-only":
+            timing_path = self._timing_path(repository, "base-provides")
             probe = self.exec(
                 box,
                 ["sh", "-c", "command -v python3 && command -v git && command -v curl && command -v script"],
                 timeout=30,
-                timing_path=repository / ".crabbox" / "bench-base-provides-timing.json",
+                timing_path=timing_path,
             )
             if probe.returncode != 0:
                 raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
             material = f"{box.provider}\n{self.image}\npython3\ngit\ncurl\nscript\n"
-            return {
+            pin = {
                 "name": app_state,
                 "digest": f"sha256:{hashlib.sha256(material.encode()).hexdigest()}",
                 "provides": ["python3", "git", "curl", "script"],
             }
+            timing_ref = self._evidence_ref(timing_path)
+            if timing_ref is not None:
+                pin["observation_refs"] = [timing_ref]
+            return pin
         if app_state != "install-only":
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
         wheels = sorted((repository / "dist").glob("*.whl"))
@@ -373,7 +514,7 @@ class CrabboxRuntime:
             if copied.returncode != 0:
                 raise CrabboxRefusal("app_state_copy_failed", copied.stderr.strip())
             remote_wheels.append(remote)
-        timing = repository / ".crabbox" / "bench-materialize-timing.json"
+        timing = self._timing_path(repository, "materialize")
         install = self.exec(
             box,
             [
@@ -388,20 +529,29 @@ class CrabboxRuntime:
         )
         if install.returncode != 0:
             raise CrabboxRefusal("app_state_install_failed", install.stderr.strip())
+        provides_timing = self._timing_path(repository, "provides")
         probe = self.exec(
             box,
             ["sh", "-c", "command -v opentraces && command -v script"],
             timeout=30,
-            timing_path=repository / ".crabbox" / "bench-provides-timing.json",
+            timing_path=provides_timing,
         )
         if probe.returncode != 0:
             raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
         app_digest = hashlib.sha256("\n".join(digests).encode()).hexdigest()
-        return {
+        pin = {
             "name": app_state,
             "digest": f"sha256:{app_digest}",
             "provides": ["cli", "script"],
         }
+        observation_refs = [
+            ref
+            for ref in (self._evidence_ref(timing), self._evidence_ref(provides_timing))
+            if ref is not None
+        ]
+        if observation_refs:
+            pin["observation_refs"] = observation_refs
+        return pin
 
     def collect(
         self,

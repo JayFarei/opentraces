@@ -135,6 +135,9 @@ class BenchRun:
         )
         self.draft.write_json("source/verifiers.json", {"sources": []})
         try:
+            configure_evidence = getattr(self.bench.box_runtime, "configure_run_evidence", None)
+            if callable(configure_evidence):
+                configure_evidence(self.draft.path)
             self.box = self.bench.box_runtime.lease()
             self._app_state_pin = self.bench.box_runtime.materialize(
                 self.box, self.app_state, repository=self.bench.repository_path
@@ -312,6 +315,16 @@ class BenchRun:
         events = list(runtime_diagnostics()) if callable(runtime_diagnostics) else []
         events.extend(self._lifecycle_diagnostics)
         artifacts: list[dict[str, Any]] = []
+        timing_root = self.draft.path / "artifacts" / "crabbox-timing"
+        if timing_root.is_dir():
+            for timing_path in sorted(timing_root.glob("*.json")):
+                artifacts.append(
+                    {
+                        "path": timing_path.relative_to(self.draft.path).as_posix(),
+                        "media_type": "application/json",
+                        "kind": "crabbox_timing",
+                    }
+                )
         if events:
             diagnostic_ref = "artifacts/box-lifecycle.json"
             self.draft.write_json(diagnostic_ref, {"events": events})
@@ -331,6 +344,14 @@ class BenchRun:
             }
             for verifier in self.verifiers
         ]
+        if verdict == "skip" and not evidence_requirements:
+            evidence_requirements.append(
+                {
+                    "name": str((reason or {}).get("code") or "bench.prerequisite"),
+                    "complete": False,
+                    "evidence_refs": [],
+                }
+            )
         if execution_status == "error":
             evidence_requirements.append(
                 {
@@ -430,7 +451,7 @@ class BenchRun:
                 self.bench.box_runtime.release(self.box)
             except Exception as caught:
                 release_error = caught
-        if release_error is not None and exc is None:
+        if release_error is not None:
             self._lifecycle_diagnostics.append(
                 {
                     "code": getattr(release_error, "code", "release_failed"),

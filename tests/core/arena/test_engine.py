@@ -209,8 +209,9 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
-printf '0.010 3\\n' >"$timing"
 sh -c "$command" >"$typescript"
+bytes=$(wc -c <"$typescript" | tr -d ' ')
+printf '0.010 %s\\n' "$bytes" >"$timing"
 cat "$typescript"
 """,
         encoding="utf-8",

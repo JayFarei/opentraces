@@ -104,24 +104,23 @@ class TerminalDrive:
         remote_base = f"bench-recordings/terminal-{self._ordinal:04d}"
         remote_timing = f"{remote_base}.timing"
         remote_typescript = f"{remote_base}.typescript"
-        script_argv = [
-            "script",
-            "-q",
-            "--return",
-            "--log-timing",
-            remote_timing,
-            "--log-out",
-            remote_typescript,
-            "--command",
-            shlex.join(argv),
-        ]
+        # Crabbox artifact globs are relative to its synced workdir.  Capture
+        # that directory before honoring the requested command cwd, otherwise
+        # `cwd=/tmp` silently strands the typescript under /tmp while collect()
+        # looks in the repository workdir.
+        recording_command = (
+            'recording_root="$PWD/bench-recordings" && '
+            'mkdir -p "$recording_root" && '
+            f"cd {shlex.quote(cwd or '.')} && "
+            "exec script -q --return "
+            f"--log-timing \"$recording_root/{Path(remote_timing).name}\" "
+            f"--log-out \"$recording_root/{Path(remote_typescript).name}\" "
+            f"--command {shlex.quote(shlex.join(argv))}"
+        )
         recorded_argv = [
             "sh",
             "-c",
-            (
-                "mkdir -p bench-recordings && "
-                f"cd {shlex.quote(cwd or '.')} && exec {shlex.join(script_argv)}"
-            ),
+            recording_command,
         ]
         observed = self.runtime.exec(
             self.box,
