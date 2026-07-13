@@ -76,6 +76,10 @@ def _finalize_session(request: dict[str, Any]) -> dict[str, Any]:
     }
     if result.error or not result.trace_id:
         return _missing(result.error or "ingest produced no trace", details=details)
+    details["security_observation"] = _trace_security_observation(
+        Path(request["project"]),
+        result.trace_id,
+    )
     return {
         "status": "finalized",
         "completeness": "full",
@@ -338,6 +342,7 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
             "manifest_path": str(manifest_path),
             "project_slug": project_slug,
             "security": trace.get("security") or {},
+            "security_observation": _security_observation_from_trace(trace),
             "events_mirror": mirror,
             "context_projection": context_projection,
             "companion_projection": companion_projection,
@@ -379,8 +384,40 @@ def _resolve_security_policy(request: dict[str, Any]) -> tuple[Any, dict[str, An
         apply_bucket_security_policy(cfg, requested)
     return cfg, {
         "requested_policy": requested,
-        "effective_tools": enabled_security_tool_names(cfg),
+        "configured_tools": enabled_security_tool_names(cfg),
+        "observed": False,
+    }
+
+
+def _trace_security_observation(project: Path, trace_id: str) -> dict[str, Any]:
+    from ..core.bucket_store import read_trace_record_object, trace_record_path
+    from ..core.config import get_project_dir
+
+    project_slug = get_project_dir(project).name
+    record = read_trace_record_object(trace_record_path(project_slug, trace_id))
+    if record is None:
+        return {
+            "observed": False,
+            "tools_applied": [],
+            "reason": "finalized TraceRecord could not be read",
+        }
+    return _security_observation_from_trace(record.record.model_dump(mode="json"))
+
+
+def _security_observation_from_trace(trace: dict[str, Any]) -> dict[str, Any]:
+    metadata = trace.get("metadata") or {}
+    manifest = metadata.get("security") if isinstance(metadata, dict) else None
+    tools = manifest.get("tools_applied") if isinstance(manifest, dict) else None
+    if not isinstance(tools, list):
+        return {
+            "observed": False,
+            "tools_applied": [],
+            "reason": "TraceRecord has no security tools_applied manifest",
+        }
+    return {
         "observed": True,
+        "tools_applied": [str(tool) for tool in tools],
+        "scanned": bool((trace.get("security") or {}).get("scanned")),
     }
 
 

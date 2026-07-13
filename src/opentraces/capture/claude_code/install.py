@@ -360,6 +360,43 @@ def status(
     }
 
 
+def registered_hook_commands(
+    hooks_dir: Path | None = None,
+    settings_file: Path | None = None,
+) -> tuple[str, ...]:
+    """Return the commands from one complete, observed production install.
+
+    This is read-only: portable Capture uses it to report the persistent
+    adapter actually present on the machine, never a command merely planned
+    by the current package.
+    """
+
+    th, ts = _resolve_paths(hooks_dir, settings_file)
+    observed = status(th, ts)
+    if observed.get("installed") is not True:
+        return ()
+    try:
+        settings = _load_settings(ts)
+    except HookInstallError:
+        return ()
+    hooks_cfg = settings.get("hooks") or {}
+    commands: list[str] = []
+    for event, name in EVENT_SCRIPTS.items():
+        expected_script = str(th / f"opentraces_{name}")
+        for entry in hooks_cfg.get(event) or []:
+            inner = entry.get("hooks") if isinstance(entry, dict) else None
+            rows = inner if isinstance(inner, list) else [entry]
+            for row in rows:
+                command = row.get("command") if isinstance(row, dict) else None
+                if isinstance(command, str) and expected_script in command:
+                    commands.append(command)
+                    break
+            else:
+                continue
+            break
+    return tuple(commands) if len(commands) == len(EVENT_SCRIPTS) else ()
+
+
 @dataclass
 class ClaudeCodeHookInstaller:
     """HookInstaller protocol adapter for Claude Code.

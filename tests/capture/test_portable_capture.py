@@ -276,7 +276,10 @@ def test_killed_required_source_is_persisted_as_partial_before_deadline(
     assert result.source("telemetry").completeness == "missing"
     assert result.view("model_boundary").completeness == "missing"
     assert "source process exited" in result.source("telemetry").limitations[0]
-    assert result.observer_version == "0.4.9-observer"
+    from opentraces import __version__ as runtime_version
+
+    assert result.observer_version == runtime_version
+    assert result.provenance["observer"]["caller_claim"] == "0.4.9-observer"
     assert result.product_under_test_version == "0.4.8-product"
 
     frozen = json.loads((result_dir / "capture_result.json").read_text())
@@ -787,6 +790,59 @@ def test_parity_preserves_semantic_attribution_range_content_hashes(
     assert "canonical_trace" in report.differences
 
 
+def test_parity_does_not_normalize_workspace_basenames_inside_semantic_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentraces.core import paths as capture_paths
+
+    monkeypatch.setattr(
+        capture_paths,
+        "OPENTRACES_DIR",
+        tmp_path / "persistent-runtime",
+    )
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        project = projects[placement]
+        source = _write_session(project, "semantic-basename-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=project,
+                    workspace=project,
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="semantic-basename-session",
+                    session_path=source,
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    for placement, result in zip(("persistent", "leased"), results, strict=True):
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+        trace["task"]["description"] = (
+            f"The word {placement}-project is semantic product text."
+        )
+        trace_path.write_text(json.dumps(trace), encoding="utf-8")
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.canonical_trace_match is False
+    assert "canonical_trace" in report.differences
+
+
 def test_bucket_companions_preserve_canonical_bytes_and_parity_normalizes_safely(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -990,6 +1046,7 @@ def test_named_security_policy_is_applied_and_observed(tmp_path: Path) -> None:
         "declared_policy": "basic",
         "configured_tools": ["regex", "entropy"],
         "tools_applied": ["regex", "entropy"],
+        "effective_tools": ["regex", "entropy"],
         "observed": True,
         "raw_body_retention": "delete",
     }

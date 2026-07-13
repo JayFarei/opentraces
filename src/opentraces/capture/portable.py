@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -115,6 +116,10 @@ class CaptureBindings:
     raw_bodies_dir: str | None = None
     watched_roots: tuple[str, ...] = ()
     hook_commands: tuple[tuple[str, ...], ...] = ()
+    hook_commands_status: Literal["observed", "unavailable", "not_requested"] = (
+        "not_requested"
+    )
+    hook_commands_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -324,16 +329,41 @@ class CaptureSession:
             if separation_proven
             else ("non-self-observation separation is not proven for this capture",)
         )
-        limitations = (*source_limitations, *provenance_limitations)
-        observed_security = [
+        declared_security = [
             source.details.get("capture_security_policy")
             for source in source_results
             if isinstance(source.details.get("capture_security_policy"), dict)
         ]
-        effective_tools = (
-            list(observed_security[0].get("effective_tools") or [])
-            if observed_security
+        security_observations = [
+            source.details.get("security_observation")
+            for source in source_results
+            if isinstance(source.details.get("security_observation"), dict)
+            and source.details["security_observation"].get("observed") is True
+        ]
+        configured_tools = (
+            list(declared_security[0].get("configured_tools") or [])
+            if declared_security
             else []
+        )
+        tools_applied = list(
+            dict.fromkeys(
+                str(tool)
+                for observation in security_observations
+                for tool in observation.get("tools_applied") or []
+            )
+        )
+        security_limitations = (
+            ()
+            if security_observations
+            else (
+                "security applied-state observation unavailable; "
+                "no sanitized TraceRecord was finalized",
+            )
+        )
+        limitations = (
+            *source_limitations,
+            *provenance_limitations,
+            *security_limitations,
         )
         result_path = self._result_dir / "capture_result.json"
         result = CaptureResult(
@@ -341,7 +371,7 @@ class CaptureSession:
             module_version=__version__,
             placement=self.plan.placement,
             completeness="complete" if complete else "partial",
-            observer_version=self.plan.observer_version,
+            observer_version=__version__,
             product_under_test_version=self.plan.product_under_test_version,
             sources=tuple(source_results),
             views=tuple(views),
@@ -349,8 +379,13 @@ class CaptureSession:
             trace_refs=tuple(self._trace_refs),
             security={
                 "policy": self.plan.security_policy,
-                "effective_tools": effective_tools,
-                "observed": bool(observed_security),
+                "declared_policy": self.plan.security_policy,
+                "configured_tools": configured_tools,
+                "tools_applied": tools_applied,
+                # Backward-compatible alias; its value now comes from the
+                # observed record rather than from enabled configuration.
+                "effective_tools": tools_applied,
+                "observed": bool(security_observations),
                 "raw_body_retention": self.plan.raw_body_retention,
             },
             provenance=provenance,
@@ -686,11 +721,15 @@ class Capture:
                         f"{type(exc).__name__}: {exc}"
                     )
 
+        hook_commands, hook_status, hook_reason = _hook_bindings(plan)
         bindings = CaptureBindings(
             env=env,
             otlp_endpoint=endpoint,
             raw_bodies_dir=str(raw_bodies),
             watched_roots=(str(plan.project),),
+            hook_commands=hook_commands,
+            hook_commands_status=hook_status,
+            hook_commands_reason=hook_reason,
         )
         return CaptureSession(
             plan,
@@ -742,6 +781,28 @@ def _start_leased_receiver(
     if not _wait_for_health(endpoint, process, timeout=3.0):
         return endpoint, owned, "receiver did not become healthy"
     return endpoint, owned, None
+
+
+def _hook_bindings(
+    plan: CapturePlan,
+) -> tuple[
+    tuple[tuple[str, ...], ...],
+    Literal["observed", "unavailable", "not_requested"],
+    str | None,
+]:
+    if "session_jsonl" not in plan.requested_sources:
+        return (), "not_requested", None
+    actor = plan.actor or "claude-code"
+    if plan.placement != "persistent":
+        return (), "unavailable", "leased hook integration was not observed"
+    if actor != "claude-code":
+        return (), "unavailable", f"persistent hook observation is unavailable for {actor}"
+    from .claude_code.install import registered_hook_commands
+
+    observed = registered_hook_commands()
+    if not observed:
+        return (), "unavailable", "Claude Code OpenTraces hooks are not installed"
+    return tuple(tuple(shlex.split(command)) for command in observed), "observed", None
 
 
 def _wait_for_health(
