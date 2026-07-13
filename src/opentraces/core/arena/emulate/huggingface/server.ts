@@ -516,7 +516,10 @@ Bun.serve({
         "Content-Length": String(file.content.byteLength),
         "Content-Type": "application/octet-stream",
         ETag: `\"${file.oid}\"`,
-        "X-Repo-Commit": repo.headOid,
+        "X-Repo-Commit":
+          decodeURIComponent(resolveMatch[2]) === "main"
+            ? repo.headOid
+            : decodeURIComponent(resolveMatch[2]),
       };
       appendLedger(request, "resolveFile", 200);
       return new Response(request.method === "HEAD" ? null : file.content, { status: 200, headers });
