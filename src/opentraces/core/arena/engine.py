@@ -308,6 +308,7 @@ class BenchRun:
         execution_status: str,
         verdict: str | None,
         reason: dict[str, str] | None,
+        scenario_assertion: bool = False,
     ) -> None:
         if self.draft is None:
             return
@@ -345,6 +346,14 @@ class BenchRun:
             }
             for verifier in self.verifiers
         ]
+        if scenario_assertion:
+            evidence_requirements.append(
+                {
+                    "name": "scenario.assertion",
+                    "complete": True,
+                    "evidence_refs": ["source/scenario.py"],
+                }
+            )
         if verdict == "skip" and not evidence_requirements:
             evidence_requirements.append(
                 {
@@ -429,6 +438,7 @@ class BenchRun:
         traceback: TracebackType | None,
     ) -> bool:
         suppressed = False
+        scenario_assertion = False
         if exc is None:
             execution_status, verdict, reason = self._outcome_from_verifiers()
         elif isinstance(exc, BenchSkip):
@@ -438,6 +448,7 @@ class BenchRun:
         elif isinstance(exc, AssertionError):
             execution_status, verdict = "complete", "fail"
             reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
+            scenario_assertion = True
             suppressed = True
         else:
             execution_status, verdict = "error", None
@@ -462,5 +473,6 @@ class BenchRun:
             execution_status=execution_status,
             verdict=verdict,
             reason=reason,
+            scenario_assertion=scenario_assertion,
         )
         return suppressed

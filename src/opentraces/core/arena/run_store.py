@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths
-from .._bucket_io import _atomic_write_bytes, _atomic_write_json
+from .._bucket_io import _atomic_write_bytes, _atomic_write_json, _canonical_json
 from .contract import validate_result
 
 
@@ -53,6 +53,11 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
+
+
+def _json_digest(payload: dict[str, Any]) -> str:
+    serialized = _canonical_json(payload, pretty=True).encode("utf-8")
+    return f"sha256:{hashlib.sha256(serialized).hexdigest()}"
 
 
 class RunStore:
@@ -228,14 +233,14 @@ class RunDraft:
             self.path.replace(final_path)
             self.path = final_path
             result_path = final_path / "result.json"
-            self._write_result(result_path, result)
             index = {
                 "schema_version": "opentraces.bench.run-index.v0",
                 "run_id": self.run_id,
-                "result_digest": _sha256(result_path),
+                "result_digest": _json_digest(result),
                 "integrity_digest": _sha256(final_path / ".integrity.json"),
             }
             _atomic_write_json(index_path, index)
+            self._write_result(result_path, result)
         except Exception as exc:
             recovery = self.store.recovery_root / self.run_id
             self.store.recovery_root.mkdir(parents=True, exist_ok=True)
