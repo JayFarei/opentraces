@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import os
 import time
+import traceback as traceback_module
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -302,6 +303,48 @@ class BenchRun:
             return "complete", "skip", skips[0]["reason"]
         return "complete", "pass", None
 
+    def _persist_assertion_failure(
+        self, exc: AssertionError, traceback: TracebackType | None
+    ) -> str:
+        if self.draft is None:
+            raise RuntimeError("BenchRun is not active")
+        last = traceback
+        while last is not None and last.tb_next is not None:
+            last = last.tb_next
+        location_path = "[external]"
+        location_line = 0
+        location_function = "[unknown]"
+        if last is not None:
+            raw_path = Path(last.tb_frame.f_code.co_filename).resolve()
+            try:
+                location_path = raw_path.relative_to(
+                    self.bench.repository_path.resolve()
+                ).as_posix()
+            except ValueError:
+                pass
+            location_line = last.tb_lineno
+            location_function = last.tb_frame.f_code.co_name
+        artifact_ref = "artifacts/scenario-assertion.json"
+        self.draft.write_json(
+            artifact_ref,
+            {
+                "schema_version": "opentraces.bench.assertion-failure.v0",
+                "type": type(exc).__name__,
+                "message": sanitize_diagnostic_value(str(exc) or "assertion failed"),
+                "location": {
+                    "path": sanitize_diagnostic_value(location_path),
+                    "line": location_line,
+                    "function": sanitize_diagnostic_value(location_function),
+                },
+                "traceback": sanitize_diagnostic_value(
+                    "".join(
+                        traceback_module.format_exception(type(exc), exc, traceback)
+                    )
+                ),
+            },
+        )
+        return artifact_ref
+
     def _finalize(
         self,
         *,
@@ -309,6 +352,7 @@ class BenchRun:
         verdict: str | None,
         reason: dict[str, str] | None,
         scenario_assertion: bool = False,
+        scenario_assertion_ref: str | None = None,
     ) -> None:
         if self.draft is None:
             return
@@ -337,6 +381,14 @@ class BenchRun:
                     "kind": "lifecycle_diagnostics",
                 }
             )
+        if scenario_assertion_ref is not None:
+            artifacts.append(
+                {
+                    "path": scenario_assertion_ref,
+                    "media_type": "application/json",
+                    "kind": "assertion_failure",
+                }
+            )
         duration_ms = max(0, int((time.monotonic() - self._started) * 1000))
         evidence_requirements = [
             {
@@ -350,8 +402,12 @@ class BenchRun:
             evidence_requirements.append(
                 {
                     "name": "scenario.assertion",
-                    "complete": True,
-                    "evidence_refs": ["source/scenario.py"],
+                    "complete": scenario_assertion_ref is not None,
+                    "evidence_refs": (
+                        [scenario_assertion_ref]
+                        if scenario_assertion_ref is not None
+                        else []
+                    ),
                 }
             )
         if verdict == "skip" and not evidence_requirements:
@@ -439,6 +495,7 @@ class BenchRun:
     ) -> bool:
         suppressed = False
         scenario_assertion = False
+        scenario_assertion_ref: str | None = None
         if exc is None:
             execution_status, verdict, reason = self._outcome_from_verifiers()
         elif isinstance(exc, BenchSkip):
@@ -449,6 +506,12 @@ class BenchRun:
             execution_status, verdict = "complete", "fail"
             reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
             scenario_assertion = True
+            try:
+                scenario_assertion_ref = self._persist_assertion_failure(exc, traceback)
+            except Exception as evidence_exc:
+                self._lifecycle_diagnostics.append(
+                    sanitize_reason("assertion_evidence_failed", evidence_exc)
+                )
             suppressed = True
         else:
             execution_status, verdict = "error", None
@@ -474,5 +537,6 @@ class BenchRun:
             verdict=verdict,
             reason=reason,
             scenario_assertion=scenario_assertion,
+            scenario_assertion_ref=scenario_assertion_ref,
         )
         return suppressed

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import shutil
 from dataclasses import dataclass
@@ -60,6 +61,17 @@ def _json_digest(payload: dict[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(serialized).hexdigest()}"
 
 
+def _process_is_alive(pid: object) -> bool:
+    try:
+        value = int(pid)
+        if value <= 0:
+            return False
+        os.kill(value, 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
 class RunStore:
     """Own the ``bucket/runs/v1`` namespace and its external integrity index."""
 
@@ -68,8 +80,10 @@ class RunStore:
         self.staging_root = self.root / ".staging"
         self.recovery_root = self.root.parent / "recovery"
         self.index_root = self.root / ".index"
+        self.transaction_root = self.root / ".transactions"
 
     def begin(self) -> "RunDraft":
+        self.reconcile()
         self.staging_root.mkdir(parents=True, exist_ok=True)
         run_id = _new_run_id()
         path = self.staging_root / run_id
@@ -111,12 +125,53 @@ class RunStore:
         actual = {
             path.relative_to(run_path).as_posix()
             for path in run_path.rglob("*")
-            if path.is_file() and path.name not in {"result.json", ".integrity.json"}
+            if path.is_file()
+            and path.relative_to(run_path).as_posix()
+            not in {"result.json", ".integrity.json"}
         }
         unexpected = actual - set(expected)
         if unexpected:
             raise RunIntegrityError(f"unexpected finalized file: {sorted(unexpected)[0]}")
         return True
+
+    def reconcile(self) -> list[Path]:
+        """Complete final publications left behind by an interrupted process."""
+
+        if not self.transaction_root.is_dir():
+            return []
+        reconciled: list[Path] = []
+        for intent_path in sorted(self.transaction_root.glob("*.json")):
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            if _process_is_alive(intent.get("owner_pid")):
+                continue
+            run_id = str(intent.get("run_id") or "")
+            result = intent.get("result")
+            if not run_id or not isinstance(result, dict):
+                raise RunIntegrityError(f"invalid finalization intent: {intent_path.name}")
+            validate_result(result)
+            if result["run_id"] != run_id:
+                raise RunIntegrityError(
+                    f"finalization intent run_id mismatch: {intent_path.name}"
+                )
+            final_path = self.root / run_id
+            staging_path = self.staging_root / run_id
+            if final_path.is_dir():
+                draft_path = final_path
+            elif staging_path.is_dir():
+                draft_path = staging_path
+            else:
+                recovery = self.recovery_root / run_id
+                recovery.mkdir(parents=True, exist_ok=True)
+                _atomic_write_json(recovery / "provisional_result.json", result)
+                intent_path.unlink()
+                continue
+            draft = RunDraft(store=self, run_id=run_id, path=draft_path)
+            published = draft._complete_finalization(result)
+            draft._finalized = True
+            draft._make_read_only(published)
+            intent_path.unlink()
+            reconciled.append(published)
+        return reconciled
 
 
 @dataclass
@@ -180,7 +235,9 @@ class RunDraft:
         files = {
             path.relative_to(self.path).as_posix(): _sha256(path)
             for path in sorted(self.path.rglob("*"))
-            if path.is_file() and path.name not in {"result.json", ".integrity.json"}
+            if path.is_file()
+            and path.relative_to(self.path).as_posix()
+            not in {"result.json", ".integrity.json"}
         }
         return {"schema_version": "opentraces.bench.integrity.v0", "files": files}
 
@@ -223,25 +280,21 @@ class RunDraft:
         if result["run_id"] != self.run_id:
             raise ValueError("result run_id does not match the draft")
 
-        final_path = self.store.root / self.run_id
-        if final_path.exists():
-            raise FinalizedRunError(f"run path already exists: {final_path}")
-        index_path = self.store.index_root / f"{self.run_id}.json"
+        intent_path = self.store.transaction_root / f"{self.run_id}.json"
         try:
-            self.write_json(".integrity.json", self._manifest())
-            self.store.root.mkdir(parents=True, exist_ok=True)
-            self.path.replace(final_path)
-            self.path = final_path
-            result_path = final_path / "result.json"
-            index = {
-                "schema_version": "opentraces.bench.run-index.v0",
-                "run_id": self.run_id,
-                "result_digest": _json_digest(result),
-                "integrity_digest": _sha256(final_path / ".integrity.json"),
-            }
-            _atomic_write_json(index_path, index)
-            self._write_result(result_path, result)
+            _atomic_write_json(
+                intent_path,
+                {
+                    "schema_version": "opentraces.bench.finalization-intent.v0",
+                    "run_id": self.run_id,
+                    "owner_pid": os.getpid(),
+                    "result": result,
+                },
+            )
+            final_path = self._complete_finalization(result)
         except Exception as exc:
+            final_path = self.store.root / self.run_id
+            index_path = self.store.index_root / f"{self.run_id}.json"
             recovery = self.store.recovery_root / self.run_id
             self.store.recovery_root.mkdir(parents=True, exist_ok=True)
             if recovery.exists():
@@ -257,10 +310,53 @@ class RunDraft:
             except OSError:
                 pass
             _atomic_write_json(recovery / "provisional_result.json", result)
+            intent_path.unlink(missing_ok=True)
             raise StorageFinalizeError(
                 f"could not finalize run {self.run_id}: {exc}", recovery_path=recovery
             ) from exc
 
         self._finalized = True
         self._make_read_only(final_path)
+        intent_path.unlink()
+        return final_path
+
+    def _complete_finalization(self, result: dict[str, Any]) -> Path:
+        """Idempotently cross the move, index, and final-marker boundaries."""
+
+        final_path = self.store.root / self.run_id
+        staging_path = self.store.staging_root / self.run_id
+        if self.path == final_path:
+            pass
+        elif self.path == staging_path:
+            if final_path.exists():
+                raise FinalizedRunError(f"run path already exists: {final_path}")
+            if not (self.path / ".integrity.json").is_file():
+                self.write_json(".integrity.json", self._manifest())
+            self.store.root.mkdir(parents=True, exist_ok=True)
+            self.path.replace(final_path)
+            self.path = final_path
+        else:
+            raise FinalizedRunError(
+                f"run {self.run_id} is outside staging and final namespaces"
+            )
+
+        integrity_path = final_path / ".integrity.json"
+        if not integrity_path.is_file():
+            _atomic_write_json(integrity_path, self._manifest())
+        index_path = self.store.index_root / f"{self.run_id}.json"
+        index = {
+            "schema_version": "opentraces.bench.run-index.v0",
+            "run_id": self.run_id,
+            "result_digest": _json_digest(result),
+            "integrity_digest": _sha256(integrity_path),
+        }
+        _atomic_write_json(index_path, index)
+        result_path = final_path / "result.json"
+        if result_path.is_file():
+            if _sha256(result_path) != index["result_digest"]:
+                raise RunIntegrityError(
+                    "existing result.json differs from finalization intent"
+                )
+        else:
+            self._write_result(result_path, result)
         return final_path

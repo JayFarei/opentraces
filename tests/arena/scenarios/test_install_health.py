@@ -15,6 +15,9 @@ pytestmark = pytest.mark.skipif(
 
 def installed_cli_reports_health(run):
     observed = run.terminal.exec("opentraces", "doctor", "--json", timeout=120)
+    assert observed.returncode == 0, (
+        f"doctor exited {observed.returncode}: {observed.stderr or 'no stderr'}"
+    )
     payload = observed.json
     assert payload["status"] == "ok"
     assert isinstance(payload["schema_version"], str) and payload["schema_version"]
@@ -33,9 +36,8 @@ def test_install_is_healthy_on_a_fresh_box(bench):
     """Install is healthy on a fresh box.
 
     The product is installed from wheels built from the checked-out HEAD. The
-    verifier deliberately does not require doctor rc=0 because benign version
-    drift may produce rc=3; it asserts the stable JSON health envelope, schema,
-    installed CLI identity, and security registry instead.
+    verifier requires doctor rc=0. Doctor rc=3 includes hard unhealthy states,
+    so accepting its JSON envelope would turn a broken install into a false green.
     """
 
     with bench.run(app_state="install-only") as run:
