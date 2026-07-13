@@ -154,6 +154,17 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
                 "ingress_quiesced": True,
             },
         )
+    if not ingress_quiesced:
+        return _missing(
+            "persistent telemetry finish-tail coverage is unproven without a "
+            "daemon barrier acknowledgment",
+            details={
+                "snapshot_quiescent": quiescent,
+                "snapshot_semantics": "persistent_unbarriered_generation",
+                "snapshot_generation": generation,
+                "accepted_envelopes": accepted,
+            },
+        )
     snapshot_semantics = (
         "leased_quiescent_generation" if ingress_quiesced else "persistent_generation"
     )
