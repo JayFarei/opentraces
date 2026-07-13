@@ -37,4 +37,3 @@ def test_premerge_sharder_leaves_hf_contract_to_its_pinned_workflow() -> None:
     workflow = (ROOT / ".github/workflows/hf-emulator-contract.yml").read_text()
     for contract_file in HF_CONTRACT_FILES:
         assert contract_file in workflow
-
