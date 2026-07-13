@@ -29,9 +29,16 @@ def _free_port() -> int:
 
 @contextmanager
 def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
-    bun = shutil.which("bun")
-    if bun is None:
-        pytest.skip("bun is required to exercise the Hugging Face emulator source")
+    compiled_binary = os.environ.get("OPENTRACES_HF_EMULATOR_BINARY")
+    if compiled_binary is not None:
+        command = [compiled_binary]
+    else:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip(
+                "bun or OPENTRACES_HF_EMULATOR_BINARY is required to exercise the emulator"
+            )
+        command = [bun, "run", str(SERVER_SOURCE)]
 
     port = _free_port()
     endpoint = f"http://127.0.0.1:{port}"
@@ -42,7 +49,7 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
         "LEDGER_PATH": str(ledger),
     }
     process = subprocess.Popen(
-        [bun, "run", str(SERVER_SOURCE)],
+        command,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -418,3 +425,21 @@ print(json.dumps({
         for row in commit_rows
         for path in row["request"]["files"]
     )
+
+
+def test_opentraces_publish_is_red_when_emulator_is_down() -> None:
+    unavailable_endpoint = f"http://127.0.0.1:{_free_port()}"
+    result = _run_hf_client(
+        unavailable_endpoint,
+        """
+from opentraces.publish.huggingface.upload import HFUploader
+
+HFUploader(
+    token="hf_bench_user_token",
+    repo_id="bench/emulator-down-control",
+).ensure_repo_exists(private=True)
+""",
+    )
+
+    assert result.returncode != 0
+    assert "Connection refused" in result.stderr or "ConnectError" in result.stderr

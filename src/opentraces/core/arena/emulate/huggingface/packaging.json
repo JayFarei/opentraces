@@ -18,12 +18,14 @@
     "strategy": "bun-in-checkpoint-plus-bundle",
     "activation": "only-if-real-box-compiled-binary-gate-fails",
     "measurement": {
-      "scope": "host-proxy-only",
-      "host": "darwin-arm64",
-      "cold_resolution_seconds": 15.7,
-      "warm_compile_seconds": 0.03,
-      "compiled_binary_size_bytes": 94080616,
-      "note": "The real-box gate must measure checkpoint install cost before activating this fallback."
+      "scope": "real-box",
+      "provider": "local-container",
+      "image": "ubuntu:24.04",
+      "architecture": "aarch64",
+      "prerequisites": ["unzip"],
+      "install_milliseconds": 5928,
+      "installed_size_bytes": 94066858,
+      "note": "Measured after the compiled binary passed. The fallback remains inactive."
     }
   }
 }

@@ -65,9 +65,16 @@ def test_binary_sha_is_part_of_app_state_digest(tmp_path: Path) -> None:
 def test_readiness_waits_for_manifest_and_rejects_a_missing_sidecar(
     tmp_path: Path,
 ) -> None:
-    bun = shutil.which("bun")
-    if bun is None:
-        pytest.skip("bun is required to launch the emulator source")
+    compiled_binary = os.environ.get("OPENTRACES_HF_EMULATOR_BINARY")
+    if compiled_binary is not None:
+        command = [compiled_binary]
+    else:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip(
+                "bun or OPENTRACES_HF_EMULATOR_BINARY is required to launch the emulator"
+            )
+        command = [bun, "run", str(SERVER_SOURCE)]
 
     port = _free_port()
     endpoint = f"http://127.0.0.1:{port}"
@@ -78,7 +85,7 @@ def test_readiness_waits_for_manifest_and_rejects_a_missing_sidecar(
         nonlocal process
         time.sleep(0.15)
         process = subprocess.Popen(
-            [bun, "run", str(SERVER_SOURCE)],
+            command,
             env={**os.environ, "PORT": str(port), "LEDGER_PATH": str(ledger)},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -130,5 +137,7 @@ def test_packaging_record_keeps_upstream_and_fallback_decisions_honest() -> None
     )
     assert record["core_reconciliation"]["runtime_dependency"] is None
     assert record["fallback"]["strategy"] == "bun-in-checkpoint-plus-bundle"
-    assert record["fallback"]["measurement"]["scope"] == "host-proxy-only"
-    assert record["fallback"]["measurement"]["cold_resolution_seconds"] > 0
+    assert record["fallback"]["measurement"]["scope"] == "real-box"
+    assert record["fallback"]["measurement"]["image"] == "ubuntu:24.04"
+    assert record["fallback"]["measurement"]["install_milliseconds"] > 0
+    assert record["fallback"]["measurement"]["installed_size_bytes"] > 0
