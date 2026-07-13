@@ -136,3 +136,47 @@ def test_recording_failure_does_not_rewrite_a_functional_pass() -> None:
     assert result["verdict"] == "pass"
     assert result["execution_status"] == "complete"
     assert result["recordings"]["rewatchable"] is False
+
+
+def test_machinery_error_cannot_claim_complete_evidence() -> None:
+    with pytest.raises(ResultContractError, match="machinery error requires incomplete evidence"):
+        _result(
+            execution_status="error",
+            verdict=None,
+            reason={"code": "machinery_error", "message": "boom"},
+            evidence={
+                "complete": True,
+                "requirements": [
+                    {"name": "bench.adjudication", "complete": True, "evidence_refs": []}
+                ],
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {"complete": False, "requirements": []},
+        {
+            "complete": False,
+            "requirements": [{"name": "", "complete": False, "evidence_refs": []}],
+        },
+        {
+            "complete": False,
+            "requirements": [{"complete": False, "evidence_refs": []}],
+        },
+    ],
+)
+def test_incomplete_evidence_requires_a_named_requirement(evidence: dict) -> None:
+    with pytest.raises(ResultContractError, match="named requirement"):
+        _result(
+            execution_status="error",
+            verdict=None,
+            reason={"code": "machinery_error", "message": "boom"},
+            evidence=evidence,
+        )
+
+
+def test_invalid_evidence_shape_raises_contract_error_not_key_error() -> None:
+    with pytest.raises(ResultContractError, match="complete and requirements"):
+        _result(evidence={"unrelated": []})
