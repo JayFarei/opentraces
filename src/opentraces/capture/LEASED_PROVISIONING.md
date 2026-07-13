@@ -76,6 +76,13 @@ their deterministic coordinates; display labels compare only when labeler proven
 matches. Placement, timing, pins, available source capabilities, and explicit
 limitations are allowed differences.
 
+When a caller requires observer/product separation, it supplies the live product PID
+and a bounded `product_under_test_version_probe` argv. `finish()` observes the live
+process command and executable identity, digests the exact probe launcher, executes
+the probe, and binds its observed version to the caller's separate version claim.
+Missing, dead, self, unrelated, unprobeable, or version-mismatched identities remain
+partial with a named limitation; a live PID alone is never separation proof.
+
 ## Follow-on integration contract
 
 The placement owner must materialize the workspace, open Capture, inject `bindings.env`

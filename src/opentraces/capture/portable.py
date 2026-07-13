@@ -7,9 +7,12 @@ leased workspaces.  Callers open one session, inject its bindings, and call
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -75,6 +78,7 @@ class CapturePlan:
     raw_body_retention: str = "delete"
     require_observer_separation: bool = False
     product_under_test_pid: int | None = None
+    product_under_test_version_probe: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         requested = tuple(dict.fromkeys(self.requested_sources))
@@ -97,10 +101,14 @@ class CapturePlan:
             )
         if self.product_under_test_pid is not None and self.product_under_test_pid <= 0:
             raise ValueError("product_under_test_pid must be positive")
+        version_probe = tuple(str(part) for part in self.product_under_test_version_probe)
+        if any(not part for part in version_probe):
+            raise ValueError("product_under_test_version_probe cannot contain empty argv")
         object.__setattr__(self, "project", Path(self.project).resolve())
         object.__setattr__(self, "workspace", Path(self.workspace).resolve())
         object.__setattr__(self, "requested_sources", requested)
         object.__setattr__(self, "required_sources", required)
+        object.__setattr__(self, "product_under_test_version_probe", version_probe)
         if self.result_dir is not None:
             object.__setattr__(self, "result_dir", Path(self.result_dir).resolve())
         if self.session_path is not None:
@@ -285,12 +293,18 @@ class CaptureSession:
         self._stop_processes(deadline)
         views = _summarize_views(source_results)
         observer_pid = os.getpid()
-        product_pid = self.plan.product_under_test_pid
-        product_alive = _pid_is_alive(product_pid)
-        separation_proven = bool(
-            product_pid is not None
-            and product_alive
-            and product_pid != observer_pid
+        (
+            product_attestation,
+            separation_proven,
+            separation_limitations,
+            observed_product_version,
+        ) = _attest_product_process(
+            pid=self.plan.product_under_test_pid,
+            observer_pid=observer_pid,
+            caller_version=self.plan.product_under_test_version,
+            version_probe=self.plan.product_under_test_version_probe,
+            workspace=self.plan.workspace,
+            deadline=deadline,
         )
         complete = bool(source_results) and all(
             source.completeness == "full" for source in source_results
@@ -308,26 +322,21 @@ class CaptureSession:
                 "pid": observer_pid,
                 "executable": sys.executable,
             },
-            "product_under_test": {
-                "version": self.plan.product_under_test_version,
-                "derivation": "runtime_pid" if product_pid is not None else "caller_claim",
-                "pid": product_pid,
-                "pid_alive": product_alive,
-            },
+            "product_under_test": product_attestation,
             "separation": {
                 "required": self.plan.require_observer_separation,
                 "proven": separation_proven,
                 "reason": (
                     None
                     if separation_proven
-                    else "observer and product process separation was not proven"
+                    else separation_limitations[0]
                 ),
             },
         }
         provenance_limitations = (
             ()
             if separation_proven
-            else ("non-self-observation separation is not proven for this capture",)
+            else tuple(separation_limitations)
         )
         declared_security = [
             source.details.get("capture_security_policy")
@@ -372,7 +381,9 @@ class CaptureSession:
             placement=self.plan.placement,
             completeness="complete" if complete else "partial",
             observer_version=__version__,
-            product_under_test_version=self.plan.product_under_test_version,
+            product_under_test_version=(
+                observed_product_version or self.plan.product_under_test_version
+            ),
             sources=tuple(source_results),
             views=tuple(views),
             limitations=limitations,
@@ -885,6 +896,291 @@ def _free_port() -> int:
 
 def _duration_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _file_identity(path: Path | None) -> dict[str, str] | None:
+    if path is None:
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return {"path": str(resolved), "digest": f"sha256:{digest.hexdigest()}"}
+
+
+def _command_path(command: str, *, workspace: Path) -> Path | None:
+    candidate: str | None
+    if os.sep in command:
+        path = Path(command).expanduser()
+        candidate = str(path if path.is_absolute() else workspace / path)
+    else:
+        candidate = shutil.which(command)
+    if candidate is None:
+        return None
+    try:
+        return Path(candidate).resolve(strict=True)
+    except OSError:
+        return None
+
+
+def _launcher_runtime_path(launcher: Path) -> Path:
+    """Resolve the OS executable for a binary or a simple shebang launcher."""
+
+    try:
+        with launcher.open("rb") as handle:
+            first_line = handle.readline(4096).decode("utf-8", errors="replace")
+    except OSError:
+        return launcher
+    if not first_line.startswith("#!"):
+        return launcher
+    try:
+        words = shlex.split(first_line[2:].strip())
+    except ValueError:
+        return launcher
+    if not words:
+        return launcher
+    interpreter = words[0]
+    if Path(interpreter).name == "env":
+        candidates = [word for word in words[1:] if not word.startswith("-")]
+        if not candidates:
+            return launcher
+        resolved = shutil.which(candidates[0])
+        return Path(resolved).resolve() if resolved else launcher
+    try:
+        return Path(interpreter).resolve(strict=True)
+    except OSError:
+        return launcher
+
+
+def _observe_process_identity(pid: int | None) -> dict[str, Any]:
+    alive = _pid_is_alive(pid)
+    observed: dict[str, Any] = {
+        "pid": pid,
+        "pid_alive": alive,
+        "command": None,
+        "executable": None,
+    }
+    if pid is None or not alive:
+        return observed
+
+    executable_path: Path | None = None
+    proc_executable = Path(f"/proc/{pid}/exe")
+    try:
+        if proc_executable.exists():
+            executable_path = Path(os.readlink(proc_executable)).resolve()
+    except OSError:
+        executable_path = None
+
+    proc_command = Path(f"/proc/{pid}/cmdline")
+    command: str | None = None
+    try:
+        if proc_command.is_file():
+            argv = [
+                part.decode("utf-8", errors="replace")
+                for part in proc_command.read_bytes().split(b"\0")
+                if part
+            ]
+            command = shlex.join(argv) if argv else None
+    except OSError:
+        command = None
+
+    if executable_path is None:
+        try:
+            completed = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "comm="],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        if completed is not None and completed.returncode == 0 and completed.stdout.strip():
+            raw_executable = completed.stdout.strip()
+            candidate = (
+                raw_executable
+                if os.sep in raw_executable
+                else shutil.which(raw_executable)
+            )
+            try:
+                executable_path = (
+                    Path(candidate).resolve(strict=True) if candidate is not None else None
+                )
+            except OSError:
+                executable_path = None
+    if command is None:
+        try:
+            completed = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        if completed is not None and completed.returncode == 0 and completed.stdout.strip():
+            command = completed.stdout.strip()
+
+    observed["command"] = command
+    observed["executable"] = _file_identity(executable_path)
+    return observed
+
+
+def _command_references_launcher(command: str | None, launcher: Path) -> bool:
+    if not command:
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    for word in words:
+        if os.sep not in word:
+            continue
+        try:
+            if Path(word).resolve(strict=True) == launcher:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+_VERSION_RE = re.compile(r"(?<![A-Za-z0-9])\d+\.\d+\.\d+(?:[A-Za-z0-9.+-]*)")
+
+
+def _attest_product_process(
+    *,
+    pid: int | None,
+    observer_pid: int,
+    caller_version: str,
+    version_probe: tuple[str, ...],
+    workspace: Path,
+    deadline: float,
+) -> tuple[dict[str, Any], bool, list[str], str | None]:
+    observed = _observe_process_identity(pid)
+    limitations: list[str] = []
+    if pid is None:
+        limitations.append("non-self-observation separation has no product process identity")
+    elif not observed["pid_alive"]:
+        limitations.append("product process is not alive at capture finalization")
+    elif pid == observer_pid:
+        limitations.append("observer and product process use the same pid")
+    if observed["executable"] is None:
+        limitations.append("product executable identity could not be observed")
+    if observed["command"] is None:
+        limitations.append("product process command identity could not be observed")
+
+    probe_record: dict[str, Any] = {
+        "argv": list(version_probe),
+        "status": "unavailable",
+        "returncode": None,
+        "version": None,
+        "executable": None,
+    }
+    launcher_identity: dict[str, str] | None = None
+    observed_version: str | None = None
+    identity_bound = False
+    if not version_probe:
+        limitations.append("product version probe was not provided")
+    else:
+        launcher_path = _command_path(version_probe[0], workspace=workspace)
+        launcher_identity = _file_identity(launcher_path)
+        if launcher_path is None or launcher_identity is None:
+            limitations.append("product version probe executable could not be resolved")
+        else:
+            runtime_identity = _file_identity(_launcher_runtime_path(launcher_path))
+            probe_record["executable"] = runtime_identity
+            observed_executable = observed["executable"]
+            runtime_matches = bool(
+                observed_executable
+                and runtime_identity
+                and observed_executable["digest"] == runtime_identity["digest"]
+            )
+            launcher_matches = bool(
+                observed_executable
+                and observed_executable["digest"] == launcher_identity["digest"]
+            ) or _command_references_launcher(observed["command"], launcher_path)
+            # macOS framework Python may report the app-bundle runtime binary
+            # rather than the shebang interpreter path. The exact, digested
+            # launcher still binds the process when it is present in the
+            # observed command; native binaries bind directly by digest.
+            identity_bound = launcher_matches and (
+                runtime_matches
+                or _command_references_launcher(observed["command"], launcher_path)
+            )
+            if not identity_bound:
+                limitations.append(
+                    "product executable identity does not match the version probe executable"
+                )
+
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                limitations.append("product version probe deadline was exhausted")
+            else:
+                try:
+                    completed = subprocess.run(
+                        list(version_probe),
+                        cwd=workspace,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=min(5.0, remaining),
+                    )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    limitations.append(
+                        f"product version probe failed: {type(exc).__name__}"
+                    )
+                else:
+                    probe_record["returncode"] = completed.returncode
+                    match = _VERSION_RE.search(f"{completed.stdout}\n{completed.stderr}")
+                    observed_version = match.group(0) if match else None
+                    probe_record["version"] = observed_version
+                    if completed.returncode != 0:
+                        limitations.append(
+                            f"product version probe exited {completed.returncode}"
+                        )
+                    elif observed_version is None:
+                        limitations.append("product version probe emitted no version")
+                    else:
+                        probe_record["status"] = "observed"
+                        if observed_version != caller_version:
+                            limitations.append(
+                                "product version probe mismatch: "
+                                f"observed {observed_version}, caller claimed {caller_version}"
+                            )
+
+    proven = bool(
+        pid is not None
+        and observed["pid_alive"]
+        and pid != observer_pid
+        and observed["executable"] is not None
+        and observed["command"] is not None
+        and identity_bound
+        and probe_record["status"] == "observed"
+        and observed_version == caller_version
+    )
+    if not proven and not limitations:
+        limitations.append("non-self-observation separation is not proven for this capture")
+    provenance = {
+        "version": observed_version or caller_version,
+        "caller_claim": caller_version,
+        "derivation": (
+            "runtime_attestation"
+            if proven
+            else ("runtime_attestation_unproven" if pid is not None else "caller_claim")
+        ),
+        "pid": pid,
+        "pid_alive": observed["pid_alive"],
+        "command": observed["command"],
+        "executable": observed["executable"],
+        "launcher": launcher_identity,
+        "version_probe": probe_record,
+    }
+    return provenance, proven, limitations, observed_version
 
 
 def _pid_is_alive(pid: int | None) -> bool:

@@ -1232,6 +1232,7 @@ def test_required_non_self_observation_rejects_unrelated_live_process(
     assert unproven.completeness == "partial"
     assert unproven.provenance["separation"]["required"] is True
     assert unproven.provenance["separation"]["proven"] is False
+    assert any("version probe was not provided" in item for item in unproven.limitations)
 
     from opentraces import __version__ as runtime_version
 
@@ -1314,6 +1315,47 @@ def test_required_non_self_observation_uses_observed_product_identity_and_versio
     assert attestation["launcher"]["digest"].startswith("sha256:")
     assert "opentraces" in attestation["command"]
     assert attestation["version_probe"]["status"] == "observed"
+
+
+def test_required_non_self_observation_rejects_product_version_mismatch(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    from opentraces import __version__ as runtime_version
+
+    product_command = _write_identifiable_product_command(
+        tmp_path / "opentraces-product"
+    )
+    product = subprocess.Popen([str(product_command), "serve"])
+    try:
+        mismatch = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=("watcher",),
+                required_sources=("watcher",),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                product_under_test_version="99.0.0",
+                product_under_test_version_probe=(
+                    str(product_command),
+                    "--version",
+                ),
+                result_dir=tmp_path / "mismatch",
+            )
+        ).finish(deadline=time.monotonic() + 5.0)
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    attestation = mismatch.provenance["product_under_test"]
+    assert mismatch.completeness == "partial"
+    assert mismatch.product_under_test_version == runtime_version
+    assert mismatch.provenance["separation"]["proven"] is False
+    assert attestation["version"] == runtime_version
+    assert attestation["caller_claim"] == "99.0.0"
+    assert any("version probe mismatch" in item for item in mismatch.limitations)
 
 
 def test_display_label_parity_requires_matching_labeler_provenance(
