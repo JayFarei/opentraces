@@ -468,6 +468,186 @@ def test_raw_listing_rejects_invalid_bearer_and_honors_owner_author_filter(
         assert json.load(caught.value) == {"error": "invalid access token"}
 
 
+def test_cross_owner_token_cannot_read_or_mutate_bench_repositories(
+    tmp_path: Path,
+) -> None:
+    with running_emulator(tmp_path) as (endpoint, _ledger_path):
+        _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={
+                "repos": [
+                    {"repo_id": "bench/public"},
+                    {"repo_id": "bench/private", "private": True},
+                    {"repo_id": "bench/gated", "gated": "manual"},
+                ]
+            },
+        )
+        other_token = _request_json(
+            f"{endpoint}/_emulate/credentials",
+            payload={"name": "other"},
+        )["token"]
+        result = _run_hf_client(
+            endpoint,
+            f"""
+import json
+import os
+import urllib.error
+import urllib.request
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from huggingface_hub import HfApi
+from huggingface_hub.errors import RepositoryNotFoundError
+
+owner = HfApi(token="hf_bench_user_token")
+other = HfApi(token={json.dumps(other_token)})
+anonymous = HfApi(token=False)
+for repo_id in ("bench/public", "bench/private", "bench/gated"):
+    owner.upload_file(
+        repo_id=repo_id,
+        repo_type="dataset",
+        path_in_repo="proof.txt",
+        path_or_fileobj=repo_id.encode(),
+    )
+other.create_repo("other/own", repo_type="dataset", private=True)
+
+def resolve(api, repo_id):
+    with TemporaryDirectory() as cache:
+        return Path(api.hf_hub_download(
+            repo_id,
+            "proof.txt",
+            repo_type="dataset",
+            cache_dir=cache,
+        )).read_text()
+
+def hidden_read(call):
+    try:
+        call()
+    except RepositoryNotFoundError as error:
+        return [
+            type(error).__name__,
+            error.response.status_code,
+            error.response.headers["x-error-code"],
+        ]
+    return None
+
+reads = {{}}
+for repo_id in ("bench/private", "bench/gated"):
+    reads[repo_id] = {{
+        "info": hidden_read(lambda repo_id=repo_id: other.dataset_info(repo_id)),
+        "tree": hidden_read(
+            lambda repo_id=repo_id: other.list_repo_files(
+                repo_id, repo_type="dataset"
+            )
+        ),
+        "resolve": hidden_read(lambda repo_id=repo_id: resolve(other, repo_id)),
+    }}
+
+observed = {{
+    "anonymous_public": [
+        anonymous.dataset_info("bench/public").id,
+        anonymous.list_repo_files("bench/public", repo_type="dataset"),
+        resolve(anonymous, "bench/public"),
+    ],
+    "owner_reads": [
+        owner.dataset_info(repo_id).id
+        for repo_id in ("bench/public", "bench/private", "bench/gated")
+    ],
+    "other_public": [
+        other.dataset_info("bench/public").id,
+        other.list_repo_files("bench/public", repo_type="dataset"),
+        resolve(other, "bench/public"),
+    ],
+    "owner_listing": [item.id for item in owner.list_datasets(limit=20)],
+    "other_listing": [item.id for item in other.list_datasets(limit=20)],
+    "reads": reads,
+}}
+
+def raw_mutation(method, path, payload, content_type="application/json"):
+    data = (
+        json.dumps(payload).encode()
+        if content_type == "application/json"
+        else payload.encode()
+    )
+    request = urllib.request.Request(
+        f"{{os.environ['HF_ENDPOINT']}}{{path}}",
+        data=data,
+        headers={{
+            "Authorization": "Bearer {other_token}",
+            "Content-Type": content_type,
+        }},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return [response.status, response.headers.get("X-Error-Code")]
+    except urllib.error.HTTPError as error:
+        return [error.code, error.headers["X-Error-Code"]]
+
+mutations = {{
+    "create": raw_mutation(
+        "POST",
+        "/api/repos/create",
+        {{"name": "foreign", "organization": "bench", "type": "dataset"}},
+    ),
+    "settings": raw_mutation(
+        "PUT",
+        "/api/datasets/bench/public/settings",
+        {{"private": True}},
+    ),
+    "preupload": raw_mutation(
+        "POST",
+        "/api/datasets/bench/public/preupload/main",
+        {{"files": []}},
+    ),
+    "commit": raw_mutation(
+        "POST",
+        "/api/datasets/bench/public/commit/main",
+        '{{"key":"header","value":{{"summary":"forbidden"}}}}\\n',
+        "application/x-ndjson",
+    ),
+    "delete": raw_mutation(
+        "DELETE",
+        "/api/repos/delete",
+        {{"name": "public", "organization": "bench", "type": "dataset"}},
+    ),
+}}
+
+observed["mutations"] = mutations
+print(json.dumps(observed, sort_keys=True))
+""",
+        )
+
+    assert result.returncode == 0, result.stderr
+    hidden = ["RepositoryNotFoundError", 404, "RepoNotFound"]
+    forbidden = [403, "Forbidden"]
+    assert json.loads(result.stdout) == {
+        "anonymous_public": ["bench/public", ["proof.txt"], "bench/public"],
+        "owner_listing": ["bench/public", "bench/private", "bench/gated"],
+        "owner_reads": ["bench/public", "bench/private", "bench/gated"],
+        "other_listing": ["other/own"],
+        "other_public": ["bench/public", ["proof.txt"], "bench/public"],
+        "reads": {
+            "bench/gated": {
+                "info": hidden,
+                "resolve": hidden,
+                "tree": hidden,
+            },
+            "bench/private": {
+                "info": hidden,
+                "resolve": hidden,
+                "tree": hidden,
+            },
+        },
+        "mutations": {
+            "commit": forbidden,
+            "create": forbidden,
+            "delete": forbidden,
+            "preupload": forbidden,
+            "settings": forbidden,
+        },
+    }
+
+
 def test_real_hf_client_dataset_info_enforces_repo_read_access(tmp_path: Path) -> None:
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
