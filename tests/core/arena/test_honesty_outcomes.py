@@ -86,3 +86,24 @@ def test_four_honesty_outcomes_are_distinguishable_on_disk_and_page(
     assert result["verdict"] == verdict
     assert (result["reason"] or {}).get("code") == reason_code
     assert page_word in page
+
+
+def test_machinery_error_names_incomplete_adjudication_evidence(tmp_path: Path) -> None:
+    bench = _bench(tmp_path)
+
+    with pytest.raises(RuntimeError, match="forced machinery red"):
+        with bench.run(app_state="base-only"):
+            raise RuntimeError("forced machinery red")
+
+    run = next(bench.store.root.glob("run_*"))
+    result = json.loads((run / "result.json").read_text())
+    assert result["evidence"] == {
+        "complete": False,
+        "requirements": [
+            {
+                "name": "bench.adjudication",
+                "complete": False,
+                "evidence_refs": [],
+            }
+        ],
+    }

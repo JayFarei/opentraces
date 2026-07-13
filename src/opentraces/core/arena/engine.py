@@ -158,15 +158,19 @@ class BenchRun:
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
 
-    @staticmethod
-    def _source_ref(fn: Callable[..., Any]) -> dict[str, str]:
+    def _source_ref(self, fn: Callable[..., Any]) -> dict[str, str]:
         path_value = inspect.getsourcefile(fn)
         if path_value is None:
             raise RuntimeError(f"cannot locate verifier source for {fn!r}")
         path = Path(path_value).resolve()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        try:
+            public_path = path.relative_to(self.bench.repository_path.resolve()).as_posix()
+        except ValueError:
+            public_path = f"external/{digest[:12]}{path.suffix}"
         return {
-            "path": path.as_posix(),
-            "digest": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
+            "path": public_path,
+            "digest": f"sha256:{digest}",
         }
 
     def verify(self, verifier: Callable[..., Any], /, **inputs: Any) -> dict[str, Any]:
@@ -234,6 +238,14 @@ class BenchRun:
             }
             for verifier in self.verifiers
         ]
+        if execution_status == "error":
+            evidence_requirements.append(
+                {
+                    "name": "bench.adjudication",
+                    "complete": False,
+                    "evidence_refs": [],
+                }
+            )
         evidence_complete = all(item["complete"] for item in evidence_requirements)
         box_pin = (
             {

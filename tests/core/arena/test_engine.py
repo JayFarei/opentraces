@@ -104,6 +104,10 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
     assert result["pins"]["environment"]["sandbox_tier"] == "container"
     assert result["verifiers"][0]["status"] == "pass"
     assert result["verifiers"][0]["source_ref"]["digest"].startswith("sha256:")
+    external_source = result["verifiers"][0]["source_ref"]["path"]
+    assert external_source.startswith("external/")
+    assert not Path(external_source).is_absolute()
+    assert not any(token in external_source.lower() for token in ("/users/", "/home/", "jayfarei"))
     assert (run.final_path / "actions" / "0001" / "stdout").read_text() == '{"healthy":true}\n'
     assert runtime.released is True
 
