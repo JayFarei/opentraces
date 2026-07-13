@@ -20,6 +20,16 @@ from .portable import (
     CaptureViewResult,
 )
 
+__all__ = [
+    "Capture",
+    "CaptureBindings",
+    "CapturePlan",
+    "CaptureResult",
+    "CaptureSession",
+    "CaptureSourceResult",
+    "CaptureViewResult",
+]
+
 if TYPE_CHECKING:
     from ._base import (  # noqa: F401
         FormatImporter,

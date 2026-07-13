@@ -21,6 +21,7 @@ from .portable import CaptureResult
 @dataclass(frozen=True)
 class PlacementParityReport:
     matches: bool
+    view_completeness_match: bool
     canonical_trace_match: bool
     context_companion_match: bool
     trail_companion_match: bool
@@ -36,6 +37,7 @@ class PlacementParityReport:
     def to_dict(self) -> dict[str, Any]:
         return {
             "matches": self.matches,
+            "view_completeness_match": self.view_completeness_match,
             "canonical_trace_match": self.canonical_trace_match,
             "context_companion_match": self.context_companion_match,
             "trail_companion_match": self.trail_companion_match,
@@ -66,6 +68,9 @@ def compare_placements(
         raise ValueError("compare_placements expects persistent then leased results")
     persistent_path = _trace_path(persistent)
     leased_path = _trace_path(leased)
+    view_match = {
+        view.name: view.completeness for view in persistent.views
+    } == {view.name: view.completeness for view in leased.views}
     persistent_trace = _read_json(persistent_path)
     leased_trace = _read_json(leased_path)
     replacements = {
@@ -102,6 +107,8 @@ def compare_placements(
     trail_match = persistent_trail == leased_trail
 
     differences: list[str] = []
+    if not view_match:
+        differences.append("view_completeness")
     if not trace_match:
         differences.append("canonical_trace")
     if not context_match:
@@ -146,6 +153,7 @@ def compare_placements(
     matches = not differences
     return PlacementParityReport(
         matches=matches,
+        view_completeness_match=view_match,
         canonical_trace_match=trace_match,
         context_companion_match=context_match,
         trail_companion_match=trail_match,

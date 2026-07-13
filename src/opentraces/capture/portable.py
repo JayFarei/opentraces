@@ -228,8 +228,9 @@ class CaptureSession:
 
         self._stop_processes(deadline)
         views = _summarize_views(source_results)
-        required = [s for s in source_results if s.required]
-        complete = all(s.completeness == "full" for s in required)
+        complete = bool(source_results) and all(
+            source.completeness == "full" for source in source_results
+        )
         limitations = tuple(
             limitation
             for source in source_results
@@ -329,21 +330,29 @@ class CaptureSession:
         stderr = (finalizers / f"{source}.stderr").open("ab")
         env = dict(os.environ)
         env["OT_OPENTRACES_DIR"] = str(self._capture_root)
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "opentraces.capture._source_finalizer",
-                "--request",
-                str(request_path),
-                "--report",
-                str(report_path),
-            ],
-            cwd=self.plan.workspace,
-            env=env,
-            stdout=stdout,
-            stderr=stderr,
-        )
+        try:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "opentraces.capture._source_finalizer",
+                    "--request",
+                    str(request_path),
+                    "--report",
+                    str(report_path),
+                ],
+                cwd=self.plan.workspace,
+                env=env,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        except OSError as exc:
+            stdout.close()
+            stderr.close()
+            return self._unavailable(
+                source,
+                f"source finalizer launch failed: {type(exc).__name__}: {exc}",
+            )
         try:
             remaining = max(0.0, deadline - time.monotonic())
             process.wait(timeout=remaining)
@@ -594,16 +603,6 @@ def _free_port() -> int:
 
 def _duration_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
-
-
-def _relative_files(root: Path, result_dir: Path) -> list[str]:
-    if not root.is_dir():
-        return []
-    return [
-        path.relative_to(result_dir).as_posix()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    ]
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

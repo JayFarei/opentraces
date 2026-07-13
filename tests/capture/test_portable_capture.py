@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 from opentraces.capture import Capture, CapturePlan
-from opentraces.capture.parity import compare_placements
+from opentraces.capture.parity import compare_placements, write_parity_report
 
 
 def _git_project(root: Path) -> Path:
@@ -206,6 +206,52 @@ def test_elapsed_deadline_never_turns_requested_sources_complete(tmp_path: Path)
     assert all(source.completeness == "missing" for source in result.sources)
 
 
+def test_missing_optional_source_still_makes_requested_capture_partial(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl",),
+            observer_version="observer-pin",
+            product_under_test_version="product-pin",
+            result_dir=tmp_path / "missing-source-result",
+        )
+    ).finish(deadline=time.monotonic() + 5.0)
+
+    assert result.completeness == "partial"
+    assert result.source("session_jsonl").status == "unavailable"
+    assert result.source("session_jsonl").completeness == "missing"
+
+
+def test_world_effect_finalizers_settle_inside_capture_lifecycle(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("watcher", "git"),
+            required_sources=("watcher", "git"),
+            observer_version="observer-pin",
+            product_under_test_version="product-pin",
+            result_dir=tmp_path / "world-effects-result",
+        )
+    ).finish(deadline=time.monotonic() + 10.0)
+
+    assert result.completeness == "complete"
+    assert result.source("watcher").status == "finalized"
+    assert result.source("git").status == "finalized"
+    assert result.view("world_effects").completeness == "full"
+
+
 def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
     tmp_path: Path,
 ) -> None:
@@ -329,15 +375,18 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
         persistent_roots=(projects["persistent"],),
         leased_roots=(projects["leased"],),
     )
+    report_path = write_parity_report(report, tmp_path / "parity-report.json")
 
     assert persistent.completeness == leased.completeness == "complete"
     assert report.matches is True
+    assert report.view_completeness_match is True
     assert report.canonical_trace_match is True
     assert report.context_companion_match is True
     assert report.trail_companion_match is True
     assert report.security_match is True
     assert report.path_normalization_applied is True
     assert report.differences == ()
+    assert json.loads(report_path.read_text(encoding="utf-8")) == report.to_dict()
 
 
 def test_display_label_parity_requires_matching_labeler_provenance(
