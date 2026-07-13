@@ -165,9 +165,7 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
                 "accepted_envelopes": accepted,
             },
         )
-    snapshot_semantics = (
-        "leased_quiescent_generation" if ingress_quiesced else "persistent_generation"
-    )
+    snapshot_semantics = "leased_quiescent_generation"
     report = flush_session_to_project(
         project_dir=Path(request["project"]),
         trace_id=trace_id,

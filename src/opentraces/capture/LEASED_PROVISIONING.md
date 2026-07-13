@@ -70,8 +70,9 @@ all runtime/log/result files under the requested result directory. Both paths us
 same source finalizers and canonical writers. Telemetry accepts the same fresh,
 internally consistent snapshot generation in both placements: the leased receiver is
 owned and must additionally stamp that generation quiescent after ingress stops,
-while the persistent daemon stays live and records `persistent_generation` semantics
-without claiming quiescence.
+while the persistent daemon stays live. Until that daemon exposes a finish barrier
+acknowledgment, a staged persistent generation remains honestly partial because
+finish-tail coverage cannot be proven.
 
 Capture security has no top-level privacy tier. `CapturePlan.security_tools=None`
 uses the project's configured `security.<tool>.enabled` flags; an explicit tuple sets
@@ -88,7 +89,8 @@ limitations are allowed differences.
 When a caller requires observer/product separation, it supplies the live product PID
 and a bounded `product_under_test_version_probe` argv. `finish()` observes the live
 process command and executable identity, digests the exact probe launcher, executes
-the probe, and binds its observed version to the caller's separate version claim.
+interpreted-script probes through the observed runtime (preserving macOS virtualenv
+launcher context), and binds that observed version to the caller's separate claim.
 Missing, dead, self, unrelated, unprobeable, or version-mismatched identities remain
 partial with a named limitation; a live PID alone is never separation proof.
 
