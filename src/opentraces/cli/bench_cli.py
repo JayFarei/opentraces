@@ -133,7 +133,7 @@ def _finalize_after_pytest(
             "stderr_ref": stderr_ref,
         }
     )
-    if outcome.returncode != 0:
+    if outcome.returncode != 0 and result["execution_status"] != "error":
         result["execution_status"] = "error"
         result["verdict"] = None
         result["reason"] = {
