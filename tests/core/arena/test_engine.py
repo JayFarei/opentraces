@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from opentraces import __version__
 from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.engine import Bench, ScenarioSource, extract_claim
 from opentraces.core.arena.run_store import RunStore
@@ -52,6 +53,26 @@ class RecordingBoxRuntime(FakeBoxRuntime):
         timing.write_text("0.010 4\n", encoding="utf-8")
         typescript.write_bytes(b"ok\r\n")
         return {timing.name: timing, typescript.name: typescript}
+
+
+class ReleaseFailingRuntime(FakeBoxRuntime):
+    def release(self, box: Box) -> None:
+        raise RuntimeError("release boom")
+
+
+class DiagnosticRuntime(FakeBoxRuntime):
+    image = "ubuntu:24.04"
+    crabbox_version = "0.38.0"
+
+    def diagnostic_records(self) -> list[dict]:
+        return [
+            {
+                "operation": "warmup",
+                "returncode": 0,
+                "stdout": "ready\n",
+                "stderr": "",
+            }
+        ]
 
 
 def _scenario(tmp_path: Path) -> ScenarioSource:
@@ -111,6 +132,109 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
     assert not any(token in external_source.lower() for token in ("/users/", "/home/", "jayfarei"))
     assert (run.final_path / "actions" / "0001" / "stdout").read_text() == '{"healthy":true}\n'
     assert runtime.released is True
+
+
+def test_terminal_action_honors_the_remote_cwd_that_it_records(tmp_path: Path) -> None:
+    runtime = FakeBoxRuntime()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    def command_runs_in_requested_directory(run):
+        observed = run.terminal.exec("pwd", cwd="/tmp")
+        assert observed.returncode == 0
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(command_runs_in_requested_directory)
+
+    invocation = json.loads((run.final_path / "actions/0001/invocation.json").read_text())
+    assert invocation["cwd"] == "/tmp"
+    assert "cd /tmp" in " ".join(runtime.commands[0])
+
+
+def test_release_failure_is_diagnostic_and_does_not_hide_a_passing_verdict(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=ReleaseFailingRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def condition_holds(run):
+        return {"evidence_refs": []}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(condition_holds)
+
+    assert run.result["execution_status"] == "complete"
+    assert run.result["verdict"] == "pass"
+    diagnostic = next(
+        item for item in run.result["artifacts"] if item["kind"] == "lifecycle_diagnostics"
+    )
+    payload = json.loads((run.final_path / diagnostic["path"]).read_text())
+    assert payload["events"][-1]["code"] == "release_failed"
+    assert "release boom" in payload["events"][-1]["message"]
+
+
+def test_result_pins_observer_crabbox_image_and_product_state(tmp_path: Path) -> None:
+    runtime = DiagnosticRuntime()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    def condition_holds(run):
+        return {"evidence_refs": []}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(condition_holds)
+
+    assert run.result["pins"]["observer"] == {
+        "package": "opentraces",
+        "version": __version__,
+    }
+    assert run.result["pins"]["environment"] == {
+        "provider": "local-container",
+        "image": "ubuntu:24.04",
+        "sandbox_tier": "container",
+        "runtime": {"name": "crabbox", "version": "0.38.0"},
+    }
+    assert run.result["pins"]["product"]["commit"] == "abc123"
+    assert run.result["pins"]["app_state"]["digest"] == "sha256:app-state"
+
+
+def test_box_lifecycle_diagnostics_are_part_of_the_finalized_exhaust(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=DiagnosticRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def condition_holds(run):
+        return {"evidence_refs": []}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(condition_holds)
+
+    artifact = next(
+        item for item in run.result["artifacts"] if item["kind"] == "lifecycle_diagnostics"
+    )
+    assert artifact == {
+        "path": "artifacts/box-lifecycle.json",
+        "media_type": "application/json",
+        "kind": "lifecycle_diagnostics",
+    }
+    payload = json.loads((run.final_path / artifact["path"]).read_text())
+    assert payload["events"][0]["operation"] == "warmup"
+    assert payload["events"][0]["stdout"] == "ready\n"
 
 
 def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Path) -> None:
