@@ -94,8 +94,10 @@ type StoredFile = {
   revOid: string;
 };
 
-const files = new Map<string, Map<string, StoredFile>>();
-const revisions = new Map<string, Set<string>>();
+type FileSet = Map<string, StoredFile>;
+
+const files = new Map<string, FileSet>();
+const revisions = new Map<string, Map<string, FileSet>>();
 
 type Identity = {
   name: string;
@@ -157,6 +159,28 @@ function requireAuthentication(request: Request, operationId: string): Response 
   return errorResponse("InvalidToken", "invalid access token", 401);
 }
 
+function requireRepoReadAccess(
+  request: Request,
+  operationId: string,
+  repo: Repo,
+): Response | undefined {
+  const authorization = request.headers.get("authorization");
+  const identity = authenticatedIdentity(request);
+  if (authorization !== null && identity === undefined) {
+    appendLedger(request, operationId, 401);
+    return errorResponse("InvalidToken", "invalid access token", 401);
+  }
+  if (repo.private && identity === undefined) {
+    appendLedger(request, operationId, 401);
+    return errorResponse("InvalidToken", "authentication required", 401);
+  }
+  if (repo.gated !== false && identity === undefined) {
+    appendLedger(request, operationId, 403);
+    return errorResponse("GatedRepo", "gated repository access denied", 403);
+  }
+  return undefined;
+}
+
 function newRepo(
   repoId: string,
   options: {
@@ -176,8 +200,9 @@ function newRepo(
     updatedAt: now,
   };
   repos.set(repoId, repo);
-  files.set(repoId, new Map());
-  revisions.set(repoId, new Set([repo.headOid]));
+  const initialFiles: FileSet = new Map();
+  files.set(repoId, initialFiles);
+  revisions.set(repoId, new Map([[repo.headOid, new Map(initialFiles)]]));
   return repo;
 }
 
@@ -198,9 +223,14 @@ function datasetInfo(repo: Repo): Record<string, unknown> {
   };
 }
 
-function revisionExists(repo: Repo, revision: string): boolean {
+function filesAtRevision(repo: Repo, revision: string): FileSet | undefined {
   const decoded = decodeURIComponent(revision);
-  return decoded === "main" || revisions.get(repo.repoId)?.has(decoded) === true;
+  if (decoded === "main") return files.get(repo.repoId);
+  return revisions.get(repo.repoId)?.get(decoded);
+}
+
+function revisionExists(repo: Repo, revision: string): boolean {
+  return filesAtRevision(repo, revision) !== undefined;
 }
 
 Bun.serve({
@@ -350,7 +380,7 @@ Bun.serve({
       const body = (await request.json()) as {
         files?: Array<{ path: string }>;
       };
-      const repoFiles = files.get(repoId) ?? new Map<string, StoredFile>();
+      const repoFiles = filesAtRevision(repo, preuploadMatch[2]) ?? new Map();
       const responseFiles = (body.files ?? []).map((file) => ({
         path: file.path,
         uploadMode: "regular",
@@ -385,7 +415,7 @@ Bun.serve({
         .split("\n")
         .filter(Boolean)
         .map((line) => JSON.parse(line) as { key: string; value: Record<string, unknown> });
-      const repoFiles = files.get(repoId) ?? new Map<string, StoredFile>();
+      const repoFiles = new Map(filesAtRevision(repo, commitMatch[2]) ?? []);
       const oid = createHash("sha1")
         .update(repo.headOid)
         .update(rawPayload)
@@ -410,7 +440,9 @@ Bun.serve({
       }
       files.set(repoId, repoFiles);
       repo.headOid = oid;
-      revisions.set(repoId, new Set([oid]));
+      const revisionFiles = revisions.get(repoId) ?? new Map();
+      revisionFiles.set(oid, new Map(repoFiles));
+      revisions.set(repoId, revisionFiles);
       repo.updatedAt = new Date().toISOString();
       appendLedger(
         request,
@@ -440,12 +472,14 @@ Bun.serve({
         appendLedger(request, "listRepoTree", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
       }
+      const accessError = requireRepoReadAccess(request, "listRepoTree", repo);
+      if (accessError !== undefined) return accessError;
       if (!revisionExists(repo, treeMatch[2])) {
         appendLedger(request, "listRepoTree", 404);
         return errorResponse("RevisionNotFound", "revision not found", 404);
       }
       const prefix = treeMatch[3] ? `${decodeURIComponent(treeMatch[3]).replace(/\/$/, "")}/` : "";
-      const result = [...(files.get(repoId) ?? new Map()).entries()]
+      const result = [...(filesAtRevision(repo, treeMatch[2]) ?? new Map()).entries()]
         .filter(([filePath]) => filePath.startsWith(prefix))
         .map(([filePath, file]) => ({
           type: "file",
@@ -466,12 +500,14 @@ Bun.serve({
         appendLedger(request, "resolveFile", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
       }
+      const accessError = requireRepoReadAccess(request, "resolveFile", repo);
+      if (accessError !== undefined) return accessError;
       if (!revisionExists(repo, resolveMatch[2])) {
         appendLedger(request, "resolveFile", 404);
         return errorResponse("RevisionNotFound", "revision not found", 404);
       }
       const filePath = decodeURIComponent(resolveMatch[3]);
-      const file = files.get(repoId)?.get(filePath);
+      const file = filesAtRevision(repo, resolveMatch[2])?.get(filePath);
       if (file === undefined) {
         appendLedger(request, "resolveFile", 404);
         return errorResponse("EntryNotFound", "file not found", 404);
@@ -492,6 +528,8 @@ Bun.serve({
         appendLedger(request, "datasetInfo", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
       }
+      const accessError = requireRepoReadAccess(request, "datasetInfo", repo);
+      if (accessError !== undefined) return accessError;
       appendLedger(request, "datasetInfo", 200);
       return jsonResponse(datasetInfo(repo));
     }
