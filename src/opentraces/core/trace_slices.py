@@ -8,11 +8,14 @@ not Markdown instructions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-from opentraces_schema import TraceMap, TraceMapEdge, TraceMapNode
+from opentraces_schema import TraceMap, TraceMapEdge, TraceMapNode, TraceRecord
 
 from .bursts import DEFAULT_BURST_GAP, detect_bursts
+from .slicing.contract import SLICING_SCHEMA_VERSION
+from .slicing.models import Trajectory
 from .trails.slices import trace_slice_id_for
 
 
@@ -67,6 +70,72 @@ def slice_by_steps(
         "metadata": metadata or {},
         "limitations": limitations,
     }
+
+
+def materialize_trajectory(
+    trace_ref: TraceRecord,
+    trajectory: Trajectory | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Materialize a slicing-v1 trajectory in canonical step coordinates.
+
+    The frozen slicing-v1 envelope tiles the *positions* ``0..N-1`` of the
+    input step array.  Trace, ctx, and Trail addresses instead name the stable
+    ``Step.step_index`` field.  This is the single translation boundary between
+    those coordinate systems; the resulting payload delegates to
+    :func:`slice_by_steps`, the same primitive used by ``trace get T:A-B``.
+
+    ``trace_ref`` is an in-memory TraceRecord so the exact array that was sliced
+    remains available for position lookup.  Captured step indices must be
+    unique and strictly increasing; otherwise no unambiguous address span
+    exists and materialization fails closed.
+    """
+
+    if isinstance(trajectory, Trajectory):
+        trajectory_payload = trajectory.to_dict()
+    else:
+        trajectory_payload = dict(trajectory)
+
+    try:
+        start_position = int(trajectory_payload["start"])
+        end_position = int(trajectory_payload["end"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("trajectory must contain integer start/end positions") from exc
+
+    steps = list(trace_ref.steps)
+    if start_position < 0 or end_position < start_position:
+        raise ValueError("trajectory positions must satisfy 0 <= start <= end")
+    if end_position >= len(steps):
+        raise ValueError(
+            f"trajectory position {end_position} is outside a {len(steps)}-step trace"
+        )
+
+    step_indices = [step.step_index for step in steps]
+    if len(set(step_indices)) != len(step_indices):
+        raise ValueError("trace has duplicate Step.step_index values")
+    if step_indices != sorted(step_indices):
+        raise ValueError("trace Step.step_index values must be strictly increasing")
+
+    start_step_index = step_indices[start_position]
+    end_step_index = step_indices[end_position]
+
+    from .trace_map import build_trace_map
+
+    return slice_by_steps(
+        build_trace_map(trace_ref),
+        trace_ref,
+        start_step_index=start_step_index,
+        end_step_index=end_step_index,
+        source="slicer_trajectory",
+        metadata={
+            "slicing_schema_version": SLICING_SCHEMA_VERSION,
+            "trajectory": trajectory_payload,
+            "trajectory_position_range": {
+                "start": start_position,
+                "end": end_position,
+            },
+            "coordinate_translation": "array_position_to_step_index",
+        },
+    )
 
 
 def slices_from_bursts(

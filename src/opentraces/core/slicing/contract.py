@@ -1,7 +1,9 @@
 """Frozen contracts for the Trace Slicer Library (issue #141).
 
 ``opentraces.slicing.v1`` — the slice envelope (downstream-consumer contract;
-changing its shape requires a schema_version bump). Derive-on-demand like
+``trajectories[].start/end`` are zero-based positions in the input step array;
+changing that meaning or the envelope shape requires a schema_version bump).
+Derive-on-demand like
 ``--waste`` / ``--run-intel`` / ``trace compare`` — NO captured-schema change,
 NO ``TraceRecord.SCHEMA_VERSION`` bump.
 

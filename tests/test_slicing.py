@@ -35,7 +35,8 @@ from opentraces_schema import (
 from opentraces.core import slicing
 from opentraces.core.slicing.models import Trajectory
 from opentraces.core.trace_map import build_trace_map
-from opentraces.core.trace_slices import slice_by_steps
+from opentraces.core.trace_slices import materialize_trajectory, slice_by_steps
+from opentraces.core.trails.lineage import parse_trail_ref
 
 
 # --------------------------------------------------------------------------
@@ -172,7 +173,8 @@ def test_s3_never_closes_on_a_failure():
 # acceptance #4 — S1/S2 pinned boundaries on the rich fixture
 # --------------------------------------------------------------------------
 def _fixture_record() -> TraceRecord:
-    # Mirrors the committed otbox slicer-conformance fixture's PARSED shape.
+    # Position-oriented conformance input. Real parser-assigned step indices are
+    # covered separately by the committed captured TraceRecord regression below.
     return _mk([
         _u("Add a farewell(name) helper to src/app.py."),
         _edit(),
@@ -200,6 +202,14 @@ def test_s2_pinned_boundaries():
     assert spans == [(0, 0), (1, 2), (3, 5), (6, 7), (8, 8)], spans
 
 
+def _real_capture_record() -> TraceRecord:
+    fixture = (
+        Path(__file__).parent
+        / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
+    )
+    return TraceRecord.model_validate_json(fixture.read_text().splitlines()[0])
+
+
 def test_real_capture_trajectory_materializes_in_step_address_coordinates():
     """Regression for #270: slicer positions are not ``Step.step_index``.
 
@@ -209,14 +219,8 @@ def test_real_capture_trajectory_materializes_in_step_address_coordinates():
     the canonical trace/ctx/Trail address coordinate.
     """
 
-    fixture = (
-        Path(__file__).parent
-        / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
-    )
-    record = TraceRecord.model_validate_json(fixture.read_text().splitlines()[0])
+    record = _real_capture_record()
     assert [step.step_index for step in record.steps] == [1, 2, 3]
-
-    from opentraces.core.trace_slices import materialize_trajectory
 
     trace_slice = materialize_trajectory(
         record,
@@ -228,8 +232,8 @@ def test_real_capture_trajectory_materializes_in_step_address_coordinates():
     assert [step["step_index"] for step in trace_slice["steps"]] == [1, 2, 3]
 
 
-def test_naive_position_as_step_address_exposes_captured_trace_off_by_one():
-    """RED control: the pre-#270 direct route silently points left by one."""
+def test_captured_position_span_translates_before_step_slice():
+    """The RED position span now resolves through the translation boundary."""
 
     fixture = (
         Path(__file__).parent
@@ -239,14 +243,100 @@ def test_naive_position_as_step_address_exposes_captured_trace_off_by_one():
     trajectory = Trajectory(
         start=0, end=2, kind="user_turn", label="captured run"
     )
-    naive = slice_by_steps(
-        build_trace_map(record),
-        record,
-        start_step_index=trajectory.start,
-        end_step_index=trajectory.end,
+    translated = materialize_trajectory(record, trajectory)
+
+    assert [step["step_index"] for step in translated["steps"]] == [1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    ("start_position", "end_position"),
+    [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2)],
+)
+def test_trajectory_materialization_matches_shared_address_span(
+    start_position, end_position
+):
+    record = _real_capture_record()
+    canonical = [step.step_index for step in record.steps]
+    start_step = canonical[start_position]
+    end_step = canonical[end_position]
+    # The committed corpus redacts the trace id as ``<trace:01>``; use a
+    # grammar-safe id while retaining its captured step payload verbatim.
+    address_trace_id = "trace-fixture"
+
+    trace_id, point, span, reserved = parse_trail_ref(
+        f"{address_trace_id}:{start_step}-{end_step}"
+    )
+    assert (trace_id, point, span, reserved) == (
+        address_trace_id,
+        None,
+        (start_step, end_step),
+        "span",
     )
 
-    assert [step["step_index"] for step in naive["steps"]] == [1, 2, 3]
+    materialized = materialize_trajectory(
+        record,
+        Trajectory(
+            start=start_position,
+            end=end_position,
+            kind="user_turn",
+            label="property span",
+        ),
+    )
+    addressed = slice_by_steps(
+        build_trace_map(record),
+        record,
+        start_step_index=start_step,
+        end_step_index=end_step,
+    )
+    expected = canonical[start_position : end_position + 1]
+
+    assert [step["step_index"] for step in materialized["steps"]] == expected
+    assert [step["step_index"] for step in addressed["steps"]] == expected
+    assert materialized["map_node_refs"] == addressed["map_node_refs"]
+
+    # Point addresses are the shared Trace/ctx/Trail join key. Every step
+    # materialized from the slicing span must round-trip through that grammar.
+    for step_index in expected:
+        assert parse_trail_ref(f"{address_trace_id}:{step_index}") == (
+            address_trace_id,
+            step_index,
+            None,
+            None,
+        )
+
+
+def test_frozen_slicing_envelope_tiles_same_real_capture_steps_when_materialized():
+    record = _real_capture_record()
+    rc, envelope = slicing.partition_trace(
+        trace_id=record.trace_id,
+        slicer_name="s1",
+        steps=record.steps,
+        judge="deterministic",
+    )
+
+    assert rc == 0
+    assert envelope["schema_version"] == "opentraces.slicing.v1"
+    assert envelope["trajectories"][0]["start"] == 0
+
+    materialized_steps = [
+        step["step_index"]
+        for trajectory in envelope["trajectories"]
+        for step in materialize_trajectory(record, trajectory)["steps"]
+    ]
+    assert materialized_steps == [step.step_index for step in record.steps]
+
+
+@pytest.mark.parametrize(
+    "trajectory",
+    [
+        Trajectory(start=-1, end=0, kind="user_turn", label="negative"),
+        Trajectory(start=1, end=0, kind="user_turn", label="reversed"),
+        Trajectory(start=0, end=3, kind="user_turn", label="outside"),
+    ],
+)
+def test_trajectory_materialization_rejects_invalid_positions(trajectory):
+    with pytest.raises(ValueError):
+        materialize_trajectory(_real_capture_record(), trajectory)
 
 
 # --------------------------------------------------------------------------
