@@ -1,10 +1,10 @@
 {
   "schema_version": "opentraces.bench.manual-proof.v1",
-  "observed_at": "2026-07-13T20:48:06Z",
-  "source_commit": "b68a78cac46c73cea459a8d0221fb40f1448cef9",
+  "observed_at": "2026-07-13T21:31:00Z",
+  "source_commit": "0fb4789aeef3e6963b7f222d048999b16ac80c1a",
   "box": {
-    "lease_id": "cbx_ae65bee53287",
-    "container_id": "00a7b7f8a55b905fd1222e6cc1f0ef074e166f650836fc8c1625e51ccc1649e2",
+    "lease_id": "cbx_3d187f6ef856",
+    "container_id": "0cc9cd69ac2011231cb8295dea8426ccfb9f9d9117e9ef4537eb8d1863fb4299",
     "provider": "local-container",
     "image": "ubuntu:24.04",
     "architecture": "aarch64",
@@ -13,28 +13,31 @@
   "binary": {
     "bun_version": "1.3.6",
     "target": "bun-linux-arm64",
-    "size_bytes": 94086544,
-    "sha256": "672f4228929effa973b40f8cfdeb47c6b5275751cf71974b0b7fbd4a4a772fcc"
+    "size_bytes": 94087310,
+    "sha256": "c67640f6af16a06589957ec61a35282e676ba967a2c6388c84e32749b5f33ef3"
   },
   "readiness": {
     "path": "/_emulate/manifest",
     "status": 200,
-    "manifest_id": "huggingface"
+    "manifest_id": "huggingface",
+    "hf_port": 14318,
+    "otlp_port": 4318,
+    "otlp_status": "ok"
   },
   "contract_tests": {
     "huggingface_hub": "1.10.2",
     "hf_xet": "1.4.3",
-    "passed": 18,
+    "passed": 20,
     "skipped": 1,
     "skip_reason": "The runtime-free box intentionally has no Bun build toolchain."
   },
   "product_publish": {
     "success": true,
     "trace_count": 1,
-    "shard_name": "traces_20260713T204729Z_3c06ebf8.jsonl",
+    "shard_name": "traces_20260713T212911Z_9bb2cafb.jsonl",
     "ledger_operation_id": "commit",
-    "ledger_path": "/api/datasets/bench/scenario-2-final-b68a/commit/main",
-    "commit_oid": "2d65809afa8a68c3034cc84ad55b06016fc3238f"
+    "ledger_path": "/api/datasets/bench/scenario-2-final-0fb478/commit/main",
+    "commit_oid": "b64dd6e37794570bfdbe6161d93371677ce988fa"
   },
   "emulator_down_control": {
     "observed": "red",
@@ -50,11 +53,13 @@
   },
   "materialization": {
     "path": "direct-scp",
-    "reason": "Crabbox 0.38.0 provisioned the named local-container lease to ready state. The exact b68a78cac46 source archive and compiled binary were copied through the lease's inspected SSH identity; every proof command ran inside that lease."
+    "reason": "Crabbox 0.38.0 provisioned the named local-container lease to ready state. The exact 0fb4789aeef source archive and compiled binary were copied through the lease's inspected SSH identity; every proof command ran inside that lease."
   },
   "release": {
     "success": true,
-    "lease_id": "cbx_ae65bee53287",
-    "container_id": "00a7b7f8a55b905fd1222e6cc1f0ef074e166f650836fc8c1625e51ccc1649e2"
+    "lease_id": "cbx_3d187f6ef856",
+    "container_id": "0cc9cd69ac2011231cb8295dea8426ccfb9f9d9117e9ef4537eb8d1863fb4299",
+    "inspect_after_stop_returncode": 4,
+    "container_absent": true
   }
 }
