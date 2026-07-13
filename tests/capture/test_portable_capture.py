@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from opentraces.capture import Capture, CapturePlan
+from opentraces.capture.parity import compare_placements
 
 
 def _git_project(root: Path) -> Path:
@@ -288,3 +289,99 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
         event.event_type == CONTEXT_NODE_OBSERVED and event.trace_id == trace_id
         for event in events
     )
+
+
+def test_persistent_and_leased_capture_have_normalized_material_parity(
+    tmp_path: Path,
+) -> None:
+    projects = {
+        "persistent": _git_project(tmp_path / "persistent-project"),
+        "leased": _git_project(tmp_path / "leased-project"),
+    }
+    sources = {
+        placement: _write_session(project, "placement-parity-session")
+        for placement, project in projects.items()
+    }
+
+    def run(placement: str, result_dir: Path):
+        project = projects[placement]
+        return Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement=placement,
+                requested_sources=("session_jsonl", "bucket"),
+                required_sources=("session_jsonl", "bucket"),
+                actor="claude-code",
+                session_id="placement-parity-session",
+                session_path=sources[placement],
+                observer_version="observer-pin",
+                product_under_test_version="product-pin",
+                result_dir=result_dir,
+            )
+        ).finish(deadline=time.monotonic() + 10.0)
+
+    persistent = run("persistent", tmp_path / "persistent")
+    leased = run("leased", tmp_path / "leased")
+    report = compare_placements(
+        persistent,
+        leased,
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert persistent.completeness == leased.completeness == "complete"
+    assert report.matches is True
+    assert report.canonical_trace_match is True
+    assert report.context_companion_match is True
+    assert report.trail_companion_match is True
+    assert report.security_match is True
+    assert report.path_normalization_applied is True
+    assert report.differences == ()
+
+
+def test_display_label_parity_requires_matching_labeler_provenance(
+    tmp_path: Path,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    sources = {
+        placement: _write_session(project, "label-parity-session")
+        for placement, project in projects.items()
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        project = projects[placement]
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=project,
+                    workspace=project,
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="label-parity-session",
+                    session_path=sources[placement],
+                    observer_version="observer-pin",
+                    product_under_test_version="product-pin",
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_spans=[{"start": 1, "end": 2, "label": "Read file"}],
+        leased_spans=[{"start": 1, "end": 2, "label": "Different wording"}],
+        persistent_labeler_provenance={"model": "labeler-a", "version": "1"},
+        leased_labeler_provenance={"model": "labeler-b", "version": "1"},
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.span_match is True
+    assert report.display_label_match is None
+    assert "display labels were not compared" in report.limitations[0]
