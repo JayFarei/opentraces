@@ -7,13 +7,16 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
 
+from opentraces.capture.otlp import start_receiver
 from opentraces.core.arena.emulate.huggingface.runtime import (
     BUN_VERSION,
     COMPILE_TARGET,
+    DEFAULT_PORT as HF_DEFAULT_PORT,
     EmulatorReadinessError,
     app_state_digest,
     app_state_pin,
@@ -109,6 +112,58 @@ def test_readiness_waits_for_manifest_and_rejects_a_missing_sidecar(
 
     with pytest.raises(EmulatorReadinessError, match="did not become ready"):
         wait_for_hf_emulator(endpoint, timeout=0.05, poll_interval=0.01)
+
+
+def test_default_hf_emulator_coexists_with_default_portable_otlp_receiver(
+    tmp_path: Path,
+) -> None:
+    compiled_binary = os.environ.get("OPENTRACES_HF_EMULATOR_BINARY")
+    if compiled_binary is not None:
+        command = [compiled_binary]
+    else:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.fail(
+                "the HF/OTLP coexistence contract requires bun or "
+                "OPENTRACES_HF_EMULATOR_BINARY"
+            )
+        command = [bun, "run", str(SERVER_SOURCE)]
+
+    receiver = None
+    try:
+        receiver = start_receiver()
+        assert receiver.wait_until_ready(timeout=2.0)
+    except OSError:
+        with urllib.request.urlopen("http://127.0.0.1:4318/health", timeout=1) as response:
+            assert json.load(response) == {"status": "ok"}
+
+    process = subprocess.Popen(
+        command,
+        env={
+            **os.environ,
+            "LEDGER_PATH": str(tmp_path / "coexistence-ledger.jsonl"),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        manifest = wait_for_hf_emulator(
+            f"http://127.0.0.1:{HF_DEFAULT_PORT}",
+            timeout=2.0,
+            poll_interval=0.01,
+        )
+        with urllib.request.urlopen("http://127.0.0.1:4318/health", timeout=1) as response:
+            assert json.load(response) == {"status": "ok"}
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=2)
+        if receiver is not None:
+            receiver.shutdown()
+
+    assert HF_DEFAULT_PORT == 14318
+    assert manifest["id"] == "huggingface"
 
 
 def test_build_produces_pinned_linux_arm64_binary(tmp_path: Path) -> None:
