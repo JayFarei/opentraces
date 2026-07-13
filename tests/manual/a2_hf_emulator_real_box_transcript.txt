@@ -1,6 +1,6 @@
 A2 Hugging Face emulator genuine leased-box transcript
-Observed: 2026-07-13T19:26:39Z
-Source commit: 246120899bd65524af03af4f5081de2da0fce91b
+Observed: 2026-07-13T20:14:27Z
+Source commit: ec73099fc9fc2f68896382199653384cfe1202d2
 
 This transcript is sanitized. It contains no credentials, developer-machine
 paths, or reusable SSH material. Angle-bracketed values name local transfer
@@ -11,38 +11,37 @@ $ crabbox --version
 0.38.0
 
 $ TMPDIR=<home>/crabbox-tmp crabbox warmup --provider local-container --local-container-image ubuntu:24.04 --ttl 30m
-provisioning provider=local-container lease=cbx_9c09571f800c slug=tidal-crayfish runtime=docker image=ubuntu:24.04 keep=true
+provisioning provider=local-container lease=cbx_bffa44465a51 slug=brisk-prawn runtime=docker image=ubuntu:24.04 keep=true
 waiting for 127.0.0.1:<port> local container ssh... ports=<port>:closed
 waiting for 127.0.0.1:<port> local container ssh ssh-auth... ports=<port>:tcp
-provisioned lease=cbx_9c09571f800c container=00864ed3169a state=ready
-leased cbx_9c09571f800c slug=tidal-crayfish provider=local-container server=00864ed3169ab06c62cce7823285209c3d63afb9e89022e5180ce6830e4f7ce9 type=ubuntu_24.04
+provisioned lease=cbx_bffa44465a51 container=dd3178e176e5 state=ready
+leased cbx_bffa44465a51 slug=brisk-prawn provider=local-container server=dd3178e176e588e68b75ee689dd1c924102a46d5d106f3e8da3b19b090cf27c9 type=ubuntu_24.04
 ready ssh=crabbox@127.0.0.1:<port> network=public workroot=/work/crabbox
-warmup complete total=50.455s
+warmup complete total=20.338s
 
-$ TMPDIR=<home>/crabbox-tmp crabbox inspect --id cbx_9c09571f800c --provider local-container --json | <select-proof-fields>
-{"id":"cbx_9c09571f800c","provider":"local-container","state":"leased","serverId":"00864ed3169ab06c62cce7823285209c3d63afb9e89022e5180ce6830e4f7ce9","serverType":"ubuntu_24.04","ready":true,"labels":{"image":"ubuntu:24.04","provider":"local-container","state":"leased"}}
+$ TMPDIR=<home>/crabbox-tmp crabbox inspect --id cbx_bffa44465a51 --provider local-container --json | <select-proof-fields>
+{"id":"cbx_bffa44465a51","provider":"local-container","state":"leased","serverId":"dd3178e176e588e68b75ee689dd1c924102a46d5d106f3e8da3b19b090cf27c9","serverType":"ubuntu_24.04","ready":true,"labels":{"image":"ubuntu:24.04","provider":"local-container","state":"leased"}}
 
 $ python -c 'build_hf_emulator_binary(<compiled-binary>)'
-[23ms] bundle 1 modules
-[2ms] compile <compiled-binary> bun-linux-aarch64-v1.3.6
-sha256=9556eb93933afd4244bded2713e34b1be2b0e2015f18abe8890d2a41437e49d1
-size_bytes=94086059
+[2ms] bundle 1 modules
+[1ms] compile <compiled-binary> bun-linux-aarch64-v1.3.6
+sha256=0b37ad33baaeb4834ccc99c550a3b2f7f4cc4818f9f77dba662886a18698b598
+size_bytes=94086269
 
-$ git archive --format=tar --output=<source-archive> 246120899bd65524af03af4f5081de2da0fce91b
-source_archive_sha256=c25ae640b1782f0df30fd4e4a28f91fa3af5927e6dfbdbcc9b5ca0739d237e65
+$ git archive --format=tar --output=<source-archive> ec73099fc9fc2f68896382199653384cfe1202d2
+source_archive_sha256=3b858f6050ce264cd53d38fb487165e3222aadcda6fd7b5261e4518696fa7c03
 
 $ scp -i <lease-key> -P <lease-port> <source-archive> <compiled-binary> crabbox@127.0.0.1:/tmp/
 $ ssh -i <lease-key> -p <lease-port> crabbox@127.0.0.1 '<extract archive and install binary under /work/crabbox/a2>'
 $ ssh -i <lease-key> -p <lease-port> crabbox@127.0.0.1 'cd /work/crabbox/a2; uname -m; ldd --version | head -1; sha256sum opentraces-hf-emulator; stat -c %s opentraces-hf-emulator'
 aarch64
 ldd (Ubuntu GLIBC 2.39-0ubuntu8.7) 2.39
-9556eb93933afd4244bded2713e34b1be2b0e2015f18abe8890d2a41437e49d1  opentraces-hf-emulator
-94086059
+0b37ad33baaeb4834ccc99c550a3b2f7f4cc4818f9f77dba662886a18698b598  opentraces-hf-emulator
+94086269
 
-The stock Ubuntu image had Python 3.12 but not ensurepip. The first
-`python3 -m venv .venv` failed with the explicit `python3.12-venv` remedy.
-The package was installed inside the same lease with apt, then the venv was
-recreated. No runtime was added for the precompiled emulator binary.
+The stock Ubuntu image had Python 3.12 but not ensurepip. The explicit
+`python3.12-venv` package was installed inside the same lease before creating
+the venv. No runtime was added for the precompiled emulator binary.
 
 $ .venv/bin/python -c '<print installed contract package versions>'
 pip=24.0
@@ -51,27 +50,29 @@ hf-xet=1.4.3
 pytest=9.1.1
 
 $ OPENTRACES_HF_EMULATOR_BINARY=/work/crabbox/a2/opentraces-hf-emulator OPENTRACES_RUNTIME_FREE_BOX=1 .venv/bin/python -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py
-...............s.                                                        [100%]
-16 passed, 1 skipped in 4.42s
+................s.                                                       [100%]
+17 passed, 1 skipped in 3.17s
 
 The one skip is the explicitly opted-in compile-tool test: the leased box runs
 the precompiled exact binary and intentionally has no Bun. The dedicated CI
-workflow provisions Bun 1.3.6 and runs all 17 tests without this opt-in.
+workflow provisions Bun 1.3.6 and runs all 18 tests without this opt-in.
+The executable contract includes old-versus-main resolve identity, authenticated
+listing scope, and settings/delete ledger-payload controls.
 
-$ PORT=4318 LEDGER_PATH=/work/crabbox/a2/hf-ledger.jsonl /work/crabbox/a2/opentraces-hf-emulator
+$ setsid env PORT=4318 LEDGER_PATH=/work/crabbox/a2/hf-ledger.jsonl /work/crabbox/a2/opentraces-hf-emulator >hf-emulator.stdout 2>hf-emulator.stderr < /dev/null &
 $ curl -fsS http://127.0.0.1:4318/_emulate/manifest | <select-readiness-fields>
 {"auth":[{"id":"user-token","status":"supported","title":"User access token","type":"bearer-token","validation":"minted-or-baseline-state"}],"controlPlane":{"credentials":"POST /_emulate/credentials","reset":"POST /_emulate/reset","seed":"POST /_emulate/seed"},"id":"huggingface","operation_count":12}
 
 $ HF_ENDPOINT=http://127.0.0.1:4318 .venv/bin/python -c '<publish one TraceRecord through HFUploader>'
-{"shard_name":"traces_20260713T192530Z_086947b8.jsonl","success":true,"trace_count":1}
+{"shard_name":"traces_20260713T201321Z_2e9c9883.jsonl","success":true,"trace_count":1}
 
 $ .venv/bin/python -c '<select the last commit row from hf-ledger.jsonl>'
-{"method":"POST","operation_id":"commit","path":"/api/datasets/bench/scenario-2-final/commit/main","request":{"files":["data/traces_20260713T192530Z_086947b8.jsonl"],"repo_id":"bench/scenario-2-final","revision":"main"},"request_id":"req_7","response":{"commit_oid":"d5519873ef271dace7d09d28144775e8c6069260","status":200}}
+{"method":"POST","operation_id":"commit","path":"/api/datasets/bench/scenario-2-final-ec730/commit/main","request":{"files":["data/traces_20260713T201321Z_2e9c9883.jsonl"],"repo_id":"bench/scenario-2-final-ec730","revision":"main"},"request_id":"req_7","response":{"commit_oid":"8251c9ed28d937b3ec1edd918de88c1285a57e68","status":200}}
 
 $ kill <emulator-pid>
 $ HF_ENDPOINT=http://127.0.0.1:4318 .venv/bin/python -c '<HFUploader.ensure_repo_exists negative control>'
 returncode=1
 httpx.ConnectError: [Errno 111] Connection refused
 
-$ TMPDIR=<home>/crabbox-tmp crabbox stop --id cbx_9c09571f800c --provider local-container
-deleted lease=cbx_9c09571f800c server=00864ed3169ab06c62cce7823285209c3d63afb9e89022e5180ce6830e4f7ce9 name=crabbox-tidal-crayfish-<suffix>
+$ TMPDIR=<home>/crabbox-tmp crabbox stop --id cbx_bffa44465a51 --provider local-container
+deleted lease=cbx_bffa44465a51 server=dd3178e176e588e68b75ee689dd1c924102a46d5d106f3e8da3b19b090cf27c9 name=crabbox-brisk-prawn-<suffix>

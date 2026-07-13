@@ -1,10 +1,10 @@
 {
   "schema_version": "opentraces.bench.manual-proof.v1",
-  "observed_at": "2026-07-13T19:26:39Z",
-  "source_commit": "246120899bd65524af03af4f5081de2da0fce91b",
+  "observed_at": "2026-07-13T20:14:27Z",
+  "source_commit": "ec73099fc9fc2f68896382199653384cfe1202d2",
   "box": {
-    "lease_id": "cbx_9c09571f800c",
-    "container_id": "00864ed3169ab06c62cce7823285209c3d63afb9e89022e5180ce6830e4f7ce9",
+    "lease_id": "cbx_bffa44465a51",
+    "container_id": "dd3178e176e588e68b75ee689dd1c924102a46d5d106f3e8da3b19b090cf27c9",
     "provider": "local-container",
     "image": "ubuntu:24.04",
     "architecture": "aarch64",
@@ -13,8 +13,8 @@
   "binary": {
     "bun_version": "1.3.6",
     "target": "bun-linux-arm64",
-    "size_bytes": 94086059,
-    "sha256": "9556eb93933afd4244bded2713e34b1be2b0e2015f18abe8890d2a41437e49d1"
+    "size_bytes": 94086269,
+    "sha256": "0b37ad33baaeb4834ccc99c550a3b2f7f4cc4818f9f77dba662886a18698b598"
   },
   "readiness": {
     "path": "/_emulate/manifest",
@@ -24,17 +24,17 @@
   "contract_tests": {
     "huggingface_hub": "1.10.2",
     "hf_xet": "1.4.3",
-    "passed": 16,
+    "passed": 17,
     "skipped": 1,
     "skip_reason": "The runtime-free box intentionally has no Bun build toolchain."
   },
   "product_publish": {
     "success": true,
     "trace_count": 1,
-    "shard_name": "traces_20260713T192530Z_086947b8.jsonl",
+    "shard_name": "traces_20260713T201321Z_2e9c9883.jsonl",
     "ledger_operation_id": "commit",
-    "ledger_path": "/api/datasets/bench/scenario-2-final/commit/main",
-    "commit_oid": "d5519873ef271dace7d09d28144775e8c6069260"
+    "ledger_path": "/api/datasets/bench/scenario-2-final-ec730/commit/main",
+    "commit_oid": "8251c9ed28d937b3ec1edd918de88c1285a57e68"
   },
   "emulator_down_control": {
     "observed": "red",
@@ -50,11 +50,11 @@
   },
   "materialization": {
     "path": "direct-scp",
-    "reason": "Crabbox 0.38.0 provisioned the named local-container lease to ready state. The exact committed source archive and compiled binary were copied through the lease's inspected SSH identity; every proof command ran inside that lease."
+    "reason": "Crabbox 0.38.0 provisioned the named local-container lease to ready state. The exact ec73099fc9f source archive and compiled binary were copied through the lease's inspected SSH identity; every proof command ran inside that lease."
   },
   "release": {
     "success": true,
-    "lease_id": "cbx_9c09571f800c",
-    "container_id": "00864ed3169ab06c62cce7823285209c3d63afb9e89022e5180ce6830e4f7ce9"
+    "lease_id": "cbx_bffa44465a51",
+    "container_id": "dd3178e176e588e68b75ee689dd1c924102a46d5d106f3e8da3b19b090cf27c9"
   }
 }
