@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -52,27 +53,21 @@ def build_local_wheels(repository: Path) -> list[Path]:
     for pattern in ("opentraces-*.whl", "opentraces_schema-*.whl"):
         for stale in dist.glob(pattern):
             stale.unlink()
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "wheel",
-            "--no-deps",
-            "--wheel-dir",
-            str(dist),
-            str(repository / "packages" / "opentraces-schema"),
-            str(repository),
-        ],
-        cwd=repository,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise click.ClickException(
-            "could not build local install wheels:\n" + (completed.stderr or completed.stdout)
+    uv = shutil.which("uv")
+    if uv is None:
+        raise click.ClickException("could not build local install wheels: uv is not installed")
+    for source in (repository / "packages" / "opentraces-schema", repository):
+        completed = subprocess.run(
+            [uv, "build", "--wheel", "--out-dir", str(dist), str(source)],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=False,
         )
+        if completed.returncode != 0:
+            raise click.ClickException(
+                "could not build local install wheels:\n" + (completed.stderr or completed.stdout)
+            )
     return sorted(dist.glob("*.whl"))
 
 
@@ -130,6 +125,8 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
     env = dict(os.environ)
     env["OT_BENCH_RUN_ROOT"] = str(store.root)
     env["OT_BENCH_REPOSITORY"] = str(repository)
+    env["OT_BENCH_SCENARIOS"] = "1"
+    env["OT_BENCH_REAL_HOME"] = str(Path.home())
     pytest_rc = run_pytest(target, repository=repository, env=env)
     created = sorted(_finalized_ids(store) - before)
     if not created:

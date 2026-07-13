@@ -14,6 +14,13 @@ def convert_script_cast(typescript_path: Path, timing_path: Path) -> bytes:
     """Convert one exact typescript/timing pair into a deterministic v2 cast."""
 
     payload = typescript_path.read_bytes()
+    if payload.startswith(b"Script started on "):
+        _, separator, payload = payload.partition(b"\n")
+        if not separator:
+            raise RecordingConversionError("typescript has an unterminated Script started header")
+        payload, separator, _ = payload.rpartition(b"\nScript done on ")
+        if not separator:
+            raise RecordingConversionError("typescript has no matching Script done footer")
     cursor = 0
     elapsed = 0.0
     events: list[list[object]] = []

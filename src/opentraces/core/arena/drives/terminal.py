@@ -32,7 +32,19 @@ class TerminalResult:
 
     @property
     def json(self) -> Any:
-        return json.loads(self.stdout)
+        try:
+            return json.loads(self.stdout)
+        except json.JSONDecodeError:
+            decoder = json.JSONDecoder()
+            for index, char in enumerate(self.stdout):
+                if char not in "[{":
+                    continue
+                try:
+                    value, _ = decoder.raw_decode(self.stdout[index:])
+                    return value
+                except json.JSONDecodeError:
+                    continue
+            raise
 
 
 class TerminalDrive:
@@ -89,10 +101,10 @@ class TerminalDrive:
             },
         )
         started = time.monotonic()
-        remote_base = f".opentraces-bench/terminal-{self._ordinal:04d}"
+        remote_base = f"bench-recordings/terminal-{self._ordinal:04d}"
         remote_timing = f"{remote_base}.timing"
         remote_typescript = f"{remote_base}.typescript"
-        recorded_argv = [
+        script_argv = [
             "script",
             "-q",
             "--return",
@@ -102,6 +114,11 @@ class TerminalDrive:
             remote_typescript,
             "--command",
             shlex.join(argv),
+        ]
+        recorded_argv = [
+            "sh",
+            "-c",
+            f"mkdir -p bench-recordings && exec {shlex.join(script_argv)}",
         ]
         observed = self.runtime.exec(
             self.box,

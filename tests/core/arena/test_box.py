@@ -69,7 +69,15 @@ def test_lease_pins_version_image_tmpdir_and_runs_both_preflights(tmp_path: Path
         PINNED_LOCAL_IMAGE,
     ]
     assert runner.calls[1][2]["TMPDIR"] == str(tmp_path / "crabbox-tmp")
-    assert inspect == ["crabbox", "inspect", "--id", "cbx_abc123", "--json"]
+    assert inspect == [
+        "crabbox",
+        "inspect",
+        "--id",
+        "cbx_abc123",
+        "--provider",
+        "local-container",
+        "--json",
+    ]
     assert ssh[:3] == ["ssh", "-F", "/dev/null"]
     assert box.sandbox_tier == "container"
 

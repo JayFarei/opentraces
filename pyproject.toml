@@ -72,4 +72,5 @@ markers = [
     "perf: deterministic latency and memory performance harness",
     "timing_sensitive: wall-clock budget assertion; run serially to avoid xdist/CI contention",
     "user_smoke: opt-in tmux/browser user smoke coverage",
+    "arena: disposable-box bench scenarios (run through opentraces bench run)",
 ]

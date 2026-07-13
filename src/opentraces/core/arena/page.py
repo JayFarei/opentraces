@@ -94,6 +94,15 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         encoding="utf-8"
     )
     verdict = result.get("verdict") or "error"
+    reason = result.get("reason") or {}
+    reason_html = (
+        '<section class="card outcome">'
+        f'<div class="eyebrow">OUTCOME REASON · {_h(str(reason.get("code")).upper())}</div>'
+        f'<p>{_h(reason.get("message"))}</p>'
+        "</section>"
+        if reason
+        else ""
+    )
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>{_h(result['scenario']['claim'])} · bench evidence</title>
@@ -113,6 +122,7 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result['execution_status'])}</div>
 <div class="fact"><div class="eyebrow">EVIDENCE</div>{'complete' if result['evidence']['complete'] else 'incomplete'}</div>
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result['recordings']['rewatchable']).lower()}</div></section>
+{reason_html}
 <h2>Recording</h2><section class="stack">{''.join(players)}</section>
 <h2>Actions and raw output</h2><section class="stack">{''.join(action_cards)}</section>
 <h2>Explicit verifiers</h2><section class="stack">{''.join(verifier_cards)}</section>

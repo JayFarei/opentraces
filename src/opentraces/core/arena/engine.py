@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -65,7 +66,10 @@ class Bench:
     ) -> None:
         self.source = source
         self.store = store or RunStore()
-        self.box_runtime = box_runtime or CrabboxRuntime()
+        runtime_home = os.environ.get("OT_BENCH_REAL_HOME")
+        self.box_runtime = box_runtime or CrabboxRuntime(
+            home=Path(runtime_home) if runtime_home else None
+        )
         self.repository_path = Path(repository_path or Path.cwd())
 
     def run(
@@ -136,6 +140,13 @@ class BenchRun:
                 repository=self.bench.repository_path,
             )
         except Exception as exc:
+            if self.box is not None:
+                try:
+                    self.bench.box_runtime.release(self.box)
+                except Exception:
+                    # The original setup failure remains primary; both the
+                    # run result and Crabbox's failure bundle preserve it.
+                    pass
             self._finalize(
                 execution_status="error",
                 verdict=None,

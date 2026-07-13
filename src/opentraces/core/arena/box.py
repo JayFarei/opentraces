@@ -121,6 +121,9 @@ class CrabboxRuntime:
         tmpdir = self.home / "crabbox-tmp"
         tmpdir.mkdir(parents=True, exist_ok=True)
         self.child_env["TMPDIR"] = str(tmpdir)
+        colima_socket = self.home / ".colima" / "default" / "docker.sock"
+        if "DOCKER_HOST" not in self.child_env and colima_socket.exists():
+            self.child_env["DOCKER_HOST"] = f"unix://{colima_socket}"
 
     def _call(
         self,
@@ -182,7 +185,16 @@ class CrabboxRuntime:
             raise CrabboxRefusal("lease_identity_missing", "warmup did not report a cbx_ lease id")
         lease_id = match.group(0)
         inspected = self._call(
-            [self.command, "inspect", "--id", lease_id, "--json"], timeout=30
+            [
+                self.command,
+                "inspect",
+                "--id",
+                lease_id,
+                "--provider",
+                self.provider,
+                "--json",
+            ],
+            timeout=30,
         )
         try:
             facts = json.loads(inspected.stdout)
@@ -274,6 +286,21 @@ class CrabboxRuntime:
     def materialize(self, box: Box, app_state: str, *, repository: Path) -> dict[str, Any]:
         """Materialize the first concrete recipe from locally built wheels."""
 
+        if app_state == "base-only":
+            probe = self.exec(
+                box,
+                ["sh", "-c", "command -v python3 && command -v git && command -v curl && command -v script"],
+                timeout=30,
+                timing_path=repository / ".crabbox" / "bench-base-provides-timing.json",
+            )
+            if probe.returncode != 0:
+                raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
+            material = f"{box.provider}\n{self.image}\npython3\ngit\ncurl\nscript\n"
+            return {
+                "name": app_state,
+                "digest": f"sha256:{hashlib.sha256(material.encode()).hexdigest()}",
+                "provides": ["python3", "git", "curl", "script"],
+            }
         if app_state != "install-only":
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
         wheels = sorted((repository / "dist").glob("*.whl"))
@@ -313,9 +340,9 @@ class CrabboxRuntime:
             [
                 "sh",
                 "-c",
-                "set -eu; apt-get update >/dev/null; "
-                "DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip >/dev/null; "
-                f"python3 -m pip install --break-system-packages {' '.join(map(shlex.quote, remote_wheels))}",
+                "set -eu; sudo apt-get update >/dev/null; "
+                "sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip >/dev/null; "
+                f"sudo python3 -m pip install --break-system-packages {' '.join(map(shlex.quote, remote_wheels))}",
             ],
             timeout=600,
             timing_path=timing,
@@ -361,7 +388,7 @@ class CrabboxRuntime:
             if Path(pattern).is_absolute():
                 raise ValueError("Crabbox artifact globs must be workdir-relative")
             command.extend(["--artifact-glob", pattern])
-        command.extend(["--", ":"])
+        command.extend(["--", "sh", "-c", ":"])
         collected = self._call(command, cwd=repository, timeout=120)
         if collected.returncode != 0:
             return {}
@@ -389,7 +416,8 @@ class CrabboxRuntime:
 
     def release(self, box: Box) -> None:
         stopped = self._call(
-            [self.command, "stop", "--id", box.id, "--provider", box.provider], timeout=60
+            [self.command, "stop", "--id", box.id, "--provider", box.provider],
+            timeout=60,
         )
         if stopped.returncode != 0:
             raise CrabboxRefusal("release_failed", (stopped.stderr or stopped.stdout).strip())
