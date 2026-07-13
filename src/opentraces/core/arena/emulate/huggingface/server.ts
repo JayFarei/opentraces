@@ -21,6 +21,13 @@ const operations = [
   { operationId: "commit", method: "POST", path: "/api/datasets/{id}/commit/{rev}", status: "hand-authored" },
   { operationId: "whoami", method: "GET", path: "/api/whoami-v2", status: "hand-authored" },
   { operationId: "updateSettings", method: "PUT", path: "/api/datasets/{id}/settings", status: "hand-authored" },
+  {
+    operationId: "validateYaml",
+    method: "POST",
+    path: "/api/validate-yaml",
+    status: "hand-authored",
+    summary: "validates the dataset card before folder upload",
+  },
   { operationId: "listDatasets", method: "GET", path: "/api/datasets", status: "partial" },
   { operationId: "deleteRepo", method: "DELETE", path: "/api/repos/delete", status: "partial" },
   { operationId: "lfsBatch", method: "POST", path: "/{id}.git/info/lfs/objects/batch", status: "unsupported" },
@@ -275,6 +282,18 @@ Bun.serve({
         status: 200,
         headers: { "Content-Type": "application/x-ndjson" },
       });
+    }
+    if (request.method === "POST" && path === "/api/validate-yaml") {
+      const unauthorized = requireAuthentication(request, "validateYaml");
+      if (unauthorized) return unauthorized;
+      const body = (await request.json()) as Record<string, unknown>;
+      const content = String(body.content ?? "");
+      const observed = {
+        repo_type: String(body.repoType ?? "model"),
+        content_sha256: createHash("sha256").update(content).digest("hex"),
+      };
+      appendLedger(request, "validateYaml", 200, observed);
+      return jsonResponse({ warnings: [], errors: [] });
     }
     if (request.method === "POST" && path === "/_emulate/credentials") {
       const body = (await request.json()) as Record<string, unknown>;

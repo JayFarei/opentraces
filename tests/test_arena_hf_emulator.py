@@ -18,9 +18,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER_SOURCE = (
-    ROOT / "src/opentraces/core/arena/emulate/huggingface/server.ts"
-)
+SERVER_SOURCE = ROOT / "src/opentraces/core/arena/emulate/huggingface/server.ts"
 
 
 def _free_port() -> int:
@@ -37,10 +35,7 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
     else:
         bun = shutil.which("bun")
         if bun is None:
-            pytest.fail(
-                "the HF emulator contract requires bun or "
-                "OPENTRACES_HF_EMULATOR_BINARY"
-            )
+            pytest.fail("the HF emulator contract requires bun or OPENTRACES_HF_EMULATOR_BINARY")
         command = [bun, "run", str(SERVER_SOURCE)]
 
     port = _free_port()
@@ -158,14 +153,13 @@ def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> N
         "commit": "hand-authored",
         "whoami": "hand-authored",
         "updateSettings": "hand-authored",
+        "validateYaml": "hand-authored",
         "listDatasets": "partial",
         "deleteRepo": "partial",
         "lfsBatch": "unsupported",
         "xetUpload": "unsupported",
     }
-    assert manifest["connections"][0]["template"] == (
-        "HF_ENDPOINT={{baseUrl}}\nHF_TOKEN={{token}}"
-    )
+    assert manifest["connections"][0]["template"] == ("HF_ENDPOINT={{baseUrl}}\nHF_TOKEN={{token}}")
     assert manifest["controlPlane"] == {
         "credentials": "POST /_emulate/credentials",
         "seed": "POST /_emulate/seed",
@@ -212,9 +206,7 @@ print(json.dumps({
         "sha": "0" * 40,
     }
     ledger_rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
-    assert [
-        (row["method"], row["path"], row["operation_id"]) for row in ledger_rows
-    ] == [
+    assert [(row["method"], row["path"], row["operation_id"]) for row in ledger_rows] == [
         ("GET", "/_emulate/manifest", "manifest"),
         ("POST", "/api/repos/create", "createRepo"),
         ("GET", "/api/datasets/bench/contract", "datasetInfo"),
@@ -229,11 +221,15 @@ def test_real_hf_client_auth_settings_listing_and_delete(tmp_path: Path) -> None
         second_credential = _request_json(
             f"{endpoint}/_emulate/credentials", payload={"name": "bench"}
         )
-        assert first_credential == second_credential == {
-            "name": "bench",
-            "token": "hf_bench_user_token",
-            "type": "user",
-        }
+        assert (
+            first_credential
+            == second_credential
+            == {
+                "name": "bench",
+                "token": "hf_bench_user_token",
+                "type": "user",
+            }
+        )
         assert _request_json(
             f"{endpoint}/_emulate/seed",
             payload={"repos": [{"repo_id": "bench/seeded", "private": True}]},
@@ -273,7 +269,11 @@ print(json.dumps({"id": info.id, "private": info.private}))
             ("PUT", f"{endpoint}/api/datasets/bench/guard/settings", {"private": True}),
             ("POST", f"{endpoint}/api/datasets/bench/guard/preupload/main", {"files": []}),
             ("POST", f"{endpoint}/api/datasets/bench/guard/commit/main", {}),
-            ("DELETE", f"{endpoint}/api/repos/delete", {"name": "guard", "organization": "bench", "type": "dataset"}),
+            (
+                "DELETE",
+                f"{endpoint}/api/repos/delete",
+                {"name": "guard", "organization": "bench", "type": "dataset"},
+            ),
         ]
         for method, url, payload in guarded_mutations:
             _assert_invalid_token(
@@ -351,8 +351,7 @@ print(json.dumps({
     update_row = next(
         row
         for row in ledger_rows
-        if row["operation_id"] == "updateSettings"
-        and row["response"]["status"] == 200
+        if row["operation_id"] == "updateSettings" and row["response"]["status"] == 200
     )
     delete_row = next(
         row
@@ -1156,9 +1155,7 @@ api.upload_file(
 """,
         )
         assert first.returncode == 0, first.stderr
-        rows_before_restart = [
-            json.loads(line) for line in ledger_path.read_text().splitlines()
-        ]
+        rows_before_restart = [json.loads(line) for line in ledger_path.read_text().splitlines()]
 
     with running_emulator(tmp_path) as (endpoint, _):
         second = _run_hf_client(
@@ -1177,9 +1174,7 @@ HfApi(token="hf_bench_user_token").create_repo(
             ]
 
     assert rows_after_restart[: len(rows_before_restart)] == rows_before_restart
-    commit_row = next(
-        row for row in rows_after_restart if row["operation_id"] == "commit"
-    )
+    commit_row = next(row for row in rows_after_restart if row["operation_id"] == "commit")
     assert commit_row["request"] == {
         "repo_id": "bench/first",
         "revision": "main",
@@ -1265,8 +1260,7 @@ with TemporaryDirectory() as raw:
         for row in rows
     )
     assert any(
-        row["operation_id"] == "commit"
-        and row["request"]["repo_id"] == "bench/folder-publish"
+        row["operation_id"] == "commit" and row["request"]["repo_id"] == "bench/folder-publish"
         for row in rows
     )
 

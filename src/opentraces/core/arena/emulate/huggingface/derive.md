@@ -20,7 +20,11 @@ Re-run the derivation after either pin changes.
 5. Inspect `hf_raise_for_status`. Keep `RepoNotFound`, `EntryNotFound`,
    `RevisionNotFound`, and `GatedRepo` response headers aligned with its
    exception dispatch.
-6. Run `pytest -q tests/test_arena_hf_emulator.py`; these are process-level
+6. Drive `HfApi.upload_folder` with a dataset card. The pinned client calls
+   `POST /api/validate-yaml` before hashing or committing `README.md`; record
+   only the repository type and a content digest in the ledger, never the card
+   body itself.
+7. Run `pytest -q tests/test_arena_hf_emulator.py`; these are process-level
    contract tests, so `HF_ENDPOINT` is set before the pinned client imports.
 
 The path-scoped `Hugging Face emulator contract` workflow provisions Bun
