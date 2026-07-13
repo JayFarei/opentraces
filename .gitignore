@@ -50,6 +50,12 @@ tmp/
 # material to `examples/` before committing it to the public repo.
 runs/
 
+# Private planning and experiment scratch belongs in kb/.
+/docs/
+/experiments/
+/firstmate/
+/.lavish/
+
 .agents/skills/agent-browser
 .claude/skills/agent-browser
 .agents/skills

@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "saved_at": "2026-07-07T08:18:31Z",
+  "save_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+  "session_name": "opentraces",
+  "windows": [
+    {
+      "window_index": 1,
+      "window_name": "site-seo-loop",
+      "window_layout": "68c8,418x77,0,0,19",
+      "panes": [
+        {
+          "pane_index": 1,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "2.1.185",
+          "is_claude": true,
+          "claude_conversation_id": "e090d438-0bb1-4a74-bf98-9f2ef37d6d26",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 19
+        }
+      ]
+    },
+    {
+      "window_index": 2,
+      "window_name": "capsule-roadmap",
+      "window_layout": "a651,418x77,0,0{210x77,0,0,148,207x77,211,0,155}",
+      "panes": [
+        {
+          "pane_index": 1,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "2.1.201",
+          "is_claude": true,
+          "claude_conversation_id": "54093282-b76f-4ee4-aa02-0dd5a14d7e80",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 148
+        },
+        {
+          "pane_index": 2,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "2.1.201",
+          "is_claude": true,
+          "claude_conversation_id": "871e40ed-3967-4ea5-bc4d-6aa5d0484338",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 155
+        }
+      ]
+    },
+    {
+      "window_index": 3,
+      "window_name": "interface-refactor",
+      "window_layout": "5034,418x77,0,0{160x77,0,0[160x40,0,0,92,160x36,0,41,97],257x77,161,0[257x34,161,0,93,257x42,161,35{67x42,161,35,120,66x42,229,35,149,40x42,296,35,129,81x42,337,35,128}]}",
+      "panes": [
+        {
+          "pane_index": 1,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.195",
+          "is_claude": true,
+          "claude_conversation_id": "437871b0-f1e8-47e2-a00e-f1d8ced257dc",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 92
+        },
+        {
+          "pane_index": 2,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.195",
+          "is_claude": true,
+          "claude_conversation_id": "437871b0-f1e8-47e2-a00e-f1d8ced257dc",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 97
+        },
+        {
+          "pane_index": 3,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.195",
+          "is_claude": true,
+          "claude_conversation_id": "437871b0-f1e8-47e2-a00e-f1d8ced257dc",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 93
+        },
+        {
+          "pane_index": 4,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.197",
+          "is_claude": true,
+          "claude_conversation_id": "ee0cff9c-8697-4a7f-b078-ae18fc442ae5",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 120
+        },
+        {
+          "pane_index": 5,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/kb/br",
+          "pane_command": "nvim",
+          "is_claude": false,
+          "claude_conversation_id": null,
+          "is_nvim": true,
+          "nvim_session_file": null,
+          "tmux_pane_id": 149
+        },
+        {
+          "pane_index": 6,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "2.1.199",
+          "is_claude": true,
+          "claude_conversation_id": "73be216e-ce54-429c-8e63-cd4009fa539d",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 129
+        },
+        {
+          "pane_index": 7,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.198",
+          "is_claude": true,
+          "claude_conversation_id": "0c8d60d1-53a4-46de-b162-8bc7d79c9db9",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 128
+        }
+      ]
+    },
+    {
+      "window_index": 4,
+      "window_name": "project-loop",
+      "window_layout": "3491,418x77,0,0,111",
+      "panes": [
+        {
+          "pane_index": 1,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "2.1.197",
+          "is_claude": true,
+          "claude_conversation_id": "ce28c49f-6913-4ebd-94b6-dda79aa71736",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 111
+        }
+      ]
+    },
+    {
+      "window_index": 5,
+      "window_name": "research",
+      "window_layout": "642e,418x77,0,0{211x77,0,0[211x39,0,0,113,211x37,0,40,116],206x77,212,0[206x39,212,0,114,206x37,212,40,117]}",
+      "panes": [
+        {
+          "pane_index": 1,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.197",
+          "is_claude": true,
+          "claude_conversation_id": "ed9318d5-4b70-496d-a06f-098079a4f7cc",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 113
+        },
+        {
+          "pane_index": 2,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.197",
+          "is_claude": true,
+          "claude_conversation_id": "d3b6ba52-ca61-40f8-a3d6-1f21429f187a",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 116
+        },
+        {
+          "pane_index": 3,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.197",
+          "is_claude": true,
+          "claude_conversation_id": "0e4307f9-130a-4514-ba7a-2166d30c982d",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 114
+        },
+        {
+          "pane_index": 4,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/firstmate",
+          "pane_command": "2.1.197",
+          "is_claude": true,
+          "claude_conversation_id": "6b626527-50a4-4d77-8a19-5b2cc5bf15ec",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 117
+        }
+      ]
+    },
+    {
+      "window_index": 6,
+      "window_name": "product-strategy",
+      "window_layout": "3dc4,418x77,0,0{208x77,0,0,151,209x77,209,0[209x38,209,0,165,209x38,209,39,166]}",
+      "panes": [
+        {
+          "pane_index": 1,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "2.1.201",
+          "is_claude": true,
+          "claude_conversation_id": "00f89921-eb78-416c-90cc-0ea433ad71f1",
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 151
+        },
+        {
+          "pane_index": 2,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "nvim",
+          "is_claude": false,
+          "claude_conversation_id": null,
+          "is_nvim": true,
+          "nvim_session_file": "/Users/jayfarei/.local/state/nvim/sessions/%Users%jayfarei%src%tries%2026-03-27-community-traces-hf.vim",
+          "tmux_pane_id": 165
+        },
+        {
+          "pane_index": 3,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/kb",
+          "pane_command": "node",
+          "is_claude": false,
+          "claude_conversation_id": null,
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 166
+        }
+      ]
+    },
+    {
+      "window_index": 7,
+      "window_name": "zsh",
+      "window_layout": "1380,418x77,0,0{227x77,0,0,156,190x77,228,0[190x20,228,0,157,190x56,228,21,161]}",
+      "panes": [
+        {
+          "pane_index": 1,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "nvim",
+          "is_claude": false,
+          "claude_conversation_id": null,
+          "is_nvim": true,
+          "nvim_session_file": "/Users/jayfarei/.local/state/nvim/sessions/%Users%jayfarei%src%tries%2026-03-27-community-traces-hf.vim",
+          "tmux_pane_id": 156
+        },
+        {
+          "pane_index": 2,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "node",
+          "is_claude": false,
+          "claude_conversation_id": null,
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 157
+        },
+        {
+          "pane_index": 3,
+          "pane_path": "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf",
+          "pane_command": "node",
+          "is_claude": false,
+          "claude_conversation_id": null,
+          "is_nvim": false,
+          "nvim_session_file": null,
+          "tmux_pane_id": 161
+        }
+      ]
+    }
+  ]
+}
