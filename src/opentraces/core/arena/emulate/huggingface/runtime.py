@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 BUN_VERSION = "1.3.6"
 COMPILE_TARGET = "bun-linux-arm64"
-DEFAULT_PORT = 4318
+DEFAULT_PORT = 14318
 DEFAULT_READINESS_TIMEOUT = 5.0
 SERVER_SOURCE = Path(__file__).with_name("server.ts")
 

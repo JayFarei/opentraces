@@ -189,7 +189,7 @@ def test_packaging_record_keeps_upstream_and_fallback_decisions_honest() -> None
         "bun_version": "1.3.6",
         "target": "bun-linux-arm64",
     }
-    assert record["port"] == 4318
+    assert record["port"] == 14318
     assert record["core_reconciliation"]["canonical_upstream"] == (
         "vercel-labs/emulate"
     )

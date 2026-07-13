@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 
 const HOST = "127.0.0.1";
-const PORT = Number.parseInt(process.env.PORT ?? "4318", 10);
+const PORT = Number.parseInt(process.env.PORT ?? "14318", 10);
 const LEDGER_PATH = process.env.LEDGER_PATH;
 
 const operations = [

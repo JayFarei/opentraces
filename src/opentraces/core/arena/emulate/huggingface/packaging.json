@@ -2,7 +2,7 @@
   "schema_version": "opentraces.bench.emulator-package.v1",
   "service": "huggingface",
   "contract_version": "huggingface.v1",
-  "port": 4318,
+  "port": 14318,
   "toolchain": {
     "bun_version": "1.3.6",
     "target": "bun-linux-arm64"
