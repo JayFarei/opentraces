@@ -540,7 +540,7 @@ class CaptureSession:
                 evidence_refs=(
                     request_path.relative_to(self._result_dir).as_posix(),
                 ),
-                limitations=("source finalizer exceeded the capture deadline",),
+                limitations=(self._finalizer_timeout_limitation(source),),
                 duration_ms=_duration_ms(started),
             )
         finally:
@@ -569,6 +569,30 @@ class CaptureSession:
             duration_ms=_duration_ms(started),
             details=dict(report.get("details") or {}),
         )
+
+    def _finalizer_timeout_limitation(self, source: str) -> str:
+        """Retain known source truth when an isolated child misses its budget."""
+
+        generic = "source finalizer exceeded the capture deadline"
+        if source != "telemetry" or not self.plan.session_id:
+            return generic
+        snapshot_path = (
+            self._capture_root / "otel-sessions" / f"{self.plan.session_id}.json"
+        )
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return generic
+        opened_at = float(
+            self._open_details.get("telemetry", {}).get("opened_at_unix") or 0.0
+        )
+        raw_last = snapshot.get("last_envelope_at")
+        last_envelope_at = float(raw_last) if raw_last is not None else None
+        if last_envelope_at is None or last_envelope_at < opened_at:
+            return "telemetry receiver produced no fresh session snapshot after Capture.open"
+        if snapshot.get("snapshot_quiescent") is not True:
+            return "telemetry snapshot is not a quiescent finish-time generation"
+        return generic
 
     def _unavailable(self, source: str, reason: str) -> CaptureSourceResult:
         return CaptureSourceResult(

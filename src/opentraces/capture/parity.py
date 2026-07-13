@@ -111,37 +111,45 @@ def compare_placements(
         persistent_path.with_name("context.jsonl.gz")
     )
     leased_context_raw = _read_jsonl_gz(leased_path.with_name("context.jsonl.gz"))
-    persistent_context = _normalize(
-        _resolve_content_references(
-            _sanitize_companion_projection(persistent_context_raw),
-            persistent_path,
+    persistent_context = _sanitize_companion_projection(
+        _normalize(
+            _resolve_content_references(
+                persistent_context_raw,
+                persistent_path,
+                persistent_replacements,
+            ),
             persistent_replacements,
-        ),
-        persistent_replacements,
-        domain="companion",
+            domain="companion",
+        )
     )
-    leased_context = _normalize(
-        _resolve_content_references(
-            _sanitize_companion_projection(leased_context_raw),
-            leased_path,
+    leased_context = _sanitize_companion_projection(
+        _normalize(
+            _resolve_content_references(
+                leased_context_raw,
+                leased_path,
+                leased_replacements,
+            ),
             leased_replacements,
-        ),
-        leased_replacements,
-        domain="companion",
+            domain="companion",
+        )
     )
     persistent_trail_raw = _read_jsonl_gz(
         persistent_path.with_name("trail.jsonl.gz")
     )
     leased_trail_raw = _read_jsonl_gz(leased_path.with_name("trail.jsonl.gz"))
-    persistent_trail = _normalize(
-        _sanitize_companion_projection(persistent_trail_raw),
-        persistent_replacements,
-        domain="companion",
+    persistent_trail = _sanitize_companion_projection(
+        _normalize(
+            persistent_trail_raw,
+            persistent_replacements,
+            domain="companion",
+        )
     )
-    leased_trail = _normalize(
-        _sanitize_companion_projection(leased_trail_raw),
-        leased_replacements,
-        domain="companion",
+    leased_trail = _sanitize_companion_projection(
+        _normalize(
+            leased_trail_raw,
+            leased_replacements,
+            domain="companion",
+        )
     )
     context_match = persistent_context == leased_context
     trail_match = persistent_trail == leased_trail
@@ -418,12 +426,71 @@ def _normalize(
         for raw, replacement in sorted(
             replacements.items(), key=lambda item: len(item[0]), reverse=True
         ):
-            if Path(raw).is_absolute() or replacement == "<trace-id>":
+            if Path(raw).is_absolute():
                 normalized = normalized.replace(raw, replacement)
+            elif replacement == "<trace-id>":
+                normalized = _normalize_trace_join(
+                    normalized,
+                    raw,
+                    replacement,
+                    domain=domain,
+                    path=path,
+                )
             elif path == ("metadata", "project") and normalized == raw:
                 normalized = replacement
         return normalized
     return value
+
+
+_TRACE_REF_VALUE_KEYS = frozenset(
+    {"map_ref", "resource_ref", "trace_ref", "world_ref"}
+)
+
+
+def _normalize_trace_join(
+    value: str,
+    raw_trace_id: str,
+    replacement: str,
+    *,
+    domain: str,
+    path: tuple[str, ...],
+) -> str:
+    """Normalize a trace identity only at a declared join-coordinate slot."""
+
+    if domain == "trace" and path == ("context_tree_summary", "trace_id"):
+        return replacement if value == raw_trace_id else value
+    if domain == "trace" and path == (
+        "attribution",
+        "files",
+        "[]",
+        "conversations",
+        "[]",
+        "url",
+    ):
+        prefix = f"opentraces://{raw_trace_id}/"
+        if value.startswith(prefix):
+            return f"opentraces://{replacement}/{value.removeprefix(prefix)}"
+        return value
+    if domain == "companion" and path[-2:] == ("payload", "trace_id"):
+        return replacement if value == raw_trace_id else value
+    if not _is_trace_ref_uri_slot(path):
+        return value
+    prefix = f"ot://trace/{raw_trace_id}"
+    if value == prefix or value.startswith(prefix + "/"):
+        return replacement.join(value.split(raw_trace_id, 1))
+    return value
+
+
+def _is_trace_ref_uri_slot(path: tuple[str, ...]) -> bool:
+    if not path:
+        return False
+    if path[-1] in _TRACE_REF_VALUE_KEYS:
+        return True
+    if len(path) >= 2 and path[-1] == "ref":
+        return path[-2] in {"source_ref", "trace", "trace_ref"}
+    if len(path) >= 2 and path[-1] == "uri":
+        return path[-2] in {"bucket_pointer", "source_ref", "trace_ref"}
+    return False
 
 
 def _is_transport_identity(
