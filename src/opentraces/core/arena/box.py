@@ -557,10 +557,17 @@ class CrabboxRuntime:
             safe = []
             for member in archive.getmembers():
                 member_path = Path(member.name)
-                if member_path.is_absolute() or ".." in member_path.parts or member.issym():
+                if (
+                    member_path.is_absolute()
+                    or ".." in member_path.parts
+                    or not (member.isfile() or member.isdir())
+                ):
                     continue
                 safe.append(member)
-            archive.extractall(extracted, members=safe, filter="data")
+            if hasattr(tarfile, "data_filter"):
+                archive.extractall(extracted, members=safe, filter="data")
+            else:
+                archive.extractall(extracted, members=safe)
         return {
             path.name: path
             for path in extracted.rglob("*")

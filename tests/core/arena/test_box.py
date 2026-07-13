@@ -292,16 +292,21 @@ def test_collect_safely_falls_back_when_tarfile_extraction_filters_are_unavailab
         return _completed(list(argv))
 
     original_extractall = tarfile.TarFile.extractall
+    original_data_filter = tarfile.data_filter
 
     def python_310_extractall(archive, path=".", members=None, *, numeric_owner=False, **kwargs):
         if "filter" in kwargs:
             raise TypeError("extractall() got an unexpected keyword argument 'filter'")
-        return original_extractall(
-            archive,
-            path=path,
-            members=members,
-            numeric_owner=numeric_owner,
-        )
+        tarfile.data_filter = original_data_filter
+        try:
+            return original_extractall(
+                archive,
+                path=path,
+                members=members,
+                numeric_owner=numeric_owner,
+            )
+        finally:
+            del tarfile.data_filter
 
     monkeypatch.delattr(tarfile, "data_filter", raising=False)
     monkeypatch.setattr(tarfile.TarFile, "extractall", python_310_extractall)
