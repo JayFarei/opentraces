@@ -370,7 +370,9 @@ print(json.dumps({
     }
 
 
-def test_real_hf_client_listing_is_scoped_to_authenticated_user(tmp_path: Path) -> None:
+def test_real_hf_client_listing_exposes_public_and_only_owned_restricted_repos(
+    tmp_path: Path,
+) -> None:
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
             f"{endpoint}/_emulate/seed",
@@ -380,6 +382,8 @@ def test_real_hf_client_listing_is_scoped_to_authenticated_user(tmp_path: Path) 
                     {"repo_id": "bench/private", "private": True},
                     {"repo_id": "bench/gated", "gated": "manual"},
                     {"repo_id": "other/public"},
+                    {"repo_id": "other/private", "private": True},
+                    {"repo_id": "other/gated", "gated": "manual"},
                 ]
             },
         )
@@ -392,8 +396,12 @@ from huggingface_hub import HfApi
 anonymous = HfApi(token=False)
 valid = HfApi(token="hf_bench_user_token")
 print(json.dumps({
+    "anonymous_all": [item.id for item in anonymous.list_datasets(limit=20)],
     "anonymous_bench": [
         item.id for item in anonymous.list_datasets(author="bench", limit=20)
+    ],
+    "anonymous_other": [
+        item.id for item in anonymous.list_datasets(author="other", limit=20)
     ],
     "valid_all": [item.id for item in valid.list_datasets(limit=20)],
     "valid_bench": [
@@ -408,11 +416,64 @@ print(json.dumps({
 
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "anonymous_bench": [],
-        "valid_all": ["bench/public", "bench/private", "bench/gated"],
+        "anonymous_all": ["bench/public", "other/public"],
+        "anonymous_bench": ["bench/public"],
+        "anonymous_other": ["other/public"],
+        "valid_all": [
+            "bench/public",
+            "bench/private",
+            "bench/gated",
+            "other/public",
+        ],
         "valid_bench": ["bench/public", "bench/private", "bench/gated"],
-        "valid_other": [],
+        "valid_other": ["other/public"],
     }
+
+
+def test_raw_listing_rejects_invalid_bearer_and_applies_author_visibility(
+    tmp_path: Path,
+) -> None:
+    with running_emulator(tmp_path) as (endpoint, _ledger_path):
+        _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={
+                "repos": [
+                    {"repo_id": "bench/public"},
+                    {"repo_id": "bench/private", "private": True},
+                    {"repo_id": "other/public"},
+                    {"repo_id": "other/gated", "gated": "manual"},
+                ]
+            },
+        )
+
+        def raw_list(*, author: str | None = None, token: str | None = None) -> list[str]:
+            suffix = f"?author={author}" if author is not None else ""
+            headers = {"Authorization": f"Bearer {token}"} if token is not None else {}
+            request = urllib.request.Request(
+                f"{endpoint}/api/datasets{suffix}",
+                headers=headers,
+                method="GET",
+            )
+            with urllib.request.urlopen(request) as response:
+                return [row["id"] for row in json.load(response)]
+
+        assert raw_list() == ["bench/public", "other/public"]
+        assert raw_list(author="bench") == ["bench/public"]
+        assert raw_list(author="other") == ["other/public"]
+        assert raw_list(token="hf_bench_user_token") == [
+            "bench/public",
+            "bench/private",
+            "other/public",
+        ]
+        assert raw_list(author="other", token="hf_bench_user_token") == [
+            "other/public"
+        ]
+
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            raw_list(token="hf_not_minted")
+        assert caught.value.code == 401
+        assert caught.value.headers["X-Error-Code"] == "InvalidToken"
+        assert json.load(caught.value) == {"error": "invalid access token"}
 
 
 def test_real_hf_client_dataset_info_enforces_repo_read_access(tmp_path: Path) -> None:
