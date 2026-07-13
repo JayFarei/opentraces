@@ -89,8 +89,9 @@ limitations are allowed differences.
 When a caller requires observer/product separation, it supplies the live product PID
 and a bounded `product_under_test_version_probe` argv. `finish()` observes the live
 process command and executable identity, digests the exact probe launcher, executes
-interpreted-script probes through the observed runtime (preserving macOS virtualenv
-launcher context), and binds that observed version to the caller's separate claim.
+interpreted-script probes through the observed runtime, and preserves macOS virtualenv
+launcher context only after an independent Python witness resolves to the same OS
+executable identity. It then binds that version to the caller's separate claim.
 Missing, dead, self, unrelated, unprobeable, or version-mismatched identities remain
 partial with a named limitation; a live PID alone is never separation proof.
 
