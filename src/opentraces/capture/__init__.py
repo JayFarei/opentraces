@@ -10,6 +10,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import claude_code, codex_cli, hermes, pi
+from .portable import (
+    Capture,
+    CaptureBindings,
+    CapturePlan,
+    CaptureResult,
+    CaptureSession,
+    CaptureSourceResult,
+    CaptureViewResult,
+)
 
 if TYPE_CHECKING:
     from ._base import (  # noqa: F401
