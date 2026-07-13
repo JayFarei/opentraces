@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import tarfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -70,6 +71,14 @@ class BoxCommandResult:
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
+def _operation_name(argv: Sequence[str]) -> str:
+    if not argv:
+        return "unknown"
+    if len(argv) > 1 and argv[0] == "crabbox":
+        return str(argv[1]).lstrip("-") or "version"
+    return Path(str(argv[0])).name
+
+
 def _subprocess_runner(
     argv: Sequence[str],
     *,
@@ -101,6 +110,8 @@ def sandbox_tier_for_provider(provider: str) -> str:
 class CrabboxRuntime:
     """Concrete five-verb box adapter frozen against Crabbox 0.38.0."""
 
+    crabbox_version = PINNED_CRABBOX_VERSION
+
     def __init__(
         self,
         *,
@@ -117,6 +128,7 @@ class CrabboxRuntime:
         self.provider = provider
         self.image = image
         self.command = command
+        self._diagnostics: list[dict[str, Any]] = []
         self.child_env = dict(os.environ)
         tmpdir = self.home / "crabbox-tmp"
         tmpdir.mkdir(parents=True, exist_ok=True)
@@ -136,10 +148,37 @@ class CrabboxRuntime:
         child_env = dict(self.child_env)
         if env:
             child_env.update({str(key): str(value) for key, value in env.items()})
+        started = time.monotonic()
         try:
-            return self.runner(list(argv), cwd=cwd, env=child_env, timeout=timeout)
+            completed = self.runner(list(argv), cwd=cwd, env=child_env, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            self._diagnostics.append(
+                {
+                    "operation": _operation_name(argv),
+                    "returncode": None,
+                    "stdout": str(exc.stdout or ""),
+                    "stderr": str(exc.stderr or ""),
+                    "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+                    "timed_out": True,
+                }
+            )
             raise CrabboxRefusal("crabbox_timeout", f"bounded command timed out: {argv[1]}") from exc
+        self._diagnostics.append(
+            {
+                "operation": _operation_name(argv),
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+                "timed_out": False,
+            }
+        )
+        return completed
+
+    def diagnostic_records(self) -> list[dict[str, Any]]:
+        """Return the private raw lifecycle observations collected so far."""
+
+        return [dict(record) for record in self._diagnostics]
 
     def _assert_version(self) -> None:
         result = self._call([self.command, "--version"], timeout=10)

@@ -12,6 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, Mapping
 
+from ... import __version__
 from .box import Box, CrabboxRuntime
 from .contract import build_result
 from .drives.terminal import TerminalDrive
@@ -112,6 +113,7 @@ class BenchRun:
         self._started_at = ""
         self._started = 0.0
         self._app_state_pin: dict[str, Any] = {}
+        self._lifecycle_diagnostics: list[dict[str, Any]] = []
 
     def __enter__(self) -> "BenchRun":
         self._started_at = _utc_now()
@@ -143,10 +145,15 @@ class BenchRun:
             if self.box is not None:
                 try:
                     self.bench.box_runtime.release(self.box)
-                except Exception:
+                except Exception as release_exc:
                     # The original setup failure remains primary; both the
                     # run result and Crabbox's failure bundle preserve it.
-                    pass
+                    self._lifecycle_diagnostics.append(
+                        {
+                            "code": getattr(release_exc, "code", "release_failed"),
+                            "message": str(release_exc),
+                        }
+                    )
             self._finalize(
                 execution_status="error",
                 verdict=None,
@@ -273,6 +280,20 @@ class BenchRun:
     ) -> None:
         if self.draft is None:
             return
+        runtime_diagnostics = getattr(self.bench.box_runtime, "diagnostic_records", None)
+        events = list(runtime_diagnostics()) if callable(runtime_diagnostics) else []
+        events.extend(self._lifecycle_diagnostics)
+        artifacts: list[dict[str, Any]] = []
+        if events:
+            diagnostic_ref = "artifacts/box-lifecycle.json"
+            self.draft.write_json(diagnostic_ref, {"events": events})
+            artifacts.append(
+                {
+                    "path": diagnostic_ref,
+                    "media_type": "application/json",
+                    "kind": "lifecycle_diagnostics",
+                }
+            )
         duration_ms = max(0, int((time.monotonic() - self._started) * 1000))
         evidence_requirements = [
             {
@@ -296,6 +317,10 @@ class BenchRun:
                 "provider": self.box.provider,
                 "image": getattr(self.bench.box_runtime, "image", None),
                 "sandbox_tier": self.box.sandbox_tier,
+                "runtime": {
+                    "name": "crabbox",
+                    "version": getattr(self.bench.box_runtime, "crabbox_version", None),
+                },
             }
             if self.box is not None
             else {"provider": None, "image": None, "sandbox_tier": "none"}
@@ -328,11 +353,11 @@ class BenchRun:
                     ],
                 }
             ),
-            artifacts=[],
+            artifacts=artifacts,
             capture=None,
             pins={
                 "product": {"commit": self.bench.source.commit},
-                "observer": {},
+                "observer": {"package": "opentraces", "version": __version__},
                 "environment": box_pin,
                 "harness": None,
                 "model_wire": None,
@@ -374,11 +399,12 @@ class BenchRun:
             except Exception as caught:
                 release_error = caught
         if release_error is not None and exc is None:
-            execution_status, verdict = "error", None
-            reason = {
-                "code": getattr(release_error, "code", "release_failed"),
-                "message": str(release_error),
-            }
+            self._lifecycle_diagnostics.append(
+                {
+                    "code": getattr(release_error, "code", "release_failed"),
+                    "message": str(release_error),
+                }
+            )
         self._finalize(
             execution_status=execution_status,
             verdict=verdict,

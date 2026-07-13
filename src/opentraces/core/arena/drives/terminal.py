@@ -118,7 +118,10 @@ class TerminalDrive:
         recorded_argv = [
             "sh",
             "-c",
-            f"mkdir -p bench-recordings && exec {shlex.join(script_argv)}",
+            (
+                "mkdir -p bench-recordings && "
+                f"cd {shlex.quote(cwd or '.')} && exec {shlex.join(script_argv)}"
+            ),
         ]
         observed = self.runtime.exec(
             self.box,
