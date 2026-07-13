@@ -105,6 +105,127 @@ def test_bad_ssh_config_is_refused_before_warmup(tmp_path: Path) -> None:
     assert len(runner.calls) == 1
 
 
+def test_unrelated_host_guard_does_not_mask_relevant_unguarded_keyword(tmp_path: Path) -> None:
+    config = tmp_path / "config"
+    config.write_text(
+        "Host github.com\n  IgnoreUnknown UseKeychain\nHost *\n  UseKeychain yes\n",
+        encoding="utf-8",
+    )
+    runner = ScriptedRunner(
+        [_completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n")]
+    )
+
+    with pytest.raises(CrabboxRefusal, match="ssh_config_incompatible"):
+        CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=config).lease()
+
+    assert len(runner.calls) == 1
+
+
+def test_irrelevant_host_only_apple_keyword_does_not_refuse_crabbox(tmp_path: Path) -> None:
+    config = tmp_path / "config"
+    config.write_text("Host github.com\n  UseKeychain yes\n", encoding="utf-8")
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout="ready lease=cbx_abc123\n"),
+            _completed(["crabbox", "inspect"], stdout=_inspect()),
+            _completed(["ssh"]),
+        ]
+    )
+
+    box = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=config).lease()
+
+    assert box.id == "cbx_abc123"
+
+
+def test_global_guard_must_precede_relevant_apple_keyword(tmp_path: Path) -> None:
+    config = tmp_path / "config"
+    config.write_text(
+        "IgnoreUnknown UseKeychain,AddKeysToKeychain\nHost *\n  UseKeychain yes\n",
+        encoding="utf-8",
+    )
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout="ready lease=cbx_abc123\n"),
+            _completed(["crabbox", "inspect"], stdout=_inspect()),
+            _completed(["ssh"]),
+        ]
+    )
+
+    box = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=config).lease()
+
+    assert box.id == "cbx_abc123"
+
+
+def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Path) -> None:
+    def runner(argv, *, cwd=None, env, timeout):
+        if "--timing-record" in argv:
+            timing_path = Path(argv[argv.index("--timing-record") + 1])
+            timing_path.parent.mkdir(parents=True, exist_ok=True)
+            timing_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "timing": {"exitCode": 0, "elapsedMs": 8},
+                        "hostPath": "/Users/private/source",
+                        "credential": "top-secret-token",
+                    }
+                ),
+                encoding="utf-8",
+            )
+        operation = argv[1] if argv and argv[0] == "crabbox" and len(argv) > 1 else argv[0]
+        if operation == "--version":
+            return _completed(list(argv), stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n")
+        if operation == "warmup":
+            return _completed(list(argv), stdout="ready lease=cbx_abc123\n")
+        if operation == "inspect":
+            return _completed(list(argv), stdout=_inspect())
+        if operation == "run":
+            return _completed(list(argv), stdout="/usr/bin/python3\n/usr/bin/git\n/usr/bin/curl\n/usr/bin/script\n")
+        return _completed(list(argv))
+
+    from opentraces.core.arena.engine import Bench, ScenarioSource
+    from opentraces.core.arena.run_store import RunStore
+
+    scenario_path = tmp_path / "test_timing.py"
+    scenario_path.write_text('def test_timing(bench):\n    """Timing stays in custody."""\n')
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+    bench = Bench(
+        source=ScenarioSource(
+            nodeid="test_timing.py::test_timing",
+            claim="Timing stays in custody.",
+            source_path=scenario_path,
+            scenario_path="tests/arena/test_timing.py",
+            repository="JayFarei/opentraces",
+            commit="abc123",
+            dirty_diff_digest=None,
+        ),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    def condition_holds(run):
+        return {"evidence_refs": []}
+
+    with bench.run(app_state="base-only") as run:
+        run.verify(condition_holds)
+
+    timing_artifacts = [item for item in run.result["artifacts"] if item["kind"] == "crabbox_timing"]
+    assert timing_artifacts
+    assert run.result["pins"]["app_state"]["observation_refs"] == [
+        timing_artifacts[0]["path"]
+    ]
+    timing = json.loads((run.final_path / timing_artifacts[0]["path"]).read_text())
+    assert timing["timing"] == {"exitCode": 0, "elapsedMs": 8}
+    serialized = json.dumps(run.result) + (run.final_path / "artifacts/box-lifecycle.json").read_text()
+    assert "top-secret-token" not in serialized
+    assert "/Users/private/source" not in serialized
+    assert "/tmp/key" not in serialized
+    assert not (tmp_path / ".crabbox" / "bench-base-provides-timing.json").exists()
+
+
 def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Path) -> None:
     timing = tmp_path / "timing.json"
 

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from opentraces import __version__
 from opentraces.core.arena.box import Box, BoxCommandResult
@@ -58,6 +63,38 @@ class RecordingBoxRuntime(FakeBoxRuntime):
 class ReleaseFailingRuntime(FakeBoxRuntime):
     def release(self, box: Box) -> None:
         raise RuntimeError("release boom")
+
+
+class RealShellRecordingRuntime(FakeBoxRuntime):
+    def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+        completed = subprocess.run(
+            list(argv),
+            cwd=cwd,
+            env={**os.environ, **dict(env or {})},
+            timeout=timeout,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return BoxCommandResult(
+            argv=list(argv),
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            timing={"schemaVersion": 1, "timing": {"exitCode": completed.returncode}},
+        )
+
+    def collect(self, box, globs, *, destination, repository):
+        files = destination / "files"
+        files.mkdir(parents=True)
+        collected = {}
+        for pattern in globs:
+            source = repository / pattern
+            if source.is_file():
+                target = files / source.name
+                shutil.copy2(source, target)
+                collected[target.name] = target
+        return collected
 
 
 class DiagnosticRuntime(FakeBoxRuntime):
@@ -155,6 +192,56 @@ def test_terminal_action_honors_the_remote_cwd_that_it_records(tmp_path: Path) -
     assert "cd /tmp" in " ".join(runtime.commands[0])
 
 
+def test_terminal_recording_survives_a_real_shell_with_a_non_default_remote_cwd(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    script = fake_bin / "script"
+    script.write_text(
+        """#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --log-timing) timing=$2; shift 2 ;;
+    --log-out) typescript=$2; shift 2 ;;
+    --command) command=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '0.010 3\\n' >"$timing"
+sh -c "$command" >"$typescript"
+cat "$typescript"
+""",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    remote_cwd = tmp_path / "elsewhere"
+    remote_cwd.mkdir()
+    runtime = RealShellRecordingRuntime()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    def command_runs_in_requested_directory(run):
+        observed = run.terminal.exec(
+            "pwd",
+            cwd=str(remote_cwd),
+            env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        )
+        assert observed.stdout.strip() == str(remote_cwd)
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(command_runs_in_requested_directory)
+
+    assert run.result["recordings"]["rewatchable"] is True
+    assert (run.final_path / "recordings/terminal-0001.cast").is_file()
+    assert not (remote_cwd / "bench-recordings").exists()
+
+
 def test_release_failure_is_diagnostic_and_does_not_hide_a_passing_verdict(
     tmp_path: Path,
 ) -> None:
@@ -179,6 +266,53 @@ def test_release_failure_is_diagnostic_and_does_not_hide_a_passing_verdict(
     payload = json.loads((run.final_path / diagnostic["path"]).read_text())
     assert payload["events"][-1]["code"] == "release_failed"
     assert "release boom" in payload["events"][-1]["message"]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "execution_status", "verdict", "reason_code"),
+    [
+        ("fail", "complete", "fail", "assertion_failed"),
+        ("skip", "complete", "skip", "absent_prerequisite"),
+        ("error", "error", None, "machinery_error"),
+    ],
+)
+def test_release_failure_is_always_diagnostic_without_rewriting_primary_outcome(
+    tmp_path: Path,
+    outcome: str,
+    execution_status: str,
+    verdict: str | None,
+    reason_code: str,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=ReleaseFailingRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def execute():
+        with bench.run(app_state="install-only") as run:
+            if outcome == "fail":
+                assert False, "functional red"
+            if outcome == "skip":
+                run.skip("absent_prerequisite", "not installed")
+            raise RuntimeError("machinery red")
+        return run
+
+    if outcome == "error":
+        with pytest.raises(RuntimeError, match="machinery red"):
+            execute()
+        final_path = next(bench.store.root.glob("run_*"))
+    else:
+        final_path = execute().final_path
+
+    result = json.loads((final_path / "result.json").read_text(encoding="utf-8"))
+    assert result["execution_status"] == execution_status
+    assert result["verdict"] == verdict
+    assert result["reason"]["code"] == reason_code
+    diagnostic = next(item for item in result["artifacts"] if item["kind"] == "lifecycle_diagnostics")
+    payload = json.loads((final_path / diagnostic["path"]).read_text(encoding="utf-8"))
+    assert payload["events"][-1]["code"] == "release_failed"
 
 
 def test_result_pins_observer_crabbox_image_and_product_state(tmp_path: Path) -> None:
