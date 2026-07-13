@@ -159,6 +159,22 @@ function requireAuthentication(request: Request, operationId: string): Response 
   return errorResponse("InvalidToken", "invalid access token", 401);
 }
 
+function ownsRepo(identity: Identity | undefined, repoId: string): boolean {
+  return identity !== undefined && identity.name === repoId.split("/", 1)[0];
+}
+
+function requireRepoOwnership(
+  request: Request,
+  operationId: string,
+  repoId: string,
+): Response | undefined {
+  const authenticationError = requireAuthentication(request, operationId);
+  if (authenticationError !== undefined) return authenticationError;
+  if (ownsRepo(authenticatedIdentity(request), repoId)) return undefined;
+  appendLedger(request, operationId, 403);
+  return errorResponse("Forbidden", "repository write access denied", 403);
+}
+
 function requireRepoReadAccess(
   request: Request,
   operationId: string,
@@ -169,6 +185,14 @@ function requireRepoReadAccess(
   if (authorization !== null && identity === undefined) {
     appendLedger(request, operationId, 401);
     return errorResponse("InvalidToken", "invalid access token", 401);
+  }
+  if (
+    (repo.private || repo.gated !== false) &&
+    identity !== undefined &&
+    !ownsRepo(identity, repo.repoId)
+  ) {
+    appendLedger(request, operationId, 404);
+    return errorResponse("RepoNotFound", "repository not found", 404);
   }
   if (repo.private && identity === undefined) {
     appendLedger(request, operationId, 401);
@@ -294,12 +318,12 @@ Bun.serve({
       return jsonResponse({ ok: true });
     }
     if (request.method === "POST" && path === "/api/repos/create") {
-      const authenticationError = requireAuthentication(request, "createRepo");
-      if (authenticationError !== undefined) return authenticationError;
       const body = (await request.json()) as Record<string, unknown>;
       const name = String(body.name ?? "");
       const organization = body.organization ? String(body.organization) : "bench";
       const repoId = `${organization}/${name}`;
+      const ownershipError = requireRepoOwnership(request, "createRepo", repoId);
+      if (ownershipError !== undefined) return ownershipError;
       if (repos.has(repoId)) {
         appendLedger(request, "createRepo", 409);
         return jsonResponse({ error: "repository already exists" }, 409);
@@ -337,12 +361,12 @@ Bun.serve({
       return jsonResponse(result);
     }
     if (request.method === "DELETE" && path === "/api/repos/delete") {
-      const authenticationError = requireAuthentication(request, "deleteRepo");
-      if (authenticationError !== undefined) return authenticationError;
       const body = (await request.json()) as Record<string, unknown>;
       const name = String(body.name ?? "");
       const organization = body.organization ? String(body.organization) : "bench";
       const repoId = `${organization}/${name}`;
+      const ownershipError = requireRepoOwnership(request, "deleteRepo", repoId);
+      if (ownershipError !== undefined) return ownershipError;
       if (!repos.delete(repoId)) {
         appendLedger(request, "deleteRepo", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
@@ -354,9 +378,10 @@ Bun.serve({
     }
     const settingsMatch = path.match(/^\/api\/datasets\/([^/]+\/[^/]+)\/settings$/);
     if (request.method === "PUT" && settingsMatch !== null) {
-      const authenticationError = requireAuthentication(request, "updateSettings");
-      if (authenticationError !== undefined) return authenticationError;
-      const repo = repos.get(decodeURIComponent(settingsMatch[1]));
+      const repoId = decodeURIComponent(settingsMatch[1]);
+      const ownershipError = requireRepoOwnership(request, "updateSettings", repoId);
+      if (ownershipError !== undefined) return ownershipError;
+      const repo = repos.get(repoId);
       if (repo === undefined) {
         appendLedger(request, "updateSettings", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
@@ -374,9 +399,9 @@ Bun.serve({
       /^\/api\/datasets\/([^/]+\/[^/]+)\/preupload\/([^/]+)$/,
     );
     if (request.method === "POST" && preuploadMatch !== null) {
-      const authenticationError = requireAuthentication(request, "preupload");
-      if (authenticationError !== undefined) return authenticationError;
       const repoId = decodeURIComponent(preuploadMatch[1]);
+      const ownershipError = requireRepoOwnership(request, "preupload", repoId);
+      if (ownershipError !== undefined) return ownershipError;
       const repo = repos.get(repoId);
       if (repo === undefined) {
         appendLedger(request, "preupload", 404);
@@ -407,9 +432,9 @@ Bun.serve({
       /^\/api\/datasets\/([^/]+\/[^/]+)\/commit\/([^/]+)$/,
     );
     if (request.method === "POST" && commitMatch !== null) {
-      const authenticationError = requireAuthentication(request, "commit");
-      if (authenticationError !== undefined) return authenticationError;
       const repoId = decodeURIComponent(commitMatch[1]);
+      const ownershipError = requireRepoOwnership(request, "commit", repoId);
+      if (ownershipError !== undefined) return ownershipError;
       const repo = repos.get(repoId);
       if (repo === undefined) {
         appendLedger(request, "commit", 404);
