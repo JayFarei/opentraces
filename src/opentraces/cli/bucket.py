@@ -13,11 +13,10 @@ from ._options import dump_json as _dump_json
 from ._progress import build_cli_progress, progress_option
 from ._security_flags import (
     BUCKET_SECURITY_POLICIES,
-    SECURITY_TOOL_NAMES,
     apply_bucket_security_policy,
-    apply_security_tool_flag_changes,
     security_tool_change_payload,
 )
+from ..security.config import SECURITY_TOOL_NAMES, apply_security_tool_flag_changes
 from ..core.bucket_list import DEFAULT_LIMIT as _LIST_DEFAULT
 from ..core.bucket_list import MAX_LIMIT as _LIST_MAX
 from ..core.config import load_config, save_config

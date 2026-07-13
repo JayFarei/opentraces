@@ -67,7 +67,16 @@ Persistent placement keeps the current OpenTraces root and external service endp
 it does not reinstall hooks, rewrite settings, or replace the existing daemon. Leased
 placement redirects only `OT_OPENTRACES_DIR`, starts its receiver inline, and records
 all runtime/log/result files under the requested result directory. Both paths use the
-same source finalizers and canonical writers.
+same source finalizers and canonical writers. Telemetry accepts the same fresh,
+internally consistent snapshot generation in both placements: the leased receiver is
+owned and must additionally stamp that generation quiescent after ingress stops,
+while the persistent daemon stays live and records `persistent_generation` semantics
+without claiming quiescence.
+
+Capture security has no top-level privacy tier. `CapturePlan.security_tools=None`
+uses the project's configured `security.<tool>.enabled` flags; an explicit tuple sets
+the exact tool flags for the isolated finalizer. The result records those configured
+tools separately from the `tools_applied` manifest observed on a finalized Trace.
 
 Placement parity is evaluated over stored Trace, Context companion, Trail companion,
 security result, and three-view completeness. The verifier normalizes only declared
