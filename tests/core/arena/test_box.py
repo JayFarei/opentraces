@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -260,3 +262,68 @@ def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Pat
         "--provider",
         "local-container",
     ]
+
+
+def test_collect_safely_falls_back_when_tarfile_extraction_filters_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Python 3.10 still collects safe members without weakening path checks."""
+
+    repository = tmp_path / "repository"
+    source_tar = repository / ".crabbox" / "runs" / "cbx_abc123" / "cbx_abc123-artifacts.tgz"
+
+    def runner(argv, *, cwd=None, env, timeout):
+        source_tar.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(source_tar, "w:gz") as archive:
+            safe = tarfile.TarInfo("proof.txt")
+            safe_payload = b"retained proof\n"
+            safe.size = len(safe_payload)
+            archive.addfile(safe, io.BytesIO(safe_payload))
+
+            traversal = tarfile.TarInfo("../escaped.txt")
+            traversal_payload = b"must not escape\n"
+            traversal.size = len(traversal_payload)
+            archive.addfile(traversal, io.BytesIO(traversal_payload))
+
+            link = tarfile.TarInfo("unsafe-link")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "../escaped.txt"
+            archive.addfile(link)
+        return _completed(list(argv))
+
+    original_extractall = tarfile.TarFile.extractall
+
+    def python_310_extractall(archive, path=".", members=None, *, numeric_owner=False, **kwargs):
+        if "filter" in kwargs:
+            raise TypeError("extractall() got an unexpected keyword argument 'filter'")
+        return original_extractall(
+            archive,
+            path=path,
+            members=members,
+            numeric_owner=numeric_owner,
+        )
+
+    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    monkeypatch.setattr(tarfile.TarFile, "extractall", python_310_extractall)
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path)
+    box = Box(
+        id="cbx_abc123",
+        slug="steady-crab",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="32222",
+        ssh_key="/tmp/key",
+    )
+
+    collected = runtime.collect(
+        box,
+        ["*.txt"],
+        destination=tmp_path / "collected",
+        repository=repository,
+    )
+
+    assert collected["proof.txt"].read_text(encoding="utf-8") == "retained proof\n"
+    assert not (tmp_path / "escaped.txt").exists()
+    assert "unsafe-link" not in collected
