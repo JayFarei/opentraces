@@ -71,8 +71,9 @@ def test_readiness_waits_for_manifest_and_rejects_a_missing_sidecar(
     else:
         bun = shutil.which("bun")
         if bun is None:
-            pytest.skip(
-                "bun or OPENTRACES_HF_EMULATOR_BINARY is required to launch the emulator"
+            pytest.fail(
+                "the HF emulator readiness contract requires bun or "
+                "OPENTRACES_HF_EMULATOR_BINARY"
             )
         command = [bun, "run", str(SERVER_SOURCE)]
 
@@ -112,7 +113,9 @@ def test_readiness_waits_for_manifest_and_rejects_a_missing_sidecar(
 
 def test_build_produces_pinned_linux_arm64_binary(tmp_path: Path) -> None:
     if shutil.which("bunx") is None:
-        pytest.skip("bunx is required to build the pinned emulator binary")
+        if os.environ.get("OPENTRACES_RUNTIME_FREE_BOX") == "1":
+            pytest.skip("runtime-free leased box verifies the precompiled pinned binary")
+        pytest.fail("bunx is required to build the pinned emulator binary")
 
     output = tmp_path / "hf-emulator"
     pin = build_hf_emulator_binary(output)

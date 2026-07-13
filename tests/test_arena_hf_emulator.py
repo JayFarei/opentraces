@@ -7,8 +7,10 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
+from importlib.metadata import version
 from pathlib import Path
 from typing import Iterator
 
@@ -35,8 +37,9 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
     else:
         bun = shutil.which("bun")
         if bun is None:
-            pytest.skip(
-                "bun or OPENTRACES_HF_EMULATOR_BINARY is required to exercise the emulator"
+            pytest.fail(
+                "the HF emulator contract requires bun or "
+                "OPENTRACES_HF_EMULATOR_BINARY"
             )
         command = [bun, "run", str(SERVER_SOURCE)]
 
@@ -87,6 +90,39 @@ def _get_json(url: str) -> dict:
         return json.load(response)
 
 
+def _request_json(
+    url: str,
+    *,
+    method: str = "POST",
+    payload: object | None = None,
+    token: str | None = None,
+) -> dict:
+    headers = {"Content-Type": "application/json"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload if payload is not None else {}).encode(),
+        headers=headers,
+        method=method,
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+def _assert_invalid_token(
+    url: str,
+    *,
+    method: str,
+    payload: object,
+    token: str | None,
+) -> None:
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _request_json(url, method=method, payload=payload, token=token)
+    assert caught.value.code == 401
+    assert caught.value.headers["X-Error-Code"] == "InvalidToken"
+
+
 def _run_hf_client(endpoint: str, script: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", script],
@@ -102,6 +138,9 @@ def _run_hf_client(endpoint: str, script: str) -> subprocess.CompletedProcess[st
 
 
 def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> None:
+    assert version("huggingface-hub") == "1.10.2"
+    assert version("hf-xet") == "1.4.3"
+
     with running_emulator(tmp_path) as (endpoint, _ledger):
         manifest = _get_json(f"{endpoint}/_emulate/manifest")
 
@@ -127,6 +166,12 @@ def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> N
     assert manifest["connections"][0]["template"] == (
         "HF_ENDPOINT={{baseUrl}}\nHF_TOKEN={{token}}"
     )
+    assert manifest["controlPlane"] == {
+        "credentials": "POST /_emulate/credentials",
+        "seed": "POST /_emulate/seed",
+        "reset": "POST /_emulate/reset",
+    }
+    assert manifest["auth"][0]["validation"] == "minted-or-baseline-state"
 
 
 def test_real_hf_client_creates_and_reads_dataset_through_hf_endpoint(
@@ -178,15 +223,81 @@ print(json.dumps({
 
 def test_real_hf_client_auth_settings_listing_and_delete(tmp_path: Path) -> None:
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
+        first_credential = _request_json(
+            f"{endpoint}/_emulate/credentials", payload={"name": "bench"}
+        )
+        second_credential = _request_json(
+            f"{endpoint}/_emulate/credentials", payload={"name": "bench"}
+        )
+        assert first_credential == second_credential == {
+            "name": "bench",
+            "token": "hf_bench_user_token",
+            "type": "user",
+        }
+        assert _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={"repos": [{"repo_id": "bench/seeded", "private": True}]},
+        ) == {"repos_seeded": ["bench/seeded"]}
+
+        seeded = _run_hf_client(
+            endpoint,
+            """
+import json
+from huggingface_hub import HfApi
+info = HfApi(token="hf_bench_user_token").dataset_info("bench/seeded")
+print(json.dumps({"id": info.id, "private": info.private}))
+""",
+        )
+        assert seeded.returncode == 0, seeded.stderr
+        assert json.loads(seeded.stdout) == {"id": "bench/seeded", "private": True}
+        assert _request_json(f"{endpoint}/_emulate/reset") == {"ok": True}
+
+        _assert_invalid_token(
+            f"{endpoint}/api/repos/create",
+            method="POST",
+            payload={"name": "missing", "organization": "bench", "type": "dataset"},
+            token=None,
+        )
+        _assert_invalid_token(
+            f"{endpoint}/api/repos/create",
+            method="POST",
+            payload={"name": "invalid", "organization": "bench", "type": "dataset"},
+            token="hf_not_minted",
+        )
+        _request_json(
+            f"{endpoint}/api/repos/create",
+            payload={"name": "guard", "organization": "bench", "type": "dataset"},
+            token="hf_bench_user_token",
+        )
+        guarded_mutations = [
+            ("PUT", f"{endpoint}/api/datasets/bench/guard/settings", {"private": True}),
+            ("POST", f"{endpoint}/api/datasets/bench/guard/preupload/main", {"files": []}),
+            ("POST", f"{endpoint}/api/datasets/bench/guard/commit/main", {}),
+            ("DELETE", f"{endpoint}/api/repos/delete", {"name": "guard", "organization": "bench", "type": "dataset"}),
+        ]
+        for method, url, payload in guarded_mutations:
+            _assert_invalid_token(
+                url,
+                method=method,
+                payload=payload,
+                token="hf_not_minted",
+            )
+
         result = _run_hf_client(
             endpoint,
             """
 import json
 from huggingface_hub import HfApi
-from huggingface_hub.errors import RepositoryNotFoundError
+from huggingface_hub.errors import HfHubHTTPError, RepositoryNotFoundError
 
 api = HfApi(token="hf_bench_user_token")
 identity = api.whoami()
+try:
+    HfApi(token="hf_not_minted").whoami()
+except HfHubHTTPError as error:
+    invalid_identity = [error.response.status_code, error.response.headers["x-error-code"]]
+else:
+    invalid_identity = None
 api.create_repo("bench/settings", repo_type="dataset", private=True)
 api.update_repo_settings(
     "bench/settings",
@@ -196,6 +307,12 @@ api.update_repo_settings(
 )
 listed = list(api.list_datasets(author="bench", limit=10))
 updated = api.dataset_info("bench/settings")
+api.upload_file(
+    repo_id="bench/settings",
+    repo_type="dataset",
+    path_in_repo="stale.txt",
+    path_or_fileobj=b"must-not-resurrect",
+)
 api.delete_repo("bench/settings", repo_type="dataset")
 try:
     api.dataset_info("bench/settings")
@@ -203,12 +320,18 @@ except RepositoryNotFoundError:
     missing_error = "RepositoryNotFoundError"
 else:
     missing_error = None
+api.create_repo("bench/settings", repo_type="dataset", private=True)
+recreated_files = api.list_repo_files("bench/settings", repo_type="dataset")
+recreated_sha = api.dataset_info("bench/settings").sha
 print(json.dumps({
     "identity": identity,
+    "invalid_identity": invalid_identity,
     "listed": [item.id for item in listed],
     "private": updated.private,
     "gated": updated.gated,
     "missing_error": missing_error,
+    "recreated_files": recreated_files,
+    "recreated_sha": recreated_sha,
 }))
 """,
         )
@@ -216,10 +339,13 @@ print(json.dumps({
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "identity": {"name": "bench", "type": "user"},
-        "listed": ["bench/settings"],
+        "invalid_identity": [401, "InvalidToken"],
+        "listed": ["bench/guard", "bench/settings"],
         "private": False,
         "gated": "manual",
         "missing_error": "RepositoryNotFoundError",
+        "recreated_files": [],
+        "recreated_sha": "0" * 40,
     }
 
 
@@ -279,6 +405,9 @@ def test_real_hf_client_dispatches_from_error_headers(tmp_path: Path) -> None:
             endpoint,
             """
 import json
+import os
+import urllib.error
+import urllib.request
 from tempfile import TemporaryDirectory
 from huggingface_hub import HfApi
 from huggingface_hub.errors import (
@@ -312,6 +441,37 @@ api.upload_file(
     path_in_repo="present.json",
     path_or_fileobj=b"{}",
 )
+try:
+    api.upload_file(
+        repo_id="bench/errors",
+        repo_type="dataset",
+        path_in_repo="rejected.json",
+        path_or_fileobj=b"{}",
+        revision="not-a-revision",
+    )
+except RevisionNotFoundError as error:
+    errors["preupload_revision"] = [
+        type(error).__name__,
+        error.response.headers["x-error-code"],
+    ]
+
+commit_request = urllib.request.Request(
+    f"{os.environ['HF_ENDPOINT']}/api/datasets/bench/errors/commit/not-a-revision",
+    data=b'{"key":"header","value":{"summary":"rejected"}}\\n',
+    headers={
+        "Authorization": "Bearer hf_bench_user_token",
+        "Content-Type": "application/x-ndjson",
+    },
+    method="POST",
+)
+try:
+    urllib.request.urlopen(commit_request)
+except urllib.error.HTTPError as error:
+    errors["commit_revision"] = [
+        error.code,
+        error.headers["X-Error-Code"],
+    ]
+
 with TemporaryDirectory() as cache:
     try:
         api.hf_hub_download(
@@ -330,7 +490,9 @@ print(json.dumps(errors, sort_keys=True))
 
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
+        "commit_revision": [404, "RevisionNotFound"],
         "entry": ["RemoteEntryNotFoundError", "EntryNotFound"],
+        "preupload_revision": ["RevisionNotFoundError", "RevisionNotFound"],
         "repo": ["RepositoryNotFoundError", "RepoNotFound"],
         "revision": ["RevisionNotFoundError", "RevisionNotFound"],
     }

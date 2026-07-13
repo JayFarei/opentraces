@@ -34,10 +34,32 @@ const manifest = {
     { id: "hub-rest", kind: "rest", title: "Hub REST API", basePath: "/api", status: "partial" },
     { id: "resolve", kind: "provider-specific", title: "File resolve/download", status: "partial" },
   ],
-  auth: [{ id: "user-token", title: "User access token", type: "bearer-token", status: "supported" }],
+  auth: [
+    {
+      id: "user-token",
+      title: "User access token",
+      type: "bearer-token",
+      status: "supported",
+      validation: "minted-or-baseline-state",
+    },
+  ],
   specs: [{ kind: "manual", title: "Hand-authored Hub emulator", coverage: "partial", operations }],
-  seedSchema: { repos: [] },
-  stateModel: { collections: [{ name: "hf.repos" }, { name: "hf.files" }, { name: "hf.commits" }] },
+  controlPlane: {
+    credentials: "POST /_emulate/credentials",
+    seed: "POST /_emulate/seed",
+    reset: "POST /_emulate/reset",
+  },
+  seedSchema: {
+    repos: [{ repo_id: "namespace/name", private: false, gated: false, tags: [] }],
+  },
+  stateModel: {
+    collections: [
+      { name: "hf.credentials" },
+      { name: "hf.repos" },
+      { name: "hf.files" },
+      { name: "hf.revisions" },
+    ],
+  },
   connections: [
     {
       id: "hf-endpoint",
@@ -73,6 +95,22 @@ type StoredFile = {
 };
 
 const files = new Map<string, Map<string, StoredFile>>();
+const revisions = new Map<string, Set<string>>();
+
+type Identity = {
+  name: string;
+  type: "user";
+};
+
+const BASELINE_TOKEN = "hf_bench_user_token";
+const credentials = new Map<string, Identity>();
+
+function resetCredentials(): void {
+  credentials.clear();
+  credentials.set(BASELINE_TOKEN, { name: "bench", type: "user" });
+}
+
+resetCredentials();
 
 function appendLedger(
   request: Request,
@@ -107,6 +145,42 @@ function errorResponse(errorCode: string, message: string, status: number): Resp
   return jsonResponse({ error: message }, status, { "X-Error-Code": errorCode });
 }
 
+function authenticatedIdentity(request: Request): Identity | undefined {
+  const authorization = request.headers.get("authorization") ?? "";
+  if (!authorization.startsWith("Bearer ")) return undefined;
+  return credentials.get(authorization.slice("Bearer ".length));
+}
+
+function requireAuthentication(request: Request, operationId: string): Response | undefined {
+  if (authenticatedIdentity(request) !== undefined) return undefined;
+  appendLedger(request, operationId, 401);
+  return errorResponse("InvalidToken", "invalid access token", 401);
+}
+
+function newRepo(
+  repoId: string,
+  options: {
+    private?: boolean;
+    gated?: boolean | "auto" | "manual";
+    tags?: string[];
+  } = {},
+): Repo {
+  const now = new Date().toISOString();
+  const repo = {
+    repoId,
+    private: options.private ?? false,
+    gated: options.gated ?? false,
+    tags: options.tags ?? [],
+    headOid: "0".repeat(40),
+    createdAt: now,
+    updatedAt: now,
+  };
+  repos.set(repoId, repo);
+  files.set(repoId, new Map());
+  revisions.set(repoId, new Set([repo.headOid]));
+  return repo;
+}
+
 function datasetInfo(repo: Repo): Record<string, unknown> {
   return {
     id: repo.repoId,
@@ -126,7 +200,7 @@ function datasetInfo(repo: Repo): Record<string, unknown> {
 
 function revisionExists(repo: Repo, revision: string): boolean {
   const decoded = decodeURIComponent(revision);
-  return decoded === "main" || decoded === repo.headOid;
+  return decoded === "main" || revisions.get(repo.repoId)?.has(decoded) === true;
 }
 
 Bun.serve({
@@ -148,7 +222,50 @@ Bun.serve({
         headers: { "Content-Type": "application/x-ndjson" },
       });
     }
+    if (request.method === "POST" && path === "/_emulate/credentials") {
+      const body = (await request.json()) as Record<string, unknown>;
+      const name = String(body.name ?? "bench");
+      const token =
+        name === "bench"
+          ? BASELINE_TOKEN
+          : `hf_bench_${createHash("sha256").update(name).digest("hex").slice(0, 24)}`;
+      const identity: Identity = { name, type: "user" };
+      credentials.set(token, identity);
+      appendLedger(request, "mintCredential", 200, { name }, { name });
+      return jsonResponse({ ...identity, token });
+    }
+    if (request.method === "POST" && path === "/_emulate/seed") {
+      const body = (await request.json()) as {
+        repos?: Array<{
+          repo_id: string;
+          private?: boolean;
+          gated?: boolean | "auto" | "manual";
+          tags?: string[];
+        }>;
+      };
+      const seeded = (body.repos ?? []).map((spec) => {
+        const repoId = String(spec.repo_id);
+        newRepo(repoId, {
+          private: Boolean(spec.private),
+          gated: spec.gated,
+          tags: Array.isArray(spec.tags) ? spec.tags.map(String) : [],
+        });
+        return repoId;
+      });
+      appendLedger(request, "seed", 200, { repos: seeded }, { repos_seeded: seeded });
+      return jsonResponse({ repos_seeded: seeded });
+    }
+    if (request.method === "POST" && path === "/_emulate/reset") {
+      repos.clear();
+      files.clear();
+      revisions.clear();
+      resetCredentials();
+      appendLedger(request, "reset", 200);
+      return jsonResponse({ ok: true });
+    }
     if (request.method === "POST" && path === "/api/repos/create") {
+      const authenticationError = requireAuthentication(request, "createRepo");
+      if (authenticationError !== undefined) return authenticationError;
       const body = (await request.json()) as Record<string, unknown>;
       const name = String(body.name ?? "");
       const organization = body.organization ? String(body.organization) : "bench";
@@ -157,27 +274,20 @@ Bun.serve({
         appendLedger(request, "createRepo", 409);
         return jsonResponse({ error: "repository already exists" }, 409);
       }
-      const now = new Date().toISOString();
-      repos.set(repoId, {
-        repoId,
+      newRepo(repoId, {
         private: body.visibility === "private" || Boolean(body.private),
-        gated: false,
-        tags: [],
-        headOid: "0".repeat(40),
-        createdAt: now,
-        updatedAt: now,
       });
       appendLedger(request, "createRepo", 200, body, { repo_id: repoId });
       return jsonResponse({ url: `http://${HOST}:${PORT}/datasets/${repoId}` });
     }
     if (request.method === "GET" && path === "/api/whoami-v2") {
-      const authorization = request.headers.get("authorization") ?? "";
-      if (!authorization.startsWith("Bearer hf_")) {
+      const identity = authenticatedIdentity(request);
+      if (identity === undefined) {
         appendLedger(request, "whoami", 401);
         return errorResponse("InvalidToken", "invalid access token", 401);
       }
       appendLedger(request, "whoami", 200);
-      return jsonResponse({ name: "bench", type: "user" });
+      return jsonResponse(identity);
     }
     if (request.method === "GET" && path === "/api/datasets") {
       const author = new URL(request.url).searchParams.get("author");
@@ -188,6 +298,8 @@ Bun.serve({
       return jsonResponse(result);
     }
     if (request.method === "DELETE" && path === "/api/repos/delete") {
+      const authenticationError = requireAuthentication(request, "deleteRepo");
+      if (authenticationError !== undefined) return authenticationError;
       const body = (await request.json()) as Record<string, unknown>;
       const name = String(body.name ?? "");
       const organization = body.organization ? String(body.organization) : "bench";
@@ -196,11 +308,15 @@ Bun.serve({
         appendLedger(request, "deleteRepo", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
       }
+      files.delete(repoId);
+      revisions.delete(repoId);
       appendLedger(request, "deleteRepo", 200);
       return jsonResponse({ ok: true });
     }
     const settingsMatch = path.match(/^\/api\/datasets\/([^/]+\/[^/]+)\/settings$/);
     if (request.method === "PUT" && settingsMatch !== null) {
+      const authenticationError = requireAuthentication(request, "updateSettings");
+      if (authenticationError !== undefined) return authenticationError;
       const repo = repos.get(decodeURIComponent(settingsMatch[1]));
       if (repo === undefined) {
         appendLedger(request, "updateSettings", 404);
@@ -219,10 +335,17 @@ Bun.serve({
       /^\/api\/datasets\/([^/]+\/[^/]+)\/preupload\/([^/]+)$/,
     );
     if (request.method === "POST" && preuploadMatch !== null) {
+      const authenticationError = requireAuthentication(request, "preupload");
+      if (authenticationError !== undefined) return authenticationError;
       const repoId = decodeURIComponent(preuploadMatch[1]);
-      if (!repos.has(repoId)) {
+      const repo = repos.get(repoId);
+      if (repo === undefined) {
         appendLedger(request, "preupload", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
+      }
+      if (!revisionExists(repo, preuploadMatch[2])) {
+        appendLedger(request, "preupload", 404);
+        return errorResponse("RevisionNotFound", "revision not found", 404);
       }
       const body = (await request.json()) as {
         files?: Array<{ path: string }>;
@@ -245,11 +368,17 @@ Bun.serve({
       /^\/api\/datasets\/([^/]+\/[^/]+)\/commit\/([^/]+)$/,
     );
     if (request.method === "POST" && commitMatch !== null) {
+      const authenticationError = requireAuthentication(request, "commit");
+      if (authenticationError !== undefined) return authenticationError;
       const repoId = decodeURIComponent(commitMatch[1]);
       const repo = repos.get(repoId);
       if (repo === undefined) {
         appendLedger(request, "commit", 404);
         return errorResponse("RepoNotFound", "repository not found", 404);
+      }
+      if (!revisionExists(repo, commitMatch[2])) {
+        appendLedger(request, "commit", 404);
+        return errorResponse("RevisionNotFound", "revision not found", 404);
       }
       const rawPayload = await request.text();
       const items = rawPayload
@@ -281,6 +410,7 @@ Bun.serve({
       }
       files.set(repoId, repoFiles);
       repo.headOid = oid;
+      revisions.set(repoId, new Set([oid]));
       repo.updatedAt = new Date().toISOString();
       appendLedger(
         request,
