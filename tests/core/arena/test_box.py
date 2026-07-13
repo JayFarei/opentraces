@@ -94,6 +94,108 @@ def test_version_drift_is_a_loud_named_refusal(tmp_path: Path) -> None:
     assert len(runner.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("inspect_result", "refusal_code"),
+    [
+        (_completed(["crabbox", "inspect"], stdout="not-json\n"), "lease_inspect_invalid"),
+        (
+            _completed(
+                ["crabbox", "inspect"],
+                stdout=json.dumps({**json.loads(_inspect()), "ready": False}),
+            ),
+            "lease_not_ready",
+        ),
+        (
+            _completed(
+                ["crabbox", "inspect"],
+                stdout=json.dumps(
+                    {
+                        key: value
+                        for key, value in json.loads(_inspect()).items()
+                        if key != "sshKey"
+                    }
+                ),
+            ),
+            "lease_inspect_incomplete",
+        ),
+    ],
+)
+def test_post_warmup_inspect_refusal_stops_the_named_lease_once(
+    tmp_path: Path,
+    inspect_result: subprocess.CompletedProcess[str],
+    refusal_code: str,
+) -> None:
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout="ready lease=cbx_abc123\n"),
+            inspect_result,
+            _completed(["crabbox", "stop"]),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match=refusal_code) as caught:
+        runtime.lease()
+
+    assert caught.value.code == refusal_code
+    stop_calls = [call[0] for call in runner.calls if call[0][1:2] == ["stop"]]
+    assert stop_calls == [
+        [
+            "crabbox",
+            "stop",
+            "--id",
+            "cbx_abc123",
+            "--provider",
+            "local-container",
+        ]
+    ]
+
+
+def test_cleanup_failure_keeps_inspect_refusal_primary_and_records_stop_diagnostic(
+    tmp_path: Path,
+) -> None:
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout="ready lease=cbx_abc123\n"),
+            _completed(["crabbox", "inspect"], stdout="not-json\n"),
+            _completed(["crabbox", "stop"], rc=1, stderr="cleanup failed\n"),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="lease_inspect_invalid") as caught:
+        runtime.lease()
+
+    assert caught.value.code == "lease_inspect_invalid"
+    stop_diagnostics = [
+        row for row in runtime.diagnostic_records() if row["operation"] == "stop"
+    ]
+    assert len(stop_diagnostics) == 1
+    assert stop_diagnostics[0]["returncode"] == 1
+    assert stop_diagnostics[0]["stderr"] == "cleanup failed\n"
+
+
+def test_ssh_probe_refusal_stops_the_lease_once(tmp_path: Path) -> None:
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout="ready lease=cbx_abc123\n"),
+            _completed(["crabbox", "inspect"], stdout=_inspect()),
+            _completed(["ssh"], rc=255, stderr="connection refused\n"),
+            _completed(["crabbox", "stop"]),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="ssh_probe_failed") as caught:
+        runtime.lease()
+
+    assert caught.value.code == "ssh_probe_failed"
+    assert sum(call[0][1:2] == ["stop"] for call in runner.calls) == 1
+
+
 def test_bad_ssh_config_is_refused_before_warmup(tmp_path: Path) -> None:
     config = tmp_path / "config"
     config.write_text("Host *\n  UseKeychain yes\n", encoding="utf-8")
