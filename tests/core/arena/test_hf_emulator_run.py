@@ -253,6 +253,7 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     assert result["execution_status"] == "complete"
     assert result["verdict"] == "fail"
     assert result["reason"]["code"] == "assertion_failed"
+    assert "0x" not in result["reason"]["message"]
     assert result_exit_code(result) == 1
     assert not any(row.get("operation_id") == "commit" for row in ledger_rows)
     assert runtime.events.count("start") == 1
