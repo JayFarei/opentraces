@@ -15,7 +15,11 @@ from opentraces.core.arena.run_store import (
 
 
 def _result(run_id: str, *, verdict: str = "pass") -> dict:
-    reason = None if verdict == "pass" else {"code": "assertion_failed", "message": "red"}
+    reason = {
+        "pass": None,
+        "fail": {"code": "assertion_failed", "message": "red"},
+        "skip": {"code": "absent_prerequisite", "message": "not available"},
+    }[verdict]
     return build_result(
         run_id=run_id,
         claim="A stored run keeps its complete declared exhaust.",

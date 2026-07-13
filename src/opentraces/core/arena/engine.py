@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping
 from ... import __version__
 from .box import Box, CrabboxRuntime
 from .contract import build_result
+from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.terminal import TerminalDrive
 from .run_store import RunDraft, RunStore
 
@@ -156,15 +157,14 @@ class BenchRun:
                     # The original setup failure remains primary; both the
                     # run result and Crabbox's failure bundle preserve it.
                     self._lifecycle_diagnostics.append(
-                        {
-                            "code": getattr(release_exc, "code", "release_failed"),
-                            "message": str(release_exc),
-                        }
+                        sanitize_reason(
+                            getattr(release_exc, "code", "release_failed"), release_exc
+                        )
                     )
             self._finalize(
                 execution_status="error",
                 verdict=None,
-                reason={"code": getattr(exc, "code", "setup_error"), "message": str(exc)},
+                reason=sanitize_reason(getattr(exc, "code", "setup_error"), exc),
             )
             raise
         return self
@@ -252,10 +252,10 @@ class BenchRun:
             status = "pass"
         except BenchSkip as exc:
             status = "skip"
-            reason = {"code": exc.code, "message": str(exc)}
+            reason = sanitize_reason(exc.code, exc)
         except AssertionError as exc:
             status = "fail"
-            reason = {"code": "assertion_failed", "message": str(exc) or "assertion failed"}
+            reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
         except EvidenceReferenceError:
             evidence_refs = []
             status = "error"
@@ -265,7 +265,7 @@ class BenchRun:
             }
         except Exception as exc:
             status = "error"
-            reason = {"code": "verifier_error", "message": f"{type(exc).__name__}: {exc}"}
+            reason = sanitize_reason("verifier_error", f"{type(exc).__name__}: {exc}")
         record = {
             "name": f"{verifier.__module__}.{verifier.__qualname__}",
             "source_ref": source_ref,
@@ -314,6 +314,7 @@ class BenchRun:
         runtime_diagnostics = getattr(self.bench.box_runtime, "diagnostic_records", None)
         events = list(runtime_diagnostics()) if callable(runtime_diagnostics) else []
         events.extend(self._lifecycle_diagnostics)
+        events = [sanitize_diagnostic_value(event) for event in events]
         artifacts: list[dict[str, Any]] = []
         timing_root = self.draft.path / "artifacts" / "crabbox-timing"
         if timing_root.is_dir():
@@ -432,18 +433,18 @@ class BenchRun:
             execution_status, verdict, reason = self._outcome_from_verifiers()
         elif isinstance(exc, BenchSkip):
             execution_status, verdict = "complete", "skip"
-            reason = {"code": exc.code, "message": str(exc)}
+            reason = sanitize_reason(exc.code, exc)
             suppressed = True
         elif isinstance(exc, AssertionError):
             execution_status, verdict = "complete", "fail"
-            reason = {"code": "assertion_failed", "message": str(exc) or "assertion failed"}
+            reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
             suppressed = True
         else:
             execution_status, verdict = "error", None
-            reason = {
-                "code": "machinery_error",
-                "message": f"{type(exc).__name__}: {exc}" if exc is not None else "unknown error",
-            }
+            reason = sanitize_reason(
+                "machinery_error",
+                f"{type(exc).__name__}: {exc}" if exc is not None else "unknown error",
+            )
 
         release_error: Exception | None = None
         if self.box is not None:
@@ -453,10 +454,9 @@ class BenchRun:
                 release_error = caught
         if release_error is not None:
             self._lifecycle_diagnostics.append(
-                {
-                    "code": getattr(release_error, "code", "release_failed"),
-                    "message": str(release_error),
-                }
+                sanitize_reason(
+                    getattr(release_error, "code", "release_failed"), release_error
+                )
             )
         self._finalize(
             execution_status=execution_status,

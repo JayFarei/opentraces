@@ -382,6 +382,7 @@ def test_box_lifecycle_diagnostics_are_part_of_the_finalized_exhaust(tmp_path: P
     }
     payload = json.loads((run.final_path / artifact["path"]).read_text())
     assert payload["events"][0]["operation"] == "warmup"
+    assert payload["events"][0]["stdout"] == "ready\n"
 
 
 def test_setup_failure_reason_sanitizes_structured_credentials_and_host_paths(
@@ -438,7 +439,6 @@ def test_verifier_and_release_diagnostics_share_secret_and_path_sanitization(
     assert "[host-path]" in serialized
     assert "verifier" in serialized
     assert "cleanup" in serialized
-    assert payload["events"][0]["stdout"] == "ready\n"
 
 
 def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -77,21 +78,56 @@ class PytestOutcome:
     returncode: int
     stdout: str
     stderr: str
+    phase_reports: list[dict[str, str]]
 
 
 def run_pytest(target: str, *, repository: Path, env: dict[str, str]) -> PytestOutcome:
-    completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "opentraces.core.arena.pytest_plugin", target],
-        cwd=repository,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    descriptor, report_name = tempfile.mkstemp(prefix="opentraces-bench-pytest-", suffix=".jsonl")
+    os.close(descriptor)
+    report_path = Path(report_name)
+    child_env = dict(env)
+    child_env["OT_BENCH_PYTEST_PHASE_REPORT"] = str(report_path)
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-p",
+                "opentraces.core.arena.pytest_plugin",
+                target,
+            ],
+            cwd=repository,
+            env=child_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        phase_reports: list[dict[str, str]] = []
+        for line in report_path.read_text(encoding="utf-8").splitlines():
+            try:
+                report = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(report, dict)
+                and report.get("when") in {"setup", "call", "teardown"}
+                and report.get("outcome") in {"passed", "failed", "skipped"}
+            ):
+                phase_reports.append(
+                    {
+                        "nodeid": str(report.get("nodeid", "")),
+                        "when": str(report["when"]),
+                        "outcome": str(report["outcome"]),
+                    }
+                )
+    finally:
+        report_path.unlink(missing_ok=True)
     return PytestOutcome(
         returncode=completed.returncode,
         stdout=completed.stdout,
         stderr=completed.stderr,
+        phase_reports=phase_reports,
     )
 
 
@@ -122,32 +158,62 @@ def _finalize_after_pytest(
     result = draft.take_staged_result()
     stdout_ref = "artifacts/pytest/stdout.txt"
     stderr_ref = "artifacts/pytest/stderr.txt"
+    phase_ref = "artifacts/pytest/phases.json"
     draft.write_text(stdout_ref, outcome.stdout)
     draft.write_text(stderr_ref, outcome.stderr)
-    result["artifacts"].append(
-        {
-            "kind": "pytest_diagnostics",
-            "media_type": "text/plain",
-            "returncode": outcome.returncode,
-            "stdout_ref": stdout_ref,
-            "stderr_ref": stderr_ref,
-        }
-    )
+    phase_reports = list(getattr(outcome, "phase_reports", []))
+    diagnostic = {
+        "kind": "pytest_diagnostics",
+        "media_type": "text/plain",
+        "returncode": outcome.returncode,
+        "stdout_ref": stdout_ref,
+        "stderr_ref": stderr_ref,
+    }
+    if phase_reports:
+        draft.write_json(phase_ref, {"reports": phase_reports})
+        diagnostic["phase_report_ref"] = phase_ref
+    result["artifacts"].append(diagnostic)
     if outcome.returncode != 0 and result["execution_status"] != "error":
-        result["execution_status"] = "error"
-        result["verdict"] = None
-        result["reason"] = {
-            "code": "pytest_failed",
-            "message": f"pytest exited nonzero after scenario adjudication ({outcome.returncode})",
+        failed_phases = {
+            str(report.get("when"))
+            for report in phase_reports
+            if report.get("outcome") == "failed"
         }
-        result["evidence"]["complete"] = False
-        result["evidence"]["requirements"].append(
-            {
-                "name": "pytest.process",
-                "complete": False,
-                "evidence_refs": [stdout_ref, stderr_ref],
+        call_observed = any(report.get("when") == "call" for report in phase_reports)
+        refs = [stdout_ref, stderr_ref, *([phase_ref] if phase_reports else [])]
+        if call_observed and failed_phases and failed_phases <= {"teardown"}:
+            result["evidence"]["complete"] = False
+            result["evidence"]["requirements"].append(
+                {
+                    "name": "pytest.cleanup",
+                    "complete": False,
+                    "evidence_refs": refs,
+                }
+            )
+        else:
+            if "call" in failed_phases:
+                reason_code = "pytest_call_failed"
+                requirement_name = "pytest.call"
+            elif "setup" in failed_phases:
+                reason_code = "pytest_setup_failed"
+                requirement_name = "pytest.setup"
+            else:
+                reason_code = "pytest_failed"
+                requirement_name = "pytest.process"
+            result["execution_status"] = "error"
+            result["verdict"] = None
+            result["reason"] = {
+                "code": reason_code,
+                "message": f"pytest exited nonzero after scenario adjudication ({outcome.returncode})",
             }
-        )
+            result["evidence"]["complete"] = False
+            result["evidence"]["requirements"].append(
+                {
+                    "name": requirement_name,
+                    "complete": False,
+                    "evidence_refs": refs,
+                }
+            )
     validate_result(result)
     return draft.finalize(result), result
 

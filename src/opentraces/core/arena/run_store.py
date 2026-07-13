@@ -218,15 +218,15 @@ class RunDraft:
         if result["run_id"] != self.run_id:
             raise ValueError("result run_id does not match the draft")
 
-        self.write_json(".integrity.json", self._manifest())
         final_path = self.store.root / self.run_id
         if final_path.exists():
             raise FinalizedRunError(f"run path already exists: {final_path}")
-        self.store.root.mkdir(parents=True, exist_ok=True)
-        self.path.replace(final_path)
-        self.path = final_path
-
+        index_path = self.store.index_root / f"{self.run_id}.json"
         try:
+            self.write_json(".integrity.json", self._manifest())
+            self.store.root.mkdir(parents=True, exist_ok=True)
+            self.path.replace(final_path)
+            self.path = final_path
             result_path = final_path / "result.json"
             self._write_result(result_path, result)
             index = {
@@ -235,14 +235,22 @@ class RunDraft:
                 "result_digest": _sha256(result_path),
                 "integrity_digest": _sha256(final_path / ".integrity.json"),
             }
-            _atomic_write_json(self.store.index_root / f"{self.run_id}.json", index)
+            _atomic_write_json(index_path, index)
         except Exception as exc:
             recovery = self.store.recovery_root / self.run_id
             self.store.recovery_root.mkdir(parents=True, exist_ok=True)
             if recovery.exists():
                 shutil.rmtree(recovery)
-            final_path.replace(recovery)
+            source = final_path if final_path.exists() else self.path
+            if source.exists():
+                source.replace(recovery)
+            else:
+                recovery.mkdir(parents=True)
             self.path = recovery
+            try:
+                index_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             _atomic_write_json(recovery / "provisional_result.json", result)
             raise StorageFinalizeError(
                 f"could not finalize run {self.run_id}: {exc}", recovery_path=recovery

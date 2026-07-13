@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value
+
 
 PINNED_CRABBOX_VERSION = "0.38.0"
 PINNED_LOCAL_IMAGE = "ubuntu:24.04"
@@ -79,10 +81,6 @@ _CRABBOX_HOST_CANDIDATES = (
     "localhost",
     "127.0.0.1",
 )
-_SENSITIVE_KEY_PARTS = ("credential", "secret", "token", "password", "privatekey", "sshkey")
-_HOST_PATH_RE = re.compile(r"(?:(?:/Users|/home|/private|/tmp)/[^\s\"']+)")
-
-
 def _host_scope_may_apply(patterns: Sequence[str] | None) -> bool:
     """Approximate the Host scopes Crabbox may traverse during warmup.
 
@@ -108,34 +106,10 @@ def _ignored(keyword: str, patterns: set[str]) -> bool:
     return any(fnmatch.fnmatchcase(keyword.lower(), pattern.lower()) for pattern in patterns)
 
 
-def _sanitize_payload(value: Any) -> Any:
-    """Retain observation shape while excluding credentials and host paths."""
-
-    if isinstance(value, Mapping):
-        sanitized: dict[str, Any] = {}
-        for raw_key, child in value.items():
-            key = str(raw_key)
-            compact = key.lower().replace("_", "").replace("-", "")
-            if any(part in compact for part in _SENSITIVE_KEY_PARTS) or compact in {
-                "hostpath",
-                "home",
-                "cwd",
-            }:
-                sanitized[key] = "[redacted]"
-            else:
-                sanitized[key] = _sanitize_payload(child)
-        return sanitized
-    if isinstance(value, list):
-        return [_sanitize_payload(item) for item in value]
-    if isinstance(value, str):
-        return _HOST_PATH_RE.sub("[host-path]", value)
-    return value
-
-
 def _sanitize_timing(value: Any) -> Any:
     """Timing records are numeric evidence; redact all free-form strings."""
 
-    sanitized = _sanitize_payload(value)
+    sanitized = sanitize_diagnostic_value(value)
     if isinstance(sanitized, Mapping):
         return {str(key): _sanitize_timing(child) for key, child in sanitized.items()}
     if isinstance(sanitized, list):
@@ -143,16 +117,6 @@ def _sanitize_timing(value: Any) -> Any:
     if isinstance(sanitized, str):
         return sanitized if sanitized in {"[redacted]", "[host-path]"} else "[redacted]"
     return sanitized
-
-
-def _sanitize_diagnostic_text(text: str) -> str:
-    if not text:
-        return text
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return _HOST_PATH_RE.sub("[host-path]", text)
-    return json.dumps(_sanitize_payload(payload), sort_keys=True)
 
 
 def _operation_name(argv: Sequence[str]) -> str:
@@ -259,8 +223,8 @@ class CrabboxRuntime:
                 {
                     "operation": _operation_name(argv),
                     "returncode": None,
-                    "stdout": _sanitize_diagnostic_text(str(exc.stdout or "")),
-                    "stderr": _sanitize_diagnostic_text(str(exc.stderr or "")),
+                    "stdout": sanitize_diagnostic_text(str(exc.stdout or "")),
+                    "stderr": sanitize_diagnostic_text(str(exc.stderr or "")),
                     "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                     "timed_out": True,
                 }
@@ -270,8 +234,8 @@ class CrabboxRuntime:
             {
                 "operation": _operation_name(argv),
                 "returncode": completed.returncode,
-                "stdout": _sanitize_diagnostic_text(completed.stdout),
-                "stderr": _sanitize_diagnostic_text(completed.stderr),
+                "stdout": sanitize_diagnostic_text(completed.stdout),
+                "stderr": sanitize_diagnostic_text(completed.stderr),
                 "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                 "timed_out": False,
             }

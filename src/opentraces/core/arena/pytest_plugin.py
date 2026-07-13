@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -11,6 +12,23 @@ import pytest
 
 from .engine import Bench, ScenarioSource, extract_claim
 from .run_store import RunStore
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Emit the minimal phase facts the parent runner needs for honest cleanup."""
+
+    path_value = os.environ.get("OT_BENCH_PYTEST_PHASE_REPORT")
+    if not path_value:
+        return
+    path = Path(path_value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "nodeid": str(report.nodeid),
+        "when": str(report.when),
+        "outcome": str(report.outcome),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def _git(repository: Path, *args: str) -> str | None:
