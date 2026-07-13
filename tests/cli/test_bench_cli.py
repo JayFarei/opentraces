@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 
@@ -50,8 +50,8 @@ def test_bench_run_prints_claim_and_returns_result_exit_code(
             capture=None,
             pins={},
         )
-        draft.finalize(result)
-        return 0
+        draft.stage_result(result)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
 
@@ -95,8 +95,8 @@ def test_bench_run_returns_one_for_a_functional_failure(tmp_path: Path, monkeypa
             capture=None,
             pins={},
         )
-        draft.finalize(result)
-        return 0
+        draft.stage_result(result)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
 
@@ -139,7 +139,7 @@ def test_bench_run_json_is_pure_and_persists_pytest_diagnostics(
             capture=None,
             pins={},
         )
-        draft.finalize(result)
+        draft.stage_result(result)
         return SimpleNamespace(returncode=0, stdout="pytest chatter\n", stderr="warning\n")
 
     monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
@@ -195,7 +195,7 @@ def test_nonzero_pytest_after_green_result_forces_error_null(tmp_path: Path, mon
             capture=None,
             pins={},
         )
-        draft.finalize(result)
+        draft.stage_result(result)
         return SimpleNamespace(returncode=3, stdout="late output\n", stderr="late failure\n")
 
     monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)

@@ -393,7 +393,11 @@ class BenchRun:
                 "app_state": self._app_state_pin,
             },
         )
-        self.final_path = self.draft.finalize(result)
+        if os.environ.get("OT_BENCH_DEFER_FINALIZE") == "1":
+            self.draft.stage_result(result)
+            self.final_path = self.draft.path
+        else:
+            self.final_path = self.draft.finalize(result)
         self.result = result
 
     def __exit__(

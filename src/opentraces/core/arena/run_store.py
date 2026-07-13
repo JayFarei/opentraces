@@ -73,6 +73,12 @@ class RunStore:
             (path / name).mkdir()
         return RunDraft(store=self, run_id=run_id, path=path)
 
+    def open_pending(self, run_id: str) -> "RunDraft":
+        path = self.staging_root / run_id
+        if not path.is_dir() or not (path / ".pending-result.json").is_file():
+            raise FinalizedRunError(f"run {run_id} has no pending result")
+        return RunDraft(store=self, run_id=run_id, path=path)
+
     def verify(self, run_path: Path | str) -> bool:
         run_path = Path(run_path)
         result_path = run_path / "result.json"
@@ -175,6 +181,23 @@ class RunDraft:
 
     def _write_result(self, path: Path, payload: dict[str, Any]) -> None:
         _atomic_write_json(path, payload)
+
+    def stage_result(self, result: dict[str, Any]) -> None:
+        """Hold a validated result until its parent runner has exited."""
+
+        validate_result(result)
+        if result["run_id"] != self.run_id:
+            raise ValueError("result run_id does not match the draft")
+        self.write_json(".pending-result.json", result)
+
+    def take_staged_result(self) -> dict[str, Any]:
+        pending = self.path / ".pending-result.json"
+        if not pending.is_file():
+            raise FinalizedRunError(f"run {self.run_id} has no pending result")
+        result = json.loads(pending.read_text(encoding="utf-8"))
+        pending.unlink()
+        validate_result(result)
+        return result
 
     @staticmethod
     def _make_read_only(path: Path) -> None:

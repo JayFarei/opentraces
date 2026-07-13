@@ -8,13 +8,14 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import click
 
 from ..core import paths
-from ..core.arena.contract import result_exit_code
+from ..core.arena.contract import result_exit_code, validate_result
 from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
 
@@ -71,14 +72,27 @@ def build_local_wheels(repository: Path) -> list[Path]:
     return sorted(dist.glob("*.whl"))
 
 
-def run_pytest(target: str, *, repository: Path, env: dict[str, str]) -> int:
+@dataclass(frozen=True)
+class PytestOutcome:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def run_pytest(target: str, *, repository: Path, env: dict[str, str]) -> PytestOutcome:
     completed = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "opentraces.core.arena.pytest_plugin", target],
         cwd=repository,
         env=env,
+        text=True,
+        capture_output=True,
         check=False,
     )
-    return completed.returncode
+    return PytestOutcome(
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
 
 
 def _finalized_ids(store: RunStore) -> set[str]:
@@ -89,6 +103,53 @@ def _finalized_ids(store: RunStore) -> set[str]:
         for child in store.root.iterdir()
         if child.is_dir() and (child / "result.json").is_file()
     }
+
+
+def _pending_ids(store: RunStore) -> set[str]:
+    if not store.staging_root.is_dir():
+        return set()
+    return {
+        child.name
+        for child in store.staging_root.iterdir()
+        if child.is_dir() and (child / ".pending-result.json").is_file()
+    }
+
+
+def _finalize_after_pytest(
+    store: RunStore, run_id: str, outcome: PytestOutcome
+) -> tuple[Path, dict[str, Any]]:
+    draft = store.open_pending(run_id)
+    result = draft.take_staged_result()
+    stdout_ref = "artifacts/pytest/stdout.txt"
+    stderr_ref = "artifacts/pytest/stderr.txt"
+    draft.write_text(stdout_ref, outcome.stdout)
+    draft.write_text(stderr_ref, outcome.stderr)
+    result["artifacts"].append(
+        {
+            "kind": "pytest_diagnostics",
+            "media_type": "text/plain",
+            "returncode": outcome.returncode,
+            "stdout_ref": stdout_ref,
+            "stderr_ref": stderr_ref,
+        }
+    )
+    if outcome.returncode != 0:
+        result["execution_status"] = "error"
+        result["verdict"] = None
+        result["reason"] = {
+            "code": "pytest_failed",
+            "message": f"pytest exited nonzero after scenario adjudication ({outcome.returncode})",
+        }
+        result["evidence"]["complete"] = False
+        result["evidence"]["requirements"].append(
+            {
+                "name": "pytest.process",
+                "complete": False,
+                "evidence_refs": [stdout_ref, stderr_ref],
+            }
+        )
+    validate_result(result)
+    return draft.finalize(result), result
 
 
 @click.group("bench")
@@ -121,22 +182,23 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
     claim = discover_claim(target)
     build_local_wheels(repository)
     store = RunStore(store_root or paths.bucket_dir() / "runs" / "v1")
-    before = _finalized_ids(store)
+    before = _pending_ids(store) | _finalized_ids(store)
     env = dict(os.environ)
     env["OT_BENCH_RUN_ROOT"] = str(store.root)
     env["OT_BENCH_REPOSITORY"] = str(repository)
     env["OT_BENCH_SCENARIOS"] = "1"
     env["OT_BENCH_REAL_HOME"] = str(Path.home())
-    pytest_rc = run_pytest(target, repository=repository, env=env)
-    created = sorted(_finalized_ids(store) - before)
+    env["OT_BENCH_DEFER_FINALIZE"] = "1"
+    pytest_outcome = run_pytest(target, repository=repository, env=env)
+    created = sorted(_pending_ids(store) - before)
     if not created:
         raise click.ClickException(
-            f"scenario produced no finalized run (pytest exit {pytest_rc}); raw pytest output is above"
+            "scenario produced no pending run "
+            f"(pytest exit {pytest_outcome.returncode}); child output was captured"
         )
     if len(created) != 1:
         raise click.ClickException(f"expected one finalized run, observed {len(created)}")
-    run_path = store.root / created[0]
-    result: dict[str, Any] = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
+    run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
     exit_code = result_exit_code(result)
     page_path: Path | None = None
     page_error: str | None = None
