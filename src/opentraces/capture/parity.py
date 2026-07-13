@@ -84,11 +84,11 @@ def compare_placements(
         replacements[str(resolved_root)] = "<workspace>"
         replacements[resolved_root.name] = "<workspace-name>"
 
-    persistent_norm = _normalize(persistent_trace, replacements)
-    leased_norm = _normalize(leased_trace, replacements)
+    persistent_norm = _normalize(persistent_trace, replacements, domain="trace")
+    leased_norm = _normalize(leased_trace, replacements, domain="trace")
     trace_match = persistent_norm == leased_norm
     security_match = _normalize(
-        persistent_trace.get("security") or {}, replacements
+        persistent_trace.get("security") or {}, replacements, domain="semantic"
     ) == _normalize(leased_trace.get("security") or {}, replacements)
 
     persistent_context = _normalize(
@@ -98,6 +98,7 @@ def compare_placements(
             replacements,
         ),
         replacements,
+        domain="companion",
     )
     leased_context = _normalize(
         _resolve_content_references(
@@ -106,12 +107,17 @@ def compare_placements(
             replacements,
         ),
         replacements,
+        domain="companion",
     )
     persistent_trail = _normalize(
-        _read_jsonl_gz(persistent_path.with_name("trail.jsonl.gz")), replacements
+        _read_jsonl_gz(persistent_path.with_name("trail.jsonl.gz")),
+        replacements,
+        domain="companion",
     )
     leased_trail = _normalize(
-        _read_jsonl_gz(leased_path.with_name("trail.jsonl.gz")), replacements
+        _read_jsonl_gz(leased_path.with_name("trail.jsonl.gz")),
+        replacements,
+        domain="companion",
     )
     context_match = persistent_context == leased_context
     trail_match = persistent_trail == leased_trail
@@ -254,7 +260,11 @@ def _resolve_content_references(
                 if content is None:
                     resolved["unresolved_content_hash"] = child
                 else:
-                    normalized_content = _normalize(content, replacements)
+                    normalized_content = _normalize(
+                        content,
+                        replacements,
+                        domain="referenced_content",
+                    )
                     resolved["referenced_content_digest"] = _digest(normalized_content)
                 continue
             resolved[key] = _resolve_content_references(
@@ -304,7 +314,7 @@ def _read_referenced_content(trace_path: Path, content_hash: str) -> Any | None:
         return None
 
 
-_IDENTITY_ONLY_KEYS = frozenset(
+_COMPANION_ENVELOPE_IDENTITY_KEYS = frozenset(
     {
         "trace_id",
         "content_hash",
@@ -319,15 +329,34 @@ _IDENTITY_ONLY_KEYS = frozenset(
 )
 
 
-def _normalize(value: Any, replacements: dict[str, str]) -> Any:
+def _normalize(
+    value: Any,
+    replacements: dict[str, str],
+    *,
+    domain: str = "semantic",
+    path: tuple[str, ...] = (),
+) -> Any:
     if isinstance(value, dict):
         return {
-            key: _normalize(child, replacements)
+            key: _normalize(
+                child,
+                replacements,
+                domain=domain,
+                path=(*path, key),
+            )
             for key, child in sorted(value.items())
-            if key not in _IDENTITY_ONLY_KEYS
+            if not _is_transport_identity(key, domain=domain, path=path)
         }
     if isinstance(value, list):
-        return [_normalize(child, replacements) for child in value]
+        return [
+            _normalize(
+                child,
+                replacements,
+                domain=domain,
+                path=(*path, "[]"),
+            )
+            for child in value
+        ]
     if isinstance(value, str):
         normalized = value
         for raw, replacement in sorted(
@@ -336,6 +365,26 @@ def _normalize(value: Any, replacements: dict[str, str]) -> Any:
             normalized = normalized.replace(raw, replacement)
         return normalized
     return value
+
+
+def _is_transport_identity(
+    key: str,
+    *,
+    domain: str,
+    path: tuple[str, ...],
+) -> bool:
+    """Suppress identity only at a known transport-envelope boundary.
+
+    A TraceRecord's own ``trace_id``/``content_hash`` vary by capture placement.
+    A projected companion row carries canonical TrailEvent envelope identity.
+    The same field names below those boundaries are domain data: notably
+    ``AttributionRange.content_hash`` and any nested original-range hash.
+    """
+    if domain == "trace" and not path:
+        return key in {"trace_id", "content_hash"}
+    if domain == "companion" and path == ("[]",):
+        return key in _COMPANION_ENVELOPE_IDENTITY_KEYS
+    return False
 
 
 def _span_coordinates(spans: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
