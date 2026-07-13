@@ -987,7 +987,9 @@ def test_named_security_policy_is_applied_and_observed(tmp_path: Path) -> None:
 
     assert result.security == {
         "policy": "basic",
-        "effective_tools": ["regex", "entropy"],
+        "declared_policy": "basic",
+        "configured_tools": ["regex", "entropy"],
+        "tools_applied": ["regex", "entropy"],
         "observed": True,
         "raw_body_retention": "delete",
     }
@@ -1005,6 +1007,84 @@ def test_unknown_security_policy_is_refused_before_capture(tmp_path: Path) -> No
             requested_sources=("watcher",),
             security_policy="not-a-real-policy",
         )
+
+
+def test_security_result_does_not_claim_observation_when_no_sanitized_record_exists(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("watcher",),
+            required_sources=("watcher",),
+            security_policy="basic",
+            result_dir=tmp_path / "result",
+        )
+    ).finish(deadline=time.monotonic() + 5.0)
+
+    assert result.security["declared_policy"] == "basic"
+    assert result.security["configured_tools"] == ["regex", "entropy"]
+    assert result.security["tools_applied"] == []
+    assert result.security["observed"] is False
+    assert any("security applied-state" in item for item in result.limitations)
+
+
+def test_persistent_bindings_report_actual_installed_claude_hooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentraces.capture.claude_code.install import install
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    installed = install()
+    project = _git_project(tmp_path / "project")
+
+    session = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl",),
+            actor="claude-code",
+            result_dir=tmp_path / "result",
+        )
+    )
+
+    assert session.bindings.hook_commands_status == "observed"
+    assert session.bindings.hook_commands_reason is None
+    assert len(session.bindings.hook_commands) == 4
+    command_tokens = {token for command in session.bindings.hook_commands for token in command}
+    assert set(installed.installed.values()) <= command_tokens
+
+
+def test_persistent_bindings_name_unavailable_hook_integration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "empty-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    project = _git_project(tmp_path / "project")
+
+    session = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl",),
+            actor="claude-code",
+            result_dir=tmp_path / "result",
+        )
+    )
+
+    assert session.bindings.hook_commands == ()
+    assert session.bindings.hook_commands_status == "unavailable"
+    assert "not installed" in session.bindings.hook_commands_reason
 
 
 def test_required_non_self_observation_is_enforced_and_can_be_proven(
@@ -1350,7 +1430,11 @@ def test_capture_records_unverified_non_self_observation_as_limitation(
     ).finish(deadline=time.monotonic() + 5.0)
 
     assert result.provenance["observer"]["derivation"] == "runtime"
+    from opentraces import __version__ as runtime_version
+
+    assert result.observer_version == runtime_version
     assert result.provenance["observer"]["version"] != "caller-observer-claim"
+    assert result.provenance["observer"]["caller_claim"] == "caller-observer-claim"
     assert result.provenance["product_under_test"]["derivation"] == "caller_claim"
     assert result.provenance["separation"]["proven"] is False
     assert any("non-self-observation" in item for item in result.limitations)
