@@ -370,7 +370,7 @@ print(json.dumps({
     }
 
 
-def test_real_hf_client_listing_exposes_public_and_only_owned_restricted_repos(
+def test_real_hf_client_listing_is_scoped_to_authenticated_owner(
     tmp_path: Path,
 ) -> None:
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
@@ -416,21 +416,16 @@ print(json.dumps({
 
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "anonymous_all": ["bench/public", "other/public"],
-        "anonymous_bench": ["bench/public"],
-        "anonymous_other": ["other/public"],
-        "valid_all": [
-            "bench/public",
-            "bench/private",
-            "bench/gated",
-            "other/public",
-        ],
+        "anonymous_all": [],
+        "anonymous_bench": [],
+        "anonymous_other": [],
+        "valid_all": ["bench/public", "bench/private", "bench/gated"],
         "valid_bench": ["bench/public", "bench/private", "bench/gated"],
-        "valid_other": ["other/public"],
+        "valid_other": [],
     }
 
 
-def test_raw_listing_rejects_invalid_bearer_and_applies_author_visibility(
+def test_raw_listing_rejects_invalid_bearer_and_honors_owner_author_filter(
     tmp_path: Path,
 ) -> None:
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
@@ -457,17 +452,14 @@ def test_raw_listing_rejects_invalid_bearer_and_applies_author_visibility(
             with urllib.request.urlopen(request) as response:
                 return [row["id"] for row in json.load(response)]
 
-        assert raw_list() == ["bench/public", "other/public"]
-        assert raw_list(author="bench") == ["bench/public"]
-        assert raw_list(author="other") == ["other/public"]
+        assert raw_list() == []
+        assert raw_list(author="bench") == []
+        assert raw_list(author="other") == []
         assert raw_list(token="hf_bench_user_token") == [
             "bench/public",
             "bench/private",
-            "other/public",
         ]
-        assert raw_list(author="other", token="hf_bench_user_token") == [
-            "other/public"
-        ]
+        assert raw_list(author="other", token="hf_bench_user_token") == []
 
         with pytest.raises(urllib.error.HTTPError) as caught:
             raw_list(token="hf_not_minted")
