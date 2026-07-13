@@ -20,6 +20,7 @@ Covers:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from opentraces_schema import (
@@ -32,6 +33,9 @@ from opentraces_schema import (
 )
 
 from opentraces.core import slicing
+from opentraces.core.slicing.models import Trajectory
+from opentraces.core.trace_map import build_trace_map
+from opentraces.core.trace_slices import slice_by_steps
 
 
 # --------------------------------------------------------------------------
@@ -194,6 +198,55 @@ def test_s2_pinned_boundaries():
     env = slicing.partition_trace(trace_id="f", slicer_name="s2", steps=rec.steps, judge="deterministic")[1]
     spans = [(t["start"], t["end"]) for t in env["trajectories"]]
     assert spans == [(0, 0), (1, 2), (3, 5), (6, 7), (8, 8)], spans
+
+
+def test_real_capture_trajectory_materializes_in_step_address_coordinates():
+    """Regression for #270: slicer positions are not ``Step.step_index``.
+
+    This committed fixture is a captured TraceRecord whose parser-assigned step
+    indices are 1-based.  The slicing-v1 trajectory remains the frozen 0-based
+    position span; materialization is the one boundary that translates it to
+    the canonical trace/ctx/Trail address coordinate.
+    """
+
+    fixture = (
+        Path(__file__).parent
+        / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
+    )
+    record = TraceRecord.model_validate_json(fixture.read_text().splitlines()[0])
+    assert [step.step_index for step in record.steps] == [1, 2, 3]
+
+    from opentraces.core.trace_slices import materialize_trajectory
+
+    trace_slice = materialize_trajectory(
+        record,
+        Trajectory(start=0, end=2, kind="user_turn", label="captured run"),
+    )
+
+    assert trace_slice["start_step_index"] == 1
+    assert trace_slice["end_step_index"] == 3
+    assert [step["step_index"] for step in trace_slice["steps"]] == [1, 2, 3]
+
+
+def test_naive_position_as_step_address_exposes_captured_trace_off_by_one():
+    """RED control: the pre-#270 direct route silently points left by one."""
+
+    fixture = (
+        Path(__file__).parent
+        / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
+    )
+    record = TraceRecord.model_validate_json(fixture.read_text().splitlines()[0])
+    trajectory = Trajectory(
+        start=0, end=2, kind="user_turn", label="captured run"
+    )
+    naive = slice_by_steps(
+        build_trace_map(record),
+        record,
+        start_step_index=trajectory.start,
+        end_step_index=trajectory.end,
+    )
+
+    assert [step["step_index"] for step in naive["steps"]] == [1, 2, 3]
 
 
 # --------------------------------------------------------------------------
