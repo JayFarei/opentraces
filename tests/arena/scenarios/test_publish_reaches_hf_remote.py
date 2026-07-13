@@ -14,11 +14,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def publish_commit_is_witnessed(run, *, hf):
-    assert hf.ledger.contains(
+    witnessed = hf.ledger.contains(
         method="POST",
         path_prefix="/api/datasets/bench/scenario-2/commit/",
         operation_id="commit",
     )
+    assert witnessed, "independent Hugging Face ledger has no successful dataset commit"
     return {"evidence_refs": [hf.ledger.evidence_ref]}
 
 
