@@ -320,10 +320,14 @@ Bun.serve({
       return jsonResponse(identity);
     }
     if (request.method === "GET" && path === "/api/datasets") {
+      const identity = authenticatedIdentity(request);
       const author = new URL(request.url).searchParams.get("author");
-      const result = [...repos.values()]
-        .filter((repo) => author === null || repo.repoId.startsWith(`${author}/`))
-        .map(datasetInfo);
+      const result =
+        identity === undefined || (author !== null && author !== identity.name)
+          ? []
+          : [...repos.values()]
+              .filter((repo) => repo.repoId.startsWith(`${identity.name}/`))
+              .map(datasetInfo);
       appendLedger(request, "listDatasets", 200);
       return jsonResponse(result);
     }
