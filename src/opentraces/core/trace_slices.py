@@ -9,6 +9,7 @@ not Markdown instructions.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from opentraces_schema import TraceMap, TraceMapEdge, TraceMapNode, TraceRecord
@@ -20,6 +21,38 @@ from .trails.slices import trace_slice_id_for
 
 
 SLICE_TEMPLATES: tuple[str, ...] = ("bursts", "product_episode")
+
+
+@dataclass(frozen=True)
+class TraceMaterializationRef:
+    """The record/map pair required to materialize a positional trajectory.
+
+    Keeping the already-enriched Trace Map in the reference prevents the
+    materializer from rebuilding a weaker map and silently dropping Trail
+    patch/anchor joins. ``from_record`` is the explicit construction boundary
+    for callers that have a Trail projection (or deliberately have none).
+    """
+
+    record: TraceRecord
+    trace_map: TraceMap
+
+    def __post_init__(self) -> None:
+        if self.record.trace_id != self.trace_map.trace_id:
+            raise ValueError("TraceRecord and TraceMap must name the same trace")
+
+    @classmethod
+    def from_record(
+        cls,
+        record: TraceRecord,
+        *,
+        trail_projection: Any | None = None,
+    ) -> "TraceMaterializationRef":
+        from .trace_map import build_trace_map
+
+        return cls(
+            record=record,
+            trace_map=build_trace_map(record, trail_projection=trail_projection),
+        )
 
 
 def slice_by_steps(
@@ -73,7 +106,7 @@ def slice_by_steps(
 
 
 def materialize_trajectory(
-    trace_ref: TraceRecord,
+    trace_ref: TraceMaterializationRef,
     trajectory: Trajectory | Mapping[str, Any],
 ) -> dict[str, Any]:
     """Materialize a slicing-v1 trajectory in canonical step coordinates.
@@ -84,10 +117,10 @@ def materialize_trajectory(
     those coordinate systems; the resulting payload delegates to
     :func:`slice_by_steps`, the same primitive used by ``trace get T:A-B``.
 
-    ``trace_ref`` is an in-memory TraceRecord so the exact array that was sliced
-    remains available for position lookup.  Captured step indices must be
-    unique and strictly increasing; otherwise no unambiguous address span
-    exists and materialization fails closed.
+    ``trace_ref`` keeps both the exact TraceRecord array that was sliced and its
+    already-enriched Trace Map. Captured step indices must be unique and
+    strictly increasing; otherwise no unambiguous address span exists and
+    materialization fails closed.
     """
 
     if isinstance(trajectory, Trajectory):
@@ -96,12 +129,19 @@ def materialize_trajectory(
         trajectory_payload = dict(trajectory)
 
     try:
-        start_position = int(trajectory_payload["start"])
-        end_position = int(trajectory_payload["end"])
-    except (KeyError, TypeError, ValueError) as exc:
+        start_position = trajectory_payload["start"]
+        end_position = trajectory_payload["end"]
+    except KeyError as exc:
         raise ValueError("trajectory must contain integer start/end positions") from exc
+    if (
+        isinstance(start_position, bool)
+        or not isinstance(start_position, int)
+        or isinstance(end_position, bool)
+        or not isinstance(end_position, int)
+    ):
+        raise ValueError("trajectory start/end positions must be integers")
 
-    steps = list(trace_ref.steps)
+    steps = list(trace_ref.record.steps)
     if start_position < 0 or end_position < start_position:
         raise ValueError("trajectory positions must satisfy 0 <= start <= end")
     if end_position >= len(steps):
@@ -118,11 +158,9 @@ def materialize_trajectory(
     start_step_index = step_indices[start_position]
     end_step_index = step_indices[end_position]
 
-    from .trace_map import build_trace_map
-
     return slice_by_steps(
-        build_trace_map(trace_ref),
-        trace_ref,
+        trace_ref.trace_map,
+        trace_ref.record,
         start_step_index=start_step_index,
         end_step_index=end_step_index,
         source="slicer_trajectory",

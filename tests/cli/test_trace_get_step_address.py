@@ -32,6 +32,8 @@ from click.testing import CliRunner
 
 from opentraces.cli import SENTINEL, main
 from opentraces_schema import Agent, Observation, Step, ToolCall, TraceRecord
+from opentraces.core.slicing.models import Trajectory
+from opentraces.core.trace_slices import TraceMaterializationRef, materialize_trajectory
 
 TRACE_ID = "trace-step-address-f1"
 
@@ -207,6 +209,32 @@ def test_span_form_embeds_slice_byte_identical_to_trace_slice(tmp_path):
     assert get_payload["span"] == {"from_step": 0, "to_step": 7}
     # One primitive, two addresses: the embedded object IS slices[0].
     assert get_payload["slice"] == slice_payload["slices"][0]
+
+
+def test_materialized_slicer_span_matches_real_trace_get_route(tmp_path):
+    """#270 route property: positional trajectory -> canonical address span."""
+
+    runner = _seed(tmp_path)
+    record = _fixture_trace()
+    from opentraces.core.trace_index import get_trace_map
+
+    trace_map = get_trace_map(record.trace_id)
+    assert trace_map is not None
+    materialized = materialize_trajectory(
+        TraceMaterializationRef(record=record, trace_map=trace_map),
+        Trajectory(start=0, end=1, kind="user_turn", label="first two steps"),
+    )
+
+    # Positions 0..1 name the record's canonical step indices 0..3.
+    via_get = runner.invoke(main, ["trace", "get", f"{TRACE_ID}:0-3", "--json"])
+    assert via_get.exit_code == 0, via_get.output
+    addressed = _extract_json(via_get.output)["slice"]
+
+    assert [step["step_index"] for step in materialized["steps"]] == [0, 3]
+    assert [step["step_index"] for step in addressed["steps"]] == [0, 3]
+    assert materialized["map_node_refs"] == addressed["map_node_refs"]
+    assert materialized["trace_patch_refs"] == addressed["trace_patch_refs"]
+    assert materialized["git_anchor_refs"] == addressed["git_anchor_refs"]
 
 
 def test_span_form_invalid_range_exits_2(tmp_path):

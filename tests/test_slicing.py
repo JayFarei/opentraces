@@ -35,7 +35,11 @@ from opentraces_schema import (
 from opentraces.core import slicing
 from opentraces.core.slicing.models import Trajectory
 from opentraces.core.trace_map import build_trace_map
-from opentraces.core.trace_slices import materialize_trajectory, slice_by_steps
+from opentraces.core.trace_slices import (
+    TraceMaterializationRef,
+    materialize_trajectory,
+    slice_by_steps,
+)
 from opentraces.core.trails.lineage import parse_trail_ref
 
 
@@ -223,7 +227,7 @@ def test_real_capture_trajectory_materializes_in_step_address_coordinates():
     assert [step.step_index for step in record.steps] == [1, 2, 3]
 
     trace_slice = materialize_trajectory(
-        record,
+        TraceMaterializationRef.from_record(record),
         Trajectory(start=0, end=2, kind="user_turn", label="captured run"),
     )
 
@@ -274,7 +278,7 @@ def test_trajectory_materialization_matches_shared_address_span(
     )
 
     materialized = materialize_trajectory(
-        record,
+        TraceMaterializationRef.from_record(record),
         Trajectory(
             start=start_position,
             end=end_position,
@@ -321,7 +325,9 @@ def test_frozen_slicing_envelope_tiles_same_real_capture_steps_when_materialized
     materialized_steps = [
         step["step_index"]
         for trajectory in envelope["trajectories"]
-        for step in materialize_trajectory(record, trajectory)["steps"]
+        for step in materialize_trajectory(
+            TraceMaterializationRef.from_record(record), trajectory
+        )["steps"]
     ]
     assert materialized_steps == [step.step_index for step in record.steps]
 
@@ -332,11 +338,49 @@ def test_frozen_slicing_envelope_tiles_same_real_capture_steps_when_materialized
         Trajectory(start=-1, end=0, kind="user_turn", label="negative"),
         Trajectory(start=1, end=0, kind="user_turn", label="reversed"),
         Trajectory(start=0, end=3, kind="user_turn", label="outside"),
+        {"start": 0.9, "end": 1, "kind": "user_turn", "label": "float"},
+        {"start": True, "end": 1, "kind": "user_turn", "label": "bool"},
+        {"start": "0", "end": 1, "kind": "user_turn", "label": "string"},
     ],
 )
 def test_trajectory_materialization_rejects_invalid_positions(trajectory):
     with pytest.raises(ValueError):
-        materialize_trajectory(_real_capture_record(), trajectory)
+        materialize_trajectory(
+            TraceMaterializationRef.from_record(_real_capture_record()), trajectory
+        )
+
+
+def test_trajectory_materialization_preserves_trail_patch_and_anchor_joins():
+    record = _real_capture_record()
+    bash_call = record.steps[1].tool_calls[0]
+
+    class Projection:
+        def patches_for_trace(self, trace_id):
+            assert trace_id == record.trace_id
+            return [
+                {
+                    "trace_patch_id": "tp-materialized",
+                    "git_anchor_id": "ga-materialized",
+                    "commit_sha": "abc123",
+                    "file_path": "src/generated.py",
+                    "attribution_role": "leaf_writer",
+                    "step_metadata": {
+                        "tool_call_id": bash_call.tool_call_id,
+                        "tool_name": bash_call.tool_name,
+                    },
+                }
+            ]
+
+    trace_ref = TraceMaterializationRef.from_record(
+        record, trail_projection=Projection()
+    )
+    trace_slice = materialize_trajectory(
+        trace_ref,
+        Trajectory(start=1, end=1, kind="change_burst", label="verified write"),
+    )
+
+    assert trace_slice["trace_patch_refs"] == ["tp-materialized"]
+    assert trace_slice["git_anchor_refs"] == ["ga-materialized"]
 
 
 # --------------------------------------------------------------------------
