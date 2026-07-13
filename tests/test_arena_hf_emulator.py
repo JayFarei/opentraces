@@ -349,6 +349,257 @@ print(json.dumps({
     }
 
 
+def test_real_hf_client_dataset_info_enforces_repo_read_access(tmp_path: Path) -> None:
+    with running_emulator(tmp_path) as (endpoint, _ledger_path):
+        _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={
+                "repos": [
+                    {"repo_id": "bench/public", "private": False},
+                    {"repo_id": "bench/private", "private": True},
+                    {"repo_id": "bench/gated", "gated": "manual"},
+                ]
+            },
+        )
+        result = _run_hf_client(
+            endpoint,
+            """
+import json
+from huggingface_hub import HfApi
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError
+
+anonymous = HfApi(token=False)
+valid = HfApi(token="hf_bench_user_token")
+invalid = HfApi(token="hf_not_minted")
+observed = {
+    "public_anonymous": anonymous.dataset_info("bench/public").id,
+    "valid": [
+        valid.dataset_info("bench/public").id,
+        valid.dataset_info("bench/private").id,
+        valid.dataset_info("bench/gated").id,
+    ],
+}
+try:
+    anonymous.dataset_info("bench/private")
+except HfHubHTTPError as error:
+    observed["private_anonymous"] = [
+        type(error).__name__,
+        error.response.status_code,
+        error.response.headers["x-error-code"],
+    ]
+try:
+    anonymous.dataset_info("bench/gated")
+except GatedRepoError as error:
+    observed["gated_anonymous"] = [
+        type(error).__name__,
+        error.response.status_code,
+        error.response.headers["x-error-code"],
+    ]
+try:
+    invalid.dataset_info("bench/public")
+except HfHubHTTPError as error:
+    observed["public_unminted"] = [
+        type(error).__name__,
+        error.response.status_code,
+        error.response.headers["x-error-code"],
+    ]
+print(json.dumps(observed, sort_keys=True))
+""",
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "gated_anonymous": ["GatedRepoError", 403, "GatedRepo"],
+        "private_anonymous": ["HfHubHTTPError", 401, "InvalidToken"],
+        "public_anonymous": "bench/public",
+        "public_unminted": ["HfHubHTTPError", 401, "InvalidToken"],
+        "valid": ["bench/public", "bench/private", "bench/gated"],
+    }
+
+
+def test_real_hf_client_tree_enforces_repo_read_access(tmp_path: Path) -> None:
+    with running_emulator(tmp_path) as (endpoint, _ledger_path):
+        _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={
+                "repos": [
+                    {"repo_id": "bench/public", "private": False},
+                    {"repo_id": "bench/private", "private": True},
+                    {"repo_id": "bench/gated", "gated": "manual"},
+                ]
+            },
+        )
+        result = _run_hf_client(
+            endpoint,
+            """
+import json
+from huggingface_hub import HfApi
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError
+
+anonymous = HfApi(token=False)
+valid = HfApi(token="hf_bench_user_token")
+invalid = HfApi(token="hf_not_minted")
+observed = {
+    "public_anonymous": anonymous.list_repo_files("bench/public", repo_type="dataset"),
+    "valid": [
+        valid.list_repo_files(repo_id, repo_type="dataset")
+        for repo_id in ("bench/public", "bench/private", "bench/gated")
+    ],
+}
+for label, api, repo_id, error_type in (
+    ("private_anonymous", anonymous, "bench/private", HfHubHTTPError),
+    ("gated_anonymous", anonymous, "bench/gated", GatedRepoError),
+    ("public_unminted", invalid, "bench/public", HfHubHTTPError),
+):
+    try:
+        api.list_repo_files(repo_id, repo_type="dataset")
+    except error_type as error:
+        observed[label] = [
+            type(error).__name__,
+            error.response.status_code,
+            error.response.headers["x-error-code"],
+        ]
+print(json.dumps(observed, sort_keys=True))
+""",
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "gated_anonymous": ["GatedRepoError", 403, "GatedRepo"],
+        "private_anonymous": ["HfHubHTTPError", 401, "InvalidToken"],
+        "public_anonymous": [],
+        "public_unminted": ["HfHubHTTPError", 401, "InvalidToken"],
+        "valid": [[], [], []],
+    }
+
+
+def test_real_hf_client_resolve_enforces_repo_read_access(tmp_path: Path) -> None:
+    with running_emulator(tmp_path) as (endpoint, _ledger_path):
+        _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={
+                "repos": [
+                    {"repo_id": "bench/public", "private": False},
+                    {"repo_id": "bench/private", "private": True},
+                    {"repo_id": "bench/gated", "gated": "manual"},
+                ]
+            },
+        )
+        result = _run_hf_client(
+            endpoint,
+            """
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from huggingface_hub import HfApi
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError
+
+valid = HfApi(token="hf_bench_user_token")
+for repo_id in ("bench/public", "bench/private", "bench/gated"):
+    valid.upload_file(
+        repo_id=repo_id,
+        repo_type="dataset",
+        path_in_repo="proof.txt",
+        path_or_fileobj=repo_id.encode(),
+    )
+
+def resolve(api, repo_id):
+    with TemporaryDirectory() as cache:
+        return Path(api.hf_hub_download(
+            repo_id,
+            "proof.txt",
+            repo_type="dataset",
+            cache_dir=cache,
+        )).read_text()
+
+anonymous = HfApi(token=False)
+invalid = HfApi(token="hf_not_minted")
+observed = {
+    "public_anonymous": resolve(anonymous, "bench/public"),
+    "valid": [resolve(valid, repo_id) for repo_id in (
+        "bench/public", "bench/private", "bench/gated"
+    )],
+}
+for label, api, repo_id, error_type in (
+    ("private_anonymous", anonymous, "bench/private", HfHubHTTPError),
+    ("gated_anonymous", anonymous, "bench/gated", GatedRepoError),
+    ("public_unminted", invalid, "bench/public", HfHubHTTPError),
+):
+    try:
+        resolve(api, repo_id)
+    except error_type as error:
+        observed[label] = [
+            type(error).__name__,
+            error.response.status_code,
+            error.response.headers["x-error-code"],
+        ]
+print(json.dumps(observed, sort_keys=True))
+""",
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "gated_anonymous": ["GatedRepoError", 403, "GatedRepo"],
+        "private_anonymous": ["HfHubHTTPError", 401, "InvalidToken"],
+        "public_anonymous": "bench/public",
+        "public_unminted": ["HfHubHTTPError", 401, "InvalidToken"],
+        "valid": ["bench/public", "bench/private", "bench/gated"],
+    }
+
+
+def test_real_hf_client_can_read_immutable_content_after_later_commits(
+    tmp_path: Path,
+) -> None:
+    with running_emulator(tmp_path) as (endpoint, _ledger_path):
+        result = _run_hf_client(
+            endpoint,
+            """
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from huggingface_hub import HfApi
+
+api = HfApi(token="hf_bench_user_token")
+api.create_repo("bench/history", repo_type="dataset")
+first = api.upload_file(
+    repo_id="bench/history",
+    repo_type="dataset",
+    path_in_repo="value.txt",
+    path_or_fileobj=b"first",
+)
+second = api.upload_file(
+    repo_id="bench/history",
+    repo_type="dataset",
+    path_in_repo="value.txt",
+    path_or_fileobj=b"second",
+)
+with TemporaryDirectory() as cache:
+    old_path = api.hf_hub_download(
+        "bench/history",
+        "value.txt",
+        repo_type="dataset",
+        revision=first.oid,
+        cache_dir=cache,
+    )
+    old_content = Path(old_path).read_text()
+print(json.dumps({
+    "first_oid": first.oid,
+    "second_oid": second.oid,
+    "old_content": old_content,
+    "old_tree": api.list_repo_files(
+        "bench/history", repo_type="dataset", revision=first.oid
+    ),
+}))
+""",
+        )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["first_oid"] != payload["second_oid"]
+    assert payload["old_content"] == "first"
+    assert payload["old_tree"] == ["value.txt"]
+
+
 def test_real_hf_client_uploads_inline_without_lfs_or_xet(tmp_path: Path) -> None:
     with running_emulator(tmp_path) as (endpoint, ledger_path):
         result = _run_hf_client(
