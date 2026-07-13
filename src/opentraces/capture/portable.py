@@ -1098,6 +1098,49 @@ def _command_executes_launcher(
     )
 
 
+def _declared_python_runtime_matches_observed(
+    runtime_command: Path,
+    observed_executable: dict[str, str] | None,
+    *,
+    deadline: float,
+) -> bool:
+    """Independently bind a Python shebang to its live OS executable."""
+
+    if (
+        observed_executable is None
+        or "python" not in runtime_command.name.lower()
+        or time.monotonic() >= deadline
+    ):
+        return False
+    try:
+        witness_env = dict(os.environ)
+        witness_env.pop("__PYVENV_LAUNCHER__", None)
+        witness = subprocess.Popen(
+            [
+                str(runtime_command),
+                "-c",
+                "import time; time.sleep(1)",
+            ],
+            env=witness_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    try:
+        time.sleep(min(0.03, max(0.0, deadline - time.monotonic())))
+        identity = _observe_process_identity(witness.pid).get("executable")
+        return bool(identity and identity == observed_executable)
+    finally:
+        if witness.poll() is None:
+            witness.terminate()
+            try:
+                witness.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                witness.kill()
+                witness.wait(timeout=0.5)
+
+
 _VERSION_RE = re.compile(r"(?<![A-Za-z0-9])\d+\.\d+\.\d+(?:[A-Za-z0-9.+-]*)")
 
 
@@ -1191,27 +1234,40 @@ def _attest_product_process(
                     probe_record["argv"] = probe_argv
                     probe_record["execution"] = "observed_runtime_launcher"
                     probe_record["executable"] = observed_executable
-                    # macOS framework Python reports the app executable while
-                    # the shebang path carries the virtualenv context.  Probe
-                    # the observed executable, preserving only that launcher
-                    # binding so imports match the live process.
-                    probe_env = dict(os.environ)
-                    probe_env["__PYVENV_LAUNCHER__"] = str(runtime_command)
-                try:
-                    completed = subprocess.run(
-                        probe_argv,
-                        cwd=workspace,
-                        env=probe_env,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        timeout=min(5.0, remaining),
+                    runtime_matches = _declared_python_runtime_matches_observed(
+                        runtime_command,
+                        observed_executable,
+                        deadline=deadline,
                     )
-                except (OSError, subprocess.TimeoutExpired) as exc:
-                    limitations.append(
-                        f"product version probe failed: {type(exc).__name__}"
+                    probe_record["runtime_relationship"] = (
+                        "independently_attested" if runtime_matches else "unproven"
                     )
+                    if runtime_matches:
+                        # macOS framework Python reports the app executable
+                        # while the shebang path carries virtualenv context.
+                        probe_env = dict(os.environ)
+                        probe_env["__PYVENV_LAUNCHER__"] = str(runtime_command)
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    limitations.append("product version probe deadline was exhausted")
+                    completed = None
                 else:
+                    try:
+                        completed = subprocess.run(
+                            probe_argv,
+                            cwd=workspace,
+                            env=probe_env,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=min(5.0, remaining),
+                        )
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        completed = None
+                        limitations.append(
+                            f"product version probe failed: {type(exc).__name__}"
+                        )
+                if completed is not None:
                     probe_record["returncode"] = completed.returncode
                     match = _VERSION_RE.search(f"{completed.stdout}\n{completed.stderr}")
                     observed_version = match.group(0) if match else None
