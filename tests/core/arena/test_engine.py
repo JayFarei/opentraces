@@ -491,6 +491,31 @@ def test_attempt_without_a_called_verifier_cannot_claim_a_pass(tmp_path: Path) -
     }
 
 
+def test_named_prerequisite_skip_is_named_in_incomplete_evidence(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.skip("absent_prerequisite", "the named prerequisite is absent")
+
+    assert run.result["execution_status"] == "complete"
+    assert run.result["verdict"] == "skip"
+    assert run.result["evidence"] == {
+        "complete": False,
+        "requirements": [
+            {
+                "name": "absent_prerequisite",
+                "complete": False,
+                "evidence_refs": [],
+            }
+        ],
+    }
+
+
 def test_missing_cast_is_not_rewatchable_and_does_not_rewrite_pass(tmp_path: Path) -> None:
     bench = Bench(
         source=_scenario(tmp_path),

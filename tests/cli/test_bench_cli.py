@@ -221,6 +221,76 @@ def test_nonzero_pytest_after_green_result_forces_error_null(tmp_path: Path, mon
     assert stored["evidence"]["complete"] is False
 
 
+def test_nonzero_pytest_preserves_an_existing_named_setup_refusal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from opentraces.cli import bench_cli
+
+    scenario = _scenario(tmp_path)
+    store_root = tmp_path / "runs" / "v1"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        result = build_result(
+            run_id=draft.run_id,
+            claim="Install is healthy on a fresh box.",
+            nodeid=target,
+            source_ref="source/scenario.py",
+            execution_mode="direct",
+            started_at="2026-07-13T12:00:00Z",
+            duration_ms=1,
+            execution_status="error",
+            verdict=None,
+            reason={
+                "code": "crabbox_version_mismatch",
+                "message": "requires crabbox 0.38.0",
+            },
+            verifiers=[],
+            evidence={
+                "complete": False,
+                "requirements": [
+                    {
+                        "name": "bench.adjudication",
+                        "complete": False,
+                        "evidence_refs": [],
+                    }
+                ],
+            },
+            recordings={"rewatchable": False, "channels": []},
+            artifacts=[],
+            capture=None,
+            pins={},
+        )
+        draft.stage_result(result)
+        return SimpleNamespace(returncode=1, stdout="setup error\n", stderr="")
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    invoked = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "run",
+            f"{scenario}::test_install",
+            "--store-root",
+            str(store_root),
+            "--json",
+        ],
+    )
+
+    assert invoked.exit_code == 1, invoked.output
+    summary = json.loads(invoked.output)
+    stored = json.loads((store_root / summary["run_id"] / "result.json").read_text())
+    assert stored["execution_status"] == "error"
+    assert stored["verdict"] is None
+    assert stored["reason"] == {
+        "code": "crabbox_version_mismatch",
+        "message": "requires crabbox 0.38.0",
+    }
+
+
 def test_run_pytest_captures_child_output(monkeypatch, tmp_path: Path) -> None:
     from opentraces.cli import bench_cli
 
