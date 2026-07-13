@@ -361,7 +361,7 @@ print(json.dumps({
     )
     assert update_row["request"] == {
         "gated": "manual",
-        "private": False,
+        "visibility": "public",
     }
     assert delete_row["request"] == {
         "name": "settings",

@@ -344,7 +344,7 @@ Bun.serve({
       }
       files.delete(repoId);
       revisions.delete(repoId);
-      appendLedger(request, "deleteRepo", 200);
+      appendLedger(request, "deleteRepo", 200, body);
       return jsonResponse({ ok: true });
     }
     const settingsMatch = path.match(/^\/api\/datasets\/([^/]+\/[^/]+)\/settings$/);
@@ -362,7 +362,7 @@ Bun.serve({
       if (body.gated !== undefined) repo.gated = body.gated as Repo["gated"];
       if (Array.isArray(body.tags)) repo.tags = body.tags.map(String);
       repo.updatedAt = new Date().toISOString();
-      appendLedger(request, "updateSettings", 200);
+      appendLedger(request, "updateSettings", 200, body);
       return jsonResponse({ ok: true });
     }
     const preuploadMatch = path.match(
