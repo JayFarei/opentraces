@@ -949,8 +949,8 @@ def _command_path(command: str, *, workspace: Path) -> Path | None:
         return None
 
 
-def _launcher_runtime_path(launcher: Path) -> Path:
-    """Resolve the OS executable for a binary or a simple shebang launcher."""
+def _launcher_runtime_command(launcher: Path) -> Path:
+    """Return the interpreter command named by a simple shebang launcher."""
 
     try:
         with launcher.open("rb") as handle:
@@ -971,9 +971,16 @@ def _launcher_runtime_path(launcher: Path) -> Path:
         if not candidates:
             return launcher
         resolved = shutil.which(candidates[0])
-        return Path(resolved).resolve() if resolved else launcher
+        return Path(resolved) if resolved else launcher
+    return Path(interpreter).expanduser()
+
+
+def _launcher_runtime_path(launcher: Path) -> Path:
+    """Resolve the OS executable for a binary or a simple shebang launcher."""
+
+    command = _launcher_runtime_command(launcher)
     try:
-        return Path(interpreter).resolve(strict=True)
+        return command.resolve(strict=True)
     except OSError:
         return launcher
 
@@ -1118,6 +1125,8 @@ def _attest_product_process(
 
     probe_record: dict[str, Any] = {
         "argv": list(version_probe),
+        "declared_argv": list(version_probe),
+        "execution": "declared_launcher",
         "status": "unavailable",
         "returncode": None,
         "version": None,
@@ -1134,6 +1143,7 @@ def _attest_product_process(
         if launcher_path is None or launcher_identity is None:
             limitations.append("product version probe executable could not be resolved")
         else:
+            runtime_command = _launcher_runtime_command(launcher_path)
             runtime_path = _launcher_runtime_path(launcher_path)
             runtime_identity = _file_identity(runtime_path)
             probe_record["executable"] = runtime_identity
@@ -1166,10 +1176,32 @@ def _attest_product_process(
             if remaining <= 0:
                 limitations.append("product version probe deadline was exhausted")
             else:
+                probe_argv = list(version_probe)
+                probe_env: dict[str, str] | None = None
+                if (
+                    executed_launcher
+                    and runtime_path != launcher_path
+                    and observed_executable is not None
+                ):
+                    probe_argv = [
+                        observed_executable["path"],
+                        str(launcher_path),
+                        *version_probe[1:],
+                    ]
+                    probe_record["argv"] = probe_argv
+                    probe_record["execution"] = "observed_runtime_launcher"
+                    probe_record["executable"] = observed_executable
+                    # macOS framework Python reports the app executable while
+                    # the shebang path carries the virtualenv context.  Probe
+                    # the observed executable, preserving only that launcher
+                    # binding so imports match the live process.
+                    probe_env = dict(os.environ)
+                    probe_env["__PYVENV_LAUNCHER__"] = str(runtime_command)
                 try:
                     completed = subprocess.run(
-                        list(version_probe),
+                        probe_argv,
                         cwd=workspace,
+                        env=probe_env,
                         capture_output=True,
                         text=True,
                         check=False,
