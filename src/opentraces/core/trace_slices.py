@@ -403,7 +403,7 @@ def _submap(trace_map: TraceMap, nodes: list[TraceMapNode]) -> TraceMap:
         root_node_ids=root_ids,
         nodes=nodes,
         edges=edges,
-        limitations=[],
+        limitations=list(trace_map.limitations),
     )
 
 

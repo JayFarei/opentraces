@@ -247,9 +247,21 @@ def test_captured_position_span_translates_before_step_slice():
     trajectory = Trajectory(
         start=0, end=2, kind="user_turn", label="captured run"
     )
-    translated = materialize_trajectory(record, trajectory)
+    translated = materialize_trajectory(
+        TraceMaterializationRef.from_record(record), trajectory
+    )
+    naive = slice_by_steps(
+        build_trace_map(record),
+        record,
+        start_step_index=trajectory.start,
+        end_step_index=trajectory.end,
+    )
 
     assert [step["step_index"] for step in translated["steps"]] == [1, 2, 3]
+    # This is the killed pre-fix route: positional 0..2 is misread as the
+    # canonical address 0..2 and therefore omits captured step 3.
+    assert [step["step_index"] for step in naive["steps"]] == [1, 2]
+    assert [step["step_index"] for step in naive["steps"]] != [1, 2, 3]
 
 
 @pytest.mark.parametrize(
@@ -371,8 +383,14 @@ def test_trajectory_materialization_preserves_trail_patch_and_anchor_joins():
                 }
             ]
 
-    trace_ref = TraceMaterializationRef.from_record(
+    enriched_ref = TraceMaterializationRef.from_record(
         record, trail_projection=Projection()
+    )
+    trace_ref = TraceMaterializationRef(
+        record=record,
+        trace_map=enriched_ref.trace_map.model_copy(
+            update={"limitations": ["path_normalization_failed"]}
+        ),
     )
     trace_slice = materialize_trajectory(
         trace_ref,
@@ -381,6 +399,8 @@ def test_trajectory_materialization_preserves_trail_patch_and_anchor_joins():
 
     assert trace_slice["trace_patch_refs"] == ["tp-materialized"]
     assert trace_slice["git_anchor_refs"] == ["ga-materialized"]
+    assert trace_slice["limitations"] == ["path_normalization_failed"]
+    assert trace_slice["map"]["limitations"] == ["path_normalization_failed"]
 
 
 # --------------------------------------------------------------------------
