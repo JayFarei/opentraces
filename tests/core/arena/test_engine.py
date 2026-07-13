@@ -593,6 +593,17 @@ def test_assertion_failure_is_a_functional_fail_not_machinery_error(tmp_path: Pa
     assert result["execution_status"] == "complete"
     assert result["verdict"] == "fail"
     assert result["reason"]["code"] == "assertion_failed"
+    assert result["verifiers"] == []
+    assert result["evidence"] == {
+        "complete": True,
+        "requirements": [
+            {
+                "name": "scenario.assertion",
+                "complete": True,
+                "evidence_refs": ["source/scenario.py"],
+            }
+        ],
+    }
 
 
 def test_attempt_without_a_called_verifier_cannot_claim_a_pass(tmp_path: Path) -> None:

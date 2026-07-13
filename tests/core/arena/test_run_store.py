@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import opentraces.core.arena.run_store as run_store_module
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.run_store import (
     FinalizedRunError,
@@ -165,6 +166,36 @@ def test_staging_move_failure_recovers_the_provisional_outcome_from_staging(
     assert recovered["verdict"] == "skip"
     assert not (store.root / draft.run_id).exists()
     assert not (store.index_root / f"{draft.run_id}.json").exists()
+
+
+def test_index_failure_occurs_before_result_becomes_the_finalization_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    draft = store.begin()
+    provisional = _result(draft.run_id, verdict="pass")
+    final_path = store.root / draft.run_id
+    index_path = store.index_root / f"{draft.run_id}.json"
+    observed_result_presence: list[bool] = []
+    original_atomic_write_json = run_store_module._atomic_write_json
+
+    def kill_during_index_write(path: Path, payload: dict) -> None:
+        if path == index_path:
+            observed_result_presence.append((final_path / "result.json").exists())
+            raise OSError("killed before index commit")
+        original_atomic_write_json(path, payload)
+
+    monkeypatch.setattr(run_store_module, "_atomic_write_json", kill_during_index_write)
+
+    with pytest.raises(StorageFinalizeError) as caught:
+        draft.finalize(provisional)
+
+    assert observed_result_presence == [False]
+    recovery = caught.value.recovery_path
+    assert not (recovery / "result.json").exists()
+    recovered = json.loads((recovery / "provisional_result.json").read_text())
+    assert recovered["verdict"] == "pass"
+    assert not index_path.exists()
 
 
 def test_source_record_copies_executed_source_and_identity(tmp_path: Path) -> None:
