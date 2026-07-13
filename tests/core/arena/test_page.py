@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import html as html_module
+import json
 from pathlib import Path
 
 from opentraces.core.arena.page import render_evidence_page

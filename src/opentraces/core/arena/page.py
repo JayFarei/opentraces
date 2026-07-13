@@ -93,6 +93,18 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     player_js = (Path(__file__).with_name("assets") / "asciicast-player.js").read_text(
         encoding="utf-8"
     )
+    integrity = json.loads((run_path / ".integrity.json").read_text(encoding="utf-8"))
+    exhaust_refs = sorted(
+        {
+            *integrity.get("files", {}),
+            ".integrity.json",
+            "result.json",
+        }
+    )
+    exhaust_links = "".join(
+        f'<a href="{_h(_href(page_dir, run_path / relative))}">{_h(relative)}</a>'
+        for relative in exhaust_refs
+    )
     verdict = result.get("verdict") or "error"
     reason = result.get("reason") or {}
     reason_html = (
@@ -126,6 +138,7 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <h2>Recording</h2><section class="stack">{''.join(players)}</section>
 <h2>Actions and raw output</h2><section class="stack">{''.join(action_cards)}</section>
 <h2>Explicit verifiers</h2><section class="stack">{''.join(verifier_cards)}</section>
+<h2>Complete stored exhaust</h2><nav class="card exhaust">{exhaust_links}</nav>
 </main><script>{player_js}</script></body></html>"""
     _atomic_write_text(output_path, document)
     return output_path
