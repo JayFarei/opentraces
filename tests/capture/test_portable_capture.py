@@ -312,6 +312,43 @@ def test_watcher_baseline_is_opened_before_lifecycle_mutation(tmp_path: Path) ->
     assert watcher.details["mutations"] == 1
 
 
+def test_watcher_refreshes_proven_baseline_across_repeated_lifecycles(
+    tmp_path: Path,
+) -> None:
+    for placement in ("persistent", "leased"):
+        project = _git_project(tmp_path / f"{placement}-project")
+        result_dir = tmp_path / f"{placement}-watcher-result"
+        watcher_results = []
+
+        for run in (1, 2):
+            capture = Capture.open(
+                CapturePlan(
+                    project=project,
+                    workspace=project,
+                    placement=placement,
+                    requested_sources=("watcher",),
+                    required_sources=("watcher",),
+                    observer_version="observer-pin",
+                    product_under_test_version="product-pin",
+                    result_dir=result_dir,
+                )
+            )
+            (project / f"lifecycle-{run}.txt").write_text(f"run {run}\n")
+            result = capture.finish(deadline=time.monotonic() + 10.0)
+
+            watcher = result.source("watcher")
+            assert result.completeness == "complete"
+            assert watcher.status == "finalized"
+            assert watcher.completeness == "full"
+            assert watcher.details["mutations"] == 1
+            watcher_results.append(watcher)
+
+        assert all(
+            watcher.details["open_baseline_proven"] is True
+            for watcher in watcher_results
+        )
+
+
 def test_finalization_is_dependency_ordered_but_results_preserve_request_order(
     tmp_path: Path,
 ) -> None:
