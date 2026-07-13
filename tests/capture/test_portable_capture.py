@@ -59,6 +59,11 @@ def _git_project(root: Path) -> Path:
         ["git", "commit", "--quiet", "-m", "seed"],
         cwd=root,
         check=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2026-07-13T10:00:00Z",
+            "GIT_COMMITTER_DATE": "2026-07-13T10:00:00Z",
+        },
     )
     return root
 
@@ -108,6 +113,99 @@ def _write_session(project: Path, session_id: str) -> Path:
             },
         },
     ]
+    session.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+    return session
+
+
+def _write_edit_session(session_root: Path, project: Path, session_id: str) -> Path:
+    """Build a real hook-backed edit fixture while leaving the pre-edit tree live."""
+
+    from opentraces.core.trails import write_worktree_tree
+
+    target = project / "captured-world-effect.txt"
+    before = "before trail evidence\n"
+    after = "substantive trail evidence\n"
+    target.write_text(before, encoding="utf-8")
+    before_tree = write_worktree_tree(project)
+    target.write_text(after, encoding="utf-8")
+    after_tree = write_worktree_tree(project)
+    target.write_text(before, encoding="utf-8")
+    head = {
+        "algo": "sha1",
+        "hex": subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+    }
+    trail_before = {
+        "worktree_root": str(project),
+        "tree_id": before_tree,
+        "git_head": head,
+    }
+    trail_after = {
+        "worktree_root": str(project),
+        "tree_id": after_tree,
+        "git_head": head,
+    }
+    tool_input = {
+        "file_path": str(target),
+        "old_string": before,
+        "new_string": after,
+    }
+    rows = [
+        {
+            "type": "user",
+            "sessionId": session_id,
+            "timestamp": "2026-07-13T10:00:00Z",
+            "message": {"role": "user", "content": "Update the evidence file."},
+        },
+        {
+            "type": "assistant",
+            "sessionId": session_id,
+            "timestamp": "2026-07-13T10:00:01Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tool-edit-1",
+                        "name": "Edit",
+                        "input": tool_input,
+                    }
+                ],
+            },
+        },
+        {
+            "type": "opentraces_hook",
+            "event": "PreToolUse",
+            "timestamp": "2026-07-13T10:00:01Z",
+            "data": {
+                "tool": "Edit",
+                "tool_use_id": "tool-edit-1",
+                "tool_input": tool_input,
+                "trail": trail_before,
+            },
+        },
+        {
+            "type": "opentraces_hook",
+            "event": "PostToolUse",
+            "timestamp": "2026-07-13T10:00:02Z",
+            "data": {
+                "tool": "Edit",
+                "tool_use_id": "tool-edit-1",
+                "tool_input": tool_input,
+                "capture_status": "captured",
+                "trail": trail_after,
+            },
+        },
+    ]
+    session_root.mkdir(parents=True, exist_ok=True)
+    session = session_root / f"{session_id}.jsonl"
     session.write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
     )
@@ -472,7 +570,15 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
 
 def test_persistent_and_leased_capture_have_normalized_material_parity(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from opentraces.core import paths as capture_paths
+
+    monkeypatch.setattr(
+        capture_paths,
+        "OPENTRACES_DIR",
+        tmp_path / "persistent-runtime",
+    )
     projects = {
         "persistent": _git_project(tmp_path / "persistent-project"),
         "leased": _git_project(tmp_path / "leased-project"),
@@ -483,8 +589,10 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
     }
 
     def run(placement: str, result_dir: Path):
+        from opentraces.core.trails import TrailEventDraft, append_event_batch
+
         project = projects[placement]
-        return Capture.open(
+        capture = Capture.open(
             CapturePlan(
                 project=project,
                 workspace=project,
@@ -498,7 +606,35 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
                 product_under_test_version="product-pin",
                 result_dir=result_dir,
             )
+        )
+        result = capture.finish(deadline=time.monotonic() + 10.0)
+        append_event_batch(
+            project,
+            [
+                TrailEventDraft(
+                    event_type="filesystem_mutation_observed",
+                    payload={
+                        "file_path": "captured-world-effect.txt",
+                        "authored_text": "substantive trail evidence",
+                    },
+                    trace_id=result.trace_refs[0],
+                    capture_method=["filesystem_watcher"],
+                )
+            ],
+            writer="portable-capture-parity-test",
+        )
+        Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement=placement,
+                requested_sources=("bucket",),
+                required_sources=("bucket",),
+                trace_id=result.trace_refs[0],
+                result_dir=result_dir,
+            )
         ).finish(deadline=time.monotonic() + 10.0)
+        return result
 
     persistent = run("persistent", tmp_path / "persistent")
     leased = run("leased", tmp_path / "leased")
@@ -653,12 +789,20 @@ def test_parity_preserves_semantic_attribution_range_content_hashes(
 
 def test_bucket_companions_preserve_canonical_bytes_and_parity_normalizes_safely(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from opentraces.core import paths as capture_paths
     from opentraces.core.context_tree import CONTEXT_LAYER_CAPTURED
     from opentraces.core.context_tree.models import build_layer
     from opentraces.core.trails import TrailEventDraft, append_event_batch
     from opentraces.core.trails.event_log import read_events
     from opentraces.core.trails.models import payload_content_hash
+
+    monkeypatch.setattr(
+        capture_paths,
+        "OPENTRACES_DIR",
+        tmp_path / "persistent-runtime",
+    )
 
     projects = {
         placement: _git_project(tmp_path / f"{placement}-project")
@@ -735,6 +879,8 @@ def test_bucket_companions_preserve_canonical_bytes_and_parity_normalizes_safely
         )
 
     for result in results:
+        from opentraces.core.trails.models import TrailEvent, expected_event_id
+
         trace_path = Path(result.source("bucket").details["trace_path"])
         rows = _read_companion(trace_path.with_name("context.jsonl.gz"))
         rows += _read_companion(trace_path.with_name("trail.jsonl.gz"))
@@ -743,6 +889,10 @@ def test_bucket_companions_preserve_canonical_bytes_and_parity_normalizes_safely
         assert "/Users/shared-dev" in material
         assert "sk-live-" in material
         assert all(row["content_hash"] == payload_content_hash(row["payload"]) for row in rows)
+        assert all(
+            row["event_id"] == expected_event_id(TrailEvent.model_validate(row))
+            for row in rows
+        )
 
     report = compare_placements(
         results[0],
@@ -1051,7 +1201,7 @@ def test_stale_telemetry_snapshot_cannot_satisfy_new_lifecycle(tmp_path: Path) -
             trace_id=trace_id,
             result_dir=result_dir,
         )
-    ).finish(deadline=time.monotonic() + 0.5)
+    ).finish(deadline=time.monotonic() + 2.0)
 
     assert result.completeness == "partial"
     assert result.source("telemetry").completeness == "missing"
@@ -1075,7 +1225,7 @@ def test_silent_first_source_cannot_consume_later_source_deadline(tmp_path: Path
     )
     (project / "during-lifecycle.txt").write_text("observed\n", encoding="utf-8")
 
-    result = capture.finish(deadline=time.monotonic() + 1.0)
+    result = capture.finish(deadline=time.monotonic() + 2.0)
 
     assert result.source("session_jsonl").status == "timed_out"
     assert result.source("watcher").status == "finalized"

@@ -41,8 +41,19 @@ def main() -> int:
                 if snapshot is not None:
                     write_snapshot(buffer, session_id, _snapshot_path(session_id))
     finally:
-        watcher.shutdown()
+        # Close ingress first. Once shutdown returns no request handler can
+        # accept another envelope, so the following drain + snapshot is the
+        # lifecycle's tail-safe generation boundary.
         receiver.shutdown()
+        watcher.shutdown()
+        watcher.drain()
+        for session_id in buffer.session_ids():
+            write_snapshot(
+                buffer,
+                session_id,
+                _snapshot_path(session_id),
+                quiescent=True,
+            )
     return 0
 
 

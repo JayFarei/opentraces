@@ -36,18 +36,23 @@ def main() -> int:
 
 
 def _finalize(request: dict[str, Any]) -> dict[str, Any]:
+    security_cfg, security_state = _resolve_security_policy(request)
+    request["_security_cfg"] = security_cfg
     source = request["source"]
     if source == "session_jsonl":
-        return _finalize_session(request)
-    if source == "telemetry":
-        return _finalize_telemetry(request)
-    if source == "watcher":
-        return _finalize_watcher(request)
-    if source == "git":
-        return _finalize_git(request)
-    if source == "bucket":
-        return _finalize_bucket(request)
-    raise ValueError(f"no isolated finalizer for {source!r}")
+        report = _finalize_session(request)
+    elif source == "telemetry":
+        report = _finalize_telemetry(request)
+    elif source == "watcher":
+        report = _finalize_watcher(request)
+    elif source == "git":
+        report = _finalize_git(request)
+    elif source == "bucket":
+        report = _finalize_bucket(request)
+    else:
+        raise ValueError(f"no isolated finalizer for {source!r}")
+    report.setdefault("details", {})["capture_security_policy"] = security_state
+    return report
 
 
 def _finalize_session(request: dict[str, Any]) -> dict[str, Any]:
@@ -60,6 +65,7 @@ def _finalize_session(request: dict[str, Any]) -> dict[str, Any]:
         Path(path),
         Path(request["project"]),
         parser_name=request.get("actor") or "claude-code",
+        cfg=request["_security_cfg"],
         reconcile_watcher=False,
     )
     details = {
@@ -90,6 +96,7 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
 
     snapshot_path = otel_staging_dir() / f"{session_id}.json"
     opened_at = float((request.get("open_details") or {}).get("opened_at_unix") or 0.0)
+    ingress_quiesced = (request.get("open_details") or {}).get("ingress_quiesced") is True
     deadline = _request_deadline(request)
     snapshot: dict[str, Any] | None = None
     last_envelope_at: float | None = None
@@ -101,6 +108,16 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
             if last_envelope_at is not None and last_envelope_at >= opened_at:
                 snapshot = candidate
                 break
+            if ingress_quiesced:
+                return _missing(
+                    "telemetry receiver produced no fresh session snapshot after Capture.open",
+                    details={
+                        "snapshot_path": str(snapshot_path),
+                        "lifecycle_opened_at": opened_at,
+                        "last_envelope_at": last_envelope_at,
+                        "ingress_quiesced": True,
+                    },
+                )
         time.sleep(min(0.03, max(0.0, deadline - time.monotonic())))
     if snapshot is None:
         return _missing(
@@ -109,6 +126,18 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
                 "snapshot_path": str(snapshot_path),
                 "lifecycle_opened_at": opened_at,
                 "last_envelope_at": last_envelope_at,
+            },
+        )
+    generation = int(snapshot.get("snapshot_generation") or 0)
+    accepted = int(snapshot.get("accepted_envelopes") or 0)
+    quiescent = snapshot.get("snapshot_quiescent") is True
+    if not quiescent or generation < 1 or generation != accepted:
+        return _missing(
+            "telemetry snapshot is not a quiescent finish-time generation",
+            details={
+                "snapshot_quiescent": quiescent,
+                "snapshot_generation": generation,
+                "accepted_envelopes": accepted,
             },
         )
     report = flush_session_to_project(
@@ -124,6 +153,13 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
             str(report.get("reason") or "telemetry flush failed"),
             details=report,
         )
+    report.update(
+        {
+            "snapshot_quiescent": True,
+            "snapshot_generation": generation,
+            "accepted_envelopes": accepted,
+        }
+    )
     return {
         "status": "finalized",
         "completeness": "full",
@@ -326,6 +362,26 @@ def _request_deadline(request: dict[str, Any]) -> float:
         return float(absolute)
     remaining = max(0.0, float(request.get("remaining_seconds") or 0.0))
     return time.monotonic() + remaining
+
+
+def _resolve_security_policy(request: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """Resolve one existing named policy to an explicit config for this child."""
+
+    from ..cli._security_flags import (
+        apply_bucket_security_policy,
+        enabled_security_tool_names,
+    )
+    from ..core.config import load_config
+
+    requested = str(request.get("security_policy") or "configured")
+    cfg = load_config()
+    if requested != "configured":
+        apply_bucket_security_policy(cfg, requested)
+    return cfg, {
+        "requested_policy": requested,
+        "effective_tools": enabled_security_tool_names(cfg),
+        "observed": True,
+    }
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

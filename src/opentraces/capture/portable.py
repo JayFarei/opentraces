@@ -35,6 +35,9 @@ SourceStatus = Literal["finalized", "partial", "unavailable", "timed_out"]
 
 CAPTURE_RESULT_SCHEMA = "opentraces.capture.result.v1"
 _KNOWN_SOURCES = frozenset({"session_jsonl", "telemetry", "watcher", "git", "bucket"})
+_KNOWN_SECURITY_POLICIES = frozenset(
+    {"configured", "off", "basic", "recommended", "strict"}
+)
 _FINALIZATION_ORDER: tuple[CaptureSourceName, ...] = (
     "session_jsonl",
     "telemetry",
@@ -69,6 +72,8 @@ class CapturePlan:
     trace_id: str | None = None
     security_policy: str = "configured"
     raw_body_retention: str = "delete"
+    require_observer_separation: bool = False
+    product_under_test_pid: int | None = None
 
     def __post_init__(self) -> None:
         requested = tuple(dict.fromkeys(self.requested_sources))
@@ -84,6 +89,13 @@ class CapturePlan:
             raise ValueError("observer_version must be pinned")
         if not self.product_under_test_version.strip():
             raise ValueError("product_under_test_version must be pinned")
+        if self.security_policy not in _KNOWN_SECURITY_POLICIES:
+            raise ValueError(
+                f"unknown capture security policy {self.security_policy!r}; "
+                f"choose one of: {', '.join(sorted(_KNOWN_SECURITY_POLICIES))}"
+            )
+        if self.product_under_test_pid is not None and self.product_under_test_pid <= 0:
+            raise ValueError("product_under_test_pid must be positive")
         object.__setattr__(self, "project", Path(self.project).resolve())
         object.__setattr__(self, "workspace", Path(self.workspace).resolve())
         object.__setattr__(self, "requested_sources", requested)
@@ -200,6 +212,7 @@ class CaptureSession:
         self._open_details = open_details
         self._finished: CaptureResult | None = None
         self._trace_refs = list([plan.trace_id] if plan.trace_id is not None else [])
+        self._interrupted_sources: set[str] = set()
 
     def interrupt(self, source: str) -> bool:
         """Terminate an owned leased source for an explicit fault injection."""
@@ -212,6 +225,7 @@ class CaptureSession:
         except subprocess.TimeoutExpired:
             owned.process.kill()
             owned.process.wait(timeout=2.0)
+        self._interrupted_sources.add(source)
         return True
 
     def finish(self, deadline: float | None = None) -> CaptureResult:
@@ -226,6 +240,9 @@ class CaptureSession:
         if deadline is None:
             deadline = time.monotonic() + 30.0
 
+        if "telemetry" in self.plan.requested_sources:
+            self._quiesce_telemetry(deadline)
+
         finalized_by_name: dict[str, CaptureSourceResult] = {}
         requested = set(self.plan.requested_sources)
         ordered_sources = [source for source in _FINALIZATION_ORDER if source in requested]
@@ -237,7 +254,16 @@ class CaptureSession:
                 continue
             sources_left = len(ordered_sources) - index
             remaining = max(0.0, deadline - time.monotonic())
-            source_deadline = time.monotonic() + (remaining / sources_left)
+            # Reserve a cold-start allowance for every later child. A silent
+            # early adapter must not consume the whole budget and leave a
+            # later source only a process-start timeout report.
+            if sources_left == 1:
+                source_budget = remaining
+            elif remaining < 3.0:
+                source_budget = remaining * 0.15
+            else:
+                source_budget = remaining / sources_left
+            source_deadline = time.monotonic() + max(0.0, source_budget)
             if source == "telemetry":
                 finalized = self._finalize_telemetry(source_deadline)
             else:
@@ -253,9 +279,17 @@ class CaptureSession:
 
         self._stop_processes(deadline)
         views = _summarize_views(source_results)
+        observer_pid = os.getpid()
+        product_pid = self.plan.product_under_test_pid
+        product_alive = _pid_is_alive(product_pid)
+        separation_proven = bool(
+            product_pid is not None
+            and product_alive
+            and product_pid != observer_pid
+        )
         complete = bool(source_results) and all(
             source.completeness == "full" for source in source_results
-        )
+        ) and (not self.plan.require_observer_separation or separation_proven)
         source_limitations = tuple(
             limitation
             for source in source_results
@@ -266,20 +300,41 @@ class CaptureSession:
                 "version": __version__,
                 "derivation": "runtime",
                 "caller_claim": self.plan.observer_version,
+                "pid": observer_pid,
+                "executable": sys.executable,
             },
             "product_under_test": {
                 "version": self.plan.product_under_test_version,
-                "derivation": "caller_claim",
+                "derivation": "runtime_pid" if product_pid is not None else "caller_claim",
+                "pid": product_pid,
+                "pid_alive": product_alive,
             },
             "separation": {
-                "proven": False,
-                "reason": "observer and product process separation was not attested",
+                "required": self.plan.require_observer_separation,
+                "proven": separation_proven,
+                "reason": (
+                    None
+                    if separation_proven
+                    else "observer and product process separation was not proven"
+                ),
             },
         }
         provenance_limitations = (
-            "non-self-observation separation is not proven for this capture",
+            ()
+            if separation_proven
+            else ("non-self-observation separation is not proven for this capture",)
         )
         limitations = (*source_limitations, *provenance_limitations)
+        observed_security = [
+            source.details.get("capture_security_policy")
+            for source in source_results
+            if isinstance(source.details.get("capture_security_policy"), dict)
+        ]
+        effective_tools = (
+            list(observed_security[0].get("effective_tools") or [])
+            if observed_security
+            else []
+        )
         result_path = self._result_dir / "capture_result.json"
         result = CaptureResult(
             schema_version=CAPTURE_RESULT_SCHEMA,
@@ -294,6 +349,8 @@ class CaptureSession:
             trace_refs=tuple(self._trace_refs),
             security={
                 "policy": self.plan.security_policy,
+                "effective_tools": effective_tools,
+                "observed": bool(observed_security),
                 "raw_body_retention": self.plan.raw_body_retention,
             },
             provenance=provenance,
@@ -307,7 +364,23 @@ class CaptureSession:
         started = time.monotonic()
         limitations = list(self._open_limitations.get("telemetry", ()))
         owned = self._processes.get("telemetry")
-        if owned is not None and owned.process.poll() is not None:
+        if "telemetry" in self._interrupted_sources:
+            limitations.append("source process exited after explicit interruption")
+            return CaptureSourceResult(
+                name="telemetry",
+                view="model_boundary",
+                requested=True,
+                required="telemetry" in self.plan.required_sources,
+                status="unavailable",
+                completeness="missing",
+                limitations=tuple(limitations),
+                duration_ms=_duration_ms(started),
+            )
+        if (
+            owned is not None
+            and owned.process.poll() is not None
+            and owned.process.returncode != 0
+        ):
             limitations.append(
                 f"source process exited with code {owned.process.returncode}"
             )
@@ -348,6 +421,21 @@ class CaptureSession:
             details=finalized.details,
         )
 
+    def _quiesce_telemetry(self, deadline: float) -> None:
+        owned = self._processes.get("telemetry")
+        if owned is None or owned.process.poll() is not None:
+            return
+        owned.process.terminate()
+        try:
+            owned.process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            owned.process.kill()
+            owned.process.wait(timeout=1.0)
+            self._open_limitations.setdefault("telemetry", []).append(
+                "telemetry receiver could not drain before the finalization deadline"
+            )
+        self._open_details.setdefault("telemetry", {})["ingress_quiesced"] = True
+
     def _run_isolated_finalizer(
         self,
         source: str,
@@ -371,6 +459,7 @@ class CaptureSession:
             "security_policy": self.plan.security_policy,
             "raw_body_retention": self.plan.raw_body_retention,
             "open_details": self._open_details.get(source) or {},
+            "requested_sources": list(self.plan.requested_sources),
         }
         _atomic_write_json(request_path, request)
         stdout = (finalizers / f"{source}.stdout").open("ab")
@@ -711,6 +800,16 @@ def _free_port() -> int:
 
 def _duration_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _pid_is_alive(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

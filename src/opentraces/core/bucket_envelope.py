@@ -21,7 +21,6 @@ from pydantic import ValidationError
 
 from opentraces_schema import TraceRecord
 
-from ..security.pipeline import sanitize_companion_dict
 from ..security.privacy import (
     bucket_security_state,
 )
@@ -461,13 +460,15 @@ def _write_per_trace_envelope(
     trace_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. trail.jsonl.gz
-    trail_lines = [_canonical_json(_companion_event(event)) for event in trail_events]
+    trail_lines = [
+        _canonical_json(event.model_dump(mode="json")) for event in trail_events
+    ]
     trail_body = ("\n".join(trail_lines) + "\n").encode("utf-8") if trail_lines else b""
     _atomic_write_gzip(trace_v1_trail_path(project_slug, trace_id), trail_body)
 
     # 3. context.jsonl.gz
     context_lines = [
-        _canonical_json(_companion_event(event)) for event in context_events
+        _canonical_json(event.model_dump(mode="json")) for event in context_events
     ]
     context_body = ("\n".join(context_lines) + "\n").encode("utf-8") if context_lines else b""
     _atomic_write_gzip(trace_v1_context_path(project_slug, trace_id), context_body)
@@ -510,24 +511,6 @@ def _write_per_trace_envelope(
         "has_trace_record": record is not None,
         "projected_at": utc_now_str(),
     }
-
-
-def _companion_event(event: Any) -> dict[str, Any]:
-    """Return the safe derived event stored in Context/Trail companions.
-
-    The canonical Git event stays byte-identical.  Companions are an outbound
-    placement, so their payload is passed through the shared field-aware
-    sanitizer and receives a content hash for the projected payload.  The
-    original ``event_id`` remains the provenance pointer back to the canonical
-    event rather than claiming the redacted derivative has that identity.
-    """
-    from .trails.models import payload_content_hash
-
-    row = event.model_dump(mode="json")
-    payload, _manifest = sanitize_companion_dict(dict(row.get("payload") or {}))
-    row["payload"] = payload
-    row["content_hash"] = payload_content_hash(payload)
-    return row
 
 
 def project_per_trace_exports(

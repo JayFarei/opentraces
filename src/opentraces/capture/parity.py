@@ -83,11 +83,13 @@ def compare_placements(
     }
     for root in persistent_roots:
         resolved_root = Path(root).resolve()
-        persistent_replacements[str(resolved_root)] = "<workspace>"
+        for alias in _path_aliases(Path(root)):
+            persistent_replacements[alias] = "<workspace>"
         persistent_replacements[resolved_root.name] = "<workspace-name>"
     for root in leased_roots:
         resolved_root = Path(root).resolve()
-        leased_replacements[str(resolved_root)] = "<workspace>"
+        for alias in _path_aliases(Path(root)):
+            leased_replacements[alias] = "<workspace>"
         leased_replacements[resolved_root.name] = "<workspace-name>"
 
     persistent_norm = _normalize(
@@ -111,7 +113,7 @@ def compare_placements(
     leased_context_raw = _read_jsonl_gz(leased_path.with_name("context.jsonl.gz"))
     persistent_context = _normalize(
         _resolve_content_references(
-            persistent_context_raw,
+            _sanitize_companion_projection(persistent_context_raw),
             persistent_path,
             persistent_replacements,
         ),
@@ -120,7 +122,7 @@ def compare_placements(
     )
     leased_context = _normalize(
         _resolve_content_references(
-            leased_context_raw,
+            _sanitize_companion_projection(leased_context_raw),
             leased_path,
             leased_replacements,
         ),
@@ -132,12 +134,12 @@ def compare_placements(
     )
     leased_trail_raw = _read_jsonl_gz(leased_path.with_name("trail.jsonl.gz"))
     persistent_trail = _normalize(
-        persistent_trail_raw,
+        _sanitize_companion_projection(persistent_trail_raw),
         persistent_replacements,
         domain="companion",
     )
     leased_trail = _normalize(
-        leased_trail_raw,
+        _sanitize_companion_projection(leased_trail_raw),
         leased_replacements,
         domain="companion",
     )
@@ -158,17 +160,11 @@ def compare_placements(
     companions_required = (
         persistent.source("bucket").required and leased.source("bucket").required
     )
-    required_companions_all_empty = not any(
-        (
-            persistent_context_raw,
-            leased_context_raw,
-            persistent_trail_raw,
-            leased_trail_raw,
-        )
-    )
-    if companions_required and required_companions_all_empty:
-        differences.append("empty_context_companion")
-        differences.append("empty_trail_companion")
+    if companions_required:
+        if not persistent_context_raw or not leased_context_raw:
+            differences.append("empty_context_companion")
+        if not persistent_trail_raw or not leased_trail_raw:
+            differences.append("empty_trail_companion")
 
     limitations: list[str] = []
     span_match: bool | None = None
@@ -257,6 +253,16 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data
 
 
+def _path_aliases(path: Path) -> set[str]:
+    """Return declared/resolved roots plus macOS's public symlink spelling."""
+
+    aliases = {str(path), str(path.resolve())}
+    for value in tuple(aliases):
+        if value.startswith("/private/"):
+            aliases.add(value.removeprefix("/private"))
+    return aliases
+
+
 def _read_jsonl_gz(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
@@ -266,6 +272,20 @@ def _read_jsonl_gz(path: Path) -> list[dict[str, Any]]:
             if line.strip():
                 rows.append(json.loads(line))
     return rows
+
+
+def _sanitize_companion_projection(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitize comparison material without rewriting canonical bucket bytes."""
+
+    from ..security.pipeline import sanitize_companion_dict
+
+    projected: list[dict[str, Any]] = []
+    for row in rows:
+        safe = dict(row)
+        payload, _manifest = sanitize_companion_dict(dict(safe.get("payload") or {}))
+        safe["payload"] = payload
+        projected.append(safe)
+    return projected
 
 
 def _resolve_content_references(
@@ -398,7 +418,10 @@ def _normalize(
         for raw, replacement in sorted(
             replacements.items(), key=lambda item: len(item[0]), reverse=True
         ):
-            normalized = normalized.replace(raw, replacement)
+            if Path(raw).is_absolute() or replacement == "<trace-id>":
+                normalized = normalized.replace(raw, replacement)
+            elif path == ("metadata", "project") and normalized == raw:
+                normalized = replacement
         return normalized
     return value
 
@@ -418,8 +441,28 @@ def _is_transport_identity(
     """
     if domain == "trace" and not path:
         return key in {"trace_id", "content_hash"}
+    if domain == "trace" and path == ("patches", "[]"):
+        return key in {
+            "patch_id",
+            "snapshot_before_id",
+            "snapshot_after_id",
+        }
     if domain == "companion" and path == ("[]",):
         return key in _COMPANION_ENVELOPE_IDENTITY_KEYS
+    if domain == "companion" and "payload" in path:
+        if key in {
+            "snapshot_id",
+            "snapshot_before_id",
+            "snapshot_after_id",
+            "trace_patch_id",
+        }:
+            return True
+        if path and path[-1].endswith("_ref") and key in {
+            "id",
+            "display_id",
+            "ref",
+        }:
+            return True
     return False
 
 
