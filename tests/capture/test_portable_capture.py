@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import gzip
 import hashlib
+import os
 import subprocess
 import time
 import urllib.request
@@ -561,6 +562,17 @@ def test_parity_dereferences_message_content_before_comparing_hashes(
     assert report.context_companion_match is False
     assert "context_companion" in report.differences
 
+    _write_context_reference(trace_paths[0], "sha256:" + "a" * 64)
+    _write_context_reference(trace_paths[1], "sha256:" + "b" * 64)
+    unresolved = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+    assert unresolved.context_companion_match is False
+    assert "context_companion" in unresolved.differences
+
 
 def test_parity_preserves_semantic_attribution_range_content_hashes(
     tmp_path: Path,
@@ -810,3 +822,251 @@ def test_display_label_parity_requires_matching_labeler_provenance(
     assert unpinned.span_match is True
     assert unpinned.display_label_match is None
     assert "labeler provenance is not pinned" in unpinned.limitations[-1]
+
+
+def test_watcher_refuses_distinct_declared_workspace(tmp_path: Path) -> None:
+    project = _git_project(tmp_path / "project")
+    workspace = tmp_path / "actor-workspace"
+    workspace.mkdir()
+
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=workspace,
+            placement="leased",
+            requested_sources=("watcher",),
+            required_sources=("watcher",),
+            result_dir=tmp_path / "result",
+        )
+    ).finish(deadline=time.monotonic() + 5.0)
+
+    assert result.completeness == "partial"
+    assert result.source("watcher").completeness == "missing"
+    assert "declared workspace" in result.source("watcher").limitations[0]
+    assert result.source("watcher").details["observed_root"] == str(project)
+    assert result.source("watcher").details["declared_workspace"] == str(workspace)
+
+
+def test_stale_telemetry_snapshot_cannot_satisfy_new_lifecycle(tmp_path: Path) -> None:
+    from opentraces.capture.otlp.emitter import OTLPCaptureBuffer
+
+    project = _git_project(tmp_path / "project")
+    result_dir = tmp_path / "result"
+    session_id = str(uuid.uuid4())
+    trace_id = str(uuid.uuid4())
+    buffer = OTLPCaptureBuffer()
+    buffer.handle_envelope(
+        {
+            "received_at": time.time() - 60,
+            "signal": "traces",
+            "path": "/v1/traces",
+            "raw_size": 1,
+            "body": {
+                "resourceSpans": [
+                    {
+                        "resource": {
+                            "attributes": [
+                                {
+                                    "key": "session.id",
+                                    "value": {"stringValue": session_id},
+                                }
+                            ]
+                        },
+                        "scopeSpans": [
+                            {
+                                "spans": [
+                                    {
+                                        "name": "claude_code.llm_request",
+                                        "attributes": [
+                                            {
+                                                "key": "session.id",
+                                                "value": {"stringValue": session_id},
+                                            },
+                                            {
+                                                "key": "prompt.id",
+                                                "value": {"stringValue": "stale-prompt"},
+                                            },
+                                            {
+                                                "key": "request_id",
+                                                "value": {"stringValue": "req_stale"},
+                                            },
+                                        ],
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+    snapshot = buffer.snapshot_session(session_id)
+    assert snapshot is not None
+    stale_path = result_dir / "runtime" / "otel-sessions" / f"{session_id}.json"
+    stale_path.parent.mkdir(parents=True)
+    stale_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("telemetry",),
+            required_sources=("telemetry",),
+            session_id=session_id,
+            trace_id=trace_id,
+            result_dir=result_dir,
+        )
+    ).finish(deadline=time.monotonic() + 0.5)
+
+    assert result.completeness == "partial"
+    assert result.source("telemetry").completeness == "missing"
+    assert "fresh" in result.source("telemetry").limitations[0]
+
+
+def test_silent_first_source_cannot_consume_later_source_deadline(tmp_path: Path) -> None:
+    project = _git_project(tmp_path / "project")
+    fifo = tmp_path / "silent-session.jsonl"
+    os.mkfifo(fifo)
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("session_jsonl", "watcher"),
+            required_sources=("session_jsonl", "watcher"),
+            session_path=fifo,
+            result_dir=tmp_path / "result",
+        )
+    )
+    (project / "during-lifecycle.txt").write_text("observed\n", encoding="utf-8")
+
+    result = capture.finish(deadline=time.monotonic() + 1.0)
+
+    assert result.source("session_jsonl").status == "timed_out"
+    assert result.source("watcher").status == "finalized"
+    assert result.source("watcher").details["mutations"] == 1
+
+
+def test_parity_rejects_empty_required_companions_and_cross_placement_leaks(
+    tmp_path: Path,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "strict-parity-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=projects[placement],
+                    workspace=projects[placement],
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="strict-parity-session",
+                    session_path=source,
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    left_path = Path(results[0].source("bucket").details["trace_path"])
+    right_path = Path(results[1].source("bucket").details["trace_path"])
+    # Both-empty is not evidence of Context/Trail parity.
+    for trace_path in (left_path, right_path):
+        for companion in ("context.jsonl.gz", "trail.jsonl.gz"):
+            with trace_path.with_name(companion).open("wb") as raw:
+                with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0):
+                    pass
+    left = json.loads(left_path.read_text(encoding="utf-8"))
+    right = json.loads(right_path.read_text(encoding="utf-8"))
+    left["task"]["description"] = str(projects["leased"] / "private.txt")
+    right["task"]["description"] = str(projects["leased"] / "private.txt")
+    left_path.write_text(json.dumps(left), encoding="utf-8")
+    right_path.write_text(json.dumps(right), encoding="utf-8")
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.matches is False
+    assert "empty_context_companion" in report.differences
+    assert "empty_trail_companion" in report.differences
+    assert "canonical_trace" in report.differences
+
+
+def test_parity_preserves_nested_semantic_content_hashes(tmp_path: Path) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "hash-parity-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=projects[placement],
+                    workspace=projects[placement],
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="hash-parity-session",
+                    session_path=source,
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+    for index, result in enumerate(results):
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+        trace["attribution"] = {
+            "files": [
+                {
+                    "path": "README.md",
+                    "conversations": [
+                        {"ranges": [{"content_hash": f"semantic-{index}"}]}
+                    ],
+                }
+            ]
+        }
+        trace_path.write_text(json.dumps(trace), encoding="utf-8")
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+    assert report.canonical_trace_match is False
+    assert "canonical_trace" in report.differences
+
+
+def test_capture_records_unverified_non_self_observation_as_limitation(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("watcher",),
+            required_sources=("watcher",),
+            observer_version="caller-observer-claim",
+            product_under_test_version="caller-product-claim",
+            result_dir=tmp_path / "result",
+        )
+    ).finish(deadline=time.monotonic() + 5.0)
+
+    assert result.provenance["observer"]["derivation"] == "runtime"
+    assert result.provenance["observer"]["version"] != "caller-observer-claim"
+    assert result.provenance["product_under_test"]["derivation"] == "caller_claim"
+    assert result.provenance["separation"]["proven"] is False
+    assert any("non-self-observation" in item for item in result.limitations)
