@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import html as html_module
 from pathlib import Path
 
 from opentraces.core.arena.page import render_evidence_page
@@ -76,6 +77,9 @@ def test_page_is_a_read_only_projection_with_claim_verifier_and_raw_links(tmp_pa
     assert result["verifiers"][0]["source_ref"]["path"] == "tests/core/arena/test_page.py"
     assert verifier_sources["sources"][0]["path"] == "tests/core/arena/test_page.py"
     assert "tests/core/arena/test_page.py" in html
+    manifest = json.loads((run.final_path / ".integrity.json").read_text(encoding="utf-8"))
+    for relative in [*manifest["files"], ".integrity.json", "result.json"]:
+        assert f">{html_module.escape(relative)}</a>" in html
     for private_path in ("/Users/", "/home/", repository_path.as_posix(), "jayfarei"):
         assert private_path.lower() not in result_before.decode("utf-8").lower()
         assert private_path.lower() not in html.lower()
