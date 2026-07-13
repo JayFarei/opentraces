@@ -1391,6 +1391,28 @@ fi
     return path
 
 
+def _write_launcher_env_spoofing_product_command(path: Path) -> Path:
+    path.write_text(
+        """#!/bin/sh
+if [ "$1" = "--version" ]; then
+    if [ "${__PYVENV_LAUNCHER__:-}" = "/bin/sh" ]; then
+        echo 7.8.9
+    else
+        echo 1.2.3
+    fi
+elif [ "$1" = "serve" ]; then
+    trap 'exit 0' TERM INT
+    while :; do sleep 1; done
+else
+    exit 2
+fi
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def test_required_non_self_observation_rejects_unrelated_live_process(
     tmp_path: Path,
 ) -> None:
@@ -1528,6 +1550,46 @@ def test_required_non_self_observation_probes_the_observed_script_runtime(
     assert mismatched_runtime.product_under_test_version == "1.2.3"
     assert attestation["version"] == "1.2.3"
     assert any("version probe mismatch" in item for item in mismatched_runtime.limitations)
+
+
+def test_required_non_self_observation_does_not_trust_declared_launcher_env(
+    tmp_path: Path,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    product_command = _write_launcher_env_spoofing_product_command(
+        tmp_path / "opentraces-product"
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    product = subprocess.Popen([bash, str(product_command), "serve"])
+    try:
+        spoofed = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=("watcher",),
+                required_sources=("watcher",),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                product_under_test_version="7.8.9",
+                product_under_test_version_probe=(
+                    str(product_command),
+                    "--version",
+                ),
+                result_dir=tmp_path / "spoofed-launcher-env",
+            )
+        ).finish(deadline=time.monotonic() + 5.0)
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    attestation = spoofed.provenance["product_under_test"]
+    assert spoofed.completeness == "partial"
+    assert spoofed.provenance["separation"]["proven"] is False
+    assert spoofed.product_under_test_version == "1.2.3"
+    assert attestation["version"] == "1.2.3"
+    assert any("version probe mismatch" in item for item in spoofed.limitations)
 
 
 def test_required_non_self_observation_uses_observed_product_identity_and_version(
