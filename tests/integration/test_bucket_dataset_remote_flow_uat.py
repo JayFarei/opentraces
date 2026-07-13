@@ -206,6 +206,7 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
         assert after_replay["result_count"] >= 1
 
         schema_path = _write_dataset_schema(tmp_path / "restored-bucket-row.schema.json")
+        install_rows_workflow("restored-bucket-curator", _dataset_row(trace_id))
         created = _run_cli(
             [
                 "dataset",
@@ -223,7 +224,6 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
             ]
         )
         assert created["dataset"]["manifest"]["remotes"] == {}
-        install_rows_workflow("restored-bucket-curator", _dataset_row(trace_id))
 
         run = _run_cli(
             [
