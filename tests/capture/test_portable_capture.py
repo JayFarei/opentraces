@@ -582,18 +582,26 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
         "OPENTRACES_DIR",
         tmp_path / "persistent-runtime",
     )
+    for placement in ("persistent", "leased"):
+        (tmp_path / placement).mkdir()
     projects = {
-        "persistent": _git_project(tmp_path / "persistent-project"),
-        "leased": _git_project(tmp_path / "leased-project"),
+        placement: _git_project(tmp_path / placement / "shared-project")
+        for placement in ("persistent", "leased")
+    }
+    session_roots = {
+        placement: tmp_path / placement / "shared-session-root"
+        for placement in ("persistent", "leased")
     }
     sources = {
-        placement: _write_session(project, "placement-parity-session")
+        placement: _write_edit_session(
+            session_roots[placement],
+            project,
+            "placement-parity-session",
+        )
         for placement, project in projects.items()
     }
 
     def run(placement: str, result_dir: Path):
-        from opentraces.core.trails import TrailEventDraft, append_event_batch
-
         project = projects[placement]
         capture = Capture.open(
             CapturePlan(
@@ -610,33 +618,15 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
                 result_dir=result_dir,
             )
         )
-        result = capture.finish(deadline=time.monotonic() + 10.0)
-        append_event_batch(
-            project,
-            [
-                TrailEventDraft(
-                    event_type="filesystem_mutation_observed",
-                    payload={
-                        "file_path": "captured-world-effect.txt",
-                        "authored_text": "substantive trail evidence",
-                    },
-                    trace_id=result.trace_refs[0],
-                    capture_method=["filesystem_watcher"],
-                )
-            ],
-            writer="portable-capture-parity-test",
+        (project / "captured-world-effect.txt").write_text(
+            "substantive trail evidence\n",
+            encoding="utf-8",
         )
-        Capture.open(
-            CapturePlan(
-                project=project,
-                workspace=project,
-                placement=placement,
-                requested_sources=("bucket",),
-                required_sources=("bucket",),
-                trace_id=result.trace_refs[0],
-                result_dir=result_dir,
-            )
-        ).finish(deadline=time.monotonic() + 10.0)
+        result = capture.finish(deadline=time.monotonic() + 10.0)
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        trail_rows = _read_companion(trace_path.with_name("trail.jsonl.gz"))
+        assert trail_rows
+        assert "substantive trail evidence" in json.dumps(trail_rows)
         return result
 
     persistent = run("persistent", tmp_path / "persistent")
@@ -644,8 +634,14 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
     report = compare_placements(
         persistent,
         leased,
-        persistent_roots=(projects["persistent"],),
-        leased_roots=(projects["leased"],),
+        persistent_roots=(
+            projects["persistent"],
+            session_roots["persistent"],
+        ),
+        leased_roots=(
+            projects["leased"],
+            session_roots["leased"],
+        ),
     )
     report_path = write_parity_report(report, tmp_path / "parity-report.json")
 
@@ -659,6 +655,58 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
     assert report.path_normalization_applied is True
     assert report.differences == ()
     assert json.loads(report_path.read_text(encoding="utf-8")) == report.to_dict()
+
+
+def test_parity_preserves_trace_ids_embedded_in_semantic_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentraces.core import paths as capture_paths
+
+    monkeypatch.setattr(
+        capture_paths,
+        "OPENTRACES_DIR",
+        tmp_path / "persistent-runtime",
+    )
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "semantic-trace-id-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=projects[placement],
+                    workspace=projects[placement],
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="semantic-trace-id-session",
+                    session_path=source,
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    for result in results:
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+        trace["task"]["description"] = (
+            f"Customer supplied semantic token {result.trace_refs[0]} in prose."
+        )
+        trace_path.write_text(json.dumps(trace), encoding="utf-8")
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.canonical_trace_match is False
+    assert "canonical_trace" in report.differences
 
 
 def test_parity_dereferences_message_content_before_comparing_hashes(
