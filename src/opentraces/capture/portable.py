@@ -7,7 +7,6 @@ leased workspaces.  Callers open one session, inject its bindings, and call
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -920,18 +919,50 @@ def _duration_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
 
 
-def _file_identity(path: Path | None) -> dict[str, str] | None:
-    if path is None:
+def _file_identity(
+    path: Path | None,
+    *,
+    deadline: float,
+) -> dict[str, str] | None:
+    """Resolve and hash a file without outliving the capture deadline."""
+
+    remaining = max(0.0, deadline - time.monotonic())
+    if path is None or remaining <= 0:
         return None
     try:
-        resolved = path.resolve(strict=True)
-        digest = hashlib.sha256()
-        with resolved.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import hashlib,json,sys; from pathlib import Path; "
+                    "p=Path(sys.argv[1]).resolve(strict=True); "
+                    "h=hashlib.sha256(); f=p.open('rb'); "
+                    "[h.update(c) for c in iter(lambda: f.read(1048576), b'')]; "
+                    "f.close(); print(json.dumps({'path':str(p),'digest':'sha256:'+h.hexdigest()}))"
+                ),
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=remaining,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
-    return {"path": str(resolved), "digest": f"sha256:{digest.hexdigest()}"}
+    if completed.returncode != 0:
+        return None
+    try:
+        identity = json.loads(completed.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(identity, dict):
+        return None
+    identity_path = identity.get("path")
+    digest = identity.get("digest")
+    if not isinstance(identity_path, str) or not isinstance(digest, str):
+        return None
+    return {"path": identity_path, "digest": digest}
 
 
 def _command_path(command: str, *, workspace: Path) -> Path | None:
@@ -985,7 +1016,11 @@ def _launcher_runtime_path(launcher: Path) -> Path:
         return launcher
 
 
-def _observe_process_identity(pid: int | None) -> dict[str, Any]:
+def _observe_process_identity(
+    pid: int | None,
+    *,
+    deadline: float,
+) -> dict[str, Any]:
     alive = _pid_is_alive(pid)
     observed: dict[str, Any] = {
         "pid": pid,
@@ -993,13 +1028,13 @@ def _observe_process_identity(pid: int | None) -> dict[str, Any]:
         "command": None,
         "executable": None,
     }
-    if pid is None or not alive:
+    if pid is None or not alive or time.monotonic() >= deadline:
         return observed
 
     executable_path: Path | None = None
     proc_executable = Path(f"/proc/{pid}/exe")
     try:
-        if proc_executable.exists():
+        if time.monotonic() < deadline and proc_executable.exists():
             executable_path = Path(os.readlink(proc_executable)).resolve()
     except OSError:
         executable_path = None
@@ -1007,7 +1042,7 @@ def _observe_process_identity(pid: int | None) -> dict[str, Any]:
     proc_command = Path(f"/proc/{pid}/cmdline")
     command: str | None = None
     try:
-        if proc_command.is_file():
+        if time.monotonic() < deadline and proc_command.is_file():
             argv = [
                 part.decode("utf-8", errors="replace")
                 for part in proc_command.read_bytes().split(b"\0")
@@ -1017,14 +1052,15 @@ def _observe_process_identity(pid: int | None) -> dict[str, Any]:
     except OSError:
         command = None
 
-    if executable_path is None:
+    if executable_path is None and time.monotonic() < deadline:
+        remaining = max(0.0, deadline - time.monotonic())
         try:
             completed = subprocess.run(
                 ["ps", "-p", str(pid), "-o", "comm="],
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=2.0,
+                timeout=remaining,
             )
         except (OSError, subprocess.TimeoutExpired):
             completed = None
@@ -1041,14 +1077,15 @@ def _observe_process_identity(pid: int | None) -> dict[str, Any]:
                 )
             except OSError:
                 executable_path = None
-    if command is None:
+    if command is None and time.monotonic() < deadline:
+        remaining = max(0.0, deadline - time.monotonic())
         try:
             completed = subprocess.run(
                 ["ps", "-p", str(pid), "-o", "command="],
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=2.0,
+                timeout=remaining,
             )
         except (OSError, subprocess.TimeoutExpired):
             completed = None
@@ -1056,7 +1093,7 @@ def _observe_process_identity(pid: int | None) -> dict[str, Any]:
             command = completed.stdout.strip()
 
     observed["command"] = command
-    observed["executable"] = _file_identity(executable_path)
+    observed["executable"] = _file_identity(executable_path, deadline=deadline)
     return observed
 
 
@@ -1129,16 +1166,25 @@ def _declared_python_runtime_matches_observed(
         return False
     try:
         time.sleep(min(0.03, max(0.0, deadline - time.monotonic())))
-        identity = _observe_process_identity(witness.pid).get("executable")
+        identity = _observe_process_identity(
+            witness.pid,
+            deadline=deadline,
+        ).get("executable")
         return bool(identity and identity == observed_executable)
     finally:
         if witness.poll() is None:
             witness.terminate()
+            remaining = max(0.0, deadline - time.monotonic())
             try:
-                witness.wait(timeout=0.5)
+                witness.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
                 witness.kill()
-                witness.wait(timeout=0.5)
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining > 0:
+                    try:
+                        witness.wait(timeout=remaining)
+                    except subprocess.TimeoutExpired:
+                        pass
 
 
 _VERSION_RE = re.compile(r"(?<![A-Za-z0-9])\d+\.\d+\.\d+(?:[A-Za-z0-9.+-]*)")
@@ -1153,7 +1199,7 @@ def _attest_product_process(
     workspace: Path,
     deadline: float,
 ) -> tuple[dict[str, Any], bool, list[str], str | None]:
-    observed = _observe_process_identity(pid)
+    observed = _observe_process_identity(pid, deadline=deadline)
     limitations: list[str] = []
     if pid is None:
         limitations.append("non-self-observation separation has no product process identity")
@@ -1182,13 +1228,13 @@ def _attest_product_process(
         limitations.append("product version probe was not provided")
     else:
         launcher_path = _command_path(version_probe[0], workspace=workspace)
-        launcher_identity = _file_identity(launcher_path)
+        launcher_identity = _file_identity(launcher_path, deadline=deadline)
         if launcher_path is None or launcher_identity is None:
             limitations.append("product version probe executable could not be resolved")
         else:
             runtime_command = _launcher_runtime_command(launcher_path)
             runtime_path = _launcher_runtime_path(launcher_path)
-            runtime_identity = _file_identity(runtime_path)
+            runtime_identity = _file_identity(runtime_path, deadline=deadline)
             probe_record["executable"] = runtime_identity
             observed_executable = observed["executable"]
             native_launcher_matches = bool(
