@@ -1,112 +1,432 @@
 {
-  "schema_version": "opentraces.bench.manual-proof.v1",
-  "observed_at": "2026-07-14T02:20:51Z",
-  "source_commit": "a4e75da329ec0ac4f629d9c66b301f470266f1b0",
-  "source_archive": {
-    "format": "tar",
-    "sha256": "715f01d839a83fbaf7d2c955333baed887e05248a58ec61bcb1c69cb3629df62"
-  },
-  "box": {
-    "lease_id": "cbx_8f94e3e59d3d",
-    "container_id": "6a00d1d373ca3c47304ba8c4d54d18e576bb938ac5262edf7a7a0b09d297dc52",
-    "provider": "local-container",
-    "image": "ubuntu:24.04",
-    "architecture": "aarch64",
-    "sandbox_tier": "container"
-  },
   "app_state": {
     "base": {
-      "name": "install-only",
-      "digest": "sha256:850066e1917e31e3213c7cbf567fb0c0e81ef69f62bb8a61c3265e5501ea5f31",
-      "dependency_lock_sha256": "sha256:b02aad4b331a1f858cc44ee24fde58f568609faba04a843b8614c409ac73b7f6",
-      "dependency_count": 33,
-      "direct_clients": {
+      "dependencies": {
+        "annotated-doc": "0.0.4",
+        "annotated-types": "0.7.0",
+        "anyio": "4.14.2",
+        "certifi": "2026.6.17",
+        "charset-normalizer": "3.4.9",
+        "click": "8.4.2",
+        "filelock": "3.29.7",
+        "fsspec": "2026.6.0",
+        "h11": "0.16.0",
+        "hf-xet": "1.4.3",
+        "httpcore": "1.0.9",
+        "httpx": "0.28.1",
         "huggingface-hub": "1.10.2",
-        "hf-xet": "1.4.3"
+        "idna": "3.18",
+        "markdown-it-py": "4.2.0",
+        "mdurl": "0.1.2",
+        "mmh3": "5.2.1",
+        "packaging": "26.2",
+        "pyclack-cli": "0.4.0",
+        "pydantic": "2.13.4",
+        "pydantic-core": "2.46.4",
+        "pygments": "2.20.0",
+        "pyyaml": "6.0.3",
+        "readchar": "4.2.2",
+        "requests": "2.34.2",
+        "rich": "15.0.0",
+        "shellingham": "1.5.4",
+        "tqdm": "4.68.4",
+        "typer": "0.26.8",
+        "typing-extensions": "4.16.0",
+        "typing-inspection": "0.4.2",
+        "urllib3": "2.7.0"
       },
+      "dependency_count": 32,
+      "dependency_lock_sha256": "sha256:b02aad4b331a1f858cc44ee24fde58f568609faba04a843b8614c409ac73b7f6",
+      "digest": "sha256:5ba324c2659645e4edc449f9c11316130300d36760499340fcda30a19a94bc69",
       "execution_identity": {
-        "user": "opentraces-product",
-        "sudo": false
+        "sudo": false,
+        "user": "opentraces-product"
       },
+      "name": "install-only",
       "wheel_sha256": [
-        "1878972736eca50a9ace6e0b99eaac692b6c362727cd01f988fe67f931d3087e",
+        "5b04f15606cfef7d84edad70b2371b3bae4f0ecb6803be1e233b8db7a66090fa",
         "af63003242b1e648cc9920f37c9d2a5504423bf47a9ecd1748cb2719eee19821"
       ]
     },
     "with_huggingface": {
-      "name": "install-only",
-      "digest": "sha256:5a15ff00d531e20ff62f557cdacb0b53138ea53420b979941b274b941461be81",
-      "emulator_sha256": "0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da"
+      "digest": "sha256:fa9edc5b26247f70f1222cb2b59caebd2b0fbdbfe7aa5b82cdd076fafb03ddbf",
+      "emulator_sha256": "9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad",
+      "name": "install-only"
     }
   },
   "binary": {
-    "provenance": "verified",
-    "contract_version": "huggingface.v1",
+    "build_inputs_sha256": "5bb8b549b32ec07dc54612308d7cc20e3646c5362e3644e397f373fa9c4dc2e2",
     "bun_version": "1.3.6",
+    "client_lock_sha256": "b02aad4b331a1f858cc44ee24fde58f568609faba04a843b8614c409ac73b7f6",
+    "contract_version": "huggingface.v1",
+    "provenance": "verified",
+    "provenance_file_sha256": "63b6435139d47230fa3b50e82d1f72d9969f3dfaac052af0496a9ff12b1760ee",
+    "rebuild_command": "build_hf_emulator_binary(<isolated-output>)",
+    "sha256": "9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad",
+    "size_bytes": 94089101,
+    "source_sha256": "9c5d8893616522f34cdaf9714906f75d13fd37787560f46f81f6bc1725729c83",
     "target": "bun-linux-arm64",
-    "size_bytes": 94088689,
-    "sha256": "0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da",
-    "source_sha256": "97b98ffe5724fb7c64554d9637ba8574a1c58b5ea7eba1cb07d4c7a1579db367",
-    "build_inputs_sha256": "6338cd5962b0f836b768aa4dbe26da857f2a1d961fad5f32bd55d2d8dc0eeaac",
-    "trusted_build_manifest": "src/opentraces/core/arena/emulate/huggingface/trusted-build.json"
+    "trusted_build_manifest": "src/opentraces/core/arena/emulate/huggingface/trusted-build.json",
+    "trusted_build_manifest_product_commit_sha256": "07360beba108b4bc426eb5677b88f492ad77a8a830c71c545e4b140e02382c2c",
+    "trusted_build_manifest_proof_commit_sha256": "8ace7aa7daad37c77a078a196b60aa95174273c7bb65bf6e70a1da728e41977f"
+  },
+  "box": {
+    "architecture": "aarch64",
+    "container_id": "5c653976e613dd2afa0795751be4e63ddc6eac73a37976a024e3f7baa602866f",
+    "crabbox_version": "0.38.0",
+    "image": "ubuntu:24.04",
+    "lease_id": "cbx_5646ec84299e",
+    "provider": "local-container",
+    "sandbox_tier": "container",
+    "slug": "violet-shrimp",
+    "warmup_stderr_literal_sanitized": "provisioning provider=local-container lease=cbx_5646ec84299e slug=violet-shrimp runtime=docker image=ubuntu:24.04 keep=true\nwaiting for 127.0.0.1:32857 local container ssh... elapsed=0s remaining=20m0s ports=32857:closed\nwaiting for 127.0.0.1:32857 local container ssh ssh-auth... elapsed=10s remaining=19m50s ports=32857:tcp\nprovisioned lease=cbx_5646ec84299e container=5c653976e613 state=ready\n",
+    "warmup_stdout_literal_sanitized": "leased cbx_5646ec84299e slug=violet-shrimp provider=local-container server=5c653976e613dd2afa0795751be4e63ddc6eac73a37976a024e3f7baa602866f type=ubuntu_24.04 ip=127.0.0.1 idle_timeout=30m0s expires=2026-07-14T04:24:20Z\nready ssh=crabbox@127.0.0.1:32857 network=public workroot=/work/crabbox\nwarmup complete total=20.314s\n"
   },
   "contract_tests": {
     "command": "python3 -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py",
-    "passed": 26,
-    "skipped": 1,
+    "passed": 27,
     "returncode": 0,
-    "skip_reason": "The runtime-free box uses the verified precompiled emulator and intentionally has no Bun build toolchain."
+    "skip_reason": "The runtime-free lease consumes the verified precompiled binary and intentionally has no Bun toolchain.",
+    "skipped": 1,
+    "stdout_literal": "......................s.....                                             [100%]\n27 passed, 1 skipped in 4.88s\n"
   },
-  "public_runs": {
-    "happy": {
-      "run_id": "run_20260714T021146217746Z_6e4b2f1ca0a8",
-      "execution_status": "complete",
-      "verdict": "pass",
-      "exit_code": 0,
-      "ledger_rows": 11,
-      "evidence_complete": true,
-      "integrity_verified": true,
-      "evidence_ref": "ledgers/huggingface.jsonl",
-      "lease_id": "cbx_d52030481305",
-      "lease_released": true,
-      "inspect_after_stop_returncode": 4
+  "discovery_history": [
+    {
+      "container_absent": true,
+      "failure": "kill -0 from the Crabbox user returned Operation not permitted against the opentraces-hf-owned live process",
+      "inspect_after_stop_returncode": 4,
+      "lease_id": "cbx_152910b1a24a",
+      "product_commit": "133bee8316a753a847c9f59cc7ba60bcdf620240",
+      "released": true
     },
-    "emulator_down": {
-      "run_id": "run_20260714T021512555812Z_5e7601448e0f",
-      "execution_status": "complete",
-      "verdict": "fail",
-      "exit_code": 1,
-      "ledger_rows": 3,
-      "commit_rows": 0,
-      "evidence_complete": true,
-      "integrity_verified": true,
-      "evidence_ref": "ledgers/huggingface.jsonl",
-      "lease_id": "cbx_9576756ad81d",
-      "lease_released": true,
-      "inspect_after_stop_returncode": 4
+    {
+      "container_absent": true,
+      "failure": "non-signalling liveness passed but cross-UID /proc process binding still returned rc 1",
+      "inspect_after_stop_returncode": 4,
+      "lease_id": "cbx_fcb373f34379",
+      "product_commit": "7e4180c4fe5d7949b486e39c9bd6dc95447bae52",
+      "released": true
+    },
+    {
+      "container_absent": true,
+      "failure": "partial privileged executable resolution still left cross-UID /proc reads unavailable",
+      "inspect_after_stop_returncode": 4,
+      "lease_id": "cbx_ecd2b56978db",
+      "product_commit": "c22614acfb9d0168fa0bdd697315c7e19fb0ab4b",
+      "released": true
+    },
+    {
+      "container_absent": true,
+      "failure": "Docker root lacked cross-UID ptrace capability for /proc/PID/exe; diagnostic values proved state S and matching UID 999",
+      "inspect_after_stop_returncode": 4,
+      "lease_id": "cbx_6a02e8f9eed1",
+      "product_commit": "9d82f4063e6c220217b12697a9b1985fe354ab2f",
+      "released": true
+    }
+  ],
+  "emulator_boot": {
+    "stderr_literal_sanitized": "",
+    "stdout_literal_sanitized": "huggingface emulator listening on http://127.0.0.1:14318\n"
+  },
+  "ledger_evidence": {
+    "happy_commit_row": {
+      "method": "POST",
+      "observed_at": "2026-07-14T03:57:21.881Z",
+      "operation_id": "commit",
+      "path": "/api/datasets/bench/scenario-2/commit/main",
+      "request": {
+        "files": [
+          "README.md",
+          "data/opentraces-product-pub_20260714T035721Z_172368f0-48208f9428d6.jsonl",
+          "dataset_infos.json",
+          "schemas/row.schema.json"
+        ],
+        "parent_commit": "0000000000000000000000000000000000000000",
+        "repo_id": "bench/scenario-2",
+        "revision": "main"
+      },
+      "request_id": "req_10",
+      "response": {
+        "commit_oid": "e28400b9d93508895c8e012e2896432c3729aa7a",
+        "status": 200
+      }
+    },
+    "happy_commit_row_literal": "{\"request_id\":\"req_10\",\"observed_at\":\"2026-07-14T03:57:21.881Z\",\"method\":\"POST\",\"path\":\"/api/datasets/bench/scenario-2/commit/main\",\"operation_id\":\"commit\",\"request\":{\"repo_id\":\"bench/scenario-2\",\"revision\":\"main\",\"parent_commit\":\"0000000000000000000000000000000000000000\",\"files\":[\"README.md\",\"data/opentraces-product-pub_20260714T035721Z_172368f0-48208f9428d6.jsonl\",\"dataset_infos.json\",\"schemas/row.schema.json\"]},\"response\":{\"status\":200,\"commit_oid\":\"e28400b9d93508895c8e012e2896432c3729aa7a\"}}",
+    "manual_rows": [
+      {
+        "method": "GET",
+        "observed_at": "2026-07-14T03:55:19.398Z",
+        "operation_id": "manifest",
+        "path": "/_emulate/manifest",
+        "request": null,
+        "request_id": "req_1",
+        "response": {
+          "status": 200
+        }
+      },
+      {
+        "method": "GET",
+        "observed_at": "2026-07-14T03:55:20.051Z",
+        "operation_id": "whoami",
+        "path": "/api/whoami-v2",
+        "request": null,
+        "request_id": "req_2",
+        "response": {
+          "status": 200
+        }
+      },
+      {
+        "method": "GET",
+        "observed_at": "2026-07-14T03:55:20.221Z",
+        "operation_id": "manifest",
+        "path": "/_emulate/manifest",
+        "request": null,
+        "request_id": "req_3",
+        "response": {
+          "status": 200
+        }
+      }
+    ]
+  },
+  "manifest_probe": {
+    "full_response": {
+      "auth": [
+        {
+          "id": "user-token",
+          "status": "supported",
+          "title": "User access token",
+          "type": "bearer-token",
+          "validation": "minted-or-baseline-state"
+        }
+      ],
+      "connections": [
+        {
+          "id": "hf-endpoint",
+          "kind": "env",
+          "language": "bash",
+          "template": "HF_ENDPOINT={{baseUrl}}\nHF_TOKEN={{token}}",
+          "title": "Point client at emulator"
+        }
+      ],
+      "controlPlane": {
+        "credentials": "POST /_emulate/credentials",
+        "reset": "POST /_emulate/reset",
+        "seed": "POST /_emulate/seed"
+      },
+      "id": "huggingface",
+      "launch": {
+        "binary_sha256": "9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad",
+        "build_inputs_sha256": "5bb8b549b32ec07dc54612308d7cc20e3646c5362e3644e397f373fa9c4dc2e2",
+        "contract_version": "huggingface.v1",
+        "nonce": "07ebc237b6d13502311a51e8506265b84e53b7dd3cfeddb6bae32b4a598917bb",
+        "pid": 5217,
+        "source_sha256": "9c5d8893616522f34cdaf9714906f75d13fd37787560f46f81f6bc1725729c83"
+      },
+      "name": "Hugging Face Hub",
+      "seedSchema": {
+        "repos": [
+          {
+            "gated": false,
+            "private": false,
+            "repo_id": "namespace/name",
+            "tags": []
+          }
+        ]
+      },
+      "specs": [
+        {
+          "coverage": "partial",
+          "kind": "manual",
+          "operations": [
+            {
+              "method": "POST",
+              "operationId": "createRepo",
+              "path": "/api/repos/create",
+              "status": "hand-authored"
+            },
+            {
+              "method": "GET",
+              "operationId": "datasetInfo",
+              "path": "/api/datasets/{id}",
+              "status": "hand-authored"
+            },
+            {
+              "method": "GET",
+              "operationId": "listRepoTree",
+              "path": "/api/datasets/{id}/tree/{rev}",
+              "status": "hand-authored"
+            },
+            {
+              "method": "GET",
+              "operationId": "resolveFile",
+              "path": "/datasets/{id}/resolve/{rev}/{path}",
+              "status": "hand-authored"
+            },
+            {
+              "method": "POST",
+              "operationId": "preupload",
+              "path": "/api/datasets/{id}/preupload/{rev}",
+              "status": "hand-authored",
+              "summary": "forces regular upload mode"
+            },
+            {
+              "method": "POST",
+              "operationId": "commit",
+              "path": "/api/datasets/{id}/commit/{rev}",
+              "status": "hand-authored"
+            },
+            {
+              "method": "GET",
+              "operationId": "whoami",
+              "path": "/api/whoami-v2",
+              "status": "hand-authored"
+            },
+            {
+              "method": "PUT",
+              "operationId": "updateSettings",
+              "path": "/api/datasets/{id}/settings",
+              "status": "hand-authored"
+            },
+            {
+              "method": "POST",
+              "operationId": "validateYaml",
+              "path": "/api/validate-yaml",
+              "status": "hand-authored",
+              "summary": "validates the dataset card before folder upload"
+            },
+            {
+              "method": "GET",
+              "operationId": "listDatasets",
+              "path": "/api/datasets",
+              "status": "partial"
+            },
+            {
+              "method": "DELETE",
+              "operationId": "deleteRepo",
+              "path": "/api/repos/delete",
+              "status": "partial"
+            },
+            {
+              "method": "POST",
+              "operationId": "lfsBatch",
+              "path": "/{id}.git/info/lfs/objects/batch",
+              "status": "unsupported"
+            },
+            {
+              "operationId": "xetUpload",
+              "status": "unsupported"
+            }
+          ],
+          "title": "Hand-authored Hub emulator"
+        }
+      ],
+      "stateModel": {
+        "collections": [
+          {
+            "name": "hf.credentials"
+          },
+          {
+            "name": "hf.repos"
+          },
+          {
+            "name": "hf.files"
+          },
+          {
+            "name": "hf.revisions"
+          }
+        ]
+      },
+      "surfaces": [
+        {
+          "basePath": "/api",
+          "id": "hub-rest",
+          "kind": "rest",
+          "status": "partial",
+          "title": "Hub REST API"
+        },
+        {
+          "id": "resolve",
+          "kind": "provider-specific",
+          "status": "partial",
+          "title": "File resolve/download"
+        }
+      ]
+    },
+    "literal_response": "{\"id\":\"huggingface\",\"name\":\"Hugging Face Hub\",\"launch\":{\"nonce\":\"07ebc237b6d13502311a51e8506265b84e53b7dd3cfeddb6bae32b4a598917bb\",\"pid\":5217,\"contract_version\":\"huggingface.v1\",\"source_sha256\":\"9c5d8893616522f34cdaf9714906f75d13fd37787560f46f81f6bc1725729c83\",\"build_inputs_sha256\":\"5bb8b549b32ec07dc54612308d7cc20e3646c5362e3644e397f373fa9c4dc2e2\",\"binary_sha256\":\"9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad\"},\"surfaces\":[{\"id\":\"hub-rest\",\"kind\":\"rest\",\"title\":\"Hub REST API\",\"basePath\":\"/api\",\"status\":\"partial\"},{\"id\":\"resolve\",\"kind\":\"provider-specific\",\"title\":\"File resolve/download\",\"status\":\"partial\"}],\"auth\":[{\"id\":\"user-token\",\"title\":\"User access token\",\"type\":\"bearer-token\",\"status\":\"supported\",\"validation\":\"minted-or-baseline-state\"}],\"specs\":[{\"kind\":\"manual\",\"title\":\"Hand-authored Hub emulator\",\"coverage\":\"partial\",\"operations\":[{\"operationId\":\"createRepo\",\"method\":\"POST\",\"path\":\"/api/repos/create\",\"status\":\"hand-authored\"},{\"operationId\":\"datasetInfo\",\"method\":\"GET\",\"path\":\"/api/datasets/{id}\",\"status\":\"hand-authored\"},{\"operationId\":\"listRepoTree\",\"method\":\"GET\",\"path\":\"/api/datasets/{id}/tree/{rev}\",\"status\":\"hand-authored\"},{\"operationId\":\"resolveFile\",\"method\":\"GET\",\"path\":\"/datasets/{id}/resolve/{rev}/{path}\",\"status\":\"hand-authored\"},{\"operationId\":\"preupload\",\"method\":\"POST\",\"path\":\"/api/datasets/{id}/preupload/{rev}\",\"status\":\"hand-authored\",\"summary\":\"forces regular upload mode\"},{\"operationId\":\"commit\",\"method\":\"POST\",\"path\":\"/api/datasets/{id}/commit/{rev}\",\"status\":\"hand-authored\"},{\"operationId\":\"whoami\",\"method\":\"GET\",\"path\":\"/api/whoami-v2\",\"status\":\"hand-authored\"},{\"operationId\":\"updateSettings\",\"method\":\"PUT\",\"path\":\"/api/datasets/{id}/settings\",\"status\":\"hand-authored\"},{\"operationId\":\"validateYaml\",\"method\":\"POST\",\"path\":\"/api/validate-yaml\",\"status\":\"hand-authored\",\"summary\":\"validates the dataset card before folder upload\"},{\"operationId\":\"listDatasets\",\"method\":\"GET\",\"path\":\"/api/datasets\",\"status\":\"partial\"},{\"operationId\":\"deleteRepo\",\"method\":\"DELETE\",\"path\":\"/api/repos/delete\",\"status\":\"partial\"},{\"operationId\":\"lfsBatch\",\"method\":\"POST\",\"path\":\"/{id}.git/info/lfs/objects/batch\",\"status\":\"unsupported\"},{\"operationId\":\"xetUpload\",\"status\":\"unsupported\"}]}],\"controlPlane\":{\"credentials\":\"POST /_emulate/credentials\",\"seed\":\"POST /_emulate/seed\",\"reset\":\"POST /_emulate/reset\"},\"seedSchema\":{\"repos\":[{\"repo_id\":\"namespace/name\",\"private\":false,\"gated\":false,\"tags\":[]}]},\"stateModel\":{\"collections\":[{\"name\":\"hf.credentials\"},{\"name\":\"hf.repos\"},{\"name\":\"hf.files\"},{\"name\":\"hf.revisions\"}]},\"connections\":[{\"id\":\"hf-endpoint\",\"title\":\"Point client at emulator\",\"kind\":\"env\",\"language\":\"bash\",\"template\":\"HF_ENDPOINT={{baseUrl}}\\nHF_TOKEN={{token}}\"}]}",
+    "returncode": 0
+  },
+  "observed_at": "2026-07-14T04:05:50Z",
+  "page_capture": {
+    "actual_tracked_artifact": true,
+    "file": "opentraces-a2-f4f9184-local-world-page.png",
+    "height": 5275,
+    "sha256": "6ee8b309126132d42bffc4b64d5736c9c553dee78c6bb50a085c49d434ceb918",
+    "visually_inspected": true,
+    "width": 1280
+  },
+  "process_binding": {
+    "literal_response": "pid=5217\nstate=S\nowner_uid=999\nsidecar_uid=999\nexecutable=/opt/bench/emulators/opentraces-hf-emulator\nbinary_sha256=9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad\n",
+    "non_signalling": true,
+    "returncode": 0,
+    "same_owner_proc_reads": true
+  },
+  "product_source": {
+    "commit": "f4f91848ca37913d97c0956a06487cb032c8f757",
+    "proof_only_commits_follow_product_commit": true,
+    "source_archive": {
+      "format": "tar",
+      "sha256": "7894cb5b188b122f122fcd91b915a9dcd486438461ba36140547c770a31e60e5"
     }
   },
-  "world_evidence": {
-    "schema_version": "opentraces.bench.world.huggingface.v1",
-    "evidence_ref": "world/huggingface.json",
-    "ledger_custody": {
-      "writer": "opentraces-hf",
-      "product_writable": false,
-      "collection": "read-only sidecar endpoint"
-    },
-    "capability_groups": ["hand-authored", "partial", "unsupported"]
+  "proof_scope": {
+    "blocker": "Issue #264 still requires the same proof on a genuine remote provider lease. No remote provider was invoked by this proof.",
+    "classification": "LOCAL diagnostic",
+    "provider": "local-container",
+    "remote_gate_issue": 264,
+    "satisfies_remote_real_lease_gate": false
   },
-  "page_capture": {
-    "file": "opentraces-a2-a4e75da-world-page.png",
-    "width": 1280,
-    "height": 5203,
-    "sha256": "6c5a260c72e6e885d06e71f4dfd49410e03a315fb5f2753332e842bbeaef2679"
+  "public_runs": {
+    "emulator_down": {
+      "commit_rows": 0,
+      "container_absent": true,
+      "evidence_complete": true,
+      "evidence_ref": "ledgers/huggingface.jsonl",
+      "execution_status": "complete",
+      "exit_code": 1,
+      "inspect_after_stop_returncode": 4,
+      "integrity_verified": true,
+      "lease_id": "cbx_e993044c6cda",
+      "lease_released": true,
+      "ledger_rows": 3,
+      "run_id": "run_20260714T035757109561Z_c35c2a5f7c75",
+      "verdict": "fail",
+      "world_ref": "world/huggingface.json"
+    },
+    "happy": {
+      "commit_rows": 1,
+      "container_absent": true,
+      "evidence_complete": true,
+      "evidence_ref": "ledgers/huggingface.jsonl",
+      "execution_status": "complete",
+      "exit_code": 0,
+      "inspect_after_stop_returncode": 4,
+      "integrity_verified": true,
+      "lease_id": "cbx_c0fb466aab50",
+      "lease_released": true,
+      "ledger_rows": 11,
+      "run_id": "run_20260714T035634282499Z_1ed9be1cb148",
+      "verdict": "pass",
+      "world_ref": "world/huggingface.json"
+    }
   },
   "release": {
-    "success": true,
-    "lease_id": "cbx_8f94e3e59d3d",
-    "container_id": "6a00d1d373ca3c47304ba8c4d54d18e576bb938ac5262edf7a7a0b09d297dc52",
+    "container_absent": true,
+    "container_id": "5c653976e613dd2afa0795751be4e63ddc6eac73a37976a024e3f7baa602866f",
     "inspect_after_stop_returncode": 4,
-    "container_absent": true
-  }
+    "lease_id": "cbx_5646ec84299e",
+    "stderr": "local-container lease not found: cbx_5646ec84299e\n",
+    "stdout": "",
+    "success": true
+  },
+  "schema_version": "opentraces.bench.manual-proof.v2"
 }

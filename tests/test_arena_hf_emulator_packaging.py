@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -257,11 +258,34 @@ def test_retained_a2_proof_names_base_and_binary_inclusive_app_state_digests() -
     proof = json.loads((ROOT / "tests/manual/a2_hf_emulator_real_box.json").read_text())
 
     assert proof["app_state"]["base"]["digest"] == (
-        "sha256:850066e1917e31e3213c7cbf567fb0c0e81ef69f62bb8a61c3265e5501ea5f31"
+        "sha256:5ba324c2659645e4edc449f9c11316130300d36760499340fcda30a19a94bc69"
     )
     assert proof["app_state"]["with_huggingface"]["digest"] == (
-        "sha256:5a15ff00d531e20ff62f557cdacb0b53138ea53420b979941b274b941461be81"
+        "sha256:fa9edc5b26247f70f1222cb2b59caebd2b0fbdbfe7aa5b82cdd076fafb03ddbf"
     )
+
+
+def test_retained_a2_proof_is_honest_local_diagnostic_with_actual_page_capture() -> None:
+    proof = json.loads((ROOT / "tests/manual/a2_hf_emulator_real_box.json").read_text())
+    page = ROOT / "tests/manual" / proof["page_capture"]["file"]
+
+    assert proof["product_source"]["commit"] == (
+        "f4f91848ca37913d97c0956a06487cb032c8f757"
+    )
+    assert proof["proof_scope"] == {
+        "blocker": (
+            "Issue #264 still requires the same proof on a genuine remote provider lease. "
+            "No remote provider was invoked by this proof."
+        ),
+        "classification": "LOCAL diagnostic",
+        "provider": "local-container",
+        "remote_gate_issue": 264,
+        "satisfies_remote_real_lease_gate": False,
+    }
+    assert page.is_file()
+    assert hashlib.sha256(page.read_bytes()).hexdigest() == proof["page_capture"]["sha256"]
+    assert proof["public_runs"]["happy"]["container_absent"] is True
+    assert proof["public_runs"]["emulator_down"]["container_absent"] is True
 
 
 def test_retained_a2_proof_points_to_the_repository_trusted_build_manifest() -> None:

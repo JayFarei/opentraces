@@ -1,75 +1,105 @@
-A2 Hugging Face emulator genuine leased-box transcript
-Observed: 2026-07-14T02:20:51Z
-Source commit: a4e75da329ec0ac4f629d9c66b301f470266f1b0
+A2 Hugging Face emulator LOCAL diagnostic transcript
+Observed: 2026-07-14T04:05:50Z
+Product source commit: f4f91848ca37913d97c0956a06487cb032c8f757
+Classification: LOCAL DIAGNOSTIC ONLY
 
 This transcript is sanitized. It contains no credentials, developer-machine
-paths, or reusable SSH material. Every contract command ran inside the named
-Crabbox lease against the archived source commit and repository-trusted binary.
+paths, reusable SSH material, or remote-provider claims. It does NOT satisfy
+issue #264's genuine remote real-lease gate. That remote run is the only
+remaining A2 verification blocker.
+
+Discovery history retained
+- 133bee8316a7 lease=cbx_152910b1a24a released/absent(rc=4): kill -0 from the Crabbox user returned Operation not permitted against the opentraces-hf-owned live process
+- 7e4180c4fe5d lease=cbx_fcb373f34379 released/absent(rc=4): non-signalling liveness passed but cross-UID /proc process binding still returned rc 1
+- c22614acfb9d lease=cbx_ecd2b56978db released/absent(rc=4): partial privileged executable resolution still left cross-UID /proc reads unavailable
+- 9d82f4063e6c lease=cbx_6a02e8f9eed1 released/absent(rc=4): Docker root lacked cross-UID ptrace capability for /proc/PID/exe; diagnostic values proved state S and matching UID 999
 
 $ crabbox --version
 0.38.0
 
 $ crabbox warmup --provider local-container --local-container-image ubuntu:24.04
-provisioning provider=local-container lease=cbx_8f94e3e59d3d slug=pearl-lobster runtime=docker image=ubuntu:24.04 keep=true
-provisioned lease=cbx_8f94e3e59d3d container=6a00d1d373ca state=ready
-leased cbx_8f94e3e59d3d provider=local-container server=6a00d1d373ca3c47304ba8c4d54d18e576bb938ac5262edf7a7a0b09d297dc52 type=ubuntu_24.04
+provisioning provider=local-container lease=cbx_5646ec84299e slug=violet-shrimp runtime=docker image=ubuntu:24.04 keep=true
+waiting for 127.0.0.1:32857 local container ssh... elapsed=0s remaining=20m0s ports=32857:closed
+waiting for 127.0.0.1:32857 local container ssh ssh-auth... elapsed=10s remaining=19m50s ports=32857:tcp
+provisioned lease=cbx_5646ec84299e container=5c653976e613 state=ready
+leased cbx_5646ec84299e slug=violet-shrimp provider=local-container server=5c653976e613dd2afa0795751be4e63ddc6eac73a37976a024e3f7baa602866f type=ubuntu_24.04 ip=127.0.0.1 idle_timeout=30m0s expires=2026-07-14T04:24:20Z
+ready ssh=crabbox@127.0.0.1:32857 network=public workroot=/work/crabbox
+warmup complete total=20.314s
 
-$ git archive --format=tar --output=<source-archive> a4e75da329ec0ac4f629d9c66b301f470266f1b0
-source_archive_sha256=715f01d839a83fbaf7d2c955333baed887e05248a58ec61bcb1c69cb3629df62
+$ git archive --format=tar --output=<source-archive> f4f91848ca37913d97c0956a06487cb032c8f757
+source_archive_sha256=7894cb5b188b122f122fcd91b915a9dcd486438461ba36140547c770a31e60e5
 
-$ <install exact project wheels and complete no-deps client lock inside lease>
-Successfully installed opentraces-0.4.9 opentraces-schema-0.9.0 and 33 exactly locked client distributions
-dependency_lock_sha256=sha256:b02aad4b331a1f858cc44ee24fde58f568609faba04a843b8614c409ac73b7f6
-opentraces_wheel_sha256=1878972736eca50a9ace6e0b99eaac692b6c362727cd01f988fe67f931d3087e
+$ <rebuild exact repository-trusted binary with Bun 1.3.6>
+binary_sha256=9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad
+binary_size_bytes=94089101
+source_sha256=9c5d8893616522f34cdaf9714906f75d13fd37787560f46f81f6bc1725729c83
+build_inputs_sha256=5bb8b549b32ec07dc54612308d7cc20e3646c5362e3644e397f373fa9c4dc2e2
+provenance_file_sha256=63b6435139d47230fa3b50e82d1f72d9969f3dfaac052af0496a9ff12b1760ee
+target=bun-linux-arm64 provenance=verified
+
+$ <install exact project wheels and complete no-deps HF client lock inside lease>
+opentraces_wheel_sha256=5b04f15606cfef7d84edad70b2371b3bae4f0ecb6803be1e233b8db7a66090fa
 schema_wheel_sha256=af63003242b1e648cc9920f37c9d2a5504423bf47a9ecd1748cb2719eee19821
+dependency_lock_sha256=sha256:b02aad4b331a1f858cc44ee24fde58f568609faba04a843b8614c409ac73b7f6
+dependency_count=32 huggingface-hub=1.10.2 hf-xet=1.4.3
 execution_identity=opentraces-product sudo=false
-
-Base install-only app-state digest (complete dependency lock, wheels, identity):
-sha256:850066e1917e31e3213c7cbf567fb0c0e81ef69f62bb8a61c3265e5501ea5f31
-
-Final binary-inclusive app-state digest recorded by the happy run:
-sha256:5a15ff00d531e20ff62f557cdacb0b53138ea53420b979941b274b941461be81
-
-$ python3 -c '<print all installed contract package versions>'
-33 exact matches; huggingface-hub=1.10.2; hf-xet=1.4.3
-
-$ <inspect repository-controlled trusted-build manifest and binary provenance>
-{"build_inputs_sha256":"6338cd5962b0f836b768aa4dbe26da857f2a1d961fad5f32bd55d2d8dc0eeaac","bun_version":"1.3.6","contract_version":"huggingface.v1","provenance":"verified","sha256":"0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da","source_sha256":"97b98ffe5724fb7c64554d9637ba8574a1c58b5ea7eba1cb07d4c7a1579db367","target":"bun-linux-arm64"}
+base_app_state_digest=sha256:5ba324c2659645e4edc449f9c11316130300d36760499340fcda30a19a94bc69
+binary_inclusive_app_state_digest=sha256:fa9edc5b26247f70f1222cb2b59caebd2b0fbdbfe7aa5b82cdd076fafb03ddbf
 
 $ OPENTRACES_HF_EMULATOR_BINARY=<verified-binary> OPENTRACES_RUNTIME_FREE_BOX=1 python3 -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py
-......................s....                                              [100%]
-26 passed, 1 skipped in 4.28s
+......................s.....                                             [100%]
+27 passed, 1 skipped in 4.88s
 
-The single skip is the explicitly opted-in compile-tool test. The leased box
-runs the verified precompiled emulator and intentionally has no Bun toolchain.
-The contract proves the complete transitive client lock, repository-controlled
-binary trust, atomic/locked build publication, non-sudo product identity,
-owner-scoped API behavior, final ledger collection, and non-product-writable
-ledger custody.
+The single skip is the opted-in compile-tool test. The Ubuntu lease consumes the
+verified precompiled binary and intentionally has no Bun toolchain.
 
-$ <run public happy scenario at the same product source commit>
-run_id=run_20260714T021146217746Z_6e4b2f1ca0a8
+Literal sanitized emulator boot stdout:
+huggingface emulator listening on http://127.0.0.1:14318
+Literal sanitized emulator boot stderr:
+<empty>
+
+$ curl -fsS http://127.0.0.1:14318/_emulate/manifest
+{"id":"huggingface","name":"Hugging Face Hub","launch":{"nonce":"07ebc237b6d13502311a51e8506265b84e53b7dd3cfeddb6bae32b4a598917bb","pid":5217,"contract_version":"huggingface.v1","source_sha256":"9c5d8893616522f34cdaf9714906f75d13fd37787560f46f81f6bc1725729c83","build_inputs_sha256":"5bb8b549b32ec07dc54612308d7cc20e3646c5362e3644e397f373fa9c4dc2e2","binary_sha256":"9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad"},"surfaces":[{"id":"hub-rest","kind":"rest","title":"Hub REST API","basePath":"/api","status":"partial"},{"id":"resolve","kind":"provider-specific","title":"File resolve/download","status":"partial"}],"auth":[{"id":"user-token","title":"User access token","type":"bearer-token","status":"supported","validation":"minted-or-baseline-state"}],"specs":[{"kind":"manual","title":"Hand-authored Hub emulator","coverage":"partial","operations":[{"operationId":"createRepo","method":"POST","path":"/api/repos/create","status":"hand-authored"},{"operationId":"datasetInfo","method":"GET","path":"/api/datasets/{id}","status":"hand-authored"},{"operationId":"listRepoTree","method":"GET","path":"/api/datasets/{id}/tree/{rev}","status":"hand-authored"},{"operationId":"resolveFile","method":"GET","path":"/datasets/{id}/resolve/{rev}/{path}","status":"hand-authored"},{"operationId":"preupload","method":"POST","path":"/api/datasets/{id}/preupload/{rev}","status":"hand-authored","summary":"forces regular upload mode"},{"operationId":"commit","method":"POST","path":"/api/datasets/{id}/commit/{rev}","status":"hand-authored"},{"operationId":"whoami","method":"GET","path":"/api/whoami-v2","status":"hand-authored"},{"operationId":"updateSettings","method":"PUT","path":"/api/datasets/{id}/settings","status":"hand-authored"},{"operationId":"validateYaml","method":"POST","path":"/api/validate-yaml","status":"hand-authored","summary":"validates the dataset card before folder upload"},{"operationId":"listDatasets","method":"GET","path":"/api/datasets","status":"partial"},{"operationId":"deleteRepo","method":"DELETE","path":"/api/repos/delete","status":"partial"},{"operationId":"lfsBatch","method":"POST","path":"/{id}.git/info/lfs/objects/batch","status":"unsupported"},{"operationId":"xetUpload","status":"unsupported"}]}],"controlPlane":{"credentials":"POST /_emulate/credentials","seed":"POST /_emulate/seed","reset":"POST /_emulate/reset"},"seedSchema":{"repos":[{"repo_id":"namespace/name","private":false,"gated":false,"tags":[]}]},"stateModel":{"collections":[{"name":"hf.credentials"},{"name":"hf.repos"},{"name":"hf.files"},{"name":"hf.revisions"}]},"connections":[{"id":"hf-endpoint","title":"Point client at emulator","kind":"env","language":"bash","template":"HF_ENDPOINT={{baseUrl}}\nHF_TOKEN={{token}}"}]}
+
+$ <same-owner, non-signalling /proc process binding>
+pid=5217
+state=S
+owner_uid=999
+sidecar_uid=999
+executable=/opt/bench/emulators/opentraces-hf-emulator
+binary_sha256=9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad
+
+Literal JSONL commit witness from the happy run:
+{"request_id":"req_10","observed_at":"2026-07-14T03:57:21.881Z","method":"POST","path":"/api/datasets/bench/scenario-2/commit/main","operation_id":"commit","request":{"repo_id":"bench/scenario-2","revision":"main","parent_commit":"0000000000000000000000000000000000000000","files":["README.md","data/opentraces-product-pub_20260714T035721Z_172368f0-48208f9428d6.jsonl","dataset_infos.json","schemas/row.schema.json"]},"response":{"status":200,"commit_oid":"e28400b9d93508895c8e012e2896432c3729aa7a"}}
+
+$ opentraces bench run tests/arena/scenarios/test_publish_reaches_hf_remote.py::test_publish_reaches_hf_remote --json
+run_id=run_20260714T035634282499Z_1ed9be1cb148
+lease=cbx_c0fb466aab50 released=true post_stop_inspect_rc=4 container_absent=true
 execution_status=complete verdict=pass exit_code=0
-ledger_rows=11 evidence_complete=true integrity_verified=true
-evidence_ref=ledgers/huggingface.jsonl world_ref=world/huggingface.json
-lease=cbx_d52030481305 released=true post_stop_inspect_rc=4
+ledger_rows=11 commit_rows=1 evidence_complete=true integrity_verified=true
+world_ref=world/huggingface.json evidence_ref=ledgers/huggingface.jsonl
 
-$ <run emulator-down negative control at the same product source commit>
-run_id=run_20260714T021512555812Z_5e7601448e0f
+$ OT_BENCH_HF_DOWN_CONTROL=1 opentraces bench run tests/arena/scenarios/test_publish_reaches_hf_remote.py::test_publish_reaches_hf_remote --json
+run_id=run_20260714T035757109561Z_c35c2a5f7c75
+lease=cbx_e993044c6cda released=true post_stop_inspect_rc=4 container_absent=true
 execution_status=complete verdict=fail exit_code=1
 ledger_rows=3 commit_rows=0 evidence_complete=true integrity_verified=true
-evidence_ref=ledgers/huggingface.jsonl
-lease=cbx_9576756ad81d released=true post_stop_inspect_rc=4
 
-$ <render and inspect the public World page>
-capture=opentraces-a2-a4e75da-world-page.png dimensions=1280x5203
-sha256=6c5a260c72e6e885d06e71f4dfd49410e03a315fb5f2753332e842bbeaef2679
-observed=complete/pass result, structured endpoint and baseline, capability groups, world and ledger evidence links, five public actions and recordings, verifier, complete exhaust
+$ <Chromium full-page capture of the finalized happy-run Scenario 2 page>
+capture=tests/manual/opentraces-a2-f4f9184-local-world-page.png
+dimensions=1280x5275
+sha256=6ee8b309126132d42bffc4b64d5736c9c553dee78c6bb50a085c49d434ceb918
+visually_inspected=true
+observed=complete/pass result, structured World, five public recordings, verifier, and complete stored exhaust
 
-$ crabbox stop --provider local-container --target linux --id cbx_8f94e3e59d3d
-deleted lease=cbx_8f94e3e59d3d server=6a00d1d373ca3c47304ba8c4d54d18e576bb938ac5262edf7a7a0b09d297dc52
+$ crabbox stop --id cbx_5646ec84299e --provider local-container
+released=true
 
-$ crabbox inspect --provider local-container --target linux --id cbx_8f94e3e59d3d
+$ crabbox inspect --id cbx_5646ec84299e --provider local-container --json
 returncode=4
-local-container lease not found: cbx_8f94e3e59d3d
+local-container lease not found: cbx_5646ec84299e
 container_absent=true
+
+REMOTE-ONLY BLOCKER
+Issue #264 still requires this proof on a genuine remote provider lease.
+No remote provider was invoked, and this LOCAL diagnostic makes no remote claim.
