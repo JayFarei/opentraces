@@ -66,6 +66,7 @@ from .bucket_layout import (
     trace_v1_context_path,
     trace_v1_history_dir,
     trace_v1_json_path,
+    trace_v1_labels_path,
     trace_v1_sources_path,
     trace_v1_trail_path,
     traces_v1_dir,

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import opentraces.core.arena.run_store as run_store_module
 import pytest
+from opentraces.cli.trace import _trace_overview
 from opentraces.core import paths
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.labels import (
@@ -19,6 +20,7 @@ from opentraces.core.arena.labels import (
 )
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 from opentraces.core.bucket_layout import trace_v1_json_path, trace_v1_labels_path
+from opentraces_schema import Agent, Outcome, TraceRecord
 
 
 RUN_ID = "run_20260714T190000000000Z_abcdef123456"
@@ -28,25 +30,39 @@ SHA_A = "sha256:" + "a" * 64
 SHA_B = "sha256:" + "b" * 64
 
 
-def _result(*, run_id: str, machinery_error: bool = False) -> dict:
-    verifiers = [] if machinery_error else [
-        {
-            "name": "scenarios.publish.remote_commit_exists",
-            "source_ref": {"path": "bench/test_publish.py", "digest": SHA_A},
-            "status": "pass",
-            "duration_ms": 8,
-            "evidence_refs": ["ledgers/huggingface.jsonl"],
-            "reason": None,
-        },
-        {
-            "name": "scenarios.publish.local_state_matches",
-            "source_ref": {"path": "bench/test_publish.py", "digest": SHA_B},
-            "status": "pass",
-            "duration_ms": 3,
-            "evidence_refs": ["actions/0001/result.json"],
-            "reason": None,
-        },
-    ]
+def _result(
+    *,
+    run_id: str,
+    machinery_error: bool = False,
+    missing_evidence: bool = False,
+    duplicate_verifiers: bool = False,
+) -> dict:
+    verifiers = (
+        []
+        if machinery_error
+        else [
+            {
+                "name": "scenarios.publish.remote_commit_exists",
+                "source_ref": {"path": "bench/test_publish.py", "digest": SHA_A},
+                "status": "pass",
+                "duration_ms": 8,
+                "evidence_refs": ["ledgers/huggingface.jsonl"],
+                "reason": None,
+            },
+            {
+                "name": "scenarios.publish.local_state_matches",
+                "source_ref": {"path": "bench/test_publish.py", "digest": SHA_B},
+                "status": "pass",
+                "duration_ms": 3,
+                "evidence_refs": [
+                    "actions/9999/missing.json" if missing_evidence else "actions/0001/result.json"
+                ],
+                "reason": None,
+            },
+        ]
+    )
+    if duplicate_verifiers:
+        verifiers[1] = json.loads(json.dumps(verifiers[0]))
     return build_result(
         run_id=run_id,
         claim="Publishing reaches the configured remote.",
@@ -57,11 +73,7 @@ def _result(*, run_id: str, machinery_error: bool = False) -> dict:
         duration_ms=100,
         execution_status="error" if machinery_error else "complete",
         verdict=None if machinery_error else "pass",
-        reason=(
-            {"code": "runner_failed", "message": "runner failed"}
-            if machinery_error
-            else None
-        ),
+        reason=({"code": "runner_failed", "message": "runner failed"} if machinery_error else None),
         verifiers=verifiers,
         evidence=(
             {
@@ -104,6 +116,8 @@ def _finalized_run(
     monkeypatch: pytest.MonkeyPatch,
     *,
     machinery_error: bool = False,
+    missing_evidence: bool = False,
+    duplicate_verifiers: bool = False,
 ) -> tuple[RunStore, Path]:
     monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
@@ -112,7 +126,12 @@ def _finalized_run(
     draft.write_text("ledgers/huggingface.jsonl", '{"operation":"commit"}\n')
     draft.write_json("actions/0001/result.json", {"returncode": 0})
     return store, draft.finalize(
-        _result(run_id=draft.run_id, machinery_error=machinery_error)
+        _result(
+            run_id=draft.run_id,
+            machinery_error=machinery_error,
+            missing_evidence=missing_evidence,
+            duplicate_verifiers=duplicate_verifiers,
+        )
     )
 
 
@@ -120,6 +139,22 @@ def _set_bucket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bucket = tmp_path / "bucket"
     monkeypatch.setattr(paths, "bucket_dir", lambda: bucket)
     return bucket
+
+
+def _write_subject_trace(*, metadata: dict[str, object] | None = None) -> Path:
+    path = trace_v1_json_path(PROJECT_SLUG, TRACE_ID)
+    path.parent.mkdir(parents=True)
+    record = TraceRecord(
+        trace_id=TRACE_ID,
+        session_id="session-label-subject",
+        agent=Agent(name="test-agent"),
+        task={"description": "Publishing reaches the configured remote."},
+        steps=[],
+        outcome=Outcome(success=None),
+        metadata=metadata or {},
+    )
+    path.write_text(record.model_dump_json() + "\n", encoding="utf-8")
+    return path
 
 
 def test_mint_freezes_one_deterministic_row_per_verifier_with_complete_run_pin(
@@ -142,17 +177,30 @@ def test_mint_freezes_one_deterministic_row_per_verifier_with_complete_run_pin(
 
     assert second == first
     assert len(first) == 2
-    assert len({row["label_id"] for row in first}) == 2
-    assert [row["verifier"]["ordinal"] for row in first] == [1, 2]
-    assert {row["schema_version"] for row in first} == {
-        "opentraces.arena.label.v0"
+    assert all(verify_label(row, store=store) for row in first)
+    assert set(first[0]) == {
+        "schema_version",
+        "label_id",
+        "kind",
+        "subject",
+        "claim",
+        "verdict",
+        "verifier",
+        "run",
+        "product_pin",
+        "run_facts",
     }
+    assert len({row["label_id"] for row in first}) == 2
+    assert [row["label_id"] for row in first] == [
+        "lbl_19db0aa70f3b77d3827602806c04a1da0fa520f3f499420293ffaa953ac2e04c",
+        "lbl_dd673a1f49c93a9ea1ba681b9c8d30295fdf24fe60c68da845322bd9fe109498",
+    ]
+    assert [row["verifier"]["ordinal"] for row in first] == [1, 2]
+    assert {row["schema_version"] for row in first} == {"opentraces.arena.label.v0"}
     assert {row["kind"] for row in first} == {"bench"}
     assert {row["subject"]["kind"] for row in first} == {"trace"}
     assert {row["subject"]["address"] for row in first} == {TRACE_ID}
-    assert {row["claim"] for row in first} == {
-        "Publishing reaches the configured remote."
-    }
+    assert {row["claim"] for row in first} == {"Publishing reaches the configured remote."}
     assert {row["verdict"] for row in first} == {"pass"}
     assert first[0]["verifier"] == {
         "ordinal": 1,
@@ -166,6 +214,9 @@ def test_mint_freezes_one_deterministic_row_per_verifier_with_complete_run_pin(
     assert {row["run"]["complete_digest"] for row in first} == {
         complete_run_digest(run_path, store=store)
     }
+    assert complete_run_digest(run_path, store=store) == (
+        "sha256:7d43965f4d1f287f29428af1b8fa992846254dbde0e91166b184a2d98a0f6fb2"
+    )
     assert first[0]["product_pin"] == {
         "commit": "2ab03ac637e",
         "worktree": "dirty",
@@ -184,9 +235,7 @@ def test_attach_is_idempotent_byte_identical_canonical_and_spine_preserving(
 ) -> None:
     _set_bucket(tmp_path, monkeypatch)
     store, run_path = _finalized_run(tmp_path, monkeypatch)
-    trace_path = trace_v1_json_path(PROJECT_SLUG, TRACE_ID)
-    trace_path.parent.mkdir(parents=True)
-    trace_path.write_text('{"metadata":{"untouched":true}}\n', encoding="utf-8")
+    trace_path = _write_subject_trace(metadata={"untouched": True})
     trace_before = trace_path.read_bytes()
     rows = mint_labels_for_run(
         run_path,
@@ -197,14 +246,14 @@ def test_attach_is_idempotent_byte_identical_canonical_and_spine_preserving(
     first_path = attach_labels(
         project_slug=PROJECT_SLUG,
         trace_id=TRACE_ID,
-        labels=reversed(rows),
+        labels=[rows[0]],
         store=store,
     )
     first_bytes = first_path.read_bytes()
     second_path = attach_labels(
         project_slug=PROJECT_SLUG,
         trace_id=TRACE_ID,
-        labels=rows,
+        labels=[rows[0]],
         store=store,
     )
 
@@ -212,9 +261,37 @@ def test_attach_is_idempotent_byte_identical_canonical_and_spine_preserving(
     assert second_path.read_bytes() == first_bytes
     assert first_bytes[4:8] == b"\x00\x00\x00\x00"
     assert trace_path.read_bytes() == trace_before
+    assert read_labels(PROJECT_SLUG, TRACE_ID) == [rows[0]]
+
+    attach_labels(
+        project_slug=PROJECT_SLUG,
+        trace_id=TRACE_ID,
+        labels=reversed(rows),
+        store=store,
+    )
     assert [row["label_id"] for row in read_labels(PROJECT_SLUG, TRACE_ID)] == sorted(
         row["label_id"] for row in rows
     )
+    assert trace_path.read_bytes() == trace_before
+
+
+def test_identical_verifier_calls_remain_two_rows_by_ordinal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch, duplicate_verifiers=True)
+
+    rows = mint_labels_for_run(
+        run_path,
+        subject={"kind": "trace", "address": TRACE_ID},
+        store=store,
+    )
+
+    assert len(rows) == 2
+    assert [row["verifier"]["ordinal"] for row in rows] == [1, 2]
+    assert rows[0]["verifier"]["name"] == rows[1]["verifier"]["name"]
+    assert rows[0]["label_id"] != rows[1]["label_id"]
 
 
 def test_tampering_any_run_byte_invalidates_an_existing_label_and_new_mint(
@@ -290,7 +367,7 @@ def test_missing_run_and_mismatched_digest_refuse_mint_or_verification(
         )
     forged = json.loads(json.dumps(rows[0]))
     forged["run"]["complete_digest"] = "sha256:" + "0" * 64
-    with pytest.raises(LabelIntegrityError, match="complete run digest"):
+    with pytest.raises(LabelIntegrityError, match="label_id"):
         verify_label(forged, store=store)
 
 
@@ -331,15 +408,28 @@ def test_machinery_error_with_null_verdict_cannot_mint_a_grade(
         )
 
 
+def test_mint_refuses_a_verifier_evidence_ref_not_persisted_in_the_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch, missing_evidence=True)
+
+    with pytest.raises(LabelIntegrityError, match="not persisted"):
+        mint_labels_for_run(
+            run_path,
+            subject={"kind": "trace", "address": TRACE_ID},
+            store=store,
+        )
+
+
 def test_normal_trace_summary_is_bounded_and_reads_the_companion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_bucket(tmp_path, monkeypatch)
     store, run_path = _finalized_run(tmp_path, monkeypatch)
-    trace_path = trace_v1_json_path(PROJECT_SLUG, TRACE_ID)
-    trace_path.parent.mkdir(parents=True)
-    trace_path.write_text("{}\n", encoding="utf-8")
+    _write_subject_trace()
     rows = mint_labels_for_run(
         run_path,
         subject={"kind": "trace", "address": TRACE_ID},
@@ -364,3 +454,14 @@ def test_normal_trace_summary_is_bounded_and_reads_the_companion(
         "subject",
         "run_ref",
     }
+    record = TraceRecord(
+        trace_id=TRACE_ID,
+        session_id="session-label-summary",
+        agent=Agent(name="test-agent"),
+        task={"description": "Publishing reaches the configured remote."},
+        steps=[],
+        outcome=Outcome(success=None),
+    )
+    assert _trace_overview(record, include_labels=True)["labels"] == (
+        label_summary_for_trace(TRACE_ID)
+    )

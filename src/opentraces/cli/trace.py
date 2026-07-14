@@ -2236,7 +2236,10 @@ def trace_get(
             sys.exit(6)
         record = _read_trace_record_from_path(trace_path)
         # v7 audit-P2 cure: bounded overview by default, NEVER a 1000-step dump.
-        payload = _envelope("opentraces.trace.get.v1", trace=_trace_overview(record))
+        payload = _envelope(
+            "opentraces.trace.get.v1",
+            trace=_trace_overview(record, include_labels=True),
+        )
 
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
@@ -2425,7 +2428,7 @@ def _trace_get_run_intel_impl(ref: str, as_json: bool) -> None:
         click.echo(f"{s.kind}  step {s.step_index}  {s.reason}")
 
 
-def _trace_overview(record) -> dict:
+def _trace_overview(record, *, include_labels: bool = False) -> dict:
     """Build a bounded, readable overview of a trace (v7 audit-P2 cure).
 
     The bare ``trace get <id>`` default must be readable but NEVER an
@@ -2465,7 +2468,7 @@ def _trace_overview(record) -> dict:
                 duration = None
 
     agent = getattr(record, "agent", None)
-    return {
+    overview = {
         "trace_id": record.trace_id,
         "title": title or record.trace_id,
         "summary": summary or title or record.trace_id,
@@ -2487,6 +2490,11 @@ def _trace_overview(record) -> dict:
             "card": f"ot://trace/{record.trace_id}/card",
         },
     }
+    if include_labels:
+        from ..core.arena.labels import label_summary_for_trace
+
+        overview["labels"] = label_summary_for_trace(record.trace_id)
+    return overview
 
 
 _STEP_CARD_CONTENT_PREVIEW_CHARS = 240
