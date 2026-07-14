@@ -155,10 +155,16 @@ class RunActionSequence:
                     self.draft.path / action_ref / "invocation.json"
                 ).is_file():
                     raise ValueError("timeline action reference is missing")
+                causal_refs = row.get("causal_refs")
                 if not isinstance(row.get("recorded_at"), str) or not isinstance(
-                    row.get("causal_refs"), list
+                    causal_refs, list
                 ):
                     raise ValueError("timeline row has invalid recorded_at or causal_refs")
+                for causal_ref in causal_refs:
+                    if not isinstance(causal_ref, str) or not (
+                        self.draft.path / causal_ref / "invocation.json"
+                    ).is_file():
+                        raise ValueError("timeline causal reference is dangling")
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             return {
                 "complete": False,
