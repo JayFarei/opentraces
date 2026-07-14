@@ -94,6 +94,61 @@ def _seed_event_log(project: Path) -> None:
     )
 
 
+def _git_capture(project: Path, result_dir: Path) -> Capture:
+    return Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("git",),
+            required_sources=("git",),
+            result_dir=result_dir,
+        )
+    )
+
+
+def _install_git_hang(
+    *,
+    tmp_path: Path,
+    monkeypatch,
+    condition: str,
+) -> Path:
+    real_git = shutil.which("git")
+    assert real_git is not None
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    pid_path = tmp_path / "hung-git-pid"
+    shim = shim_dir / "git"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f"if {condition}; then\n"
+        '  printf "%s\\n" "$$" > "$OT_GIT_HANG_PID"\n'
+        "  exec sleep 3.7\n"
+        "fi\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("OT_GIT_HANG_PID", str(pid_path))
+    return pid_path
+
+
+def _finish_with_deadline(capture: Capture) -> tuple[object, float]:
+    started = time.monotonic()
+    result = capture.finish(deadline=started + 3.0)
+    return result.source("git"), time.monotonic() - started
+
+
+def _terminate_pid_file(pid_path: Path) -> None:
+    if not pid_path.is_file():
+        return
+    try:
+        os.kill(int(pid_path.read_text(encoding="utf-8")), signal.SIGTERM)
+    except (ProcessLookupError, ValueError):
+        pass
+
+
 def test_deadline_git_runners_preserve_stdin(tmp_path: Path) -> None:
     """Deadline wrappers must hash the supplied blob, never an empty stdin."""
     project = _git_project(tmp_path / "project")
@@ -260,3 +315,125 @@ def test_finish_bounds_transitive_scoped_event_git_probe(
                 os.kill(int(pid_path.read_text(encoding="utf-8")), signal.SIGTERM)
             except (ProcessLookupError, ValueError):
                 pass
+
+
+def test_finish_bounds_anchor_reconciliation_git_show(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Anchor reconciliation must share the finalizer's absolute deadline."""
+    project = _git_project(tmp_path / "project")
+    _seed_event_log(project)
+    capture = _git_capture(project, tmp_path / "result")
+    pid_path = _install_git_hang(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        condition='[ "$1" = "show" ] && [ -n "$OT_OPENTRACES_DIR" ]',
+    )
+
+    try:
+        source, elapsed = _finish_with_deadline(capture)
+        assert elapsed < 3.5
+        assert source.status == "partial"
+        assert source.completeness == "partial"
+        assert any(
+            "git show" in limitation and "timed out" in limitation
+            for limitation in source.limitations
+        )
+        assert pid_path.is_file(), "anchor git-show control was not exercised"
+    finally:
+        _terminate_pid_file(pid_path)
+
+
+def test_finish_bounds_maturation_event_append(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Completed maturation work must not append beyond the shared deadline."""
+    project = _git_project(tmp_path / "project")
+    _seed_event_log(project)
+    capture = _git_capture(project, tmp_path / "result")
+    pid_path = _install_git_hang(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        condition=(
+            '[ "$1" = "hash-object" ] && [ "$2" = "-w" ] '
+            '&& [ -n "$OT_OPENTRACES_DIR" ]'
+        ),
+    )
+
+    try:
+        source, elapsed = _finish_with_deadline(capture)
+        assert elapsed < 3.5
+        assert source.status == "partial"
+        assert source.completeness == "partial"
+        assert any(
+            "git hash-object -w --stdin" in limitation and "timed out" in limitation
+            for limitation in source.limitations
+        )
+        assert pid_path.is_file(), "maturation append control was not exercised"
+    finally:
+        _terminate_pid_file(pid_path)
+
+
+def test_finish_bounds_final_event_evidence_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The non-truncated final evidence read must remain inside the deadline."""
+    project = _git_project(tmp_path / "project")
+    _seed_event_log(project)
+    capture = _git_capture(project, tmp_path / "result")
+    pid_path = _install_git_hang(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        condition=(
+            '[ "$1" = "rev-list" ] && [ "$2" = "--reverse" ] '
+            '&& [ -n "$OT_OPENTRACES_DIR" ]'
+        ),
+    )
+
+    try:
+        source, elapsed = _finish_with_deadline(capture)
+        assert elapsed < 3.5
+        assert source.status == "partial"
+        assert source.completeness == "partial"
+        assert any(
+            "git rev-list --reverse" in limitation and "timed out" in limitation
+            for limitation in source.limitations
+        )
+        assert pid_path.is_file(), "final event-read control was not exercised"
+    finally:
+        _terminate_pid_file(pid_path)
+
+
+def test_finish_bounds_parent_git_report_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Parent-side evidence validation must not outlive Capture.finish's deadline."""
+    project = _git_project(tmp_path / "project")
+    capture = _git_capture(project, tmp_path / "result")
+    pid_path = _install_git_hang(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        condition=(
+            '[ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] '
+            '&& [ "$3" = "refs/opentraces/local/events/v1" ] '
+            '&& [ -z "$OT_OPENTRACES_DIR" ]'
+        ),
+    )
+
+    try:
+        source, elapsed = _finish_with_deadline(capture)
+        assert elapsed < 3.5
+        assert source.status == "partial"
+        assert source.completeness == "partial"
+        assert any(
+            "git rev-parse --verify refs/opentraces/local/events/v1" in limitation
+            and "timed out" in limitation
+            for limitation in source.limitations
+        )
+        assert pid_path.is_file(), "parent validation control was not exercised"
+    finally:
+        _terminate_pid_file(pid_path)
