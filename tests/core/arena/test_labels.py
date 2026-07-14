@@ -7,7 +7,9 @@ import opentraces.core.arena.run_store as run_store_module
 import pytest
 from opentraces.cli.trace import _trace_overview
 from opentraces.core import paths
+from opentraces.core._bucket_io import _atomic_write_gzip, _canonical_json
 from opentraces.core.arena.contract import build_result
+from opentraces.core.arena.labels import _label_id
 from opentraces.core.arena.labels import (
     LabelContractError,
     LabelIntegrityError,
@@ -467,3 +469,33 @@ def test_normal_trace_summary_is_bounded_and_reads_the_companion(
     assert _trace_overview(record, include_labels=True)["labels"] == (
         label_summary_for_trace(TRACE_ID)
     )
+
+
+def test_normal_trace_read_refuses_a_self_consistent_forged_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    _write_subject_trace()
+    row = mint_labels_for_run(
+        run_path,
+        subject={"kind": "trace", "address": TRACE_ID},
+        store=store,
+    )[0]
+    forged = json.loads(json.dumps(row))
+    forged["verdict"] = "fail"
+    forged_without_id = {key: value for key, value in forged.items() if key != "label_id"}
+    forged["label_id"] = _label_id(forged_without_id)
+    _atomic_write_gzip(
+        trace_v1_labels_path(PROJECT_SLUG, TRACE_ID),
+        (_canonical_json(forged) + "\n").encode("utf-8"),
+    )
+
+    # The attacker repaired the row's deterministic content id, so shape-only
+    # validation passes. The stored run remains the authority for the grade.
+    assert forged["verdict"] == "fail"
+    with pytest.raises(LabelIntegrityError, match="verified run"):
+        verify_label(forged, store=store)
+    with pytest.raises(LabelIntegrityError, match="verified run"):
+        label_summary_for_trace(TRACE_ID)
