@@ -253,10 +253,10 @@ def test_s2_pinned_boundaries():
     assert spans == [(0, 0), (1, 2), (3, 5), (6, 7), (8, 8)], spans
 
 
-_REAL_CAPTURE_FIXTURE = Path(__file__).parent / "fixtures/a4_real_capture_coordinate/trace.jsonl"
-_REAL_CAPTURE_PROVENANCE = (
-    Path(__file__).parent / "fixtures/a4_real_capture_coordinate/PROVENANCE.json"
+_REAL_CAPTURE_FIXTURE = (
+    Path(__file__).parent / "fixtures/claude/claude-linear-edit-real-session.jsonl"
 )
+_REAL_CAPTURE_PROVENANCE = _REAL_CAPTURE_FIXTURE.with_suffix(".provenance.json")
 
 
 def _sha256(path: Path) -> str:
@@ -264,9 +264,13 @@ def _sha256(path: Path) -> str:
 
 
 def _real_capture_record() -> TraceRecord:
-    return TraceRecord.model_validate_json(_REAL_CAPTURE_FIXTURE.read_text().splitlines()[0])
+    record = ClaudeCodeParser().parse_session(_REAL_CAPTURE_FIXTURE)
+    assert record is not None
+    return record
 
 
+# TODO(#265,#270): after A3 and A4 merge, replace these duplicated release-
+# fixture checks with one shared verifier owned by the capture-test substrate.
 def test_coordinate_fixture_requires_a3_verified_release_chain():
     """#270 consumes A3's independently verified real-agent release asset."""
 
@@ -313,44 +317,31 @@ def test_release_session_independently_proves_position_address_mismatch():
     materialized_steps = [
         step["step_index"]
         for trajectory in envelope["trajectories"]
-        for step in materialize_trajectory(
-            TraceMaterializationRef.from_record(record), trajectory
-        )["steps"]
+        for step in materialize_trajectory(TraceMaterializationRef.from_record(record), trajectory)[
+            "steps"
+        ]
     ]
     assert materialized_steps == canonical_steps
 
 
 def test_coordinate_fixture_has_verifiable_real_capture_provenance():
-    """#270's coordinate control must originate in a real agent capture."""
+    """The release-derived session documents its narrow sanitization."""
 
     provenance = json.loads(_REAL_CAPTURE_PROVENANCE.read_text())
 
-    assert provenance.get("schema_version") == "opentraces.test_capture_provenance.v1"
-    assert provenance.get("source_kind") == "real_agent_capture"
-    assert provenance.get("sanitized") is True
-    assert provenance.get("fixture_sha256") == _sha256(_REAL_CAPTURE_FIXTURE)
-
-    source = provenance.get("source") or {}
-    source_path = Path(__file__).parents[1] / str(source.get("repository_path", ""))
-    assert source.get("sha256") == _sha256(source_path)
-    assert source.get("git_commit") == "8c9ef597295b8ee932455e273a33d0f22eca6789"
-    assert source.get("capture_agent") == "claude-code"
-    assert source.get("capture_agent_version")
-    assert provenance.get("retained_step_indices") == [1, 2, 3]
-
-    source_record = TraceRecord.model_validate_json(source_path.read_text().splitlines()[0])
-    fixture_record = _real_capture_record()
-    assert (
-        source.get("session_id_sha256")
-        == hashlib.sha256(source_record.session_id.encode()).hexdigest()
+    assert provenance.get("source_agent") == "claude"
+    assert provenance.get("source_session_path") == (
+        "home/.claude/projects/<captured-project>/164b9ad1-4c1b-4602-9102-5276951a1594.jsonl"
     )
-    assert source.get("capture_agent_version") == source_record.agent.version
-    assert [step.step_index for step in fixture_record.steps] == [
-        step.step_index for step in source_record.steps[:3]
+    assert provenance.get("derivation") == [
+        "retained authentic user, assistant, and opentraces_hook rows",
+        "removed only opaque assistant thinking signature fields",
+        "rewrote the captured otbox project root to /workspace/claude-real-edit-box/project",
     ]
-    assert [step.role for step in fixture_record.steps] == [
-        step.role for step in source_record.steps[:3]
-    ]
+
+    rows = [json.loads(line) for line in _REAL_CAPTURE_FIXTURE.read_text().splitlines()]
+    assert {row.get("type") for row in rows} >= {"user", "assistant", "opentraces_hook"}
+    assert {row.get("version") for row in rows if row.get("version")} == {"2.1.175"}
 
     fixture_bytes = _REAL_CAPTURE_FIXTURE.read_bytes()
     assert b"/Users/" not in fixture_bytes
@@ -360,14 +351,14 @@ def test_coordinate_fixture_has_verifiable_real_capture_provenance():
 def test_real_capture_trajectory_materializes_in_step_address_coordinates():
     """Regression for #270: slicer positions are not ``Step.step_index``.
 
-    This committed fixture is a captured TraceRecord whose parser-assigned step
-    indices are 1-based.  The slicing-v1 trajectory remains the frozen 0-based
-    position span; materialization is the one boundary that translates it to
-    the canonical trace/ctx/Trail address coordinate.
+    This committed fixture is a sanitized captured session whose parser-assigned
+    step indices are 1-based. The slicing-v1 trajectory remains the frozen
+    0-based position span; materialization is the one boundary that translates
+    it to the canonical trace/ctx/Trail address coordinate.
     """
 
     record = _real_capture_record()
-    assert [step.step_index for step in record.steps] == [1, 2, 3]
+    assert [step.step_index for step in record.steps] == [1, 2, 3, 4, 5, 6]
 
     trace_slice = materialize_trajectory(
         TraceMaterializationRef.from_record(record),
@@ -480,7 +471,7 @@ def test_frozen_slicing_envelope_tiles_same_real_capture_steps_when_materialized
     [
         Trajectory(start=-1, end=0, kind="user_turn", label="negative"),
         Trajectory(start=1, end=0, kind="user_turn", label="reversed"),
-        Trajectory(start=0, end=3, kind="user_turn", label="outside"),
+        Trajectory(start=0, end=6, kind="user_turn", label="outside"),
         {"start": 0.9, "end": 1, "kind": "user_turn", "label": "float"},
         {"start": True, "end": 1, "kind": "user_turn", "label": "bool"},
         {"start": "0", "end": 1, "kind": "user_turn", "label": "string"},

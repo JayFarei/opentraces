@@ -1,0 +1,16 @@
+{
+  "derived_fixture_sha256": "e6464e842989db4e0de33bfda299e31d94114691ddb6b47dd4c2d43e487be38d",
+  "derivation": [
+    "retained authentic user, assistant, and opentraces_hook rows",
+    "removed only opaque assistant thinking signature fields",
+    "rewrote the captured otbox project root to /workspace/claude-real-edit-box/project"
+  ],
+  "source_agent": "claude",
+  "source_metadata_sha256": "2287ae5f223f5b135d33d3b0baad645449d0713d9801a7e0500eec07b3b3a120",
+  "source_release": "otbox-captures-v1",
+  "source_session_path": "home/.claude/projects/<captured-project>/164b9ad1-4c1b-4602-9102-5276951a1594.jsonl",
+  "source_session_sha256": "a745ceee16159433d93e8b8cc54c2e2c101c657630644bb1b10902c95b42cde0",
+  "source_snapshot": "claude-linear-edit.snapshot.tar.gz",
+  "source_snapshot_sha256": "54466705324a1f44d510160fb3fa31213ef8584704afc6b443487441ca1bf03b",
+  "source_snapshot_size_bytes": 68916309
+}
