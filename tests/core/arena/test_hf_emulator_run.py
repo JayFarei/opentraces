@@ -262,6 +262,8 @@ def _source() -> ScenarioSource:
         repository="JayFarei/opentraces",
         commit="product-commit",
         dirty_diff_digest=None,
+        product_worktree="clean",
+        product_dirty_diff_digest=None,
     )
 
 
