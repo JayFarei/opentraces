@@ -175,6 +175,7 @@ class BrowserDrive:
         self._screenshot_refs: list[str] = []
         self._channels: list[dict[str, Any]] = []
         self._finalized = False
+        self._setup_refused = False
 
     @property
     def has_actions(self) -> bool:
@@ -182,7 +183,11 @@ class BrowserDrive:
 
     def _active_session(self) -> BrowserSession:
         if self._session is None:
-            self._session = self.factory()
+            try:
+                self._session = self.factory()
+            except BrowserSetupRefusal:
+                self._setup_refused = True
+                raise
         return self._session
 
     def _perform(
@@ -348,6 +353,19 @@ class BrowserDrive:
         self._channels = [channels[kind] for kind in BROWSER_CHANNELS]
 
     def recording_summary(self) -> dict[str, Any]:
+        if self._setup_refused:
+            return {
+                "rewatchable": False,
+                "channels": [
+                    {
+                        "kind": kind,
+                        "complete": False,
+                        "path": None,
+                        "reason": "browser setup refused before recording",
+                    }
+                    for kind in BROWSER_CHANNELS
+                ],
+            }
         return {
             "rewatchable": bool(self._channels) and all(
                 channel["complete"] for channel in self._channels
