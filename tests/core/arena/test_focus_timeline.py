@@ -217,3 +217,42 @@ def test_timeline_requires_exact_stored_action_facts_without_rewriting_truth(
     assert recordings["timeline"]["complete"] is False
     assert reason_fragment in recordings["timeline"]["reason"]
     assert all(channel["complete"] for channel in recordings["channels"])
+
+
+def test_timeline_rejects_completion_timestamp_inconsistent_with_stored_duration(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=PublicBrowserSession,
+    )
+
+    def journey(run):
+        terminal = run.terminal.exec("printf", "before")
+        return {"evidence_refs": [terminal.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(journey)
+        assert run.draft is not None
+        timeline_path = run.draft.path / "recordings/timeline.jsonl"
+        rows = [
+            json.loads(line)
+            for line in timeline_path.read_text(encoding="utf-8").splitlines()
+        ]
+        completion = next(row for row in rows if row["event"] == "action_completed")
+        completion["recorded_at"] = "2099-01-01T00:00:00Z"
+        timeline_path.write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    recordings = run.result["recordings"]
+    assert run.result["verdict"] == "pass"
+    assert run.result["evidence"]["complete"] is True
+    assert recordings["rewatchable"] is False
+    assert recordings["timeline"]["complete"] is False
+    assert "timestamp duration" in recordings["timeline"]["reason"]
+    assert all(channel["complete"] for channel in recordings["channels"])
