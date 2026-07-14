@@ -347,6 +347,33 @@ def test_elapsed_deadline_never_turns_requested_sources_complete(tmp_path: Path)
     assert all(source.completeness == "missing" for source in result.sources)
 
 
+def test_elapsed_deadline_preserves_configured_security_snapshot(tmp_path: Path) -> None:
+    from opentraces.core.config import load_config, save_config
+    from opentraces.security.config import set_security_tools_exact
+
+    cfg = load_config()
+    set_security_tools_exact(cfg, ("regex", "entropy"))
+    save_config(cfg)
+    project = _git_project(tmp_path / "project")
+
+    result = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("watcher",),
+            required_sources=("watcher",),
+            result_dir=tmp_path / "deadline-result",
+        )
+    ).finish(deadline=time.monotonic() - 0.001)
+
+    assert result.source("watcher").status == "timed_out"
+    assert result.security["configuration"] == "configured"
+    assert result.security["configured_tools"] == ["regex", "entropy"]
+    assert result.security["tools_applied"] == []
+    assert result.security["observed"] is False
+
+
 def test_product_identity_observation_respects_finish_deadline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
