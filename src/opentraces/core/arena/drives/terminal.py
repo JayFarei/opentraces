@@ -6,6 +6,8 @@ import hashlib
 import json
 import shlex
 import subprocess
+import threading
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -14,7 +16,7 @@ from ..box import Box, CrabboxRuntime
 from ..diagnostics import sanitize_diagnostic_value
 from ..run_store import RunDraft
 from ..recording import RecordingConversionError, convert_script_cast
-from .actions import RunActionSequence
+from .actions import ActionAllocation, RunActionSequence
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,50 @@ class TerminalResult:
             raise
 
 
+@dataclass(frozen=True)
+class _PendingTerminalState:
+    argv: tuple[str, ...]
+    environment: dict[str, str]
+    cwd: str | None
+    timeout: float
+    allocation: ActionAllocation
+    action: str
+    invocation_ref: str
+    result_ref: str
+    remote_timing: str
+    remote_typescript: str
+    recorded_argv: list[str]
+    timing_path: Path
+
+
+class TerminalAction:
+    """One bounded terminal action that may overlap public browser work."""
+
+    def __init__(
+        self,
+        *,
+        drive: "TerminalDrive",
+        state: _PendingTerminalState,
+        future: Future[Any],
+    ) -> None:
+        self._drive = drive
+        self._state = state
+        self._future = future
+        self._result: TerminalResult | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._result is None and not self._future.done()
+
+    def wait(self, *, timeout: float | None = None) -> TerminalResult:
+        """Wait a bounded interval, then freeze the action's complete exhaust."""
+
+        if self._result is not None:
+            return self._result
+        self._result = self._drive._wait_for_action(self, timeout=timeout)
+        return self._result
+
+
 class TerminalDrive:
     """Execute commands through one box and freeze every observation."""
 
@@ -63,6 +109,7 @@ class TerminalDrive:
         self.actions = actions
         self._recording_channels: list[dict[str, Any]] = []
         self._markers: list[dict[str, Any]] = []
+        self._pending: list[TerminalAction] = []
 
     @staticmethod
     def _env_pins(env: Mapping[str, str]) -> dict[str, str]:
@@ -80,8 +127,25 @@ class TerminalDrive:
         cwd: str | None = None,
         timeout: float = 60,
     ) -> TerminalResult:
+        """Execute one terminal action synchronously through the shared primitive."""
+
+        return self.start(*argv, env=env, cwd=cwd, timeout=timeout).wait(
+            timeout=timeout + 5
+        )
+
+    def start(
+        self,
+        *argv: str,
+        env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
+        timeout: float = 60,
+    ) -> TerminalAction:
+        """Start a bounded command while preserving its run action allocation."""
+
         if not argv:
-            raise ValueError("terminal.exec requires at least one argv element")
+            raise ValueError("terminal.start requires at least one argv element")
+        if timeout <= 0:
+            raise ValueError("terminal timeout must be positive")
         allocation = self.actions.allocate("terminal")
         ordinal = allocation.ordinal
         action = f"actions/{ordinal:04d}"
@@ -120,29 +184,78 @@ class TerminalDrive:
             recording_command,
         ]
         timing_path = self.draft.path / action / "timing.json"
+        state = _PendingTerminalState(
+            argv=tuple(argv),
+            environment=environment,
+            cwd=cwd,
+            timeout=timeout,
+            allocation=allocation,
+            action=action,
+            invocation_ref=invocation_ref,
+            result_ref=result_ref,
+            remote_timing=remote_timing,
+            remote_typescript=remote_typescript,
+            recorded_argv=recorded_argv,
+            timing_path=timing_path,
+        )
+        future: Future[Any] = Future()
+
+        def execute() -> None:
+            try:
+                observed = self.runtime.exec_product(
+                    self.box,
+                    state.recorded_argv,
+                    cwd=self.repository,
+                    env=state.environment,
+                    timeout=state.timeout,
+                    timing_path=state.timing_path,
+                )
+            except BaseException as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(observed)
+
+        pending = TerminalAction(drive=self, state=state, future=future)
+        self._pending.append(pending)
+        threading.Thread(
+            target=execute,
+            name=f"opentraces-terminal-{ordinal:04d}",
+            daemon=True,
+        ).start()
+        return pending
+
+    def _wait_for_action(
+        self,
+        pending: TerminalAction,
+        *,
+        timeout: float | None,
+    ) -> TerminalResult:
+        state = pending._state
+        wait_timeout = state.timeout + 5 if timeout is None else timeout
+        if wait_timeout <= 0:
+            raise ValueError("terminal wait timeout must be positive")
         try:
-            observed = self.runtime.exec_product(
-                self.box,
-                recorded_argv,
-                cwd=self.repository,
-                env=environment,
-                timeout=timeout,
-                timing_path=timing_path,
-            )
+            observed = pending._future.result(timeout=wait_timeout)
+        except FutureTimeoutError as exc:
+            raise TimeoutError(
+                f"terminal action did not complete within {wait_timeout:g} seconds"
+            ) from exc
         except Exception as exc:
-            duration_ms = self.actions.duration_ms(allocation)
-            self.actions.complete(allocation)
+            duration_ms = self.actions.duration_ms(state.allocation)
+            self.actions.complete(state.allocation)
             timeout_error = self._timeout_error(exc)
             stdout = self._exception_stream(exc, "stdout", "output")
             stderr = self._exception_stream(exc, "stderr")
-            timing = self._read_partial_timing(timing_path)
-            self.draft.write_text(f"{action}/stdout", stdout)
-            self.draft.write_text(f"{action}/stderr", stderr)
-            self.draft.write_json(f"{action}/timing.json", timing)
+            timing = self._read_partial_timing(state.timing_path)
+            self.draft.write_text(f"{state.action}/stdout", stdout)
+            self.draft.write_text(f"{state.action}/stderr", stderr)
+            self.draft.write_json(f"{state.action}/timing.json", timing)
             if timeout_error is not None:
                 reason = {
                     "code": "terminal_timeout",
-                    "message": f"terminal command exceeded its {timeout:g} second timeout",
+                    "message": (
+                        f"terminal command exceeded its {state.timeout:g} second timeout"
+                    ),
                 }
             else:
                 reason = {
@@ -150,14 +263,14 @@ class TerminalDrive:
                     "message": sanitize_diagnostic_value(f"{type(exc).__name__}: {exc}"),
                 }
             self.draft.write_json(
-                result_ref,
+                state.result_ref,
                 {
                     "execution_status": "error",
                     "returncode": None,
                     "duration_ms": duration_ms,
-                    "stdout_ref": f"{action}/stdout",
-                    "stderr_ref": f"{action}/stderr",
-                    "timing_ref": f"{action}/timing.json",
+                    "stdout_ref": f"{state.action}/stdout",
+                    "stderr_ref": f"{state.action}/stderr",
+                    "timing_ref": f"{state.action}/timing.json",
                     "reason": reason,
                 },
             )
@@ -170,20 +283,21 @@ class TerminalDrive:
                 }
             )
             self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
+            self._pending.remove(pending)
             raise
-        duration_ms = self.actions.duration_ms(allocation)
-        self.actions.complete(allocation)
-        self.draft.write_text(f"{action}/stdout", observed.stdout)
-        self.draft.write_text(f"{action}/stderr", observed.stderr)
-        self.draft.write_json(f"{action}/timing.json", observed.timing)
+        duration_ms = self.actions.duration_ms(state.allocation)
+        self.actions.complete(state.allocation)
+        self.draft.write_text(f"{state.action}/stdout", observed.stdout)
+        self.draft.write_text(f"{state.action}/stderr", observed.stderr)
+        self.draft.write_json(f"{state.action}/timing.json", observed.timing)
         self.draft.write_json(
-            result_ref,
+            state.result_ref,
             {
                 "returncode": observed.returncode,
                 "duration_ms": duration_ms,
-                "stdout_ref": f"{action}/stdout",
-                "stderr_ref": f"{action}/stderr",
-                "timing_ref": f"{action}/timing.json",
+                "stdout_ref": f"{state.action}/stdout",
+                "stderr_ref": f"{state.action}/stderr",
+                "timing_ref": f"{state.action}/timing.json",
             },
         )
         channel: dict[str, Any]
@@ -196,15 +310,16 @@ class TerminalDrive:
                 "reason": "cast collection unavailable",
             }
         else:
+            ordinal = state.allocation.ordinal
             raw_destination = self.draft.path / "recordings" / "raw" / f"{ordinal:04d}"
             files = collect(
                 self.box,
-                [remote_timing, remote_typescript],
+                [state.remote_timing, state.remote_typescript],
                 destination=raw_destination,
                 repository=self.repository,
             )
-            timing_raw = files.get(Path(remote_timing).name)
-            typescript_raw = files.get(Path(remote_typescript).name)
+            timing_raw = files.get(Path(state.remote_timing).name)
+            typescript_raw = files.get(Path(state.remote_typescript).name)
             if timing_raw is None or typescript_raw is None:
                 channel = {
                     "kind": "terminal",
@@ -225,8 +340,8 @@ class TerminalDrive:
                     }
                     self._markers.append(
                         {
-                            "ordinal": ordinal,
-                            "label": " ".join(argv),
+                            "ordinal": state.allocation.ordinal,
+                            "label": " ".join(state.argv),
                             "cast_ref": cast_ref,
                             "duration_ms": duration_ms,
                         }
@@ -240,14 +355,15 @@ class TerminalDrive:
                     }
         self._recording_channels.append(channel)
         self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
+        self._pending.remove(pending)
         return TerminalResult(
-            argv=list(argv),
+            argv=list(state.argv),
             returncode=observed.returncode,
             stdout=observed.stdout,
             stderr=observed.stderr,
             duration_ms=duration_ms,
-            invocation_ref=invocation_ref,
-            result_ref=result_ref,
+            invocation_ref=state.invocation_ref,
+            result_ref=state.result_ref,
         )
 
     @staticmethod
