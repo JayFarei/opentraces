@@ -62,10 +62,13 @@ def test_bench_run_prints_claim_and_returns_result_exit_code(
         ["bench", "run", f"{scenario}::test_install", "--store-root", str(store_root)],
     )
 
+    finalized = next(path for path in store_root.iterdir() if path.name.startswith("run_"))
     assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[0] == (
+        f"bench_run_{finalized.name} pass Install is healthy on a fresh box."
+    )
     assert "Install is healthy on a fresh box." in result.output
     assert "verdict: pass" in result.output
-    finalized = next(path for path in store_root.iterdir() if path.name.startswith("run_"))
     assert json.loads((finalized / "result.json").read_text())["verdict"] == "pass"
 
 
