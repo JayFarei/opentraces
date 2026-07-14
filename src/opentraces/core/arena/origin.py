@@ -272,16 +272,21 @@ def attach_captured_bench_labels(
 
 
 def _explicit_subject(address: str) -> tuple[str, dict[str, str]]:
-    from ..bucket_trace_records import read_bucket_record_for_trace
     from ..bucket_envelope import trace_v2_summary_by_id
     from ..bucket_layout import trace_v1_json_path
+    from ..trace_corpus import load_record, resolve
     from ..trails.lineage import parse_trail_ref
 
     trace_id, point, span, reserved = parse_trail_ref(address)
     if not trace_id or reserved not in {None, "span"}:
         raise OriginJoinError("explicit origin address is not a trace, point, or span")
-    stored = read_bucket_record_for_trace(trace_id)
-    if stored is not None:
+    candidate = resolve(trace_id)
+    if candidate is not None:
+        stored = load_record(candidate)
+        if stored is None:
+            raise OriginJoinError(
+                "explicit origin address does not resolve to a valid stored trace"
+            )
         project_slug = stored.project_slug
         record = stored.record
     else:
