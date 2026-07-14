@@ -154,9 +154,9 @@ function activeDeviceAuthorization(userCode?: string | null): DeviceAuthorizatio
   );
 }
 
-function htmlResponse(content: string, status = 200): Response {
+function htmlResponse(content: string, status = 200, head = ""): Response {
   return new Response(
-    `<!doctype html><html><head><meta charset="utf-8"><title>Hugging Face device authorization</title></head><body><main>${content}</main></body></html>`,
+    `<!doctype html><html><head><meta charset="utf-8"><title>Hugging Face device authorization</title>${head}</head><body><main>${content}</main></body></html>`,
     { status, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
 }
@@ -390,7 +390,11 @@ Bun.serve({
       );
       if (authorization === undefined) {
         appendLedger(request, "viewDeviceAuthorization", 200, { pending: false });
-        return htmlResponse("<h1>Waiting for a device code</h1>");
+        return htmlResponse(
+          "<h1>Waiting for a device code</h1>",
+          200,
+          '<meta http-equiv="refresh" content="0.25">',
+        );
       }
       appendLedger(request, "viewDeviceAuthorization", 200, { pending: true });
       return deviceAuthorizationPage(authorization);
