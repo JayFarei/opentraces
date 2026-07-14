@@ -102,15 +102,23 @@ def compare_placements(
     )
     leased_norm = _normalize(leased_trace, leased_replacements, domain="trace")
     trace_match = persistent_norm == leased_norm
-    security_match = _normalize(
-        persistent_trace.get("security") or {},
+    persistent_security = _normalize(
+        {
+            "capture_result": persistent.security,
+            "trace_record": persistent_trace.get("security") or {},
+        },
         persistent_replacements,
         domain="semantic",
-    ) == _normalize(
-        leased_trace.get("security") or {},
+    )
+    leased_security = _normalize(
+        {
+            "capture_result": leased.security,
+            "trace_record": leased_trace.get("security") or {},
+        },
         leased_replacements,
         domain="semantic",
     )
+    security_match = persistent_security == leased_security
 
     persistent_context_raw = _read_jsonl_gz(
         persistent_path.with_name("context.jsonl.gz")
@@ -212,6 +220,7 @@ def compare_placements(
             "trace": persistent_norm,
             "context": persistent_context,
             "trail": persistent_trail,
+            "security": persistent_security,
         }
     )
     leased_digest = _digest(
@@ -219,6 +228,7 @@ def compare_placements(
             "trace": leased_norm,
             "context": leased_context,
             "trail": leased_trail,
+            "security": leased_security,
         }
     )
     matches = not differences
