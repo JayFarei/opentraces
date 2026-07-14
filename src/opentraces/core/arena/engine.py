@@ -17,6 +17,8 @@ from ... import __version__
 from .box import Box, CrabboxRuntime
 from .contract import build_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
+from .drives.actions import RunActionSequence
+from .drives.browser import BrowserDrive, BrowserFactory, open_playwright_session
 from .drives.terminal import TerminalDrive
 from .emulate.huggingface.runtime import (
     HuggingFaceEmulator,
@@ -85,6 +87,7 @@ class Bench:
         store: RunStore | None = None,
         box_runtime: CrabboxRuntime | None = None,
         repository_path: Path | None = None,
+        browser_factory: BrowserFactory | None = None,
     ) -> None:
         self.source = source
         self.store = store or RunStore()
@@ -93,6 +96,7 @@ class Bench:
             home=Path(runtime_home) if runtime_home else None
         )
         self.repository_path = Path(repository_path or Path.cwd())
+        self.browser_factory = browser_factory or open_playwright_session
 
     def run(
         self,
@@ -127,6 +131,7 @@ class BenchRun:
         self.draft: RunDraft | None = None
         self.box: Box | None = None
         self.terminal: TerminalDrive
+        self.browser: BrowserDrive
         self.verifiers: list[dict[str, Any]] = []
         self.verifier_sources: list[dict[str, str]] = []
         self.final_path: Path
@@ -160,11 +165,18 @@ class BenchRun:
             self._app_state_pin = self.bench.box_runtime.materialize(
                 self.box, self.app_state, repository=self.bench.repository_path
             )
+            actions = RunActionSequence()
             self.terminal = TerminalDrive(
                 runtime=self.bench.box_runtime,
                 box=self.box,
                 draft=self.draft,
                 repository=self.bench.repository_path,
+                actions=actions,
+            )
+            self.browser = BrowserDrive(
+                draft=self.draft,
+                actions=actions,
+                factory=self.bench.browser_factory,
             )
         except Exception as exc:
             if self.box is not None:
@@ -502,21 +514,7 @@ class BenchRun:
             reason=reason,
             verifiers=self.verifiers,
             evidence={"complete": evidence_complete, "requirements": evidence_requirements},
-            recordings=(
-                self.terminal.recording_summary()
-                if hasattr(self, "terminal")
-                else {
-                    "rewatchable": False,
-                    "channels": [
-                        {
-                            "kind": "terminal",
-                            "complete": False,
-                            "path": None,
-                            "reason": "terminal cast not produced",
-                        }
-                    ],
-                }
-            ),
+            recordings=self._recording_summary(),
             artifacts=artifacts,
             capture=None,
             pins={
@@ -539,6 +537,37 @@ class BenchRun:
         else:
             self.final_path = self.draft.finalize(result)
         self.result = result
+
+    def _recording_summary(self) -> dict[str, Any]:
+        summaries: list[dict[str, Any]] = []
+        if hasattr(self, "terminal") and self.terminal.has_actions:
+            summaries.append(self.terminal.recording_summary())
+        if hasattr(self, "browser") and self.browser.has_actions:
+            summaries.append(self.browser.recording_summary())
+        if summaries:
+            result: dict[str, Any] = {
+                "rewatchable": all(summary["rewatchable"] for summary in summaries),
+                "channels": [
+                    channel for summary in summaries for channel in summary["channels"]
+                ],
+            }
+            terminal = next(
+                (summary for summary in summaries if "timeline_ref" in summary), None
+            )
+            if terminal is not None:
+                result["timeline_ref"] = terminal["timeline_ref"]
+            return result
+        return {
+            "rewatchable": False,
+            "channels": [
+                {
+                    "kind": "terminal",
+                    "complete": False,
+                    "path": None,
+                    "reason": "terminal cast not produced",
+                }
+            ],
+        }
 
     def __exit__(
         self,
@@ -569,9 +598,12 @@ class BenchRun:
         else:
             execution_status, verdict = "error", None
             reason = sanitize_reason(
-                "machinery_error",
+                getattr(exc, "code", "machinery_error"),
                 f"{type(exc).__name__}: {exc}" if exc is not None else "unknown error",
             )
+
+        if hasattr(self, "browser"):
+            self.browser.finalize_recordings()
 
         for emulator in self._emulators.values():
             try:

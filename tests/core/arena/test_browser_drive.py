@@ -100,7 +100,7 @@ def test_browser_only_attempt_freezes_public_state_and_all_recording_channels(
             "title": "Authorize OpenTraces",
         }
         assert located.state == {"selector": "label=Account", "count": 1, "visible": True}
-        assert filled.state["value"] == "bench-user"
+        assert filled.state == {"selector": "label=Account"}
         assert clicked.state["url"] == "http://127.0.0.1:8080/authorize"
         assert waited.state["state"] == "visible"
         assert inspected.state["text"] == "Authorized"
