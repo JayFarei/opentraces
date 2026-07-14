@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -70,6 +74,57 @@ class RecordingBoxRuntime(FakeBoxRuntime):
         timing.write_text("0.010 4\n", encoding="utf-8")
         typescript.write_bytes(b"ok\r\n")
         return {timing.name: timing, typescript.name: typescript}
+
+
+class ProcessTreeRuntime(RecordingBoxRuntime):
+    """Boundary runtime whose public action owns a real parent/child process group."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__()
+        self.root = root
+        self.started = threading.Event()
+        self.process: subprocess.Popen[str] | None = None
+
+    def exec_product(self, box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+        parent_pid = self.root / "parent.pid"
+        child_pid = self.root / "child.pid"
+        script = "\n".join(
+            [
+                "import os, signal, subprocess, sys, time",
+                "from pathlib import Path",
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])",
+                f"Path({str(parent_pid)!r}).write_text(str(os.getpid()))",
+                f"Path({str(child_pid)!r}).write_text(str(child.pid))",
+                "def stop(*_):",
+                "    child.terminate()",
+                "    child.wait(timeout=5)",
+                "    raise SystemExit(143)",
+                "signal.signal(signal.SIGTERM, stop)",
+                "time.sleep(60)",
+            ]
+        )
+        self.process = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        self.started.set()
+        stdout, stderr = self.process.communicate()
+        return BoxCommandResult(
+            argv=list(argv),
+            returncode=self.process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            timing={"schemaVersion": 1, "timing": {"exitCode": self.process.returncode}},
+        )
+
+    def release(self, box: Box) -> None:
+        assert self.process is not None
+        os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+        self.process.wait(timeout=5)
+        super().release(box)
 
 
 class ReleaseFailingRuntime(FakeBoxRuntime):
@@ -808,3 +863,59 @@ def test_each_terminal_action_produces_an_asciicast_playlist_marker(tmp_path: Pa
     assert marker["duration_ms"] >= 0
     cast = run.final_path / "recordings" / "terminal-0001.cast"
     assert json.loads(cast.read_text().splitlines()[0])["version"] == 2
+
+
+def test_context_exit_harvests_a_completed_terminal_action_that_was_not_waited(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        action = run.terminal.start("printf", "done")
+        deadline = time.monotonic() + 2
+        while action.running and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert action.running is False
+        run.verify(lambda _run: {"evidence_refs": []})
+
+    action_result = json.loads(
+        (run.final_path / "actions/0001/result.json").read_text(encoding="utf-8")
+    )
+    assert action_result["returncode"] == 0
+    assert run.result["recordings"]["rewatchable"] is True
+    assert run.result["recordings"]["timeline"]["complete"] is True
+
+
+def test_context_exit_stops_and_harvests_an_unwaited_terminal_process_tree(
+    tmp_path: Path,
+) -> None:
+    runtime = ProcessTreeRuntime(tmp_path)
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.terminal.start("long-running-command", timeout=60)
+        assert runtime.started.wait(timeout=2)
+        deadline = time.monotonic() + 2
+        while not (tmp_path / "child.pid").is_file() and time.monotonic() < deadline:
+            time.sleep(0.001)
+        run.verify(lambda _run: {"evidence_refs": []})
+
+    action_result = json.loads(
+        (run.final_path / "actions/0001/result.json").read_text(encoding="utf-8")
+    )
+    assert action_result["returncode"] == 143
+    assert run.result["recordings"]["timeline"]["complete"] is True
+    for path in (tmp_path / "parent.pid", tmp_path / "child.pid"):
+        pid = int(path.read_text(encoding="utf-8"))
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
