@@ -545,29 +545,16 @@ def test_normal_read_refuses_an_intact_companion_copied_to_another_trace(
         _trace_overview(trace_two, include_labels=True)
 
 
-def test_slice_subject_companion_matches_its_base_trace(
+def test_bare_slice_subject_cannot_bypass_materialized_pin(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_bucket(tmp_path, monkeypatch)
     store, run_path = _finalized_run(tmp_path, monkeypatch)
     _write_subject_trace()
-    rows = mint_labels_for_run(
-        run_path,
-        subject={"kind": "slice", "address": f"{TRACE_ID}:0-1"},
-        store=store,
-    )
-    attach_labels(
-        project_slug=PROJECT_SLUG,
-        trace_id=TRACE_ID,
-        labels=[rows[0]],
-        store=store,
-    )
-
-    summary = label_summary_for_trace(TRACE_ID)
-
-    assert summary["count"] == 1
-    assert summary["items"][0]["subject"] == {
-        "kind": "slice",
-        "address": f"{TRACE_ID}:0-1",
-    }
+    with pytest.raises(LabelIntegrityError, match="materialization reference"):
+        mint_labels_for_run(
+            run_path,
+            subject={"kind": "slice", "address": f"{TRACE_ID}:0-1"},
+            store=store,
+        )

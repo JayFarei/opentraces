@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -13,14 +14,16 @@ from opentraces.core import paths
 from opentraces.core._bucket_io import _canonical_json
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.labels import (
+    LabelContractError,
     LabelIntegrityError,
+    _label_id,
     attach_labels,
     mint_labels_for_run,
     read_labels,
     stage_slice_artifact,
     verify_label,
 )
-from opentraces.core.arena.run_store import RunStore
+from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 from opentraces.core.bucket_layout import trace_v1_json_path, trace_v1_labels_path
 from opentraces.core.slicing.models import Trajectory
 from opentraces.core.trace_slices import (
@@ -316,3 +319,201 @@ def test_slice_artifact_is_inside_run_integrity_manifest(
     assert staged["artifact_ref"].startswith("artifacts/slices/")
     assert staged["artifact_ref"] in integrity["files"]
     assert store.verify(run_path)
+
+
+def test_same_slice_id_reuses_identical_bytes_and_refuses_different_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    trace_ref = TraceMaterializationRef.from_record(record)
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    first = stage_slice_artifact(
+        draft,
+        trace_ref,
+        trajectory=Trajectory(start=0, end=2, kind="user_turn", label="first label"),
+    )
+    before = (draft.path / first["artifact_ref"]).read_bytes()
+
+    repeated = stage_slice_artifact(
+        draft,
+        trace_ref,
+        trajectory=Trajectory(start=0, end=2, kind="user_turn", label="first label"),
+    )
+    assert repeated == first
+    assert (draft.path / first["artifact_ref"]).read_bytes() == before
+
+    with pytest.raises(LabelIntegrityError, match="slice_id collision"):
+        stage_slice_artifact(
+            draft,
+            trace_ref,
+            trajectory=Trajectory(start=0, end=2, kind="user_turn", label="different label"),
+        )
+    assert (draft.path / first["artifact_ref"]).read_bytes() == before
+
+
+def test_rich_trail_refs_and_limitations_survive_pin_and_fresh_reverification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    _persist_subject(record)
+    position, call = next(
+        (position, step.tool_calls[0])
+        for position, step in enumerate(record.steps)
+        if step.tool_calls
+    )
+
+    class Projection:
+        def patches_for_trace(self, trace_id):
+            assert trace_id == record.trace_id
+            return [
+                {
+                    "trace_patch_id": "tp-a8-rich",
+                    "git_anchor_id": "ga-a8-rich",
+                    "commit_sha": "abc123",
+                    "file_path": "src/generated.py",
+                    "attribution_role": "leaf_writer",
+                    "step_metadata": {
+                        "tool_call_id": call.tool_call_id,
+                        "tool_name": call.tool_name,
+                    },
+                }
+            ]
+
+    enriched = TraceMaterializationRef.from_record(record, trail_projection=Projection())
+    trace_ref = TraceMaterializationRef(
+        record=record,
+        trace_map=enriched.trace_map.model_copy(
+            update={"limitations": ["path_normalization_failed"]}
+        ),
+    )
+    trajectory = Trajectory(
+        start=position,
+        end=position,
+        kind="change_burst",
+        label="verified write",
+    )
+    store, run_path, staged = _finalize_slice_run(
+        tmp_path,
+        monkeypatch,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )
+
+    label = mint_labels_for_run(
+        run_path,
+        subject=staged["subject"],
+        store=store,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )[0]
+
+    assert label["slice_pin"]["trace_patch_refs"] == ["tp-a8-rich"]
+    assert label["slice_pin"]["git_anchor_refs"] == ["ga-a8-rich"]
+    assert label["slice_pin"]["limitations"] == ["path_normalization_failed"]
+    assert verify_label(label, store=store)
+
+
+def _reidentify(label: dict) -> dict:
+    candidate = deepcopy(label)
+    without_id = {key: value for key, value in candidate.items() if key != "label_id"}
+    candidate["label_id"] = _label_id(without_id)
+    return candidate
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda row: row["slice_pin"].__setitem__("artifact_digest", "sha256:" + "0" * 64),
+        lambda row: row["slice_pin"].__setitem__(
+            "materialized_digest", "sha256:" + "0" * 64
+        ),
+        lambda row: row["subject"].__setitem__(
+            "address", row["subject"]["address"].rsplit("-", 1)[0] + "-4"
+        ),
+        lambda row: row["slice_pin"].__setitem__("generation_index", 99),
+        lambda row: row["slice_pin"]["trajectory_position_range"].__setitem__("end", 1),
+        lambda row: row["slice_pin"].__setitem__("coordinate_translation", "step_index"),
+        lambda row: row["slice_pin"]["map_node_refs"].append("map-forged"),
+        lambda row: row["slice_pin"]["trace_patch_refs"].append("patch-forged"),
+        lambda row: row["slice_pin"]["git_anchor_refs"].append("anchor-forged"),
+        lambda row: row["slice_pin"]["limitations"].append("limitation-forged"),
+    ],
+    ids=[
+        "raw-artifact-digest",
+        "materialized-digest",
+        "subject-boundary",
+        "generation",
+        "trajectory-range",
+        "translation-marker",
+        "map-refs",
+        "patch-refs",
+        "anchor-refs",
+        "limitations",
+    ],
+)
+def test_reverification_refuses_each_independently_forged_pin_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    _persist_subject(record)
+    trace_ref = TraceMaterializationRef.from_record(record)
+    trajectory = Trajectory(start=0, end=2, kind="user_turn", label="captured run")
+    store, run_path, staged = _finalize_slice_run(
+        tmp_path,
+        monkeypatch,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )
+    label = mint_labels_for_run(
+        run_path,
+        subject=staged["subject"],
+        store=store,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )[0]
+    forged = deepcopy(label)
+    mutation(forged)
+    forged = _reidentify(forged)
+
+    with pytest.raises((LabelContractError, LabelIntegrityError)):
+        verify_label(forged, store=store)
+
+
+def test_reverification_refuses_independently_tampered_materialized_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    _persist_subject(record)
+    trace_ref = TraceMaterializationRef.from_record(record)
+    trajectory = Trajectory(start=0, end=2, kind="user_turn", label="captured run")
+    store, run_path, staged = _finalize_slice_run(
+        tmp_path,
+        monkeypatch,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )
+    label = mint_labels_for_run(
+        run_path,
+        subject=staged["subject"],
+        store=store,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )[0]
+    artifact_path = run_path / staged["artifact_ref"]
+    artifact_path.chmod(0o600)
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    artifact["steps"][0]["content"] = "tampered"
+    artifact_path.write_text(_canonical_json(artifact, pretty=True), encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="finalized file changed"):
+        verify_label(label, store=store)
