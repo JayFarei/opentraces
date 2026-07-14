@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from .._bucket_io import _atomic_write_text
+from .run_store import RunStore
 
 
 def _h(value: object) -> str:
@@ -22,6 +23,7 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     """Render only frozen bytes; never execute a verifier or recompute a verdict."""
 
     run_path = Path(run_path).resolve()
+    RunStore(run_path.parent).verify(run_path)
     result = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
     if output_path is None:
         output_path = run_path.parent.parent / "pages" / run_path.name / "index.html"
