@@ -154,6 +154,29 @@ class WorldRuntime:
             timing={"schemaVersion": 1, "timing": {"exitCode": returncode}},
         )
 
+    def exec_product(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+        rendered = " ".join(map(str, argv))
+        self.events.append("product-exec")
+        if "/var/lib/opentraces-bench/huggingface.jsonl" in rendered and (
+            "sudo" in rendered or "su " in rendered or "FORGED_LEDGER_ROW" in rendered
+        ):
+            self.events.append("product-ledger-escalation-refused")
+            return BoxCommandResult(
+                argv=list(map(str, argv)),
+                returncode=1,
+                stdout="",
+                stderr="permission denied\n",
+                timing={"schemaVersion": 1, "timing": {"exitCode": 1}},
+            )
+        return self.exec(
+            box,
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            timing_path=timing_path,
+        )
+
     def release(self, box: Box) -> None:
         self.events.append("release")
 
@@ -292,6 +315,78 @@ def test_configured_binary_requires_matching_build_provenance(
         hf_runtime.verified_emulator_binary_pin(binary)
 
 
+def test_synthesized_sibling_cannot_attest_arbitrary_binary(tmp_path: Path) -> None:
+    from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
+
+    binary = tmp_path / "arbitrary-emulator"
+    binary.write_bytes(b"not compiled from the repository server source")
+    _write_test_provenance(binary)
+
+    with pytest.raises(RuntimeError, match="trusted build"):
+        hf_runtime.verified_emulator_binary_pin(binary)
+
+
+def test_final_ledger_refresh_includes_events_after_verifier_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _write_test_provenance(binary)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+    bench = _bench(tmp_path, runtime)
+    first = {**_COMMIT_ROW, "request_id": "req_1"}
+    later = {
+        "request_id": "req_2",
+        "method": "GET",
+        "operation_id": "datasetInfo",
+        "path": "/api/datasets/bench/scenario-2",
+        "request": None,
+        "response": {"status": 200},
+    }
+
+    with bench.run(app_state="install-only") as run:
+        hf = run.emulate("huggingface")
+        runtime.raw_ledger = (json.dumps(first) + "\n").encode()
+        assert run.verify(scenario_2.publish_commit_is_witnessed, hf=hf)["status"] == "pass"
+        runtime.raw_ledger = (json.dumps(first) + "\n" + json.dumps(later) + "\n").encode()
+
+    stored = (run.final_path / "ledgers" / "huggingface.jsonl").read_text()
+    assert [json.loads(line)["request_id"] for line in stored.splitlines()] == [
+        "req_1",
+        "req_2",
+    ]
+    assert runtime.events.count("snapshot") == 2
+
+
+def test_terminal_drive_cannot_escalate_into_independent_ledger_custody(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _write_test_provenance(binary)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+    bench = _bench(tmp_path, runtime)
+    ledger = "/var/lib/opentraces-bench/huggingface.jsonl"
+
+    with bench.run(app_state="install-only") as run:
+        run.emulate("huggingface")
+        attacks = [
+            ("sh", "-c", f"printf FORGED_LEDGER_ROW >> {ledger}"),
+            ("sudo", "-u", "opentraces-hf", "sh", "-c", f"printf forged >> {ledger}"),
+            ("sudo", "sh", "-c", f": > {ledger}"),
+            ("su", "-s", "/bin/sh", "opentraces-hf", "-c", f"printf forged >> {ledger}"),
+        ]
+        assert all(run.terminal.exec(*attack).returncode != 0 for attack in attacks)
+        assert run.terminal.exec("opentraces", "doctor", "--json").returncode == 0
+        run.verify(lambda _run: {"evidence_refs": []})
+
+    assert runtime.events.count("product-ledger-escalation-refused") == 4
+
+
 def test_run_emulate_refuses_every_unregistered_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -346,3 +441,4 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     ]
     assert runtime.events.count("start") == 1
     assert runtime.events.count("release") == 1
+    assert runtime.events.count("product-exec") == 5

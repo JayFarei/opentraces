@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -184,6 +185,83 @@ def test_build_produces_pinned_linux_arm64_binary(tmp_path: Path) -> None:
     assert pin.sha256 == emulator_binary_pin(output).sha256
     assert pin.bun_version == BUN_VERSION == "1.3.6"
     assert pin.target == COMPILE_TARGET == "bun-linux-arm64"
+
+
+def test_compile_has_a_finite_deadline_and_failed_build_cannot_replace_last_good_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
+
+    output = tmp_path / "hf-emulator"
+    output.write_bytes(b"last-good-binary")
+    provenance = hf_runtime.emulator_provenance_path(output)
+    provenance.write_text('{"last":"good"}\n', encoding="utf-8")
+    observed_timeout = None
+
+    def timed_out(argv, **kwargs):
+        nonlocal observed_timeout
+        observed_timeout = kwargs.get("timeout")
+        candidate = Path(next(item.split("=", 1)[1] for item in argv if item.startswith("--outfile=")))
+        candidate.write_bytes(b"partial-new-binary")
+        raise subprocess.TimeoutExpired(argv, observed_timeout)
+
+    monkeypatch.setattr(hf_runtime.shutil, "which", lambda _name: "/usr/bin/bunx")
+    monkeypatch.setattr(hf_runtime.subprocess, "run", timed_out)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        hf_runtime.build_hf_emulator_binary(output)
+
+    assert isinstance(observed_timeout, (int, float)) and 0 < observed_timeout <= 120
+    assert output.read_bytes() == b"last-good-binary"
+    assert provenance.read_text(encoding="utf-8") == '{"last":"good"}\n'
+
+
+def test_shared_binary_cache_serializes_concurrent_builders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
+
+    monkeypatch.delenv("OPENTRACES_HF_EMULATOR_BINARY", raising=False)
+    monkeypatch.setattr(hf_runtime.tempfile, "gettempdir", lambda: str(tmp_path))
+    active = 0
+    maximum_active = 0
+    build_count = 0
+    guard = threading.Lock()
+
+    def fake_build(output: Path):
+        nonlocal active, maximum_active, build_count
+        with guard:
+            active += 1
+            build_count += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.15)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"complete-binary")
+        hf_runtime.emulator_provenance_path(output).write_text("{}", encoding="utf-8")
+        with guard:
+            active -= 1
+        return hf_runtime.emulator_binary_pin(output)
+
+    monkeypatch.setattr(hf_runtime, "build_hf_emulator_binary", fake_build)
+    monkeypatch.setattr(hf_runtime, "verified_emulator_binary_pin", hf_runtime.emulator_binary_pin)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        binaries = list(pool.map(lambda _index: hf_runtime._binary_for_run(), range(2)))
+
+    assert binaries[0] == binaries[1]
+    assert build_count == 1
+    assert maximum_active == 1
+
+
+def test_retained_a2_proof_names_base_and_binary_inclusive_app_state_digests() -> None:
+    proof = json.loads((ROOT / "tests/manual/a2_hf_emulator_real_box.json").read_text())
+
+    assert proof["app_state"]["base"]["digest"] == (
+        "sha256:632376d019e9e00e227903f375edc55cfdc6bc02961d436b8fe6f07bdf7c4185"
+    )
+    assert proof["app_state"]["with_huggingface"]["digest"] == (
+        "sha256:7634a71febcba9d9c675afb0de9330afbac2964a44228fad24dbb5c3c835a7cd"
+    )
 
 
 def test_packaging_record_keeps_upstream_and_fallback_decisions_honest() -> None:

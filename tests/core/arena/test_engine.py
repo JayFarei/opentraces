@@ -47,6 +47,16 @@ class FakeBoxRuntime:
             timing={"schemaVersion": 1, "timing": {"exitCode": 0}},
         )
 
+    def exec_product(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+        return self.exec(
+            box,
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            timing_path=timing_path,
+        )
+
     def release(self, box: Box) -> None:
         self.released = True
 

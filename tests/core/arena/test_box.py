@@ -19,6 +19,42 @@ from opentraces.core.arena.box import (
 )
 
 
+EXPECTED_INSTALL_LOCK = {
+    "annotated-doc": "0.0.4",
+    "annotated-types": "0.7.0",
+    "anyio": "4.14.2",
+    "certifi": "2026.6.17",
+    "charset-normalizer": "3.4.9",
+    "click": "8.4.2",
+    "filelock": "3.29.7",
+    "fsspec": "2026.6.0",
+    "h11": "0.16.0",
+    "hf-xet": "1.4.3",
+    "httpcore": "1.0.9",
+    "httpx": "0.28.1",
+    "huggingface-hub": "1.10.2",
+    "idna": "3.18",
+    "markdown-it-py": "4.2.0",
+    "mdurl": "0.1.2",
+    "mmh3": "5.2.1",
+    "packaging": "26.2",
+    "pyclack-cli": "0.4.0",
+    "pydantic": "2.13.4",
+    "pydantic-core": "2.46.4",
+    "pygments": "2.20.0",
+    "pyyaml": "6.0.3",
+    "readchar": "4.2.2",
+    "requests": "2.34.2",
+    "rich": "15.0.0",
+    "shellingham": "1.5.4",
+    "tqdm": "4.68.4",
+    "typer": "0.26.8",
+    "typing-extensions": "4.16.0",
+    "typing-inspection": "0.4.2",
+    "urllib3": "2.7.0",
+}
+
+
 class ScriptedRunner:
     def __init__(self, responses: list[subprocess.CompletedProcess[str]]) -> None:
         self.responses = responses
@@ -469,12 +505,7 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
         command = " ".join(argv)
         commands.append(command)
         if "importlib.metadata" in command:
-            stdout = json.dumps(
-                {
-                    "huggingface-hub": "1.10.2",
-                    "hf-xet": "1.4.3",
-                }
-            )
+            stdout = json.dumps(EXPECTED_INSTALL_LOCK)
         else:
             stdout = "/usr/bin/opentraces\n/usr/bin/script\n"
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
@@ -486,11 +517,11 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
     install = next(command for command in commands if "pip install" in command)
     assert "huggingface-hub==1.10.2" in install
     assert "hf-xet==1.4.3" in install
-    assert pin["dependencies"] == {
-        "huggingface-hub": "1.10.2",
-        "hf-xet": "1.4.3",
-    }
+    assert "filelock==3.29.7" in install
+    assert "pydantic-core==2.46.4" in install
+    assert pin["dependencies"] == EXPECTED_INSTALL_LOCK
     assert pin["recipe"]["dependencies"] == pin["dependencies"]
+    assert pin["recipe"]["dependency_lock_sha256"].startswith("sha256:")
     assert pin["recipe"]["wheel_sha256"]
 
 
@@ -528,6 +559,45 @@ def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Pat
         "--provider",
         "local-container",
     ]
+
+
+def test_product_exec_uses_a_dedicated_home_and_writable_recording_workspace(
+    tmp_path: Path,
+) -> None:
+    timing = tmp_path / "product-timing.json"
+    runner = ScriptedRunner([_completed(["crabbox", "run"], stdout="write-heavy-ok\n")])
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path)
+    box = Box(
+        id="cbx_abc123",
+        slug="steady-crab",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="32222",
+        ssh_key="/tmp/key",
+    )
+
+    result = runtime.exec_product(
+        box,
+        [
+            "sh",
+            "-c",
+            'test -w "$HOME" && test -w bench-recordings && '
+            "opentraces dataset new scenario-2 --rows-file /tmp/rows.jsonl",
+        ],
+        env={"HF_ENDPOINT": "http://127.0.0.1:14318"},
+        timing_path=timing,
+    )
+
+    command = runner.calls[0][0]
+    rendered = " ".join(command)
+    assert result.returncode == 0
+    assert "--allow-env HF_ENDPOINT" in rendered
+    assert "sudo install -d" in rendered
+    assert '"$PWD/bench-recordings"' in rendered
+    assert "sudo -H -u opentraces-product" in rendered
+    assert "opentraces dataset new scenario-2" in rendered
 
 
 def test_collect_safely_falls_back_when_tarfile_extraction_filters_are_unavailable(
