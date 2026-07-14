@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -579,6 +580,8 @@ print(json.dumps({
 def test_real_cli_device_flow_crosses_human_page_then_persists_auth(
     tmp_path: Path,
 ) -> None:
+    opentraces = shutil.which("opentraces")
+    assert opentraces is not None, "opentraces console script is not installed"
     home = tmp_path / "isolated-home"
     home.mkdir()
     environment = {
@@ -602,7 +605,7 @@ def test_real_cli_device_flow_crosses_human_page_then_persists_auth(
         assert not credentials.exists()
         login = subprocess.Popen(
             [
-                str(ROOT / ".venv" / "bin" / "opentraces"),
+                opentraces,
                 "auth",
                 "login",
                 "--device-timeout",
@@ -646,7 +649,7 @@ def test_real_cli_device_flow_crosses_human_page_then_persists_auth(
 
         whoami = subprocess.run(
             [
-                str(ROOT / ".venv" / "bin" / "opentraces"),
+                opentraces,
                 "--json",
                 "auth",
                 "whoami",
