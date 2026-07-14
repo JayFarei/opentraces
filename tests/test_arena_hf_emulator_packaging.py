@@ -257,10 +257,10 @@ def test_retained_a2_proof_names_base_and_binary_inclusive_app_state_digests() -
     proof = json.loads((ROOT / "tests/manual/a2_hf_emulator_real_box.json").read_text())
 
     assert proof["app_state"]["base"]["digest"] == (
-        "sha256:632376d019e9e00e227903f375edc55cfdc6bc02961d436b8fe6f07bdf7c4185"
+        "sha256:850066e1917e31e3213c7cbf567fb0c0e81ef69f62bb8a61c3265e5501ea5f31"
     )
     assert proof["app_state"]["with_huggingface"]["digest"] == (
-        "sha256:7634a71febcba9d9c675afb0de9330afbac2964a44228fad24dbb5c3c835a7cd"
+        "sha256:5a15ff00d531e20ff62f557cdacb0b53138ea53420b979941b274b941461be81"
     )
 
 
