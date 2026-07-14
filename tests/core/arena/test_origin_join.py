@@ -16,6 +16,10 @@ from opentraces.core.arena.origin import (
     detect_bench_invocations,
 )
 from opentraces.core.arena.run_store import RunStore
+from opentraces.core.bucket_trace_records import (
+    read_bucket_record_for_trace,
+    trace_record_path,
+)
 from opentraces.core.bucket_layout import trace_v1_json_path, trace_v1_labels_path
 from opentraces_schema import Agent, Observation, Outcome, Step, TraceRecord
 
@@ -295,6 +299,60 @@ def test_explicit_origin_resolves_shared_trace_addresses_and_mints_same_label_sh
     store = _finalized_run(tmp_path, monkeypatch)
     record = _origin_record()
     _write_trace(tmp_path, monkeypatch, record)
+
+    attachment = attach_explicit_bench_labels(
+        store.root / RUN_ID,
+        address=f"{record.trace_id}{address_suffix}",
+        store=store,
+    )
+
+    assert (attachment.run_id, attachment.address, attachment.resolution) == (
+        RUN_ID,
+        expected_subject["address"],
+        "explicit",
+    )
+    rows = read_labels(PROJECT_SLUG, record.trace_id)
+    assert len(rows) == 1
+    assert rows[0]["subject"] == expected_subject
+
+
+@pytest.mark.parametrize(
+    ("address_suffix", "expected_subject"),
+    [
+        ("", {"kind": "trace", "address": "trace-origin-123"}),
+        (":2", {"kind": "slice", "address": "trace-origin-123:2-2"}),
+        (":1-3", {"kind": "slice", "address": "trace-origin-123:1-3"}),
+    ],
+)
+def test_explicit_origin_resolves_canonical_record_without_additive_trace_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    address_suffix: str,
+    expected_subject: dict[str, str],
+) -> None:
+    store = _finalized_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(paths, "bucket_dir", lambda: tmp_path / "bucket")
+    project_state = tmp_path / "projects" / PROJECT_SLUG
+    project_state.mkdir(parents=True)
+    monkeypatch.setattr(ingest_module, "get_project_dir", lambda _project: project_state)
+    source = tmp_path / "session.jsonl"
+    source.write_text("{}\n", encoding="utf-8")
+    record = _origin_record()
+
+    ingest_module.write_trace_to_bucket(
+        record,
+        project_state,
+        parser_name="claude-code",
+        source_jsonl=source,
+        trace_record_only=True,
+    )
+
+    assert trace_record_path(PROJECT_SLUG, record.trace_id).is_file()
+    stored = read_bucket_record_for_trace(record.trace_id)
+    assert stored is not None
+    assert stored.record.trace_id == record.trace_id
+    assert [step.step_index for step in stored.record.steps] == [1, 2, 3]
+    assert not trace_v1_json_path(PROJECT_SLUG, record.trace_id).exists()
 
     attachment = attach_explicit_bench_labels(
         store.root / RUN_ID,
