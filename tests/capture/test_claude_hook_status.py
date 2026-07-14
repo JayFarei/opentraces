@@ -8,6 +8,7 @@ the supported repair path.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import stat
 import sys
@@ -104,6 +105,47 @@ def test_status_rejects_deleted_interpreter(tmp_path: Path) -> None:
 
     observed = _status_for_stop_command(tmp_path, command)
 
+    assert observed["registered"]["Stop"] is False
+
+
+def test_status_rejects_existing_relative_interpreter_and_script(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    relative_interpreter = _make_executable(Path("bin/python"))
+    relative_hooks_dir = Path("hooks")
+    relative_script = _make_executable(
+        relative_hooks_dir / "opentraces_on_stop.py"
+    )
+    settings_file = Path("settings.json")
+    settings_file.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        f"{relative_interpreter} {relative_script}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    observed = cc_install.status(relative_hooks_dir, settings_file)
+
+    assert relative_interpreter.is_file()
+    assert os.access(relative_interpreter, os.X_OK)
+    assert relative_script.is_file()
+    assert os.access(relative_script, os.X_OK)
     assert observed["registered"]["Stop"] is False
 
 
