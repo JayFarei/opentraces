@@ -46,18 +46,14 @@ def _git_project(root: Path) -> Path:
                 "project_id": "portable-capture-test",
                 "review_policy": "review",
                 "push_policy": "manual",
-                "remotes": {
-                    "origin": {"url": "test/test", "visibility": "private"}
-                },
+                "remotes": {"origin": {"url": "test/test", "visibility": "private"}},
                 "active_remote": "origin",
                 "agents": ["claude-code"],
             }
         ),
         encoding="utf-8",
     )
-    subprocess.run(
-        ["git", "add", "README.md", ".opentraces.json"], cwd=root, check=True
-    )
+    subprocess.run(["git", "add", "README.md", ".opentraces.json"], cwd=root, check=True)
     subprocess.run(
         ["git", "commit", "--quiet", "-m", "seed"],
         cwd=root,
@@ -116,9 +112,7 @@ def _write_session(project: Path, session_id: str) -> Path:
             },
         },
     ]
-    session.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
-    )
+    session.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return session
 
 
@@ -209,9 +203,7 @@ def _write_edit_session(session_root: Path, project: Path, session_id: str) -> P
     ]
     session_root.mkdir(parents=True, exist_ok=True)
     session = session_root / f"{session_id}.jsonl"
-    session.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
-    )
+    session.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return session
 
 
@@ -287,6 +279,139 @@ def test_killed_required_source_is_persisted_as_partial_before_deadline(
 
     frozen = json.loads((result_dir / "capture_result.json").read_text())
     assert frozen == result.to_dict()
+
+
+def test_failed_finalizer_cannot_reuse_a_stale_success_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new child rc=1 must fail closed even beside a complete old report."""
+    from opentraces.capture import portable as portable_capture
+
+    project = _git_project(tmp_path / "project")
+    source = _write_session(project, "stale-finalizer-session")
+    result_dir = tmp_path / "result"
+    finalizers = result_dir / "finalizers"
+    finalizers.mkdir(parents=True)
+    stale = finalizers / "session_jsonl.report.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "status": "finalized",
+                "completeness": "full",
+                "evidence_refs": [str(source)],
+                "limitations": [],
+                "details": {"trace_id": "stale-trace"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FailedChild:
+        returncode = 1
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def wait(self, timeout=None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl",),
+            required_sources=("session_jsonl",),
+            session_id="stale-finalizer-session",
+            session_path=source,
+            result_dir=result_dir,
+        )
+    )
+    monkeypatch.setattr(portable_capture.subprocess, "Popen", FailedChild)
+
+    result = capture.finish(deadline=time.monotonic() + 2.0)
+
+    observed = result.source("session_jsonl")
+    assert result.completeness == "partial"
+    assert observed.status == "unavailable"
+    assert observed.completeness == "missing"
+    assert any("exited 1" in limitation for limitation in observed.limitations)
+    assert "stale-trace" not in result.trace_refs
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["wrong_nonce", "bad_status", "bad_completeness", "bad_evidence_refs", "bad_shape"],
+)
+def test_finalizer_report_is_validated_before_it_can_claim_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    malformation: str,
+) -> None:
+    from opentraces.capture import portable as portable_capture
+
+    project = _git_project(tmp_path / "project")
+    source = _write_session(project, "invalid-finalizer-session")
+    result_dir = tmp_path / "result"
+
+    class MalformedChild:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs) -> None:
+            request_path = Path(argv[argv.index("--request") + 1])
+            report_path = Path(argv[argv.index("--report") + 1])
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            report: dict[str, object] = {
+                "invocation_nonce": request.get("invocation_nonce"),
+                "status": "finalized",
+                "completeness": "full",
+                "evidence_refs": [str(source)],
+                "limitations": [],
+                "details": {},
+            }
+            if malformation == "wrong_nonce":
+                report["invocation_nonce"] = "not-this-invocation"
+            elif malformation == "bad_status":
+                report["status"] = "complete"
+            elif malformation == "bad_completeness":
+                report["completeness"] = "complete"
+            elif malformation == "bad_evidence_refs":
+                report["evidence_refs"] = [str(source), {"forged": True}]
+            else:
+                report["details"] = ["not", "an", "object"]
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+        def wait(self, timeout=None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl",),
+            required_sources=("session_jsonl",),
+            session_id="invalid-finalizer-session",
+            session_path=source,
+            result_dir=result_dir,
+        )
+    )
+    monkeypatch.setattr(portable_capture.subprocess, "Popen", MalformedChild)
+
+    result = capture.finish(deadline=time.monotonic() + 2.0)
+
+    observed = result.source("session_jsonl")
+    assert observed.status == "unavailable"
+    assert observed.completeness == "missing"
+    assert any("invalid finalizer report" in item for item in observed.limitations)
 
 
 def test_persistent_capture_owns_ingest_and_bucket_projection(tmp_path: Path) -> None:
@@ -611,10 +736,7 @@ def test_watcher_refreshes_proven_baseline_across_repeated_lifecycles(
             assert watcher.details["mutations"] == 1
             watcher_results.append(watcher)
 
-        assert all(
-            watcher.details["open_baseline_proven"] is True
-            for watcher in watcher_results
-        )
+        assert all(watcher.details["open_baseline_proven"] is True for watcher in watcher_results)
 
 
 def test_finalization_is_dependency_ordered_but_results_preserve_request_order(
@@ -668,9 +790,7 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
         "resourceSpans": [
             {
                 "resource": {
-                    "attributes": [
-                        {"key": "session.id", "value": {"stringValue": session_id}}
-                    ]
+                    "attributes": [{"key": "session.id", "value": {"stringValue": session_id}}]
                 },
                 "scopeSpans": [
                     {
@@ -733,8 +853,7 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
 
     events = read_events(project, verify=True)
     assert any(
-        event.event_type == CONTEXT_NODE_OBSERVED and event.trace_id == trace_id
-        for event in events
+        event.event_type == CONTEXT_NODE_OBSERVED and event.trace_id == trace_id for event in events
     )
 
 
@@ -789,21 +908,15 @@ def test_persistent_telemetry_refuses_unacknowledged_finish_tail(
                                         "attributes": [
                                             {
                                                 "key": "session.id",
-                                                "value": {
-                                                    "stringValue": session_id
-                                                },
+                                                "value": {"stringValue": session_id},
                                             },
                                             {
                                                 "key": "prompt.id",
-                                                "value": {
-                                                    "stringValue": "prompt-1"
-                                                },
+                                                "value": {"stringValue": "prompt-1"},
                                             },
                                             {
                                                 "key": "request_id",
-                                                "value": {
-                                                    "stringValue": "req_persistent_1"
-                                                },
+                                                "value": {"stringValue": "req_persistent_1"},
                                             },
                                         ],
                                     }
@@ -842,21 +955,15 @@ def test_persistent_telemetry_refuses_unacknowledged_finish_tail(
                                         "attributes": [
                                             {
                                                 "key": "session.id",
-                                                "value": {
-                                                    "stringValue": session_id
-                                                },
+                                                "value": {"stringValue": session_id},
                                             },
                                             {
                                                 "key": "prompt.id",
-                                                "value": {
-                                                    "stringValue": "prompt-2"
-                                                },
+                                                "value": {"stringValue": "prompt-2"},
                                             },
                                             {
                                                 "key": "request_id",
-                                                "value": {
-                                                    "stringValue": "req_persistent_2"
-                                                },
+                                                "value": {"stringValue": "req_persistent_2"},
                                             },
                                         ],
                                     }
@@ -977,6 +1084,158 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
     assert json.loads(report_path.read_text(encoding="utf-8")) == report.to_dict()
 
 
+def test_placement_acceptance_exercises_every_capture_view_and_preserves_asymmetry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Acceptance compares evidence-producing lifecycles, not empty envelopes."""
+    from opentraces.capture.otlp.emitter import OTLPCaptureBuffer, write_snapshot
+    from opentraces.core import paths as capture_paths
+
+    persistent_runtime = tmp_path / "persistent-runtime"
+    monkeypatch.setattr(capture_paths, "OPENTRACES_DIR", persistent_runtime)
+    monkeypatch.setattr(capture_paths, "STAGING_DIR", persistent_runtime / "staging")
+    for placement in ("persistent", "leased"):
+        (tmp_path / placement).mkdir()
+    projects = {
+        placement: _git_project(tmp_path / placement / "project")
+        for placement in ("persistent", "leased")
+    }
+    session_roots = {
+        placement: tmp_path / placement / "sessions" for placement in ("persistent", "leased")
+    }
+    session_id = "full-placement-acceptance"
+    sources = {
+        placement: _write_edit_session(session_roots[placement], project, session_id)
+        for placement, project in projects.items()
+    }
+    results = []
+
+    for placement in ("persistent", "leased"):
+        project = projects[placement]
+        capture = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement=placement,
+                requested_sources=(
+                    "session_jsonl",
+                    "telemetry",
+                    "watcher",
+                    "git",
+                    "bucket",
+                ),
+                required_sources=(
+                    "session_jsonl",
+                    "telemetry",
+                    "watcher",
+                    "git",
+                    "bucket",
+                ),
+                actor="claude-code",
+                session_id=session_id,
+                session_path=sources[placement],
+                result_dir=tmp_path / placement / "result",
+            )
+        )
+        (project / "captured-world-effect.txt").write_text(
+            "substantive trail evidence\n",
+            encoding="utf-8",
+        )
+        body = {
+            "resourceSpans": [
+                {
+                    "resource": {
+                        "attributes": [
+                            {
+                                "key": "session.id",
+                                "value": {"stringValue": session_id},
+                            }
+                        ]
+                    },
+                    "scopeSpans": [
+                        {
+                            "spans": [
+                                {
+                                    "name": "claude_code.llm_request",
+                                    "attributes": [
+                                        {
+                                            "key": "session.id",
+                                            "value": {"stringValue": session_id},
+                                        },
+                                        {
+                                            "key": "prompt.id",
+                                            "value": {"stringValue": "acceptance-prompt"},
+                                        },
+                                        {
+                                            "key": "request_id",
+                                            "value": {"stringValue": "req_acceptance"},
+                                        },
+                                        {
+                                            "key": "gen_ai.request.model",
+                                            "value": {"stringValue": "acceptance-model"},
+                                        },
+                                    ],
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+        if placement == "persistent":
+            buffer = OTLPCaptureBuffer()
+            buffer.handle_envelope(
+                {
+                    "received_at": time.time(),
+                    "signal": "traces",
+                    "path": "/v1/traces",
+                    "raw_size": 1,
+                    "body": body,
+                }
+            )
+            snapshot = capture_paths.otel_staging_dir() / f"{session_id}.json"
+            assert write_snapshot(buffer, session_id, snapshot) is True
+        else:
+            request = urllib.request.Request(
+                f"{capture.bindings.otlp_endpoint}/v1/traces",
+                data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=2.0) as response:
+                assert response.status == 200
+
+        result = capture.finish(deadline=time.monotonic() + 20.0)
+        assert result.source("session_jsonl").completeness == "full"
+        assert result.source("telemetry").details["nodes_count"] == 1
+        assert result.source("watcher").details["mutations"] >= 1
+        assert result.source("git").status == "finalized"
+        assert result.source("bucket").completeness == "full"
+        assert result.view("harness").completeness == "full"
+        assert result.view("model_boundary").completeness == "partial"
+        assert result.view("world_effects").completeness == "full"
+        assert result.view("storage").completeness == "full"
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        assert _read_companion(trace_path.with_name("context.jsonl.gz"))
+        assert _read_companion(trace_path.with_name("trail.jsonl.gz"))
+        results.append(result)
+
+    assert any("finish-tail" in item for item in results[0].source("telemetry").limitations)
+    assert not any("finish-tail" in item for item in results[1].source("telemetry").limitations)
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"], session_roots["persistent"]),
+        leased_roots=(projects["leased"], session_roots["leased"]),
+    )
+    assert report.matches is True
+    assert any(
+        "placement-specific source limitations differ: telemetry" in item
+        for item in report.limitations
+    )
+
+
 def test_parity_compares_each_source_completeness_not_only_view_aggregate(
     tmp_path: Path,
 ) -> None:
@@ -1076,9 +1335,7 @@ def test_parity_rejects_different_capture_security_results(tmp_path: Path) -> No
             "substantive trail evidence\n",
             encoding="utf-8",
         )
-        results.append(
-            capture.finish(deadline=time.monotonic() + 10.0)
-        )
+        results.append(capture.finish(deadline=time.monotonic() + 10.0))
 
     persistent = replace(
         results[0],
@@ -1333,9 +1590,7 @@ def test_parity_does_not_normalize_workspace_basenames_inside_semantic_text(
     for placement, result in zip(("persistent", "leased"), results, strict=True):
         trace_path = Path(result.source("bucket").details["trace_path"])
         trace = json.loads(trace_path.read_text(encoding="utf-8"))
-        trace["task"]["description"] = (
-            f"The word {placement}-project is semantic product text."
-        )
+        trace["task"]["description"] = f"The word {placement}-project is semantic product text."
         trace_path.write_text(json.dumps(trace), encoding="utf-8")
 
     report = compare_placements(
@@ -1452,8 +1707,7 @@ def test_bucket_companions_preserve_canonical_bytes_and_parity_normalizes_safely
         assert "sk-live-" in material
         assert all(row["content_hash"] == payload_content_hash(row["payload"]) for row in rows)
         assert all(
-            row["event_id"] == expected_event_id(TrailEvent.model_validate(row))
-            for row in rows
+            row["event_id"] == expected_event_id(TrailEvent.model_validate(row)) for row in rows
         )
 
     report = compare_placements(
@@ -1472,10 +1726,7 @@ def test_bucket_companions_preserve_canonical_bytes_and_parity_normalizes_safely
             if event.writer == "portable-capture-test"
         ]
         assert len(canonical) == 2
-        assert all(
-            event.content_hash == payload_content_hash(event.payload)
-            for event in canonical
-        )
+        assert all(event.content_hash == payload_content_hash(event.payload) for event in canonical)
         # Sanitization is an outbound companion concern. The private canonical
         # log remains byte-identical and preserves its content-address chain.
         assert "/Users/shared-dev" in json.dumps(
@@ -1527,6 +1778,49 @@ def test_parity_rejects_each_empty_required_companion_family_independently(
 
     assert report.matches is False
     assert f"empty_{empty_family}_companion" in report.differences
+
+
+def test_parity_marks_both_missing_canonical_companions_unproven_even_when_optional(
+    tmp_path: Path,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "missing-companion-session")
+        result = Capture.open(
+            CapturePlan(
+                project=projects[placement],
+                workspace=projects[placement],
+                placement=placement,
+                requested_sources=("session_jsonl", "bucket"),
+                required_sources=("session_jsonl",),
+                session_id="missing-companion-session",
+                session_path=source,
+                result_dir=tmp_path / placement,
+            )
+        ).finish(deadline=time.monotonic() + 10.0)
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        trace_path.with_name("context.jsonl.gz").unlink(missing_ok=True)
+        trace_path.with_name("trail.jsonl.gz").unlink(missing_ok=True)
+        results.append(result)
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.matches is False
+    assert report.context_companion_match is False
+    assert report.trail_companion_match is False
+    assert "unproven_context_companion" in report.differences
+    assert "unproven_trail_companion" in report.differences
+    assert any("context companion parity is unproven" in item for item in report.limitations)
+    assert any("trail companion parity is unproven" in item for item in report.limitations)
 
 
 def test_explicit_security_tools_are_applied_and_observed(tmp_path: Path) -> None:
@@ -1822,9 +2116,7 @@ def test_required_non_self_observation_rejects_unrelated_live_process(
 
     from opentraces import __version__ as runtime_version
 
-    product_command = _write_identifiable_product_command(
-        tmp_path / "opentraces-product"
-    )
+    product_command = _write_identifiable_product_command(tmp_path / "opentraces-product")
     product = subprocess.Popen(["sleep", "10"])
     try:
         unrelated = Capture.open(
@@ -1861,9 +2153,7 @@ def test_required_non_self_observation_rejects_launcher_as_inert_argv(
     project = _git_project(tmp_path / "project")
     from opentraces import __version__ as runtime_version
 
-    product_command = _write_identifiable_product_command(
-        tmp_path / "opentraces-product"
-    )
+    product_command = _write_identifiable_product_command(tmp_path / "opentraces-product")
     product = subprocess.Popen(
         [
             sys.executable,
@@ -1903,9 +2193,7 @@ def test_required_non_self_observation_probes_the_observed_script_runtime(
     tmp_path: Path,
 ) -> None:
     project = _git_project(tmp_path / "project")
-    product_command = _write_runtime_sensitive_product_command(
-        tmp_path / "opentraces-product"
-    )
+    product_command = _write_runtime_sensitive_product_command(tmp_path / "opentraces-product")
     bash = shutil.which("bash")
     assert bash is not None
     product = subprocess.Popen([bash, str(product_command), "serve"])
@@ -1944,9 +2232,7 @@ def test_required_non_self_observation_does_not_trust_declared_launcher_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _git_project(tmp_path / "project")
-    product_command = _write_launcher_env_spoofing_product_command(
-        tmp_path / "opentraces-product"
-    )
+    product_command = _write_launcher_env_spoofing_product_command(tmp_path / "opentraces-product")
     bash = shutil.which("bash")
     assert bash is not None
     product = subprocess.Popen([bash, str(product_command), "serve"])
@@ -1987,9 +2273,7 @@ def test_required_non_self_observation_uses_observed_product_identity_and_versio
     project = _git_project(tmp_path / "project")
     from opentraces import __version__ as runtime_version
 
-    product_command = _write_identifiable_product_command(
-        tmp_path / "opentraces-product"
-    )
+    product_command = _write_identifiable_product_command(tmp_path / "opentraces-product")
     product = subprocess.Popen([str(product_command), "serve"])
     try:
         proven = Capture.open(
@@ -2035,9 +2319,7 @@ def test_required_non_self_observation_rejects_product_version_mismatch(
     project = _git_project(tmp_path / "project")
     from opentraces import __version__ as runtime_version
 
-    product_command = _write_identifiable_product_command(
-        tmp_path / "opentraces-product"
-    )
+    product_command = _write_identifiable_product_command(tmp_path / "opentraces-product")
     product = subprocess.Popen([str(product_command), "serve"])
     try:
         mismatch = Capture.open(
@@ -2335,9 +2617,7 @@ def test_parity_preserves_nested_semantic_content_hashes(tmp_path: Path) -> None
             "files": [
                 {
                     "path": "README.md",
-                    "conversations": [
-                        {"ranges": [{"content_hash": f"semantic-{index}"}]}
-                    ],
+                    "conversations": [{"ranges": [{"content_hash": f"semantic-{index}"}]}],
                 }
             ]
         }
