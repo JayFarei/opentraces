@@ -71,7 +71,7 @@ def test_finish_kills_timed_out_git_probe_process_group(
     shim = shim_dir / "git"
     shim.write_text(
         "#!/bin/sh\n"
-        'if [ "$1" = "rev-parse" ]; then\n'
+        'if [ "$1" = "rev-parse" ] && [ -n "$OT_OPENTRACES_DIR" ]; then\n'
         '  printf "%s\\n" "$$" > "$OT_GIT_SHIM_PIDS"\n'
         "  sleep 3.5\n"
         '  printf survived > "$OT_GIT_SHIM_MARKER"\n'
