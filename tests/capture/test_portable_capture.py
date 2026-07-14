@@ -253,9 +253,7 @@ def _canonical_companion_row(
 ) -> dict[str, object]:
     from opentraces.core.trails.models import finalize_event
 
-    event_type = (
-        "context_layer_captured" if family == "context" else "filesystem_mutation_observed"
-    )
+    event_type = "context_layer_captured" if family == "context" else "filesystem_mutation_observed"
     event = finalize_event(
         {
             "event_sequence": 1,
@@ -485,9 +483,7 @@ def test_well_typed_session_finalizer_report_without_produced_evidence_fails_clo
                     else str(tmp_path / "does-not-exist.jsonl")
                 ],
                 "limitations": [],
-                "details": (
-                    {} if forgery == "missing_trace_id" else {"trace_id": trace_id}
-                ),
+                "details": ({} if forgery == "missing_trace_id" else {"trace_id": trace_id}),
                 "trace_id": None if forgery == "missing_trace_id" else trace_id,
             }
             report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2471,9 +2467,7 @@ def test_product_version_probe_does_not_inherit_observer_only_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _git_project(tmp_path / "project")
-    product_command = _write_observer_env_sensitive_product_command(
-        tmp_path / "opentraces-product"
-    )
+    product_command = _write_observer_env_sensitive_product_command(tmp_path / "opentraces-product")
     bash = shutil.which("bash")
     assert bash is not None
     product = subprocess.Popen([bash, str(product_command), "serve"])

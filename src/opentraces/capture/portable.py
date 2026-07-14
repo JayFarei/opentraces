@@ -7,6 +7,7 @@ leased workspaces.  Callers open one session, inject its bindings, and call
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -99,6 +100,126 @@ def _finalizer_report_error(report: Any, invocation_nonce: str) -> str | None:
     if not isinstance(report["details"], dict):
         return "details must be an object"
     return None
+
+
+def _finalizer_semantic_error(
+    report: dict[str, Any],
+    *,
+    source: str,
+    request: dict[str, Any],
+) -> str | None:
+    """Validate source truth only after the child envelope is well typed."""
+
+    if report["status"] in {"partial", "unavailable"} and not report["limitations"]:
+        return f"{report['status']} reports must name at least one limitation"
+
+    evidence_paths = [Path(ref) for ref in report["evidence_refs"]]
+    missing = [str(path) for path in evidence_paths if not path.is_file()]
+    if missing:
+        return f"referenced evidence does not exist: {', '.join(missing)}"
+    if report["status"] == "unavailable":
+        return None
+
+    details = report["details"]
+    report_trace_id = report.get("trace_id")
+    requested_trace_id = request.get("trace_id")
+    capture_root_raw = request.get("capture_root")
+    if not isinstance(capture_root_raw, str) or not capture_root_raw:
+        return "finalizer request did not pin the capture root"
+    capture_root = Path(capture_root_raw).resolve()
+
+    if source == "session_jsonl":
+        details_trace_id = details.get("trace_id")
+        if not isinstance(report_trace_id, str) or not report_trace_id:
+            return "session finalizer did not name a trace_id"
+        if details_trace_id != report_trace_id:
+            return "session report trace identities disagree"
+        requested_session_id = request.get("session_id")
+        if requested_session_id and details.get("session_id") != requested_session_id:
+            return "session report session_id does not match the request"
+        session_path = request.get("session_path")
+        if not session_path or not _path_is_referenced(Path(session_path), evidence_paths):
+            return "session input is not named as evidence"
+        trace_record_path = details.get("trace_record_path")
+        if not isinstance(trace_record_path, str) or not trace_record_path:
+            return "session finalizer did not name its canonical trace record"
+        if not _path_is_referenced(Path(trace_record_path), evidence_paths):
+            return "canonical trace record is not named as evidence"
+        from ..core.bucket_store import read_trace_record_object
+
+        record = read_trace_record_object(Path(trace_record_path))
+        if record is None or record.record.trace_id != report_trace_id:
+            return "canonical trace record is invalid or names another trace"
+        if not record.path.resolve().is_relative_to(capture_root / "bucket"):
+            return "canonical trace record is outside the pinned capture root"
+        from ..core.config import get_project_dir
+
+        expected_project_slug = get_project_dir(Path(request["project"])).name
+        if record.project_slug != expected_project_slug:
+            return "canonical trace record names another project"
+        if requested_session_id and record.record.session_id != requested_session_id:
+            return "canonical trace record names another session"
+        return None
+
+    if source == "telemetry":
+        if not isinstance(requested_trace_id, str) or not requested_trace_id:
+            return "telemetry request did not name the current trace"
+        if report_trace_id != requested_trace_id or details.get("trace_id") != requested_trace_id:
+            return "telemetry report trace_id does not match the current trace"
+        requested_session_id = request.get("session_id")
+        if not requested_session_id or details.get("session_id") != requested_session_id:
+            return "telemetry report session_id does not match the request"
+        if len(evidence_paths) != 1:
+            return "telemetry report must name exactly one staging snapshot"
+        expected_snapshot = capture_root / "staging" / "otel" / f"{requested_session_id}.json"
+        if evidence_paths[0].resolve() != expected_snapshot:
+            return "telemetry snapshot is outside the pinned session staging path"
+        try:
+            snapshot = json.loads(evidence_paths[0].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"telemetry snapshot is invalid: {type(exc).__name__}"
+        if not isinstance(snapshot, dict) or snapshot.get("session_id") != requested_session_id:
+            return "telemetry snapshot does not match the requested session"
+        return None
+
+    if source == "bucket":
+        if not isinstance(requested_trace_id, str) or not requested_trace_id:
+            return "bucket request did not name the current trace"
+        if report_trace_id != requested_trace_id or details.get("trace_id") != requested_trace_id:
+            return "bucket report trace_id does not match the current trace"
+        trace_path = details.get("trace_path")
+        manifest_path = details.get("manifest_path")
+        if not isinstance(trace_path, str) or not _path_is_referenced(
+            Path(trace_path), evidence_paths
+        ):
+            return "bucket trace projection is not named as evidence"
+        if not isinstance(manifest_path, str) or not _path_is_referenced(
+            Path(manifest_path), evidence_paths
+        ):
+            return "bucket manifest is not named as evidence"
+        bucket_root = capture_root / "bucket"
+        if not Path(trace_path).resolve().is_relative_to(bucket_root):
+            return "bucket trace projection is outside the pinned capture root"
+        if Path(manifest_path).resolve() != bucket_root / "manifest.json":
+            return "bucket manifest is outside the pinned capture root"
+        try:
+            trace = json.loads(Path(trace_path).read_text(encoding="utf-8"))
+            manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"bucket evidence is invalid: {type(exc).__name__}"
+        if not isinstance(trace, dict) or trace.get("trace_id") != requested_trace_id:
+            return "bucket trace projection names another trace"
+        if not isinstance(manifest, dict) or not any(
+            isinstance(row, dict) and row.get("trace_id") == requested_trace_id
+            for row in manifest.get("traces") or []
+        ):
+            return "bucket manifest does not contain the current trace"
+    return None
+
+
+def _path_is_referenced(path: Path, evidence_paths: list[Path]) -> bool:
+    expected = path.resolve()
+    return any(candidate.resolve() == expected for candidate in evidence_paths)
 
 
 @dataclass(frozen=True)
@@ -561,6 +682,7 @@ class CaptureSession:
             "security_tools": list(self._resolved_security_tools),
             "security_configuration": self._security_configuration,
             "raw_body_retention": self.plan.raw_body_retention,
+            "capture_root": str(self._capture_root),
             "open_details": self._open_details.get(source) or {},
             "requested_sources": list(self.plan.requested_sources),
         }
@@ -640,6 +762,17 @@ class CaptureSession:
             return self._unavailable(
                 source,
                 f"invalid finalizer report: {report_error}",
+                evidence_refs=refs,
+            )
+        semantic_error = _finalizer_semantic_error(
+            report,
+            source=source,
+            request=request,
+        )
+        if semantic_error is not None:
+            return self._unavailable(
+                source,
+                f"invalid {source} finalizer evidence: {semantic_error}",
                 evidence_refs=refs,
             )
         report_refs = (*refs, *report["evidence_refs"])
@@ -1205,6 +1338,26 @@ def _command_executes_launcher(
     )
 
 
+def _deterministic_probe_environment() -> tuple[dict[str, str], dict[str, Any]]:
+    """Return the pinned minimal environment used for product-side probes."""
+
+    environment = {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": os.defpath,
+    }
+    encoded = json.dumps(
+        environment,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return environment, {
+        "policy": "deterministic_minimal_v1",
+        "digest": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
+        "keys": sorted(environment),
+    }
+
+
 def _declared_python_runtime_matches_observed(
     runtime_command: Path,
     observed_executable: dict[str, str] | None,
@@ -1220,8 +1373,7 @@ def _declared_python_runtime_matches_observed(
     ):
         return False
     try:
-        witness_env = dict(os.environ)
-        witness_env.pop("__PYVENV_LAUNCHER__", None)
+        witness_env, _environment_record = _deterministic_probe_environment()
         witness = subprocess.Popen(
             [
                 str(runtime_command),
@@ -1291,6 +1443,8 @@ def _attest_product_process(
         "version": None,
         "executable": None,
     }
+    probe_env, environment_record = _deterministic_probe_environment()
+    probe_record["environment"] = environment_record
     launcher_identity: dict[str, str] | None = None
     observed_version: str | None = None
     identity_bound = False
@@ -1332,21 +1486,11 @@ def _attest_product_process(
                 limitations.append("product version probe deadline was exhausted")
             else:
                 probe_argv = list(version_probe)
-                probe_env = dict(os.environ)
-                probe_env.pop("__PYVENV_LAUNCHER__", None)
                 if (
                     executed_launcher
                     and runtime_path != launcher_path
                     and observed_executable is not None
                 ):
-                    probe_argv = [
-                        observed_executable["path"],
-                        str(launcher_path),
-                        *version_probe[1:],
-                    ]
-                    probe_record["argv"] = probe_argv
-                    probe_record["execution"] = "observed_runtime_launcher"
-                    probe_record["executable"] = observed_executable
                     runtime_matches = _declared_python_runtime_matches_observed(
                         runtime_command,
                         observed_executable,
@@ -1356,9 +1500,22 @@ def _attest_product_process(
                         "independently_attested" if runtime_matches else "unproven"
                     )
                     if runtime_matches:
-                        # macOS framework Python reports the app executable
-                        # while the shebang path carries virtualenv context.
-                        probe_env["__PYVENV_LAUNCHER__"] = str(runtime_command)
+                        probe_argv = [
+                            str(runtime_command),
+                            str(launcher_path),
+                            *version_probe[1:],
+                        ]
+                        probe_record["execution"] = "independently_attested_runtime_launcher"
+                        probe_record["executable"] = runtime_identity
+                    else:
+                        probe_argv = [
+                            observed_executable["path"],
+                            str(launcher_path),
+                            *version_probe[1:],
+                        ]
+                        probe_record["execution"] = "observed_runtime_launcher"
+                        probe_record["executable"] = observed_executable
+                    probe_record["argv"] = probe_argv
                 remaining = max(0.0, deadline - time.monotonic())
                 if remaining <= 0:
                     limitations.append("product version probe deadline was exhausted")

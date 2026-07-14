@@ -80,14 +80,25 @@ def _finalize_session(request: dict[str, Any]) -> dict[str, Any]:
     }
     if result.error or not result.trace_id:
         return _missing(result.error or "ingest produced no trace", details=details)
-    details["security_observation"] = _trace_security_observation(
-        Path(request["project"]),
-        result.trace_id,
+    from ..core.bucket_store import read_trace_record_object, trace_record_path
+    from ..core.config import get_project_dir
+
+    project = Path(request["project"])
+    project_slug = get_project_dir(project).name
+    record = read_trace_record_object(trace_record_path(project_slug, result.trace_id))
+    if record is None:
+        return _missing(
+            "ingest produced no independently readable canonical trace record",
+            details=details,
+        )
+    details["trace_record_path"] = str(record.path)
+    details["security_observation"] = _security_observation_from_trace(
+        record.record.model_dump(mode="json")
     )
     return {
         "status": "finalized",
         "completeness": "full",
-        "evidence_refs": [str(Path(path))],
+        "evidence_refs": [str(Path(path)), str(record.path)],
         "limitations": [],
         "details": details,
         "trace_id": result.trace_id,
@@ -370,6 +381,7 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
             "companion_projection": companion_projection,
             "manifest_row_written": manifest_row is not None,
         },
+        "trace_id": trace_id,
     }
 
 
@@ -412,21 +424,6 @@ def _resolve_security_policy(request: dict[str, Any]) -> tuple[Any, dict[str, An
         "configured_tools": enabled_security_tool_names(cfg),
         "observed": False,
     }
-
-
-def _trace_security_observation(project: Path, trace_id: str) -> dict[str, Any]:
-    from ..core.bucket_store import read_trace_record_object, trace_record_path
-    from ..core.config import get_project_dir
-
-    project_slug = get_project_dir(project).name
-    record = read_trace_record_object(trace_record_path(project_slug, trace_id))
-    if record is None:
-        return {
-            "observed": False,
-            "tools_applied": [],
-            "reason": "finalized TraceRecord could not be read",
-        }
-    return _security_observation_from_trace(record.record.model_dump(mode="json"))
 
 
 def _security_observation_from_trace(trace: dict[str, Any]) -> dict[str, Any]:

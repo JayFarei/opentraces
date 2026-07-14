@@ -160,8 +160,24 @@ def compare_placements(
             domain="companion",
         )
     )
-    context_proven = bool(persistent_context_raw) and bool(leased_context_raw)
-    trail_proven = bool(persistent_trail_raw) and bool(leased_trail_raw)
+    context_proven = _canonical_companion_evidence(
+        persistent_context_raw,
+        trace_id=str(persistent_trace.get("trace_id") or ""),
+        family="context",
+    ) and _canonical_companion_evidence(
+        leased_context_raw,
+        trace_id=str(leased_trace.get("trace_id") or ""),
+        family="context",
+    )
+    trail_proven = _canonical_companion_evidence(
+        persistent_trail_raw,
+        trace_id=str(persistent_trace.get("trace_id") or ""),
+        family="trail",
+    ) and _canonical_companion_evidence(
+        leased_trail_raw,
+        trace_id=str(leased_trace.get("trace_id") or ""),
+        family="trail",
+    )
     context_match = context_proven and persistent_context == leased_context
     trail_match = trail_proven and persistent_trail == leased_trail
 
@@ -290,6 +306,49 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data
 
 
+def _canonical_companion_evidence(
+    rows: list[Any],
+    *,
+    trace_id: str,
+    family: str,
+) -> bool:
+    """Require canonical, trace-scoped TrailEvent evidence for one family."""
+
+    from ..core.context_tree.contract import CONTEXT_EVENT_TYPES
+    from ..core.trails.models import (
+        TrailEvent,
+        expected_event_id,
+        payload_content_hash,
+    )
+    from ..core.trails.search_records import summary_search_touches_trace
+
+    if family not in {"context", "trail"}:
+        raise ValueError(f"unknown companion family: {family}")
+    if not rows or not trace_id:
+        return False
+    canonical_fields = set(TrailEvent.model_fields)
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != canonical_fields:
+            return False
+        try:
+            event = TrailEvent.model_validate(row)
+        except (TypeError, ValueError):
+            return False
+        scoped_to_trace = event.trace_id == trace_id or (
+            family == "trail" and summary_search_touches_trace(event, trace_id)
+        )
+        if not scoped_to_trace:
+            return False
+        if event.content_hash != payload_content_hash(event.payload):
+            return False
+        if event.event_id != expected_event_id(event):
+            return False
+        is_context = event.event_type in CONTEXT_EVENT_TYPES
+        if (family == "context") != is_context:
+            return False
+    return True
+
+
 def _path_aliases(path: Path) -> set[str]:
     """Return declared/resolved roots plus macOS's public symlink spelling."""
 
@@ -300,38 +359,53 @@ def _path_aliases(path: Path) -> set[str]:
     return aliases
 
 
-def _read_jsonl_gz(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl_gz(path: Path) -> list[Any]:
     if not path.is_file():
         return []
-    rows: list[dict[str, Any]] = []
-    with gzip.open(path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                rows.append(json.loads(line))
+    rows: list[Any] = []
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    try:
+                        rows.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        rows.append({"__malformed_json__": line.rstrip("\n")})
+    except (OSError, EOFError, UnicodeError) as exc:
+        rows.append({"__malformed_companion__": type(exc).__name__})
     return rows
 
 
-def _sanitize_companion_projection(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _sanitize_companion_projection(rows: list[Any]) -> list[Any]:
     """Sanitize comparison material without rewriting canonical bucket bytes."""
 
     from ..security.pipeline import sanitize_companion_dict
 
-    projected: list[dict[str, Any]] = []
+    projected: list[Any] = []
     for row in rows:
+        if not isinstance(row, dict):
+            projected.append({"__invalid_companion_row__": row})
+            continue
         safe = dict(row)
-        payload, _manifest = sanitize_companion_dict(dict(safe.get("payload") or {}))
+        raw_payload = safe.get("payload")
+        if not isinstance(raw_payload, dict):
+            projected.append(safe)
+            continue
+        payload, _manifest = sanitize_companion_dict(dict(raw_payload))
         safe["payload"] = payload
         projected.append(safe)
     return projected
 
 
 def _add_context_node_replacements(
-    rows: list[dict[str, Any]],
+    rows: list[Any],
     replacements: dict[str, str],
 ) -> None:
     """Map content-addressed node joins by observed order, retaining topology."""
 
     for row in rows:
+        if not isinstance(row, dict):
+            continue
         payload = row.get("payload")
         if not isinstance(payload, dict):
             continue
