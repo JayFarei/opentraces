@@ -196,7 +196,7 @@ class BrowserDrive:
         invocation: dict[str, Any],
         operation: Callable[[BrowserSession], Mapping[str, Any]],
     ) -> BrowserResult:
-        allocation = self.actions.allocate()
+        allocation = self.actions.allocate("browser")
         self._has_actions = True
         action = f"actions/{allocation.ordinal:04d}"
         invocation_ref = f"{action}/invocation.json"
@@ -214,6 +214,7 @@ class BrowserDrive:
             observed = dict(operation(self._active_session()))
         except Exception as exc:
             duration_ms = self.actions.duration_ms(allocation)
+            self.actions.complete(allocation)
             reason = sanitize_reason(getattr(exc, "code", "browser_operation_error"), exc)
             self.draft.write_json(
                 result_ref,
@@ -221,6 +222,7 @@ class BrowserDrive:
             )
             raise
         duration_ms = self.actions.duration_ms(allocation)
+        self.actions.complete(allocation)
         state = sanitize_diagnostic_value(observed)
         self.draft.write_json(result_ref, {"duration_ms": duration_ms, "state": state})
         return BrowserResult(
@@ -267,7 +269,7 @@ class BrowserDrive:
     def screenshot(self, name: str, *, full_page: bool = False) -> BrowserResult:
         if not name or Path(name).name != name or name in {".", ".."}:
             raise ValueError("browser screenshot name must be one relative filename stem")
-        allocation = self.actions.allocate()
+        allocation = self.actions.allocate("browser")
         self._has_actions = True
         action = f"actions/{allocation.ordinal:04d}"
         invocation_ref = f"{action}/invocation.json"
@@ -286,6 +288,7 @@ class BrowserDrive:
             payload = self._active_session().screenshot(full_page=full_page)
         except Exception as exc:
             duration_ms = self.actions.duration_ms(allocation)
+            self.actions.complete(allocation)
             reason = sanitize_reason("browser_screenshot_error", exc)
             self.draft.write_json(
                 result_ref,
@@ -296,6 +299,7 @@ class BrowserDrive:
         self.draft.write_bytes(screenshot_ref, payload)
         self._screenshot_refs.append(screenshot_ref)
         duration_ms = self.actions.duration_ms(allocation)
+        self.actions.complete(allocation)
         state = {"path": screenshot_ref}
         self.draft.write_json(result_ref, {"duration_ms": duration_ms, "state": state})
         return BrowserResult(
