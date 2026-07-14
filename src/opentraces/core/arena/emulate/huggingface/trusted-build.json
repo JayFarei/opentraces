@@ -3,7 +3,7 @@
   "build_inputs_sha256": "318ceb271637e7e391adf53ac1c0581be26b7fb5384aa0e21cc7f84f8e827264",
   "bun_version": "1.3.6",
   "contract_version": "huggingface.v1",
-  "evidence": "actual pinned build; attach a new real-box proof before merge",
+  "evidence": "A5 #274 real-box PASS run_20260714T162541686580Z_04076950a531",
   "schema_version": "opentraces.hf-emulator-trusted-build.v1",
   "size_bytes": 94094343,
   "source_sha256": "6b766b5861fa50fa458acc87b7e8de940095c5578f94b8e73347a51ceeec0c3d",
