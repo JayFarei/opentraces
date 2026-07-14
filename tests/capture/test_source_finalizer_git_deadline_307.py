@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 
 from opentraces.capture import Capture, CapturePlan
+from opentraces.core.trails.event_log import append_event_batch
+from opentraces.core.trails.models import TrailEventDraft, sha256_text
 
 
 def _git_project(root: Path) -> Path:
@@ -63,6 +65,31 @@ def _recorded_processes(pid_path: Path) -> dict[str, int]:
             if "=" in line
         )
     }
+
+
+def _seed_event_log(project: Path) -> None:
+    authored = "capture fixture\n"
+    append_event_batch(
+        project,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="trace-test",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:deadline-control",
+                    "file_path": "README.md",
+                    "affected_range": {"start_line": 1, "end_line": 1},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(authored.rstrip("\n")),
+                    "limitations": [],
+                },
+            )
+        ],
+        writer="test-307-deadline",
+    )
 
 
 def test_finish_kills_timed_out_git_probe_process_group(
@@ -145,3 +172,63 @@ def test_finish_kills_timed_out_git_probe_process_group(
         assert not marker_path.exists(), "timed-out rev-parse survived its finalizer"
     finally:
         _terminate_recorded_processes(pid_path)
+
+
+def test_finish_bounds_transitive_scoped_event_git_probe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A scoped event-log Git hang must become a named partial, not outer timeout."""
+    project = _git_project(tmp_path / "project")
+    _seed_event_log(project)
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("git",),
+            required_sources=("git",),
+            result_dir=tmp_path / "result",
+        )
+    )
+
+    real_git = shutil.which("git")
+    assert real_git is not None
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    pid_path = tmp_path / "cat-file-pid"
+    shim = shim_dir / "git"
+    shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "cat-file" ] && [ "$2" = "--batch" ] '
+        '&& [ -n "$OT_OPENTRACES_DIR" ]; then\n'
+        '  printf "%s\\n" "$$" > "$OT_GIT_SHIM_CAT_FILE_PID"\n'
+        "  exec sleep 30\n"
+        "fi\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("OT_GIT_SHIM_CAT_FILE_PID", str(pid_path))
+
+    started = time.monotonic()
+    try:
+        result = capture.finish(deadline=started + 3.0)
+        elapsed = time.monotonic() - started
+
+        source = result.source("git")
+        assert elapsed < 3.5
+        assert source.status == "partial"
+        assert source.completeness == "partial"
+        assert any(
+            "cat-file --batch" in limitation and "timed out" in limitation
+            for limitation in source.limitations
+        )
+        assert pid_path.is_file(), "scoped event-reader control was not exercised"
+    finally:
+        if pid_path.is_file():
+            try:
+                os.kill(int(pid_path.read_text(encoding="utf-8")), signal.SIGTERM)
+            except (ProcessLookupError, ValueError):
+                pass
