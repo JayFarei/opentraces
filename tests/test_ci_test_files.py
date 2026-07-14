@@ -28,7 +28,7 @@ HF_CLIENT_CARRIERS = {
 }
 
 
-def test_premerge_sharder_leaves_hf_contract_to_its_pinned_workflow() -> None:
+def test_premerge_sharder_includes_hf_contract() -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -47,7 +47,7 @@ def test_premerge_sharder_leaves_hf_contract_to_its_pinned_workflow() -> None:
     )
 
     selected = set(result.stdout.splitlines())
-    assert selected.isdisjoint(HF_CONTRACT_FILES)
+    assert HF_CONTRACT_FILES.issubset(selected)
 
     workflow = (ROOT / ".github/workflows/hf-emulator-contract.yml").read_text()
     for contract_file in HF_CONTRACT_FILES:

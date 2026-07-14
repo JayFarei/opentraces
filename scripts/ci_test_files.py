@@ -25,10 +25,6 @@ LANE_EXCLUDES: dict[str, tuple[str, ...]] = {
         "tests/integration/",
         "tests/otbox/",
         "tests/perf/",
-        # Owned by .github/workflows/hf-emulator-contract.yml, which provisions
-        # the exact Bun and Hugging Face client versions these contracts require.
-        "tests/test_arena_hf_emulator.py",
-        "tests/test_arena_hf_emulator_packaging.py",
     ),
     "integration": (),
 }
