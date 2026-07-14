@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import tarfile
 import time
@@ -90,6 +91,24 @@ class BoxCommandResult:
     stdout: str
     stderr: str
     timing: dict[str, Any]
+
+
+@dataclass
+class LocalPortForward:
+    """A bounded host-loopback bridge into one leased box port."""
+
+    endpoint: str
+    process: subprocess.Popen[str]
+
+    def close(self) -> None:
+        if self.process.poll() is not None:
+            return
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=3)
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -595,6 +614,64 @@ class CrabboxRuntime:
                 "the dedicated product identity is missing, non-writable, or sudo-capable",
             )
         return self._evidence_ref(timing)
+
+    def open_port_forward(self, box: Box, remote_port: int) -> LocalPortForward:
+        """Expose one box-loopback port only on a fresh host-loopback port."""
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            local_port = int(reservation.getsockname()[1])
+        process = subprocess.Popen(
+            [
+                "ssh",
+                "-F",
+                "/dev/null",
+                "-N",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-i",
+                box.ssh_key,
+                "-p",
+                box.ssh_port,
+                "-L",
+                f"127.0.0.1:{local_port}:127.0.0.1:{int(remote_port)}",
+                f"{box.ssh_user}@{box.ssh_host}",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        forward = LocalPortForward(
+            endpoint=f"http://127.0.0.1:{local_port}",
+            process=process,
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise CrabboxRefusal(
+                    "port_forward_failed",
+                    "the host-to-box port forward exited before becoming ready",
+                )
+            try:
+                with socket.create_connection(("127.0.0.1", local_port), timeout=0.1):
+                    return forward
+            except OSError:
+                time.sleep(0.05)
+        forward.close()
+        raise CrabboxRefusal(
+            "port_forward_failed",
+            "the host-to-box port forward did not become ready within 5 seconds",
+        )
 
     def copy_into_box(
         self,

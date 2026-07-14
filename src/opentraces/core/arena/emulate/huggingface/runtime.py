@@ -407,6 +407,8 @@ class _BoxRuntime(Protocol):
         timeout: float = 120,
     ) -> str: ...
 
+    def open_port_forward(self, box: Any, remote_port: int) -> "_PortForward": ...
+
     def exec(
         self,
         box: Any,
@@ -437,6 +439,12 @@ class _BoxRuntime(Protocol):
         destination: Path,
         repository: Path,
     ) -> dict[str, Path]: ...
+
+
+class _PortForward(Protocol):
+    endpoint: str
+
+    def close(self) -> None: ...
 
 
 class HuggingFaceLedger:
@@ -503,6 +511,7 @@ class HuggingFaceEmulator:
         self._stopped = False
         self._ledger_path: Path | None = None
         self._ledger_finalized = False
+        self._browser_forward: _PortForward | None = None
 
     def _control_request(self, route: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         if self._stopped:
@@ -574,9 +583,20 @@ class HuggingFaceEmulator:
             "evidence_ref": WORLD_EVIDENCE_REF,
         }
 
+    @property
+    def browser_endpoint(self) -> str:
+        """Return the host-loopback view of the in-box provider endpoint."""
+
+        if self._browser_forward is None:
+            self._browser_forward = self.runtime.open_port_forward(self.box, DEFAULT_PORT)
+        return self._browser_forward.endpoint
+
     def stop(self) -> None:
         if self._stopped:
             return
+        if self._browser_forward is not None:
+            self._browser_forward.close()
+            self._browser_forward = None
         timing = self.run_path / "artifacts" / "crabbox-timing" / "hf-stop.json"
         stopped = self.runtime.exec(
             self.box,

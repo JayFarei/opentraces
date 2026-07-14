@@ -54,7 +54,7 @@ def test_browser_authorization_authenticates_the_cli(bench):
         )
         assert login.running is True
 
-        verification_url = f"{hf.env['HF_ENDPOINT']}/oauth/authorize"
+        verification_url = f"{hf.browser_endpoint}/oauth/authorize"
         run.browser.navigate(verification_url)
         run.browser.wait("text=Authorize OpenTraces", timeout_ms=5_000)
         run.browser.click("button:has-text('Authorize')")
