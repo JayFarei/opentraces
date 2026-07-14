@@ -325,6 +325,8 @@ class BrowserDrive:
                     refs.append(ref)
                 if kind == "browser_screenshots":
                     self._screenshot_refs.extend(ref for ref in refs if ref not in self._screenshot_refs)
+                    if not self._screenshot_refs:
+                        raise ValueError("browser screenshots recorder produced no artifacts")
                     path = "recordings/browser/screenshots.json"
                     self.draft.write_json(path, {"screenshots": self._screenshot_refs})
                 else:
