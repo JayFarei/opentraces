@@ -1525,6 +1525,7 @@ HfApi(token="hf_bench_user_token").whoami()
             run_path=run_path,
             binary_pin=EmulatorBinaryPin(sha256="0" * 64, size_bytes=0),
             world_setup={},
+            control_token=CONTROL_TOKEN,
         )
         waiter = threading.Thread(target=process.wait, daemon=True)
         waiter.start()
