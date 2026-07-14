@@ -5,6 +5,8 @@ from pathlib import Path
 
 import opentraces.core.arena.run_store as run_store_module
 import pytest
+from click.testing import CliRunner
+from opentraces.cli import main
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 from opentraces.core.arena.trace_return import TraceReturnError, return_run_as_trace
@@ -221,3 +223,56 @@ def test_missing_declared_action_output_is_refused_before_trace_write(
         )
 
     assert read_bucket_record_for_trace(TRACE_ID) is None
+
+
+def test_returned_run_resolves_through_standard_trace_read_verbs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    return_run_as_trace(
+        run_path,
+        project_dir=_project(tmp_path),
+        store=store,
+        cfg=Config(),
+    )
+
+    runner = CliRunner()
+    got = runner.invoke(main, ["trace", "get", TRACE_ID, "--json"])
+    mapped = runner.invoke(main, ["trace", "map", TRACE_ID, "--json"])
+    sliced = runner.invoke(
+        main,
+        [
+            "trace",
+            "slice",
+            TRACE_ID,
+            "--from-step",
+            "1",
+            "--to-step",
+            "3",
+            "--json",
+        ],
+    )
+    queried = runner.invoke(
+        main,
+        [
+            "trace",
+            "query",
+            "--lex",
+            "configured remote",
+            "--unknown-success",
+            "--json",
+        ],
+    )
+
+    assert got.exit_code == 0, got.output
+    assert mapped.exit_code == 0, mapped.output
+    assert sliced.exit_code == 0, sliced.output
+    assert queried.exit_code == 0, queried.output
+    assert json.loads(got.output)["trace"]["trace_id"] == TRACE_ID
+    mapped_payload = json.loads(mapped.output)
+    assert mapped_payload["trace_id"] == TRACE_ID
+    assert json.loads(sliced.output)["slices"][0]["trace_id"] == TRACE_ID
+    assert TRACE_ID in {
+        candidate["trace_id"] for candidate in json.loads(queried.output)["candidates"]
+    }
