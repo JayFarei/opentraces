@@ -24,7 +24,7 @@ from opentraces.core.arena.labels import (
     verify_label,
 )
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
-from opentraces.core.bucket_layout import trace_v1_json_path, trace_v1_labels_path
+from opentraces.core.bucket_layout import trace_v1_json_path
 from opentraces.core.slicing.models import Trajectory
 from opentraces.core.trace_slices import (
     TraceMaterializationRef,
