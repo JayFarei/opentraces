@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from importlib.metadata import version
@@ -101,6 +102,17 @@ def _request_json(
     )
     with urllib.request.urlopen(request) as response:
         return json.load(response)
+
+
+def _request_form(url: str, payload: dict[str, str]) -> tuple[int, str]:
+    request = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(payload).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request) as response:
+        return response.status, response.read().decode()
 
 
 def _assert_invalid_token(
@@ -365,6 +377,110 @@ print(json.dumps({
         "organization": "bench",
         "type": "dataset",
     }
+
+
+def test_real_cli_device_flow_crosses_human_page_then_persists_auth(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "isolated-home"
+    home.mkdir()
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in {"HF_TOKEN", "HUGGINGFACE_TOKEN", "HF_HOME"}
+    }
+    environment.update(
+        {
+            "HOME": str(home),
+            "BROWSER": "/usr/bin/true",
+        }
+    )
+
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
+        environment["HF_ENDPOINT"] = endpoint
+        credentials = home / ".opentraces" / "credentials"
+        assert not credentials.exists()
+        login = subprocess.Popen(
+            [
+                str(ROOT / ".venv" / "bin" / "opentraces"),
+                "auth",
+                "login",
+                "--device-timeout",
+                "15",
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            authorization_page = ""
+            while time.monotonic() < deadline:
+                try:
+                    with urllib.request.urlopen(f"{endpoint}/oauth/authorize") as response:
+                        authorization_page = response.read().decode()
+                except OSError:
+                    pass
+                if "Authorize OpenTraces" in authorization_page:
+                    break
+                time.sleep(0.02)
+            assert "Authorize OpenTraces" in authorization_page
+            assert "button" in authorization_page
+            status, authorized_page = _request_form(
+                f"{endpoint}/oauth/authorize",
+                {},
+            )
+            assert status == 200
+            assert "Authorized" in authorized_page
+            stdout, stderr = login.communicate(timeout=10)
+        finally:
+            if login.poll() is None:
+                login.kill()
+                login.wait(timeout=2)
+
+        assert login.returncode == 0, f"stdout:\n{stdout}\nstderr:\n{stderr}"
+        assert credentials.is_file()
+        assert credentials.stat().st_mode & 0o777 == 0o600
+        assert "hf_bench_user_token" not in stdout
+
+        whoami = subprocess.run(
+            [
+                str(ROOT / ".venv" / "bin" / "opentraces"),
+                "--json",
+                "auth",
+                "whoami",
+            ],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert whoami.returncode == 0, whoami.stderr
+        assert json.loads(whoami.stdout) == {
+            "status": "ok",
+            "authenticated": True,
+            "username": "bench",
+        }
+
+    raw_ledger = ledger_path.read_text(encoding="utf-8")
+    ledger_rows = [json.loads(line) for line in raw_ledger.splitlines()]
+    successful_operations = {
+        row["operation_id"]
+        for row in ledger_rows
+        if row["response"]["status"] == 200
+    }
+    assert {
+        "issueDeviceCode",
+        "viewDeviceAuthorization",
+        "authorizeDeviceCode",
+        "completeDeviceCode",
+        "whoami",
+    } <= successful_operations
+    assert "hf_bench_user_token" not in raw_ledger
+    assert "device_code" not in raw_ledger
+    assert "user_code" not in raw_ledger
 
 
 def test_real_hf_client_listing_is_scoped_to_authenticated_owner(
