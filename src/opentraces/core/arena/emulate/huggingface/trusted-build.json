@@ -1,11 +1,11 @@
 {
-  "schema_version": "opentraces.hf-emulator-trusted-build.v1",
-  "binary_sha256": "a0e7bdc0ebd465f10f95e36d1865bc70ef5bfce389ecb1b15a59088f5d2e8f51",
-  "size_bytes": 94094274,
-  "source_sha256": "4b51bb5433cbe2db19ffee4c89b7757c0df3c8ca707a928f152344544fb6d82a",
-  "build_inputs_sha256": "79a49e460830557de696a249d37efc18806ff0bcb23621c245f097cd221eef7c",
+  "binary_sha256": "0bd87c30d6b56deed2be71ffdccfbea7012a17ade49cf2804ac816e52556d6fb",
+  "build_inputs_sha256": "318ceb271637e7e391adf53ac1c0581be26b7fb5384aa0e21cc7f84f8e827264",
   "bun_version": "1.3.6",
-  "target": "bun-linux-arm64",
   "contract_version": "huggingface.v1",
-  "evidence": "actual pinned build; A5 #274 real-box acceptance required before merge"
+  "evidence": "actual pinned build; attach a new real-box proof before merge",
+  "schema_version": "opentraces.hf-emulator-trusted-build.v1",
+  "size_bytes": 94094343,
+  "source_sha256": "6b766b5861fa50fa458acc87b7e8de940095c5578f94b8e73347a51ceeec0c3d",
+  "target": "bun-linux-arm64"
 }
