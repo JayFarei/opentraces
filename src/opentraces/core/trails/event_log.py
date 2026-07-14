@@ -44,16 +44,28 @@ def _git(
     input: str | None = None,
     env: dict[str, str] | None = None,
     check: bool = True,
+    deadline: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        input=input,
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
+    if deadline is None:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            input=input,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+    else:
+        from ._git_subprocess import run_git_until
+
+        proc = run_git_until(
+            args,
+            cwd=cwd,
+            deadline=deadline,
+            input=input,
+            env=env,
+        )
     if check and proc.returncode != 0:
         raise RuntimeError(
             f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}"
@@ -67,14 +79,25 @@ def _git_bytes(
     *,
     input: bytes | None = None,
     check: bool = True,
+    deadline: float | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        input=input,
-        capture_output=True,
-        check=False,
-    )
+    if deadline is None:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            input=input,
+            capture_output=True,
+            check=False,
+        )
+    else:
+        from ._git_subprocess import run_git_bytes_until
+
+        proc = run_git_bytes_until(
+            args,
+            cwd=cwd,
+            deadline=deadline,
+            input=input,
+        )
     if check and proc.returncode != 0:
         stderr = proc.stderr.decode(errors="replace").strip()
         stdout = proc.stdout.decode(errors="replace").strip()
@@ -82,8 +105,13 @@ def _git_bytes(
     return proc
 
 
-def _ref_head(cwd: Path) -> str | None:
-    proc = _git(cwd, ["rev-parse", "--verify", EVENT_LOG_REF], check=False)
+def _ref_head(cwd: Path, *, deadline: float | None = None) -> str | None:
+    proc = _git(
+        cwd,
+        ["rev-parse", "--verify", EVENT_LOG_REF],
+        check=False,
+        deadline=deadline,
+    )
     if proc.returncode != 0:
         return None
     return proc.stdout.strip()
@@ -468,11 +496,21 @@ def _event_blob_entries(cwd: Path, commits: list[str]) -> list[tuple[str, str]]:
     return entries
 
 
-def _read_blobs_batch(cwd: Path, entries: list[tuple[str, str]]) -> list[bytes]:
+def _read_blobs_batch(
+    cwd: Path,
+    entries: list[tuple[str, str]],
+    *,
+    deadline: float | None = None,
+) -> list[bytes]:
     if not entries:
         return []
     input_data = ("".join(f"{oid}\n" for _, oid in entries)).encode()
-    proc = _git_bytes(cwd, ["cat-file", "--batch"], input=input_data)
+    proc = _git_bytes(
+        cwd,
+        ["cat-file", "--batch"],
+        input=input_data,
+        deadline=deadline,
+    )
     data = proc.stdout
     offset = 0
     blobs: list[bytes] = []
@@ -496,7 +534,12 @@ def _read_blobs_batch(cwd: Path, entries: list[tuple[str, str]]) -> list[bytes]:
     return blobs
 
 
-def _iter_blobs_batch(cwd: Path, entries: list[tuple[str, str]]):
+def _iter_blobs_batch(
+    cwd: Path,
+    entries: list[tuple[str, str]],
+    *,
+    deadline: float | None = None,
+):
     """Stream blobs for ``entries`` via ONE ``git cat-file --batch`` process,
     yielding each blob's bytes as it arrives (#65).
 
@@ -506,6 +549,15 @@ def _iter_blobs_batch(cwd: Path, entries: list[tuple[str, str]]):
     pipe back-pressure.
     """
     if not entries:
+        return
+    if deadline is not None:
+        # The normal streaming reader blocks in ``readline``/``read`` and cannot
+        # enforce an absolute deadline. Deadline-bearing finalization uses
+        # bounded binary subprocesses in small chunks instead, preserving a
+        # bounded memory footprint while making every cat-file killable.
+        for offset in range(0, len(entries), 256):
+            chunk = entries[offset:offset + 256]
+            yield from _read_blobs_batch(cwd, chunk, deadline=deadline)
         return
     import threading
 
@@ -628,7 +680,12 @@ def _read_head_batch_tail(cwd: Path, head: str) -> tuple[int, str] | None:
     return event.event_sequence, event.event_id
 
 
-def _list_event_blob_entries(cwd: Path, head: str) -> list[tuple[str, str]]:
+def _list_event_blob_entries(
+    cwd: Path,
+    head: str,
+    *,
+    deadline: float | None = None,
+) -> list[tuple[str, str]]:
     """One ``rev-list --objects`` pass: every event blob ``(path, oid)``
     reachable from ``head``, sorted by zero-padded name == event_sequence.
 
@@ -636,7 +693,11 @@ def _list_event_blob_entries(cwd: Path, head: str) -> list[tuple[str, str]]:
     for commits.
     """
     entries: list[tuple[str, str]] = []
-    for line in _git(cwd, ["rev-list", "--objects", head]).stdout.splitlines():
+    for line in _git(
+        cwd,
+        ["rev-list", "--objects", head],
+        deadline=deadline,
+    ).stdout.splitlines():
         oid, sep, path = line.partition(" ")
         if not sep:
             continue
@@ -736,6 +797,7 @@ def read_events_scoped(
     commit_sha: str | None = None,
     commit_shas: set[str] | None = None,
     sink: "Callable[[TrailEvent], None] | None" = None,
+    deadline: float | None = None,
 ) -> list[TrailEvent]:
     """Read only events of ``event_types``, streaming per-commit so the whole
     history is never materialised at once (Bug B hot-path reader).
@@ -769,7 +831,7 @@ def read_events_scoped(
     ``ls-tree`` per commit and parses every event).
     """
     cwd = cwd.resolve()
-    head = _ref_head(cwd)
+    head = _ref_head(cwd, deadline=deadline)
     if head is None:
         return []
 
@@ -792,9 +854,14 @@ def read_events_scoped(
     # fall back to the whole-log raw-bytes-prefilter scan (slow-but-correct).
     from . import event_index
 
-    idx = event_index.fresh_index_for_read(cwd, head)
-    if idx is None:
-        idx = event_index.rebuild_event_index(cwd, head)
+    # The rebuildable index has its own Git probes and is intentionally a
+    # best-effort accelerator. A deadline-bearing finalizer takes the bounded
+    # canonical listing path instead of entering those legacy unbudgeted probes.
+    idx = None
+    if deadline is None:
+        idx = event_index.fresh_index_for_read(cwd, head)
+        if idx is None:
+            idx = event_index.rebuild_event_index(cwd, head)
 
     _prefilter = None
     if idx is not None:
@@ -804,7 +871,7 @@ def read_events_scoped(
             wanted_shas=wanted_shas,
         )
     else:
-        entries = _list_event_blob_entries(cwd, head)
+        entries = _list_event_blob_entries(cwd, head, deadline=deadline)
         # Cheap raw-bytes prefilter so only wanted blobs are JSON-parsed. Types
         # carrying a commit_filter are additionally gated on a wanted sha
         # appearing in the blob — on a real log these commit-keyed events
@@ -834,7 +901,7 @@ def read_events_scoped(
     # matter how large the log is. Blobs stream one at a time through
     # ``_iter_blobs_batch``.
     matched: list[TrailEvent] = []
-    for raw in _iter_blobs_batch(cwd, entries):
+    for raw in _iter_blobs_batch(cwd, entries, deadline=deadline):
         if _prefilter is not None and not _prefilter(raw):
             continue
         event = TrailEvent.model_validate_json(raw)

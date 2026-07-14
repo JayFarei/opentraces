@@ -125,7 +125,7 @@ def mature_trails(
             # #65 cure: retain dedup keys in a disk-backed scratch index, not in
             # Python sets for the whole tick. Per-chunk queries below materialize
             # only O(chunk_size * candidate_commits) keys in memory.
-            _build_dedup_index(repo, scratch, commits)
+            _build_dedup_index(repo, scratch, commits, deadline=deadline)
 
             # The shared scan is atomic by design. If it overruns the caller's
             # budget, do not use a partial dedup view; return a truncated no-op
@@ -175,10 +175,14 @@ def mature_trails(
                         repo,
                         event_types={"trace_patch_created"},
                         sink=_patch_sink,
+                        deadline=deadline,
                     )
                     _flush_patch_chunk()
                 except _MaturationBudgetExhausted:
                     pass
+                except subprocess.TimeoutExpired as exc:
+                    errors.append(timeout_limitation(exc))
+                    truncated = True
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"patch stream failed: {type(exc).__name__}: {exc}")
                     truncated = True
@@ -203,6 +207,9 @@ def mature_trails(
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"maturation flush failed: {type(exc).__name__}: {exc}")
                 truncated = True
+        except subprocess.TimeoutExpired as exc:
+            errors.append(timeout_limitation(exc))
+            truncated = True
         except Exception as exc:  # noqa: BLE001
             errors.append(f"dedup scratch failed: {type(exc).__name__}: {exc}")
             truncated = True
@@ -326,6 +333,8 @@ def _build_dedup_index(
     repo: Path,
     scratch: sqlite3.Connection,
     commits: list[str],
+    *,
+    deadline: float | None = None,
 ) -> None:
     commit_set = set(commits)
     anchor_rows: list[tuple[str, str]] = []
@@ -376,6 +385,7 @@ def _build_dedup_index(
         },
         commit_shas=commit_set,
         sink=_key_sink,
+        deadline=deadline,
     )
     _flush()
     scratch.commit()

@@ -393,29 +393,6 @@ def _finalizer_semantic_error(
             return "git report names another project"
         if details.get("event_log_ref") != EVENT_LOG_REF:
             return "git report names another canonical event ref"
-        head = subprocess.run(
-            ["git", "rev-parse", "--verify", EVENT_LOG_REF],
-            cwd=project,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if head.returncode != 0:
-            if not (
-                report["status"] == "partial"
-                and details.get("event_log_head") is None
-                and details.get("events_count") == 0
-            ):
-                return "git report event-log head is not current"
-        else:
-            if details.get("event_log_head") != head.stdout.strip():
-                return "git report event-log head is not current"
-            try:
-                events = read_events(project, verify=True)
-            except Exception as exc:  # noqa: BLE001 - fail-closed evidence validator
-                return f"git canonical event evidence is unreadable: {type(exc).__name__}"
-            if not events or details.get("events_count") != len(events):
-                return "git report event count does not match readable canonical evidence"
         maturation = details.get("maturation")
         if not isinstance(maturation, dict):
             return "git report did not include maturation evidence"
@@ -428,6 +405,45 @@ def _finalizer_semantic_error(
             return "git maturation errors are not a string list"
         if not isinstance(maturation.get("truncated"), bool):
             return "git maturation truncated flag is not boolean"
+        head = subprocess.run(
+            ["git", "rev-parse", "--verify", EVENT_LOG_REF],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        evidence_deferred = (
+            report["status"] == "partial"
+            and maturation["truncated"] is True
+            and details.get("event_log_head") is None
+            and details.get("events_count") is None
+            and any("timed out" in error.lower() for error in maturation["errors"])
+        )
+        if head.returncode != 0:
+            if not (
+                evidence_deferred
+                or (
+                    report["status"] == "partial"
+                    and details.get("event_log_head") is None
+                    and details.get("events_count") == 0
+                )
+            ):
+                return "git report event-log head is not current"
+        else:
+            if not evidence_deferred and details.get("event_log_head") != head.stdout.strip():
+                return "git report event-log head is not current"
+            count_deferred = (
+                report["status"] == "partial"
+                and maturation["truncated"] is True
+                and details.get("events_count") is None
+            )
+            if not count_deferred:
+                try:
+                    events = read_events(project, verify=True)
+                except Exception as exc:  # noqa: BLE001 - fail-closed evidence validator
+                    return f"git canonical event evidence is unreadable: {type(exc).__name__}"
+                if not events or details.get("events_count") != len(events):
+                    return "git report event count does not match readable canonical evidence"
         return None
 
     if source == "bucket":
