@@ -451,7 +451,13 @@ def test_startup_liveness_probe_does_not_signal_differently_owned_process(
                         stderr="sh: 1: kill: Operation not permitted\n",
                         timing={"schemaVersion": 1, "timing": {"exitCode": 1}},
                     )
-                if "executable=$(sudo readlink" not in rendered:
+                privileged_reads = (
+                    'sudo test -r "/proc/$pid/stat"',
+                    "state=$(sudo sed",
+                    "owner_uid=$(sudo awk",
+                    "executable=$(sudo readlink",
+                )
+                if any(fragment not in rendered for fragment in privileged_reads):
                     return BoxCommandResult(
                         argv=list(map(str, argv)),
                         returncode=1,
