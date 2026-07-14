@@ -291,22 +291,31 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
 def _finalize_git(request: dict[str, Any]) -> dict[str, Any]:
     import subprocess
 
+    from ..core.trails._git_subprocess import run_git_until, timeout_limitation
     from ..core.trails.event_log import EVENT_LOG_REF, read_events
     from ..core.trails.maturation import mature_trails
 
     project = Path(request["project"]).resolve()
+    # Leave the isolated child enough time to serialize its honest partial
+    # report after a Git process-group timeout. The parent already reserves a
+    # smaller outer cushion; this inner reserve covers cleanup plus report I/O.
+    deadline = max(time.monotonic(), _request_deadline(request) - 0.15)
     summary = mature_trails(
         project,
-        deadline=_request_deadline(request),
+        deadline=deadline,
     )
-    head = subprocess.run(
-        ["git", "rev-parse", "--verify", EVENT_LOG_REF],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    event_log_head = head.stdout.strip() if head.returncode == 0 else None
+    limitations = list(summary.errors)
+    try:
+        head = run_git_until(
+            ["rev-parse", "--verify", EVENT_LOG_REF],
+            cwd=project,
+            deadline=deadline,
+        )
+    except subprocess.TimeoutExpired as exc:
+        limitations.append(timeout_limitation(exc))
+        event_log_head = None
+    else:
+        event_log_head = head.stdout.strip() if head.returncode == 0 else None
     events = read_events(project, verify=True) if event_log_head else []
     details = {
         "schema_version": "opentraces.capture.git_finalization.v1",
@@ -316,7 +325,6 @@ def _finalize_git(request: dict[str, Any]) -> dict[str, Any]:
         "events_count": len(events),
         "maturation": summary.to_dict(),
     }
-    limitations = list(summary.errors)
     if summary.truncated:
         limitations.append("anchor maturation reached its deadline")
     if event_log_head is None or not events:
