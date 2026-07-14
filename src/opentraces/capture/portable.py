@@ -15,6 +15,7 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1056,6 +1057,7 @@ class CaptureSession:
                 env=env,
                 stdout=stdout,
                 stderr=stderr,
+                start_new_session=os.name == "posix",
             )
         except OSError as exc:
             stdout.close()
@@ -1068,13 +1070,7 @@ class CaptureSession:
             remaining = max(0.0, deadline - time.monotonic())
             process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
-            process.kill()
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining > 0:
-                try:
-                    process.wait(timeout=remaining)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
+            _kill_finalizer_process_tree(process)
             return CaptureSourceResult(
                 name=source,
                 view=_SOURCE_VIEW[source],
@@ -1151,7 +1147,7 @@ class CaptureSession:
     def _finalizer_timeout_limitation(self, source: str) -> str:
         """Retain known source truth when an isolated child misses its budget."""
 
-        generic = "source finalizer exceeded the capture deadline"
+        generic = f"{source} source finalizer exceeded the capture deadline"
         if source != "telemetry" or not self.plan.session_id:
             return generic
         snapshot_path = self._capture_root / "staging" / "otel" / f"{self.plan.session_id}.json"
@@ -1939,6 +1935,27 @@ def _pid_is_alive(pid: int | None) -> bool:
     except OSError:
         return False
     return True
+
+
+def _kill_finalizer_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Kill an isolated finalizer and every subprocess it launched."""
+
+    killed_group = False
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            killed_group = True
+        except (OSError, AttributeError):
+            pass
+    if not killed_group:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=0.5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
