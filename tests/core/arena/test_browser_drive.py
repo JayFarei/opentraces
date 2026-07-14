@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from opentraces.core.arena.engine import Bench, ScenarioSource
 from opentraces.core.arena.run_store import RunStore
 from tests.core.arena.test_engine import FakeBoxRuntime
@@ -11,10 +13,12 @@ from tests.core.arena.test_engine import FakeBoxRuntime
 class PublicBrowserSession:
     """External-browser boundary double exposing only rendered public state."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, suppressed_channel: str | None = None, silent: bool = False) -> None:
         self.url = "about:blank"
         self.account = ""
         self.authorized = False
+        self.suppressed_channel = suppressed_channel
+        self.silent = silent
 
     def navigate(self, url: str) -> dict[str, object]:
         self.url = url
@@ -48,6 +52,10 @@ class PublicBrowserSession:
         return b"\x89PNG\r\npublic-page"
 
     def finalize_channel(self, kind: str) -> list[tuple[str, bytes]]:
+        if kind == self.suppressed_channel:
+            if self.silent:
+                return []
+            raise RuntimeError(f"{kind} recorder token=private at /Users/private/recording")
         return {
             "browser_video": [("session.webm", b"browser-video")],
             "playwright_trace": [("trace.zip", b"playwright-trace")],
@@ -148,3 +156,79 @@ def test_browser_only_attempt_freezes_public_state_and_all_recording_channels(
         "recordings/browser/screenshots/authorized.png",
         "recordings/browser/screenshots/final.png",
     ]
+
+
+def _run_inspection(
+    tmp_path: Path, browser_factory
+) -> tuple[dict[str, object], Path]:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=browser_factory,
+    )
+
+    def inspect_public_page(run):
+        inspected = run.browser.inspect("main")
+        assert inspected.state["text"] == "Pending"
+        return {"evidence_refs": [inspected.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(inspect_public_page)
+    return run.result, run.final_path
+
+
+@pytest.mark.parametrize(
+    "suppressed_channel",
+    ["browser_video", "playwright_trace", "browser_screenshots"],
+)
+def test_each_browser_recorder_failure_is_independent_and_cannot_rewrite_the_verdict(
+    tmp_path: Path,
+    suppressed_channel: str,
+) -> None:
+    result, _ = _run_inspection(
+        tmp_path,
+        lambda: PublicBrowserSession(suppressed_channel=suppressed_channel),
+    )
+
+    assert result["verdict"] == "pass"
+    assert result["reason"] is None
+    assert result["recordings"]["rewatchable"] is False
+    channels = {channel["kind"]: channel for channel in result["recordings"]["channels"]}
+    assert channels[suppressed_channel]["complete"] is False
+    assert channels[suppressed_channel]["path"] is None
+    assert "private" not in channels[suppressed_channel]["reason"]
+    assert "/Users/" not in channels[suppressed_channel]["reason"]
+    assert all(
+        channel["complete"] is True
+        for kind, channel in channels.items()
+        if kind != suppressed_channel
+    )
+
+
+def test_silently_suppressed_screenshot_recorder_cannot_claim_complete(
+    tmp_path: Path,
+) -> None:
+    result, final_path = _run_inspection(
+        tmp_path,
+        lambda: PublicBrowserSession(
+            suppressed_channel="browser_screenshots",
+            silent=True,
+        ),
+    )
+
+    screenshot = next(
+        channel
+        for channel in result["recordings"]["channels"]
+        if channel["kind"] == "browser_screenshots"
+    )
+    assert result["verdict"] == "pass"
+    assert result["recordings"]["rewatchable"] is False
+    assert screenshot == {
+        "kind": "browser_screenshots",
+        "complete": False,
+        "path": None,
+        "reason": "browser screenshots recorder produced no artifacts",
+    }
+    assert not (final_path / "recordings/browser/screenshots.json").exists()
