@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -109,6 +110,35 @@ def test_retry_always_mints_a_fresh_run_id(tmp_path: Path) -> None:
     second = store.begin()
 
     assert first.run_id != second.run_id
+
+
+def test_second_run_preserves_first_exhaust_and_uses_disjoint_files(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    first = store.begin()
+    first.write_text("artifacts/run-a.txt", "run A\n")
+    run_a = first.finalize(_result(first.run_id))
+    snapshot_a = {
+        path.relative_to(run_a).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(run_a.rglob("*"))
+        if path.is_file()
+    }
+    files_a = {path.resolve() for path in run_a.rglob("*") if path.is_file()}
+
+    second = store.begin()
+    second.write_text("artifacts/run-b.txt", "run B\n")
+    run_b = second.finalize(_result(second.run_id))
+
+    assert {
+        path.relative_to(run_a).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(run_a.rglob("*"))
+        if path.is_file()
+    } == snapshot_a
+    files_b = {path.resolve() for path in run_b.rglob("*") if path.is_file()}
+    assert files_a.isdisjoint(files_b)
+    assert store.verify(run_a) is True
+    assert store.verify(run_b) is True
 
 
 def test_storage_failure_retains_the_provisional_outcome_in_recovery(
