@@ -784,8 +784,8 @@ def validate_label(label: object) -> dict[str, Any]:
     }
 
 
-def _canonical_subject_trace(trace_id: str) -> TraceRecord:
-    candidates: dict[tuple[str, str], TraceRecord] = {}
+def _canonical_subject_trace(trace_id: str) -> tuple[str, TraceRecord]:
+    candidates: dict[tuple[str, str], tuple[str, TraceRecord]] = {}
     root = traces_v1_root()
     if root.is_dir():
         pattern = f"*/{_path_part(trace_id)}/trace.json"
@@ -797,14 +797,18 @@ def _canonical_subject_trace(trace_id: str) -> TraceRecord:
             if record.trace_id != trace_id:
                 raise LabelIntegrityError("slice subject trace path contains a different trace")
             project_key = path.parent.parent.name
-            candidates[(project_key, _canonical_json(record.model_dump(mode="json")))] = record
+            candidates[(project_key, _canonical_json(record.model_dump(mode="json")))] = (
+                project_key,
+                record,
+            )
 
     from ..bucket_trace_records import iter_trace_record_objects
 
     for obj in iter_trace_record_objects():
         if obj.trace_id == trace_id:
             candidates[(obj.project_slug, _canonical_json(obj.record.model_dump(mode="json")))] = (
-                obj.record
+                obj.project_slug,
+                obj.record,
             )
     if not candidates:
         raise LabelIntegrityError("slice subject canonical TraceRecord is missing")
@@ -816,22 +820,30 @@ def _canonical_subject_trace(trace_id: str) -> TraceRecord:
 def _trace_ref_for_label(row: Mapping[str, Any], run_path: Path) -> TraceMaterializationRef:
     del run_path
     pin = row["slice_pin"]
-    record = _canonical_subject_trace(pin["trace_id"])
+    project_slug, record = _canonical_subject_trace(pin["trace_id"])
     if record.generation_index != pin["generation_index"]:
         raise LabelIntegrityError("slice pin generation does not match the canonical trace")
-    from ..trace_index import default_index_path, get_trace_map
+    from .. import paths
 
-    rebuilt_map = TraceMaterializationRef.from_record(record).trace_map
-    index_path = default_index_path()
-    indexed_map = (
-        get_trace_map(record.trace_id, index_path=index_path) if index_path.is_file() else None
-    )
-    trace_map = (
-        indexed_map.model_copy(update={"limitations": list(rebuilt_map.limitations)})
-        if indexed_map is not None
-        else rebuilt_map
-    )
-    return TraceMaterializationRef(record=record, trace_map=trace_map)
+    identity_path = paths.PROJECTS_DIR / project_slug / "project.json"
+    if not identity_path.is_file():
+        return TraceMaterializationRef.from_record(record)
+    identity = _read_object(identity_path, name="canonical project identity")
+    source_path = identity.get("path") or identity.get("project_dir")
+    if not isinstance(source_path, str) or not source_path:
+        raise LabelIntegrityError("canonical project identity has no source repository")
+    source_repo = Path(source_path).expanduser().resolve()
+    if not source_repo.is_dir():
+        raise LabelIntegrityError("canonical project source repository is unavailable")
+    try:
+        from ..trails import build_trail_query_projection_for_trace
+
+        projection = build_trail_query_projection_for_trace(source_repo, record.trace_id)
+        return TraceMaterializationRef.from_record(record, trail_projection=projection)
+    except Exception as exc:
+        raise LabelIntegrityError(
+            "authoritative current Trace Map could not be rebuilt from Trail world-state"
+        ) from exc
 
 
 def verify_labels(

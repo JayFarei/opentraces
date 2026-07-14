@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -51,39 +52,98 @@ def _real_capture_record() -> TraceRecord:
 
 
 def _set_bucket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    import opentraces.core.config as config_module
+
     bucket = tmp_path / "bucket"
     monkeypatch.setattr(paths, "OPENTRACES_DIR", tmp_path)
+    monkeypatch.setattr(paths, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(config_module, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(paths, "bucket_dir", lambda: bucket)
     return bucket
 
 
-def _persist_subject(record: TraceRecord) -> Path:
-    path = trace_v1_json_path(PROJECT_SLUG, record.trace_id)
+def _persist_subject(record: TraceRecord, *, project_slug: str = PROJECT_SLUG) -> Path:
+    path = trace_v1_json_path(project_slug, record.trace_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(record.model_dump_json() + "\n", encoding="utf-8")
     return path
 
 
-def _persist_authoritative_map(trace_map) -> None:
-    from opentraces.core.trace_index import _connect, _create_schema, default_index_path
+def _install_authoritative_trail(
+    tmp_path: Path,
+    record: TraceRecord,
+) -> tuple[str, Path, str, str]:
+    from opentraces.core.config import get_project_dir
+    from opentraces.core.repo_identity import write_project_identity
+    from opentraces.core.trails import TrailEventDraft, append_event_batch
+    from opentraces.core.trails.models import sha256_text
 
-    index_path = default_index_path()
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    with _connect(index_path, wal=False) as connection:
-        _create_schema(connection)
-        for ordinal, node in enumerate(trace_map.nodes, 1):
-            connection.execute(
-                "insert into trace_map_nodes(node_id, trace_id, ordinal, payload) "
-                "values (?, ?, ?, ?)",
-                (node.node_id, node.trace_id, ordinal, node.model_dump_json()),
-            )
-        for ordinal, edge in enumerate(trace_map.edges, 1):
-            connection.execute(
-                "insert into trace_map_edges(edge_id, trace_id, ordinal, payload) "
-                "values (?, ?, ?, ?)",
-                (edge.edge_id, edge.trace_id, ordinal, edge.model_dump_json()),
-            )
-        connection.commit()
+    repo = tmp_path / "world-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "arena@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Arena"], cwd=repo, check=True)
+    (repo / ".opentraces.json").write_text(
+        json.dumps({"marker_version": "2", "project_id": "a8" * 16}),
+        encoding="utf-8",
+    )
+    target = repo / "src" / "generated.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("print('authoritative')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+    commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    project_home = get_project_dir(repo)
+    project_slug = project_home.name
+    (project_home / "traces").mkdir(parents=True, exist_ok=True)
+    (project_home / "traces" / f"{record.trace_id}.jsonl").write_text(
+        record.model_dump_json() + "\n",
+        encoding="utf-8",
+    )
+    write_project_identity(project_home, project_dir=repo, root_sha=commit_sha)
+
+    patch_id = "tracepatch-sha256:" + hashlib.sha256(b"a8 rich patch").hexdigest()
+    anchor_id = "gitanchor-sha256:" + hashlib.sha256(b"a8 rich anchor").hexdigest()
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id=record.trace_id,
+                step_index=3,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": patch_id,
+                    "file_path": "src/generated.py",
+                    "affected_range": {"start_line": 1, "end_line": 1},
+                    "authored_text": "print('authoritative')\n",
+                    "raw_authored_hash": sha256_text("print('authoritative')\n"),
+                    "git_clean_hash": sha256_text("print('authoritative')"),
+                    "limitations": [],
+                },
+            ),
+            TrailEventDraft(
+                event_type="git_anchor_created",
+                trace_id=record.trace_id,
+                step_index=3,
+                capture_method=["manual_attach"],
+                payload={
+                    "git_anchor_id": anchor_id,
+                    "trace_patch_id": patch_id,
+                    "commit_id": {"algo": "sha1", "hex": commit_sha},
+                    "path": "src/generated.py",
+                    "range": {"start_line": 1, "end_line": 1},
+                    "relation": "anchored_in_git",
+                    "evidence_tier": "exact_range_hash",
+                    "evidence_firmness": "firm",
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-a8-world-state",
+    )
+    return project_slug, repo, patch_id.rsplit(":", 1)[-1], anchor_id.rsplit(":", 1)[-1]
 
 
 def _extract_json(output: str) -> dict:
@@ -405,32 +465,23 @@ def test_rich_trail_refs_and_limitations_survive_pin_and_fresh_reverification(
     record = _real_capture_record().model_copy(deep=True)
     record.metadata.pop("cwd", None)
     record.metadata.pop("hook_pre_tool_use", None)
-    _persist_subject(record)
     position, call = next(
         (position, step.tool_calls[0])
         for position, step in enumerate(record.steps)
-        if step.tool_calls
+        if step.tool_calls and step.tool_calls[0].tool_name == "Edit"
     )
+    assert call.tool_name == "Edit"
+    project_slug, source_repo, patch_id, anchor_id = _install_authoritative_trail(
+        tmp_path,
+        record,
+    )
+    _persist_subject(record, project_slug=project_slug)
+    from opentraces.core.trails import build_trail_query_projection_for_trace
 
-    class Projection:
-        def patches_for_trace(self, trace_id):
-            assert trace_id == record.trace_id
-            return [
-                {
-                    "trace_patch_id": "tp-a8-rich",
-                    "git_anchor_id": "ga-a8-rich",
-                    "commit_sha": "abc123",
-                    "file_path": "src/generated.py",
-                    "attribution_role": "leaf_writer",
-                    "step_metadata": {
-                        "tool_call_id": call.tool_call_id,
-                        "tool_name": call.tool_name,
-                    },
-                }
-            ]
-
-    trace_ref = TraceMaterializationRef.from_record(record, trail_projection=Projection())
-    _persist_authoritative_map(trace_ref.trace_map)
+    trace_ref = TraceMaterializationRef.from_record(
+        record,
+        trail_projection=build_trail_query_projection_for_trace(source_repo, record.trace_id),
+    )
     trajectory = Trajectory(
         start=position,
         end=position,
@@ -452,8 +503,8 @@ def test_rich_trail_refs_and_limitations_survive_pin_and_fresh_reverification(
         trajectory=trajectory,
     )[0]
 
-    assert label["slice_pin"]["trace_patch_refs"] == ["tp-a8-rich"]
-    assert label["slice_pin"]["git_anchor_refs"] == ["ga-a8-rich"]
+    assert label["slice_pin"]["trace_patch_refs"] == [patch_id]
+    assert label["slice_pin"]["git_anchor_refs"] == [anchor_id]
     assert label["slice_pin"]["limitations"] == ["path_normalization_failed"]
     assert verify_label(label, store=store)
 
