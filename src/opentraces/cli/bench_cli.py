@@ -17,6 +17,7 @@ import click
 
 from ..core import paths
 from ..core.arena.contract import result_exit_code, validate_result
+from ..core.arena.origin import OriginJoinError, attach_explicit_bench_labels
 from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
 
@@ -230,8 +231,18 @@ def bench_group() -> None:
     type=click.Path(path_type=Path),
     help="Override bucket/runs/v1 (primarily for isolated execution).",
 )
+@click.option(
+    "--origin",
+    "origin_address",
+    help="Attach verified labels to an existing trace, point, or span address.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
-def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
+def bench_run(
+    target: str,
+    store_root: Path | None,
+    origin_address: str | None,
+    as_json: bool,
+) -> None:
     """Run one pytest scenario target (PATH::TEST) on a disposable box."""
 
     repository_text = subprocess.run(
@@ -266,6 +277,15 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
         raise click.ClickException(f"expected one finalized run, observed {len(created)}")
     run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
     exit_code = result_exit_code(result)
+    if origin_address is not None:
+        try:
+            attach_explicit_bench_labels(
+                run_path,
+                address=origin_address,
+                store=store,
+            )
+        except OriginJoinError as exc:
+            raise click.ClickException(str(exc)) from exc
     page_path: Path | None = None
     page_error: str | None = None
     try:

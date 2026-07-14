@@ -11,7 +11,12 @@ from typing import Literal
 from opentraces_schema import TraceRecord
 
 from .contract import VERDICTS, validate_result
-from .labels import LabelContractError, attach_labels, mint_labels_for_run
+from .labels import (
+    LabelContractError,
+    LabelIntegrityError,
+    attach_labels,
+    mint_labels_for_run,
+)
 from .run_store import RunIntegrityError, RunStore
 
 
@@ -170,10 +175,79 @@ def attach_captured_bench_labels(
     return attachments
 
 
+def _explicit_subject(address: str) -> tuple[str, dict[str, str]]:
+    from ..bucket_envelope import trace_v2_summary_by_id
+    from ..bucket_layout import trace_v1_json_path
+    from ..trails.lineage import parse_trail_ref
+
+    trace_id, point, span, reserved = parse_trail_ref(address)
+    if not trace_id or reserved not in {None, "span"}:
+        raise OriginJoinError("explicit origin address is not a trace, point, or span")
+    summary = trace_v2_summary_by_id(trace_id)
+    if summary is None:
+        raise OriginJoinError("explicit origin address does not resolve to a stored trace")
+    project_slug = summary.get("project_slug")
+    if not isinstance(project_slug, str) or not project_slug:
+        raise OriginJoinError("explicit origin address has no owning project")
+    trace_path = trace_v1_json_path(project_slug, trace_id)
+    try:
+        record = TraceRecord.model_validate_json(trace_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise OriginJoinError("explicit origin address does not resolve to a valid trace") from exc
+    if record.trace_id != trace_id:
+        raise OriginJoinError("explicit origin address disagrees with the stored trace")
+    step_indices = {step.step_index for step in record.steps}
+    if point is not None:
+        if point not in step_indices:
+            raise OriginJoinError("explicit origin address names a missing trace point")
+        subject = {"kind": "slice", "address": f"{trace_id}:{point}-{point}"}
+    elif span is not None:
+        start, end = span
+        if start > end or start not in step_indices or end not in step_indices:
+            raise OriginJoinError("explicit origin address names a missing or invalid trace span")
+        subject = {"kind": "slice", "address": f"{trace_id}:{start}-{end}"}
+    else:
+        subject = {"kind": "trace", "address": trace_id}
+    return project_slug, subject
+
+
+def attach_explicit_bench_labels(
+    run_path: Path | str,
+    *,
+    address: str,
+    store: RunStore | None = None,
+) -> OriginAttachment:
+    """Resolve an explicit origin and attach labels through the shared mint path."""
+
+    resolved_path = Path(run_path).resolve()
+    resolved_store = store or RunStore(resolved_path.parent)
+    project_slug, subject = _explicit_subject(address)
+    try:
+        labels = mint_labels_for_run(
+            resolved_path,
+            subject=subject,
+            store=resolved_store,
+        )
+        attach_labels(
+            project_slug=project_slug,
+            trace_id=subject["address"].split(":", 1)[0],
+            labels=labels,
+            store=resolved_store,
+        )
+    except (LabelContractError, LabelIntegrityError, RunIntegrityError) as exc:
+        raise OriginJoinError(f"explicit origin label refused: {exc}") from exc
+    return OriginAttachment(
+        run_id=resolved_path.name,
+        address=subject["address"],
+        resolution="explicit",
+    )
+
+
 __all__ = [
     "BenchInvocation",
     "OriginAttachment",
     "OriginJoinError",
     "attach_captured_bench_labels",
+    "attach_explicit_bench_labels",
     "detect_bench_invocations",
 ]
