@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from opentraces.core.arena.pytest_plugin import _scenario_source
+import pytest
+
+from opentraces.core.arena.pytest_plugin import _product_worktree, _scenario_source
 from opentraces.core.arena.run_store import RunStore
 
 
@@ -30,11 +33,18 @@ def test_pytest_adapter_records_call_and_teardown_phases(
     ]
 
 
-def test_scenario_outside_misconfigured_repository_persists_a_private_path(
+def test_scenario_outside_repository_persists_a_private_path(
     tmp_path: Path,
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
+    for args in (
+        ("init", "-q"),
+        ("config", "user.name", "Bench Test"),
+        ("config", "user.email", "bench@example.invalid"),
+        ("commit", "--allow-empty", "-qm", "fixture"),
+    ):
+        subprocess.run(["git", *args], cwd=repository, check=True, capture_output=True)
     source_path = tmp_path / "Users" / "jayfarei" / "checkout" / "test_claim.py"
     source_path.parent.mkdir(parents=True)
     source_path.write_text(
@@ -70,3 +80,8 @@ def test_scenario_outside_misconfigured_repository_persists_a_private_path(
     serialized = json.dumps(persisted).lower()
     for private in ("/users/", "/home/", "jayfarei", tmp_path.as_posix().lower()):
         assert private not in serialized
+
+
+def test_product_worktree_observation_fails_closed_outside_git(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match=r"git status exited \d+"):
+        _product_worktree(tmp_path)

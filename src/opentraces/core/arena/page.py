@@ -137,6 +137,9 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             )
     exhaust_links = "".join(exhaust_items)
     verdict = result.get("verdict") or "error"
+    product_pin = result.get("pins", {}).get("product") or {}
+    product_commit = product_pin.get("commit") or "unavailable"
+    product_worktree = product_pin.get("worktree") or "unavailable"
     reason = result.get("reason") or {}
     reason_html = (
         '<section class="card outcome">'
@@ -205,6 +208,7 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <h1>{_h(result["scenario"]["claim"])}</h1>
 <section class="facts"><div class="fact"><div class="eyebrow">VERDICT</div><div class="verdict">{_h(verdict.upper())}</div></div>
 <div class="fact"><div class="eyebrow">MODE</div>{_h(result["execution_mode"])}</div>
+<div class="fact"><div class="eyebrow">PRODUCT PIN</div><code>{_h(product_commit)}</code><div>worktree {_h(product_worktree)}</div></div>
 <div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result["execution_status"])}</div>
 <div class="fact"><div class="eyebrow">EVIDENCE</div>{"complete" if result["evidence"]["complete"] else "incomplete"}</div>
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>

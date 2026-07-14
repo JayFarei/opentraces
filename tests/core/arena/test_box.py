@@ -439,6 +439,8 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
             repository="JayFarei/opentraces",
             commit="abc123",
             dirty_diff_digest=None,
+            product_worktree="clean",
+            product_dirty_diff_digest=None,
         ),
         store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
         box_runtime=runtime,

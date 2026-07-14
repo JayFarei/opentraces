@@ -54,6 +54,8 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
         "JayFarei/opentraces",
         "abc123",
         None,
+        "clean",
+        None,
     )
 
 

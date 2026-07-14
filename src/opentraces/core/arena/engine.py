@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Literal, Mapping
 
 from ... import __version__
 from .box import Box, CrabboxRuntime
@@ -51,6 +51,8 @@ class ScenarioSource:
     repository: str
     commit: str | None
     dirty_diff_digest: str | None
+    product_worktree: Literal["clean", "dirty"]
+    product_dirty_diff_digest: str | None
 
 
 class BenchSkip(RuntimeError):
@@ -518,7 +520,11 @@ class BenchRun:
             artifacts=artifacts,
             capture=None,
             pins={
-                "product": {"commit": self.bench.source.commit},
+                "product": {
+                    "commit": self.bench.source.commit,
+                    "worktree": self.bench.source.product_worktree,
+                    "dirty_diff_digest": self.bench.source.product_dirty_diff_digest,
+                },
                 "observer": {"package": "opentraces", "version": __version__},
                 "environment": box_pin,
                 "harness": None,
