@@ -438,6 +438,52 @@ def test_rich_trail_refs_and_limitations_survive_pin_and_fresh_reverification(
     assert verify_label(label, store=store)
 
 
+def test_fresh_reverification_refuses_artifact_map_lineage_absent_from_world_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    _persist_subject(record)
+    authoritative = TraceMaterializationRef.from_record(record)
+    first_node = authoritative.trace_map.nodes[0]
+    forged_map = authoritative.trace_map.model_copy(
+        update={
+            "nodes": [
+                first_node.model_copy(
+                    update={"anchor_refs": [*first_node.anchor_refs, "ga-forged-noncanonical"]}
+                ),
+                *authoritative.trace_map.nodes[1:],
+            ],
+            "limitations": [*authoritative.trace_map.limitations, "forged limitation"],
+        }
+    )
+    forged_ref = TraceMaterializationRef(record=record, trace_map=forged_map)
+    trajectory = Trajectory(start=0, end=2, kind="user_turn", label="captured run")
+    store, run_path, staged = _finalize_slice_run(
+        tmp_path,
+        monkeypatch,
+        trace_ref=forged_ref,
+        trajectory=trajectory,
+    )
+    label = mint_labels_for_run(
+        run_path,
+        subject=staged["subject"],
+        store=store,
+        trace_ref=forged_ref,
+        trajectory=trajectory,
+    )[0]
+
+    assert "ga-forged-noncanonical" not in {
+        ref for node in authoritative.trace_map.nodes for ref in node.anchor_refs
+    }
+    assert "forged limitation" not in authoritative.trace_map.limitations
+    assert label["slice_pin"]["git_anchor_refs"] == ["ga-forged-noncanonical"]
+    assert label["slice_pin"]["limitations"] == ["forged limitation"]
+    with pytest.raises(LabelIntegrityError, match="authoritative current Trace Map"):
+        verify_label(label, store=store)
+
+
 def _reidentify(label: dict) -> dict:
     candidate = deepcopy(label)
     without_id = {key: value for key, value in candidate.items() if key != "label_id"}
