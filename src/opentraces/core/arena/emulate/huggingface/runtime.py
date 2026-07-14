@@ -485,6 +485,7 @@ class HuggingFaceEmulator:
         run_path: Path,
         binary_pin: EmulatorBinaryPin,
         world_setup: dict[str, Any],
+        control_token: str,
     ) -> None:
         self.runtime = runtime
         self.box = box
@@ -492,6 +493,8 @@ class HuggingFaceEmulator:
         self.run_path = Path(run_path)
         self.binary_pin = binary_pin
         self.world_setup = world_setup
+        self._control_token = control_token
+        self._control_sequence = 0
         self.env = {
             "HF_ENDPOINT": f"http://127.0.0.1:{DEFAULT_PORT}",
             "HF_TOKEN": BASELINE_TOKEN,
@@ -500,6 +503,68 @@ class HuggingFaceEmulator:
         self._stopped = False
         self._ledger_path: Path | None = None
         self._ledger_finalized = False
+
+    def _control_request(self, route: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        if self._stopped:
+            raise RuntimeError("Hugging Face emulator control plane is stopped")
+        self._control_sequence += 1
+        environment = {
+            "OPENTRACES_HF_CONTROL_TOKEN": self._control_token,
+            "OPENTRACES_HF_CONTROL_PAYLOAD": json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "OPENTRACES_HF_CONTROL_URL": (
+                f"{self.env['HF_ENDPOINT']}/_emulate/{route}"
+            ),
+        }
+        observed = self.runtime.exec(
+            self.box,
+            [
+                "sh",
+                "-c",
+                "set -eu; curl -fsS -H 'Content-Type: application/json' "
+                "-H \"X-Bench-Control-Token: $OPENTRACES_HF_CONTROL_TOKEN\" "
+                "--data \"$OPENTRACES_HF_CONTROL_PAYLOAD\" "
+                "\"$OPENTRACES_HF_CONTROL_URL\"",
+            ],
+            cwd=self.repository,
+            env=environment,
+            timeout=30,
+            timing_path=(
+                self.run_path
+                / "artifacts"
+                / "crabbox-timing"
+                / f"hf-control-{self._control_sequence:04d}-{route}.json"
+            ),
+        )
+        if observed.returncode != 0:
+            raise RuntimeError(f"Hugging Face emulator {route} control failed")
+        try:
+            response = json.loads(observed.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Hugging Face emulator {route} control returned invalid JSON"
+            ) from exc
+        if not isinstance(response, dict):
+            raise RuntimeError(f"Hugging Face emulator {route} control returned no object")
+        return response
+
+    def mint_credentials(self, *, name: str) -> dict[str, Any]:
+        """Mint one product credential through the harness-only control plane."""
+
+        return self._control_request("credentials", {"name": name})
+
+    def seed(self, *, repos: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """Seed declared repository state through the harness-only control plane."""
+
+        return self._control_request("seed", {"repos": repos})
+
+    def reset(self) -> dict[str, Any]:
+        """Restore baseline emulator state through the harness-only control plane."""
+
+        return self._control_request("reset", {})
 
     @property
     def pin(self) -> dict[str, Any]:
@@ -658,6 +723,7 @@ def start_huggingface_emulator(
         raise RuntimeError("product custody probe changed the Hugging Face witness ledger")
 
     launch_nonce = secrets.token_hex(32)
+    control_token = secrets.token_hex(32)
     if pin.source_sha256 is None or pin.build_inputs_sha256 is None:
         raise RuntimeError("verified Hugging Face emulator pin is incomplete")
 
@@ -666,7 +732,9 @@ def start_huggingface_emulator(
         [
             "sh",
             "-c",
-            f'setsid sudo -u opentraces-hf sh -c \'printf "%s\\n" "$$" '
+            "setsid sudo -u opentraces-hf env "
+            'OPENTRACES_HF_CONTROL_TOKEN="$OPENTRACES_HF_CONTROL_TOKEN" '
+            f'sh -c \'printf "%s\\n" "$$" '
             ">/tmp/opentraces-hf-emulator.pid; exec env "
             f"PORT={DEFAULT_PORT} LEDGER_PATH={REMOTE_LEDGER} "
             f"OPENTRACES_HF_LAUNCH_NONCE={launch_nonce} "
@@ -678,6 +746,7 @@ def start_huggingface_emulator(
             "2>/tmp/opentraces-hf-emulator.stderr </dev/null &",
         ],
         cwd=repository,
+        env={"OPENTRACES_HF_CONTROL_TOKEN": control_token},
         timeout=30,
         timing_path=run_path / "artifacts" / "crabbox-timing" / "hf-start.json",
     )
@@ -792,4 +861,5 @@ def start_huggingface_emulator(
         run_path=run_path,
         binary_pin=pin,
         world_setup=world_setup,
+        control_token=control_token,
     )

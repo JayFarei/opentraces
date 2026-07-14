@@ -144,13 +144,14 @@ class WorldRuntime:
     def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         rendered = " ".join(map(str, argv))
         environment = dict(env or {})
-        if "/_emulate/credentials" in rendered:
+        control_url = environment.get("OPENTRACES_HF_CONTROL_URL", "")
+        if control_url.endswith("/_emulate/credentials"):
             self.control_calls.append(("credentials", list(map(str, argv)), environment))
             stdout, returncode = '{"name":"other","token":"hf_other","type":"user"}\n', 0
-        elif "/_emulate/seed" in rendered:
+        elif control_url.endswith("/_emulate/seed"):
             self.control_calls.append(("seed", list(map(str, argv)), environment))
             stdout, returncode = '{"repos_seeded":["other/seeded"]}\n', 0
-        elif "/_emulate/reset" in rendered:
+        elif control_url.endswith("/_emulate/reset"):
             self.control_calls.append(("reset", list(map(str, argv)), environment))
             stdout, returncode = '{"ok":true}\n', 0
         elif "/proc/$pid/exe" in rendered:
