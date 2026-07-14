@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import uuid
 from datetime import datetime, timedelta
@@ -24,6 +25,8 @@ from .run_store import RunStore
 # exact run_id remains the sole name input.
 BENCH_RUN_TRACE_NAMESPACE = uuid.UUID("d9b6d6f9-b040-5792-a5cf-16f9b501cbf4")
 _OUTPUT_LIMIT_CHARS = 4096
+_PRODUCT_PIN_FIELDS = {"commit", "worktree", "dirty_diff_digest"}
+_SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class TraceReturnError(ValueError):
@@ -188,6 +191,28 @@ def _timestamp_end(started_at: str, duration_ms: int) -> str:
     return ended.isoformat().replace("+00:00", "Z")
 
 
+def _validated_product_pin(result: Mapping[str, Any]) -> dict[str, Any]:
+    pins = result.get("pins")
+    product_pin = pins.get("product") if isinstance(pins, Mapping) else None
+    if not isinstance(product_pin, dict) or set(product_pin) != _PRODUCT_PIN_FIELDS:
+        raise TraceReturnError("product pin must contain commit, worktree, and dirty digest")
+
+    commit = product_pin["commit"]
+    worktree = product_pin["worktree"]
+    dirty_digest = product_pin["dirty_diff_digest"]
+    if not isinstance(commit, str) or not commit:
+        raise TraceReturnError("product pin commit must be a non-empty string")
+    if worktree not in {"clean", "dirty"}:
+        raise TraceReturnError("product pin worktree must be clean or dirty")
+    if worktree == "clean" and dirty_digest is not None:
+        raise TraceReturnError("clean product pin must have a null dirty digest")
+    if worktree == "dirty" and (
+        not isinstance(dirty_digest, str) or _SHA256_DIGEST.fullmatch(dirty_digest) is None
+    ):
+        raise TraceReturnError("dirty product pin must have a sha256 dirty digest")
+    return product_pin
+
+
 def _record_from_run(run_path: Path, result: dict[str, Any]) -> TraceRecord:
     run_id = result["run_id"]
     if run_id != run_path.name:
@@ -196,9 +221,7 @@ def _record_from_run(run_path: Path, result: dict[str, Any]) -> TraceRecord:
     claim = scenario["claim"]
     action_steps = _action_steps(run_path)
     end = _timestamp_end(result["started_at"], result["duration_ms"])
-    product_pin = result.get("pins", {}).get("product")
-    if not isinstance(product_pin, dict):
-        product_pin = {}
+    product_pin = _validated_product_pin(result)
 
     steps = [
         Step(
@@ -224,7 +247,7 @@ def _record_from_run(run_path: Path, result: dict[str, Any]) -> TraceRecord:
         task={
             "description": claim,
             "source": scenario["nodeid"],
-            "base_commit": product_pin.get("commit"),
+            "base_commit": product_pin["commit"],
         },
         agent=Agent(name="opentraces-bench"),
         steps=steps,
@@ -234,9 +257,9 @@ def _record_from_run(run_path: Path, result: dict[str, Any]) -> TraceRecord:
                 "run_id": run_id,
                 "run_ref": f"runs/v1/{run_id}",
                 "product_pin": {
-                    "commit": product_pin.get("commit"),
-                    "worktree": product_pin.get("worktree"),
-                    "dirty_diff_digest": product_pin.get("dirty_diff_digest"),
+                    "commit": product_pin["commit"],
+                    "worktree": product_pin["worktree"],
+                    "dirty_diff_digest": product_pin["dirty_diff_digest"],
                 },
                 "capture_limitations": [
                     "manufactured run trace has no model context unless captured separately",
