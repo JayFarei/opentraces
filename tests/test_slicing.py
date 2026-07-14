@@ -34,6 +34,7 @@ from opentraces_schema import (
     TraceRecord,
 )
 
+from opentraces.capture.claude_code.parse import ClaudeCodeParser
 from opentraces.core import slicing
 from opentraces.core.slicing.models import Trajectory
 from opentraces.core.trace_map import build_trace_map
@@ -264,6 +265,59 @@ def _sha256(path: Path) -> str:
 
 def _real_capture_record() -> TraceRecord:
     return TraceRecord.model_validate_json(_REAL_CAPTURE_FIXTURE.read_text().splitlines()[0])
+
+
+def test_coordinate_fixture_requires_a3_verified_release_chain():
+    """#270 consumes A3's independently verified real-agent release asset."""
+
+    provenance = json.loads(_REAL_CAPTURE_PROVENANCE.read_text())
+
+    assert provenance.get("source_release") == "otbox-captures-v1"
+    assert provenance.get("source_snapshot") == "claude-linear-edit.snapshot.tar.gz"
+    assert provenance.get("source_snapshot_size_bytes") == 68_916_309
+    assert provenance.get("source_snapshot_sha256") == (
+        "54466705324a1f44d510160fb3fa31213ef8584704afc6b443487441ca1bf03b"
+    )
+    assert provenance.get("source_session_sha256") == (
+        "a745ceee16159433d93e8b8cc54c2e2c101c657630644bb1b10902c95b42cde0"
+    )
+    assert provenance.get("source_metadata_sha256") == (
+        "2287ae5f223f5b135d33d3b0baad645449d0713d9801a7e0500eec07b3b3a120"
+    )
+    assert provenance.get("derived_fixture_sha256") == _sha256(_REAL_CAPTURE_FIXTURE)
+
+
+def test_release_session_independently_proves_position_address_mismatch():
+    """The real parser emits 1-based steps while slicing-v1 emits positions."""
+
+    record = ClaudeCodeParser().parse_session(_REAL_CAPTURE_FIXTURE)
+    assert record is not None
+    canonical_steps = [step.step_index for step in record.steps]
+    assert canonical_steps == [1, 2, 3, 4, 5, 6]
+
+    rc, envelope = slicing.partition_trace(
+        trace_id=record.trace_id,
+        slicer_name="s1",
+        steps=record.steps,
+        judge="deterministic",
+    )
+    assert rc == 0
+    positions = [
+        position
+        for trajectory in envelope["trajectories"]
+        for position in range(trajectory["start"], trajectory["end"] + 1)
+    ]
+    assert positions == [0, 1, 2, 3, 4, 5]
+    assert positions != canonical_steps
+
+    materialized_steps = [
+        step["step_index"]
+        for trajectory in envelope["trajectories"]
+        for step in materialize_trajectory(
+            TraceMaterializationRef.from_record(record), trajectory
+        )["steps"]
+    ]
+    assert materialized_steps == canonical_steps
 
 
 def test_coordinate_fixture_has_verifiable_real_capture_provenance():
