@@ -1,13 +1,16 @@
 """Frozen contracts for the Trace Slicer Library (issue #141).
 
 ``opentraces.slicing.v1`` — the slice envelope (downstream-consumer contract;
-changing its shape requires a schema_version bump). Derive-on-demand like
+``trajectories[].start/end`` are zero-based positions in the input step array;
+changing that meaning or the envelope shape requires a schema_version bump).
+Derive-on-demand like
 ``--waste`` / ``--run-intel`` / ``trace compare`` — NO captured-schema change,
 NO ``TraceRecord.SCHEMA_VERSION`` bump.
 
 ``opentraces.slicing.judgment.v1`` — the JudgmentRequest / JudgmentAnswer schema.
 ``opentraces.slicing.needs_judgment.v1`` — the ``rc=10`` agent-loop handshake.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -90,9 +93,7 @@ def build_needs_judgment(
         "tier": tier,
         "total_steps": total_steps,
         "judgment_schema_version": JUDGMENT_SCHEMA_VERSION,
-        "judgment_requests": [
-            (r.to_dict() if hasattr(r, "to_dict") else r) for r in requests
-        ],
+        "judgment_requests": [(r.to_dict() if hasattr(r, "to_dict") else r) for r in requests],
         "instruction": (
             "This slicer needs cheap-LLM judgments to finalize trajectory "
             "boundaries. Answer EACH request above with a decision from its "

@@ -2,13 +2,18 @@
 
     slice(trace, slicer) -> Trajectory[]      # the array TILES the trace
 
-A ``Trajectory`` span is step indices, END-INCLUSIVE. v1 is a flat array only:
-NO nesting, NO relations, NO per-trajectory provenance.
+A ``Trajectory`` span is zero-based positions in the sliced step array,
+END-INCLUSIVE.  Positions are deliberately not ``Step.step_index`` values:
+real captured records use their addressable index field (normally 1-based),
+while the frozen slicing-v1 tiling contract covers array positions ``0..N-1``.
+Translation happens once, when a trajectory is materialized as a Trace Slice.
+v1 is a flat array only: NO nesting, NO relations, NO per-trajectory provenance.
 
 The cheap-LLM step (S3/S4) is resolved by a pluggable judge through a frozen
 ``JudgmentRequest`` / ``JudgmentAnswer`` schema, versioned alongside the
 ``opentraces.slicing.v1`` envelope.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -17,7 +22,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Trajectory:
-    """One trajectory: a contiguous, end-inclusive span of step indices."""
+    """One contiguous, end-inclusive span of sliced-array positions."""
 
     start: int
     end: int  # END-INCLUSIVE
