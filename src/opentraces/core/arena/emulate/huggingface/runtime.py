@@ -206,6 +206,33 @@ def _provenance_for_binary(path: Path) -> dict[str, Any]:
     }
 
 
+def pinned_bun_command(*args: str) -> list[str]:
+    """Return a command for the exact Bun toolchain on ordinary dev/CI hosts."""
+
+    bunx = shutil.which("bunx")
+    if bunx is not None:
+        return [bunx, f"bun@{BUN_VERSION}", *args]
+
+    npx = shutil.which("npx")
+    if npx is not None:
+        return [npx, "--yes", f"bun@{BUN_VERSION}", *args]
+
+    bun = shutil.which("bun")
+    if bun is not None:
+        observed = subprocess.run(
+            [bun, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        if observed == BUN_VERSION:
+            return [bun, *args]
+        raise RuntimeError(f"Bun {BUN_VERSION} is required; found {observed or 'unknown'}")
+
+    raise RuntimeError(f"Bun {BUN_VERSION} requires bunx, npx, or an exact bun binary")
+
+
 def build_hf_emulator_binary(
     output: Path,
     *,
@@ -213,9 +240,6 @@ def build_hf_emulator_binary(
 ) -> EmulatorBinaryPin:
     """Compile the sidecar with the exact toolchain and target pins."""
 
-    bunx = shutil.which("bunx")
-    if bunx is None:
-        raise RuntimeError("bunx is required to build the Hugging Face emulator")
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     workspace = BUILD_WORK_ROOT / _build_inputs_sha256()
@@ -228,15 +252,13 @@ def build_hf_emulator_binary(
         candidate.unlink(missing_ok=True)
         candidate_provenance.unlink(missing_ok=True)
         subprocess.run(
-            [
-                bunx,
-                f"bun@{BUN_VERSION}",
+            pinned_bun_command(
                 "build",
                 str(SERVER_SOURCE),
                 "--compile",
                 f"--target={COMPILE_TARGET}",
                 f"--outfile={candidate}",
-            ],
+            ),
             check=True,
             timeout=BUILD_TIMEOUT_SECONDS,
         )
@@ -642,7 +664,7 @@ def start_huggingface_emulator(
             "-c",
             "set -eu; pid=$(cat /tmp/opentraces-hf-emulator.pid); "
             f'test "$pid" = "{pid}"; sudo -u opentraces-hf test -r "/proc/$pid/stat"; '
-            'state=$(sudo -u opentraces-hf sed -n '
+            "state=$(sudo -u opentraces-hf sed -n "
             '"s/^.*) \\([A-Z]\\) .*$/\\1/p" "/proc/$pid/stat"); '
             'test -n "$state"; test "$state" != "Z"; '
             "owner_uid=$(sudo -u opentraces-hf awk '/^Uid:/{print $2}' "

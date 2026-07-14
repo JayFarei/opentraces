@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import socket
 import subprocess
 import threading
@@ -24,6 +23,7 @@ from opentraces.core.arena.emulate.huggingface.runtime import (
     app_state_pin,
     build_hf_emulator_binary,
     emulator_binary_pin,
+    pinned_bun_command,
     wait_for_hf_emulator,
 )
 
@@ -36,6 +36,31 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def test_standard_dev_install_provisions_the_pinned_real_client() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    dev_dependencies = pyproject.split("dev = [", 1)[1].split("]", 1)[0]
+
+    assert '"huggingface-hub==1.10.2"' in dev_dependencies
+    assert '"hf-xet==1.4.3"' in dev_dependencies
+
+
+def test_pinned_bun_command_uses_npx_when_bun_and_bunx_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
+
+    executables = {"bun": None, "bunx": None, "npx": "/usr/bin/npx"}
+    monkeypatch.setattr(hf_runtime.shutil, "which", executables.get)
+
+    assert hf_runtime.pinned_bun_command("run", str(SERVER_SOURCE)) == [
+        "/usr/bin/npx",
+        "--yes",
+        "bun@1.3.6",
+        "run",
+        str(SERVER_SOURCE),
+    ]
 
 
 def test_binary_sha_is_part_of_app_state_digest(tmp_path: Path) -> None:
@@ -78,12 +103,7 @@ def test_readiness_waits_for_manifest_and_rejects_a_missing_sidecar(
     if compiled_binary is not None:
         command = [compiled_binary]
     else:
-        bun = shutil.which("bun")
-        if bun is None:
-            pytest.fail(
-                "the HF emulator readiness contract requires bun or OPENTRACES_HF_EMULATOR_BINARY"
-            )
-        command = [bun, "run", str(SERVER_SOURCE)]
+        command = pinned_bun_command("run", str(SERVER_SOURCE))
 
     port = _free_port()
     endpoint = f"http://127.0.0.1:{port}"
@@ -126,12 +146,7 @@ def test_default_hf_emulator_coexists_with_default_portable_otlp_receiver(
     if compiled_binary is not None:
         command = [compiled_binary]
     else:
-        bun = shutil.which("bun")
-        if bun is None:
-            pytest.fail(
-                "the HF/OTLP coexistence contract requires bun or OPENTRACES_HF_EMULATOR_BINARY"
-            )
-        command = [bun, "run", str(SERVER_SOURCE)]
+        command = pinned_bun_command("run", str(SERVER_SOURCE))
 
     receiver = None
     try:
@@ -171,11 +186,6 @@ def test_default_hf_emulator_coexists_with_default_portable_otlp_receiver(
 
 
 def test_build_produces_pinned_linux_arm64_binary(tmp_path: Path) -> None:
-    if shutil.which("bunx") is None:
-        if os.environ.get("OPENTRACES_RUNTIME_FREE_BOX") == "1":
-            pytest.skip("runtime-free leased box verifies the precompiled pinned binary")
-        pytest.fail("bunx is required to build the pinned emulator binary")
-
     output = tmp_path / "hf-emulator"
     pin = build_hf_emulator_binary(output)
 
@@ -269,9 +279,7 @@ def test_retained_a2_proof_is_honest_local_diagnostic_with_actual_page_capture()
     proof = json.loads((ROOT / "tests/manual/a2_hf_emulator_real_box.json").read_text())
     page = ROOT / "tests/manual" / proof["page_capture"]["file"]
 
-    assert proof["product_source"]["commit"] == (
-        "f4f91848ca37913d97c0956a06487cb032c8f757"
-    )
+    assert proof["product_source"]["commit"] == ("f4f91848ca37913d97c0956a06487cb032c8f757")
     assert proof["proof_scope"] == {
         "blocker": (
             "Issue #264 still requires the same proof on a genuine remote provider lease. "

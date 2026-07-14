@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -15,6 +14,8 @@ from pathlib import Path
 from typing import Iterator
 
 import pytest
+
+from opentraces.core.arena.emulate.huggingface.runtime import pinned_bun_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,10 +34,7 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
     if compiled_binary is not None:
         command = [compiled_binary]
     else:
-        bun = shutil.which("bun")
-        if bun is None:
-            pytest.fail("the HF emulator contract requires bun or OPENTRACES_HF_EMULATOR_BINARY")
-        command = [bun, "run", str(SERVER_SOURCE)]
+        command = pinned_bun_command("run", str(SERVER_SOURCE))
 
     port = _free_port()
     endpoint = f"http://127.0.0.1:{port}"
