@@ -130,6 +130,26 @@ def _run_hf_client(endpoint: str, script: str) -> subprocess.CompletedProcess[st
     )
 
 
+def _run_opentraces(
+    endpoint: str,
+    home: Path,
+    *args: str,
+) -> subprocess.CompletedProcess[str]:
+    executable = Path(sys.executable).with_name("opentraces")
+    return subprocess.run(
+        [str(executable), *args],
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "HF_ENDPOINT": endpoint,
+            "HF_TOKEN": "hf_bench_user_token",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> None:
     assert version("huggingface-hub") == "1.10.2"
     assert version("hf-xet") == "1.4.3"
@@ -1288,3 +1308,92 @@ HFUploader(
 
     assert result.returncode != 0
     assert "Connection refused" in result.stderr or "ConnectError" in result.stderr
+
+
+def test_dataset_publish_dead_endpoint_is_named_and_does_not_advance_local_state(
+    tmp_path: Path,
+) -> None:
+    """A confirmed-dead bound remote is an inspectable refusal, never success."""
+
+    home = tmp_path / "home"
+    home.mkdir()
+    rows = tmp_path / "rows.jsonl"
+    rows.write_text('{"value":1}\n', encoding="utf-8")
+    schema = tmp_path / "schema.json"
+    schema.write_text(
+        '{"type":"object","properties":{"value":{"type":"integer"}},'
+        '"required":["value"]}\n',
+        encoding="utf-8",
+    )
+
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
+        created = _run_opentraces(
+            endpoint,
+            home,
+            "dataset",
+            "new",
+            "remote-ack",
+            "--rows-file",
+            str(rows),
+            "--schema",
+            str(schema),
+            "--json",
+        )
+        assert created.returncode == 0, created.stderr
+        approved = _run_opentraces(
+            endpoint,
+            home,
+            "dataset",
+            "review",
+            "approve",
+            "remote-ack",
+            "--all",
+            "--json",
+        )
+        assert approved.returncode == 0, approved.stderr
+        bound = _run_opentraces(
+            endpoint,
+            home,
+            "dataset",
+            "remote",
+            "create",
+            "remote-ack",
+            "bench/remote-ack",
+            "--private",
+            "--json",
+        )
+        assert bound.returncode == 0, bound.stderr
+
+    # The context manager has terminated and waited for the sidecar. This is a
+    # confirmed-dead endpoint, unlike a best-effort signal with no death proof.
+    published = _run_opentraces(
+        endpoint,
+        home,
+        "dataset",
+        "publish",
+        "remote-ack",
+        "--json",
+    )
+
+    assert published.returncode == 3
+    payload = json.loads(published.stdout)
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "remote_unavailable"
+    assert "remote_head_after" not in payload.get("publish", {})
+    assert "Traceback" not in published.stderr
+
+    state_path = (
+        home
+        / ".opentraces"
+        / "datasets"
+        / "remote-ack"
+        / ".opentraces"
+        / "publication_state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    only_row = next(iter(state["rows"].values()))
+    assert only_row["status"] == "publishable"
+    assert only_row["uploaded_to"] == {}
+    assert not state_path.with_name("publications.jsonl").exists()
+    ledger_rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+    assert not any(row["operation_id"] == "commit" for row in ledger_rows)

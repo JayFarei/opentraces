@@ -109,6 +109,7 @@ class WorldRuntime:
         self.bound_manifest: dict | None = None
         self.events: list[str] = []
         self.copied: tuple[Path, str] | None = None
+        self.stop_command: str | None = None
 
     def lease(self) -> Box:
         return Box(
@@ -191,9 +192,18 @@ class WorldRuntime:
                 }
             stdout, returncode = "", 0
         elif "kill" in rendered:
-            self.live = False
             self.events.append("stop")
-            stdout, returncode = "", 0
+            self.stop_command = rendered
+            # Model the exact defect class from the A2 review: a best-effort
+            # signal with no wait/death proof may leave the sidecar serving.
+            # Only the strict stop contract makes the world unavailable and
+            # takes its final ledger snapshot after that fact is established.
+            if "kill -0" in rendered:
+                self.live = False
+                self.events.append("snapshot")
+                stdout, returncode = self.raw_ledger.decode(), 0
+            else:
+                stdout, returncode = "", 0
         elif "dataset publish" in rendered:
             if self.live:
                 self.raw_ledger = (json.dumps(_COMMIT_ROW, separators=(",", ":")) + "\n").encode()
@@ -355,6 +365,11 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert runtime.events.index("start") < runtime.events.index("readiness")
     assert runtime.events.index("snapshot") < runtime.events.index("release")
     assert runtime.events.index("stop") < runtime.events.index("release")
+    assert max(
+        index for index, event in enumerate(runtime.events) if event == "snapshot"
+    ) > runtime.events.index("stop")
+    assert runtime.stop_command is not None
+    assert "kill -0" in runtime.stop_command
     assert runtime.events.count("snapshot") == 2
     assert runtime.events.count("stop") == 1
     assert runtime.events.count("product-ledger-mutation") == 0
@@ -632,3 +647,5 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     assert runtime.events.count("start") == 1
     assert runtime.events.count("release") == 1
     assert runtime.events.count("product-exec") == 6
+    assert runtime.stop_command is not None
+    assert "kill -0" in runtime.stop_command
