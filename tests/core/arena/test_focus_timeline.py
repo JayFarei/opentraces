@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+from opentraces.core.arena.engine import Bench
+from opentraces.core.arena.run_store import RunStore
+from tests.core.arena.test_browser_drive import PublicBrowserSession, _scenario
+from tests.core.arena.test_engine import RecordingBoxRuntime
+
+
+def test_execution_timeline_survives_conflicting_directory_and_mtime_order(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=PublicBrowserSession,
+    )
+
+    def cross_surface_journey(run):
+        before = run.terminal.exec("printf", "before")
+        browser = run.browser.inspect("main")
+        after = run.terminal.exec("printf", "after")
+        assert before.returncode == 0
+        assert browser.state["text"] == "Pending"
+        assert after.returncode == 0
+        return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(cross_surface_journey)
+        assert run.draft is not None
+        actions = run.draft.path / "actions"
+        # A post-hoc reader now sees two contradictory plausible orders:
+        # directory names retain execution order while mtimes say the reverse.
+        for ordinal, seconds in ((1, 300), (2, 200), (3, 100)):
+            os.utime(actions / f"{ordinal:04d}", (seconds, seconds))
+        lexical_order = [path.name for path in sorted(actions.iterdir())]
+        mtime_order = [
+            path.name
+            for path in sorted(actions.iterdir(), key=lambda path: path.stat().st_mtime)
+        ]
+        assert lexical_order == ["0001", "0002", "0003"]
+        assert mtime_order == ["0003", "0002", "0001"]
+
+    assert run.result["recordings"]["timeline_ref"] == "recordings/timeline.jsonl"
+    timeline_path = run.final_path / "recordings/timeline.jsonl"
+    rows = [json.loads(line) for line in timeline_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["sequence"] for row in rows] == list(range(1, len(rows) + 1))
+    assert [row["offset_ms"] for row in rows] == sorted(row["offset_ms"] for row in rows)
+
+    starts = [row for row in rows if row["event"] == "action_started"]
+    assert [row["surface"] for row in starts] == ["terminal", "browser", "terminal"]
+    assert [row["action_ref"] for row in starts] == [
+        "actions/0001",
+        "actions/0002",
+        "actions/0003",
+    ]
+    assert starts[0]["causal_refs"] == []
+    assert starts[1]["causal_refs"] == ["actions/0001"]
+    assert starts[2]["causal_refs"] == ["actions/0002"]
+    for row in starts:
+        invocation = json.loads(
+            (run.final_path / row["action_ref"] / "invocation.json").read_text(encoding="utf-8")
+        )
+        assert row["recorded_at"] == invocation["started_at"]
+
+    focus = [row for row in rows if row["event"] == "focus_changed"]
+    assert [row["surface"] for row in focus] == ["terminal", "browser", "terminal"]
+    assert [row["action_ref"] for row in focus] == [
+        "actions/0001",
+        "actions/0002",
+        "actions/0003",
+    ]
