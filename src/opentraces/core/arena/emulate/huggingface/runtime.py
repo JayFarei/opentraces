@@ -641,10 +641,10 @@ def start_huggingface_emulator(
             "sh",
             "-c",
             "set -eu; pid=$(cat /tmp/opentraces-hf-emulator.pid); "
-            f'test "$pid" = "{pid}"; test -r "/proc/$pid/stat"; '
-            'state=$(sed -n "s/^.*) \\([A-Z]\\) .*$/\\1/p" "/proc/$pid/stat"); '
+            f'test "$pid" = "{pid}"; sudo test -r "/proc/$pid/stat"; '
+            'state=$(sudo sed -n "s/^.*) \\([A-Z]\\) .*$/\\1/p" "/proc/$pid/stat"); '
             'test -n "$state"; test "$state" != "Z"; '
-            "owner_uid=$(awk '/^Uid:/{print $2}' \"/proc/$pid/status\"); "
+            "owner_uid=$(sudo awk '/^Uid:/{print $2}' \"/proc/$pid/status\"); "
             'sidecar_uid=$(id -u opentraces-hf); test "$owner_uid" = "$sidecar_uid"; '
             'executable=$(sudo readlink -f "/proc/$pid/exe"); '
             'digest=$(sha256sum "$executable" | cut -d" " -f1); '
