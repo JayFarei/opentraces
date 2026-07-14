@@ -402,6 +402,9 @@ def test_real_cli_device_flow_crosses_human_page_then_persists_auth(
 
     with running_emulator(tmp_path) as (endpoint, ledger_path):
         environment["HF_ENDPOINT"] = endpoint
+        with urllib.request.urlopen(f"{endpoint}/oauth/authorize") as response:
+            waiting_page = response.read().decode()
+        assert 'http-equiv="refresh"' in waiting_page
         credentials = home / ".opentraces" / "credentials"
         assert not credentials.exists()
         login = subprocess.Popen(
