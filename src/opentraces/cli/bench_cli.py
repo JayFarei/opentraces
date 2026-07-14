@@ -286,6 +286,7 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
     if as_json:
         click.echo(json.dumps(summary, ensure_ascii=False, sort_keys=True))
     else:
+        click.echo(f"bench_run_{result['run_id']} {result['verdict'] or 'error'} {claim}")
         click.echo(f"claim: {claim}")
         click.echo(f"verdict: {result['verdict'] or 'error'}")
         click.echo(f"run: {run_path}")
