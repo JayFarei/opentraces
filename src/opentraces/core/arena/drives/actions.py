@@ -222,6 +222,13 @@ class RunActionSequence:
                     )
                 except ValueError as exc:
                     raise ValueError("timeline recorded_at is not RFC3339") from exc
+                if (
+                    start_time.utcoffset() is None
+                    or completion_time.utcoffset() is None
+                ):
+                    raise ValueError(
+                        "timeline recorded_at is not timezone-aware RFC3339"
+                    )
                 if completion_time < start_time:
                     raise ValueError("timeline completion timestamp precedes action start")
                 duration_ms = result.get("duration_ms")
