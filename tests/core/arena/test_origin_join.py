@@ -233,7 +233,8 @@ def test_captured_projector_round_trips_a_multiline_first_paragraph_claim(
     stored_claim = "Publishing reaches the configured remote\nwithout a side channel."
     store = _finalized_run(tmp_path, monkeypatch, claim=stored_claim)
     record = _record(
-        f"bench_run_{RUN_ID} pass Publishing reaches the configured remote without a side channel."
+        f"bench_run_{RUN_ID} pass json:"
+        '"Publishing reaches the configured remote\\nwithout a side channel."'
     )
     _write_trace(tmp_path, monkeypatch, record)
 

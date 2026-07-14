@@ -121,7 +121,7 @@ def test_bench_run_keeps_a_multiline_claim_on_one_detectable_first_line(
     finalized = next(path for path in store_root.iterdir() if path.name.startswith("run_"))
     assert result.exit_code == 0, result.output
     assert result.output.splitlines()[0] == (
-        f"bench_run_{finalized.name} pass Install is healthy on a fresh box."
+        f'bench_run_{finalized.name} pass json:"Install is healthy\\non a fresh box."'
     )
     assert json.loads((finalized / "result.json").read_text())["scenario"]["claim"] == claim
 

@@ -17,7 +17,11 @@ import click
 
 from ..core import paths
 from ..core.arena.contract import result_exit_code, validate_result
-from ..core.arena.origin import OriginJoinError, attach_explicit_bench_labels
+from ..core.arena.origin import (
+    OriginJoinError,
+    attach_explicit_bench_labels,
+    origin_claim_token,
+)
 from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
 
@@ -306,7 +310,10 @@ def bench_run(
     if as_json:
         click.echo(json.dumps(summary, ensure_ascii=False, sort_keys=True))
     else:
-        click.echo(f"bench_run_{result['run_id']} {result['verdict'] or 'error'} {claim}")
+        click.echo(
+            f"bench_run_{result['run_id']} {result['verdict'] or 'error'} "
+            f"{origin_claim_token(claim)}"
+        )
         click.echo(f"claim: {claim}")
         click.echo(f"verdict: {result['verdict'] or 'error'}")
         click.echo(f"run: {run_path}")

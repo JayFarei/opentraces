@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -27,6 +28,9 @@ _HUMAN_FIRST_LINE = re.compile(
     rf"(?P<verdict>{'|'.join(sorted(VERDICTS))}) "
     r"(?P<claim>\S(?:.*\S)?)"
 )
+_ORIGIN_CLAIM_JSON_PREFIX = "json:"
+_SHELL_CONTROL = re.compile(r"^[;&|]+$")
+_SHELL_TOOL_MARKERS = ("bash", "shell", "terminal", "exec_command")
 
 
 @dataclass(frozen=True)
@@ -54,12 +58,33 @@ class OriginJoinError(RuntimeError):
     """Captured origin evidence cannot be reproduced from a finalized run."""
 
 
+def origin_claim_token(claim: str) -> str:
+    """Encode claims that cannot be copied byte-for-byte onto one physical line."""
+
+    if "\n" in claim or "\r" in claim or claim.startswith(_ORIGIN_CLAIM_JSON_PREFIX):
+        return _ORIGIN_CLAIM_JSON_PREFIX + json.dumps(claim, ensure_ascii=False)
+    return claim
+
+
+def _decode_origin_claim(token: str) -> str | None:
+    if not token.startswith(_ORIGIN_CLAIM_JSON_PREFIX):
+        return token
+    try:
+        claim = json.loads(token.removeprefix(_ORIGIN_CLAIM_JSON_PREFIX))
+    except json.JSONDecodeError:
+        return None
+    return claim if isinstance(claim, str) and claim else None
+
+
 def _from_human(content: str) -> tuple[str, str, str] | None:
     first_line = content.splitlines()[0] if content.splitlines() else ""
     match = _HUMAN_FIRST_LINE.fullmatch(first_line)
     if match is None:
         return None
-    return match.group("run_id"), match.group("verdict"), match.group("claim")
+    claim = _decode_origin_claim(match.group("claim"))
+    if claim is None:
+        return None
+    return match.group("run_id"), match.group("verdict"), claim
 
 
 def _from_json(content: str) -> tuple[str, str, str] | None:
@@ -81,12 +106,83 @@ def _from_json(content: str) -> tuple[str, str, str] | None:
     return run_id, verdict, claim
 
 
+def _bench_argv(tokens: list[str]) -> bool:
+    while tokens and ("=" in tokens[0] and not tokens[0].startswith("=")):
+        name, _separator, _value = tokens[0].partition("=")
+        if not name.replace("_", "a").isalnum():
+            break
+        tokens = tokens[1:]
+    if tokens and tokens[0] == "env":
+        return _bench_argv(tokens[1:])
+    if tokens and tokens[0] == "command":
+        return _bench_argv(tokens[1:])
+    if len(tokens) >= 3 and Path(tokens[0]).name in {"opentraces", "ot"}:
+        return tokens[1:3] == ["bench", "run"]
+    if (
+        len(tokens) >= 5
+        and Path(tokens[0]).name.startswith("python")
+        and tokens[1:5] == ["-m", "opentraces", "bench", "run"]
+    ):
+        return True
+    if len(tokens) >= 4 and Path(tokens[0]).name == "uv" and tokens[1] == "run":
+        return _bench_argv(tokens[2:])
+    return False
+
+
+def _command_segments(command: str) -> list[list[str]]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if _SHELL_CONTROL.fullmatch(token):
+            if segments[-1]:
+                segments.append([])
+            continue
+        segments[-1].append(token)
+    return [segment for segment in segments if segment]
+
+
+def _call_invokes_bench(call: object) -> bool:
+    tool_name = str(getattr(call, "tool_name", "")).lower()
+    if not any(marker in tool_name for marker in _SHELL_TOOL_MARKERS):
+        return False
+    tool_input = getattr(call, "input", None)
+    if not isinstance(tool_input, dict):
+        return False
+    argv = tool_input.get("argv")
+    if isinstance(argv, list) and all(isinstance(part, str) for part in argv):
+        if _bench_argv(list(argv)):
+            return True
+    command = tool_input.get("command") or tool_input.get("cmd")
+    if not isinstance(command, str):
+        return False
+    return any(_bench_argv(segment) for segment in _command_segments(command))
+
+
 def detect_bench_invocations(record: TraceRecord) -> list[BenchInvocation]:
     """Detect only frozen bench outputs in captured tool observations."""
 
     invocations: list[BenchInvocation] = []
     for step in getattr(record, "steps", []) or []:
+        calls_by_id: dict[str, object] = {}
+        ambiguous_ids: set[str] = set()
+        for call in step.tool_calls or []:
+            call_id = str(call.tool_call_id)
+            if call_id in calls_by_id:
+                ambiguous_ids.add(call_id)
+            else:
+                calls_by_id[call_id] = call
+        for call_id in ambiguous_ids:
+            calls_by_id.pop(call_id, None)
         for observation in step.observations or []:
+            linked_call = calls_by_id.get(observation.source_call_id)
+            if linked_call is None or not _call_invokes_bench(linked_call):
+                continue
             content = observation.content
             if not isinstance(content, str) or not content:
                 continue
@@ -260,4 +356,5 @@ __all__ = [
     "attach_captured_bench_labels",
     "attach_explicit_bench_labels",
     "detect_bench_invocations",
+    "origin_claim_token",
 ]
