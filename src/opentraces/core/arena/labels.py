@@ -408,7 +408,11 @@ def verify_label(label: object, *, store: RunStore | None = None) -> bool:
     return verify_labels([label], store=store)
 
 
-def _decode_rows(path: Path) -> list[dict[str, Any]]:
+def _decode_rows(
+    path: Path,
+    *,
+    expected_trace_id: str | None = None,
+) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
     try:
@@ -423,14 +427,16 @@ def _decode_rows(path: Path) -> list[dict[str, Any]]:
         try:
             payload = json.loads(line)
             row = validate_label(payload)
-            if row["label_id"] in seen_ids:
-                raise LabelIntegrityError(f"duplicate label_id in companion: {row['label_id']}")
-            seen_ids.add(row["label_id"])
-            rows.append(row)
         except (json.JSONDecodeError, LabelContractError, LabelIntegrityError) as exc:
             raise LabelIntegrityError(
                 f"invalid labels companion row {line_number}: {path}"
             ) from exc
+        if expected_trace_id is not None and _subject_trace_id(row["subject"]) != expected_trace_id:
+            raise LabelIntegrityError("label companion subject does not match the requested trace")
+        if row["label_id"] in seen_ids:
+            raise LabelIntegrityError(f"duplicate label_id in companion: {row['label_id']}")
+        seen_ids.add(row["label_id"])
+        rows.append(row)
     if [row["label_id"] for row in rows] != sorted(row["label_id"] for row in rows):
         raise LabelIntegrityError("labels companion rows are not in canonical order")
     return rows
@@ -439,7 +445,10 @@ def _decode_rows(path: Path) -> list[dict[str, Any]]:
 def read_labels(project_slug: str, trace_id: str) -> list[dict[str, Any]]:
     """Read and contract-check one trace's label companion."""
 
-    return _decode_rows(trace_v1_labels_path(project_slug, trace_id))
+    return _decode_rows(
+        trace_v1_labels_path(project_slug, trace_id),
+        expected_trace_id=trace_id,
+    )
 
 
 def attach_labels(
@@ -464,7 +473,7 @@ def attach_labels(
         raise LabelIntegrityError("label subject trace id does not match its bucket path")
     resolved_store = store or RunStore()
     path = trace_v1_labels_path(project_slug, trace_id)
-    existing_rows = _decode_rows(path)
+    existing_rows = _decode_rows(path, expected_trace_id=trace_id)
     verify_labels(existing_rows, store=resolved_store)
     by_id = {row["label_id"]: row for row in existing_rows}
     for raw in labels:
@@ -494,7 +503,7 @@ def label_summary_for_trace(trace_id: str, *, limit: int = 8) -> dict[str, Any]:
     if root.is_dir():
         pattern = f"*/{_path_part(trace_id)}/labels.jsonl.gz"
         for path in sorted(root.glob(pattern)):
-            for row in _decode_rows(path):
+            for row in _decode_rows(path, expected_trace_id=trace_id):
                 existing = rows_by_id.get(row["label_id"])
                 if existing is not None and _canonical_json(existing) != _canonical_json(row):
                     raise LabelIntegrityError("cross-project label_id collision")
