@@ -1,11 +1,11 @@
 {
   "schema_version": "opentraces.hf-emulator-trusted-build.v1",
-  "binary_sha256": "9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad",
-  "size_bytes": 94089101,
-  "source_sha256": "9c5d8893616522f34cdaf9714906f75d13fd37787560f46f81f6bc1725729c83",
-  "build_inputs_sha256": "5bb8b549b32ec07dc54612308d7cc20e3646c5362e3644e397f373fa9c4dc2e2",
+  "binary_sha256": "a0e7bdc0ebd465f10f95e36d1865bc70ef5bfce389ecb1b15a59088f5d2e8f51",
+  "size_bytes": 94094274,
+  "source_sha256": "4b51bb5433cbe2db19ffee4c89b7757c0df3c8ca707a928f152344544fb6d82a",
+  "build_inputs_sha256": "79a49e460830557de696a249d37efc18806ff0bcb23621c245f097cd221eef7c",
   "bun_version": "1.3.6",
   "target": "bun-linux-arm64",
   "contract_version": "huggingface.v1",
-  "evidence": "tests/manual/a2_hf_emulator_real_box.json (LOCAL diagnostic only; remote issue #264 gate remains required)"
+  "evidence": "actual pinned build; A5 #274 real-box acceptance required before merge"
 }
