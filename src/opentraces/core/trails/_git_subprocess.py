@@ -28,6 +28,7 @@ def run_git_until(
     process = subprocess.Popen(
         command,
         cwd=cwd,
+        stdin=subprocess.PIPE if input is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
