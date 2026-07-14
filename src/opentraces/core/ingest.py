@@ -424,6 +424,7 @@ def write_trace_to_bucket(
     parser_name: str,
     source_jsonl: Path,
     trace_record_only: bool,
+    source_layer: str = "canonical",
 ) -> BucketWriteOutcome:
     """Persist a parsed record to the private bucket as ONE attributable unit.
 
@@ -449,7 +450,7 @@ def write_trace_to_bucket(
     write_trace_record(
         final_record,
         project_slug=project_slug,
-        source_layer="canonical",
+        source_layer=source_layer,
         legacy_mirror=True,
     )
     # NOTE: this raw-source link is load-bearing beyond re-parse capability —
