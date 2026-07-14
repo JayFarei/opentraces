@@ -6,9 +6,7 @@ import hashlib
 import json
 import shlex
 import subprocess
-import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,10 +14,7 @@ from ..box import Box, CrabboxRuntime
 from ..diagnostics import sanitize_diagnostic_value
 from ..run_store import RunDraft
 from ..recording import RecordingConversionError, convert_script_cast
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+from .actions import RunActionSequence
 
 
 @dataclass(frozen=True)
@@ -59,12 +54,13 @@ class TerminalDrive:
         box: Box,
         draft: RunDraft,
         repository: Path,
+        actions: RunActionSequence,
     ) -> None:
         self.runtime = runtime
         self.box = box
         self.draft = draft
         self.repository = repository
-        self._ordinal = 0
+        self.actions = actions
         self._recording_channels: list[dict[str, Any]] = []
         self._markers: list[dict[str, Any]] = []
 
@@ -86,24 +82,23 @@ class TerminalDrive:
     ) -> TerminalResult:
         if not argv:
             raise ValueError("terminal.exec requires at least one argv element")
-        self._ordinal += 1
-        action = f"actions/{self._ordinal:04d}"
+        allocation = self.actions.allocate()
+        ordinal = allocation.ordinal
+        action = f"actions/{ordinal:04d}"
         invocation_ref = f"{action}/invocation.json"
         result_ref = f"{action}/result.json"
         environment = dict(env or {})
-        started_at = _utc_now()
         self.draft.write_json(
             invocation_ref,
             {
-                "ordinal": self._ordinal,
+                "ordinal": ordinal,
                 "argv": list(argv),
                 "env_pins": self._env_pins(environment),
                 "cwd": cwd or ".",
-                "started_at": started_at,
+                "started_at": allocation.started_at,
             },
         )
-        started = time.monotonic()
-        remote_base = f"bench-recordings/terminal-{self._ordinal:04d}"
+        remote_base = f"bench-recordings/terminal-{ordinal:04d}"
         remote_timing = f"{remote_base}.timing"
         remote_typescript = f"{remote_base}.typescript"
         # Crabbox artifact globs are relative to its synced workdir.  Capture
@@ -135,7 +130,7 @@ class TerminalDrive:
                 timing_path=timing_path,
             )
         except Exception as exc:
-            duration_ms = max(0, int((time.monotonic() - started) * 1000))
+            duration_ms = self.actions.duration_ms(allocation)
             timeout_error = self._timeout_error(exc)
             stdout = self._exception_stream(exc, "stdout", "output")
             stderr = self._exception_stream(exc, "stderr")
@@ -175,7 +170,7 @@ class TerminalDrive:
             )
             self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
             raise
-        duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        duration_ms = self.actions.duration_ms(allocation)
         self.draft.write_text(f"{action}/stdout", observed.stdout)
         self.draft.write_text(f"{action}/stderr", observed.stderr)
         self.draft.write_json(f"{action}/timing.json", observed.timing)
@@ -199,7 +194,7 @@ class TerminalDrive:
                 "reason": "cast collection unavailable",
             }
         else:
-            raw_destination = self.draft.path / "recordings" / "raw" / f"{self._ordinal:04d}"
+            raw_destination = self.draft.path / "recordings" / "raw" / f"{ordinal:04d}"
             files = collect(
                 self.box,
                 [remote_timing, remote_typescript],
@@ -218,7 +213,7 @@ class TerminalDrive:
             else:
                 try:
                     cast = convert_script_cast(typescript_raw, timing_raw)
-                    cast_ref = f"recordings/terminal-{self._ordinal:04d}.cast"
+                    cast_ref = f"recordings/terminal-{ordinal:04d}.cast"
                     self.draft.write_bytes(cast_ref, cast)
                     channel = {
                         "kind": "terminal",
@@ -228,7 +223,7 @@ class TerminalDrive:
                     }
                     self._markers.append(
                         {
-                            "ordinal": self._ordinal,
+                            "ordinal": ordinal,
                             "label": " ".join(argv),
                             "cast_ref": cast_ref,
                             "duration_ms": duration_ms,
@@ -333,3 +328,7 @@ class TerminalDrive:
             ],
             "timeline_ref": "recordings/playlist.json",
         }
+
+    @property
+    def has_actions(self) -> bool:
+        return bool(self._recording_channels)
