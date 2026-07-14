@@ -451,6 +451,14 @@ def test_startup_liveness_probe_does_not_signal_differently_owned_process(
                         stderr="sh: 1: kill: Operation not permitted\n",
                         timing={"schemaVersion": 1, "timing": {"exitCode": 1}},
                     )
+                if "executable=$(sudo readlink" not in rendered:
+                    return BoxCommandResult(
+                        argv=list(map(str, argv)),
+                        returncode=1,
+                        stdout="",
+                        stderr="readlink: /proc/4242/exe: Permission denied\n",
+                        timing={"schemaVersion": 1, "timing": {"exitCode": 1}},
+                    )
             return super().exec(
                 box,
                 argv,
