@@ -153,7 +153,9 @@ def _is_active_script_command(command: object, expected_script: Path) -> bool:
     script = Path(tokens[1]).expanduser()
     interpreter_name = interpreter.name.lower()
     return (
-        script == expected_script.expanduser()
+        interpreter.is_absolute()
+        and script.is_absolute()
+        and script == expected_script.expanduser()
         and interpreter.is_file()
         and os.access(interpreter, os.X_OK)
         and ("python" in interpreter_name or interpreter_name.startswith("pypy"))
