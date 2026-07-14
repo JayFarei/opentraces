@@ -39,10 +39,7 @@ RUN_ID = "run_20260714T230000000000Z_291291291291"
 PROJECT_SLUG = "project-a8-trajectory-labels"
 SHA_A = "sha256:" + "a" * 64
 _REAL_CAPTURE_FIXTURE = (
-    Path(__file__).parents[2]
-    / "fixtures"
-    / "claude"
-    / "claude-linear-edit-real-session.jsonl"
+    Path(__file__).parents[2] / "fixtures" / "claude" / "claude-linear-edit-real-session.jsonl"
 )
 
 
@@ -215,9 +212,7 @@ def test_authentic_trajectory_pin_round_trips_positions_to_canonical_steps(
     assert label["slice_pin"]["trajectory"] == trajectory.to_dict()
     assert label["slice_pin"]["slicing_schema_version"] == "opentraces.slicing.v1"
     assert label["slice_pin"]["trajectory_position_range"] == {"start": 0, "end": 2}
-    assert label["slice_pin"]["coordinate_translation"] == (
-        "array_position_to_step_index"
-    )
+    assert label["slice_pin"]["coordinate_translation"] == ("array_position_to_step_index")
     assert verify_label(label, store=store)
 
     first_path = attach_labels(
@@ -454,9 +449,7 @@ def _reidentify(label: dict) -> dict:
     "mutation",
     [
         lambda row: row["slice_pin"].__setitem__("artifact_digest", "sha256:" + "0" * 64),
-        lambda row: row["slice_pin"].__setitem__(
-            "materialized_digest", "sha256:" + "0" * 64
-        ),
+        lambda row: row["slice_pin"].__setitem__("materialized_digest", "sha256:" + "0" * 64),
         lambda row: row["subject"].__setitem__(
             "address", row["subject"]["address"].rsplit("-", 1)[0] + "-4"
         ),
@@ -597,9 +590,7 @@ def test_trajectory_and_explicit_same_address_batch_verify_as_distinct_pins(
     result = _result(run_id=draft.run_id, evidence_ref=evidence_refs[0])
     result["verifiers"][0]["evidence_refs"] = evidence_refs
     result["evidence"]["requirements"][0]["evidence_refs"] = evidence_refs
-    result["artifacts"] = [
-        {"path": ref, "media_type": "application/json"} for ref in evidence_refs
-    ]
+    result["artifacts"] = [{"path": ref, "media_type": "application/json"} for ref in evidence_refs]
     run_path = draft.finalize(result)
 
     trajectory_label = mint_labels_for_run(

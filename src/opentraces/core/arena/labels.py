@@ -236,10 +236,15 @@ def _validate_slice_pin(pin: object, *, subject: Mapping[str, str]) -> dict[str,
         or end_step_index < start_step_index
     ):
         raise LabelContractError("slice pin step range must satisfy 0 <= start <= end")
-    expected_source = "slicer_trajectory" if provenance_kind == "trajectory" else "manual_step_range"
+    expected_source = (
+        "slicer_trajectory" if provenance_kind == "trajectory" else "manual_step_range"
+    )
     if source != expected_source:
         raise LabelContractError(f"{provenance_kind} slice pin source must be {expected_source}")
-    expected_subject = {"kind": "slice", "address": f"{trace_id}:{start_step_index}-{end_step_index}"}
+    expected_subject = {
+        "kind": "slice",
+        "address": f"{trace_id}:{start_step_index}-{end_step_index}",
+    }
     if dict(subject) != expected_subject:
         raise LabelIntegrityError("slice subject boundary does not match its pin")
     parsed_trace, point, span, reserved = parse_trail_ref(expected_subject["address"])
@@ -290,7 +295,9 @@ def _validate_slice_pin(pin: object, *, subject: Mapping[str, str]) -> dict[str,
         trajectory = _validate_trajectory(pin.get("trajectory"))
         position_range = pin.get("trajectory_position_range")
         if position_range != {"start": trajectory["start"], "end": trajectory["end"]}:
-            raise LabelIntegrityError("trajectory position range does not match the frozen trajectory")
+            raise LabelIntegrityError(
+                "trajectory position range does not match the frozen trajectory"
+            )
         if pin.get("slicing_schema_version") != SLICING_SCHEMA_VERSION:
             raise LabelContractError("trajectory slice pin has an unsupported slicing schema")
         if pin.get("coordinate_translation") != "array_position_to_step_index":
@@ -376,7 +383,9 @@ def _materialize_slice(
         if canonical_subject["kind"] != "slice":
             raise LabelContractError("slice materialization requires a slice subject")
         if _subject_trace_id(canonical_subject) != trace_id:
-            raise LabelIntegrityError("slice subject trace does not match the materialization record")
+            raise LabelIntegrityError(
+                "slice subject trace does not match the materialization record"
+            )
         start, end = _slice_bounds(canonical_subject)
         materialized = slice_by_steps(
             trace_ref.trace_map,
@@ -463,9 +472,7 @@ def stage_slice_artifact(
     artifact_path = draft.path / artifact_ref
     canonical_bytes = _canonical_json(materialized, pretty=True).encode("utf-8")
     if artifact_path.is_file() and artifact_path.read_bytes() != canonical_bytes:
-        raise LabelIntegrityError(
-            "slice_id collision has different canonical materialized bytes"
-        )
+        raise LabelIntegrityError("slice_id collision has different canonical materialized bytes")
     draft.write_json(artifact_ref, materialized)
     return {
         "artifact_ref": artifact_ref,
@@ -487,7 +494,9 @@ def _slice_pin_for_run(
     )
     artifact_ref = f"artifacts/slices/{validated['slice_id']}.json"
     artifact_path = run_path / artifact_ref
-    if not artifact_path.is_file() or not artifact_path.resolve().is_relative_to(run_path.resolve()):
+    if not artifact_path.is_file() or not artifact_path.resolve().is_relative_to(
+        run_path.resolve()
+    ):
         raise LabelIntegrityError("materialized slice artifact is missing from the run")
     artifact_bytes = artifact_path.read_bytes()
     try:
@@ -791,9 +800,9 @@ def _canonical_subject_trace(trace_id: str) -> TraceRecord:
 
     for obj in iter_trace_record_objects():
         if obj.trace_id == trace_id:
-            candidates[
-                (obj.project_slug, _canonical_json(obj.record.model_dump(mode="json")))
-            ] = obj.record
+            candidates[(obj.project_slug, _canonical_json(obj.record.model_dump(mode="json")))] = (
+                obj.record
+            )
     if not candidates:
         raise LabelIntegrityError("slice subject canonical TraceRecord is missing")
     if len(candidates) != 1:
@@ -921,9 +930,7 @@ def attach_labels(
         raise LabelContractError("label companion path must remain inside traces/v1")
     if trace_path.is_file():
         try:
-            subject_record = TraceRecord.model_validate_json(
-                trace_path.read_text(encoding="utf-8")
-            )
+            subject_record = TraceRecord.model_validate_json(trace_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, ValueError, ValidationError) as exc:
             raise LabelIntegrityError("label subject trace is not a valid TraceRecord") from exc
     else:
