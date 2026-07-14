@@ -48,7 +48,7 @@
     "sha256": "0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da",
     "source_sha256": "97b98ffe5724fb7c64554d9637ba8574a1c58b5ea7eba1cb07d4c7a1579db367",
     "build_inputs_sha256": "6338cd5962b0f836b768aa4dbe26da857f2a1d961fad5f32bd55d2d8dc0eeaac",
-    "trusted_build_manifest": "src/opentraces/arena/emulators/huggingface/trusted-build.json"
+    "trusted_build_manifest": "src/opentraces/core/arena/emulate/huggingface/trusted-build.json"
   },
   "contract_tests": {
     "command": "python3 -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py",

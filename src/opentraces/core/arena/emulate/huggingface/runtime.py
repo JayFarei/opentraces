@@ -6,6 +6,7 @@ import hashlib
 import fcntl
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -346,6 +347,17 @@ class _BoxRuntime(Protocol):
         timing_path: Path,
     ) -> Any: ...
 
+    def exec_product(
+        self,
+        box: Any,
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float = 60,
+        timing_path: Path,
+    ) -> Any: ...
+
     def collect(
         self,
         box: Any,
@@ -539,7 +551,7 @@ def start_huggingface_emulator(
     )
     if prepared.returncode != 0:
         raise RuntimeError("Hugging Face emulator ledger custody boundary failed")
-    custody_probe = runtime.exec(
+    custody_probe = runtime.exec_product(
         box,
         [
             "sh",
@@ -552,17 +564,35 @@ def start_huggingface_emulator(
     )
     if custody_probe.returncode != 0:
         raise RuntimeError("product user can write the Hugging Face witness ledger")
+    custody_unchanged = runtime.exec(
+        box,
+        ["sh", "-c", f"test ! -s {REMOTE_LEDGER}"],
+        cwd=repository,
+        timeout=30,
+        timing_path=(run_path / "artifacts" / "crabbox-timing" / "hf-custody-unchanged.json"),
+    )
+    if custody_unchanged.returncode != 0:
+        raise RuntimeError("product custody probe changed the Hugging Face witness ledger")
+
+    launch_nonce = secrets.token_hex(32)
+    if pin.source_sha256 is None or pin.build_inputs_sha256 is None:
+        raise RuntimeError("verified Hugging Face emulator pin is incomplete")
 
     started = runtime.exec(
         box,
         [
             "sh",
             "-c",
-            f"setsid sudo -u opentraces-hf env PORT={DEFAULT_PORT} "
-            f"LEDGER_PATH={REMOTE_LEDGER} {REMOTE_BINARY} "
+            f'setsid sudo -u opentraces-hf sh -c \'printf "%s\\n" "$$" '
+            ">/tmp/opentraces-hf-emulator.pid; exec env "
+            f"PORT={DEFAULT_PORT} LEDGER_PATH={REMOTE_LEDGER} "
+            f"OPENTRACES_HF_LAUNCH_NONCE={launch_nonce} "
+            f"OPENTRACES_HF_CONTRACT_VERSION={pin.contract_version} "
+            f"OPENTRACES_HF_SOURCE_SHA256={pin.source_sha256} "
+            f"OPENTRACES_HF_BUILD_INPUTS_SHA256={pin.build_inputs_sha256} "
+            f"OPENTRACES_HF_BINARY_SHA256={pin.sha256} {REMOTE_BINARY}' "
             ">/tmp/opentraces-hf-emulator.stdout "
-            "2>/tmp/opentraces-hf-emulator.stderr </dev/null & "
-            "echo $! >/tmp/opentraces-hf-emulator.pid",
+            "2>/tmp/opentraces-hf-emulator.stderr </dev/null &",
         ],
         cwd=repository,
         timeout=30,
@@ -590,6 +620,43 @@ def start_huggingface_emulator(
         raise EmulatorReadinessError("Hugging Face emulator manifest was not JSON") from exc
     if readiness.returncode != 0 or manifest.get("id") != "huggingface":
         raise EmulatorReadinessError("Hugging Face emulator manifest identity mismatch")
+    launch = manifest.get("launch")
+    expected_launch = {
+        "nonce": launch_nonce,
+        "contract_version": pin.contract_version,
+        "source_sha256": pin.source_sha256,
+        "build_inputs_sha256": pin.build_inputs_sha256,
+        "binary_sha256": pin.sha256,
+    }
+    if not isinstance(launch, dict) or any(
+        launch.get(name) != value for name, value in expected_launch.items()
+    ):
+        raise EmulatorReadinessError("Hugging Face emulator launch identity mismatch")
+    pid = launch.get("pid")
+    if not isinstance(pid, int) or pid <= 1:
+        raise EmulatorReadinessError("Hugging Face emulator launch identity has no valid PID")
+    process_binding = runtime.exec(
+        box,
+        [
+            "sh",
+            "-c",
+            "set -eu; pid=$(cat /tmp/opentraces-hf-emulator.pid); "
+            f'test "$pid" = "{pid}"; kill -0 "$pid"; '
+            "owner_uid=$(awk '/^Uid:/{print $2}' \"/proc/$pid/status\"); "
+            'sidecar_uid=$(id -u opentraces-hf); test "$owner_uid" = "$sidecar_uid"; '
+            'executable=$(readlink -f "/proc/$pid/exe"); '
+            'digest=$(sha256sum "$executable" | cut -d" " -f1); '
+            f'test "$digest" = "{pin.sha256}"; '
+            'printf "%s\\n%s\\n%s\\n" "$pid" "$owner_uid" "$digest"',
+        ],
+        cwd=repository,
+        timeout=30,
+        timing_path=(run_path / "artifacts" / "crabbox-timing" / "hf-process-binding.json"),
+    )
+    if process_binding.returncode != 0:
+        raise EmulatorReadinessError(
+            "Hugging Face emulator readiness is not bound to the running process"
+        )
     operations = list((manifest.get("specs") or [{}])[0].get("operations") or [])
     capabilities = {
         status: sorted(
@@ -606,6 +673,12 @@ def start_huggingface_emulator(
         "readiness": {
             "path": "/_emulate/manifest",
             "service_id": manifest.get("id"),
+            "launch": launch,
+            "process_binding": {
+                "pid": pid,
+                "user": "opentraces-hf",
+                "binary_sha256": pin.sha256,
+            },
         },
         "baseline": {
             "identity": {"name": "bench", "type": "user"},

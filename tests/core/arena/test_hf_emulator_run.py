@@ -141,11 +141,21 @@ class WorldRuntime:
 
     def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         rendered = " ".join(map(str, argv))
-        if "sha256sum" in rendered:
+        if "/proc/$pid/exe" in rendered:
+            self.events.append("process-binding")
+            stdout, returncode = (
+                (json.dumps({"pid": 4242, "user": "opentraces-hf"}) + "\n", 0)
+                if self.process_alive
+                else ("", 1)
+            )
+        elif "sha256sum" in rendered:
             assert self.copied is not None
             self.events.append("sha256")
             digest = hashlib.sha256(self.copied[0].read_bytes()).hexdigest()
             stdout, returncode = f"{digest}  {self.copied[1]}\n", 0
+        elif "test ! -s" in rendered:
+            self.events.append("custody-unchanged")
+            stdout, returncode = "", 0 if not self.raw_ledger else 1
         elif "_emulate/manifest" in rendered:
             self.events.append("readiness")
             manifest = self.manifest_override or self.bound_manifest or _MANIFEST
@@ -175,20 +185,11 @@ class WorldRuntime:
                         "pid": 4242,
                         "contract_version": fields["OPENTRACES_HF_CONTRACT_VERSION"],
                         "source_sha256": fields["OPENTRACES_HF_SOURCE_SHA256"],
-                        "build_inputs_sha256": fields[
-                            "OPENTRACES_HF_BUILD_INPUTS_SHA256"
-                        ],
+                        "build_inputs_sha256": fields["OPENTRACES_HF_BUILD_INPUTS_SHA256"],
                         "binary_sha256": fields["OPENTRACES_HF_BINARY_SHA256"],
                     },
                 }
             stdout, returncode = "", 0
-        elif "/proc/$pid/exe" in rendered:
-            self.events.append("process-binding")
-            stdout, returncode = (
-                (json.dumps({"pid": 4242, "user": "opentraces-hf"}) + "\n", 0)
-                if self.process_alive
-                else ("", 1)
-            )
         elif "kill" in rendered:
             self.live = False
             self.events.append("stop")
@@ -360,6 +361,8 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert runtime.events.count("product-ledger-escalation-refused") == 1
     assert runtime.events.count("custody-probe") == 0
     assert runtime.events.count("product-custody-probe") == 1
+    assert runtime.events.count("custody-unchanged") == 1
+    assert runtime.events.count("process-binding") == 1
     assert b"FORGED_LEDGER_ROW" not in stored_ledger.read_bytes()
 
     page = render_evidence_page(run.final_path)
@@ -562,4 +565,4 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     assert result["evidence"]["requirements"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert runtime.events.count("start") == 1
     assert runtime.events.count("release") == 1
-    assert runtime.events.count("product-exec") == 5
+    assert runtime.events.count("product-exec") == 6

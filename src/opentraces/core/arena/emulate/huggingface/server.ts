@@ -5,6 +5,14 @@ import { createHash } from "node:crypto";
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.PORT ?? "14318", 10);
 const LEDGER_PATH = process.env.LEDGER_PATH;
+const launch = {
+  nonce: process.env.OPENTRACES_HF_LAUNCH_NONCE ?? null,
+  pid: process.pid,
+  contract_version: process.env.OPENTRACES_HF_CONTRACT_VERSION ?? null,
+  source_sha256: process.env.OPENTRACES_HF_SOURCE_SHA256 ?? null,
+  build_inputs_sha256: process.env.OPENTRACES_HF_BUILD_INPUTS_SHA256 ?? null,
+  binary_sha256: createHash("sha256").update(readFileSync(process.execPath)).digest("hex"),
+};
 
 const operations = [
   { operationId: "createRepo", method: "POST", path: "/api/repos/create", status: "hand-authored" },
@@ -37,6 +45,7 @@ const operations = [
 const manifest = {
   id: "huggingface",
   name: "Hugging Face Hub",
+  launch,
   surfaces: [
     { id: "hub-rest", kind: "rest", title: "Hub REST API", basePath: "/api", status: "partial" },
     { id: "resolve", kind: "provider-specific", title: "File resolve/download", status: "partial" },
