@@ -462,8 +462,12 @@ def write_trace_to_bucket(
     try:
         from .arena.origin import attach_captured_bench_labels
 
-        attach_captured_bench_labels(final_record, project_slug=project_slug)
-        outcome.writes["arena_origin_labels"] = None
+        attachments = attach_captured_bench_labels(
+            final_record,
+            project_slug=project_slug,
+        )
+        if attachments:
+            outcome.writes["arena_origin_labels"] = None
     except Exception as exc:  # noqa: BLE001
         outcome.writes["arena_origin_labels"] = f"{type(exc).__name__}: {exc}"
         logger.warning(

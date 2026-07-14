@@ -85,7 +85,7 @@ def detect_bench_invocations(record: TraceRecord) -> list[BenchInvocation]:
     """Detect only frozen bench outputs in captured tool observations."""
 
     invocations: list[BenchInvocation] = []
-    for step in record.steps:
+    for step in getattr(record, "steps", []) or []:
         for observation in step.observations or []:
             content = observation.content
             if not isinstance(content, str) or not content:
