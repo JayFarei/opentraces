@@ -204,6 +204,7 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <div class="eyebrow">OPENTRACES · BENCH.V0 · {_h(result["run_id"])}</div>
 <h1>{_h(result["scenario"]["claim"])}</h1>
 <section class="facts"><div class="fact"><div class="eyebrow">VERDICT</div><div class="verdict">{_h(verdict.upper())}</div></div>
+<div class="fact"><div class="eyebrow">MODE</div>{_h(result["execution_mode"])}</div>
 <div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result["execution_status"])}</div>
 <div class="fact"><div class="eyebrow">EVIDENCE</div>{"complete" if result["evidence"]["complete"] else "incomplete"}</div>
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>
