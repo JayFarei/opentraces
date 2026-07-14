@@ -452,10 +452,11 @@ def test_startup_liveness_probe_does_not_signal_differently_owned_process(
                         timing={"schemaVersion": 1, "timing": {"exitCode": 1}},
                     )
                 privileged_reads = (
-                    'sudo test -r "/proc/$pid/stat"',
-                    "state=$(sudo sed",
-                    "owner_uid=$(sudo awk",
-                    "executable=$(sudo readlink",
+                    'sudo -u opentraces-hf test -r "/proc/$pid/stat"',
+                    "state=$(sudo -u opentraces-hf sed",
+                    "owner_uid=$(sudo -u opentraces-hf awk",
+                    "executable=$(sudo -u opentraces-hf readlink",
+                    "digest=$(sudo -u opentraces-hf sha256sum",
                 )
                 if any(fragment not in rendered for fragment in privileged_reads):
                     return BoxCommandResult(
