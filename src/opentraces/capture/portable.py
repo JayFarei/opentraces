@@ -15,6 +15,7 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -168,6 +169,7 @@ def _finalizer_semantic_error(
     *,
     source: str,
     request: dict[str, Any],
+    deadline: float,
 ) -> str | None:
     """Validate source truth only after the child envelope is well typed."""
 
@@ -381,8 +383,7 @@ def _finalizer_semantic_error(
         return None
 
     if source == "git":
-        import subprocess
-
+        from ..core.trails._git_subprocess import run_git_until
         from ..core.trails.event_log import EVENT_LOG_REF, read_events
 
         project = Path(request["project"]).resolve()
@@ -392,29 +393,6 @@ def _finalizer_semantic_error(
             return "git report names another project"
         if details.get("event_log_ref") != EVENT_LOG_REF:
             return "git report names another canonical event ref"
-        head = subprocess.run(
-            ["git", "rev-parse", "--verify", EVENT_LOG_REF],
-            cwd=project,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if head.returncode != 0:
-            if not (
-                report["status"] == "partial"
-                and details.get("event_log_head") is None
-                and details.get("events_count") == 0
-            ):
-                return "git report event-log head is not current"
-        else:
-            if details.get("event_log_head") != head.stdout.strip():
-                return "git report event-log head is not current"
-            try:
-                events = read_events(project, verify=True)
-            except Exception as exc:  # noqa: BLE001 - fail-closed evidence validator
-                return f"git canonical event evidence is unreadable: {type(exc).__name__}"
-            if not events or details.get("events_count") != len(events):
-                return "git report event count does not match readable canonical evidence"
         maturation = details.get("maturation")
         if not isinstance(maturation, dict):
             return "git report did not include maturation evidence"
@@ -427,6 +405,60 @@ def _finalizer_semantic_error(
             return "git maturation errors are not a string list"
         if not isinstance(maturation.get("truncated"), bool):
             return "git maturation truncated flag is not boolean"
+        if not isinstance(details.get("evidence_read_timed_out", False), bool):
+            return "git evidence-read timeout flag is not boolean"
+        head = run_git_until(
+            ["rev-parse", "--verify", EVENT_LOG_REF],
+            cwd=project,
+            deadline=deadline,
+        )
+        evidence_read_timed_out = details.get("evidence_read_timed_out") is True
+        evidence_deferred = (
+            report["status"] == "partial"
+            and details.get("event_log_head") is None
+            and details.get("events_count") is None
+            and (
+                (
+                    maturation["truncated"] is True
+                    and any(
+                        "timed out" in error.lower()
+                        for error in maturation["errors"]
+                    )
+                )
+                or evidence_read_timed_out
+            )
+        )
+        if head.returncode != 0:
+            if not (
+                evidence_deferred
+                or (
+                    report["status"] == "partial"
+                    and details.get("event_log_head") is None
+                    and details.get("events_count") == 0
+                )
+            ):
+                return "git report event-log head is not current"
+        else:
+            if not evidence_deferred and details.get("event_log_head") != head.stdout.strip():
+                return "git report event-log head is not current"
+            count_deferred = (
+                report["status"] == "partial"
+                and details.get("events_count") is None
+                and (maturation["truncated"] is True or evidence_read_timed_out)
+            )
+            if not count_deferred:
+                try:
+                    events = read_events(
+                        project,
+                        verify=True,
+                        deadline=deadline,
+                    )
+                except subprocess.TimeoutExpired:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - fail-closed evidence validator
+                    return f"git canonical event evidence is unreadable: {type(exc).__name__}"
+                if not events or details.get("events_count") != len(events):
+                    return "git report event count does not match readable canonical evidence"
         return None
 
     if source == "bucket":
@@ -1027,8 +1059,8 @@ class CaptureSession:
             "session_id": self.plan.session_id,
             "session_path": str(self.plan.session_path) if self.plan.session_path else None,
             "trace_id": self._trace_refs[-1] if self._trace_refs else None,
-            "remaining_seconds": max(0.0, deadline - time.monotonic() - 0.05),
-            "deadline_monotonic": max(time.monotonic(), deadline - 0.05),
+            "remaining_seconds": max(0.0, deadline - time.monotonic() - 0.2),
+            "deadline_monotonic": max(time.monotonic(), deadline - 0.2),
             "security_tools": list(self._resolved_security_tools),
             "security_configuration": self._security_configuration,
             "raw_body_retention": self.plan.raw_body_retention,
@@ -1056,6 +1088,7 @@ class CaptureSession:
                 env=env,
                 stdout=stdout,
                 stderr=stderr,
+                start_new_session=os.name == "posix",
             )
         except OSError as exc:
             stdout.close()
@@ -1068,13 +1101,7 @@ class CaptureSession:
             remaining = max(0.0, deadline - time.monotonic())
             process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
-            process.kill()
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining > 0:
-                try:
-                    process.wait(timeout=remaining)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
+            _kill_finalizer_process_tree(process)
             return CaptureSourceResult(
                 name=source,
                 view=_SOURCE_VIEW[source],
@@ -1114,11 +1141,34 @@ class CaptureSession:
                 f"invalid finalizer report: {report_error}",
                 evidence_refs=refs,
             )
-        semantic_error = _finalizer_semantic_error(
-            report,
-            source=source,
-            request=request,
-        )
+        try:
+            semantic_error = _finalizer_semantic_error(
+                report,
+                source=source,
+                request=request,
+                deadline=deadline,
+            )
+        except subprocess.TimeoutExpired as exc:
+            from ..core.trails._git_subprocess import timeout_limitation
+
+            report_refs = (*refs, *report["evidence_refs"])
+            limitations = [*report["limitations"], timeout_limitation(exc)]
+            limitations.append(
+                f"{source} finalizer evidence validation reached the capture "
+                "deadline; no post-deadline validation re-read was attempted"
+            )
+            return CaptureSourceResult(
+                name=source,
+                view=_SOURCE_VIEW[source],
+                requested=True,
+                required=source in self.plan.required_sources,
+                status="partial",
+                completeness="partial",
+                evidence_refs=report_refs,
+                limitations=tuple(dict.fromkeys(limitations)),
+                duration_ms=_duration_ms(started),
+                details=dict(report["details"]),
+            )
         if semantic_error is not None:
             return self._unavailable(
                 source,
@@ -1151,7 +1201,7 @@ class CaptureSession:
     def _finalizer_timeout_limitation(self, source: str) -> str:
         """Retain known source truth when an isolated child misses its budget."""
 
-        generic = "source finalizer exceeded the capture deadline"
+        generic = f"{source} source finalizer exceeded the capture deadline"
         if source != "telemetry" or not self.plan.session_id:
             return generic
         snapshot_path = self._capture_root / "staging" / "otel" / f"{self.plan.session_id}.json"
@@ -1939,6 +1989,27 @@ def _pid_is_alive(pid: int | None) -> bool:
     except OSError:
         return False
     return True
+
+
+def _kill_finalizer_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Kill an isolated finalizer and every subprocess it launched."""
+
+    killed_group = False
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            killed_group = True
+        except (OSError, AttributeError):
+            pass
+    if not killed_group:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=0.5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

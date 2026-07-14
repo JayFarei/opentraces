@@ -291,37 +291,81 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
 def _finalize_git(request: dict[str, Any]) -> dict[str, Any]:
     import subprocess
 
+    from ..core.trails._git_subprocess import run_git_until, timeout_limitation
     from ..core.trails.event_log import EVENT_LOG_REF, read_events
     from ..core.trails.maturation import mature_trails
 
     project = Path(request["project"]).resolve()
+    # Leave the isolated child enough time to serialize its honest partial
+    # report after a Git process-group timeout. The parent already reserves a
+    # smaller outer cushion; this inner reserve covers cleanup plus report I/O.
+    deadline = max(time.monotonic(), _request_deadline(request) - 0.15)
     summary = mature_trails(
         project,
-        deadline=_request_deadline(request),
+        deadline=deadline,
     )
-    head = subprocess.run(
-        ["git", "rev-parse", "--verify", EVENT_LOG_REF],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    event_log_head = head.stdout.strip() if head.returncode == 0 else None
-    events = read_events(project, verify=True) if event_log_head else []
+    limitations = list(summary.errors)
+    try:
+        head = run_git_until(
+            ["rev-parse", "--verify", EVENT_LOG_REF],
+            cwd=project,
+            deadline=deadline,
+        )
+    except subprocess.TimeoutExpired as exc:
+        limitations.append(timeout_limitation(exc))
+        event_log_head = None
+    else:
+        event_log_head = head.stdout.strip() if head.returncode == 0 else None
+    # A truncated maturation pass has already exhausted the shared deadline.
+    # Do not enter the legacy full-log reader afterward; ``None`` records that
+    # the count was not observed, rather than relabelling it as zero.
+    evidence_read_timed_out = False
+    if summary.truncated:
+        events = None
+    elif event_log_head:
+        try:
+            events = read_events(project, verify=True, deadline=deadline)
+        except subprocess.TimeoutExpired as exc:
+            limitations.append(timeout_limitation(exc))
+            evidence_read_timed_out = True
+            events = None
+    else:
+        events = []
     details = {
         "schema_version": "opentraces.capture.git_finalization.v1",
         "project": str(project),
         "event_log_ref": EVENT_LOG_REF,
         "event_log_head": event_log_head,
-        "events_count": len(events),
+        "events_count": len(events) if events is not None else None,
+        "evidence_read_timed_out": evidence_read_timed_out,
         "maturation": summary.to_dict(),
     }
-    limitations = list(summary.errors)
     if summary.truncated:
         limitations.append("anchor maturation reached its deadline")
-    if event_log_head is None or not events:
+    if evidence_read_timed_out:
+        limitations.append(
+            "canonical trail event verification reached its deadline; no "
+            "post-deadline evidence re-read was attempted"
+        )
+    elif event_log_head is not None and events is None:
+        limitations.append(
+            "canonical trail event count was not re-read after maturation "
+            "reached its deadline"
+        )
+    elif event_log_head is None and summary.truncated:
+        limitations.append(
+            "canonical trail event head and count were not re-observed after "
+            "maturation reached its deadline"
+        )
+    elif event_log_head is None or not events:
         limitations.append("canonical trail event log is unavailable or empty")
-    partial = summary.truncated or bool(summary.errors) or not event_log_head or not events
+    partial = (
+        summary.truncated
+        or bool(summary.errors)
+        or not event_log_head
+        or events is None
+        or not events
+    )
     return {
         "status": "partial" if partial else "finalized",
         "completeness": "partial" if partial else "full",

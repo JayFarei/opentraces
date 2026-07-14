@@ -480,7 +480,11 @@ def test_cold_backlog_drains_across_truncated_ticks(tmp_path, monkeypatch):
     monkeypatch.setattr(mat, "time", clock)
     monkeypatch.setattr(anchors_mod, "time", clock)
 
-    window = 10.0
+    # Deadline-aware Git listing/blob/append operations now consume the same
+    # injected clock as the Python reconciliation loop. Keep the window large
+    # enough to complete at least one commit's full evidence transaction while
+    # remaining far below the eight-commit backlog.
+    window = 60.0
     max_ticks = 40
     ticks = 0
     first_truncated = None

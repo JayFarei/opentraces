@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from ._git_subprocess import run_git_until, timeout_limitation
 from .anchors import ANCHOR_ALGORITHMS_PHASE5, reconcile_commit_anchors
 from .contract import ANCHOR_SEARCH_SCHEMA_VERSION
 from .event_log import append_event_batch, read_events_scoped
@@ -76,15 +77,42 @@ def mature_trails(
     # below out of an exhausted budget.
     if deadline is not None and time.monotonic() >= deadline:
         return MaturationSummary(truncated=True)
-    commits = _candidate_commits(repo, commit_refs=commit_refs, max_commits=max_commits)
-    errors = _candidate_errors(
-        repo,
-        commit_refs=commit_refs,
-        max_commits=max_commits,
-        commits=commits,
-    )
+    try:
+        commits = _candidate_commits(
+            repo,
+            commit_refs=commit_refs,
+            max_commits=max_commits,
+            deadline=deadline,
+        )
+        errors = _candidate_errors(
+            repo,
+            commit_refs=commit_refs,
+            max_commits=max_commits,
+            commits=commits,
+            deadline=deadline,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return MaturationSummary(errors=[timeout_limitation(exc)], truncated=True)
     if not commits:
         return MaturationSummary(errors=errors)
+    # No canonical Trail log means there are no patches to mature. Probe it
+    # through the shared deadline before ``read_events_scoped`` reaches its
+    # legacy unbudgeted Git reader, then return the same empty summary that the
+    # full scan would produce. A missing ref cannot be watermarked because the
+    # event-log head is part of the watermark identity.
+    try:
+        if _event_log_head(repo, deadline=deadline) is None:
+            return MaturationSummary(
+                commits_considered=len(commits),
+                errors=errors,
+            )
+    except subprocess.TimeoutExpired as exc:
+        errors.append(timeout_limitation(exc))
+        return MaturationSummary(
+            commits_considered=len(commits),
+            errors=errors,
+            truncated=True,
+        )
 
     anchors_created = 0
     searches_completed = 0
@@ -97,7 +125,7 @@ def mature_trails(
             # #65 cure: retain dedup keys in a disk-backed scratch index, not in
             # Python sets for the whole tick. Per-chunk queries below materialize
             # only O(chunk_size * candidate_commits) keys in memory.
-            _build_dedup_index(repo, scratch, commits)
+            _build_dedup_index(repo, scratch, commits, deadline=deadline)
 
             # The shared scan is atomic by design. If it overruns the caller's
             # budget, do not use a partial dedup view; return a truncated no-op
@@ -105,6 +133,7 @@ def mature_trails(
             if deadline is not None and time.monotonic() >= deadline:
                 truncated = True
             else:
+                work_deadline = _work_phase_deadline(deadline)
                 patch_chunk: list = []
                 patch_chunk_authored_bytes = 0
                 max_patch_events, max_patch_bytes = _patch_chunk_limits()
@@ -121,7 +150,7 @@ def mature_trails(
                         scratch=scratch,
                         attribution_version=effective_version,
                         writer=writer,
-                        deadline=deadline,
+                        deadline=work_deadline,
                     )
                     pending_anchors_created += chunk_result.anchors_created
                     pending_searches_completed += chunk_result.searches_completed
@@ -147,10 +176,15 @@ def mature_trails(
                         repo,
                         event_types={"trace_patch_created"},
                         sink=_patch_sink,
+                        deadline=work_deadline,
+                        monotonic=time.monotonic,
                     )
                     _flush_patch_chunk()
                 except _MaturationBudgetExhausted:
                     pass
+                except subprocess.TimeoutExpired as exc:
+                    errors.append(timeout_limitation(exc))
+                    truncated = True
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"patch stream failed: {type(exc).__name__}: {exc}")
                     truncated = True
@@ -169,12 +203,19 @@ def mature_trails(
                     commits=commits,
                     attribution_version=effective_version,
                     writer=writer,
+                    deadline=deadline,
                 )
                 anchors_created = pending_anchors_created
                 searches_completed = pending_searches_completed
+            except subprocess.TimeoutExpired as exc:
+                errors.append(timeout_limitation(exc))
+                truncated = True
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"maturation flush failed: {type(exc).__name__}: {exc}")
                 truncated = True
+        except subprocess.TimeoutExpired as exc:
+            errors.append(timeout_limitation(exc))
+            truncated = True
         except Exception as exc:  # noqa: BLE001
             errors.append(f"dedup scratch failed: {type(exc).__name__}: {exc}")
             truncated = True
@@ -188,7 +229,15 @@ def mature_trails(
     # must not stamp either (#65) — the unsearched remainder would hide
     # behind the quiet-tick gate until the next head change.
     if commit_refs is None and not truncated:
-        _stamp_maturation_watermark(repo, effective_version)
+        try:
+            _stamp_maturation_watermark(
+                repo,
+                effective_version,
+                deadline=deadline,
+            )
+        except subprocess.TimeoutExpired as exc:
+            errors.append(timeout_limitation(exc))
+            truncated = True
     return MaturationSummary(
         commits_considered=len(commits),
         searches_completed=searches_completed,
@@ -207,6 +256,21 @@ def _positive_int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _work_phase_deadline(deadline: float | None) -> float | None:
+    """Reserve the final quarter of a bounded tick for completed-work append.
+
+    Reconciliation may consume the work phase, but it must not consume the
+    append phase too: otherwise a truncated tick repeatedly computes the same
+    scratch rows and can never publish the dedup evidence that advances the
+    next tick.
+    """
+    if deadline is None:
+        return None
+    now = time.monotonic()
+    remaining = max(0.0, deadline - now)
+    return now + (remaining * 0.75)
 
 
 def _patch_chunk_limits() -> tuple[int, int]:
@@ -290,6 +354,8 @@ def _build_dedup_index(
     repo: Path,
     scratch: sqlite3.Connection,
     commits: list[str],
+    *,
+    deadline: float | None = None,
 ) -> None:
     commit_set = set(commits)
     anchor_rows: list[tuple[str, str]] = []
@@ -340,6 +406,8 @@ def _build_dedup_index(
         },
         commit_shas=commit_set,
         sink=_key_sink,
+        deadline=deadline,
+        monotonic=time.monotonic,
     )
     _flush()
     scratch.commit()
@@ -444,6 +512,7 @@ def _flush_maturation_scratch(
     commits: list[str],
     attribution_version: str,
     writer: str,
+    deadline: float | None,
 ) -> None:
     for commit in commits:
         results = [
@@ -482,7 +551,13 @@ def _flush_maturation_scratch(
                 )
             )
         drafts.extend(anchor_drafts)
-        append_event_batch(repo, drafts, writer=writer)
+        append_event_batch(
+            repo,
+            drafts,
+            writer=writer,
+            deadline=deadline,
+            monotonic=time.monotonic,
+        )
 
 
 def _mature_patch_chunk(
@@ -536,6 +611,7 @@ def _mature_patch_chunk(
                     search_keys=search_keys,
                     summary_out=per_commit_summary,
                     deadline=deadline,
+                    git_deadline=deadline,
                     append_events=False,
                 )
             )
@@ -554,6 +630,10 @@ def _mature_patch_chunk(
             if per_commit_summary.get("budget_exhausted"):
                 truncated = True
                 break
+        except subprocess.TimeoutExpired as exc:
+            errors.append(timeout_limitation(exc))
+            truncated = True
+            break
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{commit}: {type(exc).__name__}: {exc}")
     return MaturationSummary(
@@ -706,18 +786,21 @@ def has_unsearched_recent_patches(
 _MATURATION_WATERMARK_FORMAT = 1
 
 
-def _maturation_watermark_path(repo: Path) -> Path | None:
+def _maturation_watermark_path(
+    repo: Path,
+    *,
+    deadline: float | None = None,
+) -> Path | None:
     """Per-repo maturation watermark file inside the git dir.
 
     Separate file from the verify watermark (event_log_verified.json) so the two
     optimizations never collide.
     """
-    proc = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
+    proc = run_git_until(
+        ["rev-parse", "--git-dir"],
         cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
+        deadline=deadline,
+        monotonic=time.monotonic,
     )
     if proc.returncode != 0:
         return None
@@ -727,25 +810,33 @@ def _maturation_watermark_path(repo: Path) -> Path | None:
     return git_dir / "opentraces" / "maturation_watermark.json"
 
 
-def _event_log_head(repo: Path) -> str | None:
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "refs/opentraces/local/events/v1"],
+def _event_log_head(
+    repo: Path,
+    *,
+    deadline: float | None = None,
+) -> str | None:
+    proc = run_git_until(
+        ["rev-parse", "--verify", "refs/opentraces/local/events/v1"],
         cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
+        deadline=deadline,
+        monotonic=time.monotonic,
     )
     if proc.returncode != 0:
         return None
     return proc.stdout.strip() or None
 
 
-def _maturation_state(repo: Path, attribution_version: str) -> dict[str, object] | None:
+def _maturation_state(
+    repo: Path,
+    attribution_version: str,
+    *,
+    deadline: float | None = None,
+) -> dict[str, object] | None:
     """The watermark identity for the current world: event-log head + repo HEAD
     + attribution version. None when either head is unresolvable (then the gate
     falls through to the full scan and never short-circuits)."""
-    event_head = _event_log_head(repo)
-    repo_head = _rev_parse(repo, "HEAD")
+    event_head = _event_log_head(repo, deadline=deadline)
+    repo_head = _rev_parse(repo, "HEAD", deadline=deadline)
     if event_head is None or repo_head is None:
         return None
     return {
@@ -756,8 +847,12 @@ def _maturation_state(repo: Path, attribution_version: str) -> dict[str, object]
     }
 
 
-def _load_maturation_watermark(repo: Path) -> dict[str, object] | None:
-    path = _maturation_watermark_path(repo)
+def _load_maturation_watermark(
+    repo: Path,
+    *,
+    deadline: float | None = None,
+) -> dict[str, object] | None:
+    path = _maturation_watermark_path(repo, deadline=deadline)
     if path is None or not path.is_file():
         return None
     try:
@@ -769,8 +864,13 @@ def _load_maturation_watermark(repo: Path) -> dict[str, object] | None:
     return data
 
 
-def _save_maturation_watermark(repo: Path, state: dict[str, object]) -> None:
-    path = _maturation_watermark_path(repo)
+def _save_maturation_watermark(
+    repo: Path,
+    state: dict[str, object],
+    *,
+    deadline: float | None = None,
+) -> None:
+    path = _maturation_watermark_path(repo, deadline=deadline)
     if path is None:
         return
     try:
@@ -784,7 +884,10 @@ def _save_maturation_watermark(repo: Path, state: dict[str, object]) -> None:
 
 
 def _stamp_maturation_watermark(
-    repo: Path, attribution_version: str | None = None
+    repo: Path,
+    attribution_version: str | None = None,
+    *,
+    deadline: float | None = None,
 ) -> None:
     """Stamp the watermark at the current world state (end of mature_trails).
 
@@ -792,9 +895,13 @@ def _stamp_maturation_watermark(
     for at-most-one-retry-per-head-change. Once the event-log head or repo HEAD
     advances, the watermark mismatches and maturation runs again.
     """
-    state = _maturation_state(repo, attribution_version or ATTRIBUTION_VERSION)
+    state = _maturation_state(
+        repo,
+        attribution_version or ATTRIBUTION_VERSION,
+        deadline=deadline,
+    )
     if state is not None:
-        _save_maturation_watermark(repo, state)
+        _save_maturation_watermark(repo, state, deadline=deadline)
 
 
 def _candidate_commits(
@@ -802,12 +909,13 @@ def _candidate_commits(
     *,
     commit_refs: Iterable[str] | None,
     max_commits: int,
+    deadline: float | None = None,
 ) -> list[str]:
     if commit_refs is not None:
         out: list[str] = []
         seen: set[str] = set()
         for ref in commit_refs:
-            resolved = _rev_parse(repo, ref)
+            resolved = _rev_parse(repo, ref, deadline=deadline)
             if resolved and resolved not in seen:
                 out.append(resolved)
                 seen.add(resolved)
@@ -816,12 +924,11 @@ def _candidate_commits(
     limit = max(0, int(max_commits))
     if limit == 0:
         return []
-    proc = subprocess.run(
-        ["git", "rev-list", f"--max-count={limit}", "HEAD"],
+    proc = run_git_until(
+        ["rev-list", f"--max-count={limit}", "HEAD"],
         cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
+        deadline=deadline,
+        monotonic=time.monotonic,
     )
     if proc.returncode != 0:
         return []
@@ -834,25 +941,34 @@ def _candidate_errors(
     commit_refs: Iterable[str] | None,
     max_commits: int,
     commits: list[str],
+    deadline: float | None = None,
 ) -> list[str]:
     if commit_refs is not None:
         errors: list[str] = []
         for ref in commit_refs:
-            if _rev_parse(repo, ref) is None:
+            if _rev_parse(repo, ref, deadline=deadline) is None:
                 errors.append(f"unresolved commit ref: {ref}")
         return errors
-    if max_commits > 0 and not commits and not _rev_parse(repo, "HEAD"):
+    if max_commits > 0 and not commits and not _rev_parse(
+        repo,
+        "HEAD",
+        deadline=deadline,
+    ):
         return ["not a Git repository or HEAD is unavailable"]
     return []
 
 
-def _rev_parse(repo: Path, ref: str) -> str | None:
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", ref],
+def _rev_parse(
+    repo: Path,
+    ref: str,
+    *,
+    deadline: float | None = None,
+) -> str | None:
+    proc = run_git_until(
+        ["rev-parse", "--verify", ref],
         cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
+        deadline=deadline,
+        monotonic=time.monotonic,
     )
     if proc.returncode != 0:
         return None
