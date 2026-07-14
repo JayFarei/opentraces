@@ -4,12 +4,14 @@ import html as html_module
 import json
 from pathlib import Path
 
+import pytest
+
 from opentraces.core.arena.page import render_evidence_page
 
 from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.engine import ScenarioSource
-from opentraces.core.arena.run_store import RunStore
+from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 
 
 class FakeBoxRuntime:
@@ -95,3 +97,29 @@ def test_page_is_a_read_only_projection_with_claim_verifier_and_raw_links(tmp_pa
     for private_path in ("/Users/", "/home/", repository_path.as_posix(), "jayfarei"):
         assert private_path.lower() not in result_before.decode("utf-8").lower()
         assert private_path.lower() not in html.lower()
+
+
+def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def health(run):
+        observation = run.terminal.exec("opentraces", "doctor", "--json")
+        assert observation.returncode == 0
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(health)
+
+    stdout = run.final_path / "actions" / "0001" / "stdout"
+    stdout.chmod(0o600)
+    stdout.write_text("tampered\n", encoding="utf-8")
+    output = tmp_path / "tampered-page.html"
+
+    with pytest.raises(RunIntegrityError, match="actions/0001/stdout"):
+        render_evidence_page(run.final_path, output)
+
+    assert not output.exists()
