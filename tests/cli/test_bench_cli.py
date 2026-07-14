@@ -114,6 +114,64 @@ def test_bench_run_returns_one_for_a_functional_failure(tmp_path: Path, monkeypa
     assert "verdict: fail" in result.output
 
 
+def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatch) -> None:
+    from opentraces.cli import bench_cli
+
+    scenario = _scenario(tmp_path)
+    store_root = tmp_path / "runs" / "v1"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        result = build_result(
+            run_id=draft.run_id,
+            claim="Install is healthy on a fresh box.",
+            nodeid=target,
+            source_ref="source/scenario.py",
+            execution_mode="direct",
+            started_at="2026-07-13T12:00:00Z",
+            duration_ms=1,
+            execution_status="complete",
+            verdict="pass",
+            reason=None,
+            verifiers=[],
+            evidence={"complete": True, "requirements": []},
+            recordings={"rewatchable": False, "channels": []},
+            artifacts=[],
+            capture=None,
+            pins={},
+        )
+        draft.stage_result(result)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    attached: dict[str, object] = {}
+
+    def fake_attach(run_path: Path, *, address: str, store: RunStore):
+        attached.update(run_path=run_path, address=address, store=store)
+        assert (run_path / "result.json").is_file()
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+    monkeypatch.setattr(bench_cli, "attach_explicit_bench_labels", fake_attach)
+
+    invoked = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "run",
+            f"{scenario}::test_install",
+            "--store-root",
+            str(store_root),
+            "--origin",
+            "trace-origin-123:1-2",
+        ],
+    )
+
+    assert invoked.exit_code == 0, invoked.output
+    assert attached["address"] == "trace-origin-123:1-2"
+    assert attached["store"].root == store_root
+
+
 def test_bench_run_json_is_pure_and_persists_pytest_diagnostics(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -12,6 +12,7 @@ from opentraces.core.arena.labels import read_labels
 from opentraces.core.arena.origin import (
     OriginJoinError,
     attach_captured_bench_labels,
+    attach_explicit_bench_labels,
     detect_bench_invocations,
 )
 from opentraces.core.arena.run_store import RunStore
@@ -109,6 +110,15 @@ def _write_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: TraceR
     path = trace_v1_json_path(PROJECT_SLUG, record.trace_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(record.model_dump_json() + "\n", encoding="utf-8")
+
+
+def _origin_record() -> TraceRecord:
+    record = _record("ordinary tool output")
+    record.steps = [
+        Step(step_index=index, role="agent", content=f"step {index}")
+        for index in (1, 2, 3)
+    ]
+    return record
 
 
 def test_detector_accepts_only_the_two_frozen_captured_output_forms() -> None:
@@ -266,3 +276,53 @@ def test_trace_bucket_ingestion_projects_captured_origin_idempotently(
     assert companion.read_bytes() == first_bytes
     assert len(read_labels(PROJECT_SLUG, record.trace_id)) == 1
     assert store.verify(store.root / RUN_ID)
+
+
+@pytest.mark.parametrize(
+    ("address_suffix", "expected_subject"),
+    [
+        ("", {"kind": "trace", "address": "trace-origin-123"}),
+        (":2", {"kind": "slice", "address": "trace-origin-123:2-2"}),
+        (":1-3", {"kind": "slice", "address": "trace-origin-123:1-3"}),
+    ],
+)
+def test_explicit_origin_resolves_shared_trace_addresses_and_mints_same_label_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    address_suffix: str,
+    expected_subject: dict[str, str],
+) -> None:
+    store = _finalized_run(tmp_path, monkeypatch)
+    record = _origin_record()
+    _write_trace(tmp_path, monkeypatch, record)
+
+    attachment = attach_explicit_bench_labels(
+        store.root / RUN_ID,
+        address=f"{record.trace_id}{address_suffix}",
+        store=store,
+    )
+
+    assert (attachment.run_id, attachment.address, attachment.resolution) == (
+        RUN_ID,
+        expected_subject["address"],
+        "explicit",
+    )
+    rows = read_labels(PROJECT_SLUG, record.trace_id)
+    assert len(rows) == 1
+    assert rows[0]["subject"] == expected_subject
+
+
+@pytest.mark.parametrize("address", ["trace-origin-123:4", "trace-origin-123:3-1"])
+def test_explicit_origin_refuses_dangling_or_invalid_points_and_spans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    address: str,
+) -> None:
+    store = _finalized_run(tmp_path, monkeypatch)
+    record = _origin_record()
+    _write_trace(tmp_path, monkeypatch, record)
+
+    with pytest.raises(OriginJoinError, match="origin address"):
+        attach_explicit_bench_labels(store.root / RUN_ID, address=address, store=store)
+
+    assert not trace_v1_labels_path(PROJECT_SLUG, record.trace_id).exists()
