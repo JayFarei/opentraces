@@ -360,6 +360,21 @@ def test_page_renders_each_recording_kind_against_the_stored_focus_timeline(
     assert "data-media-kind=\"browser_video\"" in rendered
     assert "data-focus-boundary" in rendered
 
+    browser_start = next(
+        json.loads(line)
+        for line in timeline_before.decode("utf-8").splitlines()
+        if (row := json.loads(line))["event"] == "action_started"
+        and row["surface"] == "browser"
+    )
+    assert (
+        f'data-media-start-offset-ms="{browser_start["offset_ms"]}"'
+        in rendered
+    )
+    assert "media.currentTime = seekOffsetMs / 1000" in rendered
+    assert "media.play()" in rendered
+    assert "media.dataset.seekOffsetMs = String(seekOffsetMs)" in rendered
+    assert "media.click()" in rendered
+
     assert set(playlist) == {"markers"}
     assert (run.final_path / "result.json").read_bytes() == result_before
     assert (run.final_path / "recordings/timeline.jsonl").read_bytes() == timeline_before
