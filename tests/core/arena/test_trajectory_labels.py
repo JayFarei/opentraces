@@ -6,10 +6,12 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from opentraces_schema import TraceRecord
 
 import opentraces.core.arena.run_store as run_store_module
 from opentraces.capture.claude_code.parse import ClaudeCodeParser
+from opentraces.cli import SENTINEL, main
 from opentraces.core import paths
 from opentraces.core._bucket_io import _canonical_json
 from opentraces.core.arena.contract import build_result
@@ -22,6 +24,7 @@ from opentraces.core.arena.labels import (
     read_labels,
     stage_slice_artifact,
     verify_label,
+    verify_labels,
 )
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 from opentraces.core.bucket_layout import trace_v1_json_path
@@ -61,6 +64,28 @@ def _persist_subject(record: TraceRecord) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(record.model_dump_json() + "\n", encoding="utf-8")
     return path
+
+
+def _extract_json(output: str) -> dict:
+    if SENTINEL in output:
+        return json.loads(output.split(SENTINEL, 1)[1].strip())
+    return json.loads(output)
+
+
+def _write_project_trace(project_dir: Path, record: TraceRecord) -> None:
+    from opentraces.core.config import get_project_traces_dir
+
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".opentraces.json").write_text(
+        json.dumps({"marker_version": "2", "project_id": "a8" * 16}),
+        encoding="utf-8",
+    )
+    traces_dir = get_project_traces_dir(project_dir)
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    (traces_dir / f"{record.trace_id}.jsonl").write_text(
+        record.model_dump_json() + "\n",
+        encoding="utf-8",
+    )
 
 
 def _result(*, run_id: str, evidence_ref: str) -> dict:
@@ -517,3 +542,117 @@ def test_reverification_refuses_independently_tampered_materialized_bytes(
 
     with pytest.raises(RunIntegrityError, match="finalized file changed"):
         verify_label(label, store=store)
+
+
+def test_fresh_reverification_refuses_a_mutated_canonical_subject_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    subject_path = _persist_subject(record)
+    trace_ref = TraceMaterializationRef.from_record(record)
+    trajectory = Trajectory(start=0, end=2, kind="user_turn", label="captured run")
+    store, run_path, staged = _finalize_slice_run(
+        tmp_path,
+        monkeypatch,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )
+    label = mint_labels_for_run(
+        run_path,
+        subject=staged["subject"],
+        store=store,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )[0]
+    mutated = record.model_copy(deep=True)
+    mutated.steps[0].content = "canonical subject changed after grading"
+    subject_path.write_text(mutated.model_dump_json() + "\n", encoding="utf-8")
+
+    with pytest.raises(LabelIntegrityError, match="stored slice.*fresh materialization"):
+        verify_label(label, store=store)
+
+
+def test_trajectory_and_explicit_same_address_batch_verify_as_distinct_pins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
+    record = _real_capture_record()
+    _persist_subject(record)
+    trace_ref = TraceMaterializationRef.from_record(record)
+    trajectory = Trajectory(start=0, end=2, kind="user_turn", label="captured run")
+    subject = {"kind": "slice", "address": f"{record.trace_id}:1-3"}
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    draft.write_text("source/scenario.py", "def test_selected_trajectory(): pass\n")
+    trajectory_staged = stage_slice_artifact(draft, trace_ref, trajectory=trajectory)
+    explicit_staged = stage_slice_artifact(draft, trace_ref, subject=subject)
+    evidence_refs = [
+        trajectory_staged["artifact_ref"],
+        explicit_staged["artifact_ref"],
+    ]
+    result = _result(run_id=draft.run_id, evidence_ref=evidence_refs[0])
+    result["verifiers"][0]["evidence_refs"] = evidence_refs
+    result["evidence"]["requirements"][0]["evidence_refs"] = evidence_refs
+    result["artifacts"] = [
+        {"path": ref, "media_type": "application/json"} for ref in evidence_refs
+    ]
+    run_path = draft.finalize(result)
+
+    trajectory_label = mint_labels_for_run(
+        run_path,
+        subject=subject,
+        store=store,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )[0]
+    explicit_label = mint_labels_for_run(
+        run_path,
+        subject=subject,
+        store=store,
+        trace_ref=trace_ref,
+    )[0]
+
+    assert trajectory_label["slice_pin"]["provenance_kind"] == "trajectory"
+    assert explicit_label["slice_pin"]["provenance_kind"] == "explicit"
+    assert trajectory_label["slice_pin"]["slice_id"] != explicit_label["slice_pin"]["slice_id"]
+    assert trajectory_label["label_id"] != explicit_label["label_id"]
+    assert verify_labels([trajectory_label, explicit_label], store=store)
+
+
+def test_standard_trace_get_span_matches_the_pinned_authentic_slice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    _persist_subject(record)
+    project = tmp_path / "project"
+    _write_project_trace(project, record)
+    monkeypatch.chdir(project)
+    runner = CliRunner()
+    rebuild = runner.invoke(main, ["trace", "index", "--json"])
+    assert rebuild.exit_code == 0, rebuild.output
+    from opentraces.core.trace_index import get_trace_map
+
+    trace_map = get_trace_map(record.trace_id)
+    assert trace_map is not None
+    trace_ref = TraceMaterializationRef(record=record, trace_map=trace_map)
+    trajectory = Trajectory(start=0, end=2, kind="user_turn", label="captured run")
+    _store, run_path, staged = _finalize_slice_run(
+        tmp_path,
+        monkeypatch,
+        trace_ref=trace_ref,
+        trajectory=trajectory,
+    )
+    pinned = json.loads((run_path / staged["artifact_ref"]).read_text(encoding="utf-8"))
+
+    observed = runner.invoke(main, ["trace", "get", f"{record.trace_id}:1-3", "--json"])
+    assert observed.exit_code == 0, observed.output
+    addressed = _extract_json(observed.output)["slice"]
+
+    assert _canonical_json(addressed["steps"]) == _canonical_json(pinned["steps"])
+    assert addressed["map_node_refs"] == pinned["map_node_refs"]
