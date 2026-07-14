@@ -356,7 +356,7 @@ def status(
                     cmds = [h.get("command", "") for h in inner if isinstance(h, dict)]
                 elif isinstance(entry, dict):
                     cmds = [entry.get("command", "")]
-                if any("opentraces_" in c for c in cmds):
+                if any(_is_active_script_command(c, expected_script) for c in cmds):
                     registered[event] = True
                     break
 
