@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from opentraces_schema import TraceRecord
 
-from .contract import VERDICTS
+from .contract import VERDICTS, validate_result
+from .labels import LabelContractError, attach_labels, mint_labels_for_run
+from .run_store import RunIntegrityError, RunStore
 
 
 _RUN_ID_TEXT = r"run_[0-9]{8}T[0-9]{12}Z_[0-9a-f]{12}"
@@ -31,6 +34,19 @@ class BenchInvocation:
     output_format: Literal["human", "json"]
     step_index: int
     source_call_id: str
+
+
+@dataclass(frozen=True)
+class OriginAttachment:
+    """One verified run-to-subject join completed by a named resolution path."""
+
+    run_id: str
+    address: str
+    resolution: Literal["captured", "explicit"]
+
+
+class OriginJoinError(RuntimeError):
+    """Captured origin evidence cannot be reproduced from a finalized run."""
 
 
 def _from_human(content: str) -> tuple[str, str, str] | None:
@@ -90,4 +106,74 @@ def detect_bench_invocations(record: TraceRecord) -> list[BenchInvocation]:
     return invocations
 
 
-__all__ = ["BenchInvocation", "detect_bench_invocations"]
+def _verified_result(
+    invocation: BenchInvocation,
+    *,
+    store: RunStore,
+) -> tuple[Path, dict]:
+    run_path = store.root / invocation.run_id
+    try:
+        store.verify(run_path)
+        payload = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
+        validate_result(payload)
+    except (OSError, ValueError, RunIntegrityError) as exc:
+        raise OriginJoinError(
+            f"captured bench token does not resolve to a verified finalized run: "
+            f"{invocation.run_id}"
+        ) from exc
+    scenario = payload.get("scenario")
+    stored_claim = scenario.get("claim") if isinstance(scenario, dict) else None
+    if stored_claim != invocation.claim or payload.get("verdict") != invocation.verdict:
+        raise OriginJoinError("captured claim or verdict does not match the finalized run")
+    return run_path, payload
+
+
+def attach_captured_bench_labels(
+    record: TraceRecord,
+    *,
+    project_slug: str,
+    store: RunStore | None = None,
+) -> list[OriginAttachment]:
+    """Attach verified bench labels found in one already-persisted trace."""
+
+    resolved_store = store or RunStore()
+    attachments: list[OriginAttachment] = []
+    seen: set[tuple[str, str, str]] = set()
+    for invocation in detect_bench_invocations(record):
+        evidence_key = (invocation.run_id, invocation.verdict, invocation.claim)
+        if evidence_key in seen:
+            continue
+        seen.add(evidence_key)
+        run_path, _result = _verified_result(invocation, store=resolved_store)
+        try:
+            labels = mint_labels_for_run(
+                run_path,
+                subject={"kind": "trace", "address": record.trace_id},
+                store=resolved_store,
+            )
+        except LabelContractError as exc:
+            detail = "product pin" if "product pin" in str(exc) else "stored run"
+            raise OriginJoinError(f"{detail} cannot mint an origin label: {exc}") from exc
+        attach_labels(
+            project_slug=project_slug,
+            trace_id=record.trace_id,
+            labels=labels,
+            store=resolved_store,
+        )
+        attachments.append(
+            OriginAttachment(
+                run_id=invocation.run_id,
+                address=record.trace_id,
+                resolution="captured",
+            )
+        )
+    return attachments
+
+
+__all__ = [
+    "BenchInvocation",
+    "OriginAttachment",
+    "OriginJoinError",
+    "attach_captured_bench_labels",
+    "detect_bench_invocations",
+]

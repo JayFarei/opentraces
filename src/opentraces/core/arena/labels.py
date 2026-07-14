@@ -463,12 +463,24 @@ def attach_labels(
     trace_path = trace_v1_json_path(project_slug, trace_id)
     if not trace_path.resolve().is_relative_to(traces_v1_root().resolve()):
         raise LabelContractError("label companion path must remain inside traces/v1")
-    if not trace_path.is_file():
-        raise LabelIntegrityError("label subject trace does not exist in the bucket")
-    try:
-        subject_record = TraceRecord.model_validate_json(trace_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError, ValidationError) as exc:
-        raise LabelIntegrityError("label subject trace is not a valid TraceRecord") from exc
+    if trace_path.is_file():
+        try:
+            subject_record = TraceRecord.model_validate_json(
+                trace_path.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeDecodeError, ValueError, ValidationError) as exc:
+            raise LabelIntegrityError("label subject trace is not a valid TraceRecord") from exc
+    else:
+        # Normal ingestion writes the canonical v2 record before the additive
+        # traces/v1 envelope. Accept that already-persisted spine as existence
+        # proof so #290 can attach in the same ingest transaction; the later
+        # per-trace projection places trace.json beside this companion.
+        from ..bucket_trace_records import read_trace_record_object, trace_record_path
+
+        stored = read_trace_record_object(trace_record_path(project_slug, trace_id))
+        if stored is None:
+            raise LabelIntegrityError("label subject trace does not exist in the bucket")
+        subject_record = stored.record
     if subject_record.trace_id != trace_id:
         raise LabelIntegrityError("label subject trace id does not match its bucket path")
     resolved_store = store or RunStore()
