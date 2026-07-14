@@ -641,13 +641,15 @@ def start_huggingface_emulator(
             "sh",
             "-c",
             "set -eu; pid=$(cat /tmp/opentraces-hf-emulator.pid); "
-            f'test "$pid" = "{pid}"; sudo test -r "/proc/$pid/stat"; '
-            'state=$(sudo sed -n "s/^.*) \\([A-Z]\\) .*$/\\1/p" "/proc/$pid/stat"); '
+            f'test "$pid" = "{pid}"; sudo -u opentraces-hf test -r "/proc/$pid/stat"; '
+            'state=$(sudo -u opentraces-hf sed -n '
+            '"s/^.*) \\([A-Z]\\) .*$/\\1/p" "/proc/$pid/stat"); '
             'test -n "$state"; test "$state" != "Z"; '
-            "owner_uid=$(sudo awk '/^Uid:/{print $2}' \"/proc/$pid/status\"); "
+            "owner_uid=$(sudo -u opentraces-hf awk '/^Uid:/{print $2}' "
+            '"/proc/$pid/status"); '
             'sidecar_uid=$(id -u opentraces-hf); test "$owner_uid" = "$sidecar_uid"; '
-            'executable=$(sudo readlink -f "/proc/$pid/exe"); '
-            'digest=$(sha256sum "$executable" | cut -d" " -f1); '
+            'executable=$(sudo -u opentraces-hf readlink -f "/proc/$pid/exe"); '
+            'digest=$(sudo -u opentraces-hf sha256sum "$executable" | cut -d" " -f1); '
             f'test "$digest" = "{pin.sha256}"; '
             'printf "%s\\n%s\\n%s\\n" "$pid" "$owner_uid" "$digest"',
         ],
