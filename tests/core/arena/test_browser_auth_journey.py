@@ -130,7 +130,7 @@ def test_recorder_only_failure_cannot_rewrite_successful_browser_auth_verdict(
     scenario.test_browser_authorization_authenticates_the_cli(bench)
 
     assert runtime.login_started.is_set()
-    assert all("HF_TOKEN" not in env for env in runtime.product_envs)
+    assert all(set(env) <= {"HF_ENDPOINT"} for env in runtime.product_envs)
     assert bench.store.verify(next(bench.store.root.glob("run_*"))) is True
     result = json.loads(next(bench.store.root.glob("run_*/result.json")).read_text())
     channels = {channel["kind"]: channel for channel in result["recordings"]["channels"]}

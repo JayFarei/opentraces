@@ -34,12 +34,11 @@ def test_browser_authorization_authenticates_the_cli(bench):
 
     with bench.run(app_state="install-only") as run:
         hf = run.emulate("huggingface")
-        home = "/tmp/opentraces-bench-auth-home"
-        auth_env = {"HOME": home, "HF_ENDPOINT": hf.env["HF_ENDPOINT"]}
+        auth_env = {"HF_ENDPOINT": hf.env["HF_ENDPOINT"]}
         prepared = run.terminal.exec(
             "sh",
             "-c",
-            f"rm -rf {home} && install -d -m 0700 {home}",
+            'rm -rf "$HOME/.cache/huggingface" "$HOME/.huggingface"',
             env=auth_env,
         )
         assert prepared.returncode == 0, prepared.stderr
@@ -75,4 +74,3 @@ def test_browser_authorization_authenticates_the_cli(bench):
         assert screenshot.state["path"] == (
             "recordings/browser/screenshots/hf-device-authorized.png"
         )
-
