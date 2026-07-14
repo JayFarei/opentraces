@@ -43,6 +43,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **onboard-integrations** | 1 → N | 1 (Setup) | The bare `setup` wizard walks every integration step |
 | **offboard-repo** | 1/1 | 1 | A developer unenrolls + wipes local state |
 | **verify-install** | 1/1 | 1 | `doctor` reports pipeline health after any setup step |
+| **verify-product-claim** | 1/1 | 6 | Run one acceptance scenario in a disposable box and retain its result and evidence page |
 | **connect-hf-identity** | 1 → 3 | 1 | `auth login` / `whoami` / `logout` lifecycle |
 | **configure-settings** | 1 → 3 | 1 | `config set` + `config show` + `config get` |
 | **configure-tracking-mode** | 1/1 | 1 | `config tracking-mode` |
@@ -276,6 +277,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 
 | Command | JTBD one-liner | Action trajectory (n/N) | Owning journey | Persona |
 |---|---|---|---|---|
+| `bench run` | Developer or agent runs one acceptance scenario in a disposable box and retains a grounded result plus evidence page | verify-product-claim (1/1) | `bench-command-smoke` | both |
 | `dataset list` | Curator lists all local HF-shaped datasets to know what exists before running or publishing | survey-local-datasets (1/1) | unowned | both |
 | `dataset new` | Curator creates a workflow-driven (or ad-hoc) dataset shell so workflow output can land in a typed structure | build-publishable-dataset (3/6) ★ | `cli-publish-happy-path`, `tier1-cold-publish` | both |
 | `dataset security` | Curator inspects or edits one dataset's resolved security policy (seeded from the workflow contract): enabling optional tools or recording an unsafe override for a required tool. Owned by the dataset manifest, never a global config toggle | build-publishable-dataset (3/6) ★ | `dataset-security-workflow-seeding` | both |
