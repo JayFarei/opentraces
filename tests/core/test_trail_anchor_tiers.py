@@ -1,6 +1,7 @@
 """Phase 5 anchor identity tiers — formatter divergence."""
 from __future__ import annotations
 
+import difflib as _real_difflib
 import subprocess
 from pathlib import Path
 
@@ -366,8 +367,6 @@ def test_before_blob_guard_rejects_revert_commit_as_landing(tmp_path: Path) -> N
 # --------------------------------------------------------------------------- #
 
 
-import difflib as _real_difflib
-
 _REAL_SEQUENCE_MATCHER = _real_difflib.SequenceMatcher
 
 
@@ -508,8 +507,6 @@ def test_reconcile_memoizes_patch_id_and_oid_subprocesses(tmp_path, monkeypatch)
     ``git patch-id`` exactly ONCE (loop-invariant per (repo, commit)) and
     ``git rev-parse <commit>:<path>`` exactly once per DISTINCT path — not once
     per anchor."""
-    import subprocess as _sp
-
     from opentraces.core.trails import anchors as A
 
     _init_repo(tmp_path)
@@ -556,9 +553,9 @@ def test_reconcile_memoizes_patch_id_and_oid_subprocesses(tmp_path, monkeypatch)
     ).strip()
 
     counts = {"patch_id": 0, "rev_parse_blob": {}}
-    real_run = _sp.run
+    real_run_git_until = A.run_git_until
 
-    def _counting_run(args, *a, **k):
+    def _counting_run_git_until(args, *a, **k):
         try:
             if isinstance(args, (list, tuple)):
                 if "patch-id" in args:
@@ -573,9 +570,9 @@ def test_reconcile_memoizes_patch_id_and_oid_subprocesses(tmp_path, monkeypatch)
                             )
         except Exception:
             pass
-        return real_run(args, *a, **k)
+        return real_run_git_until(args, *a, **k)
 
-    monkeypatch.setattr(A.subprocess, "run", _counting_run)
+    monkeypatch.setattr(A, "run_git_until", _counting_run_git_until)
     created = A.reconcile_commit_anchors(tmp_path, head)
 
     assert len(created) == 4, "all four patches must anchor"

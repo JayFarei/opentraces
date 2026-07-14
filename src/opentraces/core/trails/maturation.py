@@ -133,6 +133,7 @@ def mature_trails(
             if deadline is not None and time.monotonic() >= deadline:
                 truncated = True
             else:
+                work_deadline = _work_phase_deadline(deadline)
                 patch_chunk: list = []
                 patch_chunk_authored_bytes = 0
                 max_patch_events, max_patch_bytes = _patch_chunk_limits()
@@ -149,7 +150,7 @@ def mature_trails(
                         scratch=scratch,
                         attribution_version=effective_version,
                         writer=writer,
-                        deadline=deadline,
+                        deadline=work_deadline,
                     )
                     pending_anchors_created += chunk_result.anchors_created
                     pending_searches_completed += chunk_result.searches_completed
@@ -175,7 +176,8 @@ def mature_trails(
                         repo,
                         event_types={"trace_patch_created"},
                         sink=_patch_sink,
-                        deadline=deadline,
+                        deadline=work_deadline,
+                        monotonic=time.monotonic,
                     )
                     _flush_patch_chunk()
                 except _MaturationBudgetExhausted:
@@ -254,6 +256,21 @@ def _positive_int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _work_phase_deadline(deadline: float | None) -> float | None:
+    """Reserve the final quarter of a bounded tick for completed-work append.
+
+    Reconciliation may consume the work phase, but it must not consume the
+    append phase too: otherwise a truncated tick repeatedly computes the same
+    scratch rows and can never publish the dedup evidence that advances the
+    next tick.
+    """
+    if deadline is None:
+        return None
+    now = time.monotonic()
+    remaining = max(0.0, deadline - now)
+    return now + (remaining * 0.75)
 
 
 def _patch_chunk_limits() -> tuple[int, int]:
@@ -390,6 +407,7 @@ def _build_dedup_index(
         commit_shas=commit_set,
         sink=_key_sink,
         deadline=deadline,
+        monotonic=time.monotonic,
     )
     _flush()
     scratch.commit()
@@ -533,7 +551,13 @@ def _flush_maturation_scratch(
                 )
             )
         drafts.extend(anchor_drafts)
-        append_event_batch(repo, drafts, writer=writer, deadline=deadline)
+        append_event_batch(
+            repo,
+            drafts,
+            writer=writer,
+            deadline=deadline,
+            monotonic=time.monotonic,
+        )
 
 
 def _mature_patch_chunk(

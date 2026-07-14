@@ -42,6 +42,7 @@ def _git(
         cwd=repo,
         deadline=deadline,
         input=input,
+        monotonic=time.monotonic,
     )
     if check and proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
@@ -82,6 +83,7 @@ def _stable_patch_id(
         cwd=repo,
         deadline=deadline,
         input=diff,
+        monotonic=time.monotonic,
     )
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
@@ -295,6 +297,7 @@ def reconcile_commit_anchors(
                 },
                 commit_sha=commit,
                 deadline=git_deadline,
+                monotonic=time.monotonic,
             )
         else:
             events = [
@@ -522,7 +525,13 @@ def reconcile_commit_anchors(
         drafts.extend(anchor_drafts)
 
         if drafts:
-            append_event_batch(repo, drafts, writer=writer, deadline=git_deadline)
+            append_event_batch(
+                repo,
+                drafts,
+                writer=writer,
+                deadline=git_deadline,
+                monotonic=time.monotonic,
+            )
     if summary_out is not None:
         # #23: surface the per-patch search count to the caller so maturation can
         # sum these instead of re-reading the whole log twice (before/after) just

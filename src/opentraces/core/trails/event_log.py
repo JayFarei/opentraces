@@ -7,7 +7,9 @@ import os
 import pickle
 import subprocess
 import tempfile
+import time
 import uuid
+from contextvars import ContextVar
 from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any, Callable
@@ -32,6 +34,11 @@ _EVENT_CACHE_FORMAT = 1
 # many events — small per-ingest deltas read from the existing snapshot + a
 # cheap range read without rewriting the whole (potentially 100s of MB) file.
 _SNAPSHOT_REFRESH_MIN_DELTA = 2000
+
+_DEADLINE_MONOTONIC: ContextVar[Callable[[], float]] = ContextVar(
+    "opentraces_event_log_deadline_monotonic",
+    default=time.monotonic,
+)
 
 
 
@@ -65,6 +72,7 @@ def _git(
             deadline=deadline,
             input=input,
             env=env,
+            monotonic=_DEADLINE_MONOTONIC.get(),
         )
     if check and proc.returncode != 0:
         raise RuntimeError(
@@ -97,6 +105,7 @@ def _git_bytes(
             cwd=cwd,
             deadline=deadline,
             input=input,
+            monotonic=_DEADLINE_MONOTONIC.get(),
         )
     if check and proc.returncode != 0:
         stderr = proc.stderr.decode(errors="replace").strip()
@@ -382,6 +391,24 @@ def _commit_batch(
 
 
 def append_event_batch(
+    cwd: Path,
+    drafts: list[TrailEventDraft | dict[str, Any]],
+    *,
+    writer: str,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] | None = None,
+) -> list[TrailEvent]:
+    """Append a batch using the caller's clock for every nested Git deadline."""
+    if monotonic is None:
+        return _append_event_batch(cwd, drafts, writer=writer, deadline=deadline)
+    token = _DEADLINE_MONOTONIC.set(monotonic)
+    try:
+        return _append_event_batch(cwd, drafts, writer=writer, deadline=deadline)
+    finally:
+        _DEADLINE_MONOTONIC.reset(token)
+
+
+def _append_event_batch(
     cwd: Path,
     drafts: list[TrailEventDraft | dict[str, Any]],
     *,
@@ -920,6 +947,35 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
 
 
 def read_events_scoped(
+    cwd: Path,
+    *,
+    event_types: set[str],
+    commit_filter: dict[str, str] | None = None,
+    commit_sha: str | None = None,
+    commit_shas: set[str] | None = None,
+    sink: "Callable[[TrailEvent], None] | None" = None,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] | None = None,
+) -> list[TrailEvent]:
+    """Read a scoped slice using the caller's clock for nested Git work."""
+    kwargs = {
+        "event_types": event_types,
+        "commit_filter": commit_filter,
+        "commit_sha": commit_sha,
+        "commit_shas": commit_shas,
+        "sink": sink,
+        "deadline": deadline,
+    }
+    if monotonic is None:
+        return _read_events_scoped(cwd, **kwargs)
+    token = _DEADLINE_MONOTONIC.set(monotonic)
+    try:
+        return _read_events_scoped(cwd, **kwargs)
+    finally:
+        _DEADLINE_MONOTONIC.reset(token)
+
+
+def _read_events_scoped(
     cwd: Path,
     *,
     event_types: set[str],
