@@ -8,7 +8,7 @@ import pytest
 from opentraces.core.arena.engine import Bench, ScenarioSource
 from opentraces.core.arena.drives.browser import BrowserSetupRefusal
 from opentraces.core.arena.run_store import RunStore
-from tests.core.arena.test_engine import FakeBoxRuntime
+from tests.core.arena.test_engine import FakeBoxRuntime, RecordingBoxRuntime
 
 
 class PublicBrowserSession:
@@ -273,3 +273,49 @@ def test_missing_playwright_is_a_named_setup_refusal_before_browser_attempt(
             for kind in ("browser_video", "playwright_trace", "browser_screenshots")
         ],
     }
+
+
+def test_terminal_and_browser_share_one_run_action_domain(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=PublicBrowserSession,
+    )
+
+    def cross_surface_journey(run):
+        first = run.terminal.exec("printf", "before")
+        browser = run.browser.inspect("main")
+        last = run.terminal.exec("printf", "after")
+        assert first.returncode == 0
+        assert browser.state["text"] == "Pending"
+        assert last.returncode == 0
+        return {"evidence_refs": [first.result_ref, browser.result_ref, last.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(cross_surface_journey)
+
+    invocations = [
+        json.loads((run.final_path / f"actions/{ordinal:04d}/invocation.json").read_text())
+        for ordinal in (1, 2, 3)
+    ]
+    assert [invocation["ordinal"] for invocation in invocations] == [1, 2, 3]
+    assert [invocation.get("kind", "terminal") for invocation in invocations] == [
+        "terminal",
+        "inspect",
+        "terminal",
+    ]
+    assert [invocation["started_at"] for invocation in invocations] == sorted(
+        invocation["started_at"] for invocation in invocations
+    )
+    assert run.result["recordings"]["rewatchable"] is True
+    assert [channel["kind"] for channel in run.result["recordings"]["channels"]] == [
+        "terminal",
+        "browser_video",
+        "playwright_trace",
+        "browser_screenshots",
+    ]
+    assert [
+        marker["ordinal"] for marker in run.result["recordings"]["channels"][0]["casts"]
+    ] == [1, 3]
