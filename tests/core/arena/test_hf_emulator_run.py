@@ -429,6 +429,57 @@ def test_startup_rejects_dead_recorded_process_even_with_current_manifest(
         )
 
 
+def test_startup_liveness_probe_does_not_signal_differently_owned_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Crabbox login user may inspect, but cannot signal, the sidecar user."""
+
+    class DifferentlyOwnedProcessRuntime(WorldRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.binding_commands: list[str] = []
+
+        def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+            rendered = " ".join(map(str, argv))
+            if "/proc/$pid/exe" in rendered:
+                self.binding_commands.append(rendered)
+                if "kill -0" in rendered:
+                    return BoxCommandResult(
+                        argv=list(map(str, argv)),
+                        returncode=1,
+                        stdout="",
+                        stderr="sh: 1: kill: Operation not permitted\n",
+                        timing={"schemaVersion": 1, "timing": {"exitCode": 1}},
+                    )
+            return super().exec(
+                box,
+                argv,
+                cwd=cwd,
+                env=env,
+                timeout=timeout,
+                timing_path=timing_path,
+            )
+
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _trust_test_binary(binary, monkeypatch)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = DifferentlyOwnedProcessRuntime()
+
+    handle = start_huggingface_emulator(
+        runtime=runtime,
+        box=runtime.lease(),
+        repository=tmp_path,
+        run_path=tmp_path / "run",
+    )
+
+    assert handle.world_setup["readiness"]["process_binding"]["pid"] == 4242
+    assert len(runtime.binding_commands) == 1
+    assert "kill -0" not in runtime.binding_commands[0]
+    assert "/proc/$pid/stat" in runtime.binding_commands[0]
+
+
 def test_configured_binary_requires_matching_build_provenance(
     tmp_path: Path,
 ) -> None:
