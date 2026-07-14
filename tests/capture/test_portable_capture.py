@@ -3462,13 +3462,48 @@ def test_query_parity_rejects_empty_trail_behavior_even_with_event_ref(
 def test_query_normalization_preserves_semantic_absolute_path_drift(
     tmp_path: Path,
 ) -> None:
+    from opentraces.capture.parity import _normalize_query_input
+
     projects = {
         placement: _git_project(tmp_path / f"{placement}-project")
         for placement in ("persistent", "leased")
     }
+    normalized_inputs = {
+        placement: _normalize_query_input(
+            {
+                "steps": [
+                    {
+                        "content": (
+                            f"Customer supplied semantic literal {projects[placement]}/README.md"
+                        ),
+                        "tool_calls": [
+                            {"input": {"file_path": str(projects[placement] / "README.md")}}
+                        ],
+                    }
+                ]
+            },
+            {str(projects[placement]): "<workspace>"},
+        )
+        for placement in ("persistent", "leased")
+    }
+    assert (
+        normalized_inputs["persistent"]["steps"][0]["content"]
+        != normalized_inputs["leased"]["steps"][0]["content"]
+    )
+    assert (
+        normalized_inputs["persistent"]["steps"][0]["tool_calls"][0]["input"]["file_path"]
+        == normalized_inputs["leased"]["steps"][0]["tool_calls"][0]["input"]["file_path"]
+    )
     results = []
     for placement in ("persistent", "leased"):
-        source = _write_session(projects[placement], "semantic-path-query-session")
+        source = _write_edit_session(
+            tmp_path / f"{placement}-sessions",
+            projects[placement],
+            "semantic-path-query-session",
+        )
+        (projects[placement] / "captured-world-effect.txt").write_text(
+            "substantive trail evidence\n", encoding="utf-8"
+        )
         result = Capture.open(
             CapturePlan(
                 project=projects[placement],
