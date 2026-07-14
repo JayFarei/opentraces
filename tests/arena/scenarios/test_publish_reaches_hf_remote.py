@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -100,6 +101,16 @@ def test_publish_reaches_hf_remote(bench):
         )
         if os.environ.get("OT_BENCH_HF_DOWN_CONTROL") == "1":
             assert published.returncode != 0, "publish unexpectedly reached a stopped world"
+            payload = json.loads(published.stdout)
+            assert payload.get("status") != "ok"
+            publish_payload = payload.get("publish") or {}
+            assert publish_payload.get("uploaded") is not True
+            assert not publish_payload.get("remote_head_after")
+            assert not hf.ledger.contains(
+                method="POST",
+                path_prefix="/api/datasets/bench/scenario-2/commit/",
+                operation_id="commit",
+            )
         else:
             assert published.returncode == 0, published.stderr
         run.verify(publish_commit_is_witnessed, hf=hf)
