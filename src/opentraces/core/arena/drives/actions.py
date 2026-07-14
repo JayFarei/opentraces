@@ -12,6 +12,7 @@ from ..run_store import RunDraft
 
 
 TIMELINE_REF = "recordings/timeline.jsonl"
+TIMELINE_TIMESTAMP_TOLERANCE_MS = 250
 
 
 def _utc_now() -> str:
@@ -231,6 +232,16 @@ class RunActionSequence:
                     or duration_ms != observed_duration
                 ):
                     raise ValueError("timeline duration disagrees with stored action result")
+                timestamp_duration_ms = (
+                    completion_time - start_time
+                ).total_seconds() * 1_000
+                if (
+                    abs(timestamp_duration_ms - duration_ms)
+                    > TIMELINE_TIMESTAMP_TOLERANCE_MS
+                ):
+                    raise ValueError(
+                        "timeline timestamp duration disagrees with stored action result"
+                    )
                 expected_causal = [] if prior_ref is None else [prior_ref]
                 if start["causal_refs"] != expected_causal or completion["causal_refs"] != []:
                     raise ValueError("timeline causal chain disagrees with action order")
