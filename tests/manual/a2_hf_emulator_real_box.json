@@ -1,14 +1,14 @@
 {
   "schema_version": "opentraces.bench.manual-proof.v1",
-  "observed_at": "2026-07-14T01:06:58Z",
-  "source_commit": "7ae83c72690f25b2edde2cd4123f76d8d5101250",
+  "observed_at": "2026-07-14T02:20:51Z",
+  "source_commit": "a4e75da329ec0ac4f629d9c66b301f470266f1b0",
   "source_archive": {
     "format": "tar",
-    "sha256": "1b7bf14b50d7101274e0bb5f05e1b453631b81c97373802dc5270d95085b5c5c"
+    "sha256": "715f01d839a83fbaf7d2c955333baed887e05248a58ec61bcb1c69cb3629df62"
   },
   "box": {
-    "lease_id": "cbx_684fca9113e5",
-    "container_id": "2a6829a1dc9af18cf479a73f2c3c9156bc6217bcfbab31e1fe2025b175204374",
+    "lease_id": "cbx_8f94e3e59d3d",
+    "container_id": "6a00d1d373ca3c47304ba8c4d54d18e576bb938ac5262edf7a7a0b09d297dc52",
     "provider": "local-container",
     "image": "ubuntu:24.04",
     "architecture": "aarch64",
@@ -17,19 +17,25 @@
   "app_state": {
     "base": {
       "name": "install-only",
-      "digest": "sha256:632376d019e9e00e227903f375edc55cfdc6bc02961d436b8fe6f07bdf7c4185",
-      "dependencies": {
+      "digest": "sha256:850066e1917e31e3213c7cbf567fb0c0e81ef69f62bb8a61c3265e5501ea5f31",
+      "dependency_lock_sha256": "sha256:b02aad4b331a1f858cc44ee24fde58f568609faba04a843b8614c409ac73b7f6",
+      "dependency_count": 33,
+      "direct_clients": {
         "huggingface-hub": "1.10.2",
         "hf-xet": "1.4.3"
       },
+      "execution_identity": {
+        "user": "opentraces-product",
+        "sudo": false
+      },
       "wheel_sha256": [
-        "3122c6db3c8856d6756e9711157d491d11f233eda6298d21b1172b2cf5dd6be2",
+        "1878972736eca50a9ace6e0b99eaac692b6c362727cd01f988fe67f931d3087e",
         "af63003242b1e648cc9920f37c9d2a5504423bf47a9ecd1748cb2719eee19821"
       ]
     },
     "with_huggingface": {
       "name": "install-only",
-      "digest": "sha256:7634a71febcba9d9c675afb0de9330afbac2964a44228fad24dbb5c3c835a7cd",
+      "digest": "sha256:5a15ff00d531e20ff62f557cdacb0b53138ea53420b979941b274b941461be81",
       "emulator_sha256": "0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da"
     }
   },
@@ -41,38 +47,43 @@
     "size_bytes": 94088689,
     "sha256": "0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da",
     "source_sha256": "97b98ffe5724fb7c64554d9637ba8574a1c58b5ea7eba1cb07d4c7a1579db367",
-    "build_inputs_sha256": "6338cd5962b0f836b768aa4dbe26da857f2a1d961fad5f32bd55d2d8dc0eeaac"
+    "build_inputs_sha256": "6338cd5962b0f836b768aa4dbe26da857f2a1d961fad5f32bd55d2d8dc0eeaac",
+    "trusted_build_manifest": "src/opentraces/arena/emulators/huggingface/trusted-build.json"
   },
   "contract_tests": {
     "command": "python3 -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py",
-    "passed": 23,
+    "passed": 26,
     "skipped": 1,
     "returncode": 0,
     "skip_reason": "The runtime-free box uses the verified precompiled emulator and intentionally has no Bun build toolchain."
   },
   "public_runs": {
     "happy": {
-      "run_id": "run_20260714T005226013533Z_79c989b512bf",
+      "run_id": "run_20260714T021146217746Z_6e4b2f1ca0a8",
       "execution_status": "complete",
       "verdict": "pass",
       "exit_code": 0,
       "ledger_rows": 11,
       "evidence_complete": true,
+      "integrity_verified": true,
       "evidence_ref": "ledgers/huggingface.jsonl",
-      "lease_id": "cbx_e0bae8793ac6",
-      "lease_released": true
+      "lease_id": "cbx_d52030481305",
+      "lease_released": true,
+      "inspect_after_stop_returncode": 4
     },
     "emulator_down": {
-      "run_id": "run_20260714T005349183062Z_1e390a82119e",
+      "run_id": "run_20260714T021512555812Z_5e7601448e0f",
       "execution_status": "complete",
       "verdict": "fail",
       "exit_code": 1,
       "ledger_rows": 3,
       "commit_rows": 0,
       "evidence_complete": true,
+      "integrity_verified": true,
       "evidence_ref": "ledgers/huggingface.jsonl",
-      "lease_id": "cbx_3a646e259146",
-      "lease_released": true
+      "lease_id": "cbx_9576756ad81d",
+      "lease_released": true,
+      "inspect_after_stop_returncode": 4
     }
   },
   "world_evidence": {
@@ -86,15 +97,15 @@
     "capability_groups": ["hand-authored", "partial", "unsupported"]
   },
   "page_capture": {
-    "file": "opentraces-a2-7ae83c7-world-page.png",
+    "file": "opentraces-a2-a4e75da-world-page.png",
     "width": 1280,
     "height": 5203,
-    "sha256": "94bbc1ecccfe0879978eafffa3b59fc2a351cfcbb0d2abdead153dc8f3e055fc"
+    "sha256": "6c5a260c72e6e885d06e71f4dfd49410e03a315fb5f2753332e842bbeaef2679"
   },
   "release": {
     "success": true,
-    "lease_id": "cbx_684fca9113e5",
-    "container_id": "2a6829a1dc9af18cf479a73f2c3c9156bc6217bcfbab31e1fe2025b175204374",
+    "lease_id": "cbx_8f94e3e59d3d",
+    "container_id": "6a00d1d373ca3c47304ba8c4d54d18e576bb938ac5262edf7a7a0b09d297dc52",
     "inspect_after_stop_returncode": 4,
     "container_absent": true
   }
