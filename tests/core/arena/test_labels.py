@@ -27,6 +27,7 @@ from opentraces_schema import Agent, Outcome, TraceRecord
 
 RUN_ID = "run_20260714T190000000000Z_abcdef123456"
 TRACE_ID = "trace-origin-123"
+TRACE_TWO_ID = "trace-origin-456"
 PROJECT_SLUG = "project-labels"
 SHA_A = "sha256:" + "a" * 64
 SHA_B = "sha256:" + "b" * 64
@@ -143,12 +144,16 @@ def _set_bucket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return bucket
 
 
-def _write_subject_trace(*, metadata: dict[str, object] | None = None) -> Path:
-    path = trace_v1_json_path(PROJECT_SLUG, TRACE_ID)
+def _write_subject_trace(
+    *,
+    trace_id: str = TRACE_ID,
+    metadata: dict[str, object] | None = None,
+) -> Path:
+    path = trace_v1_json_path(PROJECT_SLUG, trace_id)
     path.parent.mkdir(parents=True)
     record = TraceRecord(
-        trace_id=TRACE_ID,
-        session_id="session-label-subject",
+        trace_id=trace_id,
+        session_id=f"session-label-subject-{trace_id}",
         agent=Agent(name="test-agent"),
         task={"description": "Publishing reaches the configured remote."},
         steps=[],
@@ -509,3 +514,60 @@ def test_normal_trace_read_refuses_a_self_consistent_forged_verdict(
     )
     with pytest.raises(LabelIntegrityError, match="verified run"):
         _trace_overview(record, include_labels=True)
+
+
+def test_normal_read_refuses_an_intact_companion_copied_to_another_trace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    _write_subject_trace(trace_id=TRACE_ID)
+    trace_two_path = _write_subject_trace(trace_id=TRACE_TWO_ID)
+    rows = mint_labels_for_run(
+        run_path,
+        subject={"kind": "trace", "address": TRACE_ID},
+        store=store,
+    )
+    source = attach_labels(
+        project_slug=PROJECT_SLUG,
+        trace_id=TRACE_ID,
+        labels=[rows[0]],
+        store=store,
+    )
+    copied = trace_v1_labels_path(PROJECT_SLUG, TRACE_TWO_ID)
+    copied.write_bytes(source.read_bytes())
+    trace_two = TraceRecord.model_validate_json(trace_two_path.read_text(encoding="utf-8"))
+
+    with pytest.raises(LabelIntegrityError, match="subject.*requested trace"):
+        label_summary_for_trace(TRACE_TWO_ID)
+    with pytest.raises(LabelIntegrityError, match="subject.*requested trace"):
+        _trace_overview(trace_two, include_labels=True)
+
+
+def test_slice_subject_companion_matches_its_base_trace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    _write_subject_trace()
+    rows = mint_labels_for_run(
+        run_path,
+        subject={"kind": "slice", "address": f"{TRACE_ID}:0-1"},
+        store=store,
+    )
+    attach_labels(
+        project_slug=PROJECT_SLUG,
+        trace_id=TRACE_ID,
+        labels=[rows[0]],
+        store=store,
+    )
+
+    summary = label_summary_for_trace(TRACE_ID)
+
+    assert summary["count"] == 1
+    assert summary["items"][0]["subject"] == {
+        "kind": "slice",
+        "address": f"{TRACE_ID}:0-1",
+    }
