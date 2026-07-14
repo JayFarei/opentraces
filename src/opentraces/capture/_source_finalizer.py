@@ -91,14 +91,16 @@ def _finalize_session(request: dict[str, Any]) -> dict[str, Any]:
             "ingest produced no independently readable canonical trace record",
             details=details,
         )
+    current_pointer = trace_record_path(project_slug, result.trace_id)
     details["trace_record_path"] = str(record.path)
+    details["trace_record_pointer_path"] = str(current_pointer)
     details["security_observation"] = _security_observation_from_trace(
         record.record.model_dump(mode="json")
     )
     return {
         "status": "finalized",
         "completeness": "full",
-        "evidence_refs": [str(Path(path)), str(record.path)],
+        "evidence_refs": [str(Path(path)), str(record.path), str(current_pointer)],
         "limitations": [],
         "details": details,
         "trace_id": result.trace_id,
@@ -191,6 +193,7 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
             "snapshot_semantics": snapshot_semantics,
             "snapshot_generation": generation,
             "accepted_envelopes": accepted,
+            "last_envelope_at": last_envelope_at,
         }
     )
     limitations: list[str] = []
@@ -267,7 +270,7 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "finalized",
         "completeness": "full",
-        "evidence_refs": [],
+        "evidence_refs": [str(Path(state_path))],
         "limitations": [],
         "details": {
             **root_details,
@@ -286,19 +289,42 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _finalize_git(request: dict[str, Any]) -> dict[str, Any]:
+    import subprocess
+
+    from ..core.trails.event_log import EVENT_LOG_REF, read_events
     from ..core.trails.maturation import mature_trails
 
+    project = Path(request["project"]).resolve()
     summary = mature_trails(
-        Path(request["project"]),
+        project,
         deadline=_request_deadline(request),
     )
-    details = summary.to_dict()
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", EVENT_LOG_REF],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    event_log_head = head.stdout.strip() if head.returncode == 0 else None
+    events = read_events(project, verify=True) if event_log_head else []
+    details = {
+        "schema_version": "opentraces.capture.git_finalization.v1",
+        "project": str(project),
+        "event_log_ref": EVENT_LOG_REF,
+        "event_log_head": event_log_head,
+        "events_count": len(events),
+        "maturation": summary.to_dict(),
+    }
     limitations = list(summary.errors)
     if summary.truncated:
         limitations.append("anchor maturation reached its deadline")
+    if event_log_head is None or not events:
+        limitations.append("canonical trail event log is unavailable or empty")
+    partial = summary.truncated or bool(summary.errors) or not event_log_head or not events
     return {
-        "status": "partial" if summary.truncated or summary.errors else "finalized",
-        "completeness": "partial" if summary.truncated or summary.errors else "full",
+        "status": "partial" if partial else "finalized",
+        "completeness": "partial" if partial else "full",
         "evidence_refs": [],
         "limitations": limitations,
         "details": details,
@@ -350,6 +376,17 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
     )
     trace_path = trace_v1_json_path(project_slug, trace_id)
     manifest_path = bucket_manifest_path()
+    pointer_path = trace_record_path(project_slug, trace_id)
+    record_path = record_obj.path
+    from ..core.bucket_layout import (
+        trace_v1_context_path,
+        trace_v1_sources_path,
+        trace_v1_trail_path,
+    )
+
+    context_path = trace_v1_context_path(project_slug, trace_id)
+    trail_path = trace_v1_trail_path(project_slug, trace_id)
+    sources_path = trace_v1_sources_path(project_slug, trace_id)
     missing = [str(path) for path in (trace_path, manifest_path) if not path.is_file()]
     if missing:
         return _missing(
@@ -367,12 +404,25 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "finalized",
         "completeness": "full",
-        "evidence_refs": [str(trace_path), str(manifest_path)],
+        "evidence_refs": [
+            str(trace_path),
+            str(manifest_path),
+            str(pointer_path),
+            str(record_path),
+            str(context_path),
+            str(trail_path),
+            str(sources_path),
+        ],
         "limitations": [],
         "details": {
             "trace_id": trace_id,
             "trace_path": str(trace_path),
             "manifest_path": str(manifest_path),
+            "trace_record_pointer_path": str(pointer_path),
+            "trace_record_path": str(record_path),
+            "context_path": str(context_path),
+            "trail_path": str(trail_path),
+            "sources_path": str(sources_path),
             "project_slug": project_slug,
             "security": trace.get("security") or {},
             "security_observation": _security_observation_from_trace(trace),

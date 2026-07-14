@@ -8,6 +8,7 @@ leased workspaces.  Callers open one session, inject its bindings, and call
 from __future__ import annotations
 
 import hashlib
+import gzip
 import json
 import os
 import re
@@ -141,20 +142,75 @@ def _finalizer_semantic_error(
         if not session_path or not _path_is_referenced(Path(session_path), evidence_paths):
             return "session input is not named as evidence"
         trace_record_path = details.get("trace_record_path")
+        pointer_path = details.get("trace_record_pointer_path")
         if not isinstance(trace_record_path, str) or not trace_record_path:
             return "session finalizer did not name its canonical trace record"
+        if not isinstance(pointer_path, str) or not pointer_path:
+            return "session finalizer did not name its canonical current pointer"
         if not _path_is_referenced(Path(trace_record_path), evidence_paths):
             return "canonical trace record is not named as evidence"
+        if not _path_is_referenced(Path(pointer_path), evidence_paths):
+            return "canonical current pointer is not named as evidence"
+        from ..core._bucket_io import _digest_payload
+        from ..core.bucket_models import (
+            TRACE_RECORD_BUCKET_SCHEMA,
+            TRACE_RECORD_POINTER_SCHEMA,
+        )
         from ..core.bucket_store import read_trace_record_object
-
-        record = read_trace_record_object(Path(trace_record_path))
-        if record is None or record.record.trace_id != report_trace_id:
-            return "canonical trace record is invalid or names another trace"
-        if not record.path.resolve().is_relative_to(capture_root / "bucket"):
-            return "canonical trace record is outside the pinned capture root"
         from ..core.config import get_project_dir
 
         expected_project_slug = get_project_dir(Path(request["project"])).name
+        expected_pointer = (
+            capture_root
+            / "bucket"
+            / "objects"
+            / "traces"
+            / "v1"
+            / expected_project_slug
+            / report_trace_id
+            / "current.json"
+        ).resolve()
+        if Path(pointer_path).resolve() != expected_pointer:
+            return "canonical current pointer is not at the exact bucket layout path"
+        try:
+            pointer = json.loads(Path(pointer_path).read_text(encoding="utf-8"))
+            envelope = json.loads(Path(trace_record_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"canonical trace record evidence is invalid: {type(exc).__name__}"
+        if pointer.get("schema_version") != TRACE_RECORD_POINTER_SCHEMA:
+            return "canonical current pointer has the wrong schema"
+        if envelope.get("schema_version") != TRACE_RECORD_BUCKET_SCHEMA:
+            return "canonical trace record has the wrong schema"
+        record_hash = _digest_payload(envelope.get("record") or {})
+        if envelope.get("record_hash") != record_hash or pointer.get("record_hash") != record_hash:
+            return "canonical trace record hash does not match stored record bytes"
+        expected_object = (
+            capture_root / "bucket" / str(pointer.get("object_path") or "")
+        ).resolve()
+        canonical_object = (
+            expected_pointer.parent / f"{record_hash.removeprefix('sha256:')}.json"
+        ).resolve()
+        if expected_object != canonical_object:
+            return "canonical current pointer object is not at its content-addressed path"
+        if expected_object != Path(trace_record_path).resolve():
+            return "canonical current pointer names another trace record object"
+        if (
+            pointer.get("trace_id") != report_trace_id
+            or envelope.get("trace_id") != report_trace_id
+        ):
+            return "canonical trace record envelope names another trace"
+        if (
+            pointer.get("project_slug") != expected_project_slug
+            or envelope.get("project_slug") != expected_project_slug
+        ):
+            return "canonical trace record envelope names another project"
+        record = read_trace_record_object(Path(trace_record_path))
+        if record is None or record.record.trace_id != report_trace_id:
+            return "canonical trace record is invalid or names another trace"
+        if record.record.content_hash != record.record.compute_content_hash():
+            return "canonical TraceRecord content_hash does not match its content"
+        if not record.path.resolve().is_relative_to(capture_root / "bucket"):
+            return "canonical trace record is outside the pinned capture root"
         if record.project_slug != expected_project_slug:
             return "canonical trace record names another project"
         if requested_session_id and record.record.session_id != requested_session_id:
@@ -180,6 +236,137 @@ def _finalizer_semantic_error(
             return f"telemetry snapshot is invalid: {type(exc).__name__}"
         if not isinstance(snapshot, dict) or snapshot.get("session_id") != requested_session_id:
             return "telemetry snapshot does not match the requested session"
+        open_details = request.get("open_details") or {}
+        opened_at = open_details.get("opened_at_unix")
+        last_envelope_at = snapshot.get("last_envelope_at")
+        if not _is_number(opened_at) or not _is_number(last_envelope_at):
+            return "telemetry freshness timestamps are not numeric"
+        if float(last_envelope_at) < float(opened_at):
+            return "telemetry snapshot predates Capture.open"
+        generation = snapshot.get("snapshot_generation")
+        accepted = snapshot.get("accepted_envelopes")
+        if not _is_nonnegative_int(generation) or not _is_nonnegative_int(accepted):
+            return "telemetry generation counters are not typed integers"
+        if generation < 1 or generation != accepted:
+            return "telemetry snapshot generation is incomplete"
+        for key in ("last_envelope_at", "snapshot_generation", "accepted_envelopes"):
+            if details.get(key) != snapshot.get(key):
+                return f"telemetry report {key} disagrees with its snapshot"
+        if open_details.get("ingress_quiesced") is True:
+            if snapshot.get("snapshot_quiescent") is not True:
+                return "telemetry snapshot is not quiescent after ingress shutdown"
+            if details.get("snapshot_quiescent") is not True:
+                return "telemetry report does not attest its quiescent snapshot"
+        for key in (
+            "layers_count",
+            "nodes_count",
+            "full_nodes",
+            "approximated_nodes",
+            "stub_nodes",
+            "drafts_appended",
+        ):
+            if key in details and not _is_nonnegative_int(details[key]):
+                return f"telemetry report {key} is not a nonnegative integer"
+        return None
+
+    if source == "watcher":
+        open_details = request.get("open_details") or {}
+        project = Path(request["project"]).resolve()
+        workspace = Path(request["workspace"]).resolve()
+        state_path = open_details.get("state_path")
+        if project != workspace:
+            return "watcher project and workspace roots differ"
+        if not isinstance(state_path, str) or not state_path:
+            return "watcher request did not pin its open-time state path"
+        if len(evidence_paths) != 1 or evidence_paths[0].resolve() != Path(state_path).resolve():
+            return "watcher report did not name the exact lifecycle state artifact"
+        if details.get("observed_root") != str(Path(request["project"])):
+            return "watcher report observed another project root"
+        if details.get("declared_workspace") != str(Path(request["workspace"])):
+            return "watcher report names another declared workspace"
+        for key in ("poll_succeeded", "baseline_proven", "root_binding_proven"):
+            if open_details.get(key) is not True:
+                return f"watcher open-time {key} was not proven"
+        if details.get("open_poll_succeeded") is not True:
+            return "watcher report did not preserve open poll success"
+        if details.get("open_baseline_proven") is not True:
+            return "watcher report did not preserve open baseline proof"
+        if details.get("open_baseline_initialized") != open_details.get("baseline_initialized"):
+            return "watcher report changed the open baseline state"
+        if details.get("final_baseline_initialized") is not False:
+            return "watcher final drain reinitialized its baseline"
+        if (
+            details.get("final_state_present") is not True
+            or details.get("state_path") != state_path
+        ):
+            return "watcher final state artifact is not the pinned open-time state"
+        try:
+            state = json.loads(Path(state_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"watcher state artifact is invalid: {type(exc).__name__}"
+        if state.get("schema_version") != "opentraces.fs_watcher.state.v1":
+            return "watcher state artifact has the wrong schema"
+        if Path(str(state.get("repo") or "")).resolve() != project:
+            return "watcher state artifact names another project"
+        if not isinstance(state.get("paths"), dict):
+            return "watcher state artifact has invalid path state"
+        for key in ("paths_seen", "observations", "mutations"):
+            if not _is_nonnegative_int(details.get(key)):
+                return f"watcher report {key} is not a nonnegative integer"
+        reconciled = details.get("reconciled")
+        if not isinstance(reconciled, dict) or not reconciled:
+            return "watcher report did not include its reconciliation result"
+        if not all(_is_nonnegative_int(value) for value in reconciled.values()):
+            return "watcher reconciliation counters are not typed integers"
+        return None
+
+    if source == "git":
+        import subprocess
+
+        from ..core.trails.event_log import EVENT_LOG_REF, read_events
+
+        project = Path(request["project"]).resolve()
+        if details.get("schema_version") != "opentraces.capture.git_finalization.v1":
+            return "git report has the wrong finalization schema"
+        if details.get("project") != str(project):
+            return "git report names another project"
+        if details.get("event_log_ref") != EVENT_LOG_REF:
+            return "git report names another canonical event ref"
+        head = subprocess.run(
+            ["git", "rev-parse", "--verify", EVENT_LOG_REF],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head.returncode != 0:
+            if not (
+                report["status"] == "partial"
+                and details.get("event_log_head") is None
+                and details.get("events_count") == 0
+            ):
+                return "git report event-log head is not current"
+        else:
+            if details.get("event_log_head") != head.stdout.strip():
+                return "git report event-log head is not current"
+            try:
+                events = read_events(project, verify=True)
+            except Exception as exc:  # noqa: BLE001 - fail-closed evidence validator
+                return f"git canonical event evidence is unreadable: {type(exc).__name__}"
+            if not events or details.get("events_count") != len(events):
+                return "git report event count does not match readable canonical evidence"
+        maturation = details.get("maturation")
+        if not isinstance(maturation, dict):
+            return "git report did not include maturation evidence"
+        for key in ("commits_considered", "searches_completed", "anchors_created"):
+            if not _is_nonnegative_int(maturation.get(key)):
+                return f"git maturation {key} is not a nonnegative integer"
+        if not isinstance(maturation.get("errors"), list) or not all(
+            isinstance(value, str) for value in maturation["errors"]
+        ):
+            return "git maturation errors are not a string list"
+        if not isinstance(maturation.get("truncated"), bool):
+            return "git maturation truncated flag is not boolean"
         return None
 
     if source == "bucket":
@@ -187,16 +374,44 @@ def _finalizer_semantic_error(
             return "bucket request did not name the current trace"
         if report_trace_id != requested_trace_id or details.get("trace_id") != requested_trace_id:
             return "bucket report trace_id does not match the current trace"
-        trace_path = details.get("trace_path")
-        manifest_path = details.get("manifest_path")
-        if not isinstance(trace_path, str) or not _path_is_referenced(
-            Path(trace_path), evidence_paths
-        ):
-            return "bucket trace projection is not named as evidence"
-        if not isinstance(manifest_path, str) or not _path_is_referenced(
-            Path(manifest_path), evidence_paths
-        ):
-            return "bucket manifest is not named as evidence"
+        from opentraces_schema import TraceRecord
+
+        from ..core._bucket_io import _digest_payload
+        from ..core.bucket_models import (
+            BUCKET_MANIFEST_SCHEMA,
+            TRACE_RECORD_BUCKET_SCHEMA,
+            TRACE_RECORD_POINTER_SCHEMA,
+        )
+        from ..core.bucket_store import _load_manifest
+        from ..core.config import get_project_dir
+
+        project_slug = get_project_dir(Path(request["project"])).name
+        bucket_root = capture_root / "bucket"
+        base = bucket_root / "traces" / "v1" / project_slug / requested_trace_id
+        expected = {
+            "trace_path": base / "trace.json",
+            "manifest_path": bucket_root / "manifest.json",
+            "trace_record_pointer_path": (
+                bucket_root
+                / "objects"
+                / "traces"
+                / "v1"
+                / project_slug
+                / requested_trace_id
+                / "current.json"
+            ),
+            "context_path": base / "context.jsonl.gz",
+            "trail_path": base / "trail.jsonl.gz",
+            "sources_path": base / "sources.jsonl.gz",
+        }
+        for key, path in expected.items():
+            value = details.get(key)
+            if not isinstance(value, str) or Path(value).resolve() != path.resolve():
+                return f"bucket {key} is not at the exact canonical layout path"
+            if not _path_is_referenced(path, evidence_paths):
+                return f"bucket {key} is not named as evidence"
+        trace_path = str(expected["trace_path"])
+        manifest_path = str(expected["manifest_path"])
         bucket_root = capture_root / "bucket"
         if not Path(trace_path).resolve().is_relative_to(bucket_root):
             return "bucket trace projection is outside the pinned capture root"
@@ -205,16 +420,75 @@ def _finalizer_semantic_error(
         try:
             trace = json.loads(Path(trace_path).read_text(encoding="utf-8"))
             manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            pointer = json.loads(expected["trace_record_pointer_path"].read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return f"bucket evidence is invalid: {type(exc).__name__}"
-        if not isinstance(trace, dict) or trace.get("trace_id") != requested_trace_id:
+        try:
+            trace_record = TraceRecord.model_validate(trace)
+        except (TypeError, ValueError) as exc:
+            return f"bucket trace projection is not a canonical TraceRecord: {type(exc).__name__}"
+        if trace_record.trace_id != requested_trace_id:
             return "bucket trace projection names another trace"
-        if not isinstance(manifest, dict) or not any(
+        if manifest.get("schema_version") != BUCKET_MANIFEST_SCHEMA or not any(
             isinstance(row, dict) and row.get("trace_id") == requested_trace_id
             for row in manifest.get("traces") or []
         ):
             return "bucket manifest does not contain the current trace"
+        try:
+            canonical_manifest = _load_manifest(expected["manifest_path"])
+        except Exception as exc:  # noqa: BLE001 - fail-closed evidence validator
+            return f"bucket manifest canonical reader rejected evidence: {type(exc).__name__}"
+        if canonical_manifest is None:
+            return "bucket manifest canonical reader found no manifest"
+        if pointer.get("schema_version") != TRACE_RECORD_POINTER_SCHEMA:
+            return "bucket current pointer has the wrong schema"
+        object_path = (bucket_root / str(pointer.get("object_path") or "")).resolve()
+        reported_object = details.get("trace_record_path")
+        if not isinstance(reported_object, str) or Path(reported_object).resolve() != object_path:
+            return "bucket report does not name the current trace record object"
+        if not _path_is_referenced(object_path, evidence_paths):
+            return "bucket current trace record object is not named as evidence"
+        try:
+            envelope = json.loads(object_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"bucket trace record object is invalid: {type(exc).__name__}"
+        if envelope.get("schema_version") != TRACE_RECORD_BUCKET_SCHEMA:
+            return "bucket trace record object has the wrong schema"
+        record_hash = _digest_payload(envelope.get("record") or {})
+        if pointer.get("record_hash") != record_hash or envelope.get("record_hash") != record_hash:
+            return "bucket trace record hash does not match stored record bytes"
+        canonical_object = (
+            expected["trace_record_pointer_path"].parent
+            / f"{record_hash.removeprefix('sha256:')}.json"
+        ).resolve()
+        if object_path != canonical_object:
+            return "bucket current record object is not at its content-addressed path"
+        if (
+            pointer.get("trace_id") != requested_trace_id
+            or envelope.get("trace_id") != requested_trace_id
+            or pointer.get("project_slug") != project_slug
+            or envelope.get("project_slug") != project_slug
+        ):
+            return "bucket current record pointer or envelope names another identity"
+        if envelope.get("record") != trace_record.model_dump(mode="json"):
+            return "bucket trace projection differs from its canonical current record"
+        for key in ("context_path", "trail_path", "sources_path"):
+            try:
+                with gzip.open(expected[key], "rt", encoding="utf-8") as handle:
+                    for line in handle:
+                        if line.strip():
+                            json.loads(line)
+            except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+                return f"bucket {key} companion is unreadable: {type(exc).__name__}"
     return None
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _path_is_referenced(path: Path, evidence_paths: list[Path]) -> bool:

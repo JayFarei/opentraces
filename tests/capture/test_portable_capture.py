@@ -778,10 +778,12 @@ def test_world_effect_finalizers_settle_inside_capture_lifecycle(
         )
     ).finish(deadline=time.monotonic() + 10.0)
 
-    assert result.completeness == "complete"
+    assert result.completeness == "partial"
     assert result.source("watcher").status == "finalized"
-    assert result.source("git").status == "finalized"
-    assert result.view("world_effects").completeness == "full"
+    assert result.source("git").status == "partial"
+    assert result.source("git").completeness == "partial"
+    assert "canonical trail event log" in result.source("git").limitations[0]
+    assert result.view("world_effects").completeness == "partial"
 
 
 def test_watcher_baseline_is_opened_before_lifecycle_mutation(tmp_path: Path) -> None:
@@ -1177,14 +1179,16 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
     report_path = write_parity_report(report, tmp_path / "parity-report.json")
 
     assert persistent.completeness == leased.completeness == "complete"
-    assert report.matches is True
+    assert report.matches is False
     assert report.view_completeness_match is True
     assert report.canonical_trace_match is True
     assert report.context_companion_match is True
     assert report.trail_companion_match is True
     assert report.security_match is True
+    assert report.query_behavior_match is False
     assert report.path_normalization_applied is True
-    assert report.differences == ()
+    assert report.differences == ("query_behavior", "unproven_query_behavior")
+    assert any("could not execute Trace, Ctx, and Trail" in item for item in report.limitations)
     assert json.loads(report_path.read_text(encoding="utf-8")) == report.to_dict()
 
 
@@ -3073,8 +3077,7 @@ def test_nonce_correct_noncanonical_bucket_projection_fails_closed(
 
     assert result.source("bucket").status == "unavailable"
     assert any(
-        "invalid bucket finalizer evidence" in item
-        for item in result.source("bucket").limitations
+        "invalid bucket finalizer evidence" in item for item in result.source("bucket").limitations
     )
 
 
@@ -3225,9 +3228,7 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
     )
     assert ingested.trace_id is not None
     legacy_slug = get_project_dir(legacy_project).name
-    legacy_record = read_trace_record_object(
-        trace_record_path(legacy_slug, ingested.trace_id)
-    )
+    legacy_record = read_trace_record_object(trace_record_path(legacy_slug, ingested.trace_id))
     assert legacy_record is not None
     mature_trails(legacy_project, deadline=time.monotonic() + 10.0)
     sync_trail_events_from_repo(legacy_project, repo_id=legacy_slug)

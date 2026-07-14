@@ -11,6 +11,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -27,6 +28,8 @@ class PlacementParityReport:
     context_companion_match: bool
     trail_companion_match: bool
     security_match: bool
+    query_behavior_match: bool
+    query_behavior: dict[str, Any]
     path_normalization_applied: bool
     persistent_digest: str
     leased_digest: str
@@ -44,6 +47,8 @@ class PlacementParityReport:
             "context_companion_match": self.context_companion_match,
             "trail_companion_match": self.trail_companion_match,
             "security_match": self.security_match,
+            "query_behavior_match": self.query_behavior_match,
+            "query_behavior": self.query_behavior,
             "path_normalization_applied": self.path_normalization_applied,
             "persistent_digest": self.persistent_digest,
             "leased_digest": self.leased_digest,
@@ -51,6 +56,26 @@ class PlacementParityReport:
             "limitations": list(self.limitations),
             "span_match": self.span_match,
             "display_label_match": self.display_label_match,
+        }
+
+
+@dataclass(frozen=True)
+class PersistentCompatibilityReport:
+    matches: bool
+    byte_match: bool
+    query_behavior_match: bool
+    legacy_digest: str
+    capture_digest: str
+    differences: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "matches": self.matches,
+            "byte_match": self.byte_match,
+            "query_behavior_match": self.query_behavior_match,
+            "legacy_digest": self.legacy_digest,
+            "capture_digest": self.capture_digest,
+            "differences": list(self.differences),
         }
 
 
@@ -181,6 +206,21 @@ def compare_placements(
     context_match = context_proven and persistent_context == leased_context
     trail_match = trail_proven and persistent_trail == leased_trail
 
+    persistent_query = _query_behavior(
+        trace=persistent_trace,
+        trace_path=persistent_path,
+        roots=persistent_roots,
+        replacements=persistent_replacements,
+    )
+    leased_query = _query_behavior(
+        trace=leased_trace,
+        trace_path=leased_path,
+        roots=leased_roots,
+        replacements=leased_replacements,
+    )
+    query_proven = persistent_query["proven"] and leased_query["proven"]
+    query_match = query_proven and persistent_query["result"] == leased_query["result"]
+
     differences: list[str] = []
     limitations: list[str] = []
     if not view_match:
@@ -195,6 +235,14 @@ def compare_placements(
         differences.append("trail_companion")
     if not security_match:
         differences.append("security")
+    if not query_match:
+        differences.append("query_behavior")
+    if not query_proven:
+        differences.append("unproven_query_behavior")
+        limitations.append(
+            "query behavior parity is unproven because one or both placements "
+            "could not execute Trace, Ctx, and Trail reads against canonical state"
+        )
     if not context_proven:
         differences.append("unproven_context_companion")
         limitations.append(
@@ -248,6 +296,7 @@ def compare_placements(
             "context": persistent_context,
             "trail": persistent_trail,
             "security": persistent_security,
+            "query_behavior": persistent_query["result"],
         }
     )
     leased_digest = _digest(
@@ -256,6 +305,7 @@ def compare_placements(
             "context": leased_context,
             "trail": leased_trail,
             "security": leased_security,
+            "query_behavior": leased_query["result"],
         }
     )
     matches = not differences
@@ -267,6 +317,11 @@ def compare_placements(
         context_companion_match=context_match,
         trail_companion_match=trail_match,
         security_match=security_match,
+        query_behavior_match=query_match,
+        query_behavior={
+            "persistent": persistent_query,
+            "leased": leased_query,
+        },
         path_normalization_applied=True,
         persistent_digest=persistent_digest,
         leased_digest=leased_digest,
@@ -274,6 +329,65 @@ def compare_placements(
         limitations=tuple(limitations),
         span_match=span_match,
         display_label_match=display_label_match,
+    )
+
+
+def compare_persistent_compatibility(
+    *,
+    legacy_trace_path: Path,
+    legacy_project: Path,
+    captured: CaptureResult,
+    legacy_roots: tuple[Path, ...] = (),
+    captured_roots: tuple[Path, ...] = (),
+) -> PersistentCompatibilityReport:
+    """Compare Capture persistent output with the direct legacy canonical chain."""
+    if captured.placement != "persistent":
+        raise ValueError("persistent compatibility requires a persistent CaptureResult")
+    legacy_trace_path = Path(legacy_trace_path)
+    captured_trace_path = _trace_path(captured)
+    legacy_trace = _read_json(legacy_trace_path)
+    captured_trace = _read_json(captured_trace_path)
+    legacy_replacements = _compatibility_replacements(legacy_trace_path, legacy_trace, legacy_roots)
+    captured_replacements = _compatibility_replacements(
+        captured_trace_path, captured_trace, captured_roots
+    )
+    legacy_material = _persistent_material(legacy_trace_path, legacy_trace, legacy_replacements)
+    captured_material = _persistent_material(
+        captured_trace_path, captured_trace, captured_replacements
+    )
+    byte_match = legacy_material == captured_material
+    legacy_query = _query_behavior(
+        trace=legacy_trace,
+        trace_path=legacy_trace_path,
+        roots=(legacy_project, *legacy_roots),
+        replacements=legacy_replacements,
+    )
+    captured_query = _query_behavior(
+        trace=captured_trace,
+        trace_path=captured_trace_path,
+        roots=captured_roots,
+        replacements=captured_replacements,
+    )
+    query_match = (
+        legacy_query["proven"]
+        and captured_query["proven"]
+        and legacy_query["result"] == captured_query["result"]
+    )
+    differences = tuple(
+        name
+        for name, matches in (
+            ("normalized_bytes", byte_match),
+            ("query_behavior", query_match),
+        )
+        if not matches
+    )
+    return PersistentCompatibilityReport(
+        matches=not differences,
+        byte_match=byte_match,
+        query_behavior_match=query_match,
+        legacy_digest=_digest(legacy_material),
+        capture_digest=_digest(captured_material),
+        differences=differences,
     )
 
 
@@ -297,6 +411,261 @@ def _trace_path(result: CaptureResult) -> Path:
     if not resolved.is_file():
         raise FileNotFoundError(resolved)
     return resolved
+
+
+def _query_behavior(
+    *,
+    trace: dict[str, Any],
+    trace_path: Path,
+    roots: tuple[Path, ...],
+    replacements: dict[str, str],
+) -> dict[str, Any]:
+    """Execute the public/core Trace, Ctx, and Trail query projections."""
+    from opentraces_schema import TraceRecord
+
+    from ..core.context_tree.query import build_context_tree_projection_for_trace
+    from ..core.trace_map import build_trace_map
+    from ..core.trails.event_log import EVENT_LOG_REF
+    from ..core.trails.query import build_trail_query_projection_for_trace
+
+    trace_id = str(trace.get("trace_id") or "")
+    project = _project_root(roots)
+    errors: list[str] = []
+    try:
+        # Normalize declared placement roots before Trace Map builds previews;
+        # normalizing after its bounded truncation would preserve path-length
+        # differences as false behavioral drift.
+        record = TraceRecord.model_validate(_normalize_query_input(trace, replacements))
+        trace_map = build_trace_map(record)
+        node_indexes = {node.node_id: index for index, node in enumerate(trace_map.nodes)}
+        trace_result: Any = {
+            "nodes": [
+                {
+                    key: value
+                    for key, value in node.model_dump(mode="json").items()
+                    if key
+                    in {
+                        "action_type",
+                        "step_index",
+                        "tool_name",
+                        "files_read",
+                        "files_modified",
+                        "text_preview",
+                        "metadata",
+                    }
+                }
+                for node in trace_map.nodes
+            ],
+            "edges": [
+                {
+                    "source": node_indexes.get(edge.source_node_id),
+                    "target": node_indexes.get(edge.target_node_id),
+                    "relation": edge.edge_type,
+                }
+                for edge in trace_map.edges
+            ],
+            "limitations": list(trace_map.limitations),
+        }
+    except Exception as exc:  # noqa: BLE001 - verification must record failure
+        trace_result = {"error": type(exc).__name__}
+        errors.append("trace")
+
+    if project is None:
+        ctx_result: Any = {"error": "project_root_unavailable"}
+        trail_result: Any = {"error": "project_root_unavailable"}
+        errors.extend(("ctx", "trail"))
+        event_ref_present = False
+    else:
+        ref = subprocess.run(
+            ["git", "rev-parse", "--verify", EVENT_LOG_REF],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        event_ref_present = ref.returncode == 0
+        try:
+            ctx = build_context_tree_projection_for_trace(project, trace_id)
+            ctx_result = {
+                "nodes": [
+                    _selected_fields(
+                        ctx.nodes_by_id[node_id].model_dump(mode="json"),
+                        {
+                            "step_index",
+                            "transcript_offset",
+                            "branch_type",
+                            "capture_completeness",
+                            "capture_method",
+                        },
+                    )
+                    for node_id in ctx.nodes_by_trace.get(trace_id, [])
+                    if node_id in ctx.nodes_by_id
+                ],
+                "layers": [
+                    _selected_fields(
+                        layer.model_dump(mode="json"),
+                        {
+                            "layer_type",
+                            "content",
+                            "capture_completeness",
+                            "capture_method",
+                        },
+                    )
+                    for _, layer in sorted(ctx.layers_by_id.items())
+                ],
+                "active_path": [
+                    _selected_fields(
+                        node.model_dump(mode="json"),
+                        {"step_index", "transcript_offset", "branch_type"},
+                    )
+                    for node in ctx.active_path(trace_id)
+                ],
+                "limitations": ctx.capture_limitations_by_trace.get(trace_id, []),
+            }
+        except Exception as exc:  # noqa: BLE001 - verification must record failure
+            ctx_result = {"error": type(exc).__name__}
+            errors.append("ctx")
+        try:
+            trail = build_trail_query_projection_for_trace(project, trace_id)
+            trail_result = {
+                "summary": _selected_fields(
+                    trail.to_summary(),
+                    {"patch_count", "anchor_count", "limitations"},
+                ),
+                "patches": [
+                    _selected_fields(
+                        row,
+                        {
+                            "step_index",
+                            "generation_index",
+                            "patch_status",
+                            "relation",
+                            "file_path",
+                            "affected_range",
+                            "line_count",
+                            "evidence_tier",
+                            "evidence_firmness",
+                            "limitations",
+                        },
+                    )
+                    for row in trail.patches_for_trace(trace_id)
+                ],
+                "anchors": [
+                    _selected_fields(
+                        row,
+                        {
+                            "step_index",
+                            "generation_index",
+                            "relation",
+                            "file_path",
+                            "range",
+                            "line_count",
+                            "evidence_tier",
+                            "evidence_firmness",
+                            "limitations",
+                        },
+                    )
+                    for row in trail.anchors_for_trace(trace_id)
+                ],
+            }
+        except Exception as exc:  # noqa: BLE001 - verification must record failure
+            trail_result = {"error": type(exc).__name__}
+            errors.append("trail")
+
+    normalized = _normalize(
+        {
+            "trace": trace_result,
+            "ctx": ctx_result,
+            "trail": trail_result,
+        },
+        replacements,
+        domain="query",
+    )
+    trace_nodes = trace_result.get("nodes") if isinstance(trace_result, dict) else None
+    ctx_nodes = ctx_result.get("nodes") if isinstance(ctx_result, dict) else None
+    proven = (
+        not errors
+        and bool(trace_id)
+        and event_ref_present
+        and isinstance(trace_nodes, list)
+        and bool(trace_nodes)
+        and isinstance(ctx_nodes, list)
+        and bool(ctx_nodes)
+        and trace_path.is_file()
+    )
+    return {
+        "proven": proven,
+        "errors": errors,
+        "result": normalized,
+    }
+
+
+def _project_root(roots: tuple[Path, ...]) -> Path | None:
+    for root in roots:
+        candidate = Path(root).resolve()
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _selected_fields(value: dict[str, Any], keys: set[str]) -> dict[str, Any]:
+    return {key: value[key] for key in sorted(keys) if key in value}
+
+
+def _normalize_query_input(value: Any, replacements: dict[str, str]) -> Any:
+    if isinstance(value, dict):
+        return {key: _normalize_query_input(child, replacements) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_normalize_query_input(child, replacements) for child in value]
+    if isinstance(value, str):
+        normalized = value
+        for raw, replacement in sorted(
+            replacements.items(), key=lambda item: len(item[0]), reverse=True
+        ):
+            if Path(raw).is_absolute():
+                normalized = normalized.replace(raw, replacement)
+        return normalized
+    return value
+
+
+def _compatibility_replacements(
+    trace_path: Path,
+    trace: dict[str, Any],
+    roots: tuple[Path, ...],
+) -> dict[str, str]:
+    replacements = {
+        str(trace_path.parents[4]): "<bucket-root>",
+        str(trace.get("trace_id") or ""): "<trace-id>",
+    }
+    for root in roots:
+        resolved = Path(root).resolve()
+        for alias in _path_aliases(Path(root)):
+            replacements[alias] = "<workspace>"
+        replacements[resolved.name] = "<workspace-name>"
+    return replacements
+
+
+def _persistent_material(
+    trace_path: Path,
+    trace: dict[str, Any],
+    replacements: dict[str, str],
+) -> dict[str, Any]:
+    context_raw = _read_jsonl_gz(trace_path.with_name("context.jsonl.gz"))
+    trail_raw = _read_jsonl_gz(trace_path.with_name("trail.jsonl.gz"))
+    _add_context_node_replacements(context_raw, replacements)
+    return {
+        "trace": _normalize(trace, replacements, domain="trace"),
+        "context": _sanitize_companion_projection(
+            _normalize(
+                _resolve_content_references(context_raw, trace_path, replacements),
+                replacements,
+                domain="companion",
+            )
+        ),
+        "trail": _sanitize_companion_projection(
+            _normalize(trail_raw, replacements, domain="companion")
+        ),
+    }
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -554,9 +923,20 @@ def _normalize(
                 )
             elif (
                 replacement.startswith("<context-node:")
-                and domain == "companion"
                 and path
-                and path[-1] in {"node_id", "parent_node_id", "active_path_leaf_id"}
+                and (
+                    (
+                        domain == "companion"
+                        and path[-1] in {"node_id", "parent_node_id", "active_path_leaf_id"}
+                    )
+                    or (
+                        domain == "trace"
+                        and (
+                            path == ("context_tree_summary", "active_path_leaf_id")
+                            or path == ("steps", "[]", "context_node_id")
+                        )
+                    )
+                )
                 and normalized == raw
             ):
                 normalized = replacement
