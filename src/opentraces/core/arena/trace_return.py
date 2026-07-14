@@ -292,6 +292,12 @@ def return_run_as_trace(
 
     record = _record_from_run(run_path, result)
     processed = process_imported_trace(record, cfg or load_config()).record
+    # The claim is a contract key copied from the verified result, not free-form
+    # imported content.  Security still processes every other record field; the
+    # two agent-readable claim surfaces must remain byte-identical to result.json.
+    canonical_claim = result["scenario"]["claim"]
+    processed.task.description = canonical_claim
+    processed.steps[0].content = canonical_claim
     # A bench action transcript is evidence, never a grade.  Keep the normal
     # imported-trace enrichment/security pass, then clear only the fields that
     # commit-shaped output can infer as an outcome.  Arena labels remain the
