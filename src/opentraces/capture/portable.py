@@ -33,7 +33,7 @@ CaptureSourceName = Literal[
     "git",
     "bucket",
 ]
-CaptureViewName = Literal["model_boundary", "harness", "world_effects"]
+CaptureViewName = Literal["model_boundary", "harness", "world_effects", "storage"]
 Completeness = Literal["full", "partial", "missing"]
 SourceStatus = Literal["finalized", "partial", "unavailable", "timed_out"]
 
@@ -51,8 +51,9 @@ _SOURCE_VIEW: dict[str, CaptureViewName] = {
     "session_jsonl": "harness",
     "watcher": "world_effects",
     "git": "world_effects",
-    "bucket": "world_effects",
+    "bucket": "storage",
 }
+_OBSERVATIONAL_SOURCES = frozenset({"session_jsonl", "telemetry", "watcher", "git"})
 
 
 @dataclass(frozen=True)
@@ -313,9 +314,15 @@ class CaptureSession:
             workspace=self.plan.workspace,
             deadline=deadline,
         )
-        complete = bool(source_results) and all(
-            source.completeness == "full" for source in source_results
-        ) and (not self.plan.require_observer_separation or separation_proven)
+        has_observational_source = any(
+            source.name in _OBSERVATIONAL_SOURCES for source in source_results
+        )
+        complete = (
+            bool(source_results)
+            and has_observational_source
+            and all(source.completeness == "full" for source in source_results)
+            and (not self.plan.require_observer_separation or separation_proven)
+        )
         source_limitations = tuple(
             limitation
             for source in source_results
@@ -376,10 +383,16 @@ class CaptureSession:
                 "no sanitized TraceRecord was finalized",
             )
         )
+        observation_limitations = (
+            ()
+            if has_observational_source
+            else ("no observational capture source was requested; storage alone proves custody",)
+        )
         limitations = (
             *source_limitations,
             *provenance_limitations,
             *security_limitations,
+            *observation_limitations,
         )
         result_path = self._result_dir / "capture_result.json"
         result = CaptureResult(
@@ -486,7 +499,12 @@ class CaptureSession:
             owned.process.wait(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             owned.process.kill()
-            owned.process.wait(timeout=1.0)
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0:
+                try:
+                    owned.process.wait(timeout=remaining)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
             self._open_limitations.setdefault("telemetry", []).append(
                 "telemetry receiver could not drain before the finalization deadline"
             )
@@ -552,7 +570,12 @@ class CaptureSession:
             process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=1.0)
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0:
+                try:
+                    process.wait(timeout=remaining)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
             return CaptureSourceResult(
                 name=source,
                 view=_SOURCE_VIEW[source],
@@ -890,7 +913,7 @@ def _summarize_views(
     sources: list[CaptureSourceResult],
 ) -> list[CaptureViewResult]:
     rows: list[CaptureViewResult] = []
-    for name in ("model_boundary", "harness", "world_effects"):
+    for name in ("model_boundary", "harness", "world_effects", "storage"):
         members = [source for source in sources if source.view == name]
         if not members:
             completeness: Completeness = "missing"

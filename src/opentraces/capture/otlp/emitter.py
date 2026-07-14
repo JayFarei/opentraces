@@ -736,6 +736,15 @@ def flush_session_to_project(
         "trace_id": trace_id,
         "layers_count": len(seen_layer_ids),
         "nodes_count": len(nodes),
+        "full_nodes": sum(
+            node.capture_completeness == "full" for node in nodes
+        ),
+        "approximated_nodes": sum(
+            node.capture_completeness == "approximated" for node in nodes
+        ),
+        "stub_nodes": sum(
+            node.capture_completeness == "stub" for node in nodes
+        ),
         "drafts_appended": len(appended),
         "message_blobs_written": blob_report.get("written", 0),
         "message_blobs_deduped": blob_report.get("deduped", 0),

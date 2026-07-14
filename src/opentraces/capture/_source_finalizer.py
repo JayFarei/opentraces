@@ -154,18 +154,11 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
                 "ingress_quiesced": True,
             },
         )
-    if not ingress_quiesced:
-        return _missing(
-            "persistent telemetry finish-tail coverage is unproven without a "
-            "daemon barrier acknowledgment",
-            details={
-                "snapshot_quiescent": quiescent,
-                "snapshot_semantics": "persistent_unbarriered_generation",
-                "snapshot_generation": generation,
-                "accepted_envelopes": accepted,
-            },
-        )
-    snapshot_semantics = "leased_quiescent_generation"
+    snapshot_semantics = (
+        "leased_quiescent_generation"
+        if ingress_quiesced
+        else "persistent_unbarriered_generation"
+    )
     report = flush_session_to_project(
         project_dir=Path(request["project"]),
         trace_id=trace_id,
@@ -187,11 +180,25 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
             "accepted_envelopes": accepted,
         }
     )
+    limitations: list[str] = []
+    if not ingress_quiesced:
+        limitations.append(
+            "persistent telemetry finish-tail coverage is unproven without a "
+            "daemon barrier acknowledgment"
+        )
+    approximated_nodes = int(report.get("approximated_nodes") or 0)
+    stub_nodes = int(report.get("stub_nodes") or 0)
+    if approximated_nodes or stub_nodes:
+        limitations.append(
+            "OTel evidence contains approximated or stub context nodes; "
+            "model-boundary capture is not full"
+        )
+    partial = bool(limitations)
     return {
-        "status": "finalized",
-        "completeness": "full",
+        "status": "partial" if partial else "finalized",
+        "completeness": "partial" if partial else "full",
         "evidence_refs": [str(snapshot_path)],
-        "limitations": [],
+        "limitations": limitations,
         "details": report,
         "trace_id": trace_id,
     }
