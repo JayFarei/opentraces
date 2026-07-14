@@ -21,7 +21,7 @@ from opentraces.core.bucket_trace_records import (
     trace_record_path,
 )
 from opentraces.core.bucket_layout import trace_v1_json_path, trace_v1_labels_path
-from opentraces_schema import Agent, Observation, Outcome, Step, TraceRecord
+from opentraces_schema import Agent, Observation, Outcome, Step, ToolCall, TraceRecord
 
 
 RUN_ID = "run_20260714T190000000000Z_abcdef123456"
@@ -29,7 +29,15 @@ CLAIM = "Publishing reaches the configured remote."
 PROJECT_SLUG = "project-origin"
 
 
-def _record(*contents: str, step_content: str | None = None) -> TraceRecord:
+def _record(
+    *contents: str,
+    step_content: str | None = None,
+    commands: tuple[str | None, ...] | None = None,
+) -> TraceRecord:
+    resolved_commands = commands or tuple(
+        "opentraces bench run bench/test_publish.py::test_publish" for _ in contents
+    )
+    assert len(resolved_commands) == len(contents)
     return TraceRecord(
         trace_id="trace-origin-123",
         session_id="session-origin-123",
@@ -40,6 +48,15 @@ def _record(*contents: str, step_content: str | None = None) -> TraceRecord:
                 step_index=7,
                 role="agent",
                 content=step_content,
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id=f"call-{index}",
+                        tool_name="Bash",
+                        input={"command": command},
+                    )
+                    for index, command in enumerate(resolved_commands, start=1)
+                    if command is not None
+                ],
                 observations=[
                     Observation(source_call_id=f"call-{index}", content=content)
                     for index, content in enumerate(contents, start=1)
@@ -169,6 +186,22 @@ def test_detector_rejects_near_matches_and_uncaptured_narration(content: str) ->
     assert detect_bench_invocations(record) == []
 
 
+@pytest.mark.parametrize(
+    "commands",
+    [
+        (None,),
+        ("printf 'bench marker copied from another session'",),
+        ("cat saved-bench-output.txt",),
+    ],
+)
+def test_detector_requires_the_linked_tool_call_to_invoke_bench(
+    commands: tuple[str | None, ...],
+) -> None:
+    copied = f"bench_run_{RUN_ID} pass {CLAIM}"
+
+    assert detect_bench_invocations(_record(copied, commands=commands)) == []
+
+
 def test_captured_projector_verifies_and_attaches_once_after_trace_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -191,6 +224,24 @@ def test_captured_projector_verifies_and_attaches_once_after_trace_exists(
     assert len(rows) == 1
     assert rows[0]["run"]["id"] == RUN_ID
     assert rows[0]["subject"] == {"kind": "trace", "address": record.trace_id}
+
+
+def test_captured_projector_round_trips_a_multiline_first_paragraph_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored_claim = "Publishing reaches the configured remote\nwithout a side channel."
+    store = _finalized_run(tmp_path, monkeypatch, claim=stored_claim)
+    record = _record(
+        f"bench_run_{RUN_ID} pass Publishing reaches the configured remote without a side channel."
+    )
+    _write_trace(tmp_path, monkeypatch, record)
+
+    attach_captured_bench_labels(record, project_slug=PROJECT_SLUG, store=store)
+
+    rows = read_labels(PROJECT_SLUG, record.trace_id)
+    assert len(rows) == 1
+    assert rows[0]["claim"] == stored_claim
 
 
 def test_captured_projector_refuses_dangling_or_mismatched_evidence(

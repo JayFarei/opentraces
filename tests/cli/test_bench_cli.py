@@ -72,6 +72,60 @@ def test_bench_run_prints_claim_and_returns_result_exit_code(
     assert json.loads((finalized / "result.json").read_text())["verdict"] == "pass"
 
 
+def test_bench_run_keeps_a_multiline_claim_on_one_detectable_first_line(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from opentraces.cli import bench_cli
+
+    claim = "Install is healthy\non a fresh box."
+    scenario = tmp_path / "test_install_multiline.py"
+    scenario.write_text(
+        'def test_install(bench):\n    """Install is healthy\n    on a fresh box.\n\n    Details."""\n',
+        encoding="utf-8",
+    )
+    store_root = tmp_path / "runs" / "v1"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        draft.stage_result(
+            build_result(
+                run_id=draft.run_id,
+                claim=claim,
+                nodeid=target,
+                source_ref="source/scenario.py",
+                execution_mode="direct",
+                started_at="2026-07-13T12:00:00Z",
+                duration_ms=1,
+                execution_status="complete",
+                verdict="pass",
+                reason=None,
+                verifiers=[],
+                evidence={"complete": True, "requirements": []},
+                recordings={"rewatchable": False, "channels": []},
+                artifacts=[],
+                capture=None,
+                pins={},
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    result = CliRunner().invoke(
+        main,
+        ["bench", "run", f"{scenario}::test_install", "--store-root", str(store_root)],
+    )
+
+    finalized = next(path for path in store_root.iterdir() if path.name.startswith("run_"))
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[0] == (
+        f"bench_run_{finalized.name} pass Install is healthy on a fresh box."
+    )
+    assert json.loads((finalized / "result.json").read_text())["scenario"]["claim"] == claim
+
+
 def test_bench_run_returns_one_for_a_functional_failure(tmp_path: Path, monkeypatch) -> None:
     from opentraces.cli import bench_cli
 
