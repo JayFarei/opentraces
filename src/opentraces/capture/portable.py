@@ -359,7 +359,7 @@ class CaptureSession:
         configured_tools = (
             list(declared_security[0].get("configured_tools") or [])
             if declared_security
-            else []
+            else list(self._resolved_security_tools)
         )
         tools_applied = list(
             dict.fromkeys(
