@@ -1245,6 +1245,43 @@ def test_explicit_security_tools_are_applied_and_observed(tmp_path: Path) -> Non
     assert json.loads(trace_path.read_text())["security"]["scanned"] is True
 
 
+def test_configured_security_tools_are_identical_across_placements(
+    tmp_path: Path,
+) -> None:
+    from opentraces.core.config import load_config, save_config
+    from opentraces.security.config import set_security_tools_exact
+
+    cfg = load_config()
+    set_security_tools_exact(cfg, ("regex", "entropy"))
+    save_config(cfg)
+
+    results = []
+    for placement in ("persistent", "leased"):
+        (tmp_path / placement).mkdir()
+        project = _git_project(tmp_path / placement / "project")
+        source = _write_session(project, f"configured-security-{placement}")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=project,
+                    workspace=project,
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id=f"configured-security-{placement}",
+                    session_path=source,
+                    result_dir=tmp_path / placement / "result",
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    for result in results:
+        assert result.security["configuration"] == "configured"
+        assert result.security["configured_tools"] == ["regex", "entropy"]
+        assert result.security["tools_applied"] == ["regex", "entropy"]
+        assert result.security["observed"] is True
+
+
 def test_capture_plan_refuses_top_level_security_tiers(tmp_path: Path) -> None:
     project = _git_project(tmp_path / "project")
     with pytest.raises((TypeError, ValueError), match="security_policy"):
