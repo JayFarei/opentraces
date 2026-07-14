@@ -17,8 +17,10 @@ from .labels import (
     LabelIntegrityError,
     attach_labels,
     mint_labels_for_run,
+    stage_slice_artifact,
 )
-from .run_store import RunIntegrityError, RunStore
+from .run_store import RunDraft, RunIntegrityError, RunStore
+from ..trace_slices import TraceMaterializationRef
 
 
 _RUN_ID_TEXT = r"run_[0-9]{8}T[0-9]{12}Z_[0-9a-f]{12}"
@@ -271,7 +273,9 @@ def attach_captured_bench_labels(
     return attachments
 
 
-def _explicit_subject(address: str) -> tuple[str, dict[str, str]]:
+def _explicit_subject(
+    address: str,
+) -> tuple[str, dict[str, str], TraceMaterializationRef | None]:
     from ..bucket_envelope import trace_v2_summary_by_id
     from ..bucket_layout import trace_v1_json_path
     from ..trace_corpus import load_record, resolve
@@ -319,7 +323,57 @@ def _explicit_subject(address: str) -> tuple[str, dict[str, str]]:
         subject = {"kind": "slice", "address": f"{trace_id}:{start}-{end}"}
     else:
         subject = {"kind": "trace", "address": trace_id}
-    return project_slug, subject
+    trace_ref: TraceMaterializationRef | None = None
+    if subject["kind"] == "slice":
+        from ..trace_index import get_trace_map
+
+        trace_map = get_trace_map(trace_id)
+        if trace_map is None:
+            trace_ref = TraceMaterializationRef.from_record(record)
+        else:
+            try:
+                trace_ref = TraceMaterializationRef(record=record, trace_map=trace_map)
+            except ValueError as exc:
+                raise OriginJoinError(
+                    "explicit origin trace and canonical Trace Map disagree"
+                ) from exc
+    return project_slug, subject, trace_ref
+
+
+def stage_explicit_origin_evidence(
+    draft: RunDraft,
+    result: dict,
+    *,
+    address: str,
+) -> dict[str, str]:
+    """Stage a slice origin while its run is still mutable.
+
+    Slice subjects are immutable run evidence, so the canonical materialized
+    slice must land before ``RunDraft.finalize`` seals the integrity manifest.
+    Whole-trace origins preserve their existing label shape and stage nothing.
+    """
+
+    _project_slug, subject, trace_ref = _explicit_subject(address)
+    if subject["kind"] == "trace":
+        return subject
+    if trace_ref is None:  # pragma: no cover - guarded by _explicit_subject
+        raise OriginJoinError("explicit slice origin has no materialization reference")
+    try:
+        staged = stage_slice_artifact(draft, trace_ref, subject=subject)
+    except (LabelContractError, LabelIntegrityError, ValueError) as exc:
+        raise OriginJoinError(f"explicit origin slice could not be staged: {exc}") from exc
+
+    verifiers = result.get("verifiers")
+    if not isinstance(verifiers, list):
+        raise OriginJoinError("explicit origin run has no verifier array")
+    artifact_ref = staged["artifact_ref"]
+    for verifier in verifiers:
+        evidence_refs = verifier.get("evidence_refs") if isinstance(verifier, dict) else None
+        if not isinstance(evidence_refs, list):
+            raise OriginJoinError("explicit origin verifier has no evidence_refs array")
+        if artifact_ref not in evidence_refs:
+            evidence_refs.append(artifact_ref)
+    return subject
 
 
 def attach_explicit_bench_labels(
@@ -332,12 +386,13 @@ def attach_explicit_bench_labels(
 
     resolved_path = Path(run_path).resolve()
     resolved_store = store or RunStore(resolved_path.parent)
-    project_slug, subject = _explicit_subject(address)
+    project_slug, subject, trace_ref = _explicit_subject(address)
     try:
         labels = mint_labels_for_run(
             resolved_path,
             subject=subject,
             store=resolved_store,
+            trace_ref=trace_ref,
         )
         attach_labels(
             project_slug=project_slug,
@@ -362,4 +417,5 @@ __all__ = [
     "attach_explicit_bench_labels",
     "detect_bench_invocations",
     "origin_claim_token",
+    "stage_explicit_origin_evidence",
 ]

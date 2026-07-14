@@ -21,6 +21,7 @@ from ..core.arena.origin import (
     OriginJoinError,
     attach_explicit_bench_labels,
     origin_claim_token,
+    stage_explicit_origin_evidence,
 )
 from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
@@ -43,9 +44,7 @@ def discover_claim(target: str) -> str:
         and (function_name is None or node.name == function_name)
     ]
     if len(candidates) != 1:
-        raise click.UsageError(
-            "bench run requires one pytest function target (path.py::test_name)"
-        )
+        raise click.UsageError("bench run requires one pytest function target (path.py::test_name)")
     doc = ast.get_docstring(candidates[0], clean=True)
     if not doc or not doc.split("\n\n", 1)[0].strip():
         raise click.UsageError("bench scenario requires a non-empty first docstring paragraph")
@@ -157,7 +156,11 @@ def _pending_ids(store: RunStore) -> set[str]:
 
 
 def _finalize_after_pytest(
-    store: RunStore, run_id: str, outcome: PytestOutcome
+    store: RunStore,
+    run_id: str,
+    outcome: PytestOutcome,
+    *,
+    origin_address: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     draft = store.open_pending(run_id)
     result = draft.take_staged_result()
@@ -180,9 +183,7 @@ def _finalize_after_pytest(
     result["artifacts"].append(diagnostic)
     if outcome.returncode != 0 and result["execution_status"] != "error":
         failed_phases = {
-            str(report.get("when"))
-            for report in phase_reports
-            if report.get("outcome") == "failed"
+            str(report.get("when")) for report in phase_reports if report.get("outcome") == "failed"
         }
         call_observed = any(report.get("when") == "call" for report in phase_reports)
         refs = [stdout_ref, stderr_ref, *([phase_ref] if phase_reports else [])]
@@ -219,6 +220,8 @@ def _finalize_after_pytest(
                     "evidence_refs": refs,
                 }
             )
+    if origin_address is not None:
+        stage_explicit_origin_evidence(draft, result, address=origin_address)
     validate_result(result)
     return draft.finalize(result), result
 
@@ -279,7 +282,15 @@ def bench_run(
         )
     if len(created) != 1:
         raise click.ClickException(f"expected one finalized run, observed {len(created)}")
-    run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
+    try:
+        run_path, result = _finalize_after_pytest(
+            store,
+            created[0],
+            pytest_outcome,
+            origin_address=origin_address,
+        )
+    except OriginJoinError as exc:
+        raise click.ClickException(str(exc)) from exc
     exit_code = result_exit_code(result)
     if origin_address is not None:
         try:
