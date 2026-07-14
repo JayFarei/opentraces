@@ -12,6 +12,7 @@ import sys
 import time
 import urllib.request
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -315,7 +316,9 @@ def test_persistent_capture_owns_ingest_and_bucket_projection(tmp_path: Path) ->
     assert result.source("bucket").status == "finalized"
     assert result.source("bucket").completeness == "full"
     assert result.view("harness").completeness == "full"
-    assert result.view("world_effects").completeness == "full"
+    assert result.source("bucket").view == "storage"
+    assert result.view("storage").completeness == "full"
+    assert result.view("world_effects").completeness == "missing"
     assert len(result.trace_refs) == 1
 
     trace_path = Path(result.source("bucket").details["trace_path"])
@@ -324,6 +327,42 @@ def test_persistent_capture_owns_ingest_and_bucket_projection(tmp_path: Path) ->
     assert trace["trace_id"] == result.trace_refs[0]
     assert result.source("bucket").details["security"] == trace["security"]
     assert "scanned" in trace["security"]
+
+
+def test_storage_only_projection_cannot_claim_complete_capture(tmp_path: Path) -> None:
+    """Private storage proves custody, not that any behavior was observed."""
+    project = _git_project(tmp_path / "project")
+    source = _write_session(project, "storage-only-session")
+    observed = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl", "bucket"),
+            required_sources=("session_jsonl", "bucket"),
+            session_id="storage-only-session",
+            session_path=source,
+            result_dir=tmp_path / "observed",
+        )
+    ).finish(deadline=time.monotonic() + 10.0)
+
+    stored = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("bucket",),
+            required_sources=("bucket",),
+            trace_id=observed.trace_refs[0],
+            result_dir=tmp_path / "stored",
+        )
+    ).finish(deadline=time.monotonic() + 10.0)
+
+    assert stored.source("bucket").completeness == "full"
+    assert stored.view("storage").completeness == "full"
+    assert stored.view("world_effects").completeness == "missing"
+    assert stored.completeness == "partial"
+    assert any("observational capture source" in item for item in stored.limitations)
 
 
 def test_elapsed_deadline_never_turns_requested_sources_complete(tmp_path: Path) -> None:
@@ -426,6 +465,48 @@ def test_product_identity_observation_respects_finish_deadline(
     assert elapsed < 0.5
     assert result.completeness == "partial"
     assert result.provenance["separation"]["proven"] is False
+
+
+def test_finish_cleanup_never_waits_past_attestation_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stubborn owned process cannot add a fixed cleanup tail or escape."""
+    project = _git_project(tmp_path / "project")
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("telemetry",),
+            required_sources=("telemetry",),
+            result_dir=tmp_path / "result",
+        )
+    )
+    owned = capture._processes["telemetry"]
+    original_wait = owned.process.wait
+    waits: list[float | None] = []
+
+    def refuse_wait(timeout: float | None = None) -> int:
+        waits.append(timeout)
+        raise subprocess.TimeoutExpired(owned.process.args, timeout)
+
+    monkeypatch.setattr(owned.process, "wait", refuse_wait)
+    started = time.monotonic()
+    try:
+        result = capture.finish(deadline=started + 0.01)
+    finally:
+        monkeypatch.setattr(owned.process, "wait", original_wait)
+        try:
+            original_wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            owned.process.kill()
+            original_wait(timeout=2.0)
+
+    assert result.completeness == "partial"
+    assert time.monotonic() - started < 0.25
+    assert waits
+    assert all(timeout is not None and timeout <= 0.02 for timeout in waits)
 
 
 def test_missing_optional_source_still_makes_requested_capture_partial(
@@ -632,17 +713,20 @@ def test_leased_telemetry_finalizes_through_the_canonical_event_writer(
 
     result = capture.finish(deadline=time.monotonic() + 5.0)
 
-    assert result.completeness == "complete"
-    assert result.source("telemetry").status == "finalized"
-    assert result.source("telemetry").completeness == "full"
+    assert result.completeness == "partial"
+    assert result.source("telemetry").status == "partial"
+    assert result.source("telemetry").completeness == "partial"
     assert result.source("telemetry").details["nodes_count"] == 1
+    assert result.source("telemetry").details["approximated_nodes"] == 1
+    assert result.source("telemetry").details["full_nodes"] == 0
     assert result.source("telemetry").details["snapshot_quiescent"] is True
     assert result.source("telemetry").details["snapshot_generation"] >= 1
     assert (
         result.source("telemetry").details["accepted_envelopes"]
         == result.source("telemetry").details["snapshot_generation"]
     )
-    assert result.view("model_boundary").completeness == "full"
+    assert result.view("model_boundary").completeness == "partial"
+    assert any("approximated" in item for item in result.source("telemetry").limitations)
 
     from opentraces.core.context_tree import CONTEXT_NODE_OBSERVED
     from opentraces.core.trails.event_log import read_events
@@ -790,10 +874,21 @@ def test_persistent_telemetry_refuses_unacknowledged_finish_tail(
 
     telemetry = result.source("telemetry")
     assert result.completeness == "partial"
-    assert telemetry.completeness == "missing"
+    assert telemetry.status == "partial"
+    assert telemetry.completeness == "partial"
     assert any("finish-tail" in item for item in telemetry.limitations)
     assert telemetry.details["snapshot_generation"] == 1
     assert telemetry.details["accepted_envelopes"] == 1
+    assert telemetry.details["nodes_count"] == 1
+    assert telemetry.evidence_refs
+
+    from opentraces.core.context_tree import CONTEXT_NODE_OBSERVED
+    from opentraces.core.trails.event_log import read_events
+
+    assert any(
+        event.event_type == CONTEXT_NODE_OBSERVED and event.trace_id == trace_id
+        for event in read_events(project, verify=True)
+    )
 
 
 def test_persistent_and_leased_capture_have_normalized_material_parity(
@@ -880,6 +975,74 @@ def test_persistent_and_leased_capture_have_normalized_material_parity(
     assert report.path_normalization_applied is True
     assert report.differences == ()
     assert json.loads(report_path.read_text(encoding="utf-8")) == report.to_dict()
+
+
+def test_parity_compares_each_source_completeness_not_only_view_aggregate(
+    tmp_path: Path,
+) -> None:
+    """Swapping watcher/git outcomes must not disappear inside one partial view."""
+    results = []
+    projects = {}
+    for placement in ("persistent", "leased"):
+        project = _git_project(tmp_path / f"{placement}-project")
+        projects[placement] = project
+        source = _write_session(project, "source-parity-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=project,
+                    workspace=project,
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="source-parity-session",
+                    session_path=source,
+                    result_dir=tmp_path / f"{placement}-result",
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    reshaped = []
+    for placement, result in zip(("persistent", "leased"), results, strict=True):
+        template = result.source("session_jsonl")
+        watcher_full = placement == "persistent"
+        watcher = replace(
+            template,
+            name="watcher",
+            view="world_effects",
+            status="finalized" if watcher_full else "partial",
+            completeness="full" if watcher_full else "partial",
+        )
+        git = replace(
+            template,
+            name="git",
+            view="world_effects",
+            status="partial" if watcher_full else "finalized",
+            completeness="partial" if watcher_full else "full",
+        )
+        views = tuple(
+            replace(
+                view,
+                completeness="partial",
+                methods=("watcher", "git"),
+            )
+            if view.name == "world_effects"
+            else view
+            for view in result.views
+        )
+        reshaped.append(replace(result, sources=(*result.sources, watcher, git), views=views))
+
+    report = compare_placements(
+        reshaped[0],
+        reshaped[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+
+    assert report.view_completeness_match is True
+    assert report.source_completeness_match is False
+    assert report.matches is False
+    assert "source_completeness" in report.differences
 
 
 def test_parity_preserves_trace_ids_embedded_in_semantic_text(
@@ -1464,6 +1627,42 @@ def test_persistent_bindings_name_unavailable_hook_integration(
     assert session.bindings.hook_commands == ()
     assert session.bindings.hook_commands_status == "unavailable"
     assert "not installed" in session.bindings.hook_commands_reason
+
+
+def test_persistent_bindings_reject_inert_commands_containing_hook_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mentioning an installed hook as inert text is not an active registration."""
+    from opentraces.capture.claude_code.install import install, status
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    installed = install()
+    settings_path = installed.settings_file
+    assert settings_path is not None
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    for entries in settings["hooks"].values():
+        for entry in entries:
+            for hook in entry.get("hooks") or []:
+                hook["command"] = f"echo {hook['command']}"
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+    project = _git_project(tmp_path / "project")
+    session = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl",),
+            actor="claude-code",
+            result_dir=tmp_path / "result",
+        )
+    )
+
+    assert status()["installed"] is False
+    assert session.bindings.hook_commands == ()
+    assert session.bindings.hook_commands_status == "unavailable"
 
 
 def _write_identifiable_product_command(path: Path) -> Path:
