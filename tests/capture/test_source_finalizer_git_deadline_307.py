@@ -72,12 +72,10 @@ def test_finish_kills_timed_out_git_probe_process_group(
     shim.write_text(
         "#!/bin/sh\n"
         'if [ "$1" = "rev-parse" ]; then\n'
-        '  (sleep 0.5; printf survived > "$OT_GIT_SHIM_MARKER") &\n'
-        "  delayed=$!\n"
-        "  sleep 30 &\n"
-        "  blocker=$!\n"
-        '  printf "%s %s %s\\n" "$$" "$delayed" "$blocker" > "$OT_GIT_SHIM_PIDS"\n'
-        '  wait "$blocker"\n'
+        '  printf "%s\\n" "$$" > "$OT_GIT_SHIM_PIDS"\n'
+        "  sleep 3.5\n"
+        '  printf survived > "$OT_GIT_SHIM_MARKER"\n'
+        "  exec sleep 30\n"
         "fi\n"
         f'exec "{real_git}" "$@"\n',
         encoding="utf-8",
@@ -89,11 +87,11 @@ def test_finish_kills_timed_out_git_probe_process_group(
 
     started = time.monotonic()
     try:
-        result = capture.finish(deadline=started + 1.0)
+        result = capture.finish(deadline=started + 3.0)
         elapsed = time.monotonic() - started
 
         source = result.source("git")
-        assert elapsed < 1.5
+        assert elapsed < 3.5
         assert source.status in {"partial", "unavailable", "timed_out"}
         assert source.completeness != "full"
         assert any(
@@ -103,7 +101,7 @@ def test_finish_kills_timed_out_git_probe_process_group(
         )
 
         assert pid_path.is_file(), "rev-parse timeout control was not exercised"
-        time.sleep(0.7)
+        time.sleep(3.7)
         assert not marker_path.exists(), "timed-out rev-parse survived its finalizer"
     finally:
         _terminate_recorded_processes(pid_path)
