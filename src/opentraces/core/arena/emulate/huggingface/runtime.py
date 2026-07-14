@@ -35,6 +35,7 @@ TRUSTED_BUILD_MANIFEST = SERVER_SOURCE.with_name("trusted-build.json")
 BUILD_TIMEOUT_SECONDS = 120.0
 BUILD_LOCK_TIMEOUT_SECONDS = BUILD_TIMEOUT_SECONDS + 10.0
 BUILD_WORK_ROOT = Path("/tmp/opentraces-hf-build-v1")
+BUN_TOOLCHAIN_ROOT = BUILD_WORK_ROOT / "bun-toolchains"
 
 
 class EmulatorReadinessError(RuntimeError):
@@ -206,6 +207,54 @@ def _provenance_for_binary(path: Path) -> dict[str, Any]:
     }
 
 
+def _is_exact_bun_executable(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        observed = subprocess.run(
+            [str(path), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return observed == BUN_VERSION
+
+
+def _materialize_npx_bun(npx: str) -> Path:
+    workspace = BUN_TOOLCHAIN_ROOT / BUN_VERSION
+    record_path = workspace / "executable.json"
+    with _exclusive_build_lock(workspace / ".resolve.lock"):
+        if record_path.is_file():
+            try:
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                cached = Path(record["executable"])
+            except (OSError, json.JSONDecodeError, KeyError, TypeError):
+                cached = None
+            if cached is not None and _is_exact_bun_executable(cached):
+                return cached
+
+        resolved = subprocess.run(
+            [npx, "--yes", "--package", f"bun@{BUN_VERSION}", "which", "bun"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=BUILD_TIMEOUT_SECONDS,
+        ).stdout.strip()
+        if not resolved:
+            raise RuntimeError(f"npx did not materialize Bun {BUN_VERSION}")
+        candidate = Path(resolved.splitlines()[-1]).resolve()
+        if not _is_exact_bun_executable(candidate):
+            raise RuntimeError(f"npx materialized an invalid Bun {BUN_VERSION} executable")
+        _write_json_atomic(
+            record_path,
+            {"bun_version": BUN_VERSION, "executable": str(candidate)},
+        )
+        return candidate
+
+
 def pinned_bun_command(*args: str) -> list[str]:
     """Return a command for the exact Bun toolchain on ordinary dev/CI hosts."""
 
@@ -215,7 +264,7 @@ def pinned_bun_command(*args: str) -> list[str]:
 
     npx = shutil.which("npx")
     if npx is not None:
-        return [npx, "--yes", f"bun@{BUN_VERSION}", *args]
+        return [str(_materialize_npx_bun(npx)), *args]
 
     bun = shutil.which("bun")
     if bun is not None:

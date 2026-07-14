@@ -46,21 +46,61 @@ def test_standard_dev_install_provisions_the_pinned_real_client() -> None:
     assert '"hf-xet==1.4.3"' in dev_dependencies
 
 
-def test_pinned_bun_command_uses_npx_when_bun_and_bunx_are_absent(
+def test_pinned_bun_command_materializes_a_serving_ready_npx_toolchain(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
 
-    executables = {"bun": None, "bunx": None, "npx": "/usr/bin/npx"}
+    npx = hf_runtime.shutil.which("npx")
+    assert npx is not None
+
+    monkeypatch.setenv("npm_config_cache", str(tmp_path / "cold-npm-cache"))
+    monkeypatch.setattr(
+        hf_runtime,
+        "BUN_TOOLCHAIN_ROOT",
+        tmp_path / "resolved-bun-toolchain",
+        raising=False,
+    )
+    executables = {"bun": None, "bunx": None, "npx": npx}
     monkeypatch.setattr(hf_runtime.shutil, "which", executables.get)
 
-    assert hf_runtime.pinned_bun_command("run", str(SERVER_SOURCE)) == [
-        "/usr/bin/npx",
-        "--yes",
-        "bun@1.3.6",
-        "run",
-        str(SERVER_SOURCE),
-    ]
+    command = hf_runtime.pinned_bun_command("run", str(SERVER_SOURCE))
+    port = _free_port()
+    process = subprocess.Popen(
+        command,
+        env={
+            **os.environ,
+            "PORT": str(port),
+            "LEDGER_PATH": str(tmp_path / "npx-materialized-ledger.jsonl"),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        manifest = wait_for_hf_emulator(
+            f"http://127.0.0.1:{port}",
+            timeout=2.0,
+            poll_interval=0.01,
+        )
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=2)
+
+    assert Path(command[0]).is_file()
+    assert command[0] != npx
+    assert command[1:] == ["run", str(SERVER_SOURCE)]
+    observed_version = subprocess.run(
+        [command[0], "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    ).stdout.strip()
+    assert observed_version == "1.3.6"
+    assert manifest["id"] == "huggingface"
 
 
 def test_binary_sha_is_part_of_app_state_digest(tmp_path: Path) -> None:

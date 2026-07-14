@@ -29,8 +29,10 @@ Re-run the derivation after either pin changes.
 
 The standard dev extra and the path-scoped `Hugging Face emulator contract`
 workflow install `huggingface-hub==1.10.2` plus `hf-xet==1.4.3` explicitly.
-Contract tests resolve Bun 1.3.6 through bunx or the Node-provided npx fallback,
-so the maintained Python-only CI install still runs the real TypeScript sidecar.
+Contract tests resolve Bun 1.3.6 through bunx or a locked, one-time
+materialization from the Node-provided npx fallback. Emulator processes execute
+the verified Bun binary directly, so concurrent Python-only CI workers still
+run the real TypeScript sidecar without paying package resolution at readiness.
 The real `install-only` materializer installs the complete exact environment in
 `client-lock.json` with dependency resolution disabled, probes every locked
 distribution inside the lease, and includes both the full observed map and the
