@@ -229,7 +229,11 @@ def _write_raw_message_reference(trace_path: Path, payload: dict[str, object]) -
 
 
 def _write_context_reference(trace_path: Path, content_hash: str) -> None:
-    row = {"payload": {"content": {"messages": [{"content_hash": content_hash}]}}}
+    row = _canonical_companion_row(
+        trace_path,
+        family="context",
+        payload={"content": {"messages": [{"content_hash": content_hash}]}},
+    )
     with trace_path.with_name("context.jsonl.gz").open("wb") as raw:
         with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped:
             zipped.write((json.dumps(row, sort_keys=True) + "\n").encode())
@@ -238,6 +242,43 @@ def _write_context_reference(trace_path: Path, content_hash: str) -> None:
 def _read_companion(path: Path) -> list[dict[str, object]]:
     with gzip.open(path, "rt", encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
+
+
+def _canonical_companion_row(
+    trace_path: Path,
+    *,
+    family: str,
+    payload: dict[str, object] | None = None,
+    trace_id: str | None = None,
+) -> dict[str, object]:
+    from opentraces.core.trails.models import finalize_event
+
+    event_type = (
+        "context_layer_captured" if family == "context" else "filesystem_mutation_observed"
+    )
+    event = finalize_event(
+        {
+            "event_sequence": 1,
+            "event_time": "2026-07-13T10:00:00Z",
+            "previous_event_id": None,
+            "trace_id": trace_id or trace_path.parent.name,
+            "generation_index": 0,
+            "step_index": 0,
+            "batch_id": "batch-parity-fixture",
+            "writer": "portable-capture-test",
+            "capture_method": ["test_fixture"],
+            "event_type": event_type,
+            "payload": payload or {"proof": "substantive"},
+        }
+    )
+    return event.model_dump(mode="json")
+
+
+def _write_companion_rows(path: Path, rows: list[dict[str, object]]) -> None:
+    with path.open("wb") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped:
+            for row in rows:
+                zipped.write((json.dumps(row, sort_keys=True) + "\n").encode())
 
 
 def test_killed_required_source_is_persisted_as_partial_before_deadline(
@@ -412,6 +453,73 @@ def test_finalizer_report_is_validated_before_it_can_claim_evidence(
     assert observed.status == "unavailable"
     assert observed.completeness == "missing"
     assert any("invalid finalizer report" in item for item in observed.limitations)
+
+
+@pytest.mark.parametrize("forgery", ["missing_trace_id", "nonexistent_evidence"])
+def test_well_typed_session_finalizer_report_without_produced_evidence_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    forgery: str,
+) -> None:
+    from opentraces.capture import portable as portable_capture
+
+    project = _git_project(tmp_path / "project")
+    source = _write_session(project, "forged-finalizer-session")
+    result_dir = tmp_path / "result"
+
+    class ForgedChild:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs) -> None:
+            request_path = Path(argv[argv.index("--request") + 1])
+            report_path = Path(argv[argv.index("--report") + 1])
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            trace_id = "forged-trace"
+            report = {
+                "invocation_nonce": request["invocation_nonce"],
+                "status": "finalized",
+                "completeness": "full",
+                "evidence_refs": [
+                    str(source)
+                    if forgery == "missing_trace_id"
+                    else str(tmp_path / "does-not-exist.jsonl")
+                ],
+                "limitations": [],
+                "details": (
+                    {} if forgery == "missing_trace_id" else {"trace_id": trace_id}
+                ),
+                "trace_id": None if forgery == "missing_trace_id" else trace_id,
+            }
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+        def wait(self, timeout=None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="persistent",
+            requested_sources=("session_jsonl",),
+            required_sources=("session_jsonl",),
+            session_id="forged-finalizer-session",
+            session_path=source,
+            result_dir=result_dir,
+        )
+    )
+    monkeypatch.setattr(portable_capture.subprocess, "Popen", ForgedChild)
+
+    result = capture.finish(deadline=time.monotonic() + 2.0)
+
+    observed = result.source("session_jsonl")
+    assert observed.status == "unavailable"
+    assert observed.completeness == "missing"
+    assert any("invalid session_jsonl finalizer evidence" in item for item in observed.limitations)
+    assert "forged-trace" not in result.trace_refs
 
 
 def test_persistent_capture_owns_ingest_and_bucket_projection(tmp_path: Path) -> None:
@@ -1764,10 +1872,12 @@ def test_parity_rejects_each_empty_required_companion_family_independently(
     for result in results:
         trace_path = Path(result.source("bucket").details["trace_path"])
         for family in ("context", "trail"):
-            body = b"" if family == empty_family else b'{"payload":{"proof":"substantive"}}\n'
-            with trace_path.with_name(f"{family}.jsonl.gz").open("wb") as raw:
-                with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped:
-                    zipped.write(body)
+            rows = (
+                []
+                if family == empty_family
+                else [_canonical_companion_row(trace_path, family=family)]
+            )
+            _write_companion_rows(trace_path.with_name(f"{family}.jsonl.gz"), rows)
 
     report = compare_placements(
         results[0],
@@ -1821,6 +1931,77 @@ def test_parity_marks_both_missing_canonical_companions_unproven_even_when_optio
     assert "unproven_trail_companion" in report.differences
     assert any("context companion parity is unproven" in item for item in report.limitations)
     assert any("trail companion parity is unproven" in item for item in report.limitations)
+
+
+@pytest.mark.parametrize("family", ["context", "trail"])
+def test_parity_rejects_noncanonical_or_wrong_family_companion_evidence(
+    tmp_path: Path,
+    family: str,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "canonical-companion-session")
+        result = Capture.open(
+            CapturePlan(
+                project=projects[placement],
+                workspace=projects[placement],
+                placement=placement,
+                requested_sources=("session_jsonl", "bucket"),
+                required_sources=("session_jsonl", "bucket"),
+                session_id="canonical-companion-session",
+                session_path=source,
+                result_dir=tmp_path / placement,
+            )
+        ).finish(deadline=time.monotonic() + 10.0)
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        results.append(result)
+    corruptions = (
+        "empty_object",
+        "malformed_envelope",
+        "unrelated_trace",
+        "wrong_family",
+        "invalid_event_id",
+        "invalid_content_hash",
+    )
+    for corruption in corruptions:
+        for result in results:
+            trace_path = Path(result.source("bucket").details["trace_path"])
+            row = _canonical_companion_row(trace_path, family=family)
+            if corruption == "empty_object":
+                row = {}
+            elif corruption == "malformed_envelope":
+                row["event_sequence"] = "not-an-integer"
+            elif corruption == "unrelated_trace":
+                row = _canonical_companion_row(
+                    trace_path,
+                    family=family,
+                    trace_id="unrelated-trace",
+                )
+            elif corruption == "wrong_family":
+                row = _canonical_companion_row(
+                    trace_path,
+                    family="trail" if family == "context" else "context",
+                )
+            elif corruption == "invalid_event_id":
+                row["event_id"] = "trailevent-sha256:" + "0" * 64
+            else:
+                row["content_hash"] = "sha256:" + "0" * 64
+            _write_companion_rows(trace_path.with_name(f"{family}.jsonl.gz"), [row])
+
+        report = compare_placements(
+            results[0],
+            results[1],
+            persistent_roots=(projects["persistent"],),
+            leased_roots=(projects["leased"],),
+        )
+
+        assert report.matches is False, corruption
+        assert getattr(report, f"{family}_companion_match") is False, corruption
+        assert f"unproven_{family}_companion" in report.differences, corruption
 
 
 def test_explicit_security_tools_are_applied_and_observed(tmp_path: Path) -> None:
@@ -2094,6 +2275,24 @@ fi
     return path
 
 
+def _write_observer_env_sensitive_product_command(path: Path) -> Path:
+    path.write_text(
+        """#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "${OBSERVER_PRODUCT_VERSION_OVERRIDE:-1.2.3}"
+elif [ "$1" = "serve" ]; then
+    trap 'exit 0' TERM INT
+    while :; do sleep 1; done
+else
+    exit 2
+fi
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def test_required_non_self_observation_rejects_unrelated_live_process(
     tmp_path: Path,
 ) -> None:
@@ -2265,6 +2464,53 @@ def test_required_non_self_observation_does_not_trust_declared_launcher_env(
     assert spoofed.product_under_test_version == "1.2.3"
     assert attestation["version"] == "1.2.3"
     assert any("version probe mismatch" in item for item in spoofed.limitations)
+
+
+def test_product_version_probe_does_not_inherit_observer_only_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    product_command = _write_observer_env_sensitive_product_command(
+        tmp_path / "opentraces-product"
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    product = subprocess.Popen([bash, str(product_command), "serve"])
+    monkeypatch.setenv("OBSERVER_PRODUCT_VERSION_OVERRIDE", "7.8.9")
+    monkeypatch.setenv("PYTHONPATH", "/observer-only/python")
+    monkeypatch.setenv("LD_PRELOAD", "/observer-only/loader.so")
+    try:
+        result = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=("watcher",),
+                required_sources=("watcher",),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                product_under_test_version="7.8.9",
+                product_under_test_version_probe=(
+                    str(product_command),
+                    "--version",
+                ),
+                result_dir=tmp_path / "observer-env",
+            )
+        ).finish(deadline=time.monotonic() + 5.0)
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    probe = result.provenance["product_under_test"]["version_probe"]
+    assert result.completeness == "partial"
+    assert result.provenance["separation"]["proven"] is False
+    assert result.product_under_test_version == "1.2.3"
+    assert probe["environment"]["policy"] == "deterministic_minimal_v1"
+    assert probe["environment"]["digest"].startswith("sha256:")
+    assert "OBSERVER_PRODUCT_VERSION_OVERRIDE" not in probe["environment"]["keys"]
+    assert "PYTHONPATH" not in probe["environment"]["keys"]
+    assert "LD_PRELOAD" not in probe["environment"]["keys"]
 
 
 def test_required_non_self_observation_uses_observed_product_identity_and_version(
