@@ -105,6 +105,8 @@ def _validate_subject(subject: object) -> dict[str, str]:
             raise LabelContractError("slice subject address must be trace:A-B with A <= B")
     else:
         raise LabelContractError("subject kind must be trace or slice")
+    if _subject_trace_id({"kind": str(kind), "address": address}) in {".", ".."}:
+        raise LabelContractError("subject trace address cannot be a path segment")
     return {"kind": kind, "address": address}
 
 
@@ -433,6 +435,8 @@ def attach_labels(
     """Merge verified rows into a deterministic sibling companion."""
 
     trace_path = trace_v1_json_path(project_slug, trace_id)
+    if not trace_path.resolve().is_relative_to(traces_v1_root().resolve()):
+        raise LabelContractError("label companion path must remain inside traces/v1")
     if not trace_path.is_file():
         raise LabelIntegrityError("label subject trace does not exist in the bucket")
     try:
@@ -468,6 +472,7 @@ def label_summary_for_trace(trace_id: str, *, limit: int = 8) -> dict[str, Any]:
 
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ValueError("label summary limit must be a non-negative integer")
+    _validate_subject({"kind": "trace", "address": trace_id})
     root = traces_v1_root()
     rows_by_id: dict[str, dict[str, Any]] = {}
     if root.is_dir():

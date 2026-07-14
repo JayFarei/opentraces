@@ -379,6 +379,8 @@ def test_missing_run_and_mismatched_digest_refuse_mint_or_verification(
         {"kind": "slice", "address": "trace:3-2"},
         {"kind": "run", "address": TRACE_ID},
         {"kind": "trace", "address": ""},
+        {"kind": "trace", "address": "."},
+        {"kind": "trace", "address": ".."},
     ],
 )
 def test_mint_refuses_noncanonical_trace_or_slice_subjects(
