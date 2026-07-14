@@ -9,6 +9,7 @@ import pytest
 from opentraces.core.arena.page import render_evidence_page
 
 from opentraces.core.arena.box import Box, BoxCommandResult
+from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.engine import ScenarioSource
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
@@ -49,6 +50,27 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
         "JayFarei/opentraces",
         "abc123",
         None,
+    )
+
+
+def _result(run_id: str, *, recordings: dict) -> dict:
+    return build_result(
+        run_id=run_id,
+        claim="Stored evidence remains inside its finalized run.",
+        nodeid="tests/core/arena/test_page.py::test_page",
+        source_ref="source/scenario.py",
+        execution_mode="direct",
+        started_at="2026-07-14T12:00:00Z",
+        duration_ms=1,
+        execution_status="complete",
+        verdict="pass",
+        reason=None,
+        verifiers=[],
+        evidence={"complete": True, "requirements": []},
+        recordings=recordings,
+        artifacts=[],
+        capture=None,
+        pins={},
     )
 
 
@@ -123,3 +145,53 @@ def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> No
         render_evidence_page(run.final_path, output)
 
     assert not output.exists()
+
+
+def test_page_names_and_omits_a_recording_ref_that_escapes_the_run(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    recordings = {
+        "rewatchable": True,
+        "channels": [
+            {
+                "kind": "terminal",
+                "complete": True,
+                "path": "../escape.cast",
+                "reason": None,
+                "casts": [
+                    {
+                        "ordinal": 1,
+                        "label": "escaped cast",
+                        "cast_ref": "../escape.cast",
+                        "duration_ms": 1,
+                    }
+                ],
+            }
+        ],
+    }
+    finalized = draft.finalize(_result(draft.run_id, recordings=recordings))
+    (store.root / "escape.cast").write_text("outside the run\n", encoding="utf-8")
+
+    assert store.verify(finalized) is True
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    assert "MISSING RECORDING" in html
+    assert "../escape.cast" in html
+    assert "data-cast=" not in html
+
+
+def test_page_names_and_omits_an_exhaust_symlink_that_escapes_the_run(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside the run\n", encoding="utf-8")
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    (draft.path / "artifacts" / "outside.txt").symlink_to(outside)
+    recordings = {"rewatchable": False, "channels": []}
+    finalized = draft.finalize(_result(draft.run_id, recordings=recordings))
+
+    assert store.verify(finalized) is True
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    assert "MISSING EXHAUST" in html
+    assert "artifacts/outside.txt" in html
+    assert ">artifacts/outside.txt</a>" not in html
