@@ -172,6 +172,8 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
         repository="JayFarei/opentraces",
         commit="abc123",
         dirty_diff_digest=None,
+        product_worktree="clean",
+        product_dirty_diff_digest=None,
     )
 
 

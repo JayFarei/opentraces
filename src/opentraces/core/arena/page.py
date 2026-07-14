@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from .._bucket_io import _atomic_write_text
+from .run_store import RunStore
 
 
 def _h(value: object) -> str:
@@ -18,10 +19,23 @@ def _href(page_dir: Path, target: Path) -> str:
     return Path(os.path.relpath(target, page_dir)).as_posix()
 
 
+def _resolve_run_ref(run_path: Path, reference: object) -> Path | None:
+    if not isinstance(reference, str) or not reference:
+        return None
+    try:
+        target = (run_path / reference).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if not target.is_relative_to(run_path) or not target.is_file():
+        return None
+    return target
+
+
 def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Path:
     """Render only frozen bytes; never execute a verifier or recompute a verdict."""
 
     run_path = Path(run_path).resolve()
+    RunStore(run_path.parent).verify(run_path)
     result = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
     if output_path is None:
         output_path = run_path.parent.parent / "pages" / run_path.name / "index.html"
@@ -72,7 +86,16 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         if channel.get("complete") and path:
             casts = channel.get("casts") or [{"cast_ref": path, "label": channel["kind"]}]
             for cast_index, cast in enumerate(casts, start=1):
-                cast_path = run_path / cast["cast_ref"]
+                cast_ref = cast.get("cast_ref")
+                cast_path = _resolve_run_ref(run_path, cast_ref)
+                if cast_path is None:
+                    players.append(
+                        '<article class="card incomplete">'
+                        '<div class="eyebrow">MISSING RECORDING</div>'
+                        f'<p>{_h(cast_ref)}</p>'
+                        "</article>"
+                    )
+                    continue
                 player_id = f"cast-{index}-{cast_index}"
                 players.append(
                     '<article class="card player">'
@@ -101,11 +124,22 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             "result.json",
         }
     )
-    exhaust_links = "".join(
-        f'<a href="{_h(_href(page_dir, run_path / relative))}">{_h(relative)}</a>'
-        for relative in exhaust_refs
-    )
+    exhaust_items = []
+    for relative in exhaust_refs:
+        target = _resolve_run_ref(run_path, relative)
+        if target is None:
+            exhaust_items.append(
+                f'<span><strong>MISSING EXHAUST</strong> · {_h(relative)}</span>'
+            )
+        else:
+            exhaust_items.append(
+                f'<a href="{_h(_href(page_dir, target))}">{_h(relative)}</a>'
+            )
+    exhaust_links = "".join(exhaust_items)
     verdict = result.get("verdict") or "error"
+    product_pin = result.get("pins", {}).get("product") or {}
+    product_commit = product_pin.get("commit") or "unavailable"
+    product_worktree = product_pin.get("worktree") or "unavailable"
     reason = result.get("reason") or {}
     reason_html = (
         '<section class="card outcome">'
@@ -173,6 +207,8 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <div class="eyebrow">OPENTRACES · BENCH.V0 · {_h(result["run_id"])}</div>
 <h1>{_h(result["scenario"]["claim"])}</h1>
 <section class="facts"><div class="fact"><div class="eyebrow">VERDICT</div><div class="verdict">{_h(verdict.upper())}</div></div>
+<div class="fact"><div class="eyebrow">MODE</div>{_h(result["execution_mode"])}</div>
+<div class="fact"><div class="eyebrow">PRODUCT PIN</div><code>{_h(product_commit)}</code><div>worktree {_h(product_worktree)}</div></div>
 <div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result["execution_status"])}</div>
 <div class="fact"><div class="eyebrow">EVIDENCE</div>{"complete" if result["evidence"]["complete"] else "incomplete"}</div>
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>

@@ -37,6 +37,8 @@ def _bench(tmp_path: Path) -> Bench:
             "JayFarei/opentraces",
             "abc123",
             None,
+            "clean",
+            None,
         ),
         store=RunStore(tmp_path / "runs" / "v1"),
         box_runtime=Runtime(),

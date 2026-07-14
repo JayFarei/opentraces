@@ -43,6 +43,33 @@ def _git(repository: Path, *args: str) -> str | None:
     return value if completed.returncode == 0 and value else None
 
 
+def _product_worktree(repository: Path) -> tuple[str, str | None]:
+    """Return the observed cleanliness of the code packaged for a bench run."""
+
+    scope = ("src", "packages", "pyproject.toml")
+
+    def observe(*args: str) -> bytes:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=repository,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"could not observe product worktree: git {args[0]} "
+                f"exited {completed.returncode}"
+            )
+        return completed.stdout
+
+    status = observe("status", "--porcelain=v1", "-z", "--", *scope)
+    diff = observe("diff", "--binary", "HEAD", "--", *scope)
+    if not status and not diff:
+        return "clean", None
+    digest = hashlib.sha256(status + diff).hexdigest()
+    return "dirty", f"sha256:{digest}"
+
+
 def _public_scenario_path(source_path: Path, repository: Path) -> str:
     """Return a repository coordinate or a content-derived private fallback."""
 
@@ -66,6 +93,7 @@ def _scenario_source(request: pytest.FixtureRequest, repository: Path) -> Scenar
         check=False,
     ).stdout
     dirty_digest = f"sha256:{hashlib.sha256(diff).hexdigest()}" if diff else None
+    product_worktree, product_dirty_diff_digest = _product_worktree(repository)
     return ScenarioSource(
         nodeid=request.node.nodeid,
         claim=extract_claim(function),
@@ -74,6 +102,8 @@ def _scenario_source(request: pytest.FixtureRequest, repository: Path) -> Scenar
         repository=repository_identity,
         commit=_git(repository, "rev-parse", "HEAD"),
         dirty_diff_digest=dirty_digest,
+        product_worktree=product_worktree,
+        product_dirty_diff_digest=product_dirty_diff_digest,
     )
 
 
