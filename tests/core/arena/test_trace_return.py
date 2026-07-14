@@ -39,7 +39,9 @@ def _finalized_run(
     tmp_path: Path,
     monkeypatch,
     *,
+    claim: str = "Publishing reaches the configured remote.",
     commit_shaped_action: bool = False,
+    first_stdout: str = "published demo\n",
     omit_first_stdout: bool = False,
     pins: dict[str, object] | None = None,
 ) -> tuple[RunStore, Path]:
@@ -51,7 +53,7 @@ def _finalized_run(
         "source/source.json",
         {
             "nodeid": "tests/scenarios/test_publish.py::test_publish",
-            "claim": "Publishing reaches the configured remote.",
+            "claim": claim,
             "scenario_path": "tests/scenarios/test_publish.py",
             "repository": "JayFarei/opentraces",
             "commit": "2ab03ac637e",
@@ -63,7 +65,7 @@ def _finalized_run(
         (
             ["opentraces", "dataset", "publish", "demo"],
             ".",
-            "published demo\n",
+            first_stdout,
             "",
             0,
             17,
@@ -120,7 +122,7 @@ def _finalized_run(
 
     result = build_result(
         run_id=draft.run_id,
-        claim="Publishing reaches the configured remote.",
+        claim=claim,
         nodeid="tests/scenarios/test_publish.py::test_publish",
         source_ref="source/scenario.py",
         execution_mode="direct",
@@ -274,6 +276,36 @@ def test_missing_partial_or_malformed_product_pin_is_refused(
         )
 
     assert read_bucket_record_for_trace(TRACE_ID) is None
+
+
+def test_security_pipeline_preserves_canonical_claim_but_sanitizes_other_content(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    claim_token = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+    output_token = "ghp_zyxwvutsrqponmlkjihgfedcba0987654321"
+    claim = f"The scanner recognizes {claim_token}."
+    store, run_path = _finalized_run(
+        tmp_path,
+        monkeypatch,
+        claim=claim,
+        first_stdout=f"observed {output_token}\n",
+    )
+    cfg = Config()
+    cfg.security.regex.enabled = True
+
+    returned = return_run_as_trace(
+        run_path,
+        project_dir=_project(tmp_path),
+        store=store,
+        cfg=cfg,
+    )
+
+    assert returned.task.description == claim
+    assert returned.steps[0].content == claim
+    assert output_token not in (returned.steps[1].observations[0].content or "")
+    assert "[REDACTED]" in (returned.steps[1].observations[0].content or "")
+    assert "regex" in returned.metadata["security"]["tools_applied"]
 
 
 def test_tampered_run_is_refused_before_any_trace_is_written(
