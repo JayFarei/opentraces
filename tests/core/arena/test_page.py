@@ -17,6 +17,8 @@ from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.engine import ScenarioSource
 from opentraces.core.arena.pytest_plugin import _scenario_source
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
+from tests.core.arena.test_browser_drive import PublicBrowserSession
+from tests.core.arena.test_engine import RecordingBoxRuntime
 
 
 class FakeBoxRuntime:
@@ -309,3 +311,55 @@ def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
     html = render_evidence_page(finalized).read_text(encoding="utf-8")
 
     assert '<div class="eyebrow">MODE</div>agent_replay' in html
+
+
+def test_page_renders_each_recording_kind_against_the_stored_focus_timeline(
+    tmp_path: Path,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=PublicBrowserSession,
+    )
+
+    def cross_surface(run):
+        before = run.terminal.exec("printf", "before")
+        browser = run.browser.inspect("main")
+        after = run.terminal.exec("printf", "after")
+        return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(cross_surface)
+
+    result_before = (run.final_path / "result.json").read_bytes()
+    timeline_before = (run.final_path / "recordings/timeline.jsonl").read_bytes()
+    playlist = json.loads(
+        (run.final_path / "recordings/playlist.json").read_text(encoding="utf-8")
+    )
+    page = render_evidence_page(run.final_path)
+    rendered = page.read_text(encoding="utf-8")
+
+    assert "Cross-surface timeline" in rendered
+    assert rendered.index("actions/0001") < rendered.index("actions/0002")
+    assert rendered.index("actions/0002") < rendered.index("actions/0003")
+    assert 'data-action-ref="actions/0001"' in rendered
+    assert 'data-surface="browser"' in rendered
+    assert 'data-event="focus_changed"' in rendered
+    assert 'data-sequence="1"' in rendered
+    assert "Causal: actions/0001" in rendered
+
+    assert '<video controls' in rendered
+    assert "recordings/browser/video/session.webm" in rendered
+    assert "Open Playwright trace" in rendered
+    assert "recordings/browser/trace/trace.zip" in rendered
+    assert '<img loading="lazy"' in rendered
+    assert "recordings/browser/screenshots/final.png" in rendered
+    assert rendered.count("data-cast=") == 2
+    assert "data-media-kind=\"browser_video\"" in rendered
+    assert "data-focus-boundary" in rendered
+
+    assert set(playlist) == {"markers"}
+    assert (run.final_path / "result.json").read_bytes() == result_before
+    assert (run.final_path / "recordings/timeline.jsonl").read_bytes() == timeline_before
