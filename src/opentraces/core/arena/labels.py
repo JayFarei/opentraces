@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from opentraces_schema import TraceMap, TraceRecord
+from opentraces_schema import TraceRecord
 from pydantic import ValidationError
 
 from .._bucket_io import (
@@ -507,7 +507,10 @@ def _slice_pin_for_run(
         raise LabelIntegrityError("materialized slice artifact must be a JSON object")
     _validate_materialized_slice(stored, provenance_kind=provenance_kind)
     if _canonical_json(stored) != _canonical_json(validated):
-        raise LabelIntegrityError("stored slice does not match fresh materialization")
+        raise LabelIntegrityError(
+            "stored slice does not match fresh materialization from "
+            "the authoritative current Trace Map"
+        )
 
     pin: dict[str, Any] = {
         "provenance_kind": provenance_kind,
@@ -811,16 +814,23 @@ def _canonical_subject_trace(trace_id: str) -> TraceRecord:
 
 
 def _trace_ref_for_label(row: Mapping[str, Any], run_path: Path) -> TraceMaterializationRef:
+    del run_path
     pin = row["slice_pin"]
-    artifact_path = run_path / pin["materialized_ref"]
-    artifact = _read_object(artifact_path, name="materialized slice artifact")
-    try:
-        trace_map = TraceMap.model_validate(artifact.get("map"))
-    except (ValueError, ValidationError) as exc:
-        raise LabelIntegrityError("materialized slice map is invalid") from exc
     record = _canonical_subject_trace(pin["trace_id"])
     if record.generation_index != pin["generation_index"]:
         raise LabelIntegrityError("slice pin generation does not match the canonical trace")
+    from ..trace_index import default_index_path, get_trace_map
+
+    rebuilt_map = TraceMaterializationRef.from_record(record).trace_map
+    index_path = default_index_path()
+    indexed_map = (
+        get_trace_map(record.trace_id, index_path=index_path) if index_path.is_file() else None
+    )
+    trace_map = (
+        indexed_map.model_copy(update={"limitations": list(rebuilt_map.limitations)})
+        if indexed_map is not None
+        else rebuilt_map
+    )
     return TraceMaterializationRef(record=record, trace_map=trace_map)
 
 

@@ -52,6 +52,7 @@ def _real_capture_record() -> TraceRecord:
 
 def _set_bucket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bucket = tmp_path / "bucket"
+    monkeypatch.setattr(paths, "OPENTRACES_DIR", tmp_path)
     monkeypatch.setattr(paths, "bucket_dir", lambda: bucket)
     return bucket
 
@@ -61,6 +62,28 @@ def _persist_subject(record: TraceRecord) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(record.model_dump_json() + "\n", encoding="utf-8")
     return path
+
+
+def _persist_authoritative_map(trace_map) -> None:
+    from opentraces.core.trace_index import _connect, _create_schema, default_index_path
+
+    index_path = default_index_path()
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with _connect(index_path, wal=False) as connection:
+        _create_schema(connection)
+        for ordinal, node in enumerate(trace_map.nodes, 1):
+            connection.execute(
+                "insert into trace_map_nodes(node_id, trace_id, ordinal, payload) "
+                "values (?, ?, ?, ?)",
+                (node.node_id, node.trace_id, ordinal, node.model_dump_json()),
+            )
+        for ordinal, edge in enumerate(trace_map.edges, 1):
+            connection.execute(
+                "insert into trace_map_edges(edge_id, trace_id, ordinal, payload) "
+                "values (?, ?, ?, ?)",
+                (edge.edge_id, edge.trace_id, ordinal, edge.model_dump_json()),
+            )
+        connection.commit()
 
 
 def _extract_json(output: str) -> dict:
@@ -379,7 +402,9 @@ def test_rich_trail_refs_and_limitations_survive_pin_and_fresh_reverification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_bucket(tmp_path, monkeypatch)
-    record = _real_capture_record()
+    record = _real_capture_record().model_copy(deep=True)
+    record.metadata.pop("cwd", None)
+    record.metadata.pop("hook_pre_tool_use", None)
     _persist_subject(record)
     position, call = next(
         (position, step.tool_calls[0])
@@ -404,13 +429,8 @@ def test_rich_trail_refs_and_limitations_survive_pin_and_fresh_reverification(
                 }
             ]
 
-    enriched = TraceMaterializationRef.from_record(record, trail_projection=Projection())
-    trace_ref = TraceMaterializationRef(
-        record=record,
-        trace_map=enriched.trace_map.model_copy(
-            update={"limitations": ["path_normalization_failed"]}
-        ),
-    )
+    trace_ref = TraceMaterializationRef.from_record(record, trail_projection=Projection())
+    _persist_authoritative_map(trace_ref.trace_map)
     trajectory = Trajectory(
         start=position,
         end=position,
