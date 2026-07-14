@@ -5,17 +5,27 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from importlib.metadata import version
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterator
 
 import pytest
 
-from opentraces.core.arena.emulate.huggingface.runtime import pinned_bun_command
+from opentraces.core.arena.emulate.huggingface.runtime import (
+    DEFAULT_PORT,
+    EmulatorBinaryPin,
+    HuggingFaceEmulator,
+    LEDGER_EVIDENCE_REF,
+    REMOTE_LEDGER,
+    pinned_bun_command,
+    wait_for_hf_emulator,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +86,34 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=2)
+
+
+class _RealLocalStopRuntime:
+    """Execute the production stop script against a real local sidecar process."""
+
+    def __init__(self, *, pid_path: Path, ledger_path: Path) -> None:
+        self.pid_path = pid_path
+        self.ledger_path = ledger_path
+
+    def exec(self, _box, argv, *, cwd=None, env=None, timeout=60, timing_path=None):
+        assert argv[:2] == ["sh", "-c"]
+        script = argv[2]
+        script = script.replace("/tmp/opentraces-hf-emulator.pid", str(self.pid_path))
+        script = script.replace(f"sudo -u opentraces-hf cat {REMOTE_LEDGER}", f"cat {self.ledger_path}")
+        observed = subprocess.run(
+            ["sh", "-c", script],
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return SimpleNamespace(
+            returncode=observed.returncode,
+            stdout=observed.stdout,
+            stderr=observed.stderr,
+        )
 
 
 def _get_json(url: str) -> dict:
@@ -1332,6 +1370,81 @@ HFUploader(
 
     assert result.returncode != 0
     assert "Connection refused" in result.stderr or "ConnectError" in result.stderr
+
+
+def test_hf_stop_proves_real_process_death_before_final_ledger_snapshot(
+    tmp_path: Path,
+) -> None:
+    """The production lifecycle stops a real pinned sidecar before sealing evidence."""
+
+    endpoint = f"http://127.0.0.1:{DEFAULT_PORT}"
+    ledger_path = tmp_path / "real-stop-ledger.jsonl"
+    pid_path = tmp_path / "real-stop.pid"
+    process = subprocess.Popen(
+        pinned_bun_command("run", str(SERVER_SOURCE)),
+        env={
+            **os.environ,
+            "PORT": str(DEFAULT_PORT),
+            "LEDGER_PATH": str(ledger_path),
+        },
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
+    waiter: threading.Thread | None = None
+    try:
+        wait_for_hf_emulator(endpoint)
+        observed = _run_hf_client(
+            endpoint,
+            """
+from huggingface_hub import HfApi
+HfApi(token="hf_bench_user_token").whoami()
+""",
+        )
+        assert observed.returncode == 0, observed.stderr
+        pre_stop_rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+        pre_stop_whoami = next(row for row in pre_stop_rows if row["operation_id"] == "whoami")
+
+        run_path = tmp_path / "run"
+        hf = HuggingFaceEmulator(
+            runtime=_RealLocalStopRuntime(pid_path=pid_path, ledger_path=ledger_path),
+            box=None,
+            repository=ROOT,
+            run_path=run_path,
+            binary_pin=EmulatorBinaryPin(sha256="0" * 64, size_bytes=0),
+            world_setup={},
+        )
+        waiter = threading.Thread(target=process.wait, daemon=True)
+        waiter.start()
+        hf.stop()
+        waiter.join(timeout=2)
+
+        assert process.returncode is not None
+        with pytest.raises(OSError):
+            urllib.request.urlopen(f"{endpoint}/_emulate/manifest", timeout=0.2)
+
+        post_death = _run_hf_client(
+            endpoint,
+            """
+from huggingface_hub import HfApi
+HfApi(token="hf_bench_user_token").create_repo(
+    "bench/post-death", repo_type="dataset"
+)
+""",
+        )
+        assert post_death.returncode != 0
+        final_path = run_path / LEDGER_EVIDENCE_REF
+        assert final_path.read_bytes() == ledger_path.read_bytes()
+        final_rows = [json.loads(line) for line in final_path.read_text().splitlines()]
+        assert pre_stop_whoami in final_rows
+        assert not any(row["operation_id"] == "commit" for row in final_rows)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        if waiter is not None:
+            waiter.join(timeout=2)
 
 
 def test_dataset_publish_dead_endpoint_is_named_and_does_not_advance_local_state(
