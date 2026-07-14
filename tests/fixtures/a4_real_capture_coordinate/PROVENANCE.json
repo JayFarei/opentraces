@@ -1,0 +1,39 @@
+{
+  "derivation": {
+    "dropped": [
+      "remaining 417 steps",
+      "repository diff and unrelated environment metadata",
+      "patch, attribution, and session-summary payloads"
+    ],
+    "preserved": [
+      "parser-assigned step_index values",
+      "step order, roles, call types, timestamps, model, token counts",
+      "tool-call and observation structure"
+    ],
+    "replaced": [
+      "trace, session, tool-call, Git, and path-bearing identifiers",
+      "user-authored text, command path, and command output"
+    ],
+    "target_schema_version": "0.9.0"
+  },
+  "fixture_sha256": "bb25e0965cceab8baef692b6e7df679b4c06f2074208f7b082502191cdc71e64",
+  "retained_step_indices": [
+    1,
+    2,
+    3
+  ],
+  "sanitized": true,
+  "schema_version": "opentraces.test_capture_provenance.v1",
+  "source": {
+    "capture_agent": "claude-code",
+    "capture_agent_version": "2.1.123",
+    "capture_started_at": "2026-04-29T10:23:00.283Z",
+    "git_commit": "8c9ef597295b8ee932455e273a33d0f22eca6789",
+    "repository_path": "tests/integration/fixtures/entry6/trace.jsonl",
+    "session_id_sha256": "326e09d2e41742435c1f86cd6d86050a33b21d2ee1eb50aa93d3a99787aa1bab",
+    "sha256": "9d0c4b29e22b8745f2e1119d2bb0ad85191824a585a96c06c20a363b41c61972",
+    "source_schema_version": "0.3.0",
+    "total_steps": 420
+  },
+  "source_kind": "real_agent_capture"
+}

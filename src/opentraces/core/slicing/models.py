@@ -13,6 +13,7 @@ The cheap-LLM step (S3/S4) is resolved by a pluggable judge through a frozen
 ``JudgmentRequest`` / ``JudgmentAnswer`` schema, versioned alongside the
 ``opentraces.slicing.v1`` envelope.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

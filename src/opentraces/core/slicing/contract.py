@@ -10,6 +10,7 @@ NO ``TraceRecord.SCHEMA_VERSION`` bump.
 ``opentraces.slicing.judgment.v1`` — the JudgmentRequest / JudgmentAnswer schema.
 ``opentraces.slicing.needs_judgment.v1`` — the ``rc=10`` agent-loop handshake.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -92,9 +93,7 @@ def build_needs_judgment(
         "tier": tier,
         "total_steps": total_steps,
         "judgment_schema_version": JUDGMENT_SCHEMA_VERSION,
-        "judgment_requests": [
-            (r.to_dict() if hasattr(r, "to_dict") else r) for r in requests
-        ],
+        "judgment_requests": [(r.to_dict() if hasattr(r, "to_dict") else r) for r in requests],
         "instruction": (
             "This slicer needs cheap-LLM judgments to finalize trajectory "
             "boundaries. Answer EACH request above with a decision from its "

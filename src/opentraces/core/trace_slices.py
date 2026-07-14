@@ -69,9 +69,7 @@ def slice_by_steps(
 
     start, end = _normalise_step_range(start_step_index, end_step_index)
     selected_nodes = [
-        node
-        for node in trace_map.nodes
-        if _node_overlaps_step_range(node, start, end)
+        node for node in trace_map.nodes if _node_overlaps_step_range(node, start, end)
     ]
     selected_map = _submap(trace_map, selected_nodes)
     steps = _steps_for_range(record, start, end)
@@ -145,9 +143,7 @@ def materialize_trajectory(
     if start_position < 0 or end_position < start_position:
         raise ValueError("trajectory positions must satisfy 0 <= start <= end")
     if end_position >= len(steps):
-        raise ValueError(
-            f"trajectory position {end_position} is outside a {len(steps)}-step trace"
-        )
+        raise ValueError(f"trajectory position {end_position} is outside a {len(steps)}-step trace")
 
     step_indices = [step.step_index for step in steps]
     if len(set(step_indices)) != len(step_indices):

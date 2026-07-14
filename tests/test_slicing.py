@@ -17,6 +17,7 @@ Covers:
     self-report-valid-with-gap) each caught by the independent recompute.
   - the frozen envelope schema_version + no TraceRecord.SCHEMA_VERSION bump.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -67,8 +68,11 @@ def _independent_recompute(trajectories: list[dict], total: int) -> dict:
     overlaps = sum(1 for c in cover if c >= 2)
     gaps = sum(1 for c in cover if c == 0)
     spans = sorted((int(t["start"]), int(t["end"])) for t in trajectories)
-    contiguous = bool(spans) and spans[0][0] == 0 and spans[-1][1] == total - 1 and all(
-        spans[i][0] == spans[i - 1][1] + 1 for i in range(1, len(spans))
+    contiguous = (
+        bool(spans)
+        and spans[0][0] == 0
+        and spans[-1][1] == total - 1
+        and all(spans[i][0] == spans[i - 1][1] + 1 for i in range(1, len(spans)))
     )
     return {
         "valid": covered == total and overlaps == 0 and gaps == 0 and bad == 0 and contiguous,
@@ -85,14 +89,23 @@ def _mk(spec: list[tuple]) -> TraceRecord:
     """spec rows: (role, content, [tool_names], obs_text, obs_error)."""
     steps = []
     for i, (role, content, tools, otext, oerr) in enumerate(spec):
-        tcs = [ToolCall(tool_call_id=f"c{i}_{j}", tool_name=t, input={"file_path": "a.py"})
-               for j, t in enumerate(tools)]
+        tcs = [
+            ToolCall(tool_call_id=f"c{i}_{j}", tool_name=t, input={"file_path": "a.py"})
+            for j, t in enumerate(tools)
+        ]
         obs = []
         if otext or oerr:
-            obs = [Observation(source_call_id=f"c{i}_0", content=otext or None,
-                               error="err" if oerr else None)]
-        steps.append(Step(step_index=i, role=role, content=content, tool_calls=tcs, observations=obs))
-    return TraceRecord(trace_id="synthetic", session_id="s", agent=Agent(name="claude-code"), steps=steps)
+            obs = [
+                Observation(
+                    source_call_id=f"c{i}_0", content=otext or None, error="err" if oerr else None
+                )
+            ]
+        steps.append(
+            Step(step_index=i, role=role, content=content, tool_calls=tcs, observations=obs)
+        )
+    return TraceRecord(
+        trace_id="synthetic", session_id="s", agent=Agent(name="claude-code"), steps=steps
+    )
 
 
 def _u(text):  # user ask
@@ -116,21 +129,37 @@ CORPUS: dict[str, TraceRecord] = {
     "single": _mk([_u("do the thing")]),
     "single_agent": _mk([_edit()]),
     "autonomous": _mk([_edit(), _edit(), _pass(), ("agent", "done", [], "", False)]),
-    "control_leak": _mk([
-        _u("add a helper"), _edit(),
-        ("user", "<task-notification> bg task done </task-notification>", [], "", False),
-        ("user", "continue", [], "", False),
-        _edit(), _u("now another helper"), _edit(),
-        ("agent", "all done", [], "", False),
-    ]),
-    "synthetic_marker_leak": _mk([
-        _u("start"), ("user", "<<autonomous-loop-dynamic>>", [], "", False), _edit(),
-    ]),
+    "control_leak": _mk(
+        [
+            _u("add a helper"),
+            _edit(),
+            ("user", "<task-notification> bg task done </task-notification>", [], "", False),
+            ("user", "continue", [], "", False),
+            _edit(),
+            _u("now another helper"),
+            _edit(),
+            ("agent", "all done", [], "", False),
+        ]
+    ),
+    "synthetic_marker_leak": _mk(
+        [
+            _u("start"),
+            ("user", "<<autonomous-loop-dynamic>>", [], "", False),
+            _edit(),
+        ]
+    ),
     "error_heavy": _mk([_u("fix it"), _fail(), _edit(False), _fail(), _edit(), _pass()]),
-    "multi_turn": _mk([
-        _u("ask one"), _edit(), _pass(), _u("ask two"), _edit(),
-        _u("ask three"), ("agent", "answer", [], "", False),
-    ]),
+    "multi_turn": _mk(
+        [
+            _u("ask one"),
+            _edit(),
+            _pass(),
+            _u("ask two"),
+            _edit(),
+            _u("ask three"),
+            ("agent", "answer", [], "", False),
+        ]
+    ),
     "long_explore": _mk([_u("research")] + [("agent", "reading", ["Read"], "x", False)] * 40),
 }
 
@@ -157,8 +186,12 @@ def test_tiling_recomputed_valid_every_trace(name, slicer):
 @pytest.mark.parametrize("slicer", ("s1", "s2"))
 def test_s1_s2_byte_identical_rerun(name, slicer):
     rec = CORPUS[name]
-    a = slicing.partition_trace(trace_id=rec.trace_id, slicer_name=slicer, steps=rec.steps, judge="deterministic")[1]
-    b = slicing.partition_trace(trace_id=rec.trace_id, slicer_name=slicer, steps=rec.steps, judge="deterministic")[1]
+    a = slicing.partition_trace(
+        trace_id=rec.trace_id, slicer_name=slicer, steps=rec.steps, judge="deterministic"
+    )[1]
+    b = slicing.partition_trace(
+        trace_id=rec.trace_id, slicer_name=slicer, steps=rec.steps, judge="deterministic"
+    )[1]
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 
@@ -180,39 +213,48 @@ def test_s3_never_closes_on_a_failure():
 def _fixture_record() -> TraceRecord:
     # Position-oriented conformance input. Real parser-assigned step indices are
     # covered separately by the committed captured TraceRecord regression below.
-    return _mk([
-        _u("Add a farewell(name) helper to src/app.py."),
-        _edit(),
-        ("user", "<task-notification> background task wu7 finished </task-notification>", [], "", False),
-        ("user", "Noted the background task.", [], "", False),
-        ("user", "continue", [], "", False),
-        _edit(),
-        ("user", "Now also add a hello(name) helper.", [], "", False),
-        _edit(),
-        ("user", "Added farewell, goodbye, and hello helpers.", [], "", False),
-    ])
+    return _mk(
+        [
+            _u("Add a farewell(name) helper to src/app.py."),
+            _edit(),
+            (
+                "user",
+                "<task-notification> background task wu7 finished </task-notification>",
+                [],
+                "",
+                False,
+            ),
+            ("user", "Noted the background task.", [], "", False),
+            ("user", "continue", [], "", False),
+            _edit(),
+            ("user", "Now also add a hello(name) helper.", [], "", False),
+            _edit(),
+            ("user", "Added farewell, goodbye, and hello helpers.", [], "", False),
+        ]
+    )
 
 
 def test_s1_pinned_boundaries():
     rec = _fixture_record()
-    env = slicing.partition_trace(trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic")[1]
+    env = slicing.partition_trace(
+        trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic"
+    )[1]
     spans = [(t["start"], t["end"]) for t in env["trajectories"]]
     assert spans == [(0, 2), (3, 5), (6, 7), (8, 8)], spans  # control msgs at 2,4 absorbed
 
 
 def test_s2_pinned_boundaries():
     rec = _fixture_record()
-    env = slicing.partition_trace(trace_id="f", slicer_name="s2", steps=rec.steps, judge="deterministic")[1]
+    env = slicing.partition_trace(
+        trace_id="f", slicer_name="s2", steps=rec.steps, judge="deterministic"
+    )[1]
     spans = [(t["start"], t["end"]) for t in env["trajectories"]]
     assert spans == [(0, 0), (1, 2), (3, 5), (6, 7), (8, 8)], spans
 
 
-_REAL_CAPTURE_FIXTURE = (
-    Path(__file__).parent
-    / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
-)
+_REAL_CAPTURE_FIXTURE = Path(__file__).parent / "fixtures/a4_real_capture_coordinate/trace.jsonl"
 _REAL_CAPTURE_PROVENANCE = (
-    Path(__file__).parent / "fixtures/trace_trails_corpus/v1/manifest.json"
+    Path(__file__).parent / "fixtures/a4_real_capture_coordinate/PROVENANCE.json"
 )
 
 
@@ -221,9 +263,7 @@ def _sha256(path: Path) -> str:
 
 
 def _real_capture_record() -> TraceRecord:
-    return TraceRecord.model_validate_json(
-        _REAL_CAPTURE_FIXTURE.read_text().splitlines()[0]
-    )
+    return TraceRecord.model_validate_json(_REAL_CAPTURE_FIXTURE.read_text().splitlines()[0])
 
 
 def test_coordinate_fixture_has_verifiable_real_capture_provenance():
@@ -239,9 +279,24 @@ def test_coordinate_fixture_has_verifiable_real_capture_provenance():
     source = provenance.get("source") or {}
     source_path = Path(__file__).parents[1] / str(source.get("repository_path", ""))
     assert source.get("sha256") == _sha256(source_path)
+    assert source.get("git_commit") == "8c9ef597295b8ee932455e273a33d0f22eca6789"
     assert source.get("capture_agent") == "claude-code"
     assert source.get("capture_agent_version")
     assert provenance.get("retained_step_indices") == [1, 2, 3]
+
+    source_record = TraceRecord.model_validate_json(source_path.read_text().splitlines()[0])
+    fixture_record = _real_capture_record()
+    assert (
+        source.get("session_id_sha256")
+        == hashlib.sha256(source_record.session_id.encode()).hexdigest()
+    )
+    assert source.get("capture_agent_version") == source_record.agent.version
+    assert [step.step_index for step in fixture_record.steps] == [
+        step.step_index for step in source_record.steps[:3]
+    ]
+    assert [step.role for step in fixture_record.steps] == [
+        step.role for step in source_record.steps[:3]
+    ]
 
     fixture_bytes = _REAL_CAPTURE_FIXTURE.read_bytes()
     assert b"/Users/" not in fixture_bytes
@@ -273,17 +328,9 @@ def test_real_capture_trajectory_materializes_in_step_address_coordinates():
 def test_captured_position_span_translates_before_step_slice():
     """The RED position span now resolves through the translation boundary."""
 
-    fixture = (
-        Path(__file__).parent
-        / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
-    )
-    record = TraceRecord.model_validate_json(fixture.read_text().splitlines()[0])
-    trajectory = Trajectory(
-        start=0, end=2, kind="user_turn", label="captured run"
-    )
-    translated = materialize_trajectory(
-        TraceMaterializationRef.from_record(record), trajectory
-    )
+    record = _real_capture_record()
+    trajectory = Trajectory(start=0, end=2, kind="user_turn", label="captured run")
+    translated = materialize_trajectory(TraceMaterializationRef.from_record(record), trajectory)
     naive = slice_by_steps(
         build_trace_map(record),
         record,
@@ -302,20 +349,16 @@ def test_captured_position_span_translates_before_step_slice():
     ("start_position", "end_position"),
     [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2)],
 )
-def test_trajectory_materialization_matches_shared_address_span(
-    start_position, end_position
-):
+def test_trajectory_materialization_matches_shared_address_span(start_position, end_position):
     record = _real_capture_record()
     canonical = [step.step_index for step in record.steps]
     start_step = canonical[start_position]
     end_step = canonical[end_position]
-    # The committed corpus redacts the trace id as ``<trace:01>``; use a
-    # grammar-safe id while retaining its captured step payload verbatim.
+    # The sanitized excerpt uses a fixture trace id; route it through a
+    # grammar-safe id while retaining its captured step payload and coordinates.
     address_trace_id = "trace-fixture"
 
-    trace_id, point, span, reserved = parse_trail_ref(
-        f"{address_trace_id}:{start_step}-{end_step}"
-    )
+    trace_id, point, span, reserved = parse_trail_ref(f"{address_trace_id}:{start_step}-{end_step}")
     assert (trace_id, point, span, reserved) == (
         address_trace_id,
         None,
@@ -371,9 +414,9 @@ def test_frozen_slicing_envelope_tiles_same_real_capture_steps_when_materialized
     materialized_steps = [
         step["step_index"]
         for trajectory in envelope["trajectories"]
-        for step in materialize_trajectory(
-            TraceMaterializationRef.from_record(record), trajectory
-        )["steps"]
+        for step in materialize_trajectory(TraceMaterializationRef.from_record(record), trajectory)[
+            "steps"
+        ]
     ]
     assert materialized_steps == [step.step_index for step in record.steps]
 
@@ -398,7 +441,11 @@ def test_trajectory_materialization_rejects_invalid_positions(trajectory):
 
 def test_trajectory_materialization_preserves_trail_patch_and_anchor_joins():
     record = _real_capture_record()
-    bash_call = record.steps[1].tool_calls[0]
+    bash_position, bash_call = next(
+        (position, step.tool_calls[0])
+        for position, step in enumerate(record.steps)
+        if step.tool_calls
+    )
 
     class Projection:
         def patches_for_trace(self, trace_id):
@@ -417,9 +464,7 @@ def test_trajectory_materialization_preserves_trail_patch_and_anchor_joins():
                 }
             ]
 
-    enriched_ref = TraceMaterializationRef.from_record(
-        record, trail_projection=Projection()
-    )
+    enriched_ref = TraceMaterializationRef.from_record(record, trail_projection=Projection())
     trace_ref = TraceMaterializationRef(
         record=record,
         trace_map=enriched_ref.trace_map.model_copy(
@@ -428,7 +473,12 @@ def test_trajectory_materialization_preserves_trail_patch_and_anchor_joins():
     )
     trace_slice = materialize_trajectory(
         trace_ref,
-        Trajectory(start=1, end=1, kind="change_burst", label="verified write"),
+        Trajectory(
+            start=bash_position,
+            end=bash_position,
+            kind="change_burst",
+            label="verified write",
+        ),
     )
 
     assert trace_slice["trace_patch_refs"] == ["tp-materialized"]
@@ -454,8 +504,10 @@ def test_agent_loop_rc10_then_rc0(slicer):
         assert set(r) >= {"id", "kind", "window", "candidate_step", "prompt", "answer_schema"}
         assert r["kind"] in ("same_outcome", "terminal_vs_intermediate")
 
-    answers = {r["id"]: {"decision": r["answer_schema"]["decision"][0], "confidence": 0.9}
-               for r in env1["judgment_requests"]}
+    answers = {
+        r["id"]: {"decision": r["answer_schema"]["decision"][0], "confidence": 0.9}
+        for r in env1["judgment_requests"]
+    }
     rc2, env2 = slicing.partition_trace(
         trace_id="f", slicer_name=slicer, steps=rec.steps, judge="agent", answers=answers
     )
@@ -476,9 +528,13 @@ def _arm(monkeypatch, site):
 
 def test_mutant_off_by_one_changes_boundaries(monkeypatch):
     rec = _fixture_record()
-    base = slicing.partition_trace(trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic")[1]
+    base = slicing.partition_trace(
+        trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic"
+    )[1]
     _arm(monkeypatch, "slicer-boundary-off-by-one")
-    mut = slicing.partition_trace(trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic")[1]
+    mut = slicing.partition_trace(
+        trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic"
+    )[1]
     base_spans = [(t["start"], t["end"]) for t in base["trajectories"]]
     mut_spans = [(t["start"], t["end"]) for t in mut["trajectories"]]
     assert mut_spans != base_spans  # the pinned-boundary journey assertion would fail
@@ -486,9 +542,13 @@ def test_mutant_off_by_one_changes_boundaries(monkeypatch):
 
 def test_mutant_dropped_continuation_opens_control_messages(monkeypatch):
     rec = _fixture_record()
-    base = slicing.partition_trace(trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic")[1]
+    base = slicing.partition_trace(
+        trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic"
+    )[1]
     _arm(monkeypatch, "slicer-drop-continuation")
-    mut = slicing.partition_trace(trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic")[1]
+    mut = slicing.partition_trace(
+        trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic"
+    )[1]
     # control messages now open trajectories -> strictly more of them
     assert len(mut["trajectories"]) > len(base["trajectories"])
 
@@ -496,7 +556,9 @@ def test_mutant_dropped_continuation_opens_control_messages(monkeypatch):
 def test_mutant_self_report_valid_gap_is_caught_by_recompute(monkeypatch):
     rec = _fixture_record()
     _arm(monkeypatch, "slicer-self-report-valid-gap")
-    env = slicing.partition_trace(trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic")[1]
+    env = slicing.partition_trace(
+        trace_id="f", slicer_name="s1", steps=rec.steps, judge="deterministic"
+    )[1]
     # The envelope LIES: it claims its own tiling is valid...
     assert env["tiling"]["valid"] is True
     # ...but the INDEPENDENT recompute from trajectories[] finds the real gap.
@@ -509,7 +571,9 @@ def test_mutant_self_report_valid_gap_is_caught_by_recompute(monkeypatch):
 # acceptance #8 — derive-on-demand: NO captured-schema bump
 # --------------------------------------------------------------------------
 def test_no_schema_version_bump():
-    assert SCHEMA_VERSION == "0.9.0", "Trace Slicer Library is derive-on-demand; do not bump SCHEMA_VERSION for slicing (0.9.0 is the #212 dataset-facet MINOR, unrelated to this module)"
+    assert SCHEMA_VERSION == "0.9.0", (
+        "Trace Slicer Library is derive-on-demand; do not bump SCHEMA_VERSION for slicing (0.9.0 is the #212 dataset-facet MINOR, unrelated to this module)"
+    )
     assert slicing.SLICING_SCHEMA_VERSION == "opentraces.slicing.v1"
 
 
@@ -518,7 +582,9 @@ def test_no_schema_version_bump():
 # --------------------------------------------------------------------------
 def test_labeler_replaces_labels_but_not_boundaries():
     rec = CORPUS["multi_turn"]
-    base = slicing.partition_trace(trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic")[1]
+    base = slicing.partition_trace(
+        trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic"
+    )[1]
 
     seen = {}
 
@@ -531,14 +597,18 @@ def test_labeler_replaces_labels_but_not_boundaries():
     )
     assert rc == 0
     # boundaries identical, labels replaced
-    assert [(t["start"], t["end"]) for t in env["trajectories"]] == [(t["start"], t["end"]) for t in base["trajectories"]]
+    assert [(t["start"], t["end"]) for t in env["trajectories"]] == [
+        (t["start"], t["end"]) for t in base["trajectories"]
+    ]
     assert [t["label"] for t in env["trajectories"]] == [f"LABEL-{i}" for i in range(seen["n"])]
     assert _independent_recompute(env["trajectories"], env["total_steps"])["valid"]
 
 
 def test_labeler_failure_falls_back_to_deterministic():
     rec = CORPUS["multi_turn"]
-    base = slicing.partition_trace(trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic")[1]
+    base = slicing.partition_trace(
+        trace_id="x", slicer_name="s3", steps=rec.steps, judge="deterministic"
+    )[1]
 
     def bad_labeler(slicer_name, steps, trajectories):
         return None  # provider unavailable / malformed -> keep deterministic
@@ -552,4 +622,5 @@ def test_labeler_failure_falls_back_to_deterministic():
 def test_provider_labeler_is_none_when_provider_disabled(monkeypatch):
     monkeypatch.setenv("OT_LLM_PROVIDER", "none")
     from opentraces.core.slicing.labeler import provider_labeler
+
     assert provider_labeler() is None
