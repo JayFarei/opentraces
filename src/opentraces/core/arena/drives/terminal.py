@@ -82,7 +82,7 @@ class TerminalDrive:
     ) -> TerminalResult:
         if not argv:
             raise ValueError("terminal.exec requires at least one argv element")
-        allocation = self.actions.allocate()
+        allocation = self.actions.allocate("terminal")
         ordinal = allocation.ordinal
         action = f"actions/{ordinal:04d}"
         invocation_ref = f"{action}/invocation.json"
@@ -131,6 +131,7 @@ class TerminalDrive:
             )
         except Exception as exc:
             duration_ms = self.actions.duration_ms(allocation)
+            self.actions.complete(allocation)
             timeout_error = self._timeout_error(exc)
             stdout = self._exception_stream(exc, "stdout", "output")
             stderr = self._exception_stream(exc, "stderr")
@@ -171,6 +172,7 @@ class TerminalDrive:
             self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
             raise
         duration_ms = self.actions.duration_ms(allocation)
+        self.actions.complete(allocation)
         self.draft.write_text(f"{action}/stdout", observed.stdout)
         self.draft.write_text(f"{action}/stderr", observed.stderr)
         self.draft.write_json(f"{action}/timing.json", observed.timing)
@@ -313,7 +315,6 @@ class TerminalDrive:
                         "casts": self._markers,
                     }
                 ],
-                "timeline_ref": "recordings/playlist.json",
             }
         reasons = [channel["reason"] for channel in self._recording_channels if channel["reason"]]
         return {
@@ -326,7 +327,6 @@ class TerminalDrive:
                     "reason": "; ".join(reasons),
                 }
             ],
-            "timeline_ref": "recordings/playlist.json",
         }
 
     @property

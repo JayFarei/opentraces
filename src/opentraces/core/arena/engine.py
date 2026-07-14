@@ -132,6 +132,7 @@ class BenchRun:
         self.box: Box | None = None
         self.terminal: TerminalDrive
         self.browser: BrowserDrive
+        self.actions: RunActionSequence
         self.verifiers: list[dict[str, Any]] = []
         self.verifier_sources: list[dict[str, str]] = []
         self.final_path: Path
@@ -165,17 +166,20 @@ class BenchRun:
             self._app_state_pin = self.bench.box_runtime.materialize(
                 self.box, self.app_state, repository=self.bench.repository_path
             )
-            actions = RunActionSequence()
+            self.actions = RunActionSequence(
+                draft=self.draft,
+                run_started_monotonic=self._started,
+            )
             self.terminal = TerminalDrive(
                 runtime=self.bench.box_runtime,
                 box=self.box,
                 draft=self.draft,
                 repository=self.bench.repository_path,
-                actions=actions,
+                actions=self.actions,
             )
             self.browser = BrowserDrive(
                 draft=self.draft,
-                actions=actions,
+                actions=self.actions,
                 factory=self.bench.browser_factory,
             )
         except Exception as exc:
@@ -545,18 +549,26 @@ class BenchRun:
         if hasattr(self, "browser") and self.browser.has_actions:
             summaries.append(self.browser.recording_summary())
         if summaries:
+            timeline = self.actions.timeline_status()
             result: dict[str, Any] = {
-                "rewatchable": all(summary["rewatchable"] for summary in summaries),
+                "rewatchable": timeline["complete"]
+                and all(summary["rewatchable"] for summary in summaries),
                 "channels": [
                     channel for summary in summaries for channel in summary["channels"]
                 ],
+                "timeline_ref": timeline["path"],
+                "timeline": timeline,
             }
-            terminal = next(
-                (summary for summary in summaries if "timeline_ref" in summary), None
-            )
-            if terminal is not None:
-                result["timeline_ref"] = terminal["timeline_ref"]
             return result
+        timeline = (
+            self.actions.timeline_status()
+            if hasattr(self, "actions")
+            else {
+                "complete": False,
+                "path": "recordings/timeline.jsonl",
+                "reason": "execution timeline was not initialized",
+            }
+        )
         return {
             "rewatchable": False,
             "channels": [
@@ -567,6 +579,8 @@ class BenchRun:
                     "reason": "terminal cast not produced",
                 }
             ],
+            "timeline_ref": timeline["path"],
+            "timeline": timeline,
         }
 
     def __exit__(
