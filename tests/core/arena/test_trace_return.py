@@ -39,6 +39,7 @@ def _finalized_run(
     tmp_path: Path,
     monkeypatch,
     *,
+    commit_shaped_action: bool = False,
     omit_first_stdout: bool = False,
 ) -> tuple[RunStore, Path]:
     monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
@@ -77,6 +78,16 @@ def _finalized_run(
             "2026-07-14T12:00:02Z",
         ),
     ]
+    if commit_shaped_action:
+        actions[0] = (
+            ["git", "commit", "-m", "done"],
+            ".",
+            "[main abc1234] done\n",
+            "",
+            0,
+            17,
+            "2026-07-14T12:00:01Z",
+        )
     for ordinal, (argv, cwd, stdout, stderr, returncode, duration_ms, started_at) in enumerate(
         actions, start=1
     ):
@@ -183,6 +194,28 @@ def test_verified_run_returns_as_one_deterministic_manufactured_trace(
     assert stored is not None
     assert stored.source_layer == "manufactured"
     assert stored.record.model_dump_json() == first_bytes
+
+
+def test_commit_shaped_action_does_not_grade_the_manufactured_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store, run_path = _finalized_run(
+        tmp_path,
+        monkeypatch,
+        commit_shaped_action=True,
+    )
+
+    returned = return_run_as_trace(
+        run_path,
+        project_dir=_project(tmp_path),
+        store=store,
+        cfg=Config(),
+    )
+
+    assert returned.outcome.success is None
+    assert returned.outcome.committed is False
+    assert returned.outcome.commit_sha is None
 
 
 def test_tampered_run_is_refused_before_any_trace_is_written(
