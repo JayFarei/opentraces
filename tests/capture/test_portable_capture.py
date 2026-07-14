@@ -347,6 +347,60 @@ def test_elapsed_deadline_never_turns_requested_sources_complete(tmp_path: Path)
     assert all(source.completeness == "missing" for source in result.sources)
 
 
+def test_product_identity_observation_respects_finish_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentraces.capture import portable as portable_capture
+
+    project = _git_project(tmp_path / "project")
+    product = subprocess.Popen(["sleep", "10"])
+    proc_executable = Path(f"/proc/{product.pid}/exe")
+    proc_command = Path(f"/proc/{product.pid}/cmdline")
+    real_exists = Path.exists
+    real_is_file = Path.is_file
+    real_run = portable_capture.subprocess.run
+
+    def hide_proc_executable(path: Path) -> bool:
+        return False if path == proc_executable else real_exists(path)
+
+    def hide_proc_command(path: Path) -> bool:
+        return False if path == proc_command else real_is_file(path)
+
+    def slow_ps(command, *args, **kwargs):
+        if command and command[0] == "ps":
+            timeout = float(kwargs.get("timeout") or 2.0)
+            time.sleep(timeout)
+            raise subprocess.TimeoutExpired(command, timeout)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", hide_proc_executable)
+    monkeypatch.setattr(Path, "is_file", hide_proc_command)
+    monkeypatch.setattr(portable_capture.subprocess, "run", slow_ps)
+    try:
+        capture = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement="leased",
+                requested_sources=(),
+                require_observer_separation=True,
+                product_under_test_pid=product.pid,
+                result_dir=tmp_path / "deadline-result",
+            )
+        )
+        started = time.monotonic()
+        result = capture.finish(deadline=started + 0.05)
+        elapsed = time.monotonic() - started
+    finally:
+        product.terminate()
+        product.wait(timeout=2.0)
+
+    assert elapsed < 0.5
+    assert result.completeness == "partial"
+    assert result.provenance["separation"]["proven"] is False
+
+
 def test_missing_optional_source_still_makes_requested_capture_partial(
     tmp_path: Path,
 ) -> None:
