@@ -580,8 +580,11 @@ print(json.dumps({
 def test_real_cli_device_flow_crosses_human_page_then_persists_auth(
     tmp_path: Path,
 ) -> None:
-    opentraces = shutil.which("opentraces")
-    assert opentraces is not None, "opentraces console script is not installed"
+    scripts_dir = Path(sys.executable).parent
+    opentraces = shutil.which("opentraces", path=str(scripts_dir))
+    assert opentraces is not None, (
+        f"opentraces console script is not installed alongside {sys.executable}"
+    )
     home = tmp_path / "isolated-home"
     home.mkdir()
     environment = {
