@@ -124,6 +124,21 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             if ledger_path.is_file()
             else '<span class="muted">ledger unavailable</span>'
         )
+        setup = (pin or {}).get("setup") or {}
+        baseline = setup.get("baseline") or {}
+        identity = baseline.get("identity") or {}
+        capabilities = setup.get("capabilities") or {}
+        capability_rows = "".join(
+            f"<div>{_h(status)}: {_h(', '.join(map(str, operations)))}</div>"
+            for status, operations in sorted(capabilities.items())
+        )
+        world_ref = str((pin or {}).get("evidence_ref") or f"world/{name}.json")
+        world_path = run_path / world_ref
+        world_link = (
+            f'<a href="{_h(_href(page_dir, world_path))}">{_h(world_ref)}</a>'
+            if world_path.is_file()
+            else '<span class="muted">world setup unavailable</span>'
+        )
         world_cards.append(
             '<article class="card world">'
             f'<div class="eyebrow">WORLD · {_h(str(name).upper())}</div>'
@@ -131,7 +146,10 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             f"<div>sha256: {_h((pin or {}).get('sha256'))}</div>"
             f"<div>toolchain: {_h((pin or {}).get('bun_version'))} · "
             f"{_h((pin or {}).get('target'))}</div>"
-            f"<nav>{ledger_link}</nav>"
+            f"<div>endpoint: {_h(setup.get('endpoint'))}</div>"
+            f"<div>baseline identity: {_h(identity.get('name'))}</div>"
+            f"{capability_rows}"
+            f"<nav>{world_link}{ledger_link}</nav>"
             "</article>"
         )
     world_html = (

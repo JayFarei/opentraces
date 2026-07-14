@@ -22,9 +22,11 @@ DEFAULT_PORT = 14318
 DEFAULT_READINESS_TIMEOUT = 5.0
 SERVER_SOURCE = Path(__file__).with_name("server.ts")
 REMOTE_BINARY = "/opt/bench/emulators/opentraces-hf-emulator"
-REMOTE_LEDGER = "huggingface.jsonl"
+REMOTE_LEDGER = "/var/lib/opentraces-bench/huggingface.jsonl"
 LEDGER_EVIDENCE_REF = "ledgers/huggingface.jsonl"
+WORLD_EVIDENCE_REF = "world/huggingface.json"
 BASELINE_TOKEN = "hf_bench_user_token"
+PROVENANCE_SCHEMA = "opentraces.hf-emulator-build.v1"
 
 
 class EmulatorReadinessError(RuntimeError):
@@ -40,6 +42,9 @@ class EmulatorBinaryPin:
     bun_version: str = BUN_VERSION
     target: str = COMPILE_TARGET
     contract_version: str = "huggingface.v1"
+    source_sha256: str | None = None
+    build_inputs_sha256: str | None = None
+    provenance: str = "unverified"
 
     def to_dict(self) -> dict[str, str | int]:
         return asdict(self)
@@ -53,6 +58,55 @@ def emulator_binary_pin(path: Path) -> EmulatorBinaryPin:
         for chunk in iter(lambda: binary.read(1024 * 1024), b""):
             digest.update(chunk)
     return EmulatorBinaryPin(sha256=digest.hexdigest(), size_bytes=path.stat().st_size)
+
+
+def _build_inputs() -> dict[str, str]:
+    return {
+        "bun_version": BUN_VERSION,
+        "target": COMPILE_TARGET,
+        "contract_version": "huggingface.v1",
+        "source_sha256": hashlib.sha256(SERVER_SOURCE.read_bytes()).hexdigest(),
+    }
+
+
+def _build_inputs_sha256() -> str:
+    encoded = json.dumps(_build_inputs(), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def emulator_provenance_path(binary: Path) -> Path:
+    return binary.with_name(f"{binary.name}.provenance.json")
+
+
+def verified_emulator_binary_pin(path: Path) -> EmulatorBinaryPin:
+    """Return a pin only when the binary matches the frozen build inputs."""
+
+    pin = emulator_binary_pin(path)
+    provenance_path = emulator_provenance_path(path)
+    try:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("HF emulator binary provenance is missing or invalid") from exc
+    expected_inputs = _build_inputs()
+    expected = {
+        "schema_version": PROVENANCE_SCHEMA,
+        **expected_inputs,
+        "build_inputs_sha256": _build_inputs_sha256(),
+        "binary_sha256": pin.sha256,
+        "size_bytes": pin.size_bytes,
+    }
+    if provenance != expected:
+        raise RuntimeError("HF emulator binary provenance does not match build inputs")
+    return EmulatorBinaryPin(
+        sha256=pin.sha256,
+        size_bytes=pin.size_bytes,
+        bun_version=BUN_VERSION,
+        target=COMPILE_TARGET,
+        contract_version="huggingface.v1",
+        source_sha256=expected_inputs["source_sha256"],
+        build_inputs_sha256=expected["build_inputs_sha256"],
+        provenance="verified",
+    )
 
 
 def app_state_digest(recipe: Mapping[str, Any], *, hf_emulator: EmulatorBinaryPin) -> str:
@@ -85,6 +139,10 @@ def app_state_pin(
         "digest": app_state_digest(recipe, hf_emulator=hf_emulator),
         "provides": list(provides),
         "emulators": {"huggingface": hf_emulator.to_dict()},
+        "recipe": {
+            "base": recipe,
+            "emulators": {"huggingface": hf_emulator.to_dict()},
+        },
     }
 
 
@@ -107,7 +165,19 @@ def build_hf_emulator_binary(output: Path) -> EmulatorBinaryPin:
         ],
         check=True,
     )
-    return emulator_binary_pin(output)
+    pin = emulator_binary_pin(output)
+    provenance = {
+        "schema_version": PROVENANCE_SCHEMA,
+        **_build_inputs(),
+        "build_inputs_sha256": _build_inputs_sha256(),
+        "binary_sha256": pin.sha256,
+        "size_bytes": pin.size_bytes,
+    }
+    emulator_provenance_path(output).write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return verified_emulator_binary_pin(output)
 
 
 def wait_for_hf_emulator(
@@ -217,12 +287,14 @@ class HuggingFaceEmulator:
         repository: Path,
         run_path: Path,
         binary_pin: EmulatorBinaryPin,
+        world_setup: dict[str, Any],
     ) -> None:
         self.runtime = runtime
         self.box = box
         self.repository = Path(repository)
         self.run_path = Path(run_path)
         self.binary_pin = binary_pin
+        self.world_setup = world_setup
         self.env = {
             "HF_ENDPOINT": f"http://127.0.0.1:{DEFAULT_PORT}",
             "HF_TOKEN": BASELINE_TOKEN,
@@ -232,12 +304,17 @@ class HuggingFaceEmulator:
         self._ledger_path: Path | None = None
 
     @property
-    def pin(self) -> dict[str, str | int]:
-        return self.binary_pin.to_dict()
+    def pin(self) -> dict[str, Any]:
+        return {
+            **self.binary_pin.to_dict(),
+            "setup": self.world_setup,
+            "evidence_ref": WORLD_EVIDENCE_REF,
+        }
 
     def stop(self) -> None:
         if self._stopped:
             return
+        self.snapshot_ledger()
         timing = self.run_path / "artifacts" / "crabbox-timing" / "hf-stop.json"
         stopped = self.runtime.exec(
             self.box,
@@ -245,6 +322,7 @@ class HuggingFaceEmulator:
                 "sh",
                 "-c",
                 "if test -f /tmp/opentraces-hf-emulator.pid; then "
+                "kill -- -$(cat /tmp/opentraces-hf-emulator.pid) 2>/dev/null || "
                 "kill $(cat /tmp/opentraces-hf-emulator.pid) 2>/dev/null || true; fi",
             ],
             cwd=self.repository,
@@ -260,18 +338,18 @@ class HuggingFaceEmulator:
             return self._ledger_path
         target = self.run_path / LEDGER_EVIDENCE_REF
         target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="opentraces-hf-ledger-") as raw_dir:
-            collected = self.runtime.collect(
-                self.box,
-                [REMOTE_LEDGER],
-                destination=Path(raw_dir),
-                repository=self.repository,
-            )
-            source = collected.get(Path(REMOTE_LEDGER).name)
-            if source is None:
-                target.write_bytes(b"")
-            else:
-                shutil.copyfile(source, target)
+        observed = self.runtime.exec(
+            self.box,
+            ["curl", "-fsS", f"{self.env['HF_ENDPOINT']}/_emulate/ledger"],
+            cwd=self.repository,
+            timeout=30,
+            timing_path=(
+                self.run_path / "artifacts" / "crabbox-timing" / "hf-ledger.json"
+            ),
+        )
+        if observed.returncode != 0:
+            raise RuntimeError("Hugging Face emulator ledger could not be collected")
+        target.write_text(observed.stdout, encoding="utf-8")
         self._ledger_path = target
         return target
 
@@ -282,17 +360,19 @@ def _binary_for_run() -> Path:
         binary = Path(configured).expanduser().resolve()
         if not binary.is_file():
             raise FileNotFoundError(f"configured HF emulator binary does not exist: {binary}")
+        verified_emulator_binary_pin(binary)
         return binary
-    source_digest = hashlib.sha256(SERVER_SOURCE.read_bytes()).hexdigest()
+    build_digest = _build_inputs_sha256()
     binary = (
         Path(tempfile.gettempdir())
         / "opentraces-bench"
         / "huggingface"
-        / source_digest
+        / build_digest
         / "opentraces-hf-emulator"
     )
-    if not binary.is_file():
+    if not binary.is_file() or not emulator_provenance_path(binary).is_file():
         build_hf_emulator_binary(binary)
+    verified_emulator_binary_pin(binary)
     return binary
 
 
@@ -306,7 +386,7 @@ def start_huggingface_emulator(
     """Stage, attest, start, and identify the concrete Hugging Face world."""
 
     binary = _binary_for_run()
-    pin = emulator_binary_pin(binary)
+    pin = verified_emulator_binary_pin(binary)
     remote = runtime.copy_into_box(box, binary, REMOTE_BINARY)
     checksum = runtime.exec(
         box,
@@ -319,13 +399,50 @@ def start_huggingface_emulator(
     if checksum.returncode != 0 or observed_digest != pin.sha256:
         raise RuntimeError("Hugging Face emulator in-box checksum mismatch")
 
+    prepared = runtime.exec(
+        box,
+        [
+            "sh",
+            "-c",
+            "set -eu; "
+            "if ! id -u opentraces-hf >/dev/null 2>&1; then "
+            "sudo useradd --system --no-create-home --shell /usr/sbin/nologin opentraces-hf; "
+            "fi; "
+            "sudo install -d -m 0700 -o opentraces-hf -g opentraces-hf "
+            "/var/lib/opentraces-bench; "
+            f"sudo install -m 0600 -o opentraces-hf -g opentraces-hf /dev/null {REMOTE_LEDGER}",
+        ],
+        cwd=repository,
+        timeout=30,
+        timing_path=run_path / "artifacts" / "crabbox-timing" / "hf-custody.json",
+    )
+    if prepared.returncode != 0:
+        raise RuntimeError("Hugging Face emulator ledger custody boundary failed")
+    custody_probe = runtime.exec(
+        box,
+        [
+            "sh",
+            "-c",
+            f"if printf CUSTODY_PROBE >> {REMOTE_LEDGER} 2>/dev/null; "
+            "then exit 1; else exit 0; fi",
+        ],
+        cwd=repository,
+        timeout=30,
+        timing_path=(
+            run_path / "artifacts" / "crabbox-timing" / "hf-custody-probe.json"
+        ),
+    )
+    if custody_probe.returncode != 0:
+        raise RuntimeError("product user can write the Hugging Face witness ledger")
+
     started = runtime.exec(
         box,
         [
             "sh",
             "-c",
-            f"setsid env PORT={DEFAULT_PORT} LEDGER_PATH={REMOTE_LEDGER} "
-            f"{REMOTE_BINARY} >/tmp/opentraces-hf-emulator.stdout "
+            f"setsid sudo -u opentraces-hf env PORT={DEFAULT_PORT} "
+            f"LEDGER_PATH={REMOTE_LEDGER} {REMOTE_BINARY} "
+            ">/tmp/opentraces-hf-emulator.stdout "
             "2>/tmp/opentraces-hf-emulator.stderr </dev/null & "
             "echo $! >/tmp/opentraces-hf-emulator.pid",
         ],
@@ -355,10 +472,46 @@ def start_huggingface_emulator(
         raise EmulatorReadinessError("Hugging Face emulator manifest was not JSON") from exc
     if readiness.returncode != 0 or manifest.get("id") != "huggingface":
         raise EmulatorReadinessError("Hugging Face emulator manifest identity mismatch")
+    operations = list((manifest.get("specs") or [{}])[0].get("operations") or [])
+    capabilities = {
+        status: sorted(
+            str(operation.get("operationId"))
+            for operation in operations
+            if operation.get("status") == status
+        )
+        for status in ("hand-authored", "partial", "unsupported")
+    }
+    world_setup = {
+        "schema_version": "opentraces.bench.world.huggingface.v1",
+        "endpoint": f"http://127.0.0.1:{DEFAULT_PORT}",
+        "port": DEFAULT_PORT,
+        "readiness": {
+            "path": "/_emulate/manifest",
+            "service_id": manifest.get("id"),
+        },
+        "baseline": {
+            "identity": {"name": "bench", "type": "user"},
+            "seeded_state": {"repos": []},
+        },
+        "capabilities": capabilities,
+        "manifest": manifest,
+        "ledger_custody": {
+            "writer": "opentraces-hf",
+            "product_writable": False,
+            "collection": "read-only sidecar endpoint",
+        },
+    }
+    world_path = run_path / WORLD_EVIDENCE_REF
+    world_path.parent.mkdir(parents=True, exist_ok=True)
+    world_path.write_text(
+        json.dumps(world_setup, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return HuggingFaceEmulator(
         runtime=runtime,
         box=box,
         repository=repository,
         run_path=run_path,
         binary_pin=pin,
+        world_setup=world_setup,
     )

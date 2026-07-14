@@ -10,8 +10,11 @@ import pytest
 from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.contract import result_exit_code
 from opentraces.core.arena.emulate.huggingface.runtime import (
+    PROVENANCE_SCHEMA,
     app_state_digest,
+    emulator_provenance_path,
     emulator_binary_pin,
+    verified_emulator_binary_pin,
 )
 from opentraces.core.arena.engine import Bench, ScenarioSource
 from opentraces.core.arena.page import render_evidence_page
@@ -31,6 +34,37 @@ _COMMIT_ROW = {
     "request": {"repo_id": "bench/scenario-2", "revision": "main"},
     "response": {"commit_oid": "a" * 40, "status": 200},
 }
+_MANIFEST = {
+    "id": "huggingface",
+    "specs": [
+        {
+            "operations": [
+                {"operationId": "commit", "status": "hand-authored"},
+                {"operationId": "listDatasets", "status": "partial"},
+                {"operationId": "xetUpload", "status": "unsupported"},
+            ]
+        }
+    ],
+}
+
+
+def _write_test_provenance(binary: Path) -> None:
+    from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
+
+    pin = emulator_binary_pin(binary)
+    emulator_provenance_path(binary).write_text(
+        json.dumps(
+            {
+                "schema_version": PROVENANCE_SCHEMA,
+                **hf_runtime._build_inputs(),
+                "build_inputs_sha256": hf_runtime._build_inputs_sha256(),
+                "binary_sha256": pin.sha256,
+                "size_bytes": pin.size_bytes,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
 
 
 class WorldRuntime:
@@ -82,7 +116,9 @@ class WorldRuntime:
             stdout, returncode = f"{digest}  {self.copied[1]}\n", 0
         elif "_emulate/manifest" in rendered:
             self.events.append("readiness")
-            stdout, returncode = ('{"id":"huggingface"}\n', 0) if self.live else ("", 7)
+            stdout, returncode = (
+                (json.dumps(_MANIFEST) + "\n", 0) if self.live else ("", 7)
+            )
         elif "_emulate/ledger" in rendered:
             self.events.append("snapshot")
             stdout, returncode = (
@@ -102,9 +138,12 @@ class WorldRuntime:
                 stdout, returncode = '{"published":true}\n', 0
             else:
                 stdout, returncode = "", 1
+        elif "CUSTODY_PROBE" in rendered:
+            self.events.append("custody-probe")
+            stdout, returncode = "", 0
         elif "FORGED_LEDGER_ROW" in rendered:
             self.events.append("product-ledger-mutation")
-            stdout, returncode = "", 0
+            stdout, returncode = "", 1
         else:
             stdout, returncode = "{}\n", 0
         return BoxCommandResult(
@@ -166,6 +205,7 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     binary = tmp_path / "opentraces-hf-emulator"
     binary.write_bytes(b"exact-linux-arm64-emulator")
     binary.chmod(0o755)
+    _write_test_provenance(binary)
     monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
     runtime = WorldRuntime()
     bench = _bench(tmp_path, runtime)
@@ -181,24 +221,39 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
         forged = run.terminal.exec(
             "sh",
             "-c",
-            "printf FORGED_LEDGER_ROW > huggingface.jsonl",
+            "printf FORGED_LEDGER_ROW > /var/lib/opentraces-bench/huggingface.jsonl",
             env=hf.env,
         )
-        assert forged.returncode == 0
+        assert forged.returncode != 0
         run.verify(scenario_2.publish_commit_is_witnessed, hf=hf)
 
-    expected_binary_pin = emulator_binary_pin(binary).to_dict()
+    expected_binary_pin = verified_emulator_binary_pin(binary).to_dict()
     result = json.loads((run.final_path / "result.json").read_text(encoding="utf-8"))
     stored_ledger = run.final_path / "ledgers" / "huggingface.jsonl"
     assert stored_ledger.read_bytes() == runtime.raw_ledger
     assert result["verdict"] == "pass"
     assert result["verifiers"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
-    assert result["pins"]["emulators"] == {"huggingface": expected_binary_pin}
+    emulator_pin = result["pins"]["emulators"]["huggingface"]
+    assert {key: emulator_pin[key] for key in expected_binary_pin} == expected_binary_pin
+    assert emulator_pin["evidence_ref"] == "world/huggingface.json"
+    assert emulator_pin["setup"]["endpoint"] == "http://127.0.0.1:14318"
+    assert emulator_pin["setup"]["baseline"]["identity"] == {
+        "name": "bench",
+        "type": "user",
+    }
+    assert emulator_pin["setup"]["ledger_custody"]["product_writable"] is False
     assert result["pins"]["app_state"] == {
         "name": "install-only",
-        "digest": app_state_digest(_BASE_APP_STATE, hf_emulator=emulator_binary_pin(binary)),
+        "digest": app_state_digest(
+            _BASE_APP_STATE,
+            hf_emulator=verified_emulator_binary_pin(binary),
+        ),
         "provides": ["cli", "script", "hf-emulator"],
         "emulators": {"huggingface": expected_binary_pin},
+        "recipe": {
+            "base": _BASE_APP_STATE,
+            "emulators": {"huggingface": expected_binary_pin},
+        },
     }
     assert runtime.copied == (binary, "/opt/bench/emulators/opentraces-hf-emulator")
     assert runtime.events.index("copy") < runtime.events.index("sha256")
@@ -209,6 +264,7 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert runtime.events.count("snapshot") == 1
     assert runtime.events.count("stop") == 1
     assert runtime.events.count("product-ledger-mutation") == 1
+    assert runtime.events.count("custody-probe") == 1
     assert b"FORGED_LEDGER_ROW" not in stored_ledger.read_bytes()
 
     page = render_evidence_page(run.final_path)
@@ -241,6 +297,7 @@ def test_run_emulate_refuses_every_unregistered_name(
 ) -> None:
     binary = tmp_path / "opentraces-hf-emulator"
     binary.write_bytes(b"binary")
+    _write_test_provenance(binary)
     monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
     runtime = WorldRuntime()
     bench = _bench(tmp_path, runtime)
@@ -259,6 +316,7 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     binary = tmp_path / "opentraces-hf-emulator"
     binary.write_bytes(b"exact-linux-arm64-emulator")
     binary.chmod(0o755)
+    _write_test_provenance(binary)
     monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
     monkeypatch.setenv("OT_BENCH_HF_DOWN_CONTROL", "1")
     runtime = WorldRuntime()

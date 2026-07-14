@@ -29,6 +29,9 @@ Re-run the derivation after either pin changes.
 
 The path-scoped `Hugging Face emulator contract` workflow provisions Bun
 1.3.6 and installs `huggingface-hub==1.10.2` plus `hf-xet==1.4.3` explicitly.
+The real `install-only` materializer installs and probes those same exact
+versions inside the lease, then includes the observed dependency map in the
+app-state recipe and digest.
 The tests assert those installed versions and fail when neither Bun nor a
 precompiled emulator is available. Only a leased runtime-free box may opt into
 the single, explicit compiled-build skip with `OPENTRACES_RUNTIME_FREE_BOX=1`.
@@ -43,3 +46,13 @@ Bearer-looking strings that were never minted are not credentials.
 The supported operation set is deliberately finite. New client calls must be
 declared in the readiness manifest and tested through the real client before
 the emulator pin changes.
+
+Every compiled binary has a sibling build-provenance record binding its SHA,
+source SHA, Bun version, target, and contract version. A configured or cached
+binary is refused unless that record matches the current build inputs. Inside
+the lease, the sidecar runs as the dedicated `opentraces-hf` user and writes
+its ledger outside the product workspace; a product-user write probe must fail
+before readiness. The runner freezes the ledger through the sidecar's
+read-only endpoint before stopping it and stores the complete manifest,
+baseline identity, seeded state, endpoint, and capability classes under
+`world/huggingface.json`.

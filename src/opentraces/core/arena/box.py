@@ -20,6 +20,8 @@ from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value, sa
 
 PINNED_CRABBOX_VERSION = "0.38.0"
 PINNED_LOCAL_IMAGE = "ubuntu:24.04"
+PINNED_HF_HUB_VERSION = "1.10.2"
+PINNED_HF_XET_VERSION = "1.4.3"
 DEFAULT_PROVIDER = "local-container"
 
 VERSION_REAUDIT = (
@@ -595,7 +597,10 @@ class CrabboxRuntime:
                 "-c",
                 "set -eu; sudo apt-get update >/dev/null; "
                 "sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip >/dev/null; "
-                f"sudo python3 -m pip install --break-system-packages {' '.join(map(shlex.quote, remote_wheels))}",
+                f"sudo python3 -m pip install --break-system-packages "
+                f"{' '.join(map(shlex.quote, remote_wheels))} "
+                f"huggingface-hub=={PINNED_HF_HUB_VERSION} "
+                f"hf-xet=={PINNED_HF_XET_VERSION}",
             ],
             timeout=600,
             timing_path=timing,
@@ -611,15 +616,58 @@ class CrabboxRuntime:
         )
         if probe.returncode != 0:
             raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
-        app_digest = hashlib.sha256("\n".join(digests).encode()).hexdigest()
+        dependency_timing = self._timing_path(repository, "dependencies")
+        dependency_probe = self.exec(
+            box,
+            [
+                "python3",
+                "-c",
+                (
+                    "import importlib.metadata as m,json; "
+                    "print(json.dumps({'huggingface-hub':m.version('huggingface-hub'),"
+                    "'hf-xet':m.version('hf-xet')},sort_keys=True))"
+                ),
+            ],
+            timeout=30,
+            timing_path=dependency_timing,
+        )
+        try:
+            dependencies = json.loads(dependency_probe.stdout)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise CrabboxRefusal(
+                "app_state_dependency_probe_failed",
+                "installed HF client versions were not observable",
+            ) from exc
+        expected_dependencies = {
+            "huggingface-hub": PINNED_HF_HUB_VERSION,
+            "hf-xet": PINNED_HF_XET_VERSION,
+        }
+        if dependency_probe.returncode != 0 or dependencies != expected_dependencies:
+            raise CrabboxRefusal(
+                "app_state_dependency_mismatch",
+                f"expected {expected_dependencies}, observed {dependencies}",
+            )
+        recipe = {
+            "wheel_sha256": digests,
+            "dependencies": expected_dependencies,
+        }
+        app_digest = hashlib.sha256(
+            json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         pin = {
             "name": app_state,
             "digest": f"sha256:{app_digest}",
             "provides": ["cli", "script"],
+            "dependencies": expected_dependencies,
+            "recipe": recipe,
         }
         observation_refs = [
             ref
-            for ref in (self._evidence_ref(timing), self._evidence_ref(provides_timing))
+            for ref in (
+                self._evidence_ref(timing),
+                self._evidence_ref(provides_timing),
+                self._evidence_ref(dependency_timing),
+            )
             if ref is not None
         ]
         if observation_refs:

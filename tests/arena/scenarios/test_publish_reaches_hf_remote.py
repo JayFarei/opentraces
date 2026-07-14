@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+from opentraces.core.arena.engine import VerificationFailed
+
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OT_BENCH_SCENARIOS") != "1",
@@ -19,7 +21,11 @@ def publish_commit_is_witnessed(run, *, hf):
         path_prefix="/api/datasets/bench/scenario-2/commit/",
         operation_id="commit",
     )
-    assert witnessed, "independent Hugging Face ledger has no successful dataset commit"
+    if not witnessed:
+        raise VerificationFailed(
+            "independent Hugging Face ledger has no successful dataset commit",
+            evidence_refs=[hf.ledger.evidence_ref],
+        )
     return {"evidence_refs": [hf.ledger.evidence_ref]}
 
 

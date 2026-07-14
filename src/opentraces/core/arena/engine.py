@@ -65,6 +65,14 @@ class EvidenceReferenceError(ValueError):
     """A verifier referenced material outside the immutable run exhaust."""
 
 
+class VerificationFailed(AssertionError):
+    """An assertion failure that preserves the evidence it examined."""
+
+    def __init__(self, message: str, *, evidence_refs: list[str]) -> None:
+        super().__init__(message)
+        self.evidence_refs = evidence_refs
+
+
 class Bench:
     """Thin factory bound to one discovered scenario source."""
 
@@ -288,6 +296,18 @@ class BenchRun:
         except AssertionError as exc:
             status = "fail"
             reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
+            try:
+                evidence_refs = [
+                    self._persisted_evidence_ref(item)
+                    for item in getattr(exc, "evidence_refs", [])
+                ]
+            except EvidenceReferenceError:
+                evidence_refs = []
+                status = "error"
+                reason = {
+                    "code": "invalid_evidence_ref",
+                    "message": "verifier evidence must reference a persisted file in this run",
+                }
         except EvidenceReferenceError:
             evidence_refs = []
             status = "error"

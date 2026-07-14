@@ -345,7 +345,7 @@ Bun.serve({
       if (ownershipError !== undefined) return ownershipError;
       if (repos.has(repoId)) {
         appendLedger(request, "createRepo", 409);
-        return jsonResponse({ error: "repository already exists" }, 409);
+        return errorResponse("Conflict", "repository already exists", 409);
       }
       newRepo(repoId, {
         private: body.visibility === "private" || Boolean(body.private),

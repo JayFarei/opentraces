@@ -12,7 +12,7 @@
     "reviewed_fork": "UsefulSoftwareCo/emulate",
     "runtime_dependency": null,
     "decision": "The v1 sidecar owns its finite Hub contract in-tree and does not pin either external core.",
-    "reason": "The fork source was ahead of the published package. Keeping the eight hand-authored operations in one compiled source removes that unresolved source identity from the app-state pin; the binary sha256 remains the authority."
+    "reason": "The fork source was ahead of the published package. Keeping the nine hand-authored operations in one compiled source removes that unresolved source identity; the verified binary, source, toolchain, target, and contract pins are the authority."
   },
   "fallback": {
     "strategy": "bun-in-checkpoint-plus-bundle",

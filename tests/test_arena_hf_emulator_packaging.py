@@ -62,6 +62,10 @@ def test_binary_sha_is_part_of_app_state_digest(tmp_path: Path) -> None:
         "digest": app_state_digest(recipe, hf_emulator=first_pin),
         "provides": ["python3", "hf-emulator"],
         "emulators": {"huggingface": first_pin.to_dict()},
+        "recipe": {
+            "base": recipe,
+            "emulators": {"huggingface": first_pin.to_dict()},
+        },
     }
 
 
