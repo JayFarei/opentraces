@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 
 import opentraces.core.arena.run_store as run_store_module
+import pytest
 from opentraces.core.arena.contract import build_result
-from opentraces.core.arena.run_store import RunStore
-from opentraces.core.arena.trace_return import return_run_as_trace
+from opentraces.core.arena.run_store import RunIntegrityError, RunStore
+from opentraces.core.arena.trace_return import TraceReturnError, return_run_as_trace
 from opentraces.core.bucket_trace_records import read_bucket_record_for_trace
 from opentraces.core.config import Config
 
@@ -33,6 +34,8 @@ def _project(tmp_path: Path) -> Path:
 def _finalized_run(
     tmp_path: Path,
     monkeypatch,
+    *,
+    omit_first_stdout: bool = False,
 ) -> tuple[RunStore, Path]:
     monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
@@ -84,7 +87,8 @@ def _finalized_run(
                 "started_at": started_at,
             },
         )
-        draft.write_text(f"{action}/stdout", stdout)
+        if not (omit_first_stdout and ordinal == 1):
+            draft.write_text(f"{action}/stdout", stdout)
         draft.write_text(f"{action}/stderr", stderr)
         draft.write_json(f"{action}/timing.json", {"schemaVersion": 1})
         draft.write_json(
@@ -176,3 +180,44 @@ def test_verified_run_returns_as_one_deterministic_manufactured_trace(
     assert stored.source_layer == "manufactured"
     assert stored.record.model_dump_json() == first_bytes
 
+
+def test_tampered_run_is_refused_before_any_trace_is_written(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    stdout = run_path / "actions" / "0001" / "stdout"
+    stdout.chmod(0o600)
+    stdout.write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="actions/0001/stdout"):
+        return_run_as_trace(
+            run_path,
+            project_dir=_project(tmp_path),
+            store=store,
+            cfg=Config(),
+        )
+
+    assert read_bucket_record_for_trace(TRACE_ID) is None
+
+
+def test_missing_declared_action_output_is_refused_before_trace_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store, run_path = _finalized_run(
+        tmp_path,
+        monkeypatch,
+        omit_first_stdout=True,
+    )
+    assert store.verify(run_path) is True
+
+    with pytest.raises(TraceReturnError, match="missing action output.*stdout"):
+        return_run_as_trace(
+            run_path,
+            project_dir=_project(tmp_path),
+            store=store,
+            cfg=Config(),
+        )
+
+    assert read_bucket_record_for_trace(TRACE_ID) is None
