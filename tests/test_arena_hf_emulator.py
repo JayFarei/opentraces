@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -30,6 +31,7 @@ from opentraces.core.arena.emulate.huggingface.runtime import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_SOURCE = ROOT / "src/opentraces/core/arena/emulate/huggingface/server.ts"
+CONTROL_TOKEN = "test-harness-control-token"
 
 
 def _free_port() -> int:
@@ -53,6 +55,7 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
         **os.environ,
         "PORT": str(port),
         "LEDGER_PATH": str(ledger),
+        "OPENTRACES_HF_CONTROL_TOKEN": CONTROL_TOKEN,
     }
     process = subprocess.Popen(
         command,
@@ -127,10 +130,13 @@ def _request_json(
     method: str = "POST",
     payload: object | None = None,
     token: str | None = None,
+    control_token: str | None = CONTROL_TOKEN,
 ) -> dict:
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
+    if control_token is not None:
+        headers["X-Bench-Control-Token"] = control_token
     request = urllib.request.Request(
         url,
         data=json.dumps(payload if payload is not None else {}).encode(),
@@ -139,6 +145,23 @@ def _request_json(
     )
     with urllib.request.urlopen(request) as response:
         return json.load(response)
+
+
+def _assert_control_denied(
+    url: str,
+    *,
+    payload: object,
+    control_token: str | None,
+) -> None:
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _request_json(
+            url,
+            payload=payload,
+            token="hf_bench_user_token",
+            control_token=control_token,
+        )
+    assert caught.value.code == 401
+    assert caught.value.headers["X-Error-Code"] == "InvalidControlToken"
 
 
 def _assert_invalid_token(
@@ -246,6 +269,94 @@ def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> N
         "reset": "POST /_emulate/reset",
     }
     assert manifest["auth"][0]["validation"] == "minted-or-baseline-state"
+
+
+def test_product_identity_cannot_mutate_control_plane_and_rejections_are_ledgered(
+    tmp_path: Path,
+) -> None:
+    """Only the harness bearer may mint credentials, seed state, or reset it."""
+
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
+        assert _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={"repos": [{"repo_id": "bench/protected"}]},
+        ) == {"repos_seeded": ["bench/protected"]}
+        ally = _request_json(
+            f"{endpoint}/_emulate/credentials",
+            payload={"name": "ally"},
+        )
+
+        attacks = (
+            ("credentials", {"name": "intruder"}),
+            ("seed", {"repos": [{"repo_id": "bench/forged"}]}),
+            ("reset", {}),
+        )
+        for route, payload in attacks:
+            _assert_control_denied(
+                f"{endpoint}/_emulate/{route}",
+                payload=payload,
+                control_token=None,
+            )
+            _assert_control_denied(
+                f"{endpoint}/_emulate/{route}",
+                payload=payload,
+                control_token="hf_bench_user_token",
+            )
+
+        assert _get_json(f"{endpoint}/api/datasets/bench/protected")["id"] == (
+            "bench/protected"
+        )
+        with pytest.raises(urllib.error.HTTPError) as forged_repo:
+            _get_json(f"{endpoint}/api/datasets/bench/forged")
+        assert forged_repo.value.code == 404
+        _assert_invalid_token(
+            f"{endpoint}/api/whoami-v2",
+            method="GET",
+            payload={},
+            token=(
+                "hf_bench_"
+                + hashlib.sha256(b"intruder").hexdigest()[:24]
+            ),
+        )
+        assert _request_json(
+            f"{endpoint}/api/whoami-v2",
+            method="GET",
+            token=ally["token"],
+        ) == {"name": "ally", "type": "user"}
+
+        harness_credential = _request_json(
+            f"{endpoint}/_emulate/credentials",
+            payload={"name": "harness"},
+        )
+        assert harness_credential["name"] == "harness"
+        assert _request_json(
+            f"{endpoint}/_emulate/seed",
+            payload={"repos": [{"repo_id": "harness/allowed"}]},
+        ) == {"repos_seeded": ["harness/allowed"]}
+        assert _request_json(f"{endpoint}/_emulate/reset") == {"ok": True}
+
+        rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+
+    rejected = [
+        row
+        for row in rows
+        if row["operation_id"] in {"mintCredential", "seed", "reset"}
+        and row["response"]["status"] == 401
+    ]
+    assert [(row["operation_id"], row["response"]["status"]) for row in rejected] == [
+        ("mintCredential", 401),
+        ("mintCredential", 401),
+        ("seed", 401),
+        ("seed", 401),
+        ("reset", 401),
+        ("reset", 401),
+    ]
+    assert all(row["request"] is None for row in rejected)
+    assert {
+        row["operation_id"]
+        for row in rows
+        if row["response"]["status"] == 200
+    } >= {"mintCredential", "seed", "reset"}
 
 
 def test_real_hf_client_creates_and_reads_dataset_through_hf_endpoint(
