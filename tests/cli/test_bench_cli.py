@@ -22,9 +22,7 @@ def _scenario(tmp_path: Path) -> Path:
     return path
 
 
-def test_bench_run_prints_claim_and_returns_result_exit_code(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_bench_run_prints_claim_and_returns_result_exit_code(tmp_path: Path, monkeypatch) -> None:
     from opentraces.cli import bench_cli
 
     scenario = _scenario(tmp_path)
@@ -200,12 +198,18 @@ def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatc
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     attached: dict[str, object] = {}
+    staged: dict[str, object] = {}
+
+    def fake_stage(draft, result, *, address: str):
+        staged.update(draft=draft, result=result, address=address)
+        assert not (draft.path / "result.json").exists()
 
     def fake_attach(run_path: Path, *, address: str, store: RunStore):
         attached.update(run_path=run_path, address=address, store=store)
         assert (run_path / "result.json").is_file()
 
     monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+    monkeypatch.setattr(bench_cli, "stage_explicit_origin_evidence", fake_stage)
     monkeypatch.setattr(bench_cli, "attach_explicit_bench_labels", fake_attach)
 
     invoked = CliRunner().invoke(
@@ -222,6 +226,7 @@ def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatc
     )
 
     assert invoked.exit_code == 0, invoked.output
+    assert staged["address"] == "trace-origin-123:1-2"
     assert attached["address"] == "trace-origin-123:1-2"
     assert attached["store"].root == store_root
 
@@ -679,9 +684,7 @@ def test_runner_reports_machinery_error(bench):
         assert result["verdict"] == verdict
         assert (result["reason"] or {}).get("code") == reason_code
         diagnostic = next(
-            artifact
-            for artifact in result["artifacts"]
-            if artifact["kind"] == "pytest_diagnostics"
+            artifact for artifact in result["artifacts"] if artifact["kind"] == "pytest_diagnostics"
         )
         assert diagnostic["phase_report_ref"] == "artifacts/pytest/phases.json"
         assert store.verify(run_path) is True

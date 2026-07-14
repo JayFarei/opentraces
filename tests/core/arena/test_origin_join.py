@@ -14,6 +14,7 @@ from opentraces.core.arena.origin import (
     attach_captured_bench_labels,
     attach_explicit_bench_labels,
     detect_bench_invocations,
+    stage_explicit_origin_evidence,
 )
 from opentraces.core.arena.run_store import RunStore
 from opentraces.core.bucket_trace_records import (
@@ -74,55 +75,59 @@ def _finalized_run(
     claim: str = CLAIM,
     verdict: str = "pass",
     product_pin: dict | None = None,
+    explicit_origin: str | None = None,
 ) -> RunStore:
     monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
     draft.write_text("source/scenario.py", "def test_publish(): pass\n")
     draft.write_json("actions/0001/result.json", {"returncode": 0})
-    draft.finalize(
-        build_result(
-            run_id=draft.run_id,
-            claim=claim,
-            nodeid="bench/test_publish.py::test_publish",
-            source_ref="source/scenario.py",
-            execution_mode="direct",
-            started_at="2026-07-14T19:00:00Z",
-            duration_ms=1,
-            execution_status="complete",
-            verdict=verdict,
-            reason=(
-                {"code": "assertion_failed", "message": "product red"}
-                if verdict == "fail"
-                else None
-            ),
-            verifiers=[
-                {
-                    "name": "scenarios.publish.remote_commit_exists",
-                    "source_ref": {
-                        "path": "bench/test_publish.py",
-                        "digest": "sha256:" + "a" * 64,
-                    },
-                    "status": verdict,
-                    "duration_ms": 1,
-                    "evidence_refs": ["actions/0001/result.json"],
-                    "reason": None,
-                }
-            ],
-            evidence={"complete": True, "requirements": []},
-            recordings={"rewatchable": False, "channels": []},
-            artifacts=[],
-            capture=None,
-            pins={
-                "product": product_pin
-                or {
-                    "commit": "2ab03ac637e",
-                    "worktree": "clean",
-                    "dirty_diff_digest": None,
-                }
-            },
-        )
+    result = build_result(
+        run_id=draft.run_id,
+        claim=claim,
+        nodeid="bench/test_publish.py::test_publish",
+        source_ref="source/scenario.py",
+        execution_mode="direct",
+        started_at="2026-07-14T19:00:00Z",
+        duration_ms=1,
+        execution_status="complete",
+        verdict=verdict,
+        reason=(
+            {"code": "assertion_failed", "message": "product red"} if verdict == "fail" else None
+        ),
+        verifiers=[
+            {
+                "name": "scenarios.publish.remote_commit_exists",
+                "source_ref": {
+                    "path": "bench/test_publish.py",
+                    "digest": "sha256:" + "a" * 64,
+                },
+                "status": verdict,
+                "duration_ms": 1,
+                "evidence_refs": ["actions/0001/result.json"],
+                "reason": None,
+            }
+        ],
+        evidence={"complete": True, "requirements": []},
+        recordings={"rewatchable": False, "channels": []},
+        artifacts=[],
+        capture=None,
+        pins={
+            "product": product_pin
+            or {
+                "commit": "2ab03ac637e",
+                "worktree": "clean",
+                "dirty_diff_digest": None,
+            }
+        },
     )
+    if explicit_origin is not None:
+        stage_explicit_origin_evidence(
+            draft,
+            result,
+            address=explicit_origin,
+        )
+    draft.finalize(result)
     return store
 
 
@@ -136,8 +141,7 @@ def _write_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: TraceR
 def _origin_record() -> TraceRecord:
     record = _record("ordinary tool output")
     record.steps = [
-        Step(step_index=index, role="agent", content=f"step {index}")
-        for index in (1, 2, 3)
+        Step(step_index=index, role="agent", content=f"step {index}") for index in (1, 2, 3)
     ]
     return record
 
@@ -152,11 +156,7 @@ def test_detector_accepts_only_the_two_frozen_captured_output_forms() -> None:
             "result_ref": "/private/run/result.json",
         }
     )
-    human = (
-        f"bench_run_{RUN_ID} pass {CLAIM}\n"
-        f"claim: {CLAIM}\n"
-        "verdict: pass\n"
-    )
+    human = f"bench_run_{RUN_ID} pass {CLAIM}\nclaim: {CLAIM}\nverdict: pass\n"
 
     invocations = detect_bench_invocations(_record(human, structured))
 
@@ -348,13 +348,18 @@ def test_explicit_origin_resolves_shared_trace_addresses_and_mints_same_label_sh
     address_suffix: str,
     expected_subject: dict[str, str],
 ) -> None:
-    store = _finalized_run(tmp_path, monkeypatch)
     record = _origin_record()
     _write_trace(tmp_path, monkeypatch, record)
+    address = f"{record.trace_id}{address_suffix}"
+    store = _finalized_run(
+        tmp_path,
+        monkeypatch,
+        explicit_origin=address,
+    )
 
     attachment = attach_explicit_bench_labels(
         store.root / RUN_ID,
-        address=f"{record.trace_id}{address_suffix}",
+        address=address,
         store=store,
     )
 
@@ -366,6 +371,17 @@ def test_explicit_origin_resolves_shared_trace_addresses_and_mints_same_label_sh
     rows = read_labels(PROJECT_SLUG, record.trace_id)
     assert len(rows) == 1
     assert rows[0]["subject"] == expected_subject
+    if expected_subject["kind"] == "slice":
+        materialized_ref = rows[0]["slice_pin"]["materialized_ref"]
+        assert materialized_ref in rows[0]["verifier"]["evidence_refs"]
+        assert (
+            materialized_ref
+            in json.loads((store.root / RUN_ID / ".integrity.json").read_text(encoding="utf-8"))[
+                "files"
+            ]
+        )
+    else:
+        assert "slice_pin" not in rows[0]
 
 
 @pytest.mark.parametrize(
@@ -382,7 +398,6 @@ def test_explicit_origin_resolves_canonical_record_without_additive_trace_envelo
     address_suffix: str,
     expected_subject: dict[str, str],
 ) -> None:
-    store = _finalized_run(tmp_path, monkeypatch)
     monkeypatch.setattr(paths, "bucket_dir", lambda: tmp_path / "bucket")
     project_state = tmp_path / "projects" / PROJECT_SLUG
     project_state.mkdir(parents=True)
@@ -405,10 +420,16 @@ def test_explicit_origin_resolves_canonical_record_without_additive_trace_envelo
     assert stored.record.trace_id == record.trace_id
     assert [step.step_index for step in stored.record.steps] == [1, 2, 3]
     assert not trace_v1_json_path(PROJECT_SLUG, record.trace_id).exists()
+    address = f"{record.trace_id}{address_suffix}"
+    store = _finalized_run(
+        tmp_path,
+        monkeypatch,
+        explicit_origin=address,
+    )
 
     attachment = attach_explicit_bench_labels(
         store.root / RUN_ID,
-        address=f"{record.trace_id}{address_suffix}",
+        address=address,
         store=store,
     )
 
@@ -420,6 +441,24 @@ def test_explicit_origin_resolves_canonical_record_without_additive_trace_envelo
     rows = read_labels(PROJECT_SLUG, record.trace_id)
     assert len(rows) == 1
     assert rows[0]["subject"] == expected_subject
+
+
+def test_explicit_slice_origin_refuses_a_finalized_run_without_staged_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _origin_record()
+    _write_trace(tmp_path, monkeypatch, record)
+    store = _finalized_run(tmp_path, monkeypatch)
+
+    with pytest.raises(OriginJoinError, match="materialized slice artifact"):
+        attach_explicit_bench_labels(
+            store.root / RUN_ID,
+            address=f"{record.trace_id}:1-3",
+            store=store,
+        )
+
+    assert not trace_v1_labels_path(PROJECT_SLUG, record.trace_id).exists()
 
 
 @pytest.mark.parametrize("address", ["trace-origin-123:4", "trace-origin-123:3-1"])
