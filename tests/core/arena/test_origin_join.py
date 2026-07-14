@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import opentraces.core.arena.run_store as run_store_module
+import opentraces.core.ingest as ingest_module
 from opentraces.core import paths
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.labels import read_labels
@@ -228,3 +229,40 @@ def test_trace_without_captured_invocation_gets_no_origin_label(
 
     assert attach_captured_bench_labels(record, project_slug=PROJECT_SLUG, store=store) == []
     assert not trace_v1_labels_path(PROJECT_SLUG, record.trace_id).exists()
+
+
+def test_trace_bucket_ingestion_projects_captured_origin_idempotently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _finalized_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(paths, "bucket_dir", lambda: tmp_path / "bucket")
+    project_state = tmp_path / "projects" / PROJECT_SLUG
+    project_state.mkdir(parents=True)
+    monkeypatch.setattr(ingest_module, "get_project_dir", lambda _project: project_state)
+    source = tmp_path / "session.jsonl"
+    source.write_text("{}\n", encoding="utf-8")
+    record = _record(f"bench_run_{RUN_ID} pass {CLAIM}")
+
+    first = ingest_module.write_trace_to_bucket(
+        record,
+        tmp_path,
+        parser_name="claude-code",
+        source_jsonl=source,
+        trace_record_only=True,
+    )
+    companion = trace_v1_labels_path(PROJECT_SLUG, record.trace_id)
+    first_bytes = companion.read_bytes()
+    second = ingest_module.write_trace_to_bucket(
+        record,
+        tmp_path,
+        parser_name="claude-code",
+        source_jsonl=source,
+        trace_record_only=True,
+    )
+
+    assert first.writes["arena_origin_labels"] is None
+    assert second.writes["arena_origin_labels"] is None
+    assert companion.read_bytes() == first_bytes
+    assert len(read_labels(PROJECT_SLUG, record.trace_id)) == 1
+    assert store.verify(store.root / RUN_ID)
