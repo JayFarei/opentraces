@@ -90,6 +90,37 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             "</article>"
         )
 
+    recordings = result.get("recordings", {})
+    timeline_status = recordings.get("timeline") or {}
+    timeline_rows: list[dict[str, object]] = []
+    if timeline_status.get("complete"):
+        timeline_path = run_path / str(recordings.get("timeline_ref"))
+        try:
+            timeline_rows = [
+                row
+                for line in timeline_path.read_text(encoding="utf-8").splitlines()
+                if isinstance((row := json.loads(line)), dict)
+            ]
+        except (OSError, json.JSONDecodeError):
+            timeline_rows = []
+    media_start_offsets = {
+        str(row["action_ref"]): int(row["offset_ms"])
+        for row in timeline_rows
+        if row.get("event") == "action_started"
+        and isinstance(row.get("action_ref"), str)
+        and isinstance(row.get("offset_ms"), int)
+    }
+    browser_start_offset = min(
+        (
+            int(row["offset_ms"])
+            for row in timeline_rows
+            if row.get("event") == "action_started"
+            and row.get("surface") == "browser"
+            and isinstance(row.get("offset_ms"), int)
+        ),
+        default=0,
+    )
+
     players: list[str] = []
     for index, channel in enumerate(result.get("recordings", {}).get("channels", []), start=1):
         path = channel.get("path")
@@ -109,11 +140,14 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                     continue
                 player_id = f"cast-{index}-{cast_index}"
                 ordinal = int(cast.get("ordinal") or cast_index)
+                action_ref = f"actions/{ordinal:04d}"
+                media_start_offset = media_start_offsets.get(action_ref, 0)
                 players.append(
                     '<article class="card player">'
                     f'<div class="eyebrow">{_h(cast.get("label", "TERMINAL"))}</div>'
                     f'<button data-cast="{_h(_href(page_dir, cast_path))}" '
-                    f'data-target="{player_id}" data-action-ref="actions/{ordinal:04d}">'
+                    f'data-target="{player_id}" data-action-ref="{action_ref}" '
+                    f'data-media-start-offset-ms="{media_start_offset}">'
                     "Play terminal recording</button>"
                     f'<pre id="{player_id}"></pre>'
                     "</article>"
@@ -123,7 +157,8 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             players.append(
                 '<article class="card player" data-media-kind="browser_video">'
                 '<div class="eyebrow">BROWSER VIDEO</div>'
-                f'<video controls preload="metadata" src="{_h(_href(page_dir, video_path))}"></video>'
+                f'<video controls preload="metadata" data-media-start-offset-ms="{browser_start_offset}" '
+                f'src="{_h(_href(page_dir, video_path))}"></video>'
                 f'<nav><a href="{_h(_href(page_dir, video_path))}">{_h(path)}</a></nav>'
                 "</article>"
             )
@@ -166,19 +201,6 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                 "</article>"
             )
 
-    recordings = result.get("recordings", {})
-    timeline_status = recordings.get("timeline") or {}
-    timeline_rows: list[dict[str, object]] = []
-    if timeline_status.get("complete"):
-        timeline_path = run_path / str(recordings.get("timeline_ref"))
-        try:
-            timeline_rows = [
-                row
-                for line in timeline_path.read_text(encoding="utf-8").splitlines()
-                if isinstance((row := json.loads(line)), dict)
-            ]
-        except (OSError, json.JSONDecodeError):
-            timeline_rows = []
     timeline_cards = "".join(
         '<button class="timeline-row" data-focus-boundary '
         f'data-sequence="{_h(row.get("sequence"))}" '
@@ -317,7 +339,17 @@ document.addEventListener("click", (event) => {{
   const action = document.getElementById("action-" + actionRef.split("/").pop());
   const media = boundary.dataset.surface === "terminal"
     ? document.querySelector('[data-cast][data-action-ref="' + actionRef + '"]')
-    : document.querySelector('[data-media-kind="browser_video"]');
+    : document.querySelector('[data-media-kind="browser_video"] video');
+  const boundaryOffsetMs = Number(boundary.dataset.offsetMs);
+  const mediaStartOffsetMs = Number(media?.dataset.mediaStartOffsetMs || 0);
+  const seekOffsetMs = Math.max(0, boundaryOffsetMs - mediaStartOffsetMs);
+  if (media instanceof HTMLVideoElement) {{
+    media.currentTime = seekOffsetMs / 1000;
+    media.play().catch((error) => {{ media.title = String(error); }});
+  }} else if (media) {{
+    media.dataset.seekOffsetMs = String(seekOffsetMs);
+    media.click();
+  }}
   (media || action)?.scrollIntoView({{behavior: "smooth", block: "center"}});
 }});
 </script></body></html>"""
