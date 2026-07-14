@@ -325,6 +325,8 @@ class BrowserDrive:
                 for filename, payload in artifacts:
                     if Path(filename).name != filename:
                         raise ValueError("browser recorder returned an unsafe artifact name")
+                    if not payload:
+                        raise ValueError(f"{kind} recorder produced an empty artifact")
                     ref = f"{self._channel_root(kind)}/{filename}"
                     self.draft.write_bytes(ref, payload)
                     refs.append(ref)
