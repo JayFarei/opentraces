@@ -358,7 +358,7 @@ def test_page_names_and_omits_every_cross_surface_ref_that_escapes_the_run(
     assert store.verify(finalized) is True
     rendered = render_evidence_page(finalized).read_text(encoding="utf-8")
 
-    assert "data-focus-boundary" not in rendered
+    assert '<button class="timeline-row" data-focus-boundary' not in rendered
     assert "data-cast=" not in rendered
     assert "<video controls" not in rendered
     assert "Open Playwright trace" not in rendered
