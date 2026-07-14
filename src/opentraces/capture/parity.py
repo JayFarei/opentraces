@@ -70,12 +70,12 @@ def compare_placements(
         raise ValueError("compare_placements expects persistent then leased results")
     persistent_path = _trace_path(persistent)
     leased_path = _trace_path(leased)
-    view_match = {
-        view.name: view.completeness for view in persistent.views
-    } == {view.name: view.completeness for view in leased.views}
-    source_match = {
-        source.name: source.completeness for source in persistent.sources
-    } == {source.name: source.completeness for source in leased.sources}
+    view_match = {view.name: view.completeness for view in persistent.views} == {
+        view.name: view.completeness for view in leased.views
+    }
+    source_match = {source.name: source.completeness for source in persistent.sources} == {
+        source.name: source.completeness for source in leased.sources
+    }
     persistent_trace = _read_json(persistent_path)
     leased_trace = _read_json(leased_path)
     persistent_replacements = {
@@ -97,9 +97,7 @@ def compare_placements(
             leased_replacements[alias] = "<workspace>"
         leased_replacements[resolved_root.name] = "<workspace-name>"
 
-    persistent_norm = _normalize(
-        persistent_trace, persistent_replacements, domain="trace"
-    )
+    persistent_norm = _normalize(persistent_trace, persistent_replacements, domain="trace")
     leased_norm = _normalize(leased_trace, leased_replacements, domain="trace")
     trace_match = persistent_norm == leased_norm
     persistent_security = _normalize(
@@ -120,10 +118,10 @@ def compare_placements(
     )
     security_match = persistent_security == leased_security
 
-    persistent_context_raw = _read_jsonl_gz(
-        persistent_path.with_name("context.jsonl.gz")
-    )
+    persistent_context_raw = _read_jsonl_gz(persistent_path.with_name("context.jsonl.gz"))
     leased_context_raw = _read_jsonl_gz(leased_path.with_name("context.jsonl.gz"))
+    _add_context_node_replacements(persistent_context_raw, persistent_replacements)
+    _add_context_node_replacements(leased_context_raw, leased_replacements)
     persistent_context = _sanitize_companion_projection(
         _normalize(
             _resolve_content_references(
@@ -146,9 +144,7 @@ def compare_placements(
             domain="companion",
         )
     )
-    persistent_trail_raw = _read_jsonl_gz(
-        persistent_path.with_name("trail.jsonl.gz")
-    )
+    persistent_trail_raw = _read_jsonl_gz(persistent_path.with_name("trail.jsonl.gz"))
     leased_trail_raw = _read_jsonl_gz(leased_path.with_name("trail.jsonl.gz"))
     persistent_trail = _sanitize_companion_projection(
         _normalize(
@@ -164,10 +160,13 @@ def compare_placements(
             domain="companion",
         )
     )
-    context_match = persistent_context == leased_context
-    trail_match = persistent_trail == leased_trail
+    context_proven = bool(persistent_context_raw) and bool(leased_context_raw)
+    trail_proven = bool(persistent_trail_raw) and bool(leased_trail_raw)
+    context_match = context_proven and persistent_context == leased_context
+    trail_match = trail_proven and persistent_trail == leased_trail
 
     differences: list[str] = []
+    limitations: list[str] = []
     if not view_match:
         differences.append("view_completeness")
     if not source_match:
@@ -180,16 +179,30 @@ def compare_placements(
         differences.append("trail_companion")
     if not security_match:
         differences.append("security")
-    companions_required = (
-        persistent.source("bucket").required and leased.source("bucket").required
-    )
+    if not context_proven:
+        differences.append("unproven_context_companion")
+        limitations.append(
+            "context companion parity is unproven because one or both placements "
+            "did not produce canonical context evidence"
+        )
+    if not trail_proven:
+        differences.append("unproven_trail_companion")
+        limitations.append(
+            "trail companion parity is unproven because one or both placements "
+            "did not produce canonical trail evidence"
+        )
+    companions_required = persistent.source("bucket").required and leased.source("bucket").required
     if companions_required:
         if not persistent_context_raw or not leased_context_raw:
             differences.append("empty_context_companion")
         if not persistent_trail_raw or not leased_trail_raw:
             differences.append("empty_trail_companion")
 
-    limitations: list[str] = []
+    persistent_sources = {source.name: source for source in persistent.sources}
+    leased_sources = {source.name: source for source in leased.sources}
+    for source_name in sorted(set(persistent_sources) & set(leased_sources)):
+        if persistent_sources[source_name].limitations != leased_sources[source_name].limitations:
+            limitations.append(f"placement-specific source limitations differ: {source_name}")
     span_match: bool | None = None
     display_label_match: bool | None = None
     if persistent_spans is not None or leased_spans is not None:
@@ -198,9 +211,7 @@ def compare_placements(
         span_match = _span_coordinates(left_spans) == _span_coordinates(right_spans)
         if not span_match:
             differences.append("slicer_spans")
-        if _matching_pinned_provenance(
-            persistent_labeler_provenance, leased_labeler_provenance
-        ):
+        if _matching_pinned_provenance(persistent_labeler_provenance, leased_labeler_provenance):
             display_label_match = _display_labels(left_spans) == _display_labels(right_spans)
             if not display_label_match:
                 differences.append("display_labels")
@@ -211,8 +222,8 @@ def compare_placements(
                 "display labels were not compared because labeler provenance is not pinned"
             )
         else:
-            limitations.append(
-                "display labels were not compared because labeler provenance differs"
+            limitations.insert(
+                0, "display labels were not compared because labeler provenance differs"
             )
 
     persistent_digest = _digest(
@@ -314,6 +325,23 @@ def _sanitize_companion_projection(rows: list[dict[str, Any]]) -> list[dict[str,
     return projected
 
 
+def _add_context_node_replacements(
+    rows: list[dict[str, Any]],
+    replacements: dict[str, str],
+) -> None:
+    """Map content-addressed node joins by observed order, retaining topology."""
+
+    for row in rows:
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        node_id = payload.get("node_id")
+        if isinstance(node_id, str) and node_id not in replacements:
+            replacements[node_id] = (
+                f"<context-node:{sum(1 for value in replacements.values() if value.startswith('<context-node:'))}>"
+            )
+
+
 def _resolve_content_references(
     value: Any,
     trace_path: Path,
@@ -333,11 +361,7 @@ def _resolve_content_references(
         resolved: dict[str, Any] = {}
         for key, child in value.items():
             child_path = (*path, key)
-            if (
-                key == "content_hash"
-                and isinstance(child, str)
-                and "messages" in path
-            ):
+            if key == "content_hash" and isinstance(child, str) and "messages" in path:
                 content = _read_referenced_content(trace_path, child)
                 if content is None:
                     resolved["unresolved_content_hash"] = child
@@ -454,15 +478,21 @@ def _normalize(
                     domain=domain,
                     path=path,
                 )
+            elif (
+                replacement.startswith("<context-node:")
+                and domain == "companion"
+                and path
+                and path[-1] in {"node_id", "parent_node_id", "active_path_leaf_id"}
+                and normalized == raw
+            ):
+                normalized = replacement
             elif path == ("metadata", "project") and normalized == raw:
                 normalized = replacement
         return normalized
     return value
 
 
-_TRACE_REF_VALUE_KEYS = frozenset(
-    {"map_ref", "resource_ref", "trace_ref", "world_ref"}
-)
+_TRACE_REF_VALUE_KEYS = frozenset({"map_ref", "resource_ref", "trace_ref", "world_ref"})
 
 
 def _normalize_trace_join(
@@ -489,7 +519,7 @@ def _normalize_trace_join(
         if value.startswith(prefix):
             return f"opentraces://{replacement}/{value.removeprefix(prefix)}"
         return value
-    if domain == "companion" and path[-2:] == ("payload", "trace_id"):
+    if domain == "companion" and path and path[-1] == "trace_id" and "payload" in path:
         return replacement if value == raw_trace_id else value
     if not _is_trace_ref_uri_slot(path):
         return value
@@ -542,23 +572,23 @@ def _is_transport_identity(
             "trace_patch_id",
         }:
             return True
-        if path and path[-1].endswith("_ref") and key in {
-            "id",
-            "display_id",
-            "ref",
-        }:
+        if (
+            path
+            and path[-1].endswith("_ref")
+            and key
+            in {
+                "id",
+                "display_id",
+                "ref",
+            }
+        ):
             return True
     return False
 
 
 def _span_coordinates(spans: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        {
-            key: span.get(key)
-            for key in ("start", "end", "kind")
-            if key in span
-        }
-        for span in spans
+        {key: span.get(key) for key in ("start", "end", "kind") if key in span} for span in spans
     ]
 
 
@@ -567,11 +597,7 @@ def _display_labels(spans: Iterable[dict[str, Any]]) -> list[Any]:
 
 
 def _pinned_provenance(value: dict[str, Any] | None) -> bool:
-    return bool(
-        isinstance(value, dict)
-        and value.get("model")
-        and value.get("version")
-    )
+    return bool(isinstance(value, dict) and value.get("model") and value.get("version"))
 
 
 def _matching_pinned_provenance(
@@ -582,7 +608,5 @@ def _matching_pinned_provenance(
 
 
 def _digest(value: Any) -> str:
-    material = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode()
+    material = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(material).hexdigest()

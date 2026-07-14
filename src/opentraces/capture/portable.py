@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -54,6 +55,50 @@ _SOURCE_VIEW: dict[str, CaptureViewName] = {
     "bucket": "storage",
 }
 _OBSERVATIONAL_SOURCES = frozenset({"session_jsonl", "telemetry", "watcher", "git"})
+_FINALIZER_OUTCOMES = {
+    "finalized": "full",
+    "partial": "partial",
+    "unavailable": "missing",
+}
+
+
+def _finalizer_report_error(report: Any, invocation_nonce: str) -> str | None:
+    """Validate the complete child-to-parent evidence envelope."""
+
+    if not isinstance(report, dict):
+        return "expected a JSON object"
+    required = {
+        "invocation_nonce",
+        "status",
+        "completeness",
+        "evidence_refs",
+        "limitations",
+        "details",
+    }
+    missing = sorted(required - set(report))
+    if missing:
+        return f"missing fields: {', '.join(missing)}"
+    if report["invocation_nonce"] != invocation_nonce:
+        return "invocation nonce does not match the request"
+    status = report["status"]
+    if status not in _FINALIZER_OUTCOMES:
+        return f"invalid status: {status!r}"
+    completeness = report["completeness"]
+    if completeness != _FINALIZER_OUTCOMES[status]:
+        return f"status {status!r} cannot claim completeness {completeness!r}"
+    evidence_refs = report["evidence_refs"]
+    if not isinstance(evidence_refs, list) or not all(
+        isinstance(ref, str) and ref for ref in evidence_refs
+    ):
+        return "evidence_refs must be a list of non-empty strings"
+    limitations = report["limitations"]
+    if not isinstance(limitations, list) or not all(
+        isinstance(item, str) and item for item in limitations
+    ):
+        return "limitations must be a list of non-empty strings"
+    if not isinstance(report["details"], dict):
+        return "details must be an object"
+    return None
 
 
 @dataclass(frozen=True)
@@ -128,9 +173,7 @@ class CaptureBindings:
     raw_bodies_dir: str | None = None
     watched_roots: tuple[str, ...] = ()
     hook_commands: tuple[tuple[str, ...], ...] = ()
-    hook_commands_status: Literal["observed", "unavailable", "not_requested"] = (
-        "not_requested"
-    )
+    hook_commands_status: Literal["observed", "unavailable", "not_requested"] = "not_requested"
     hook_commands_reason: str | None = None
 
 
@@ -294,9 +337,7 @@ class CaptureSession:
             if trace_id and trace_id not in self._trace_refs:
                 self._trace_refs.append(str(trace_id))
 
-        source_results = [
-            finalized_by_name[source] for source in self.plan.requested_sources
-        ]
+        source_results = [finalized_by_name[source] for source in self.plan.requested_sources]
 
         self._stop_processes(deadline)
         views = _summarize_views(source_results)
@@ -324,9 +365,7 @@ class CaptureSession:
             and (not self.plan.require_observer_separation or separation_proven)
         )
         source_limitations = tuple(
-            limitation
-            for source in source_results
-            for limitation in source.limitations
+            limitation for source in source_results for limitation in source.limitations
         )
         provenance = {
             "observer": {
@@ -340,18 +379,10 @@ class CaptureSession:
             "separation": {
                 "required": self.plan.require_observer_separation,
                 "proven": separation_proven,
-                "reason": (
-                    None
-                    if separation_proven
-                    else separation_limitations[0]
-                ),
+                "reason": (None if separation_proven else separation_limitations[0]),
             },
         }
-        provenance_limitations = (
-            ()
-            if separation_proven
-            else tuple(separation_limitations)
-        )
+        provenance_limitations = () if separation_proven else tuple(separation_limitations)
         declared_security = [
             source.details.get("capture_security_policy")
             for source in source_results
@@ -445,14 +476,8 @@ class CaptureSession:
                 limitations=tuple(limitations),
                 duration_ms=_duration_ms(started),
             )
-        if (
-            owned is not None
-            and owned.process.poll() is not None
-            and owned.process.returncode != 0
-        ):
-            limitations.append(
-                f"source process exited with code {owned.process.returncode}"
-            )
+        if owned is not None and owned.process.poll() is not None and owned.process.returncode != 0:
+            limitations.append(f"source process exited with code {owned.process.returncode}")
             return CaptureSourceResult(
                 name="telemetry",
                 view="model_boundary",
@@ -518,9 +543,11 @@ class CaptureSession:
         started = time.monotonic()
         finalizers = self._result_dir / "finalizers"
         finalizers.mkdir(parents=True, exist_ok=True)
-        request_path = finalizers / f"{source}.request.json"
-        report_path = finalizers / f"{source}.report.json"
+        invocation_nonce = secrets.token_hex(16)
+        request_path = finalizers / f"{source}.{invocation_nonce}.request.json"
+        report_path = finalizers / f"{source}.{invocation_nonce}.report.json"
         request = {
+            "invocation_nonce": invocation_nonce,
             "source": source,
             "placement": self.plan.placement,
             "project": str(self.plan.project),
@@ -538,8 +565,8 @@ class CaptureSession:
             "requested_sources": list(self.plan.requested_sources),
         }
         _atomic_write_json(request_path, request)
-        stdout = (finalizers / f"{source}.stdout").open("ab")
-        stderr = (finalizers / f"{source}.stderr").open("ab")
+        stdout = (finalizers / f"{source}.{invocation_nonce}.stdout").open("xb")
+        stderr = (finalizers / f"{source}.{invocation_nonce}.stderr").open("xb")
         env = dict(os.environ)
         env["OT_OPENTRACES_DIR"] = str(self._capture_root)
         try:
@@ -583,37 +610,59 @@ class CaptureSession:
                 required=source in self.plan.required_sources,
                 status="timed_out",
                 completeness="missing",
-                evidence_refs=(
-                    request_path.relative_to(self._result_dir).as_posix(),
-                ),
+                evidence_refs=(request_path.relative_to(self._result_dir).as_posix(),),
                 limitations=(self._finalizer_timeout_limitation(source),),
                 duration_ms=_duration_ms(started),
             )
         finally:
             stdout.close()
             stderr.close()
+        refs = (
+            request_path.relative_to(self._result_dir).as_posix(),
+            report_path.relative_to(self._result_dir).as_posix(),
+        )
         if not report_path.is_file():
             return self._unavailable(
                 source,
                 f"source finalizer exited {process.returncode} without a report",
+                evidence_refs=refs[:1],
             )
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        refs = [
-            request_path.relative_to(self._result_dir).as_posix(),
-            report_path.relative_to(self._result_dir).as_posix(),
-        ]
-        refs.extend(str(ref) for ref in report.get("evidence_refs") or [])
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return self._unavailable(
+                source,
+                f"invalid finalizer report: {type(exc).__name__}: {exc}",
+                evidence_refs=refs,
+            )
+        report_error = _finalizer_report_error(report, invocation_nonce)
+        if report_error is not None:
+            return self._unavailable(
+                source,
+                f"invalid finalizer report: {report_error}",
+                evidence_refs=refs,
+            )
+        report_refs = (*refs, *report["evidence_refs"])
+        if process.returncode != 0:
+            detail = "; ".join(report["limitations"])
+            suffix = f": {detail}" if detail else ""
+            return self._unavailable(
+                source,
+                f"source finalizer exited {process.returncode}{suffix}",
+                evidence_refs=report_refs,
+                details=dict(report["details"]),
+            )
         return CaptureSourceResult(
             name=source,
             view=_SOURCE_VIEW[source],
             requested=True,
             required=source in self.plan.required_sources,
-            status=report.get("status", "unavailable"),
-            completeness=report.get("completeness", "missing"),
-            evidence_refs=tuple(refs),
-            limitations=tuple(report.get("limitations") or []),
+            status=report["status"],
+            completeness=report["completeness"],
+            evidence_refs=report_refs,
+            limitations=tuple(report["limitations"]),
             duration_ms=_duration_ms(started),
-            details=dict(report.get("details") or {}),
+            details=dict(report["details"]),
         )
 
     def _finalizer_timeout_limitation(self, source: str) -> str:
@@ -622,31 +671,29 @@ class CaptureSession:
         generic = "source finalizer exceeded the capture deadline"
         if source != "telemetry" or not self.plan.session_id:
             return generic
-        snapshot_path = (
-            self._capture_root
-            / "staging"
-            / "otel"
-            / f"{self.plan.session_id}.json"
-        )
+        snapshot_path = self._capture_root / "staging" / "otel" / f"{self.plan.session_id}.json"
         try:
             snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return generic
-        opened_at = float(
-            self._open_details.get("telemetry", {}).get("opened_at_unix") or 0.0
-        )
+        opened_at = float(self._open_details.get("telemetry", {}).get("opened_at_unix") or 0.0)
         raw_last = snapshot.get("last_envelope_at")
         last_envelope_at = float(raw_last) if raw_last is not None else None
         if last_envelope_at is None or last_envelope_at < opened_at:
             return "telemetry receiver produced no fresh session snapshot after Capture.open"
-        ingress_quiesced = (
-            self._open_details.get("telemetry", {}).get("ingress_quiesced") is True
-        )
+        ingress_quiesced = self._open_details.get("telemetry", {}).get("ingress_quiesced") is True
         if ingress_quiesced and snapshot.get("snapshot_quiescent") is not True:
             return "telemetry snapshot is not a quiescent finish-time generation"
         return generic
 
-    def _unavailable(self, source: str, reason: str) -> CaptureSourceResult:
+    def _unavailable(
+        self,
+        source: str,
+        reason: str,
+        *,
+        evidence_refs: tuple[str, ...] = (),
+        details: dict[str, Any] | None = None,
+    ) -> CaptureSourceResult:
         return CaptureSourceResult(
             name=source,
             view=_SOURCE_VIEW[source],
@@ -654,7 +701,9 @@ class CaptureSession:
             required=source in self.plan.required_sources,
             status="unavailable",
             completeness="missing",
+            evidence_refs=evidence_refs,
             limitations=(reason,),
+            details=dict(details or {}),
         )
 
     def _timed_out(self, source: str, reason: str) -> CaptureSourceResult:
@@ -737,9 +786,7 @@ class Capture:
                 if reason is not None:
                     limitations.setdefault("telemetry", []).append(reason)
             else:
-                endpoint = os.environ.get(
-                    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318"
-                )
+                endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
             env.update(
                 {
                     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
@@ -803,8 +850,7 @@ class Capture:
                         "root_binding_proven": True,
                     }
                     limitations.setdefault("watcher", []).append(
-                        "watcher baseline failed at Capture.open: "
-                        f"{type(exc).__name__}: {exc}"
+                        f"watcher baseline failed at Capture.open: {type(exc).__name__}: {exc}"
                     )
 
         hook_commands, hook_status, hook_reason = _hook_bindings(plan)
@@ -928,13 +974,9 @@ def _summarize_views(
                 name=name,  # type: ignore[arg-type]
                 completeness=completeness,
                 methods=tuple(source.name for source in members),
-                evidence_refs=tuple(
-                    ref for source in members for ref in source.evidence_refs
-                ),
+                evidence_refs=tuple(ref for source in members for ref in source.evidence_refs),
                 limitations=tuple(
-                    limitation
-                    for source in members
-                    for limitation in source.limitations
+                    limitation for source in members for limitation in source.limitations
                 ),
             )
         )
@@ -1098,11 +1140,7 @@ def _observe_process_identity(
             completed = None
         if completed is not None and completed.returncode == 0 and completed.stdout.strip():
             raw_executable = completed.stdout.strip()
-            candidate = (
-                raw_executable
-                if os.sep in raw_executable
-                else shutil.which(raw_executable)
-            )
+            candidate = raw_executable if os.sep in raw_executable else shutil.which(raw_executable)
             try:
                 executable_path = (
                     Path(candidate).resolve(strict=True) if candidate is not None else None
@@ -1279,11 +1317,7 @@ def _attest_product_process(
                 launcher=launcher_path,
                 runtimes=(
                     runtime_path,
-                    *(
-                        (Path(observed_executable["path"]),)
-                        if observed_executable
-                        else ()
-                    ),
+                    *((Path(observed_executable["path"]),) if observed_executable else ()),
                 ),
             )
             identity_bound = native_launcher_matches or executed_launcher
@@ -1342,18 +1376,14 @@ def _attest_product_process(
                         )
                     except (OSError, subprocess.TimeoutExpired) as exc:
                         completed = None
-                        limitations.append(
-                            f"product version probe failed: {type(exc).__name__}"
-                        )
+                        limitations.append(f"product version probe failed: {type(exc).__name__}")
                 if completed is not None:
                     probe_record["returncode"] = completed.returncode
                     match = _VERSION_RE.search(f"{completed.stdout}\n{completed.stderr}")
                     observed_version = match.group(0) if match else None
                     probe_record["version"] = observed_version
                     if completed.returncode != 0:
-                        limitations.append(
-                            f"product version probe exited {completed.returncode}"
-                        )
+                        limitations.append(f"product version probe exited {completed.returncode}")
                     elif observed_version is None:
                         limitations.append("product version probe emitted no version")
                     else:

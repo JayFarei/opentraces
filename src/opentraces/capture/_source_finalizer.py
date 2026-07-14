@@ -21,6 +21,9 @@ def main() -> int:
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     request = json.loads(args.request.read_text(encoding="utf-8"))
+    invocation_nonce = request.get("invocation_nonce")
+    if not isinstance(invocation_nonce, str) or not invocation_nonce:
+        raise ValueError("finalizer request is missing its invocation nonce")
     try:
         report = _finalize(request)
     except Exception as exc:  # noqa: BLE001 - the report is the honesty seam
@@ -31,6 +34,7 @@ def main() -> int:
             "limitations": [f"{type(exc).__name__}: {exc}"],
             "details": {},
         }
+    report["invocation_nonce"] = invocation_nonce
     _atomic_write_json(args.report, report)
     return 0 if report.get("status") in {"finalized", "partial"} else 1
 
@@ -155,9 +159,7 @@ def _finalize_telemetry(request: dict[str, Any]) -> dict[str, Any]:
             },
         )
     snapshot_semantics = (
-        "leased_quiescent_generation"
-        if ingress_quiesced
-        else "persistent_unbarriered_generation"
+        "leased_quiescent_generation" if ingress_quiesced else "persistent_unbarriered_generation"
     )
     report = flush_session_to_project(
         project_dir=Path(request["project"]),
@@ -231,9 +233,7 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
                 **root_details,
                 "open_poll_succeeded": poll_succeeded,
                 "open_baseline_proven": baseline_proven,
-                "open_baseline_initialized": open_details.get(
-                    "baseline_initialized"
-                ),
+                "open_baseline_initialized": open_details.get("baseline_initialized"),
                 "state_path": state_path,
             },
         )
@@ -246,9 +246,7 @@ def _finalize_watcher(request: dict[str, Any]) -> dict[str, Any]:
                 **root_details,
                 "open_poll_succeeded": True,
                 "open_baseline_proven": True,
-                "open_baseline_initialized": open_details.get(
-                    "baseline_initialized"
-                ),
+                "open_baseline_initialized": open_details.get("baseline_initialized"),
                 "final_baseline_initialized": poll.baseline_initialized,
                 "final_state_present": final_state_present,
                 "state_path": state_path,
@@ -341,11 +339,7 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
     )
     trace_path = trace_v1_json_path(project_slug, trace_id)
     manifest_path = bucket_manifest_path()
-    missing = [
-        str(path)
-        for path in (trace_path, manifest_path)
-        if not path.is_file()
-    ]
+    missing = [str(path) for path in (trace_path, manifest_path) if not path.is_file()]
     if missing:
         return _missing(
             "ingest did not materialize required bucket projection",
@@ -353,9 +347,7 @@ def _finalize_bucket(request: dict[str, Any]) -> dict[str, Any]:
         )
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    present = any(
-        row.get("trace_id") == trace_id for row in manifest.get("traces") or []
-    )
+    present = any(row.get("trace_id") == trace_id for row in manifest.get("traces") or [])
     if not present:
         return _missing(
             "manifest does not name the finalized trace",
