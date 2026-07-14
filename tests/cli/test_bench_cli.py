@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -459,3 +460,114 @@ def test_run_pytest_captures_child_output(monkeypatch, tmp_path: Path) -> None:
         {"nodeid": "test_demo.py::test_demo", "when": "call", "outcome": "passed"},
         {"nodeid": "test_demo.py::test_demo", "when": "teardown", "outcome": "failed"},
     ]
+
+
+def test_real_pytest_subprocess_reconciles_all_honesty_outcomes(tmp_path: Path) -> None:
+    from opentraces.cli import bench_cli
+
+    scenario = tmp_path / "test_runner_honesty_subprocess.py"
+    scenario.write_text(
+        '''from tests.core.arena.test_engine import FakeBoxRuntime
+
+
+def verifier_passes(run):
+    return {"evidence_refs": []}
+
+
+def use_fake_runtime(bench):
+    bench.box_runtime = FakeBoxRuntime()
+    return bench
+
+
+def test_runner_reports_pass(bench):
+    """The real pytest seam preserves a passing adjudication."""
+    with use_fake_runtime(bench).run(app_state="base-only") as run:
+        run.verify(verifier_passes)
+
+
+def test_runner_reports_fail(bench):
+    """The real pytest seam preserves a functional failure."""
+    with use_fake_runtime(bench).run(app_state="base-only"):
+        assert False, "forced functional red"
+
+
+def test_runner_reports_named_skip(bench):
+    """The real pytest seam preserves a named prerequisite skip."""
+    with use_fake_runtime(bench).run(app_state="base-only") as run:
+        run.skip("absent_prerequisite", "the required dependency is absent")
+
+
+def test_runner_reports_machinery_error(bench):
+    """The real pytest seam preserves machinery that prevents adjudication."""
+    with use_fake_runtime(bench).run(app_state="base-only"):
+        raise RuntimeError("forced machinery red")
+''',
+        encoding="utf-8",
+    )
+    store = RunStore(tmp_path / "runs" / "v1")
+    env = dict(os.environ)
+    env.update(
+        {
+            "OT_BENCH_RUN_ROOT": str(store.root),
+            "OT_BENCH_REPOSITORY": str(Path.cwd()),
+            "OT_BENCH_DEFER_FINALIZE": "1",
+        }
+    )
+    expected = {
+        "test_runner_reports_pass": (0, "passed", "complete", "pass", None),
+        "test_runner_reports_fail": (
+            0,
+            "passed",
+            "complete",
+            "fail",
+            "assertion_failed",
+        ),
+        "test_runner_reports_named_skip": (
+            0,
+            "passed",
+            "complete",
+            "skip",
+            "absent_prerequisite",
+        ),
+        "test_runner_reports_machinery_error": (
+            1,
+            "failed",
+            "error",
+            None,
+            "machinery_error",
+        ),
+    }
+
+    for test_name, (
+        returncode,
+        call_outcome,
+        execution_status,
+        verdict,
+        reason_code,
+    ) in expected.items():
+        before = bench_cli._pending_ids(store) | bench_cli._finalized_ids(store)
+        target = f"{scenario}::{test_name}"
+        outcome = bench_cli.run_pytest(target, repository=Path.cwd(), env=env)
+
+        assert outcome.returncode == returncode, outcome.stderr
+        assert any(
+            report["when"] == "call" and report["outcome"] == call_outcome
+            for report in outcome.phase_reports
+        )
+        created = bench_cli._pending_ids(store) - before
+        assert len(created) == 1
+        run_id = created.pop()
+
+        run_path, result = bench_cli._finalize_after_pytest(store, run_id, outcome)
+
+        assert result["execution_status"] == execution_status
+        assert result["verdict"] == verdict
+        assert (result["reason"] or {}).get("code") == reason_code
+        diagnostic = next(
+            artifact
+            for artifact in result["artifacts"]
+            if artifact["kind"] == "pytest_diagnostics"
+        )
+        assert diagnostic["phase_report_ref"] == "artifacts/pytest/phases.json"
+        assert store.verify(run_path) is True
+        assert run_id not in bench_cli._pending_ids(store)
