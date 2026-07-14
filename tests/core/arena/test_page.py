@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import html as html_module
 import json
+import re
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +15,7 @@ from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.engine import ScenarioSource
+from opentraces.core.arena.pytest_plugin import _scenario_source
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 
 
@@ -51,6 +55,98 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
         "abc123",
         None,
     )
+
+
+def _git(repository: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _product_clone(tmp_path: Path) -> Path:
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q")
+    _git(origin, "config", "user.name", "Bench Test")
+    _git(origin, "config", "user.email", "bench@example.invalid")
+    product = origin / "src" / "opentraces" / "payload.bin"
+    product.parent.mkdir(parents=True)
+    product.write_bytes(b"clean\x00product\n")
+    scenario = origin / "tests" / "test_product_pin.py"
+    scenario.parent.mkdir()
+    scenario.write_text(
+        'def test_product_pin(bench):\n    """The product pin records its worktree state."""\n',
+        encoding="utf-8",
+    )
+    (origin / "pyproject.toml").write_text("[project]\nname = 'pin-fixture'\n", encoding="utf-8")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "fixture")
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-local", str(origin), str(clone)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return clone
+
+
+@pytest.mark.parametrize(
+    ("dirty", "expected_worktree"),
+    [(False, "clean"), (True, "dirty")],
+)
+def test_product_worktree_state_round_trips_through_result_page_and_store(
+    tmp_path: Path, dirty: bool, expected_worktree: str
+) -> None:
+    repository = _product_clone(tmp_path)
+    if dirty:
+        (repository / "src" / "opentraces" / "payload.bin").write_bytes(
+            b"dirty\x00product\n"
+        )
+
+    def test_product_pin(bench):
+        """The product pin records its worktree state."""
+
+    source_path = repository / "tests" / "test_product_pin.py"
+    request = SimpleNamespace(
+        node=SimpleNamespace(
+            function=test_product_pin,
+            path=source_path,
+            nodeid="tests/test_product_pin.py::test_product_pin",
+        )
+    )
+    source = _scenario_source(request, repository)
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    bench = Bench(
+        source=source,
+        store=store,
+        box_runtime=FakeBoxRuntime(),
+        repository_path=repository,
+    )
+
+    with bench.run(app_state="base-only") as run:
+        pass
+
+    result = json.loads((run.final_path / "result.json").read_text(encoding="utf-8"))
+    product_pin = result["pins"]["product"]
+    page = render_evidence_page(run.final_path).read_text(encoding="utf-8")
+
+    assert product_pin["commit"] == _git(repository, "rev-parse", "HEAD")
+    assert product_pin["worktree"] == expected_worktree
+    if dirty:
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", product_pin["dirty_diff_digest"])
+    else:
+        assert product_pin["dirty_diff_digest"] is None
+    assert "PRODUCT PIN" in page
+    assert product_pin["commit"] in page
+    assert f"worktree {expected_worktree}" in page
+    assert store.verify(run.final_path) is True
 
 
 def _result(run_id: str, *, recordings: dict, execution_mode: str = "direct") -> dict:
