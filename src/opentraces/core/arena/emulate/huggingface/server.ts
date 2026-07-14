@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.PORT ?? "14318", 10);
 const LEDGER_PATH = process.env.LEDGER_PATH;
+const CONTROL_TOKEN = process.env.OPENTRACES_HF_CONTROL_TOKEN;
 const launch = {
   nonce: process.env.OPENTRACES_HF_LAUNCH_NONCE ?? null,
   pid: process.pid,
@@ -175,6 +176,18 @@ function requireAuthentication(request: Request, operationId: string): Response 
   return errorResponse("InvalidToken", "invalid access token", 401);
 }
 
+function requireControlAuthorization(
+  request: Request,
+  operationId: string,
+): Response | undefined {
+  const presented = request.headers.get("x-bench-control-token");
+  if (CONTROL_TOKEN !== undefined && CONTROL_TOKEN.length > 0 && presented === CONTROL_TOKEN) {
+    return undefined;
+  }
+  appendLedger(request, operationId, 401);
+  return errorResponse("InvalidControlToken", "invalid bench control token", 401);
+}
+
 function ownsRepo(identity: Identity | undefined, repoId: string): boolean {
   return identity !== undefined && identity.name === repoId.split("/", 1)[0];
 }
@@ -305,6 +318,8 @@ Bun.serve({
       return jsonResponse({ warnings: [], errors: [] });
     }
     if (request.method === "POST" && path === "/_emulate/credentials") {
+      const unauthorized = requireControlAuthorization(request, "mintCredential");
+      if (unauthorized !== undefined) return unauthorized;
       const body = (await request.json()) as Record<string, unknown>;
       const name = String(body.name ?? "bench");
       const token =
@@ -317,6 +332,8 @@ Bun.serve({
       return jsonResponse({ ...identity, token });
     }
     if (request.method === "POST" && path === "/_emulate/seed") {
+      const unauthorized = requireControlAuthorization(request, "seed");
+      if (unauthorized !== undefined) return unauthorized;
       const body = (await request.json()) as {
         repos?: Array<{
           repo_id: string;
@@ -338,6 +355,8 @@ Bun.serve({
       return jsonResponse({ repos_seeded: seeded });
     }
     if (request.method === "POST" && path === "/_emulate/reset") {
+      const unauthorized = requireControlAuthorization(request, "reset");
+      if (unauthorized !== undefined) return unauthorized;
       repos.clear();
       files.clear();
       revisions.clear();
