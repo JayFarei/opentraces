@@ -19,6 +19,7 @@ Covers:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -206,12 +207,45 @@ def test_s2_pinned_boundaries():
     assert spans == [(0, 0), (1, 2), (3, 5), (6, 7), (8, 8)], spans
 
 
+_REAL_CAPTURE_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
+)
+_REAL_CAPTURE_PROVENANCE = (
+    Path(__file__).parent / "fixtures/trace_trails_corpus/v1/manifest.json"
+)
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _real_capture_record() -> TraceRecord:
-    fixture = (
-        Path(__file__).parent
-        / "fixtures/trace_trails_corpus/v1/workspace/traces/full_stack_demo.jsonl"
+    return TraceRecord.model_validate_json(
+        _REAL_CAPTURE_FIXTURE.read_text().splitlines()[0]
     )
-    return TraceRecord.model_validate_json(fixture.read_text().splitlines()[0])
+
+
+def test_coordinate_fixture_has_verifiable_real_capture_provenance():
+    """#270's coordinate control must originate in a real agent capture."""
+
+    provenance = json.loads(_REAL_CAPTURE_PROVENANCE.read_text())
+
+    assert provenance.get("schema_version") == "opentraces.test_capture_provenance.v1"
+    assert provenance.get("source_kind") == "real_agent_capture"
+    assert provenance.get("sanitized") is True
+    assert provenance.get("fixture_sha256") == _sha256(_REAL_CAPTURE_FIXTURE)
+
+    source = provenance.get("source") or {}
+    source_path = Path(__file__).parents[1] / str(source.get("repository_path", ""))
+    assert source.get("sha256") == _sha256(source_path)
+    assert source.get("capture_agent") == "claude-code"
+    assert source.get("capture_agent_version")
+    assert provenance.get("retained_step_indices") == [1, 2, 3]
+
+    fixture_bytes = _REAL_CAPTURE_FIXTURE.read_bytes()
+    assert b"/Users/" not in fixture_bytes
+    assert b"/home/" not in fixture_bytes
 
 
 def test_real_capture_trajectory_materializes_in_step_address_coordinates():
