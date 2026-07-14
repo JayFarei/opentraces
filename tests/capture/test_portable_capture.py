@@ -1338,6 +1338,8 @@ def test_placement_acceptance_exercises_every_capture_view_and_preserves_asymmet
         leased_roots=(projects["leased"], session_roots["leased"]),
     )
     assert report.matches is True
+    assert report.query_behavior["persistent"]["proof"]["trail_substantive"] is True
+    assert report.query_behavior["leased"]["proof"]["trail_substantive"] is True
     assert any(
         "placement-specific source limitations differ: telemetry" in item
         for item in report.limitations
@@ -3198,6 +3200,7 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#268: compare against the pre-extraction persistent canonical chain."""
+    from opentraces.core import config as config_module
     from opentraces.core import paths as capture_paths
     from opentraces.core.bucket_store import (
         project_context_tree_to_bucket,
@@ -3211,55 +3214,64 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
     from opentraces.core.ingest import ingest_one_session
     from opentraces.core.trails.maturation import mature_trails
 
-    fixture = Path(__file__).parents[1] / "fixtures" / "pi" / "linear-session.jsonl"
+    fixture = Path(__file__).parents[1] / "fixtures" / "pi" / "pi-linear-edit-real-session.jsonl"
     assert fixture.is_file()
-    legacy_project = _git_project(tmp_path / "legacy-project")
-    capture_project = _git_project(tmp_path / "capture-project")
-
-    legacy_root = tmp_path / "legacy-runtime"
-    monkeypatch.setattr(capture_paths, "OPENTRACES_DIR", legacy_root)
-    monkeypatch.setattr(capture_paths, "STAGING_DIR", legacy_root / "staging")
+    provenance = json.loads(fixture.with_suffix(".provenance.json").read_text())
+    assert provenance["source_release"] == "otbox-captures-v1"
+    assert provenance["source_snapshot_sha256"] == (
+        "4bd322ff93ad141194b0df6eb2cae8586fd2d3dc5c0d3f90dd59ed2a0eb33bee"
+    )
+    project = _git_project(tmp_path / "project")
+    runtime_root = tmp_path / "runtime"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for module in (capture_paths, config_module):
+        monkeypatch.setattr(module, "OPENTRACES_DIR", runtime_root)
+        monkeypatch.setattr(module, "CONFIG_PATH", runtime_root / "config.json")
+        monkeypatch.setattr(module, "CREDENTIALS_PATH", runtime_root / "credentials")
+        monkeypatch.setattr(module, "PROJECTS_DIR", runtime_root / "projects")
+    monkeypatch.setattr(capture_paths, "STAGING_DIR", runtime_root / "staging")
     ingested = ingest_one_session(
         fixture,
-        legacy_project,
+        project,
         parser_name="pi",
         cfg=load_config(),
         reconcile_watcher=False,
     )
     assert ingested.trace_id is not None
-    legacy_slug = get_project_dir(legacy_project).name
-    legacy_record = read_trace_record_object(trace_record_path(legacy_slug, ingested.trace_id))
+    project_slug = get_project_dir(project).name
+    legacy_record = read_trace_record_object(trace_record_path(project_slug, ingested.trace_id))
     assert legacy_record is not None
-    mature_trails(legacy_project, deadline=time.monotonic() + 10.0)
-    sync_trail_events_from_repo(legacy_project, repo_id=legacy_slug)
-    project_context_tree_to_bucket(
-        legacy_project, project_slug=legacy_slug, trace_id=ingested.trace_id
-    )
+    mature_trails(project, deadline=time.monotonic() + 10.0)
+    sync_trail_events_from_repo(project, repo_id=project_slug)
+    project_context_tree_to_bucket(project, project_slug=project_slug, trace_id=ingested.trace_id)
     project_per_trace_exports(
-        legacy_project,
-        project_slug=legacy_slug,
+        project,
+        project_slug=project_slug,
         trace_id=ingested.trace_id,
         record=legacy_record.record,
     )
     upsert_manifest_trace_row(
-        legacy_project,
-        project_slug=legacy_slug,
+        project,
+        project_slug=project_slug,
         trace_id=ingested.trace_id,
         record=legacy_record.record,
     )
-
-    capture_root = tmp_path / "capture-runtime"
-    monkeypatch.setattr(capture_paths, "OPENTRACES_DIR", capture_root)
-    monkeypatch.setattr(capture_paths, "STAGING_DIR", capture_root / "staging")
+    baseline_bucket = tmp_path / "pre-extraction-bucket"
+    shutil.copytree(runtime_root / "bucket", baseline_bucket)
+    baseline_trace_path = (
+        baseline_bucket / "traces" / "v1" / project_slug / ingested.trace_id / "trace.json"
+    )
     captured = Capture.open(
         CapturePlan(
-            project=capture_project,
-            workspace=capture_project,
+            project=project,
+            workspace=project,
             placement="persistent",
             requested_sources=("session_jsonl", "bucket"),
             required_sources=("session_jsonl", "bucket"),
             actor="pi",
-            session_id="pi-linear-session",
+            session_id="019eb1ff-4699-790c-9a4c-d637d93b8bc7",
             session_path=fixture,
             result_dir=tmp_path / "capture-result",
         )
@@ -3268,20 +3280,15 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
     from opentraces.capture.parity import compare_persistent_compatibility
 
     report = compare_persistent_compatibility(
-        legacy_trace_path=legacy_root
-        / "bucket"
-        / "traces"
-        / "v1"
-        / legacy_slug
-        / ingested.trace_id
-        / "trace.json",
-        legacy_project=legacy_project,
+        legacy_trace_path=baseline_trace_path,
+        legacy_project=project,
         captured=captured,
-        legacy_roots=(legacy_project, fixture.parent),
-        captured_roots=(capture_project, fixture.parent),
+        legacy_roots=(project, fixture.parent),
+        captured_roots=(project, fixture.parent),
     )
     assert report.matches is True
-    assert report.byte_match is True
+    assert report.serialized_artifact_bytes_match is True
+    assert report.semantic_material_match is True
     assert report.query_behavior_match is True
 
     # Killed control: the comparator must detect captured behavior/material
@@ -3291,17 +3298,202 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
     payload["task"]["description"] = "corrupted after capture"
     captured_trace.write_text(json.dumps(payload), encoding="utf-8")
     killed = compare_persistent_compatibility(
-        legacy_trace_path=legacy_root
-        / "bucket"
-        / "traces"
-        / "v1"
-        / legacy_slug
-        / ingested.trace_id
-        / "trace.json",
-        legacy_project=legacy_project,
+        legacy_trace_path=baseline_trace_path,
+        legacy_project=project,
         captured=captured,
-        legacy_roots=(legacy_project, fixture.parent),
-        captured_roots=(capture_project, fixture.parent),
+        legacy_roots=(project, fixture.parent),
+        captured_roots=(project, fixture.parent),
     )
     assert killed.matches is False
-    assert killed.byte_match is False
+    assert killed.serialized_artifact_bytes_match is False
+
+
+def _write_gzip_rows(path: Path, rows: list[dict[str, object]]) -> None:
+    material = b"".join((json.dumps(row, sort_keys=True) + "\n").encode("utf-8") for row in rows)
+    with path.open("wb") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped:
+            zipped.write(material)
+
+
+@pytest.mark.parametrize(
+    ("family", "corruption"),
+    [
+        ("context", "object"),
+        ("context", "wrong_family"),
+        ("context", "unrelated_trace"),
+        ("context", "bad_hash"),
+        ("context", "empty_required"),
+        ("trail", "object"),
+        ("trail", "wrong_family"),
+        ("trail", "unrelated_trace"),
+        ("trail", "bad_hash"),
+        ("trail", "empty_required"),
+        ("sources", "object"),
+    ],
+)
+def test_bucket_finalizer_validates_companion_content_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    family: str,
+    corruption: str,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    session_id = "bucket-companion-proof"
+    session_root = tmp_path / "sessions"
+    source = _write_edit_session(session_root, project, session_id)
+    result_dir = tmp_path / "result"
+    first_capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("session_jsonl", "bucket"),
+            required_sources=("session_jsonl", "bucket"),
+            session_id=session_id,
+            session_path=source,
+            result_dir=result_dir,
+        )
+    )
+    (project / "captured-world-effect.txt").write_text(
+        "substantive trail evidence\n", encoding="utf-8"
+    )
+    first = first_capture.finish(deadline=time.monotonic() + 10.0)
+    trace_id = first.trace_refs[0]
+    details = dict(first.source("bucket").details)
+    target = Path(details[f"{family}_path"])
+    context_rows = _read_companion(Path(details["context_path"]))
+    trail_rows = _read_companion(Path(details["trail_path"]))
+    assert context_rows and trail_rows
+
+    if corruption == "object":
+        rows: list[dict[str, object]] = [{}]
+    elif corruption == "wrong_family":
+        rows = trail_rows if family == "context" else context_rows
+    elif corruption == "unrelated_trace":
+        rows = [
+            _canonical_companion_row(
+                Path(details["trace_path"]),
+                family=family,
+                trace_id="01JUNRELATEDTRACE00000000000",
+            )
+        ]
+    elif corruption == "bad_hash":
+        rows = [dict((context_rows if family == "context" else trail_rows)[0])]
+        rows[0]["content_hash"] = "sha256:" + ("0" * 64)
+    else:
+        rows = []
+    _write_gzip_rows(target, rows)
+
+    second = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("bucket",),
+            required_sources=("bucket",),
+            trace_id=trace_id,
+            result_dir=result_dir,
+        )
+    )
+
+    def forged(request: dict[str, object]) -> dict[str, object]:
+        evidence_keys = (
+            "trace_path",
+            "manifest_path",
+            "trace_record_pointer_path",
+            "trace_record_path",
+            "context_path",
+            "trail_path",
+            "sources_path",
+        )
+        return {
+            "status": "finalized",
+            "completeness": "full",
+            "evidence_refs": [str(details[key]) for key in evidence_keys],
+            "limitations": [],
+            "trace_id": trace_id,
+            "details": details,
+        }
+
+    _install_forged_finalizer(monkeypatch, forged)
+    observed = second.finish(deadline=time.monotonic() + 2.0).source("bucket")
+    assert observed.status == "unavailable"
+    assert observed.completeness == "missing"
+    assert any("invalid bucket finalizer evidence" in item for item in observed.limitations)
+
+
+def test_query_parity_rejects_empty_trail_behavior_even_with_event_ref(
+    tmp_path: Path,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "empty-trail-query-session")
+        results.append(
+            Capture.open(
+                CapturePlan(
+                    project=projects[placement],
+                    workspace=projects[placement],
+                    placement=placement,
+                    requested_sources=("session_jsonl", "bucket"),
+                    required_sources=("session_jsonl", "bucket"),
+                    session_id="empty-trail-query-session",
+                    session_path=source,
+                    result_dir=tmp_path / placement,
+                )
+            ).finish(deadline=time.monotonic() + 10.0)
+        )
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+    assert report.query_behavior_match is False
+    assert report.query_behavior["persistent"]["proof"]["trail_substantive"] is False
+    assert report.query_behavior["leased"]["proof"]["trail_substantive"] is False
+    assert "unproven_query_behavior" in report.differences
+
+
+def test_query_normalization_preserves_semantic_absolute_path_drift(
+    tmp_path: Path,
+) -> None:
+    projects = {
+        placement: _git_project(tmp_path / f"{placement}-project")
+        for placement in ("persistent", "leased")
+    }
+    results = []
+    for placement in ("persistent", "leased"):
+        source = _write_session(projects[placement], "semantic-path-query-session")
+        result = Capture.open(
+            CapturePlan(
+                project=projects[placement],
+                workspace=projects[placement],
+                placement=placement,
+                requested_sources=("session_jsonl", "bucket"),
+                required_sources=("session_jsonl", "bucket"),
+                session_id="semantic-path-query-session",
+                session_path=source,
+                result_dir=tmp_path / placement,
+            )
+        ).finish(deadline=time.monotonic() + 10.0)
+        trace_path = Path(result.source("bucket").details["trace_path"])
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+        trace["steps"][0]["content"] = (
+            f"Customer supplied semantic literal {projects[placement]}/README.md"
+        )
+        trace_path.write_text(json.dumps(trace), encoding="utf-8")
+        results.append(result)
+
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"],),
+        leased_roots=(projects["leased"],),
+    )
+    assert report.query_behavior_match is False
+    assert "query_behavior" in report.differences

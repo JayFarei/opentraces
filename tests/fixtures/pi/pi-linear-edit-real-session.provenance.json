@@ -1,0 +1,18 @@
+{
+  "schema_version": "opentraces.real_session_fixture.v1",
+  "fixture": "pi-linear-edit-real-session.jsonl",
+  "source_release": "otbox-captures-v1",
+  "source_asset": "pi-linear-edit.snapshot.tar.gz",
+  "source_snapshot_sha256": "4bd322ff93ad141194b0df6eb2cae8586fd2d3dc5c0d3f90dd59ed2a0eb33bee",
+  "source_snapshot_size_bytes": 5936860,
+  "source_metadata_sha256": "ed892618de5af24267189b50ad209d5d22f3e346a91c88f1f80b4258680fd2c9",
+  "source_session_member": "home/.pi/agent/sessions/<captured-project>/2026-06-10T14-45-57-529Z_019eb1ff-4699-790c-9a4c-d637d93b8bc7.jsonl",
+  "source_session_sha256": "5ac02ea954de53b1054515cefcd8d402a3d5216b4cf5602d97a851366b9aaab6",
+  "source_session_id": "019eb1ff-4699-790c-9a4c-d637d93b8bc7",
+  "derived_fixture_sha256": "4fe8e733ac736d3fa7e358fb9aceb793ac6b0bfffda5892630dbd3388fa086a8",
+  "derivation": [
+    "Extracted the single raw Pi session from the SHA-verified release snapshot.",
+    "Rewrote only the captured otbox root to /workspace/pi-real-edit-box, matching the documented snapshot restore path-rewrite class.",
+    "Removed opaque thinkingSignature and textSignature fields, including encrypted signature payloads; preserved user, assistant, thinking text, tool calls, tool results, timestamps, model, usage, and commit behavior."
+  ]
+}
