@@ -120,6 +120,7 @@ def test_browser_only_attempt_freezes_public_state_and_all_recording_channels(
         run.verify(authorize_through_public_page)
 
     result = json.loads((run.final_path / "result.json").read_text(encoding="utf-8"))
+    assert bench.store.verify(run.final_path) is True
     assert result["verdict"] == "pass"
     assert result["recordings"]["rewatchable"] is True
     assert result["recordings"]["channels"] == [
@@ -146,6 +147,12 @@ def test_browser_only_attempt_freezes_public_state_and_all_recording_channels(
         json.loads((run.final_path / f"actions/{ordinal:04d}/invocation.json").read_text())["kind"]
         for ordinal in range(1, 8)
     ] == ["navigate", "locate", "fill", "click", "wait", "inspect", "screenshot"]
+    fill_invocation = json.loads(
+        (run.final_path / "actions/0003/invocation.json").read_text(encoding="utf-8")
+    )
+    assert fill_invocation["value_pin"].startswith("sha256:")
+    assert "value" not in fill_invocation
+    assert "bench-user" not in json.dumps(fill_invocation)
     assert (run.final_path / "recordings/browser/video/session.webm").read_bytes() == b"browser-video"
     assert (run.final_path / "recordings/browser/trace/trace.zip").read_bytes() == (
         b"playwright-trace"
