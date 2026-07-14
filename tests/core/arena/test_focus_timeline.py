@@ -77,6 +77,17 @@ def test_execution_timeline_survives_conflicting_directory_and_mtime_order(
         "actions/0002",
         "actions/0003",
     ]
+    manifest = json.loads(
+        (run.final_path / ".integrity.json").read_text(encoding="utf-8")
+    )
+    assert "recordings/timeline.jsonl" in manifest["files"]
+    assert bench.store.verify(run.final_path) is True
+    assert run.draft is not None
+    with pytest.raises(RuntimeError, match="finalized"):
+        run.draft.append_jsonl("recordings/timeline.jsonl", {"sequence": 999})
+    with pytest.raises(PermissionError):
+        timeline_path.write_text(timeline_path.read_text() + "{}\n", encoding="utf-8")
+    assert bench.store.verify(run.final_path) is True
 
 
 @pytest.mark.parametrize("damage", ["missing", "dangling-causal-ref"])
