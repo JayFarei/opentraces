@@ -1275,7 +1275,8 @@ def _attest_product_process(
                 limitations.append("product version probe deadline was exhausted")
             else:
                 probe_argv = list(version_probe)
-                probe_env: dict[str, str] | None = None
+                probe_env = dict(os.environ)
+                probe_env.pop("__PYVENV_LAUNCHER__", None)
                 if (
                     executed_launcher
                     and runtime_path != launcher_path
@@ -1300,7 +1301,6 @@ def _attest_product_process(
                     if runtime_matches:
                         # macOS framework Python reports the app executable
                         # while the shebang path carries virtualenv context.
-                        probe_env = dict(os.environ)
                         probe_env["__PYVENV_LAUNCHER__"] = str(runtime_command)
                 remaining = max(0.0, deadline - time.monotonic())
                 if remaining <= 0:
