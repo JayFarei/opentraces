@@ -1,77 +1,93 @@
 {
   "schema_version": "opentraces.bench.manual-proof.v1",
-  "observed_at": "2026-07-13T22:09:16Z",
-  "source_commit": "cf9f5584c6fb53253e69e3f3ba0cb580a32ccc0c",
+  "observed_at": "2026-07-14T01:06:58Z",
+  "source_commit": "7ae83c72690f25b2edde2cd4123f76d8d5101250",
   "source_archive": {
     "format": "tar",
-    "sha256": "d2317326f8ce9dc8b9a5140229d9d90637b84e3644c968f846f2014eeffd5097"
+    "sha256": "1b7bf14b50d7101274e0bb5f05e1b453631b81c97373802dc5270d95085b5c5c"
   },
   "box": {
-    "lease_id": "cbx_3c4d329627cf",
-    "container_id": "56cabc5b6c77bed84529372e918720391543b1061898446f1e77ae3e70ca6772",
+    "lease_id": "cbx_684fca9113e5",
+    "container_id": "2a6829a1dc9af18cf479a73f2c3c9156bc6217bcfbab31e1fe2025b175204374",
     "provider": "local-container",
     "image": "ubuntu:24.04",
     "architecture": "aarch64",
-    "glibc": "2.39"
+    "sandbox_tier": "container"
+  },
+  "app_state": {
+    "name": "install-only",
+    "digest": "sha256:632376d019e9e00e227903f375edc55cfdc6bc02961d436b8fe6f07bdf7c4185",
+    "dependencies": {
+      "huggingface-hub": "1.10.2",
+      "hf-xet": "1.4.3"
+    },
+    "wheel_sha256": [
+      "3122c6db3c8856d6756e9711157d491d11f233eda6298d21b1172b2cf5dd6be2",
+      "af63003242b1e648cc9920f37c9d2a5504423bf47a9ecd1748cb2719eee19821"
+    ]
   },
   "binary": {
+    "provenance": "verified",
+    "contract_version": "huggingface.v1",
     "bun_version": "1.3.6",
     "target": "bun-linux-arm64",
-    "size_bytes": 94087927,
-    "sha256": "e3f493a7585cde0c87036e75305b9d24208fca1d70da4c73946cc6e5fa92532c"
-  },
-  "readiness": {
-    "path": "/_emulate/manifest",
-    "status": 200,
-    "manifest_id": "huggingface",
-    "hf_port": 14318,
-    "otlp_port": 4318,
-    "otlp_status": "ok"
+    "size_bytes": 94088689,
+    "sha256": "0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da",
+    "source_sha256": "97b98ffe5724fb7c64554d9637ba8574a1c58b5ea7eba1cb07d4c7a1579db367",
+    "build_inputs_sha256": "6338cd5962b0f836b768aa4dbe26da857f2a1d961fad5f32bd55d2d8dc0eeaac"
   },
   "contract_tests": {
-    "huggingface_hub": "1.10.2",
-    "hf_xet": "1.4.3",
-    "passed": 22,
+    "command": "python3 -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py",
+    "passed": 23,
     "skipped": 1,
-    "skip_reason": "The runtime-free box intentionally has no Bun build toolchain."
+    "returncode": 0,
+    "skip_reason": "The runtime-free box uses the verified precompiled emulator and intentionally has no Bun build toolchain."
   },
-  "product_publish": {
-    "success": true,
-    "trace_count": 1,
-    "shard_name": "traces_20260713T220605Z_9cc842d9.jsonl",
-    "ledger_operation_id": "commit",
-    "ledger_path": "/api/datasets/bench/scenario-2-final-cf9f/commit/main",
-    "commit_oid": "3e4757b653047ff8d75894e34c58403a25310bda"
+  "public_runs": {
+    "happy": {
+      "run_id": "run_20260714T005226013533Z_79c989b512bf",
+      "execution_status": "complete",
+      "verdict": "pass",
+      "exit_code": 0,
+      "ledger_rows": 11,
+      "evidence_complete": true,
+      "evidence_ref": "ledgers/huggingface.jsonl",
+      "lease_id": "cbx_e0bae8793ac6",
+      "lease_released": true
+    },
+    "emulator_down": {
+      "run_id": "run_20260714T005349183062Z_1e390a82119e",
+      "execution_status": "complete",
+      "verdict": "fail",
+      "exit_code": 1,
+      "ledger_rows": 3,
+      "commit_rows": 0,
+      "evidence_complete": true,
+      "evidence_ref": "ledgers/huggingface.jsonl",
+      "lease_id": "cbx_3a646e259146",
+      "lease_released": true
+    }
   },
-  "stale_parent_control": {
-    "status": 409,
-    "error_code": "Conflict",
-    "accepted_head": "87ee40609845de0fdf8fa45a9cb62f2e4a5191e6",
-    "head_unchanged": true,
-    "files_after": ["first.txt", "second.txt"],
-    "stale_file_absent": true,
-    "rejected_ledger_commit_oid_absent": true
+  "world_evidence": {
+    "schema_version": "opentraces.bench.world.huggingface.v1",
+    "evidence_ref": "world/huggingface.json",
+    "ledger_custody": {
+      "writer": "opentraces-hf",
+      "product_writable": false,
+      "collection": "read-only sidecar endpoint"
+    },
+    "capability_groups": ["hand-authored", "partial", "unsupported"]
   },
-  "emulator_down_control": {
-    "observed": "red",
-    "returncode": 1,
-    "error": "httpx.ConnectError: Connection refused"
-  },
-  "fallback_measurement": {
-    "activated": false,
-    "strategy": "bun-in-checkpoint-plus-bundle",
-    "prerequisites": ["unzip"],
-    "install_milliseconds": 5928,
-    "installed_size_bytes": 94066858
-  },
-  "materialization": {
-    "path": "direct-scp",
-    "reason": "Crabbox 0.38.0 provisioned the named local-container lease to ready state. The exact cf9f5584c6f source archive and compiled binary were copied through the lease's inspected SSH identity; every proof command ran inside that lease."
+  "page_capture": {
+    "file": "opentraces-a2-7ae83c7-world-page.png",
+    "width": 1280,
+    "height": 5203,
+    "sha256": "94bbc1ecccfe0879978eafffa3b59fc2a351cfcbb0d2abdead153dc8f3e055fc"
   },
   "release": {
     "success": true,
-    "lease_id": "cbx_3c4d329627cf",
-    "container_id": "56cabc5b6c77bed84529372e918720391543b1061898446f1e77ae3e70ca6772",
+    "lease_id": "cbx_684fca9113e5",
+    "container_id": "2a6829a1dc9af18cf479a73f2c3c9156bc6217bcfbab31e1fe2025b175204374",
     "inspect_after_stop_returncode": 4,
     "container_absent": true
   }

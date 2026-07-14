@@ -1,98 +1,66 @@
 A2 Hugging Face emulator genuine leased-box transcript
-Observed: 2026-07-13T22:09:16Z
-Source commit: cf9f5584c6fb53253e69e3f3ba0cb580a32ccc0c
+Observed: 2026-07-14T01:06:58Z
+Source commit: 7ae83c72690f25b2edde2cd4123f76d8d5101250
 
 This transcript is sanitized. It contains no credentials, developer-machine
-paths, or reusable SSH material. Angle-bracketed values name local transfer
-artifacts. Every command after readiness ran inside the named Crabbox lease;
-no replacement container was created or relabelled.
+paths, or reusable SSH material. Every contract command ran inside the named
+Crabbox lease against the archived source commit and verified binary.
 
 $ crabbox --version
 0.38.0
 
-$ TMPDIR=<home>/crabbox-tmp crabbox warmup --provider local-container --local-container-image ubuntu:24.04 --ttl 30m
-provisioning provider=local-container lease=cbx_3c4d329627cf slug=violet-hermit runtime=docker image=ubuntu:24.04 keep=true
-waiting for 127.0.0.1:<port> local container ssh... ports=<port>:closed
-waiting for 127.0.0.1:<port> local container ssh ssh-auth... ports=<port>:tcp
-provisioned lease=cbx_3c4d329627cf container=56cabc5b6c77 state=ready
-leased cbx_3c4d329627cf slug=violet-hermit provider=local-container server=56cabc5b6c77bed84529372e918720391543b1061898446f1e77ae3e70ca6772 type=ubuntu_24.04
-ready ssh=crabbox@127.0.0.1:<port> network=public workroot=/work/crabbox
-warmup complete total=21.095s
+$ crabbox warmup --provider local-container --local-container-image ubuntu:24.04
+provisioning provider=local-container lease=cbx_684fca9113e5 slug=swift-hermit runtime=docker image=ubuntu:24.04 keep=true
+provisioned lease=cbx_684fca9113e5 container=2a6829a1dc9a state=ready
+leased cbx_684fca9113e5 provider=local-container server=2a6829a1dc9af18cf479a73f2c3c9156bc6217bcfbab31e1fe2025b175204374 type=ubuntu_24.04
 
-$ TMPDIR=<home>/crabbox-tmp crabbox inspect --id cbx_3c4d329627cf --provider local-container --json | <select-proof-fields>
-{"id":"cbx_3c4d329627cf","provider":"local-container","state":"leased","serverId":"56cabc5b6c77bed84529372e918720391543b1061898446f1e77ae3e70ca6772","serverType":"ubuntu_24.04","ready":true,"labels":{"image":"ubuntu:24.04","provider":"local-container","state":"leased"}}
+$ git archive --format=tar --output=<source-archive> 7ae83c72690f25b2edde2cd4123f76d8d5101250
+source_archive_sha256=1b7bf14b50d7101274e0bb5f05e1b453631b81c97373802dc5270d95085b5c5c
 
-$ python -c 'build_hf_emulator_binary(<compiled-binary>)'
-[80ms] bundle 1 modules
-[6ms] compile <compiled-binary> bun-linux-aarch64-v1.3.6
-sha256=e3f493a7585cde0c87036e75305b9d24208fca1d70da4c73946cc6e5fa92532c
-size_bytes=94087927
+$ <install exact project wheels and pinned Hub clients inside lease>
+Successfully installed opentraces-0.4.9 opentraces-schema-0.9.0 huggingface-hub-1.10.2 hf-xet-1.4.3
 
-$ git archive --format=tar --output=<source-archive> cf9f5584c6fb53253e69e3f3ba0cb580a32ccc0c
-source_archive_sha256=d2317326f8ce9dc8b9a5140229d9d90637b84e3644c968f846f2014eeffd5097
+$ python3 -c '<print installed contract package versions>'
+{"hf-xet": "1.4.3", "huggingface-hub": "1.10.2"}
 
-$ scp -i <lease-key> -P <lease-port> <source-archive> <compiled-binary> crabbox@127.0.0.1:/tmp/
-$ ssh -i <lease-key> -p <lease-port> crabbox@127.0.0.1 '<extract archive and install binary under /work/crabbox/a2>'
-$ ssh -i <lease-key> -p <lease-port> crabbox@127.0.0.1 'cd /work/crabbox/a2; uname -m; ldd --version | head -1; sha256sum opentraces-hf-emulator; stat -c %s opentraces-hf-emulator'
-aarch64
-ldd (Ubuntu GLIBC 2.39-0ubuntu8.7) 2.39
-e3f493a7585cde0c87036e75305b9d24208fca1d70da4c73946cc6e5fa92532c  opentraces-hf-emulator
-94087927
+$ <inspect verified emulator provenance>
+{"build_inputs_sha256":"6338cd5962b0f836b768aa4dbe26da857f2a1d961fad5f32bd55d2d8dc0eeaac","bun_version":"1.3.6","contract_version":"huggingface.v1","provenance":"verified","sha256":"0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da","source_sha256":"97b98ffe5724fb7c64554d9637ba8574a1c58b5ea7eba1cb07d4c7a1579db367","target":"bun-linux-arm64"}
 
-The stock Ubuntu image had Python 3.12 but not ensurepip. The explicit
-`python3.12-venv` package was installed inside the same lease before creating
-the venv. No runtime was added for the precompiled emulator binary.
+$ OPENTRACES_HF_EMULATOR_BINARY=<verified-binary> OPENTRACES_RUNTIME_FREE_BOX=1 python3 -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py
+......................s.                                                 [100%]
+23 passed, 1 skipped in 3.96s
 
-$ .venv/bin/python -c '<print installed contract package versions>'
-pip=26.1.2
-huggingface-hub=1.10.2
-hf-xet=1.4.3
-pytest=9.1.1
+The single skip is the explicitly opted-in compile-tool test. The leased box
+runs the verified precompiled emulator and intentionally has no Bun toolchain.
+The exercised contract includes exact client pins, binary/source/build-input
+provenance, app-state dependency and wheel hashes, authenticated owner-scoped
+listing, parent-linked commits, stale-parent conflict headers, settings and
+delete operations, structured setup evidence, and an independent ledger that
+the product user cannot write.
 
-$ OPENTRACES_HF_EMULATOR_BINARY=/work/crabbox/a2/opentraces-hf-emulator OPENTRACES_RUNTIME_FREE_BOX=1 .venv/bin/python -m pytest -q tests/test_ci_test_files.py tests/test_arena_hf_emulator.py tests/test_arena_hf_emulator_packaging.py
-.....................s.                                                  [100%]
-22 passed, 1 skipped in 4.34s
+$ <run public happy scenario at the same source commit>
+run_id=run_20260714T005226013533Z_79c989b512bf
+execution_status=complete verdict=pass exit_code=0
+ledger_rows=11 evidence_complete=true evidence_ref=ledgers/huggingface.jsonl
+world_ref=world/huggingface.json
+lease=cbx_e0bae8793ac6 released=true
 
-The one skip is the explicitly opted-in compile-tool test: the leased box runs
-the precompiled exact binary and intentionally has no Bun. The dedicated CI
-workflow provisions Bun 1.3.6 and runs all 21 focused A2 tests without this opt-in.
-The executable contract includes old-versus-main resolve identity, authenticated
-owner-scoped listing with explicit invalid-bearer rejection, and settings/delete
-ledger-payload controls. It also starts the default portable OTLP receiver and
-the default HF emulator together, requiring both readiness probes to stay green.
-The suite also requires real-client parent commits to chain and a stale parent
-to return `409 Conflict` without changing the accepted head or repository files.
+$ <run emulator-down negative control at the same source commit>
+run_id=run_20260714T005349183062Z_1e390a82119e
+execution_status=complete verdict=fail exit_code=1
+ledger_rows=3 commit_rows=0 evidence_complete=true
+evidence_ref=ledgers/huggingface.jsonl
+lease=cbx_3a646e259146 released=true
 
-$ setsid .venv/bin/python -c '<start default portable OTLP receiver>' >otlp.stdout 2>otlp.stderr < /dev/null &
-$ setsid env LEDGER_PATH=/work/crabbox/a2/hf-ledger.jsonl /work/crabbox/a2/opentraces-hf-emulator >hf-emulator.stdout 2>hf-emulator.stderr < /dev/null &
-$ curl -fsS http://127.0.0.1:4318/health
-{"status":"ok"}
-$ curl -fsS http://127.0.0.1:14318/_emulate/manifest | <select-readiness-fields>
-{"auth":[{"id":"user-token","status":"supported","title":"User access token","type":"bearer-token","validation":"minted-or-baseline-state"}],"controlPlane":{"credentials":"POST /_emulate/credentials","reset":"POST /_emulate/reset","seed":"POST /_emulate/seed"},"id":"huggingface","operation_count":12}
+$ <render and inspect the public World page>
+capture=opentraces-a2-7ae83c7-world-page.png dimensions=1280x5203
+sha256=94bbc1ecccfe0879978eafffa3b59fc2a351cfcbb0d2abdead153dc8f3e055fc
+observed=complete/pass result, structured endpoint and baseline, capability groups, world and ledger evidence links, public actions, verifier, exhaust
 
-$ HF_ENDPOINT=http://127.0.0.1:14318 .venv/bin/python -c '<publish one TraceRecord through HFUploader>'
-{"shard_name":"traces_20260713T220605Z_9cc842d9.jsonl","success":true,"trace_count":1}
+$ crabbox stop --provider local-container --target linux --id cbx_684fca9113e5
+deleted lease=cbx_684fca9113e5 server=2a6829a1dc9af18cf479a73f2c3c9156bc6217bcfbab31e1fe2025b175204374
 
-$ .venv/bin/python -c '<select the last commit row from hf-ledger.jsonl>'
-{"method":"POST","operation_id":"commit","path":"/api/datasets/bench/scenario-2-final-cf9f/commit/main","request":{"files":["data/traces_20260713T220605Z_9cc842d9.jsonl"],"repo_id":"bench/scenario-2-final-cf9f","revision":"main"},"response":{"commit_oid":"3e4757b653047ff8d75894e34c58403a25310bda","status":200}}
-
-$ HF_ENDPOINT=http://127.0.0.1:14318 .venv/bin/python -c '<two accepted parent-linked commits, then retry the first parent>'
-{"after_files":["first.txt","second.txt"],"after_head":"87ee40609845de0fdf8fa45a9cb62f2e4a5191e6","conflict":[409,"Conflict"],"second_oid":"87ee40609845de0fdf8fa45a9cb62f2e4a5191e6"}
-$ .venv/bin/python -c '<select the rejected parent-proof ledger row>'
-{"error_code":null,"has_commit_oid":false,"parent_commit":"7137f29da0713ca0612320918f56644077e94a64","status":409}
-
-$ kill <emulator-pid>
-$ HF_ENDPOINT=http://127.0.0.1:14318 .venv/bin/python -c '<HFUploader.ensure_repo_exists negative control>'
-returncode=1
-httpx.ConnectError: [Errno 111] Connection refused
-$ curl -fsS http://127.0.0.1:4318/health
-{"status": "ok"}
-$ kill <otlp-receiver-pid>
-
-$ TMPDIR=<home>/crabbox-tmp crabbox stop --id cbx_3c4d329627cf --provider local-container
-deleted lease=cbx_3c4d329627cf server=56cabc5b6c77bed84529372e918720391543b1061898446f1e77ae3e70ca6772 name=crabbox-violet-hermit-<suffix>
-
-$ TMPDIR=<home>/crabbox-tmp crabbox inspect --id cbx_3c4d329627cf --provider local-container --json
+$ crabbox inspect --provider local-container --target linux --id cbx_684fca9113e5
 returncode=4
-local-container lease not found: cbx_3c4d329627cf
+local-container lease not found: cbx_684fca9113e5
 container_absent=true
