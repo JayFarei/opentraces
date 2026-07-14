@@ -85,14 +85,7 @@ class RunStore:
     def begin(self) -> "RunDraft":
         self.reconcile()
         self.staging_root.mkdir(parents=True, exist_ok=True)
-        run_id = next(
-            (
-                child.name
-                for child in sorted(self.root.glob("run_*"))
-                if child.is_dir() and (child / "result.json").is_file()
-            ),
-            _new_run_id(),
-        )
+        run_id = _new_run_id()
         path = self.staging_root / run_id
         path.mkdir()
         for name in RUN_SUBDIRECTORIES:
