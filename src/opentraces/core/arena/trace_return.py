@@ -49,7 +49,7 @@ def _read_object(path: Path, *, label: str) -> dict[str, Any]:
 
 
 def _bounded_text(path: Path, remaining: int) -> tuple[str, int]:
-    if remaining <= 0 or not path.is_file():
+    if remaining <= 0:
         return "", remaining
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -62,10 +62,31 @@ def _bounded_text(path: Path, remaining: int) -> tuple[str, int]:
     return text[:keep] + marker[: remaining - keep], 0
 
 
-def _observation_text(action_path: Path) -> str | None:
+def _action_output_path(
+    run_path: Path,
+    action_path: Path,
+    observed: Mapping[str, Any],
+    field: str,
+) -> Path:
+    reference = observed.get(field)
+    if not isinstance(reference, str) or not reference:
+        raise TraceReturnError(f"missing action output reference: {field}")
+    target = (run_path / reference).resolve()
+    if not target.is_relative_to(action_path.resolve()) or not target.is_file():
+        raise TraceReturnError(f"missing action output: {reference}")
+    return target
+
+
+def _observation_text(
+    run_path: Path,
+    action_path: Path,
+    observed: Mapping[str, Any],
+) -> str | None:
     remaining = _OUTPUT_LIMIT_CHARS
-    stdout, remaining = _bounded_text(action_path / "stdout", remaining)
-    stderr, _ = _bounded_text(action_path / "stderr", remaining)
+    stdout_path = _action_output_path(run_path, action_path, observed, "stdout_ref")
+    stderr_path = _action_output_path(run_path, action_path, observed, "stderr_ref")
+    stdout, remaining = _bounded_text(stdout_path, remaining)
+    stderr, _ = _bounded_text(stderr_path, remaining)
     parts: list[str] = []
     if stdout:
         parts.append(stdout)
@@ -148,7 +169,7 @@ def _action_steps(run_path: Path) -> list[Step]:
                 observations=[
                     Observation(
                         source_call_id=call_id,
-                        content=_observation_text(action_path),
+                        content=_observation_text(run_path, action_path, observed),
                         output_summary=f"rc={returncode}",
                         error=error,
                     )
