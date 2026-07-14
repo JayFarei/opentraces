@@ -176,6 +176,7 @@ def attach_captured_bench_labels(
 
 
 def _explicit_subject(address: str) -> tuple[str, dict[str, str]]:
+    from ..bucket_trace_records import read_bucket_record_for_trace
     from ..bucket_envelope import trace_v2_summary_by_id
     from ..bucket_layout import trace_v1_json_path
     from ..trails.lineage import parse_trail_ref
@@ -183,17 +184,26 @@ def _explicit_subject(address: str) -> tuple[str, dict[str, str]]:
     trace_id, point, span, reserved = parse_trail_ref(address)
     if not trace_id or reserved not in {None, "span"}:
         raise OriginJoinError("explicit origin address is not a trace, point, or span")
-    summary = trace_v2_summary_by_id(trace_id)
-    if summary is None:
-        raise OriginJoinError("explicit origin address does not resolve to a stored trace")
-    project_slug = summary.get("project_slug")
-    if not isinstance(project_slug, str) or not project_slug:
-        raise OriginJoinError("explicit origin address has no owning project")
-    trace_path = trace_v1_json_path(project_slug, trace_id)
-    try:
-        record = TraceRecord.model_validate_json(trace_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise OriginJoinError("explicit origin address does not resolve to a valid trace") from exc
+    stored = read_bucket_record_for_trace(trace_id)
+    if stored is not None:
+        project_slug = stored.project_slug
+        record = stored.record
+    else:
+        # Compatibility fallback for old envelope-only buckets that predate the
+        # canonical TraceRecord object/pointer store.
+        summary = trace_v2_summary_by_id(trace_id)
+        if summary is None:
+            raise OriginJoinError("explicit origin address does not resolve to a stored trace")
+        project_slug = summary.get("project_slug")
+        if not isinstance(project_slug, str) or not project_slug:
+            raise OriginJoinError("explicit origin address has no owning project")
+        trace_path = trace_v1_json_path(project_slug, trace_id)
+        try:
+            record = TraceRecord.model_validate_json(trace_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise OriginJoinError(
+                "explicit origin address does not resolve to a valid trace"
+            ) from exc
     if record.trace_id != trace_id:
         raise OriginJoinError("explicit origin address disagrees with the stored trace")
     step_indices = {step.step_index for step in record.steps}
