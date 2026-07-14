@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.run_store import RunStore
 from tests.core.arena.test_browser_drive import PublicBrowserSession, _scenario
@@ -75,3 +77,52 @@ def test_execution_timeline_survives_conflicting_directory_and_mtime_order(
         "actions/0002",
         "actions/0003",
     ]
+
+
+@pytest.mark.parametrize("damage", ["missing", "dangling-causal-ref"])
+def test_timeline_damage_only_removes_rewatchability(
+    tmp_path: Path,
+    damage: str,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=PublicBrowserSession,
+    )
+
+    def journey(run):
+        terminal = run.terminal.exec("printf", "before")
+        browser = run.browser.inspect("main")
+        return {"evidence_refs": [terminal.result_ref, browser.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(journey)
+        assert run.draft is not None
+        timeline_path = run.draft.path / "recordings/timeline.jsonl"
+        if damage == "missing":
+            timeline_path.unlink()
+        else:
+            rows = [
+                json.loads(line)
+                for line in timeline_path.read_text(encoding="utf-8").splitlines()
+            ]
+            browser_start = next(
+                row
+                for row in rows
+                if row["event"] == "action_started" and row["surface"] == "browser"
+            )
+            browser_start["causal_refs"] = ["actions/9999"]
+            timeline_path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+    recordings = run.result["recordings"]
+    assert run.result["verdict"] == "pass"
+    assert run.result["evidence"]["complete"] is True
+    assert recordings["rewatchable"] is False
+    assert recordings["timeline"]["complete"] is False
+    assert damage.split("-", 1)[0] in recordings["timeline"]["reason"]
+    assert all(channel["complete"] for channel in recordings["channels"])
