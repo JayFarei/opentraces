@@ -1045,6 +1045,76 @@ def test_parity_compares_each_source_completeness_not_only_view_aggregate(
     assert "source_completeness" in report.differences
 
 
+def test_parity_rejects_different_capture_security_results(tmp_path: Path) -> None:
+    """Result-level security truth must agree even when stored traces match."""
+    results = []
+    projects = {}
+    session_roots = {}
+    for placement in ("persistent", "leased"):
+        project = _git_project(tmp_path / f"{placement}-project")
+        projects[placement] = project
+        session_root = tmp_path / f"{placement}-sessions"
+        session_roots[placement] = session_root
+        source = _write_edit_session(
+            session_root,
+            project,
+            "security-parity-session",
+        )
+        capture = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement=placement,
+                requested_sources=("session_jsonl", "bucket"),
+                required_sources=("session_jsonl", "bucket"),
+                session_id="security-parity-session",
+                session_path=source,
+                result_dir=tmp_path / f"{placement}-result",
+            )
+        )
+        (project / "captured-world-effect.txt").write_text(
+            "substantive trail evidence\n",
+            encoding="utf-8",
+        )
+        results.append(
+            capture.finish(deadline=time.monotonic() + 10.0)
+        )
+
+    persistent = replace(
+        results[0],
+        security={
+            "configuration": "explicit",
+            "configured_tools": ["regex"],
+            "tools_applied": ["regex"],
+            "effective_tools": ["regex"],
+            "observed": True,
+            "raw_body_retention": "delete",
+        },
+    )
+    leased = replace(
+        results[1],
+        security={
+            "configuration": "configured",
+            "configured_tools": ["entropy"],
+            "tools_applied": [],
+            "effective_tools": [],
+            "observed": False,
+            "raw_body_retention": "retain",
+        },
+    )
+
+    report = compare_placements(
+        persistent,
+        leased,
+        persistent_roots=(projects["persistent"], session_roots["persistent"]),
+        leased_roots=(projects["leased"], session_roots["leased"]),
+    )
+
+    assert report.security_match is False
+    assert report.matches is False
+    assert "security" in report.differences
+
+
 def test_parity_preserves_trace_ids_embedded_in_semantic_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
