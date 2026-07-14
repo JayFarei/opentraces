@@ -3188,3 +3188,119 @@ def test_parity_executes_trace_ctx_and_trail_queries_in_both_placements(
     assert report.query_behavior_match is False
     assert "query_behavior" in report.differences
     assert report.matches is False
+
+
+def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#268: compare against the pre-extraction persistent canonical chain."""
+    from opentraces.core import paths as capture_paths
+    from opentraces.core.bucket_store import (
+        project_context_tree_to_bucket,
+        project_per_trace_exports,
+        read_trace_record_object,
+        sync_trail_events_from_repo,
+        trace_record_path,
+        upsert_manifest_trace_row,
+    )
+    from opentraces.core.config import get_project_dir, load_config
+    from opentraces.core.ingest import ingest_one_session
+    from opentraces.core.trails.maturation import mature_trails
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "pi" / "linear-session.jsonl"
+    assert fixture.is_file()
+    legacy_project = _git_project(tmp_path / "legacy-project")
+    capture_project = _git_project(tmp_path / "capture-project")
+
+    legacy_root = tmp_path / "legacy-runtime"
+    monkeypatch.setattr(capture_paths, "OPENTRACES_DIR", legacy_root)
+    monkeypatch.setattr(capture_paths, "STAGING_DIR", legacy_root / "staging")
+    ingested = ingest_one_session(
+        fixture,
+        legacy_project,
+        parser_name="pi",
+        cfg=load_config(),
+        reconcile_watcher=False,
+    )
+    assert ingested.trace_id is not None
+    legacy_slug = get_project_dir(legacy_project).name
+    legacy_record = read_trace_record_object(
+        trace_record_path(legacy_slug, ingested.trace_id)
+    )
+    assert legacy_record is not None
+    mature_trails(legacy_project, deadline=time.monotonic() + 10.0)
+    sync_trail_events_from_repo(legacy_project, repo_id=legacy_slug)
+    project_context_tree_to_bucket(
+        legacy_project, project_slug=legacy_slug, trace_id=ingested.trace_id
+    )
+    project_per_trace_exports(
+        legacy_project,
+        project_slug=legacy_slug,
+        trace_id=ingested.trace_id,
+        record=legacy_record.record,
+    )
+    upsert_manifest_trace_row(
+        legacy_project,
+        project_slug=legacy_slug,
+        trace_id=ingested.trace_id,
+        record=legacy_record.record,
+    )
+
+    capture_root = tmp_path / "capture-runtime"
+    monkeypatch.setattr(capture_paths, "OPENTRACES_DIR", capture_root)
+    monkeypatch.setattr(capture_paths, "STAGING_DIR", capture_root / "staging")
+    captured = Capture.open(
+        CapturePlan(
+            project=capture_project,
+            workspace=capture_project,
+            placement="persistent",
+            requested_sources=("session_jsonl", "bucket"),
+            required_sources=("session_jsonl", "bucket"),
+            actor="pi",
+            session_id="pi-linear-session",
+            session_path=fixture,
+            result_dir=tmp_path / "capture-result",
+        )
+    ).finish(deadline=time.monotonic() + 15.0)
+
+    from opentraces.capture.parity import compare_persistent_compatibility
+
+    report = compare_persistent_compatibility(
+        legacy_trace_path=legacy_root
+        / "bucket"
+        / "traces"
+        / "v1"
+        / legacy_slug
+        / ingested.trace_id
+        / "trace.json",
+        legacy_project=legacy_project,
+        captured=captured,
+        legacy_roots=(legacy_project, fixture.parent),
+        captured_roots=(capture_project, fixture.parent),
+    )
+    assert report.matches is True
+    assert report.byte_match is True
+    assert report.query_behavior_match is True
+
+    # Killed control: the comparator must detect captured behavior/material
+    # drifting even though the direct legacy baseline is left untouched.
+    captured_trace = Path(captured.source("bucket").details["trace_path"])
+    payload = json.loads(captured_trace.read_text(encoding="utf-8"))
+    payload["task"]["description"] = "corrupted after capture"
+    captured_trace.write_text(json.dumps(payload), encoding="utf-8")
+    killed = compare_persistent_compatibility(
+        legacy_trace_path=legacy_root
+        / "bucket"
+        / "traces"
+        / "v1"
+        / legacy_slug
+        / ingested.trace_id
+        / "trace.json",
+        legacy_project=legacy_project,
+        captured=captured,
+        legacy_roots=(legacy_project, fixture.parent),
+        captured_roots=(capture_project, fixture.parent),
+    )
+    assert killed.matches is False
+    assert killed.byte_match is False
