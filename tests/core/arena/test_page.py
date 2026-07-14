@@ -53,13 +53,13 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
     )
 
 
-def _result(run_id: str, *, recordings: dict) -> dict:
+def _result(run_id: str, *, recordings: dict, execution_mode: str = "direct") -> dict:
     return build_result(
         run_id=run_id,
         claim="Stored evidence remains inside its finalized run.",
         nodeid="tests/core/arena/test_page.py::test_page",
         source_ref="source/scenario.py",
-        execution_mode="direct",
+        execution_mode=execution_mode,
         started_at="2026-07-14T12:00:00Z",
         duration_ms=1,
         execution_status="complete",
@@ -195,3 +195,19 @@ def test_page_names_and_omits_an_exhaust_symlink_that_escapes_the_run(tmp_path: 
     assert "MISSING EXHAUST" in html
     assert "artifacts/outside.txt" in html
     assert ">artifacts/outside.txt</a>" not in html
+
+
+def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    finalized = draft.finalize(
+        _result(
+            draft.run_id,
+            recordings={"rewatchable": False, "channels": []},
+            execution_mode="agent_replay",
+        )
+    )
+
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    assert '<div class="eyebrow">MODE</div>agent_replay' in html
