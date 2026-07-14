@@ -499,3 +499,13 @@ def test_normal_trace_read_refuses_a_self_consistent_forged_verdict(
         verify_label(forged, store=store)
     with pytest.raises(LabelIntegrityError, match="verified run"):
         label_summary_for_trace(TRACE_ID)
+    record = TraceRecord(
+        trace_id=TRACE_ID,
+        session_id="session-forged-label",
+        agent=Agent(name="test-agent"),
+        task={"description": "Publishing reaches the configured remote."},
+        steps=[],
+        outcome=Outcome(success=None),
+    )
+    with pytest.raises(LabelIntegrityError, match="verified run"):
+        _trace_overview(record, include_labels=True)

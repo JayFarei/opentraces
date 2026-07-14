@@ -369,26 +369,43 @@ def validate_label(label: object) -> dict[str, Any]:
     }
 
 
-def verify_label(label: object, *, store: RunStore | None = None) -> bool:
-    """Reverify the complete run and reproduce the exact label row from it."""
+def verify_labels(
+    labels: Iterable[object],
+    *,
+    store: RunStore | None = None,
+) -> bool:
+    """Batch-reverify labels, hashing each shared run/subject pin once."""
 
-    canonical = validate_label(label)
+    canonical_rows = [validate_label(label) for label in labels]
     resolved_store = store or RunStore()
-    run_id = canonical["run"]["id"]
-    run_path = resolved_store.root / run_id
-    rows = mint_labels_for_run(
-        run_path,
-        subject=canonical["subject"],
-        store=resolved_store,
-        expected_complete_run_digest=canonical["run"]["complete_digest"],
-    )
-    expected = next(
-        (row for row in rows if row["label_id"] == canonical["label_id"]),
-        None,
-    )
-    if expected is None or _canonical_json(expected) != _canonical_json(canonical):
-        raise LabelIntegrityError("label does not reproduce from the verified run")
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for row in canonical_rows:
+        key = (
+            row["run"]["id"],
+            _canonical_json(row["subject"]),
+            row["run"]["complete_digest"],
+        )
+        groups.setdefault(key, []).append(row)
+
+    for (run_id, _subject_key, run_digest), group in groups.items():
+        expected_rows = mint_labels_for_run(
+            resolved_store.root / run_id,
+            subject=group[0]["subject"],
+            store=resolved_store,
+            expected_complete_run_digest=run_digest,
+        )
+        expected_by_id = {row["label_id"]: row for row in expected_rows}
+        for row in group:
+            expected = expected_by_id.get(row["label_id"])
+            if expected is None or _canonical_json(expected) != _canonical_json(row):
+                raise LabelIntegrityError("label does not reproduce from the verified run")
     return True
+
+
+def verify_label(label: object, *, store: RunStore | None = None) -> bool:
+    """Reverify the complete run and reproduce one exact label row from it."""
+
+    return verify_labels([label], store=store)
 
 
 def _decode_rows(path: Path) -> list[dict[str, Any]]:
@@ -448,8 +465,7 @@ def attach_labels(
     resolved_store = store or RunStore()
     path = trace_v1_labels_path(project_slug, trace_id)
     existing_rows = _decode_rows(path)
-    for row in existing_rows:
-        verify_label(row, store=resolved_store)
+    verify_labels(existing_rows, store=resolved_store)
     by_id = {row["label_id"]: row for row in existing_rows}
     for raw in labels:
         row = validate_label(raw)
@@ -484,6 +500,7 @@ def label_summary_for_trace(trace_id: str, *, limit: int = 8) -> dict[str, Any]:
                     raise LabelIntegrityError("cross-project label_id collision")
                 rows_by_id[row["label_id"]] = row
     rows = [rows_by_id[label_id] for label_id in sorted(rows_by_id)]
+    verify_labels(rows, store=RunStore())
     return {
         "count": len(rows),
         "items": [
@@ -512,4 +529,5 @@ __all__ = [
     "read_labels",
     "validate_label",
     "verify_label",
+    "verify_labels",
 ]
