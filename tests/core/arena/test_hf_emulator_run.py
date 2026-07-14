@@ -110,6 +110,7 @@ class WorldRuntime:
         self.events: list[str] = []
         self.copied: tuple[Path, str] | None = None
         self.stop_command: str | None = None
+        self.control_calls: list[tuple[str, list[str], dict[str, str]]] = []
 
     def lease(self) -> Box:
         return Box(
@@ -142,7 +143,17 @@ class WorldRuntime:
 
     def exec(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         rendered = " ".join(map(str, argv))
-        if "/proc/$pid/exe" in rendered:
+        environment = dict(env or {})
+        if "/_emulate/credentials" in rendered:
+            self.control_calls.append(("credentials", list(map(str, argv)), environment))
+            stdout, returncode = '{"name":"other","token":"hf_other","type":"user"}\n', 0
+        elif "/_emulate/seed" in rendered:
+            self.control_calls.append(("seed", list(map(str, argv)), environment))
+            stdout, returncode = '{"repos_seeded":["other/seeded"]}\n', 0
+        elif "/_emulate/reset" in rendered:
+            self.control_calls.append(("reset", list(map(str, argv)), environment))
+            stdout, returncode = '{"ok":true}\n', 0
+        elif "/proc/$pid/exe" in rendered:
             self.events.append("process-binding")
             stdout, returncode = (
                 (json.dumps({"pid": 4242, "user": "opentraces-hf"}) + "\n", 0)
@@ -604,6 +615,54 @@ def test_terminal_drive_cannot_escalate_into_independent_ledger_custody(
         run.verify(lambda _run: {"evidence_refs": []})
 
     assert runtime.events.count("product-ledger-escalation-refused") == 4
+
+
+def test_harness_control_client_keeps_its_per_launch_bearer_out_of_product_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _trust_test_binary(binary, monkeypatch)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+    bench = _bench(tmp_path, runtime)
+
+    with bench.run(app_state="install-only") as run:
+        hf = run.emulate("huggingface")
+        assert hf.mint_credentials(name="other") == {
+            "name": "other",
+            "token": "hf_other",
+            "type": "user",
+        }
+        assert hf.seed(repos=[{"repo_id": "other/seeded"}]) == {
+            "repos_seeded": ["other/seeded"]
+        }
+        assert hf.reset() == {"ok": True}
+        assert set(hf.env) == {"HF_ENDPOINT", "HF_TOKEN"}
+
+    assert [name for name, _argv, _env in runtime.control_calls] == [
+        "credentials",
+        "seed",
+        "reset",
+    ]
+    control_tokens = {
+        environment["OPENTRACES_HF_CONTROL_TOKEN"]
+        for _name, _argv, environment in runtime.control_calls
+    }
+    assert len(control_tokens) == 1
+    control_token = control_tokens.pop()
+    assert len(control_token) == 64
+    assert control_token != hf.env["HF_TOKEN"]
+    assert all(
+        control_token not in argument
+        for _name, argv, _environment in runtime.control_calls
+        for argument in argv
+    )
+    assert all(
+        "OPENTRACES_HF_CONTROL_TOKEN" in environment
+        for _name, _argv, environment in runtime.control_calls
+    )
 
 
 def test_run_emulate_refuses_every_unregistered_name(
