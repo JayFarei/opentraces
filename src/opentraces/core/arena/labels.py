@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from opentraces_schema import TraceRecord
+from opentraces_schema import TraceMap, TraceRecord
 from pydantic import ValidationError
 
 from .._bucket_io import (
@@ -27,14 +27,24 @@ from ..bucket_layout import (
     trace_v1_labels_path,
     traces_v1_root,
 )
+from ..slicing.contract import SLICING_SCHEMA_VERSION
+from ..slicing.models import Trajectory
+from ..trace_slices import (
+    TraceMaterializationRef,
+    materialize_trajectory,
+    slice_by_steps,
+)
+from ..trails.lineage import parse_trail_ref
+from ..trails.slices import trace_slice_id_for
 from .contract import VERDICTS, validate_result
-from .run_store import RunIntegrityError, RunStore
+from .run_store import RunDraft, RunIntegrityError, RunStore
 
 
 ARENA_LABEL_SCHEMA_VERSION = "opentraces.arena.label.v0"
 ARENA_LABEL_KIND = "bench"
 COMPLETE_RUN_DIGEST_DOMAIN = b"opentraces.arena.complete-run.v0\x00"
 LABEL_ID_DOMAIN = b"opentraces.arena.label-id.v0\x00"
+MATERIALIZED_SLICE_DIGEST_DOMAIN = b"opentraces.arena.materialized-slice.v0\x00"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _TRACE_ADDRESS = re.compile(r"[^\s:]+")
 _SLICE_ADDRESS = re.compile(r"(?P<trace>[^\s:]+):(?P<start>[0-9]+)-(?P<end>[0-9]+)")
@@ -50,6 +60,45 @@ _LABEL_FIELDS = {
     "run",
     "product_pin",
     "run_facts",
+}
+_SLICE_LABEL_FIELDS = _LABEL_FIELDS | {"slice_pin"}
+_MATERIALIZED_SLICE_FIELDS = {
+    "slice_id",
+    "trace_id",
+    "generation_index",
+    "source",
+    "template",
+    "start_step_index",
+    "end_step_index",
+    "map",
+    "steps",
+    "map_node_refs",
+    "trace_patch_refs",
+    "git_anchor_refs",
+    "metadata",
+    "limitations",
+}
+_SLICE_PIN_COMMON_FIELDS = {
+    "provenance_kind",
+    "materialized_ref",
+    "materialized_digest",
+    "artifact_digest",
+    "slice_id",
+    "trace_id",
+    "generation_index",
+    "start_step_index",
+    "end_step_index",
+    "source",
+    "map_node_refs",
+    "trace_patch_refs",
+    "git_anchor_refs",
+    "limitations",
+}
+_SLICE_PIN_TRAJECTORY_FIELDS = _SLICE_PIN_COMMON_FIELDS | {
+    "slicing_schema_version",
+    "trajectory",
+    "trajectory_position_range",
+    "coordinate_translation",
 }
 _VERIFIER_FIELDS = {
     "ordinal",
@@ -114,6 +163,149 @@ def _subject_trace_id(subject: Mapping[str, str]) -> str:
     return subject["address"].split(":", 1)[0]
 
 
+def _slice_bounds(subject: Mapping[str, str]) -> tuple[int, int]:
+    match = _SLICE_ADDRESS.fullmatch(subject["address"])
+    if subject.get("kind") != "slice" or match is None:
+        raise LabelContractError("slice subject address must be trace:A-B with A <= B")
+    return int(match.group("start")), int(match.group("end"))
+
+
+def _validate_string_list(value: object, *, name: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise LabelContractError(f"slice pin {name} must be an array of strings")
+    return list(value)
+
+
+def _validate_trajectory(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {"start", "end", "kind", "label"}:
+        raise LabelContractError("slice pin trajectory must contain start, end, kind, and label")
+    start = value.get("start")
+    end = value.get("end")
+    kind = value.get("kind")
+    label = value.get("label")
+    if (
+        not isinstance(start, int)
+        or isinstance(start, bool)
+        or not isinstance(end, int)
+        or isinstance(end, bool)
+        or start < 0
+        or end < start
+    ):
+        raise LabelContractError("slice pin trajectory positions must satisfy 0 <= start <= end")
+    if not isinstance(kind, str) or not kind or not isinstance(label, str):
+        raise LabelContractError("slice pin trajectory kind and label must be strings")
+    return {"start": start, "end": end, "kind": kind, "label": label}
+
+
+def _validate_slice_pin(pin: object, *, subject: Mapping[str, str]) -> dict[str, Any]:
+    if not isinstance(pin, Mapping):
+        raise LabelContractError("slice subject requires a slice pin")
+    provenance_kind = pin.get("provenance_kind")
+    expected_fields = (
+        _SLICE_PIN_TRAJECTORY_FIELDS
+        if provenance_kind == "trajectory"
+        else _SLICE_PIN_COMMON_FIELDS
+        if provenance_kind == "explicit"
+        else set()
+    )
+    if not expected_fields or set(pin) != expected_fields:
+        raise LabelContractError("slice pin field set does not match its provenance kind")
+
+    slice_id = pin.get("slice_id")
+    trace_id = pin.get("trace_id")
+    generation_index = pin.get("generation_index")
+    start_step_index = pin.get("start_step_index")
+    end_step_index = pin.get("end_step_index")
+    source = pin.get("source")
+    if not isinstance(slice_id, str) or not slice_id:
+        raise LabelContractError("slice pin slice_id must be a non-empty string")
+    if not isinstance(trace_id, str) or not trace_id:
+        raise LabelContractError("slice pin trace_id must be a non-empty string")
+    if (
+        not isinstance(generation_index, int)
+        or isinstance(generation_index, bool)
+        or generation_index < 0
+    ):
+        raise LabelContractError("slice pin generation_index must be a non-negative integer")
+    if (
+        not isinstance(start_step_index, int)
+        or isinstance(start_step_index, bool)
+        or not isinstance(end_step_index, int)
+        or isinstance(end_step_index, bool)
+        or start_step_index < 0
+        or end_step_index < start_step_index
+    ):
+        raise LabelContractError("slice pin step range must satisfy 0 <= start <= end")
+    expected_source = "slicer_trajectory" if provenance_kind == "trajectory" else "manual_step_range"
+    if source != expected_source:
+        raise LabelContractError(f"{provenance_kind} slice pin source must be {expected_source}")
+    expected_subject = {"kind": "slice", "address": f"{trace_id}:{start_step_index}-{end_step_index}"}
+    if dict(subject) != expected_subject:
+        raise LabelIntegrityError("slice subject boundary does not match its pin")
+    parsed_trace, point, span, reserved = parse_trail_ref(expected_subject["address"])
+    if (parsed_trace, point, span, reserved) != (
+        trace_id,
+        None,
+        (start_step_index, end_step_index),
+        "span",
+    ):
+        raise LabelIntegrityError("slice subject does not round-trip through the address grammar")
+
+    expected_slice_id = trace_slice_id_for(
+        trace_id=trace_id,
+        generation_index=generation_index,
+        start_step_index=start_step_index,
+        end_step_index=end_step_index,
+        source=source,
+    )
+    if slice_id != expected_slice_id:
+        raise LabelIntegrityError("slice_id does not reproduce from the pinned identity")
+    expected_ref = f"artifacts/slices/{slice_id}.json"
+    if pin.get("materialized_ref") != expected_ref:
+        raise LabelContractError("slice pin materialized_ref must be canonical")
+
+    canonical: dict[str, Any] = {
+        "provenance_kind": provenance_kind,
+        "materialized_ref": expected_ref,
+        "materialized_digest": _validate_digest(
+            pin.get("materialized_digest"), name="materialized slice"
+        ),
+        "artifact_digest": _validate_digest(pin.get("artifact_digest"), name="slice artifact"),
+        "slice_id": slice_id,
+        "trace_id": trace_id,
+        "generation_index": generation_index,
+        "start_step_index": start_step_index,
+        "end_step_index": end_step_index,
+        "source": source,
+        "map_node_refs": _validate_string_list(pin.get("map_node_refs"), name="map_node_refs"),
+        "trace_patch_refs": _validate_string_list(
+            pin.get("trace_patch_refs"), name="trace_patch_refs"
+        ),
+        "git_anchor_refs": _validate_string_list(
+            pin.get("git_anchor_refs"), name="git_anchor_refs"
+        ),
+        "limitations": _validate_string_list(pin.get("limitations"), name="limitations"),
+    }
+    if provenance_kind == "trajectory":
+        trajectory = _validate_trajectory(pin.get("trajectory"))
+        position_range = pin.get("trajectory_position_range")
+        if position_range != {"start": trajectory["start"], "end": trajectory["end"]}:
+            raise LabelIntegrityError("trajectory position range does not match the frozen trajectory")
+        if pin.get("slicing_schema_version") != SLICING_SCHEMA_VERSION:
+            raise LabelContractError("trajectory slice pin has an unsupported slicing schema")
+        if pin.get("coordinate_translation") != "array_position_to_step_index":
+            raise LabelContractError("trajectory slice pin has an invalid coordinate translation")
+        canonical.update(
+            {
+                "slicing_schema_version": SLICING_SCHEMA_VERSION,
+                "trajectory": trajectory,
+                "trajectory_position_range": dict(position_range),
+                "coordinate_translation": "array_position_to_step_index",
+            }
+        )
+    return canonical
+
+
 def _validate_product_pin(pin: object) -> dict[str, Any]:
     if not isinstance(pin, Mapping) or set(pin) != _PRODUCT_PIN_FIELDS:
         raise LabelContractError("product pin must contain commit, worktree, and dirty_diff_digest")
@@ -165,6 +357,176 @@ def complete_run_digest(
     resolved_store = store or RunStore(resolved_path.parent)
     material = _run_digest_material(resolved_path, resolved_store)
     return _digest(COMPLETE_RUN_DIGEST_DOMAIN, material)
+
+
+def _materialize_slice(
+    trace_ref: TraceMaterializationRef,
+    *,
+    subject: Mapping[str, str] | None,
+    trajectory: Trajectory | Mapping[str, Any] | None,
+) -> tuple[dict[str, str], dict[str, Any], str]:
+    trace_id = trace_ref.record.trace_id
+    if trajectory is not None:
+        materialized = materialize_trajectory(trace_ref, trajectory)
+        provenance_kind = "trajectory"
+    else:
+        if subject is None:
+            raise LabelContractError("explicit slice materialization requires a slice subject")
+        canonical_subject = _validate_subject(subject)
+        if canonical_subject["kind"] != "slice":
+            raise LabelContractError("slice materialization requires a slice subject")
+        if _subject_trace_id(canonical_subject) != trace_id:
+            raise LabelIntegrityError("slice subject trace does not match the materialization record")
+        start, end = _slice_bounds(canonical_subject)
+        materialized = slice_by_steps(
+            trace_ref.trace_map,
+            trace_ref.record,
+            start_step_index=start,
+            end_step_index=end,
+        )
+        provenance_kind = "explicit"
+
+    materialized_subject = {
+        "kind": "slice",
+        "address": (
+            f"{materialized['trace_id']}:"
+            f"{materialized['start_step_index']}-{materialized['end_step_index']}"
+        ),
+    }
+    canonical_materialized_subject = _validate_subject(materialized_subject)
+    if subject is not None and _validate_subject(subject) != canonical_materialized_subject:
+        raise LabelIntegrityError("slice subject boundary disagrees with materialization")
+    return canonical_materialized_subject, materialized, provenance_kind
+
+
+def _validate_materialized_slice(
+    materialized: object,
+    *,
+    provenance_kind: str,
+) -> dict[str, Any]:
+    if not isinstance(materialized, Mapping) or set(materialized) != _MATERIALIZED_SLICE_FIELDS:
+        raise LabelIntegrityError("materialized slice artifact field set is invalid")
+    payload = dict(materialized)
+    metadata = payload.get("metadata")
+    if provenance_kind == "trajectory":
+        if payload.get("source") != "slicer_trajectory" or payload.get("template") is not None:
+            raise LabelIntegrityError("trajectory artifact has invalid source or template")
+        if not isinstance(metadata, Mapping) or set(metadata) != {
+            "slicing_schema_version",
+            "trajectory",
+            "trajectory_position_range",
+            "coordinate_translation",
+        }:
+            raise LabelIntegrityError("trajectory artifact metadata field set is invalid")
+        trajectory = _validate_trajectory(metadata.get("trajectory"))
+        if metadata.get("slicing_schema_version") != SLICING_SCHEMA_VERSION:
+            raise LabelIntegrityError("trajectory artifact has an unsupported slicing schema")
+        if metadata.get("trajectory_position_range") != {
+            "start": trajectory["start"],
+            "end": trajectory["end"],
+        }:
+            raise LabelIntegrityError("trajectory artifact position range is inconsistent")
+        if metadata.get("coordinate_translation") != "array_position_to_step_index":
+            raise LabelIntegrityError("trajectory artifact coordinate translation is invalid")
+    else:
+        if (
+            payload.get("source") != "manual_step_range"
+            or payload.get("template") is not None
+            or metadata != {}
+        ):
+            raise LabelIntegrityError("explicit slice artifact must use canonical step slicing")
+    return payload
+
+
+def stage_slice_artifact(
+    draft: RunDraft,
+    trace_ref: TraceMaterializationRef,
+    *,
+    trajectory: Trajectory | Mapping[str, Any] | None = None,
+    subject: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Materialize and stage the exact slice a verifier will grade.
+
+    The artifact is written before run finalization so RunStore's integrity
+    manifest and complete-run digest cover its exact bytes. ``slice_id`` is an
+    address identity rather than a content digest; an attempted same-id write
+    with different bytes therefore fails closed instead of overwriting.
+    """
+
+    canonical_subject, materialized, provenance_kind = _materialize_slice(
+        trace_ref,
+        subject=subject,
+        trajectory=trajectory,
+    )
+    _validate_materialized_slice(materialized, provenance_kind=provenance_kind)
+    artifact_ref = f"artifacts/slices/{materialized['slice_id']}.json"
+    artifact_path = draft.path / artifact_ref
+    canonical_bytes = _canonical_json(materialized, pretty=True).encode("utf-8")
+    if artifact_path.is_file() and artifact_path.read_bytes() != canonical_bytes:
+        raise LabelIntegrityError(
+            "slice_id collision has different canonical materialized bytes"
+        )
+    draft.write_json(artifact_ref, materialized)
+    return {
+        "artifact_ref": artifact_ref,
+        "subject": canonical_subject,
+        "slice_id": materialized["slice_id"],
+    }
+
+
+def _slice_pin_for_run(
+    run_path: Path,
+    *,
+    subject: Mapping[str, str],
+    materialized: Mapping[str, Any],
+    provenance_kind: str,
+) -> dict[str, Any]:
+    validated = _validate_materialized_slice(
+        materialized,
+        provenance_kind=provenance_kind,
+    )
+    artifact_ref = f"artifacts/slices/{validated['slice_id']}.json"
+    artifact_path = run_path / artifact_ref
+    if not artifact_path.is_file() or not artifact_path.resolve().is_relative_to(run_path.resolve()):
+        raise LabelIntegrityError("materialized slice artifact is missing from the run")
+    artifact_bytes = artifact_path.read_bytes()
+    try:
+        stored = json.loads(artifact_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LabelIntegrityError("materialized slice artifact is invalid JSON") from exc
+    if not isinstance(stored, dict):
+        raise LabelIntegrityError("materialized slice artifact must be a JSON object")
+    _validate_materialized_slice(stored, provenance_kind=provenance_kind)
+    if _canonical_json(stored) != _canonical_json(validated):
+        raise LabelIntegrityError("stored slice does not match fresh materialization")
+
+    pin: dict[str, Any] = {
+        "provenance_kind": provenance_kind,
+        "materialized_ref": artifact_ref,
+        "materialized_digest": _digest(MATERIALIZED_SLICE_DIGEST_DOMAIN, stored),
+        "artifact_digest": f"sha256:{hashlib.sha256(artifact_bytes).hexdigest()}",
+        "slice_id": stored["slice_id"],
+        "trace_id": stored["trace_id"],
+        "generation_index": stored["generation_index"],
+        "start_step_index": stored["start_step_index"],
+        "end_step_index": stored["end_step_index"],
+        "source": stored["source"],
+        "map_node_refs": list(stored["map_node_refs"]),
+        "trace_patch_refs": list(stored["trace_patch_refs"]),
+        "git_anchor_refs": list(stored["git_anchor_refs"]),
+        "limitations": list(stored["limitations"]),
+    }
+    if provenance_kind == "trajectory":
+        metadata = stored["metadata"]
+        pin.update(
+            {
+                "slicing_schema_version": metadata["slicing_schema_version"],
+                "trajectory": dict(metadata["trajectory"]),
+                "trajectory_position_range": dict(metadata["trajectory_position_range"]),
+                "coordinate_translation": metadata["coordinate_translation"],
+            }
+        )
+    return _validate_slice_pin(pin, subject=subject)
 
 
 def _validated_verifier(
@@ -220,6 +582,7 @@ def _mint_rows(
     subject: Mapping[str, str],
     run_digest: str,
     run_path: Path,
+    slice_pin: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if result.get("execution_status") != "complete" or result.get("verdict") not in VERDICTS:
         raise LabelContractError("a label requires an adjudicated verdict")
@@ -241,17 +604,25 @@ def _mint_rows(
 
     rows: list[dict[str, Any]] = []
     for ordinal, verifier in enumerate(verifiers, start=1):
+        canonical_verifier = _validated_verifier(
+            verifier,
+            ordinal=ordinal,
+            run_path=run_path,
+        )
+        if (
+            slice_pin is not None
+            and slice_pin["materialized_ref"] not in canonical_verifier["evidence_refs"]
+        ):
+            raise LabelIntegrityError(
+                "slice artifact must be named in the grading verifier evidence_refs"
+            )
         row_without_id = {
             "schema_version": ARENA_LABEL_SCHEMA_VERSION,
             "kind": ARENA_LABEL_KIND,
             "subject": dict(subject),
             "claim": claim,
             "verdict": result["verdict"],
-            "verifier": _validated_verifier(
-                verifier,
-                ordinal=ordinal,
-                run_path=run_path,
-            ),
+            "verifier": canonical_verifier,
             "run": {
                 "id": result["run_id"],
                 "ref": f"runs/v1/{result['run_id']}",
@@ -263,6 +634,8 @@ def _mint_rows(
                 "rewatchable": recordings["rewatchable"],
             },
         }
+        if slice_pin is not None:
+            row_without_id["slice_pin"] = dict(slice_pin)
         rows.append(
             {
                 "schema_version": row_without_id["schema_version"],
@@ -279,6 +652,8 @@ def mint_labels_for_run(
     subject: Mapping[str, str],
     store: RunStore | None = None,
     expected_complete_run_digest: str | None = None,
+    trace_ref: TraceMaterializationRef | None = None,
+    trajectory: Trajectory | Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Mint deterministic per-verifier rows from one verified finalized run."""
 
@@ -292,24 +667,47 @@ def mint_labels_for_run(
     validate_result(result)
     if result["run_id"] != resolved_path.name:
         raise LabelIntegrityError("result run_id does not match the run directory")
+    slice_pin: dict[str, Any] | None = None
+    if canonical_subject["kind"] == "slice":
+        if trace_ref is None:
+            raise LabelIntegrityError("slice mint requires a materialization reference")
+        fresh_subject, materialized, provenance_kind = _materialize_slice(
+            trace_ref,
+            subject=canonical_subject,
+            trajectory=trajectory,
+        )
+        if fresh_subject != canonical_subject:
+            raise LabelIntegrityError("fresh materialization changed the slice subject")
+        slice_pin = _slice_pin_for_run(
+            resolved_path,
+            subject=canonical_subject,
+            materialized=materialized,
+            provenance_kind=provenance_kind,
+        )
+    elif trajectory is not None or trace_ref is not None:
+        raise LabelContractError("trace subjects cannot carry slice materialization inputs")
     return _mint_rows(
         result,
         subject=canonical_subject,
         run_digest=run_digest,
         run_path=resolved_path,
+        slice_pin=slice_pin,
     )
 
 
 def validate_label(label: object) -> dict[str, Any]:
     """Validate the exact frozen label shape without touching storage."""
 
-    if not isinstance(label, Mapping) or set(label) != _LABEL_FIELDS:
-        raise LabelContractError("label field set does not match opentraces.arena.label.v0")
+    if not isinstance(label, Mapping):
+        raise LabelContractError("label must be an object")
     if label.get("schema_version") != ARENA_LABEL_SCHEMA_VERSION:
         raise LabelContractError("unsupported arena label schema_version")
     if label.get("kind") != ARENA_LABEL_KIND:
         raise LabelContractError("arena label kind must be bench")
     subject = _validate_subject(label.get("subject"))
+    expected_fields = _SLICE_LABEL_FIELDS if subject["kind"] == "slice" else _LABEL_FIELDS
+    if set(label) != expected_fields:
+        raise LabelContractError("label field set does not match opentraces.arena.label.v0")
     claim = label.get("claim")
     verdict = label.get("verdict")
     if not isinstance(claim, str) or not claim:
@@ -359,6 +757,11 @@ def validate_label(label: object) -> dict[str, Any]:
         "product_pin": product_pin,
         "run_facts": dict(facts),
     }
+    if subject["kind"] == "slice":
+        row_without_id["slice_pin"] = _validate_slice_pin(
+            label.get("slice_pin"),
+            subject=subject,
+        )
     expected_id = _label_id(row_without_id)
     if label.get("label_id") != expected_id:
         raise LabelIntegrityError("label_id does not match the canonical label content")
@@ -367,6 +770,49 @@ def validate_label(label: object) -> dict[str, Any]:
         "label_id": expected_id,
         **{key: value for key, value in row_without_id.items() if key != "schema_version"},
     }
+
+
+def _canonical_subject_trace(trace_id: str) -> TraceRecord:
+    candidates: dict[tuple[str, str], TraceRecord] = {}
+    root = traces_v1_root()
+    if root.is_dir():
+        pattern = f"*/{_path_part(trace_id)}/trace.json"
+        for path in sorted(root.glob(pattern)):
+            try:
+                record = TraceRecord.model_validate_json(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError, ValidationError) as exc:
+                raise LabelIntegrityError("slice subject trace is not a valid TraceRecord") from exc
+            if record.trace_id != trace_id:
+                raise LabelIntegrityError("slice subject trace path contains a different trace")
+            project_key = path.parent.parent.name
+            candidates[(project_key, _canonical_json(record.model_dump(mode="json")))] = record
+
+    from ..bucket_trace_records import iter_trace_record_objects
+
+    for obj in iter_trace_record_objects():
+        if obj.trace_id == trace_id:
+            candidates[
+                (obj.project_slug, _canonical_json(obj.record.model_dump(mode="json")))
+            ] = obj.record
+    if not candidates:
+        raise LabelIntegrityError("slice subject canonical TraceRecord is missing")
+    if len(candidates) != 1:
+        raise LabelIntegrityError("slice subject canonical TraceRecord is ambiguous")
+    return next(iter(candidates.values()))
+
+
+def _trace_ref_for_label(row: Mapping[str, Any], run_path: Path) -> TraceMaterializationRef:
+    pin = row["slice_pin"]
+    artifact_path = run_path / pin["materialized_ref"]
+    artifact = _read_object(artifact_path, name="materialized slice artifact")
+    try:
+        trace_map = TraceMap.model_validate(artifact.get("map"))
+    except (ValueError, ValidationError) as exc:
+        raise LabelIntegrityError("materialized slice map is invalid") from exc
+    record = _canonical_subject_trace(pin["trace_id"])
+    if record.generation_index != pin["generation_index"]:
+        raise LabelIntegrityError("slice pin generation does not match the canonical trace")
+    return TraceMaterializationRef(record=record, trace_map=trace_map)
 
 
 def verify_labels(
@@ -378,21 +824,31 @@ def verify_labels(
 
     canonical_rows = [validate_label(label) for label in labels]
     resolved_store = store or RunStore()
-    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for row in canonical_rows:
         key = (
             row["run"]["id"],
             _canonical_json(row["subject"]),
             row["run"]["complete_digest"],
+            _canonical_json(row.get("slice_pin")),
         )
         groups.setdefault(key, []).append(row)
 
-    for (run_id, _subject_key, run_digest), group in groups.items():
+    for (run_id, _subject_key, run_digest, _slice_pin_key), group in groups.items():
+        run_path = resolved_store.root / run_id
+        trace_ref: TraceMaterializationRef | None = None
+        trajectory: Mapping[str, Any] | None = None
+        if group[0]["subject"]["kind"] == "slice":
+            trace_ref = _trace_ref_for_label(group[0], run_path)
+            if group[0]["slice_pin"]["provenance_kind"] == "trajectory":
+                trajectory = group[0]["slice_pin"]["trajectory"]
         expected_rows = mint_labels_for_run(
-            resolved_store.root / run_id,
+            run_path,
             subject=group[0]["subject"],
             store=resolved_store,
             expected_complete_run_digest=run_digest,
+            trace_ref=trace_ref,
+            trajectory=trajectory,
         )
         expected_by_id = {row["label_id"]: row for row in expected_rows}
         for row in group:
@@ -548,6 +1004,7 @@ __all__ = [
     "label_summary_for_trace",
     "mint_labels_for_run",
     "read_labels",
+    "stage_slice_artifact",
     "validate_label",
     "verify_label",
     "verify_labels",
