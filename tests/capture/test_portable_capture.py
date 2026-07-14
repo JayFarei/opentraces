@@ -2899,3 +2899,292 @@ def test_capture_records_unverified_non_self_observation_as_limitation(
     assert result.provenance["product_under_test"]["derivation"] == "caller_claim"
     assert result.provenance["separation"]["proven"] is False
     assert any("non-self-observation" in item for item in result.limitations)
+
+
+def _install_forged_finalizer(monkeypatch: pytest.MonkeyPatch, build_report) -> None:
+    """Replace only the finish child after Capture.open established real state."""
+    from opentraces.capture import portable as portable_capture
+
+    class ForgedChild:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs) -> None:
+            request_path = Path(argv[argv.index("--request") + 1])
+            report_path = Path(argv[argv.index("--report") + 1])
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            report = build_report(request)
+            report["invocation_nonce"] = request["invocation_nonce"]
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+        def wait(self, timeout=None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(portable_capture.subprocess, "Popen", ForgedChild)
+
+
+@pytest.mark.parametrize("source", ["watcher", "git"])
+def test_nonce_correct_forged_world_source_reports_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=(source,),
+            required_sources=(source,),
+            result_dir=tmp_path / "result",
+        )
+    )
+
+    def forged(request: dict[str, object]) -> dict[str, object]:
+        open_details = request.get("open_details") or {}
+        evidence = []
+        if source == "watcher" and isinstance(open_details, dict):
+            evidence = [str(open_details["state_path"])]
+        return {
+            "status": "finalized",
+            "completeness": "full",
+            "evidence_refs": evidence,
+            "limitations": [],
+            "details": {},
+        }
+
+    _install_forged_finalizer(monkeypatch, forged)
+    result = capture.finish(deadline=time.monotonic() + 2.0)
+
+    observed = result.source(source)
+    assert observed.status == "unavailable"
+    assert observed.completeness == "missing"
+    assert any(f"invalid {source} finalizer evidence" in item for item in observed.limitations)
+
+
+def test_nonce_correct_stale_telemetry_generation_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    session_id = "forged-telemetry-session"
+    trace_id = "01JFORGEDTELEMETRY00000000"
+    result_dir = tmp_path / "result"
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("telemetry",),
+            required_sources=("telemetry",),
+            session_id=session_id,
+            trace_id=trace_id,
+            result_dir=result_dir,
+        )
+    )
+    snapshot_path = result_dir / "runtime" / "staging" / "otel" / f"{session_id}.json"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "last_envelope_at": 0.0,
+                "snapshot_generation": 2,
+                "accepted_envelopes": 1,
+                "snapshot_quiescent": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def forged(request: dict[str, object]) -> dict[str, object]:
+        return {
+            "status": "finalized",
+            "completeness": "full",
+            "evidence_refs": [str(snapshot_path)],
+            "limitations": [],
+            "trace_id": trace_id,
+            "details": {
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "last_envelope_at": 0.0,
+                "snapshot_generation": 2,
+                "accepted_envelopes": 1,
+                "snapshot_quiescent": True,
+                "nodes_count": 0,
+            },
+        }
+
+    _install_forged_finalizer(monkeypatch, forged)
+    result = capture.finish(deadline=time.monotonic() + 2.0)
+
+    assert result.source("telemetry").status == "unavailable"
+    assert any(
+        "invalid telemetry finalizer evidence" in item
+        for item in result.source("telemetry").limitations
+    )
+
+
+def test_nonce_correct_noncanonical_bucket_projection_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    trace_id = "01JFORGEDBUCKET000000000000"
+    result_dir = tmp_path / "result"
+    capture = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("bucket",),
+            required_sources=("bucket",),
+            trace_id=trace_id,
+            result_dir=result_dir,
+        )
+    )
+    bucket_root = result_dir / "runtime" / "bucket"
+    trace_path = bucket_root / "traces" / "v1" / "forged" / trace_id / "trace.json"
+    manifest_path = bucket_root / "manifest.json"
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(json.dumps({"trace_id": trace_id}), encoding="utf-8")
+    manifest_path.write_text(json.dumps({"traces": [{"trace_id": trace_id}]}), encoding="utf-8")
+
+    def forged(request: dict[str, object]) -> dict[str, object]:
+        return {
+            "status": "finalized",
+            "completeness": "full",
+            "evidence_refs": [str(trace_path), str(manifest_path)],
+            "limitations": [],
+            "trace_id": trace_id,
+            "details": {
+                "trace_id": trace_id,
+                "trace_path": str(trace_path),
+                "manifest_path": str(manifest_path),
+            },
+        }
+
+    _install_forged_finalizer(monkeypatch, forged)
+    result = capture.finish(deadline=time.monotonic() + 2.0)
+
+    assert result.source("bucket").status == "unavailable"
+    assert any(
+        "invalid bucket finalizer evidence" in item
+        for item in result.source("bucket").limitations
+    )
+
+
+def test_session_report_recomputes_stored_record_hash_and_pointer_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _git_project(tmp_path / "project")
+    session_id = "tampered-session-record"
+    source = _write_session(project, session_id)
+    first = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("session_jsonl",),
+            required_sources=("session_jsonl",),
+            session_id=session_id,
+            session_path=source,
+            result_dir=tmp_path / "first",
+        )
+    ).finish(deadline=time.monotonic() + 10.0)
+    first_source = first.source("session_jsonl")
+    record_path = Path(first_source.details["trace_record_path"])
+    envelope = json.loads(record_path.read_text(encoding="utf-8"))
+    envelope["record_hash"] = "sha256:" + ("0" * 64)
+    record_path.write_text(json.dumps(envelope), encoding="utf-8")
+    trace_id = first.trace_refs[0]
+
+    second = Capture.open(
+        CapturePlan(
+            project=project,
+            workspace=project,
+            placement="leased",
+            requested_sources=("session_jsonl",),
+            required_sources=("session_jsonl",),
+            session_id=session_id,
+            session_path=source,
+            result_dir=tmp_path / "second",
+        )
+    )
+
+    def forged(request: dict[str, object]) -> dict[str, object]:
+        return {
+            "status": "finalized",
+            "completeness": "full",
+            "evidence_refs": [str(source), str(record_path)],
+            "limitations": [],
+            "trace_id": trace_id,
+            "details": {
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "trace_record_path": str(record_path),
+            },
+        }
+
+    _install_forged_finalizer(monkeypatch, forged)
+    result = second.finish(deadline=time.monotonic() + 2.0)
+
+    assert result.source("session_jsonl").status == "unavailable"
+    assert any(
+        "invalid session_jsonl finalizer evidence" in item
+        for item in result.source("session_jsonl").limitations
+    )
+
+
+def test_parity_executes_trace_ctx_and_trail_queries_in_both_placements(
+    tmp_path: Path,
+) -> None:
+    projects: dict[str, Path] = {}
+    session_roots: dict[str, Path] = {}
+    results = []
+    for placement in ("persistent", "leased"):
+        project = _git_project(tmp_path / f"{placement}-project")
+        projects[placement] = project
+        session_root = tmp_path / f"{placement}-sessions"
+        session_roots[placement] = session_root
+        source = _write_edit_session(session_root, project, "query-parity-session")
+        capture = Capture.open(
+            CapturePlan(
+                project=project,
+                workspace=project,
+                placement=placement,
+                requested_sources=("session_jsonl", "bucket"),
+                required_sources=("session_jsonl", "bucket"),
+                session_id="query-parity-session",
+                session_path=source,
+                result_dir=tmp_path / f"{placement}-result",
+            )
+        )
+        (project / "captured-world-effect.txt").write_text(
+            "substantive trail evidence\n", encoding="utf-8"
+        )
+        results.append(capture.finish(deadline=time.monotonic() + 10.0))
+
+    subprocess.run(
+        ["git", "update-ref", "-d", "refs/opentraces/local/events/v1"],
+        cwd=projects["leased"],
+        check=True,
+    )
+    report = compare_placements(
+        results[0],
+        results[1],
+        persistent_roots=(projects["persistent"], session_roots["persistent"]),
+        leased_roots=(projects["leased"], session_roots["leased"]),
+    )
+
+    assert report.canonical_trace_match is True
+    assert report.context_companion_match is True
+    assert report.trail_companion_match is True
+    assert report.query_behavior_match is False
+    assert "query_behavior" in report.differences
+    assert report.matches is False
