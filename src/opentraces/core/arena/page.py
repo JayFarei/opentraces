@@ -92,17 +92,19 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
 
     recordings = result.get("recordings", {})
     timeline_status = recordings.get("timeline") or {}
+    timeline_ref = recordings.get("timeline_ref")
     timeline_rows: list[dict[str, object]] = []
     if timeline_status.get("complete"):
-        timeline_path = run_path / str(recordings.get("timeline_ref"))
-        try:
-            timeline_rows = [
-                row
-                for line in timeline_path.read_text(encoding="utf-8").splitlines()
-                if isinstance((row := json.loads(line)), dict)
-            ]
-        except (OSError, json.JSONDecodeError):
-            timeline_rows = []
+        timeline_path = _resolve_run_ref(run_path, timeline_ref)
+        if timeline_path is not None:
+            try:
+                timeline_rows = [
+                    row
+                    for line in timeline_path.read_text(encoding="utf-8").splitlines()
+                    if isinstance((row := json.loads(line)), dict)
+                ]
+            except (OSError, json.JSONDecodeError):
+                timeline_rows = []
     media_start_offsets = {
         str(row["action_ref"]): int(row["offset_ms"])
         for row in timeline_rows
@@ -153,7 +155,15 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                     "</article>"
                 )
         elif channel.get("complete") and path and kind == "browser_video":
-            video_path = run_path / str(path)
+            video_path = _resolve_run_ref(run_path, path)
+            if video_path is None:
+                players.append(
+                    '<article class="card incomplete">'
+                    '<div class="eyebrow">MISSING RECORDING</div>'
+                    f"<p>{_h(path)}</p>"
+                    "</article>"
+                )
+                continue
             players.append(
                 '<article class="card player" data-media-kind="browser_video">'
                 '<div class="eyebrow">BROWSER VIDEO</div>'
@@ -163,7 +173,15 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                 "</article>"
             )
         elif channel.get("complete") and path and kind == "playwright_trace":
-            trace_path = run_path / str(path)
+            trace_path = _resolve_run_ref(run_path, path)
+            if trace_path is None:
+                players.append(
+                    '<article class="card incomplete">'
+                    '<div class="eyebrow">MISSING RECORDING</div>'
+                    f"<p>{_h(path)}</p>"
+                    "</article>"
+                )
+                continue
             players.append(
                 '<article class="card player" data-media-kind="playwright_trace">'
                 '<div class="eyebrow">PLAYWRIGHT TRACE</div>'
@@ -172,25 +190,42 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                 "</article>"
             )
         elif channel.get("complete") and path and kind == "browser_screenshots":
-            manifest_path = run_path / str(path)
+            manifest_path = _resolve_run_ref(run_path, path)
+            if manifest_path is None:
+                players.append(
+                    '<article class="card incomplete">'
+                    '<div class="eyebrow">MISSING RECORDING</div>'
+                    f"<p>{_h(path)}</p>"
+                    "</article>"
+                )
+                continue
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 screenshot_refs = manifest.get("screenshots") or []
             except (OSError, json.JSONDecodeError):
                 screenshot_refs = []
-            screenshots = "".join(
-                '<figure>'
-                f'<img loading="lazy" src="{_h(_href(page_dir, run_path / ref))}" '
-                f'alt="Browser screenshot {_h(ref)}">'
-                f'<figcaption><a href="{_h(_href(page_dir, run_path / ref))}">{_h(ref)}</a></figcaption>'
-                "</figure>"
-                for ref in screenshot_refs
-                if isinstance(ref, str)
-            )
+            screenshot_items: list[str] = []
+            for ref in screenshot_refs:
+                screenshot_path = _resolve_run_ref(run_path, ref)
+                if screenshot_path is None:
+                    screenshot_items.append(
+                        '<div class="card incomplete">'
+                        '<div class="eyebrow">MISSING RECORDING</div>'
+                        f"<p>{_h(ref)}</p>"
+                        "</div>"
+                    )
+                    continue
+                screenshot_items.append(
+                    '<figure>'
+                    f'<img loading="lazy" src="{_h(_href(page_dir, screenshot_path))}" '
+                    f'alt="Browser screenshot {_h(ref)}">'
+                    f'<figcaption><a href="{_h(_href(page_dir, screenshot_path))}">{_h(ref)}</a></figcaption>'
+                    "</figure>"
+                )
             players.append(
                 '<article class="card player screenshots" data-media-kind="browser_screenshots">'
                 '<div class="eyebrow">BROWSER SCREENSHOTS</div>'
-                f"{screenshots}"
+                f"{''.join(screenshot_items)}"
                 "</article>"
             )
         else:
@@ -216,11 +251,11 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     )
     timeline_html = (
         '<h2>Cross-surface timeline</h2>'
-        f'<section class="timeline" data-timeline-ref="{_h(recordings.get("timeline_ref"))}">'
+        f'<section class="timeline" data-timeline-ref="{_h(timeline_ref)}">'
         f"{timeline_cards}</section>"
         if timeline_rows
         else '<h2>Cross-surface timeline</h2><section class="card incomplete">'
-        f'<p>{_h(timeline_status.get("reason") or "Stored timeline is unavailable.")}</p></section>'
+        f'<p>{_h(timeline_status.get("reason") or f"Stored timeline is unavailable: {timeline_ref}")}</p></section>'
     )
 
     player_js = (Path(__file__).with_name("assets") / "asciicast-player.js").read_text(
