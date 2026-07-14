@@ -115,8 +115,8 @@ class TerminalDrive:
             'mkdir -p "$recording_root" && '
             f"cd {shlex.quote(cwd or '.')} && "
             "exec script -q --return "
-            f"--log-timing \"$recording_root/{Path(remote_timing).name}\" "
-            f"--log-out \"$recording_root/{Path(remote_typescript).name}\" "
+            f'--log-timing "$recording_root/{Path(remote_timing).name}" '
+            f'--log-out "$recording_root/{Path(remote_typescript).name}" '
             f"--command {shlex.quote(shlex.join(argv))}"
         )
         recorded_argv = [
@@ -126,7 +126,7 @@ class TerminalDrive:
         ]
         timing_path = self.draft.path / action / "timing.json"
         try:
-            observed = self.runtime.exec(
+            observed = self.runtime.exec_product(
                 self.box,
                 recorded_argv,
                 cwd=self.repository,
@@ -151,9 +151,7 @@ class TerminalDrive:
             else:
                 reason = {
                     "code": "terminal_exec_error",
-                    "message": sanitize_diagnostic_value(
-                        f"{type(exc).__name__}: {exc}"
-                    ),
+                    "message": sanitize_diagnostic_value(f"{type(exc).__name__}: {exc}"),
                 }
             self.draft.write_json(
                 result_ref,

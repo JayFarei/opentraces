@@ -18,6 +18,11 @@ from .box import Box, CrabboxRuntime
 from .contract import build_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.terminal import TerminalDrive
+from .emulate.huggingface.runtime import (
+    HuggingFaceEmulator,
+    app_state_pin as app_state_with_hf,
+    start_huggingface_emulator,
+)
 from .run_store import RunDraft, RunStore
 
 
@@ -58,6 +63,14 @@ class BenchSkip(RuntimeError):
 
 class EvidenceReferenceError(ValueError):
     """A verifier referenced material outside the immutable run exhaust."""
+
+
+class VerificationFailed(AssertionError):
+    """An assertion failure that preserves the evidence it examined."""
+
+    def __init__(self, message: str, *, evidence_refs: list[str]) -> None:
+        super().__init__(message)
+        self.evidence_refs = evidence_refs
 
 
 class Bench:
@@ -119,6 +132,7 @@ class BenchRun:
         self._started_at = ""
         self._started = 0.0
         self._app_state_pin: dict[str, Any] = {}
+        self._emulators: dict[str, HuggingFaceEmulator] = {}
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
 
     def __enter__(self) -> "BenchRun":
@@ -158,9 +172,7 @@ class BenchRun:
                     # The original setup failure remains primary; both the
                     # run result and Crabbox's failure bundle preserve it.
                     self._lifecycle_diagnostics.append(
-                        sanitize_reason(
-                            getattr(release_exc, "code", "release_failed"), release_exc
-                        )
+                        sanitize_reason(getattr(release_exc, "code", "release_failed"), release_exc)
                     )
             self._finalize(
                 execution_status="error",
@@ -172,6 +184,34 @@ class BenchRun:
 
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
+
+    def emulate(self, name: str) -> HuggingFaceEmulator:
+        """Start the one concrete bench.v0 provider world."""
+
+        if name != "huggingface":
+            raise ValueError(f"unknown emulator {name!r}; expected 'huggingface'")
+        if self.draft is None or self.box is None:
+            raise RuntimeError("BenchRun is not active")
+        existing = self._emulators.get(name)
+        if existing is not None:
+            return existing
+        emulator = start_huggingface_emulator(
+            runtime=self.bench.box_runtime,
+            box=self.box,
+            repository=self.bench.repository_path,
+            run_path=self.draft.path,
+        )
+        self._emulators[name] = emulator
+        self._app_state_pin = app_state_with_hf(
+            name=str(self._app_state_pin.get("name") or self.app_state),
+            recipe=self._app_state_pin,
+            provides=[
+                *list(self._app_state_pin.get("provides") or []),
+                "hf-emulator",
+            ],
+            hf_emulator=emulator.binary_pin,
+        )
+        return emulator
 
     def _source_ref(self, source_object: object) -> dict[str, str]:
         path_value = inspect.getsourcefile(source_object)
@@ -247,8 +287,7 @@ class BenchRun:
             returned = verifier(self, **inputs)
             if isinstance(returned, Mapping):
                 evidence_refs = [
-                    self._persisted_evidence_ref(item)
-                    for item in returned.get("evidence_refs", [])
+                    self._persisted_evidence_ref(item) for item in returned.get("evidence_refs", [])
                 ]
             status = "pass"
         except BenchSkip as exc:
@@ -257,6 +296,18 @@ class BenchRun:
         except AssertionError as exc:
             status = "fail"
             reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
+            try:
+                evidence_refs = [
+                    self._persisted_evidence_ref(item)
+                    for item in getattr(exc, "evidence_refs", [])
+                ]
+            except EvidenceReferenceError:
+                evidence_refs = []
+                status = "error"
+                reason = {
+                    "code": "invalid_evidence_ref",
+                    "message": "verifier evidence must reference a persisted file in this run",
+                }
         except EvidenceReferenceError:
             evidence_refs = []
             status = "error"
@@ -337,9 +388,7 @@ class BenchRun:
                     "function": sanitize_diagnostic_value(location_function),
                 },
                 "traceback": sanitize_diagnostic_value(
-                    "".join(
-                        traceback_module.format_exception(type(exc), exc, traceback)
-                    )
+                    "".join(traceback_module.format_exception(type(exc), exc, traceback))
                 ),
             },
         )
@@ -404,9 +453,7 @@ class BenchRun:
                     "name": "scenario.assertion",
                     "complete": scenario_assertion_ref is not None,
                     "evidence_refs": (
-                        [scenario_assertion_ref]
-                        if scenario_assertion_ref is not None
-                        else []
+                        [scenario_assertion_ref] if scenario_assertion_ref is not None else []
                     ),
                 }
             )
@@ -476,7 +523,7 @@ class BenchRun:
                 "environment": box_pin,
                 "harness": None,
                 "model_wire": None,
-                "emulators": {},
+                "emulators": {name: emulator.pin for name, emulator in self._emulators.items()},
                 "app_state": self._app_state_pin,
             },
         )
@@ -520,6 +567,15 @@ class BenchRun:
                 f"{type(exc).__name__}: {exc}" if exc is not None else "unknown error",
             )
 
+        for emulator in self._emulators.values():
+            try:
+                emulator.stop()
+                emulator.snapshot_ledger()
+            except Exception as emulator_error:
+                self._lifecycle_diagnostics.append(
+                    sanitize_reason("emulator_cleanup_failed", emulator_error)
+                )
+
         release_error: Exception | None = None
         if self.box is not None:
             try:
@@ -528,9 +584,7 @@ class BenchRun:
                 release_error = caught
         if release_error is not None:
             self._lifecycle_diagnostics.append(
-                sanitize_reason(
-                    getattr(release_error, "code", "release_failed"), release_error
-                )
+                sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)
             )
         self._finalize(
             execution_status=execution_status,

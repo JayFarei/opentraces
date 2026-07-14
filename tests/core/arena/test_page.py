@@ -22,6 +22,16 @@ class FakeBoxRuntime:
     def exec(self, box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         return BoxCommandResult(list(argv), 0, "healthy\n", "", {})
 
+    def exec_product(self, box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+        return self.exec(
+            box,
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            timing_path=timing_path,
+        )
+
     def release(self, box):
         return None
 

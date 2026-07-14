@@ -47,9 +47,9 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         action_cards.append(
             '<article class="card action">'
             f'<div class="eyebrow">ACTION {_h(invocation.get("ordinal"))}</div>'
-            f'<code>{_h(" ".join(invocation.get("argv", [])))}</code>'
+            f"<code>{_h(' '.join(invocation.get('argv', [])))}</code>"
             f'<span class="rc">rc={_h(observed.get("returncode"))}</span>'
-            f'<nav>{"".join(links)}</nav>'
+            f"<nav>{''.join(links)}</nav>"
             "</article>"
         )
 
@@ -59,10 +59,10 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         verifier_cards.append(
             '<article class="card verifier">'
             f'<div class="eyebrow">VERIFIER · {_h(verifier.get("status", "unknown").upper())}</div>'
-            f'<strong>{_h(verifier.get("name"))}</strong>'
+            f"<strong>{_h(verifier.get('name'))}</strong>"
             f'<div class="source">{_h(source.get("path"))}</div>'
-            f'<code>{_h(source.get("digest"))}</code>'
-            f'<p>{_h((verifier.get("reason") or {}).get("message", "Observed condition held."))}</p>'
+            f"<code>{_h(source.get('digest'))}</code>"
+            f"<p>{_h((verifier.get('reason') or {}).get('message', 'Observed condition held.'))}</p>"
             "</article>"
         )
 
@@ -86,7 +86,7 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             players.append(
                 '<article class="card incomplete">'
                 '<div class="eyebrow">RECORDING INCOMPLETE</div>'
-                f'<p>{_h(channel.get("reason") or "No recording was produced.")}</p>'
+                f"<p>{_h(channel.get('reason') or 'No recording was produced.')}</p>"
                 "</article>"
             )
 
@@ -110,34 +110,77 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     reason_html = (
         '<section class="card outcome">'
         f'<div class="eyebrow">OUTCOME REASON · {_h(str(reason.get("code")).upper())}</div>'
-        f'<p>{_h(reason.get("message"))}</p>'
+        f"<p>{_h(reason.get('message'))}</p>"
         "</section>"
         if reason
         else ""
     )
+    world_cards: list[str] = []
+    for name, pin in sorted((result.get("pins", {}).get("emulators") or {}).items()):
+        ledger_ref = f"ledgers/{name}.jsonl"
+        ledger_path = run_path / ledger_ref
+        ledger_link = (
+            f'<a href="{_h(_href(page_dir, ledger_path))}">{_h(ledger_ref)}</a>'
+            if ledger_path.is_file()
+            else '<span class="muted">ledger unavailable</span>'
+        )
+        setup = (pin or {}).get("setup") or {}
+        baseline = setup.get("baseline") or {}
+        identity = baseline.get("identity") or {}
+        capabilities = setup.get("capabilities") or {}
+        capability_rows = "".join(
+            f"<div>{_h(status)}: {_h(', '.join(map(str, operations)))}</div>"
+            for status, operations in sorted(capabilities.items())
+        )
+        world_ref = str((pin or {}).get("evidence_ref") or f"world/{name}.json")
+        world_path = run_path / world_ref
+        world_link = (
+            f'<a href="{_h(_href(page_dir, world_path))}">{_h(world_ref)}</a>'
+            if world_path.is_file()
+            else '<span class="muted">world setup unavailable</span>'
+        )
+        world_cards.append(
+            '<article class="card world">'
+            f'<div class="eyebrow">WORLD · {_h(str(name).upper())}</div>'
+            f"<strong>{_h(name)}</strong>"
+            f"<div>sha256: {_h((pin or {}).get('sha256'))}</div>"
+            f"<div>toolchain: {_h((pin or {}).get('bun_version'))} · "
+            f"{_h((pin or {}).get('target'))}</div>"
+            f"<div>endpoint: {_h(setup.get('endpoint'))}</div>"
+            f"<div>baseline identity: {_h(identity.get('name'))}</div>"
+            f"{capability_rows}"
+            f"<nav>{world_link}{ledger_link}</nav>"
+            "</article>"
+        )
+    world_html = (
+        f'<h2>World</h2><section class="stack">{"".join(world_cards)}</section>'
+        if world_cards
+        else ""
+    )
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>{_h(result['scenario']['claim'])} · bench evidence</title>
+<title>{_h(result["scenario"]["claim"])} · bench evidence</title>
 <style>
 :root{{--ink:#11100e;--paper:#f3efe6;--line:#c9c0ad;--green:#17643d;--red:#9b2c2c;--muted:#6f685c}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}}
 main{{width:min(960px,calc(100% - 32px));margin:48px auto 96px}} h1{{font:700 clamp(30px,6vw,64px)/1.04 system-ui,sans-serif;letter-spacing:-.04em;max-width:16ch}}
 .facts{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));border:1px solid var(--line);margin:32px 0}} .fact{{padding:16px;border-right:1px solid var(--line)}}
-.eyebrow{{font-size:12px;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}} .verdict{{color:{'var(--green)' if verdict == 'pass' else 'var(--red)'};font-weight:800;font-size:24px}}
+.eyebrow{{font-size:12px;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}} .verdict{{color:{"var(--green)" if verdict == "pass" else "var(--red)"};font-weight:800;font-size:24px}}
 h2{{font:700 22px system-ui,sans-serif;margin-top:48px}} .stack{{display:grid;gap:12px}} .card{{min-width:0;border:1px solid var(--line);background:#fffaf0;padding:16px;overflow-wrap:anywhere}}
 .action code{{display:block;margin-bottom:10px}} .rc{{display:inline-block;border:1px solid var(--line);padding:2px 7px}} nav{{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}} a{{color:#254d80}}
 button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14px;cursor:pointer}} pre{{white-space:pre-wrap;min-height:120px;background:#141414;color:#eee;padding:12px;overflow:auto}}
 </style></head><body><main>
-<div class="eyebrow">OPENTRACES · BENCH.V0 · {_h(result['run_id'])}</div>
-<h1>{_h(result['scenario']['claim'])}</h1>
+<div class="eyebrow">OPENTRACES · BENCH.V0 · {_h(result["run_id"])}</div>
+<h1>{_h(result["scenario"]["claim"])}</h1>
 <section class="facts"><div class="fact"><div class="eyebrow">VERDICT</div><div class="verdict">{_h(verdict.upper())}</div></div>
-<div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result['execution_status'])}</div>
-<div class="fact"><div class="eyebrow">EVIDENCE</div>{'complete' if result['evidence']['complete'] else 'incomplete'}</div>
-<div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result['recordings']['rewatchable']).lower()}</div></section>
+<div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result["execution_status"])}</div>
+<div class="fact"><div class="eyebrow">EVIDENCE</div>{"complete" if result["evidence"]["complete"] else "incomplete"}</div>
+<div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>
 {reason_html}
-<h2>Recording</h2><section class="stack">{''.join(players)}</section>
-<h2>Actions and raw output</h2><section class="stack">{''.join(action_cards)}</section>
-<h2>Explicit verifiers</h2><section class="stack">{''.join(verifier_cards)}</section>
+{world_html}
+<h2>Recording</h2><section class="stack">{"".join(players)}</section>
+<h2>Actions and raw output</h2><section class="stack">{"".join(action_cards)}</section>
+<h2>Explicit verifiers</h2><section class="stack">{"".join(verifier_cards)}</section>
 <h2>Complete stored exhaust</h2><nav class="card exhaust">{exhaust_links}</nav>
 </main><script>{player_js}</script></body></html>"""
     _atomic_write_text(output_path, document)

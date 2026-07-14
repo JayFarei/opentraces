@@ -5,6 +5,7 @@ import json
 import subprocess
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,42 @@ from opentraces.core.arena.box import (
     CrabboxRuntime,
     sandbox_tier_for_provider,
 )
+
+
+EXPECTED_INSTALL_LOCK = {
+    "annotated-doc": "0.0.4",
+    "annotated-types": "0.7.0",
+    "anyio": "4.14.2",
+    "certifi": "2026.6.17",
+    "charset-normalizer": "3.4.9",
+    "click": "8.4.2",
+    "filelock": "3.29.7",
+    "fsspec": "2026.6.0",
+    "h11": "0.16.0",
+    "hf-xet": "1.4.3",
+    "httpcore": "1.0.9",
+    "httpx": "0.28.1",
+    "huggingface-hub": "1.10.2",
+    "idna": "3.18",
+    "markdown-it-py": "4.2.0",
+    "mdurl": "0.1.2",
+    "mmh3": "5.2.1",
+    "packaging": "26.2",
+    "pyclack-cli": "0.4.0",
+    "pydantic": "2.13.4",
+    "pydantic-core": "2.46.4",
+    "pygments": "2.20.0",
+    "pyyaml": "6.0.3",
+    "readchar": "4.2.2",
+    "requests": "2.34.2",
+    "rich": "15.0.0",
+    "shellingham": "1.5.4",
+    "tqdm": "4.68.4",
+    "typer": "0.26.8",
+    "typing-extensions": "4.16.0",
+    "typing-inspection": "0.4.2",
+    "urllib3": "2.7.0",
+}
 
 
 class ScriptedRunner:
@@ -200,11 +237,7 @@ def test_version_drift_is_a_loud_named_refusal(tmp_path: Path) -> None:
             _completed(
                 ["crabbox", "inspect"],
                 stdout=json.dumps(
-                    {
-                        key: value
-                        for key, value in json.loads(_inspect()).items()
-                        if key != "sshKey"
-                    }
+                    {key: value for key, value in json.loads(_inspect()).items() if key != "sshKey"}
                 ),
             ),
             "lease_inspect_incomplete",
@@ -260,9 +293,7 @@ def test_cleanup_failure_keeps_inspect_refusal_primary_and_records_stop_diagnost
         runtime.lease()
 
     assert caught.value.code == "lease_inspect_invalid"
-    stop_diagnostics = [
-        row for row in runtime.diagnostic_records() if row["operation"] == "stop"
-    ]
+    stop_diagnostics = [row for row in runtime.diagnostic_records() if row["operation"] == "stop"]
     assert len(stop_diagnostics) == 1
     assert stop_diagnostics[0]["returncode"] == 1
     assert stop_diagnostics[0]["stderr"] == "cleanup failed\n"
@@ -387,7 +418,10 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
         if operation == "inspect":
             return _completed(list(argv), stdout=_inspect())
         if operation == "run":
-            return _completed(list(argv), stdout="/usr/bin/python3\n/usr/bin/git\n/usr/bin/curl\n/usr/bin/script\n")
+            return _completed(
+                list(argv),
+                stdout="/usr/bin/python3\n/usr/bin/git\n/usr/bin/curl\n/usr/bin/script\n",
+            )
         return _completed(list(argv))
 
     from opentraces.core.arena.engine import Bench, ScenarioSource
@@ -417,18 +451,79 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
     with bench.run(app_state="base-only") as run:
         run.verify(condition_holds)
 
-    timing_artifacts = [item for item in run.result["artifacts"] if item["kind"] == "crabbox_timing"]
-    assert timing_artifacts
-    assert run.result["pins"]["app_state"]["observation_refs"] == [
-        timing_artifacts[0]["path"]
+    timing_artifacts = [
+        item for item in run.result["artifacts"] if item["kind"] == "crabbox_timing"
     ]
+    assert timing_artifacts
+    assert set(run.result["pins"]["app_state"]["observation_refs"]) == {
+        artifact["path"] for artifact in timing_artifacts
+    }
     timing = json.loads((run.final_path / timing_artifacts[0]["path"]).read_text())
     assert timing["timing"] == {"exitCode": 0, "elapsedMs": 8}
-    serialized = json.dumps(run.result) + (run.final_path / "artifacts/box-lifecycle.json").read_text()
+    serialized = (
+        json.dumps(run.result) + (run.final_path / "artifacts/box-lifecycle.json").read_text()
+    )
     assert "top-secret-token" not in serialized
     assert "/Users/private/source" not in serialized
     assert "/tmp/key" not in serialized
     assert not (tmp_path / ".crabbox" / "bench-base-provides-timing.json").exists()
+
+
+def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    wheel = dist / "opentraces-0.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"local wheel bytes")
+    commands: list[str] = []
+    runtime = CrabboxRuntime(runner=lambda *args, **kwargs: _completed([]), home=tmp_path)
+    box = Box(
+        id="box",
+        slug="box",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        commands.append(command)
+        if "importlib.metadata" in command:
+            stdout = json.dumps(EXPECTED_INSTALL_LOCK)
+        else:
+            stdout = "/usr/bin/opentraces\n/usr/bin/script\n"
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+
+    pin = runtime.materialize(box, "install-only", repository=repository)
+
+    install = next(command for command in commands if "pip install" in command)
+    assert "huggingface-hub==1.10.2" in install
+    assert "hf-xet==1.4.3" in install
+    assert "filelock==3.29.7" in install
+    assert "pydantic-core==2.46.4" in install
+    assert pin["dependencies"] == EXPECTED_INSTALL_LOCK
+    assert pin["recipe"]["dependencies"] == pin["dependencies"]
+    assert pin["recipe"]["dependency_lock_sha256"].startswith("sha256:")
+    assert pin["recipe"]["wheel_sha256"]
 
 
 def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Path) -> None:
@@ -465,6 +560,114 @@ def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Pat
         "--provider",
         "local-container",
     ]
+
+
+def test_product_exec_uses_a_dedicated_home_and_writable_recording_workspace(
+    tmp_path: Path,
+) -> None:
+    timing = tmp_path / "product-timing.json"
+    runner = ScriptedRunner([_completed(["crabbox", "run"], stdout="write-heavy-ok\n")])
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path)
+    box = Box(
+        id="cbx_abc123",
+        slug="steady-crab",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="32222",
+        ssh_key="/tmp/key",
+    )
+
+    result = runtime.exec_product(
+        box,
+        [
+            "sh",
+            "-c",
+            'test "$(id -u)" -ne 0 && ! sudo -n true && '
+            'test -w "$HOME" && test -w bench-recordings && '
+            "opentraces dataset new scenario-2 --rows-file /tmp/rows.jsonl",
+        ],
+        env={
+            "BASH_ENV": "/home/opentraces-product/product-shell-startup",
+            "HF_ENDPOINT": "http://127.0.0.1:14318",
+            "OPENAI_API_KEY": "ordinary-model-secret",
+            "PYTHONPATH": "/home/opentraces-product/scenario-modules",
+        },
+        timing_path=timing,
+    )
+
+    command = runner.calls[0][0]
+    rendered = " ".join(command)
+    assert result.returncode == 0
+    assert (
+        "--allow-env BASH_ENV --allow-env HF_ENDPOINT --allow-env OPENAI_API_KEY "
+        "--allow-env PYTHONPATH" in rendered
+    )
+    product_start = command.index("/usr/bin/sudo")
+    assert command[product_start:] == [
+        "/usr/bin/sudo",
+        "-H",
+        "-u",
+        "opentraces-product",
+        "--preserve-env=BASH_ENV,HF_ENDPOINT,OPENAI_API_KEY,PYTHONPATH",
+        "--",
+        "sh",
+        "-c",
+        'test "$(id -u)" -ne 0 && ! sudo -n true && '
+        'test -w "$HOME" && test -w bench-recordings && '
+        "opentraces dataset new scenario-2 --rows-file /tmp/rows.jsonl",
+    ]
+    assert "sh -c set -eu" not in rendered
+    assert "opentraces dataset new scenario-2" in rendered
+    assert "http://127.0.0.1:14318" not in rendered
+    assert "ordinary-model-secret" not in rendered
+    assert "/home/opentraces-product/product-shell-startup" not in rendered
+    assert "/home/opentraces-product/scenario-modules" not in rendered
+    assert "http://127.0.0.1:14318" not in json.dumps(runtime.diagnostic_records())
+    assert "ordinary-model-secret" not in json.dumps(runtime.diagnostic_records())
+    assert "/home/opentraces-product/product-shell-startup" not in json.dumps(
+        runtime.diagnostic_records()
+    )
+    assert "/home/opentraces-product/scenario-modules" not in json.dumps(
+        runtime.diagnostic_records()
+    )
+
+
+@pytest.mark.parametrize(
+    "unsafe_name",
+    ["PATH", "HOME", "USER", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "SUDO_ASKPASS"],
+)
+def test_product_exec_rejects_shell_startup_environment_before_controller_launch(
+    tmp_path: Path,
+    unsafe_name: str,
+) -> None:
+    marker = tmp_path / "controller-marker"
+    hostile_value = f"{marker}; touch {marker}"
+    runner = ScriptedRunner([])
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path)
+    box = Box(
+        id="cbx_abc123",
+        slug="steady-crab",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="32222",
+        ssh_key="/tmp/key",
+    )
+
+    with pytest.raises(ValueError, match="unsafe product environment"):
+        runtime.exec_product(
+            box,
+            ["opentraces", "dataset", "list"],
+            env={unsafe_name: hostile_value},
+            timing_path=tmp_path / "hostile-timing.json",
+        )
+
+    assert runner.calls == []
+    assert not marker.exists()
+    assert hostile_value not in json.dumps(runtime.diagnostic_records())
 
 
 def test_collect_safely_falls_back_when_tarfile_extraction_filters_are_unavailable(

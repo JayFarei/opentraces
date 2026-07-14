@@ -20,7 +20,27 @@ from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value, sa
 
 PINNED_CRABBOX_VERSION = "0.38.0"
 PINNED_LOCAL_IMAGE = "ubuntu:24.04"
+PINNED_HF_HUB_VERSION = "1.10.2"
+PINNED_HF_XET_VERSION = "1.4.3"
 DEFAULT_PROVIDER = "local-container"
+PRODUCT_USER = "opentraces-product"
+PRODUCT_SUDO = "/usr/bin/sudo"
+PRODUCT_ENV_DENY_EXACT = frozenset(
+    {
+        "HOME",
+        "LOGNAME",
+        "PATH",
+        "SHELL",
+        "USER",
+    }
+)
+PRODUCT_ENV_DENY_PREFIXES = ("DYLD_", "LD_", "SUDO_")
+HF_CLIENT_LOCK_PATH = Path(__file__).parent / "emulate" / "huggingface" / "client-lock.json"
+
+
+def _unsafe_product_env_name(name: str) -> bool:
+    return name in PRODUCT_ENV_DENY_EXACT or name.startswith(PRODUCT_ENV_DENY_PREFIXES)
+
 
 VERSION_REAUDIT = (
     "re-audit warmup/run/checkpoint flags, the explicit image default, inspect JSON, "
@@ -82,6 +102,8 @@ _CRABBOX_HOST_CANDIDATES = (
     "localhost",
     "127.0.0.1",
 )
+
+
 def _host_scope_may_apply(patterns: Sequence[str] | None) -> bool:
     """Approximate the Host scopes Crabbox may traverse during warmup.
 
@@ -128,6 +150,36 @@ def _operation_name(argv: Sequence[str]) -> str:
     return Path(str(argv[0])).name
 
 
+def _hf_client_lock() -> tuple[dict[str, str], str]:
+    try:
+        encoded = HF_CLIENT_LOCK_PATH.read_bytes()
+        value = json.loads(encoded)
+        packages = value["packages"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise CrabboxRefusal(
+            "app_state_dependency_lock_invalid",
+            "the committed HF client environment lock is missing or invalid",
+        ) from exc
+    if not isinstance(packages, Mapping) or not all(
+        isinstance(name, str) and isinstance(version, str) for name, version in packages.items()
+    ):
+        raise CrabboxRefusal(
+            "app_state_dependency_lock_invalid",
+            "the committed HF client environment lock has invalid package entries",
+        )
+    normalized = {str(name): str(version) for name, version in sorted(packages.items())}
+    required = {
+        "huggingface-hub": PINNED_HF_HUB_VERSION,
+        "hf-xet": PINNED_HF_XET_VERSION,
+    }
+    if any(normalized.get(name) != version for name, version in required.items()):
+        raise CrabboxRefusal(
+            "app_state_dependency_lock_invalid",
+            "the committed HF client environment lock disagrees with the client pins",
+        )
+    return normalized, f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
 def _subprocess_runner(
     argv: Sequence[str],
     *,
@@ -146,9 +198,7 @@ def _subprocess_runner(
     )
 
 
-_CONTAINER_PROVIDERS = frozenset(
-    {"local-container", "e2b", "modal", "cloudflare"}
-)
+_CONTAINER_PROVIDERS = frozenset({"local-container", "e2b", "modal", "cloudflare"})
 _MICROVM_PROVIDERS = frozenset({"firecracker", "apple-vm", "proxmox"})
 _UNCONTAINED_PROVIDERS = frozenset({"ssh", "host", "direct"})
 
@@ -241,7 +291,9 @@ class CrabboxRuntime:
                     "timed_out": True,
                 }
             )
-            raise CrabboxRefusal("crabbox_timeout", f"bounded command timed out: {argv[1]}") from exc
+            raise CrabboxRefusal(
+                "crabbox_timeout", f"bounded command timed out: {argv[1]}"
+            ) from exc
         self._diagnostics.append(
             {
                 "operation": _operation_name(argv),
@@ -275,9 +327,7 @@ class CrabboxRuntime:
         host_patterns: list[str] | None = None
         global_ignored: set[str] = set()
         local_ignored: set[str] = set()
-        for raw_line in self.ssh_config.read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines():
+        for raw_line in self.ssh_config.read_text(encoding="utf-8", errors="replace").splitlines():
             line = raw_line.split("#", 1)[0].strip()
             if not line:
                 continue
@@ -290,9 +340,7 @@ class CrabboxRuntime:
                 continue
             if directive == "ignoreunknown":
                 patterns = {
-                    pattern
-                    for value in values
-                    for pattern in value.replace(",", " ").split()
+                    pattern for value in values for pattern in value.replace(",", " ").split()
                 }
                 if host_patterns is None:
                     global_ignored.update(patterns)
@@ -346,19 +394,15 @@ class CrabboxRuntime:
             try:
                 facts = json.loads(inspected.stdout)
             except json.JSONDecodeError as exc:
-                raise CrabboxRefusal(
-                    "lease_inspect_invalid", "inspect did not emit JSON"
-                ) from exc
+                raise CrabboxRefusal("lease_inspect_invalid", "inspect did not emit JSON") from exc
             if not isinstance(facts, Mapping):
-                raise CrabboxRefusal(
-                    "lease_inspect_invalid", "inspect did not emit an object"
-                )
-            if inspected.returncode != 0 or not facts.get("ready") or facts.get(
-                "state"
-            ) not in {"leased", "ready"}:
-                raise CrabboxRefusal(
-                    "lease_not_ready", "inspect did not report a ready lease"
-                )
+                raise CrabboxRefusal("lease_inspect_invalid", "inspect did not emit an object")
+            if (
+                inspected.returncode != 0
+                or not facts.get("ready")
+                or facts.get("state") not in {"leased", "ready"}
+            ):
+                raise CrabboxRefusal("lease_not_ready", "inspect did not report a ready lease")
             required_facts = (
                 "id",
                 "slug",
@@ -368,18 +412,13 @@ class CrabboxRuntime:
                 "sshPort",
                 "sshKey",
             )
-            if any(
-                facts.get(name) is None or facts.get(name) == ""
-                for name in required_facts
-            ):
+            if any(facts.get(name) is None or facts.get(name) == "" for name in required_facts):
                 raise CrabboxRefusal(
                     "lease_inspect_incomplete", "inspect omitted required lease facts"
                 )
             labels = facts.get("labels")
             if not isinstance(labels, Mapping) or not labels.get("image"):
-                raise CrabboxRefusal(
-                    "lease_inspect_incomplete", "inspect omitted labels.image"
-                )
+                raise CrabboxRefusal("lease_inspect_incomplete", "inspect omitted labels.image")
             observed_provider = str(facts["provider"])
             observed_image = str(labels["image"])
             if observed_provider != self.provider:
@@ -495,6 +534,128 @@ class CrabboxRuntime:
             timing=timing,
         )
 
+    def exec_product(
+        self,
+        box: Box,
+        argv: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float = 60,
+        timing_path: Path,
+    ) -> BoxCommandResult:
+        """Execute one public-drive action as the non-sudo product identity."""
+
+        environment = {str(name): str(value) for name, value in (env or {}).items()}
+        invalid = [
+            name for name in environment if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+        ]
+        if invalid:
+            raise ValueError(f"invalid product environment name: {invalid[0]!r}")
+        unsafe = sorted(name for name in environment if _unsafe_product_env_name(name))
+        if unsafe:
+            raise ValueError(f"unsafe product environment: {unsafe[0]!r}")
+        product_argv = [PRODUCT_SUDO, "-H", "-u", PRODUCT_USER]
+        if environment:
+            product_argv.append(f"--preserve-env={','.join(sorted(environment))}")
+        product_argv.extend(["--", *map(str, argv)])
+        return self.exec(
+            box,
+            product_argv,
+            cwd=cwd,
+            env=environment,
+            timeout=timeout,
+            timing_path=timing_path,
+        )
+
+    def _prepare_product_identity(self, box: Box, *, repository: Path) -> str | None:
+        timing = self._timing_path(repository, "product-identity")
+        prepared = self.exec(
+            box,
+            [
+                "sh",
+                "-c",
+                "set -eu; "
+                f"if ! id -u {PRODUCT_USER} >/dev/null 2>&1; then "
+                f"sudo useradd --create-home --home-dir /home/{PRODUCT_USER} "
+                f"--shell /bin/sh {PRODUCT_USER}; fi; "
+                f'test "$(id -u {PRODUCT_USER})" -ne 0; '
+                f"sudo -u {PRODUCT_USER} test -w /home/{PRODUCT_USER}; "
+                f"sudo install -d -m 0755 -o {PRODUCT_USER} -g {PRODUCT_USER} "
+                '"$PWD/bench-recordings"; '
+                f"if sudo -u {PRODUCT_USER} sudo -n true >/dev/null 2>&1; then exit 1; fi",
+            ],
+            cwd=repository,
+            timeout=30,
+            timing_path=timing,
+        )
+        if prepared.returncode != 0:
+            raise CrabboxRefusal(
+                "product_identity_invalid",
+                "the dedicated product identity is missing, non-writable, or sudo-capable",
+            )
+        return self._evidence_ref(timing)
+
+    def copy_into_box(
+        self,
+        box: Box,
+        source: Path,
+        destination: str,
+        *,
+        timeout: float = 120,
+    ) -> str:
+        """Copy one exact host file into the leased box."""
+
+        source = Path(source).resolve(strict=True)
+        destination_path = Path(destination)
+        staged = (
+            f"/tmp/opentraces-copy-{hashlib.sha256(str(destination).encode()).hexdigest()[:12]}"
+        )
+        copied = self._call(
+            [
+                "scp",
+                "-F",
+                "/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                box.ssh_key,
+                "-P",
+                box.ssh_port,
+                str(source),
+                f"{box.ssh_user}@{box.ssh_host}:{staged}",
+            ],
+            timeout=timeout,
+        )
+        if copied.returncode != 0:
+            raise CrabboxRefusal("app_state_copy_failed", copied.stderr.strip())
+        installed = self._call(
+            [
+                "ssh",
+                "-F",
+                "/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                box.ssh_key,
+                "-p",
+                box.ssh_port,
+                f"{box.ssh_user}@{box.ssh_host}",
+                "sudo",
+                "sh",
+                "-c",
+                shlex.quote(
+                    f"mkdir -p {shlex.quote(str(destination_path.parent))} && "
+                    f"install -m 0755 {shlex.quote(staged)} {shlex.quote(destination)} && "
+                    f"rm -f {shlex.quote(staged)}"
+                ),
+            ],
+            timeout=timeout,
+        )
+        if installed.returncode != 0:
+            raise CrabboxRefusal("app_state_copy_failed", installed.stderr.strip())
+        return destination
+
     def materialize(self, box: Box, app_state: str, *, repository: Path) -> dict[str, Any]:
         """Materialize the first concrete recipe from locally built wheels."""
 
@@ -502,21 +663,30 @@ class CrabboxRuntime:
             timing_path = self._timing_path(repository, "base-provides")
             probe = self.exec(
                 box,
-                ["sh", "-c", "command -v python3 && command -v git && command -v curl && command -v script"],
+                [
+                    "sh",
+                    "-c",
+                    "command -v python3 && command -v git && command -v curl && command -v script",
+                ],
                 timeout=30,
                 timing_path=timing_path,
             )
             if probe.returncode != 0:
                 raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
-            material = f"{box.provider}\n{self.image}\npython3\ngit\ncurl\nscript\n"
+            identity_ref = self._prepare_product_identity(box, repository=repository)
+            material = (
+                f"{box.provider}\n{self.image}\npython3\ngit\ncurl\nscript\n"
+                f"product_user={PRODUCT_USER}\nproduct_sudo=false\n"
+            )
             pin = {
                 "name": app_state,
                 "digest": f"sha256:{hashlib.sha256(material.encode()).hexdigest()}",
                 "provides": ["python3", "git", "curl", "script"],
             }
             timing_ref = self._evidence_ref(timing_path)
-            if timing_ref is not None:
-                pin["observation_refs"] = [timing_ref]
+            observation_refs = [ref for ref in (timing_ref, identity_ref) if ref is not None]
+            if observation_refs:
+                pin["observation_refs"] = observation_refs
             return pin
         if app_state != "install-only":
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
@@ -532,25 +702,12 @@ class CrabboxRuntime:
             digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
             digests.append(digest)
             remote = f"/tmp/{wheel.name}"
-            copied = self._call(
-                [
-                    "scp",
-                    "-F",
-                    "/dev/null",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-i",
-                    box.ssh_key,
-                    "-P",
-                    box.ssh_port,
-                    str(wheel),
-                    f"{box.ssh_user}@{box.ssh_host}:{remote}",
-                ],
-                timeout=120,
-            )
-            if copied.returncode != 0:
-                raise CrabboxRefusal("app_state_copy_failed", copied.stderr.strip())
+            self.copy_into_box(box, wheel, remote, timeout=120)
             remote_wheels.append(remote)
+        dependency_lock, dependency_lock_sha256 = _hf_client_lock()
+        locked_requirements = " ".join(
+            shlex.quote(f"{name}=={version}") for name, version in dependency_lock.items()
+        )
         timing = self._timing_path(repository, "materialize")
         install = self.exec(
             box,
@@ -559,7 +716,9 @@ class CrabboxRuntime:
                 "-c",
                 "set -eu; sudo apt-get update >/dev/null; "
                 "sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip >/dev/null; "
-                f"sudo python3 -m pip install --break-system-packages {' '.join(map(shlex.quote, remote_wheels))}",
+                f"sudo python3 -m pip install --break-system-packages --no-deps "
+                f"{' '.join(map(shlex.quote, remote_wheels))} "
+                f"{locked_requirements}",
             ],
             timeout=600,
             timing_path=timing,
@@ -575,15 +734,60 @@ class CrabboxRuntime:
         )
         if probe.returncode != 0:
             raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
-        app_digest = hashlib.sha256("\n".join(digests).encode()).hexdigest()
+        dependency_timing = self._timing_path(repository, "dependencies")
+        package_names = json.dumps(sorted(dependency_lock))
+        dependency_probe = self.exec(
+            box,
+            [
+                "python3",
+                "-c",
+                (
+                    "import importlib.metadata as m,json; "
+                    f"names=json.loads({package_names!r}); "
+                    "print(json.dumps({name:m.version(name) for name in names},sort_keys=True))"
+                ),
+            ],
+            timeout=30,
+            timing_path=dependency_timing,
+        )
+        try:
+            dependencies = json.loads(dependency_probe.stdout)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise CrabboxRefusal(
+                "app_state_dependency_probe_failed",
+                "installed HF client versions were not observable",
+            ) from exc
+        expected_dependencies = dependency_lock
+        if dependency_probe.returncode != 0 or dependencies != expected_dependencies:
+            raise CrabboxRefusal(
+                "app_state_dependency_mismatch",
+                f"expected {expected_dependencies}, observed {dependencies}",
+            )
+        identity_ref = self._prepare_product_identity(box, repository=repository)
+        recipe = {
+            "wheel_sha256": digests,
+            "dependencies": expected_dependencies,
+            "dependency_lock_sha256": dependency_lock_sha256,
+            "execution_identity": {"user": PRODUCT_USER, "sudo": False},
+        }
+        app_digest = hashlib.sha256(
+            json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         pin = {
             "name": app_state,
             "digest": f"sha256:{app_digest}",
             "provides": ["cli", "script"],
+            "dependencies": expected_dependencies,
+            "recipe": recipe,
         }
         observation_refs = [
             ref
-            for ref in (self._evidence_ref(timing), self._evidence_ref(provides_timing))
+            for ref in (
+                self._evidence_ref(timing),
+                self._evidence_ref(provides_timing),
+                self._evidence_ref(dependency_timing),
+                identity_ref,
+            )
             if ref is not None
         ]
         if observation_refs:
@@ -641,11 +845,7 @@ class CrabboxRuntime:
                 archive.extractall(extracted, members=safe, filter="data")
             else:
                 archive.extractall(extracted, members=safe)
-        return {
-            path.name: path
-            for path in extracted.rglob("*")
-            if path.is_file()
-        }
+        return {path.name: path for path in extracted.rglob("*") if path.is_file()}
 
     def _release_id(self, lease_id: str, *, provider: str) -> None:
         stopped = self._call(

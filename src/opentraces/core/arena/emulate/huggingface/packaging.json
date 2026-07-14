@@ -1,0 +1,38 @@
+{
+  "schema_version": "opentraces.bench.emulator-package.v1",
+  "service": "huggingface",
+  "contract_version": "huggingface.v1",
+  "port": 14318,
+  "toolchain": {
+    "bun_version": "1.3.6",
+    "target": "bun-linux-arm64"
+  },
+  "trusted_build_manifest": "trusted-build.json",
+  "client_environment_lock": "client-lock.json",
+  "execution_identities": {
+    "controller": "crabbox",
+    "product": "opentraces-product",
+    "sidecar": "opentraces-hf"
+  },
+  "core_reconciliation": {
+    "canonical_upstream": "vercel-labs/emulate",
+    "reviewed_fork": "UsefulSoftwareCo/emulate",
+    "runtime_dependency": null,
+    "decision": "The v1 sidecar owns its finite Hub contract in-tree and does not pin either external core.",
+    "reason": "The fork source was ahead of the published package. Keeping the nine hand-authored operations in one compiled source removes that unresolved source identity; the verified binary, source, toolchain, target, and contract pins are the authority."
+  },
+  "fallback": {
+    "strategy": "bun-in-checkpoint-plus-bundle",
+    "activation": "only-if-real-box-compiled-binary-gate-fails",
+    "measurement": {
+      "scope": "real-box",
+      "provider": "local-container",
+      "image": "ubuntu:24.04",
+      "architecture": "aarch64",
+      "prerequisites": ["unzip"],
+      "install_milliseconds": 5928,
+      "installed_size_bytes": 94066858,
+      "note": "Measured after the compiled binary passed. The fallback remains inactive."
+    }
+  }
+}
