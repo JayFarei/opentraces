@@ -109,6 +109,7 @@ class WorldRuntime:
         self.bound_manifest: dict | None = None
         self.events: list[str] = []
         self.copied: tuple[Path, str] | None = None
+        self.port_forward = WorldPortForward()
 
     def lease(self) -> Box:
         return Box(
@@ -251,6 +252,21 @@ class WorldRuntime:
     def release(self, box: Box) -> None:
         self.events.append("release")
 
+    def open_port_forward(self, box: Box, remote_port: int):
+        assert remote_port == 14318
+        self.events.append("port-forward")
+        return self.port_forward
+
+
+class WorldPortForward:
+    endpoint = "http://127.0.0.1:43182"
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
 
 def _source() -> ScenarioSource:
     path = Path(inspect.getsourcefile(scenario_2.test_publish_reaches_hf_remote) or "")
@@ -312,6 +328,7 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
             "HF_ENDPOINT": "http://127.0.0.1:14318",
             "HF_TOKEN": hf.env["HF_TOKEN"],
         }
+        assert hf.browser_endpoint == "http://127.0.0.1:43182"
         assert hf.env["HF_TOKEN"].startswith("hf_")
         runtime.raw_ledger = (json.dumps(_COMMIT_ROW, separators=(",", ":")) + "\n").encode()
         forged = run.terminal.exec(
@@ -364,6 +381,7 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert runtime.events.count("custody-probe") == 0
     assert runtime.events.count("product-custody-probe") == 1
     assert runtime.events.count("custody-unchanged") == 1
+    assert runtime.port_forward.closed is True
     assert runtime.events.count("process-binding") == 1
     assert b"FORGED_LEDGER_ROW" not in stored_ledger.read_bytes()
 
