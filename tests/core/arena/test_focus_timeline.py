@@ -137,3 +137,83 @@ def test_timeline_damage_only_removes_rewatchability(
     assert recordings["timeline"]["complete"] is False
     assert damage.split("-", 1)[0] in recordings["timeline"]["reason"]
     assert all(channel["complete"] for channel in recordings["channels"])
+
+
+@pytest.mark.parametrize(
+    ("damage", "reason_fragment"),
+    [
+        ("omitted-action", "action inventory"),
+        ("missing-completion", "start/completion"),
+        ("started-at-mismatch", "started_at"),
+        ("duration-mismatch", "duration"),
+        ("causal-mismatch", "causal"),
+    ],
+)
+def test_timeline_requires_exact_stored_action_facts_without_rewriting_truth(
+    tmp_path: Path,
+    damage: str,
+    reason_fragment: str,
+) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=RecordingBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=PublicBrowserSession,
+    )
+
+    def journey(run):
+        terminal = run.terminal.exec("printf", "before")
+        browser = run.browser.inspect("main")
+        return {"evidence_refs": [terminal.result_ref, browser.result_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(journey)
+        assert run.draft is not None
+        timeline_path = run.draft.path / "recordings/timeline.jsonl"
+        rows = [
+            json.loads(line)
+            for line in timeline_path.read_text(encoding="utf-8").splitlines()
+        ]
+        if damage == "omitted-action":
+            rows = [row for row in rows if row["action_ref"] != "actions/0002"]
+        elif damage == "missing-completion":
+            rows = [
+                row
+                for row in rows
+                if not (
+                    row["action_ref"] == "actions/0002"
+                    and row["event"] == "action_completed"
+                )
+            ]
+        elif damage == "started-at-mismatch":
+            start = next(row for row in rows if row["event"] == "action_started")
+            start["recorded_at"] = "2000-01-01T00:00:00Z"
+        elif damage == "duration-mismatch":
+            action_result_path = run.draft.path / "actions/0001/result.json"
+            action_result = json.loads(action_result_path.read_text(encoding="utf-8"))
+            action_result["duration_ms"] += 1_000
+            action_result_path.write_text(
+                json.dumps(action_result, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            browser_start = next(
+                row
+                for row in rows
+                if row["event"] == "action_started"
+                and row["action_ref"] == "actions/0002"
+            )
+            browser_start["causal_refs"] = []
+        timeline_path.write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    recordings = run.result["recordings"]
+    assert run.result["verdict"] == "pass"
+    assert run.result["evidence"]["complete"] is True
+    assert recordings["rewatchable"] is False
+    assert recordings["timeline"]["complete"] is False
+    assert reason_fragment in recordings["timeline"]["reason"]
+    assert all(channel["complete"] for channel in recordings["channels"])
