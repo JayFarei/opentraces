@@ -264,6 +264,14 @@ def test_retained_a2_proof_names_base_and_binary_inclusive_app_state_digests() -
     )
 
 
+def test_retained_a2_proof_points_to_the_repository_trusted_build_manifest() -> None:
+    proof = json.loads((ROOT / "tests/manual/a2_hf_emulator_real_box.json").read_text())
+    manifest = ROOT / proof["binary"]["trusted_build_manifest"]
+
+    assert manifest == SERVER_SOURCE.with_name("trusted-build.json")
+    assert manifest.is_file()
+
+
 def test_packaging_record_keeps_upstream_and_fallback_decisions_honest() -> None:
     record = json.loads(PACKAGING_RECORD.read_text())
 

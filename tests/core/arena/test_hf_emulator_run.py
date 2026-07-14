@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,12 @@ import pytest
 from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.contract import result_exit_code
 from opentraces.core.arena.emulate.huggingface.runtime import (
+    EmulatorReadinessError,
     PROVENANCE_SCHEMA,
     app_state_digest,
     emulator_provenance_path,
     emulator_binary_pin,
+    start_huggingface_emulator,
     verified_emulator_binary_pin,
 )
 from opentraces.core.arena.engine import Bench, ScenarioSource
@@ -101,6 +104,9 @@ class WorldRuntime:
     def __init__(self, raw_ledger: bytes = b"") -> None:
         self.raw_ledger = raw_ledger
         self.live = False
+        self.process_alive = True
+        self.manifest_override: dict | None = None
+        self.bound_manifest: dict | None = None
         self.events: list[str] = []
         self.copied: tuple[Path, str] | None = None
 
@@ -142,14 +148,47 @@ class WorldRuntime:
             stdout, returncode = f"{digest}  {self.copied[1]}\n", 0
         elif "_emulate/manifest" in rendered:
             self.events.append("readiness")
-            stdout, returncode = (json.dumps(_MANIFEST) + "\n", 0) if self.live else ("", 7)
+            manifest = self.manifest_override or self.bound_manifest or _MANIFEST
+            stdout, returncode = (json.dumps(manifest) + "\n", 0) if self.live else ("", 7)
         elif "_emulate/ledger" in rendered:
             self.events.append("snapshot")
             stdout, returncode = (self.raw_ledger.decode(), 0) if self.live else ("", 7)
         elif "setsid" in rendered or "hf-emulator" in rendered and "kill" not in rendered:
             self.live = True
             self.events.append("start")
+            fields = {
+                name: match.group(1)
+                for name in (
+                    "OPENTRACES_HF_LAUNCH_NONCE",
+                    "OPENTRACES_HF_CONTRACT_VERSION",
+                    "OPENTRACES_HF_SOURCE_SHA256",
+                    "OPENTRACES_HF_BUILD_INPUTS_SHA256",
+                    "OPENTRACES_HF_BINARY_SHA256",
+                )
+                if (match := re.search(rf"{name}=([^ ]+)", rendered)) is not None
+            }
+            if len(fields) == 5:
+                self.bound_manifest = {
+                    **_MANIFEST,
+                    "launch": {
+                        "nonce": fields["OPENTRACES_HF_LAUNCH_NONCE"],
+                        "pid": 4242,
+                        "contract_version": fields["OPENTRACES_HF_CONTRACT_VERSION"],
+                        "source_sha256": fields["OPENTRACES_HF_SOURCE_SHA256"],
+                        "build_inputs_sha256": fields[
+                            "OPENTRACES_HF_BUILD_INPUTS_SHA256"
+                        ],
+                        "binary_sha256": fields["OPENTRACES_HF_BINARY_SHA256"],
+                    },
+                }
             stdout, returncode = "", 0
+        elif "/proc/$pid/exe" in rendered:
+            self.events.append("process-binding")
+            stdout, returncode = (
+                (json.dumps({"pid": 4242, "user": "opentraces-hf"}) + "\n", 0)
+                if self.process_alive
+                else ("", 1)
+            )
         elif "kill" in rendered:
             self.live = False
             self.events.append("stop")
@@ -179,6 +218,15 @@ class WorldRuntime:
     def exec_product(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         rendered = " ".join(map(str, argv))
         self.events.append("product-exec")
+        if "CUSTODY_PROBE" in rendered:
+            self.events.append("product-custody-probe")
+            return BoxCommandResult(
+                argv=list(map(str, argv)),
+                returncode=0,
+                stdout="",
+                stderr="",
+                timing={"schemaVersion": 1, "timing": {"exitCode": 0}},
+            )
         if "/var/lib/opentraces-bench/huggingface.jsonl" in rendered and (
             "sudo" in rendered or "su " in rendered or "FORGED_LEDGER_ROW" in rendered
         ):
@@ -310,7 +358,8 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert runtime.events.count("stop") == 1
     assert runtime.events.count("product-ledger-mutation") == 0
     assert runtime.events.count("product-ledger-escalation-refused") == 1
-    assert runtime.events.count("custody-probe") == 1
+    assert runtime.events.count("custody-probe") == 0
+    assert runtime.events.count("product-custody-probe") == 1
     assert b"FORGED_LEDGER_ROW" not in stored_ledger.read_bytes()
 
     page = render_evidence_page(run.final_path)
@@ -324,6 +373,57 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert "hand-authored" in frozen_page
     assert "unsupported" in frozen_page
     assert "world/huggingface.json" in frozen_page
+
+
+def test_startup_rejects_stale_fixed_port_listener_when_new_child_is_dead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _trust_test_binary(binary, monkeypatch)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+    runtime.process_alive = False
+    runtime.manifest_override = {
+        **_MANIFEST,
+        "launch": {
+            "nonce": "stale-launch",
+            "pid": 111,
+            "contract_version": "huggingface.v1",
+            "source_sha256": "stale-source",
+            "build_inputs_sha256": "stale-inputs",
+            "binary_sha256": "stale-binary",
+        },
+    }
+
+    with pytest.raises(EmulatorReadinessError, match="launch identity"):
+        start_huggingface_emulator(
+            runtime=runtime,
+            box=runtime.lease(),
+            repository=tmp_path,
+            run_path=tmp_path / "run",
+        )
+
+
+def test_startup_rejects_dead_recorded_process_even_with_current_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _trust_test_binary(binary, monkeypatch)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+    runtime.process_alive = False
+
+    with pytest.raises(EmulatorReadinessError, match="running process"):
+        start_huggingface_emulator(
+            runtime=runtime,
+            box=runtime.lease(),
+            repository=tmp_path,
+            run_path=tmp_path / "run",
+        )
 
 
 def test_configured_binary_requires_matching_build_provenance(
