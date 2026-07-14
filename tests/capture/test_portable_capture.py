@@ -1645,6 +1645,7 @@ def test_required_non_self_observation_probes_the_observed_script_runtime(
 
 def test_required_non_self_observation_does_not_trust_declared_launcher_env(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _git_project(tmp_path / "project")
     product_command = _write_launcher_env_spoofing_product_command(
@@ -1653,6 +1654,7 @@ def test_required_non_self_observation_does_not_trust_declared_launcher_env(
     bash = shutil.which("bash")
     assert bash is not None
     product = subprocess.Popen([bash, str(product_command), "serve"])
+    monkeypatch.setenv("__PYVENV_LAUNCHER__", "/bin/sh")
     try:
         spoofed = Capture.open(
             CapturePlan(
