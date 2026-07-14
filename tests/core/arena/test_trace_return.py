@@ -41,6 +41,7 @@ def _finalized_run(
     *,
     commit_shaped_action: bool = False,
     omit_first_stdout: bool = False,
+    pins: dict[str, object] | None = None,
 ) -> tuple[RunStore, Path]:
     monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
@@ -133,13 +134,17 @@ def _finalized_run(
         recordings={"rewatchable": False, "channels": []},
         artifacts=[],
         capture=None,
-        pins={
-            "product": {
-                "commit": "2ab03ac637e",
-                "worktree": "clean",
-                "dirty_diff_digest": None,
+        pins=(
+            pins
+            if pins is not None
+            else {
+                "product": {
+                    "commit": "2ab03ac637e",
+                    "worktree": "clean",
+                    "dirty_diff_digest": None,
+                }
             }
-        },
+        ),
     )
     return store, draft.finalize(result)
 
@@ -216,6 +221,59 @@ def test_commit_shaped_action_does_not_grade_the_manufactured_run(
     assert returned.outcome.success is None
     assert returned.outcome.committed is False
     assert returned.outcome.commit_sha is None
+
+
+@pytest.mark.parametrize(
+    "pins",
+    [
+        {},
+        {"product": {"commit": "2ab03ac637e", "worktree": "clean"}},
+        {
+            "product": {
+                "commit": "2ab03ac637e",
+                "worktree": "unknown",
+                "dirty_diff_digest": None,
+            }
+        },
+        {
+            "product": {
+                "commit": "2ab03ac637e",
+                "worktree": "dirty",
+                "dirty_diff_digest": None,
+            }
+        },
+        {
+            "product": {
+                "commit": "2ab03ac637e",
+                "worktree": "clean",
+                "dirty_diff_digest": "sha256:" + "a" * 64,
+            }
+        },
+        {
+            "product": {
+                "commit": "",
+                "worktree": "dirty",
+                "dirty_diff_digest": "sha256:not-a-digest",
+            }
+        },
+    ],
+)
+def test_missing_partial_or_malformed_product_pin_is_refused(
+    tmp_path: Path,
+    monkeypatch,
+    pins: dict[str, object],
+) -> None:
+    store, run_path = _finalized_run(tmp_path, monkeypatch, pins=pins)
+
+    with pytest.raises(TraceReturnError, match="product pin"):
+        return_run_as_trace(
+            run_path,
+            project_dir=_project(tmp_path),
+            store=store,
+            cfg=Config(),
+        )
+
+    assert read_bucket_record_for_trace(TRACE_ID) is None
 
 
 def test_tampered_run_is_refused_before_any_trace_is_written(
