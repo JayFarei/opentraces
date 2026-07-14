@@ -109,16 +109,19 @@ class RunActionSequence:
         self._previous_action_ref = action_ref
         return allocation
 
-    def complete(self, allocation: ActionAllocation) -> None:
+    def complete(self, allocation: ActionAllocation) -> int:
         observed = time.monotonic()
+        completion_offset_ms = self._offset_ms(observed)
+        duration_ms = max(0, completion_offset_ms - allocation.offset_ms)
         self._append(
-            offset_ms=self._offset_ms(observed),
+            offset_ms=completion_offset_ms,
             recorded_at=_utc_now(),
             surface=allocation.surface,
             event="action_completed",
             action_ref=allocation.action_ref,
             causal_refs=(),
         )
+        return duration_ms
 
     @staticmethod
     def duration_ms(allocation: ActionAllocation) -> int:
@@ -135,6 +138,9 @@ class RunActionSequence:
         try:
             rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
             previous_offset = -1
+            starts: dict[str, dict[str, Any]] = {}
+            completions: dict[str, dict[str, Any]] = {}
+            focus_changes: dict[str, dict[str, Any]] = {}
             for expected_sequence, row in enumerate(rows, start=1):
                 if not isinstance(row, dict) or row.get("sequence") != expected_sequence:
                     raise ValueError("timeline sequence is not contiguous")
@@ -151,9 +157,10 @@ class RunActionSequence:
                 }:
                     raise ValueError("timeline event is invalid")
                 action_ref = row.get("action_ref")
-                if not isinstance(action_ref, str) or not (
-                    self.draft.path / action_ref / "invocation.json"
-                ).is_file():
+                if not isinstance(action_ref, str) or not action_ref.startswith("actions/"):
+                    raise ValueError("timeline action reference is missing")
+                action_path = self.draft.path / action_ref
+                if not (action_path / "invocation.json").is_file():
                     raise ValueError("timeline action reference is missing")
                 causal_refs = row.get("causal_refs")
                 if not isinstance(row.get("recorded_at"), str) or not isinstance(
@@ -165,6 +172,86 @@ class RunActionSequence:
                         self.draft.path / causal_ref / "invocation.json"
                     ).is_file():
                         raise ValueError("timeline causal reference is dangling")
+                event = str(row["event"])
+                event_rows = {
+                    "focus_changed": focus_changes,
+                    "action_started": starts,
+                    "action_completed": completions,
+                }[event]
+                if action_ref in event_rows:
+                    raise ValueError(f"timeline has duplicate {event} row")
+                event_rows[action_ref] = row
+
+            action_root = self.draft.path / "actions"
+            stored_refs = [
+                f"actions/{path.name}"
+                for path in sorted(action_root.iterdir())
+                if path.is_dir()
+            ]
+            expected_refs = [f"actions/{ordinal:04d}" for ordinal in range(1, len(stored_refs) + 1)]
+            if stored_refs != expected_refs or set(starts) != set(stored_refs):
+                raise ValueError("timeline action inventory does not match stored actions")
+            if set(completions) != set(stored_refs):
+                raise ValueError("timeline start/completion pairing is incomplete")
+
+            prior_ref: str | None = None
+            prior_surface: str | None = None
+            expected_focus_refs: set[str] = set()
+            for action_ref in stored_refs:
+                action_path = self.draft.path / action_ref
+                invocation = json.loads(
+                    (action_path / "invocation.json").read_text(encoding="utf-8")
+                )
+                result = json.loads((action_path / "result.json").read_text(encoding="utf-8"))
+                if not isinstance(invocation, dict) or not isinstance(result, dict):
+                    raise ValueError("timeline action facts are invalid")
+                start = starts[action_ref]
+                completion = completions[action_ref]
+                surface = "terminal" if isinstance(invocation.get("argv"), list) else "browser"
+                if start["surface"] != surface or completion["surface"] != surface:
+                    raise ValueError("timeline surface disagrees with stored action")
+                if start["recorded_at"] != invocation.get("started_at"):
+                    raise ValueError("timeline started_at disagrees with stored invocation")
+                try:
+                    start_time = datetime.fromisoformat(
+                        str(start["recorded_at"]).replace("Z", "+00:00")
+                    )
+                    completion_time = datetime.fromisoformat(
+                        str(completion["recorded_at"]).replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    raise ValueError("timeline recorded_at is not RFC3339") from exc
+                if completion_time < start_time:
+                    raise ValueError("timeline completion timestamp precedes action start")
+                duration_ms = result.get("duration_ms")
+                observed_duration = completion["offset_ms"] - start["offset_ms"]
+                if (
+                    not isinstance(duration_ms, int)
+                    or isinstance(duration_ms, bool)
+                    or duration_ms != observed_duration
+                ):
+                    raise ValueError("timeline duration disagrees with stored action result")
+                expected_causal = [] if prior_ref is None else [prior_ref]
+                if start["causal_refs"] != expected_causal or completion["causal_refs"] != []:
+                    raise ValueError("timeline causal chain disagrees with action order")
+                if prior_surface != surface:
+                    expected_focus_refs.add(action_ref)
+                    focus = focus_changes.get(action_ref)
+                    if focus is None or any(
+                        focus[key] != start[key]
+                        for key in (
+                            "offset_ms",
+                            "recorded_at",
+                            "surface",
+                            "action_ref",
+                            "causal_refs",
+                        )
+                    ):
+                        raise ValueError("timeline focus change disagrees with action start")
+                prior_ref = action_ref
+                prior_surface = surface
+            if set(focus_changes) != expected_focus_refs:
+                raise ValueError("timeline focus changes disagree with surface transitions")
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             return {
                 "complete": False,

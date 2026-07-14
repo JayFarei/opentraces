@@ -213,16 +213,14 @@ class BrowserDrive:
         try:
             observed = dict(operation(self._active_session()))
         except Exception as exc:
-            duration_ms = self.actions.duration_ms(allocation)
-            self.actions.complete(allocation)
+            duration_ms = self.actions.complete(allocation)
             reason = sanitize_reason(getattr(exc, "code", "browser_operation_error"), exc)
             self.draft.write_json(
                 result_ref,
                 {"execution_status": "error", "duration_ms": duration_ms, "reason": reason},
             )
             raise
-        duration_ms = self.actions.duration_ms(allocation)
-        self.actions.complete(allocation)
+        duration_ms = self.actions.complete(allocation)
         state = sanitize_diagnostic_value(observed)
         self.draft.write_json(result_ref, {"duration_ms": duration_ms, "state": state})
         return BrowserResult(
@@ -287,8 +285,7 @@ class BrowserDrive:
         try:
             payload = self._active_session().screenshot(full_page=full_page)
         except Exception as exc:
-            duration_ms = self.actions.duration_ms(allocation)
-            self.actions.complete(allocation)
+            duration_ms = self.actions.complete(allocation)
             reason = sanitize_reason("browser_screenshot_error", exc)
             self.draft.write_json(
                 result_ref,
@@ -298,8 +295,7 @@ class BrowserDrive:
         screenshot_ref = f"recordings/browser/screenshots/{name}.png"
         self.draft.write_bytes(screenshot_ref, payload)
         self._screenshot_refs.append(screenshot_ref)
-        duration_ms = self.actions.duration_ms(allocation)
-        self.actions.complete(allocation)
+        duration_ms = self.actions.complete(allocation)
         state = {"path": screenshot_ref}
         self.draft.write_json(result_ref, {"duration_ms": duration_ms, "state": state})
         return BrowserResult(

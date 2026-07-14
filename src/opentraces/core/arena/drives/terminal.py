@@ -150,8 +150,7 @@ class TerminalDrive:
 
     def _freeze_unsettled(self, pending: TerminalAction, *, message: str) -> None:
         state = pending._state
-        duration_ms = self.actions.duration_ms(state.allocation)
-        self.actions.complete(state.allocation)
+        duration_ms = self.actions.complete(state.allocation)
         self.draft.write_text(f"{state.action}/stdout", "")
         self.draft.write_text(f"{state.action}/stderr", "")
         self.draft.write_json(f"{state.action}/timing.json", {})
@@ -311,8 +310,7 @@ class TerminalDrive:
                 f"terminal action did not complete within {wait_timeout:g} seconds"
             ) from exc
         except Exception as exc:
-            duration_ms = self.actions.duration_ms(state.allocation)
-            self.actions.complete(state.allocation)
+            duration_ms = self.actions.complete(state.allocation)
             timeout_error = self._timeout_error(exc)
             stdout = self._exception_stream(exc, "stdout", "output")
             stderr = self._exception_stream(exc, "stderr")
@@ -355,8 +353,7 @@ class TerminalDrive:
             self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
             self._pending.remove(pending)
             raise
-        duration_ms = self.actions.duration_ms(state.allocation)
-        self.actions.complete(state.allocation)
+        duration_ms = self.actions.complete(state.allocation)
         self.draft.write_text(f"{state.action}/stdout", observed.stdout)
         self.draft.write_text(f"{state.action}/stderr", observed.stderr)
         self.draft.write_json(f"{state.action}/timing.json", observed.timing)
