@@ -218,6 +218,8 @@ class CaptureSession:
         processes: dict[str, _OwnedProcess],
         open_limitations: dict[str, list[str]],
         open_details: dict[str, dict[str, Any]],
+        resolved_security_tools: tuple[str, ...],
+        security_configuration: Literal["configured", "explicit"],
     ) -> None:
         self.plan = plan
         self.bindings = bindings
@@ -226,6 +228,8 @@ class CaptureSession:
         self._processes = processes
         self._open_limitations = open_limitations
         self._open_details = open_details
+        self._resolved_security_tools = resolved_security_tools
+        self._security_configuration = security_configuration
         self._finished: CaptureResult | None = None
         self._trace_refs = list([plan.trace_id] if plan.trace_id is not None else [])
         self._interrupted_sources: set[str] = set()
@@ -395,11 +399,7 @@ class CaptureSession:
                 "configuration": (
                     declared_security[0].get("configuration", "configured")
                     if declared_security
-                    else (
-                        "explicit"
-                        if self.plan.security_tools is not None
-                        else "configured"
-                    )
+                    else self._security_configuration
                 ),
                 "configured_tools": configured_tools,
                 "tools_applied": tools_applied,
@@ -513,11 +513,8 @@ class CaptureSession:
             "trace_id": self._trace_refs[-1] if self._trace_refs else None,
             "remaining_seconds": max(0.0, deadline - time.monotonic() - 0.05),
             "deadline_monotonic": max(time.monotonic(), deadline - 0.05),
-            "security_tools": (
-                list(self.plan.security_tools)
-                if self.plan.security_tools is not None
-                else None
-            ),
+            "security_tools": list(self._resolved_security_tools),
+            "security_configuration": self._security_configuration,
             "raw_body_retention": self.plan.raw_body_retention,
             "open_details": self._open_details.get(source) or {},
             "requested_sources": list(self.plan.requested_sources),
@@ -674,6 +671,16 @@ class Capture:
         if not plan.workspace.is_dir():
             raise FileNotFoundError(f"capture workspace does not exist: {plan.workspace}")
 
+        if plan.security_tools is None:
+            from ..core.config import load_config
+            from ..security.config import enabled_security_tool_names
+
+            resolved_security_tools = tuple(enabled_security_tool_names(load_config()))
+            security_configuration: Literal["configured", "explicit"] = "configured"
+        else:
+            resolved_security_tools = plan.security_tools
+            security_configuration = "explicit"
+
         result_dir = plan.result_dir or (plan.workspace / ".opentraces" / "capture")
         result_dir.mkdir(parents=True, exist_ok=True)
         if plan.placement == "persistent":
@@ -795,6 +802,8 @@ class Capture:
             processes=processes,
             open_limitations=limitations,
             open_details=open_details,
+            resolved_security_tools=resolved_security_tools,
+            security_configuration=security_configuration,
         )
 
 

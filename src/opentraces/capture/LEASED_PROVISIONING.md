@@ -75,9 +75,11 @@ acknowledgment, a staged persistent generation remains honestly partial because
 finish-tail coverage cannot be proven.
 
 Capture security has no top-level privacy tier. `CapturePlan.security_tools=None`
-uses the project's configured `security.<tool>.enabled` flags; an explicit tuple sets
-the exact tool flags for the isolated finalizer. The result records those configured
-tools separately from the `tools_applied` manifest observed on a finalized Trace.
+resolves the project's configured `security.<tool>.enabled` flags once at
+`Capture.open`; every persistent or leased finalizer then receives that same resolved
+set. An explicit tuple sets the exact tool flags for the isolated finalizer. The
+result records those configured tools separately from the `tools_applied` manifest
+observed on a finalized Trace.
 
 Placement parity is evaluated over stored Trace, Context companion, Trail companion,
 security result, and three-view completeness. The verifier normalizes only declared

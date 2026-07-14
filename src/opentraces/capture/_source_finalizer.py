@@ -403,7 +403,9 @@ def _resolve_security_policy(request: dict[str, Any]) -> tuple[Any, dict[str, An
 
     cfg = load_config()
     requested = request.get("security_tools")
-    configuration = "configured" if requested is None else "explicit"
+    configuration = request.get("security_configuration")
+    if configuration not in {"configured", "explicit"}:
+        configuration = "configured" if requested is None else "explicit"
     if requested is not None:
         set_security_tools_exact(cfg, requested)
     return cfg, {
