@@ -269,6 +269,11 @@ def return_run_as_trace(
 
     record = _record_from_run(run_path, result)
     processed = process_imported_trace(record, cfg or load_config()).record
+    # A bench action transcript is evidence, never a grade.  Keep the normal
+    # imported-trace enrichment/security pass, then clear only the fields that
+    # commit-shaped output can infer as an outcome.  Arena labels remain the
+    # sole grading surface for this manufactured trace family.
+    processed.outcome = Outcome(success=None)
     processed.content_hash = processed.compute_content_hash()
     write_trace_to_bucket(
         processed,
