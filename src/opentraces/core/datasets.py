@@ -1459,7 +1459,14 @@ def publish_dataset(
     attempts = 0
     while True:
         attempts += 1
-        remote_head_before = _remote_head(repo_id, token)
+        try:
+            remote_head_before = _remote_head(repo_id, token)
+        except Exception as exc:
+            if _is_remote_transport_error(exc):
+                raise DatasetRemoteUnavailableError(
+                    f"dataset remote unavailable: {repo_id}"
+                ) from exc
+            raise
         _check_remote_schema_not_ahead(dataset, repo_id, token)
         state = evaluate_publication_state(name)
         remote_row_ids = _remote_row_ids(repo_id, dataset.manifest.identity, token)
@@ -1563,6 +1570,12 @@ def publish_dataset(
             if attempts > max_retries:
                 raise
             continue
+        except Exception as exc:
+            if _is_remote_transport_error(exc):
+                raise DatasetRemoteUnavailableError(
+                    f"dataset remote unavailable: {repo_id}"
+                ) from exc
+            raise
         _mark_rows_uploaded(name, [row_id for row_id, _row in selected_rows], remote_name)
         _append_publication_event(
             dataset.path,
@@ -1599,6 +1612,14 @@ def publish_dataset(
             message="published",
             filter_summary=emitted_filter,
         )
+
+
+def _is_remote_transport_error(exc: BaseException) -> bool:
+    """Recognize the pinned Hugging Face client's connection-error family."""
+
+    from httpx import TransportError
+
+    return isinstance(exc, TransportError)
 
 
 def withdraw_dataset_row(
@@ -1749,6 +1770,20 @@ class RemoteHeadConflict(RuntimeError):
 
 class DatasetRemotePermissionError(RuntimeError):
     classification = "permission_denied"
+
+
+class DatasetRemoteUnavailableError(RuntimeError):
+    """The bound dataset remote could not acknowledge the publish operation."""
+
+    classification = "remote_unavailable"
+    exit_code = 3
+
+
+class DatasetRemoteAcknowledgmentError(RuntimeError):
+    """The upload returned without a new remote commit acknowledgment."""
+
+    classification = "remote_ack_missing"
+    exit_code = 3
 
 
 class DatasetRemoteSchemaAheadError(RuntimeError):
@@ -2039,7 +2074,7 @@ def _upload_public_surface(
     from huggingface_hub import HfApi
 
     api = HfApi(token=token)
-    api.upload_folder(
+    acknowledged = api.upload_folder(
         repo_id=repo_id,
         repo_type="dataset",
         folder_path=str(staging),
@@ -2048,7 +2083,18 @@ def _upload_public_surface(
         create_pr=False,
         parent_commit=parent_commit,
     )
-    return _remote_head(repo_id, token) or ""
+    acknowledged_oid = getattr(acknowledged, "oid", None)
+    if not isinstance(acknowledged_oid, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", acknowledged_oid
+    ):
+        raise DatasetRemoteAcknowledgmentError(
+            f"remote did not acknowledge a commit for {repo_id}"
+        )
+    if parent_commit is not None and acknowledged_oid == parent_commit:
+        raise DatasetRemoteAcknowledgmentError(
+            f"remote did not acknowledge a new commit for {repo_id}"
+        )
+    return acknowledged_oid
 
 
 def _remote_head(repo_id: str, token: str | None) -> str | None:

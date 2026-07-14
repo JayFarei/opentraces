@@ -150,6 +150,30 @@ def _run_opentraces(
     )
 
 
+def _prepare_publishable_dataset(
+    endpoint: str,
+    home: Path,
+    tmp_path: Path,
+    *,
+    name: str,
+) -> None:
+    rows = tmp_path / f"{name}-rows.jsonl"
+    rows.write_text('{"value":1}\n', encoding="utf-8")
+    schema = tmp_path / f"{name}-schema.json"
+    schema.write_text(
+        '{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"]}\n',
+        encoding="utf-8",
+    )
+    commands = (
+        ("dataset", "new", name, "--rows-file", str(rows), "--schema", str(schema), "--json"),
+        ("dataset", "review", "approve", name, "--all", "--json"),
+        ("dataset", "remote", "create", name, f"bench/{name}", "--private", "--json"),
+    )
+    for command in commands:
+        result = _run_opentraces(endpoint, home, *command)
+        assert result.returncode == 0, result.stderr
+
+
 def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> None:
     assert version("huggingface-hub") == "1.10.2"
     assert version("hf-xet") == "1.4.3"
@@ -1317,52 +1341,9 @@ def test_dataset_publish_dead_endpoint_is_named_and_does_not_advance_local_state
 
     home = tmp_path / "home"
     home.mkdir()
-    rows = tmp_path / "rows.jsonl"
-    rows.write_text('{"value":1}\n', encoding="utf-8")
-    schema = tmp_path / "schema.json"
-    schema.write_text(
-        '{"type":"object","properties":{"value":{"type":"integer"}},'
-        '"required":["value"]}\n',
-        encoding="utf-8",
-    )
 
     with running_emulator(tmp_path) as (endpoint, ledger_path):
-        created = _run_opentraces(
-            endpoint,
-            home,
-            "dataset",
-            "new",
-            "remote-ack",
-            "--rows-file",
-            str(rows),
-            "--schema",
-            str(schema),
-            "--json",
-        )
-        assert created.returncode == 0, created.stderr
-        approved = _run_opentraces(
-            endpoint,
-            home,
-            "dataset",
-            "review",
-            "approve",
-            "remote-ack",
-            "--all",
-            "--json",
-        )
-        assert approved.returncode == 0, approved.stderr
-        bound = _run_opentraces(
-            endpoint,
-            home,
-            "dataset",
-            "remote",
-            "create",
-            "remote-ack",
-            "bench/remote-ack",
-            "--private",
-            "--json",
-        )
-        assert bound.returncode == 0, bound.stderr
+        _prepare_publishable_dataset(endpoint, home, tmp_path, name="remote-ack")
 
     # The context manager has terminated and waited for the sidecar. This is a
     # confirmed-dead endpoint, unlike a best-effort signal with no death proof.
@@ -1383,12 +1364,7 @@ def test_dataset_publish_dead_endpoint_is_named_and_does_not_advance_local_state
     assert "Traceback" not in published.stderr
 
     state_path = (
-        home
-        / ".opentraces"
-        / "datasets"
-        / "remote-ack"
-        / ".opentraces"
-        / "publication_state.json"
+        home / ".opentraces" / "datasets" / "remote-ack" / ".opentraces" / "publication_state.json"
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     only_row = next(iter(state["rows"].values()))
@@ -1397,3 +1373,32 @@ def test_dataset_publish_dead_endpoint_is_named_and_does_not_advance_local_state
     assert not state_path.with_name("publications.jsonl").exists()
     ledger_rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
     assert not any(row["operation_id"] == "commit" for row in ledger_rows)
+
+
+def test_dataset_publish_reports_the_pinned_clients_commit_ack(tmp_path: Path) -> None:
+    """The public product journey reports the write response's exact commit oid."""
+
+    home = tmp_path / "home"
+    home.mkdir()
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
+        _prepare_publishable_dataset(endpoint, home, tmp_path, name="remote-ack-live")
+        published = _run_opentraces(
+            endpoint,
+            home,
+            "dataset",
+            "publish",
+            "remote-ack-live",
+            "--json",
+        )
+
+    assert published.returncode == 0, published.stderr
+    payload = json.loads(published.stdout)
+    assert payload["status"] == "ok"
+    acknowledged_oid = payload["publish"]["remote_head_after"]
+    commit_rows = [
+        row
+        for row in (json.loads(line) for line in ledger_path.read_text().splitlines())
+        if row["operation_id"] == "commit"
+    ]
+    assert len(commit_rows) == 1
+    assert acknowledged_oid == commit_rows[0]["response"]["commit_oid"]

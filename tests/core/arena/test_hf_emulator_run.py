@@ -157,7 +157,7 @@ class WorldRuntime:
         elif "test ! -s" in rendered:
             self.events.append("custody-unchanged")
             stdout, returncode = "", 0 if not self.raw_ledger else 1
-        elif "_emulate/manifest" in rendered:
+        elif "_emulate/manifest" in rendered and "kill" not in rendered:
             self.events.append("readiness")
             manifest = self.manifest_override or self.bound_manifest or _MANIFEST
             stdout, returncode = (json.dumps(manifest) + "\n", 0) if self.live else ("", 7)
@@ -209,7 +209,17 @@ class WorldRuntime:
                 self.raw_ledger = (json.dumps(_COMMIT_ROW, separators=(",", ":")) + "\n").encode()
                 stdout, returncode = '{"published":true}\n', 0
             else:
-                stdout, returncode = "", 1
+                stdout, returncode = (
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "error": {"code": "remote_unavailable"},
+                            "publish": {},
+                        }
+                    )
+                    + "\n",
+                    1,
+                )
         elif "CUSTODY_PROBE" in rendered:
             self.events.append("custody-probe")
             stdout, returncode = "", 0

@@ -52,4 +52,3 @@ def test_live_upload_uses_the_upload_ack_oid_without_a_second_head_read(
 
     assert observed == acknowledged_oid
     assert len(calls) == 1
-

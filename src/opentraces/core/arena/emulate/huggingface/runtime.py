@@ -512,16 +512,24 @@ class HuggingFaceEmulator:
     def stop(self) -> None:
         if self._stopped:
             return
-        self.snapshot_ledger(final=True)
         timing = self.run_path / "artifacts" / "crabbox-timing" / "hf-stop.json"
         stopped = self.runtime.exec(
             self.box,
             [
                 "sh",
                 "-c",
-                "if test -f /tmp/opentraces-hf-emulator.pid; then "
-                "kill -- -$(cat /tmp/opentraces-hf-emulator.pid) 2>/dev/null || "
-                "kill $(cat /tmp/opentraces-hf-emulator.pid) 2>/dev/null || true; fi",
+                "set -eu; test -f /tmp/opentraces-hf-emulator.pid; "
+                "pid=$(cat /tmp/opentraces-hf-emulator.pid); "
+                "if kill -0 \"$pid\" 2>/dev/null; then "
+                "kill -- -\"$pid\" 2>/dev/null || kill \"$pid\"; fi; "
+                "i=0; while kill -0 \"$pid\" 2>/dev/null; do "
+                "state=$(sed -n 's/^.*) \\([A-Z]\\) .*$/\\1/p' \"/proc/$pid/stat\" "
+                "2>/dev/null || true); "
+                "test \"$state\" = Z && break; "
+                "test $i -lt 100 || exit 1; i=$((i+1)); sleep 0.05; done; "
+                f"if curl -fsS http://127.0.0.1:{DEFAULT_PORT}/_emulate/manifest "
+                ">/dev/null 2>&1; then exit 1; fi; "
+                f"sudo -u opentraces-hf cat {REMOTE_LEDGER}",
             ],
             cwd=self.repository,
             timeout=30,
@@ -529,6 +537,7 @@ class HuggingFaceEmulator:
         )
         if stopped.returncode != 0:
             raise RuntimeError("Hugging Face emulator did not stop cleanly")
+        self._persist_ledger(stopped.stdout, final=True)
         self._stopped = True
 
     def snapshot_ledger(self, *, final: bool = False) -> Path:
@@ -536,8 +545,6 @@ class HuggingFaceEmulator:
             if self._ledger_path is None:
                 raise RuntimeError("Hugging Face emulator stopped without a ledger snapshot")
             return self._ledger_path
-        target = self.run_path / LEDGER_EVIDENCE_REF
-        target.parent.mkdir(parents=True, exist_ok=True)
         observed = self.runtime.exec(
             self.box,
             ["curl", "-fsS", f"{self.env['HF_ENDPOINT']}/_emulate/ledger"],
@@ -547,8 +554,13 @@ class HuggingFaceEmulator:
         )
         if observed.returncode != 0:
             raise RuntimeError("Hugging Face emulator ledger could not be collected")
+        return self._persist_ledger(observed.stdout, final=final)
+
+    def _persist_ledger(self, raw: str, *, final: bool) -> Path:
+        target = self.run_path / LEDGER_EVIDENCE_REF
+        target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.tmp")
-        temporary.write_text(observed.stdout, encoding="utf-8")
+        temporary.write_text(raw, encoding="utf-8")
         os.replace(temporary, target)
         self._ledger_path = target
         self._ledger_finalized = final
