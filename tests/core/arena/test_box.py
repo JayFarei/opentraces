@@ -5,6 +5,7 @@ import json
 import subprocess
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -429,6 +430,68 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
     assert "/Users/private/source" not in serialized
     assert "/tmp/key" not in serialized
     assert not (tmp_path / ".crabbox" / "bench-base-provides-timing.json").exists()
+
+
+def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    wheel = dist / "opentraces-0.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"local wheel bytes")
+    commands: list[str] = []
+    runtime = CrabboxRuntime(runner=lambda *args, **kwargs: _completed([]), home=tmp_path)
+    box = Box(
+        id="box",
+        slug="box",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        commands.append(command)
+        if "importlib.metadata" in command:
+            stdout = json.dumps(
+                {
+                    "huggingface-hub": "1.10.2",
+                    "hf-xet": "1.4.3",
+                }
+            )
+        else:
+            stdout = "/usr/bin/opentraces\n/usr/bin/script\n"
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+
+    pin = runtime.materialize(box, "install-only", repository=repository)
+
+    install = next(command for command in commands if "pip install" in command)
+    assert "huggingface-hub==1.10.2" in install
+    assert "hf-xet==1.4.3" in install
+    assert pin["dependencies"] == {
+        "huggingface-hub": "1.10.2",
+        "hf-xet": "1.4.3",
+    }
+    assert pin["recipe"]["dependencies"] == pin["dependencies"]
+    assert pin["recipe"]["wheel_sha256"]
 
 
 def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Path) -> None:

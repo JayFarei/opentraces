@@ -1049,6 +1049,7 @@ import urllib.request
 from tempfile import TemporaryDirectory
 from huggingface_hub import HfApi
 from huggingface_hub.errors import (
+    HfHubHTTPError,
     RemoteEntryNotFoundError,
     RepositoryNotFoundError,
     RevisionNotFoundError,
@@ -1062,6 +1063,13 @@ except RepositoryNotFoundError as error:
     errors["repo"] = [type(error).__name__, error.response.headers["x-error-code"]]
 
 api.create_repo("bench/errors", repo_type="dataset")
+try:
+    api.create_repo("bench/errors", repo_type="dataset", exist_ok=False)
+except HfHubHTTPError as error:
+    errors["create_conflict"] = [
+        type(error).__name__,
+        error.response.headers["x-error-code"],
+    ]
 with TemporaryDirectory() as cache:
     try:
         api.hf_hub_download(
@@ -1129,6 +1137,7 @@ print(json.dumps(errors, sort_keys=True))
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "commit_revision": [404, "RevisionNotFound"],
+        "create_conflict": ["HfHubHTTPError", "Conflict"],
         "entry": ["RemoteEntryNotFoundError", "EntryNotFound"],
         "preupload_revision": ["RevisionNotFoundError", "RevisionNotFound"],
         "repo": ["RepositoryNotFoundError", "RepoNotFound"],

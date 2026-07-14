@@ -83,6 +83,11 @@ class WorldRuntime:
         elif "_emulate/manifest" in rendered:
             self.events.append("readiness")
             stdout, returncode = ('{"id":"huggingface"}\n', 0) if self.live else ("", 7)
+        elif "_emulate/ledger" in rendered:
+            self.events.append("snapshot")
+            stdout, returncode = (
+                (self.raw_ledger.decode(), 0) if self.live else ("", 7)
+            )
         elif "setsid" in rendered or "hf-emulator" in rendered and "kill" not in rendered:
             self.live = True
             self.events.append("start")
@@ -97,6 +102,9 @@ class WorldRuntime:
                 stdout, returncode = '{"published":true}\n', 0
             else:
                 stdout, returncode = "", 1
+        elif "FORGED_LEDGER_ROW" in rendered:
+            self.events.append("product-ledger-mutation")
+            stdout, returncode = "", 0
         else:
             stdout, returncode = "{}\n", 0
         return BoxCommandResult(
@@ -106,14 +114,6 @@ class WorldRuntime:
             stderr="emulator unavailable\n" if returncode else "",
             timing={"schemaVersion": 1, "timing": {"exitCode": returncode}},
         )
-
-    def collect(self, box: Box, globs, *, destination: Path, repository: Path):
-        assert all("/_emulate/ledger" not in str(pattern) for pattern in globs)
-        self.events.append("collect")
-        destination.mkdir(parents=True, exist_ok=True)
-        target = destination / "huggingface.jsonl"
-        target.write_bytes(self.raw_ledger)
-        return {"huggingface.jsonl": target}
 
     def release(self, box: Box) -> None:
         self.events.append("release")
@@ -178,6 +178,13 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
         }
         assert hf.env["HF_TOKEN"].startswith("hf_")
         runtime.raw_ledger = (json.dumps(_COMMIT_ROW, separators=(",", ":")) + "\n").encode()
+        forged = run.terminal.exec(
+            "sh",
+            "-c",
+            "printf FORGED_LEDGER_ROW > huggingface.jsonl",
+            env=hf.env,
+        )
+        assert forged.returncode == 0
         run.verify(scenario_2.publish_commit_is_witnessed, hf=hf)
 
     expected_binary_pin = emulator_binary_pin(binary).to_dict()
@@ -197,10 +204,12 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert runtime.events.index("copy") < runtime.events.index("sha256")
     assert runtime.events.index("sha256") < runtime.events.index("start")
     assert runtime.events.index("start") < runtime.events.index("readiness")
-    assert runtime.events.index("collect") < runtime.events.index("release")
+    assert runtime.events.index("snapshot") < runtime.events.index("release")
     assert runtime.events.index("stop") < runtime.events.index("release")
-    assert runtime.events.count("collect") == 1
+    assert runtime.events.count("snapshot") == 1
     assert runtime.events.count("stop") == 1
+    assert runtime.events.count("product-ledger-mutation") == 1
+    assert b"FORGED_LEDGER_ROW" not in stored_ledger.read_bytes()
 
     page = render_evidence_page(run.final_path)
     frozen_page = page.read_text(encoding="utf-8")
@@ -208,6 +217,23 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert "huggingface" in frozen_page
     assert expected_binary_pin["sha256"] in frozen_page
     assert "ledgers/huggingface.jsonl" in frozen_page
+    assert "http://127.0.0.1:14318" in frozen_page
+    assert "baseline identity: bench" in frozen_page
+    assert "hand-authored" in frozen_page
+    assert "unsupported" in frozen_page
+    assert "world/huggingface.json" in frozen_page
+
+
+def test_configured_binary_requires_matching_build_provenance(
+    tmp_path: Path,
+) -> None:
+    from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
+
+    binary = tmp_path / "untrusted-emulator"
+    binary.write_bytes(b"not a verified Bun build")
+
+    with pytest.raises(RuntimeError, match="provenance"):
+        hf_runtime.verified_emulator_binary_pin(binary)
 
 
 def test_run_emulate_refuses_every_unregistered_name(
@@ -256,5 +282,9 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     assert "0x" not in result["reason"]["message"]
     assert result_exit_code(result) == 1
     assert not any(row.get("operation_id") == "commit" for row in ledger_rows)
+    assert result["verifiers"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
+    assert result["evidence"]["requirements"][0]["evidence_refs"] == [
+        "ledgers/huggingface.jsonl"
+    ]
     assert runtime.events.count("start") == 1
     assert runtime.events.count("release") == 1
