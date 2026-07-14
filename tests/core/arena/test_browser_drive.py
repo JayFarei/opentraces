@@ -279,6 +279,12 @@ def test_missing_playwright_is_a_named_setup_refusal_before_browser_attempt(
             }
             for kind in ("browser_video", "playwright_trace", "browser_screenshots")
         ],
+        "timeline_ref": "recordings/timeline.jsonl",
+        "timeline": {
+            "complete": True,
+            "path": "recordings/timeline.jsonl",
+            "reason": None,
+        },
     }
 
 
