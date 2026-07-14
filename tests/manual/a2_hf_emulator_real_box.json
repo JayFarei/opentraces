@@ -372,7 +372,12 @@
   },
   "product_source": {
     "commit": "f4f91848ca37913d97c0956a06487cb032c8f757",
-    "proof_only_commits_follow_product_commit": true,
+    "proof_only_commits_follow_product_commit": false,
+    "post_pin_product_commits": [
+      "dbfa19f5616",
+      "10b8bf89bcb"
+    ],
+    "post_pin_note": "Toolchain-resolution changes landed after the pinned proof commit; re-proof is routed to #305.",
     "source_archive": {
       "format": "tar",
       "sha256": "7894cb5b188b122f122fcd91b915a9dcd486438461ba36140547c770a31e60e5"

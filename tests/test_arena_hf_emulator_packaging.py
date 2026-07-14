@@ -320,6 +320,11 @@ def test_retained_a2_proof_is_honest_local_diagnostic_with_actual_page_capture()
     page = ROOT / "tests/manual" / proof["page_capture"]["file"]
 
     assert proof["product_source"]["commit"] == ("f4f91848ca37913d97c0956a06487cb032c8f757")
+    assert proof["product_source"]["proof_only_commits_follow_product_commit"] is False
+    assert proof["product_source"]["post_pin_product_commits"] == [
+        "dbfa19f5616",
+        "10b8bf89bcb",
+    ]
     assert proof["proof_scope"] == {
         "blocker": (
             "Issue #264 still requires the same proof on a genuine remote provider lease. "
