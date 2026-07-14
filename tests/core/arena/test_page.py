@@ -280,6 +280,100 @@ def test_page_names_and_omits_a_recording_ref_that_escapes_the_run(tmp_path: Pat
     assert "data-cast=" not in html
 
 
+def test_page_names_and_omits_every_cross_surface_ref_that_escapes_the_run(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    inside_manifest = draft.path / "recordings/browser/screenshots/manifest.json"
+    inside_manifest.parent.mkdir(parents=True)
+    inside_manifest.write_text(
+        json.dumps({"screenshots": ["../escape-screenshot-member.png"]}),
+        encoding="utf-8",
+    )
+    recordings = {
+        "rewatchable": True,
+        "timeline": {"complete": True, "reason": None},
+        "timeline_ref": "../escape-timeline.jsonl",
+        "channels": [
+            {
+                "kind": "terminal",
+                "complete": True,
+                "path": "../escape-terminal.cast",
+                "reason": None,
+                "casts": [
+                    {
+                        "ordinal": 1,
+                        "label": "escaped terminal cast",
+                        "cast_ref": "../escape-terminal.cast",
+                        "duration_ms": 1,
+                    }
+                ],
+            },
+            {
+                "kind": "browser_video",
+                "complete": True,
+                "path": "../escape-browser.webm",
+                "reason": None,
+            },
+            {
+                "kind": "playwright_trace",
+                "complete": True,
+                "path": "../escape-trace.zip",
+                "reason": None,
+            },
+            {
+                "kind": "browser_screenshots",
+                "complete": True,
+                "path": "../escape-screenshot-manifest.json",
+                "reason": None,
+            },
+            {
+                "kind": "browser_screenshots",
+                "complete": True,
+                "path": "recordings/browser/screenshots/manifest.json",
+                "reason": None,
+            },
+        ],
+    }
+    finalized = draft.finalize(_result(draft.run_id, recordings=recordings))
+    outside = {
+        "escape-timeline.jsonl": (
+            '{"sequence":1,"offset_ms":0,"surface":"browser",'
+            '"event":"focus_changed","action_ref":"actions/0001",'
+            '"causal_refs":[]}\n'
+        ),
+        "escape-terminal.cast": "terminal outside the run\n",
+        "escape-browser.webm": "video outside the run\n",
+        "escape-trace.zip": "trace outside the run\n",
+        "escape-screenshot-manifest.json": json.dumps(
+            {"screenshots": ["../escape-member-via-outside-manifest.png"]}
+        ),
+        "escape-screenshot-member.png": "screenshot outside the run\n",
+        "escape-member-via-outside-manifest.png": "screenshot outside the run\n",
+    }
+    for name, content in outside.items():
+        (store.root / name).write_text(content, encoding="utf-8")
+
+    assert store.verify(finalized) is True
+    rendered = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    assert "data-focus-boundary" not in rendered
+    assert "data-cast=" not in rendered
+    assert "<video controls" not in rendered
+    assert "Open Playwright trace" not in rendered
+    assert '<img loading="lazy"' not in rendered
+    for reference in (
+        "../escape-timeline.jsonl",
+        "../escape-terminal.cast",
+        "../escape-browser.webm",
+        "../escape-trace.zip",
+        "../escape-screenshot-manifest.json",
+        "../escape-screenshot-member.png",
+    ):
+        assert reference in rendered
+
+
 def test_page_names_and_omits_an_exhaust_symlink_that_escapes_the_run(tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("outside the run\n", encoding="utf-8")
