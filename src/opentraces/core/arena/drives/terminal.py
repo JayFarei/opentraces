@@ -7,6 +7,7 @@ import json
 import shlex
 import subprocess
 import threading
+import time
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,6 +111,75 @@ class TerminalDrive:
         self._recording_channels: list[dict[str, Any]] = []
         self._markers: list[dict[str, Any]] = []
         self._pending: list[TerminalAction] = []
+
+    @property
+    def has_pending(self) -> bool:
+        return bool(self._pending)
+
+    def settle_completed(self) -> list[Exception]:
+        """Harvest actions the runtime has already completed, without blocking."""
+
+        errors: list[Exception] = []
+        for pending in list(self._pending):
+            if not pending._future.done():
+                continue
+            try:
+                pending.wait(timeout=0.001)
+            except Exception as exc:
+                errors.append(exc)
+        return errors
+
+    def settle_after_release(self, *, timeout: float) -> list[Exception]:
+        """Boundedly freeze every action after the box stopped its process tree."""
+
+        if timeout <= 0:
+            raise ValueError("terminal settlement timeout must be positive")
+        errors: list[Exception] = []
+        deadline = time.monotonic() + timeout
+        for pending in list(self._pending):
+            remaining = max(0.001, deadline - time.monotonic())
+            try:
+                pending.wait(timeout=remaining)
+            except TimeoutError:
+                message = "terminal action did not settle after its box was released"
+                self._freeze_unsettled(pending, message=message)
+                errors.append(TimeoutError(message))
+            except Exception as exc:
+                errors.append(exc)
+        return errors
+
+    def _freeze_unsettled(self, pending: TerminalAction, *, message: str) -> None:
+        state = pending._state
+        duration_ms = self.actions.duration_ms(state.allocation)
+        self.actions.complete(state.allocation)
+        self.draft.write_text(f"{state.action}/stdout", "")
+        self.draft.write_text(f"{state.action}/stderr", "")
+        self.draft.write_json(f"{state.action}/timing.json", {})
+        self.draft.write_json(
+            state.result_ref,
+            {
+                "execution_status": "error",
+                "returncode": None,
+                "duration_ms": duration_ms,
+                "stdout_ref": f"{state.action}/stdout",
+                "stderr_ref": f"{state.action}/stderr",
+                "timing_ref": f"{state.action}/timing.json",
+                "reason": {
+                    "code": "terminal_settlement_timeout",
+                    "message": message,
+                },
+            },
+        )
+        self._recording_channels.append(
+            {
+                "kind": "terminal",
+                "complete": False,
+                "path": None,
+                "reason": message,
+            }
+        )
+        self.draft.write_json("recordings/playlist.json", {"markers": self._markers})
+        self._pending.remove(pending)
 
     @staticmethod
     def _env_pins(env: Mapping[str, str]) -> dict[str, str]:
