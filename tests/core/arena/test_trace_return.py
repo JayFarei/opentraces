@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import opentraces.core.arena.run_store as run_store_module
 import pytest
 from click.testing import CliRunner
 from opentraces.cli import main
+from opentraces.core import bucket_store, ingest
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 from opentraces.core.arena.trace_return import TraceReturnError, return_run_as_trace
@@ -276,3 +278,31 @@ def test_returned_run_resolves_through_standard_trace_read_verbs(
     assert TRACE_ID in {
         candidate["trace_id"] for candidate in json.loads(queried.output)["candidates"]
     }
+
+
+def test_existing_bucket_writer_callers_keep_the_canonical_source_layer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(
+        ingest,
+        "get_project_dir",
+        lambda _project: SimpleNamespace(name="existing-project"),
+    )
+    monkeypatch.setattr(
+        bucket_store,
+        "write_trace_record",
+        lambda _record, **kwargs: seen.append(kwargs["source_layer"]),
+    )
+    monkeypatch.setattr(bucket_store, "write_raw_source_artifact", lambda *_a, **_k: None)
+
+    ingest.write_trace_to_bucket(
+        SimpleNamespace(trace_id="existing-canonical-trace"),
+        tmp_path,
+        parser_name="claude-code",
+        source_jsonl=tmp_path / "session.jsonl",
+        trace_record_only=True,
+    )
+
+    assert seen == ["canonical"]
