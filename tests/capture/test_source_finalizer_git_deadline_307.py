@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import signal
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from opentraces.capture import Capture, CapturePlan
 from opentraces.core.trails.event_log import append_event_batch
+from opentraces.core.trails._git_subprocess import run_git_bytes_until, run_git_until
 from opentraces.core.trails.models import TrailEventDraft, sha256_text
 
 
@@ -90,6 +92,32 @@ def _seed_event_log(project: Path) -> None:
         ],
         writer="test-307-deadline",
     )
+
+
+def test_deadline_git_runners_preserve_stdin(tmp_path: Path) -> None:
+    """Deadline wrappers must hash the supplied blob, never an empty stdin."""
+    project = _git_project(tmp_path / "project")
+    payload = "deadline runner stdin\n"
+    expected = hashlib.sha1(
+        f"blob {len(payload.encode())}\0{payload}".encode()
+    ).hexdigest()
+    deadline = time.monotonic() + 2.0
+
+    text_result = run_git_until(
+        ["hash-object", "--stdin"],
+        cwd=project,
+        deadline=deadline,
+        input=payload,
+    )
+    binary_result = run_git_bytes_until(
+        ["hash-object", "--stdin"],
+        cwd=project,
+        deadline=deadline,
+        input=payload.encode(),
+    )
+
+    assert text_result.stdout.strip() == expected
+    assert binary_result.stdout.strip().decode() == expected
 
 
 def test_finish_kills_timed_out_git_probe_process_group(
