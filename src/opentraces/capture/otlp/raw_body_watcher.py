@@ -120,6 +120,11 @@ class RawBodyWatcher:
             self._thread.join(timeout=5.0)
             self._thread = None
 
+    def drain(self) -> None:
+        """Synchronously consume any body pairs left after ingress stops."""
+
+        self._scan_once()
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:

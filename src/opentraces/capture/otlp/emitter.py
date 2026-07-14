@@ -60,6 +60,7 @@ class _SessionState:
     # per-llm-request, producing one node per llm-request instead of per turn.
     body_ref_events: list[dict[str, Any]] = field(default_factory=list)
     last_envelope_at: float = field(default_factory=time.time)
+    generation: int = 0
 
 
 class OTLPCaptureBuffer:
@@ -93,6 +94,7 @@ class OTLPCaptureBuffer:
             state = self._sessions.setdefault(
                 result.session_id, _SessionState(session_id=result.session_id)
             )
+            state.generation += 1
             state.last_envelope_at = time.time()
             if result.runtime_state_updates:
                 state.runtime_state.update(result.runtime_state_updates)
@@ -172,6 +174,8 @@ class OTLPCaptureBuffer:
                 "raw_bodies_by_request": {k: dict(v) for k, v in state.raw_bodies_by_request.items()},
                 "body_ref_events": [dict(e) for e in state.body_ref_events],
                 "last_envelope_at": state.last_envelope_at,
+                "snapshot_generation": state.generation,
+                "accepted_envelopes": state.generation,
             }
 
 
@@ -732,6 +736,15 @@ def flush_session_to_project(
         "trace_id": trace_id,
         "layers_count": len(seen_layer_ids),
         "nodes_count": len(nodes),
+        "full_nodes": sum(
+            node.capture_completeness == "full" for node in nodes
+        ),
+        "approximated_nodes": sum(
+            node.capture_completeness == "approximated" for node in nodes
+        ),
+        "stub_nodes": sum(
+            node.capture_completeness == "stub" for node in nodes
+        ),
         "drafts_appended": len(appended),
         "message_blobs_written": blob_report.get("written", 0),
         "message_blobs_deduped": blob_report.get("deduped", 0),
@@ -878,12 +891,19 @@ def _delete_raw_body_pairs(raw_bodies_dir: Path, request_ids: list[str]) -> int:
 
 
 def write_snapshot(
-    buffer: OTLPCaptureBuffer, session_id: str, out_path: Path
+    buffer: OTLPCaptureBuffer,
+    session_id: str,
+    out_path: Path,
+    *,
+    quiescent: bool = False,
 ) -> bool:
     """Dump a session snapshot to JSON. Used by `capture-otlp status --dump`."""
     snap = buffer.snapshot_session(session_id)
     if snap is None:
         return False
+    snap["snapshot_quiescent"] = quiescent
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(snap, indent=2, default=str), encoding="utf-8")
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(snap, indent=2, default=str), encoding="utf-8")
+    tmp.replace(out_path)
     return True

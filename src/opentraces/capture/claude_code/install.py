@@ -138,6 +138,28 @@ def _hook_command(script: str) -> str:
     return f"{shlex.quote(py)} {shlex.quote(script)}"
 
 
+def _is_active_script_command(command: object, expected_script: Path) -> bool:
+    """Return whether ``command`` directly executes the installed hook script."""
+
+    if not isinstance(command, str):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if len(tokens) != 2:
+        return False
+    interpreter = Path(tokens[0]).expanduser()
+    script = Path(tokens[1]).expanduser()
+    interpreter_name = interpreter.name.lower()
+    return (
+        script == expected_script.expanduser()
+        and interpreter.is_file()
+        and os.access(interpreter, os.X_OK)
+        and ("python" in interpreter_name or interpreter_name.startswith("pypy"))
+    )
+
+
 _OWNED_MODULE_PREFIX = "opentraces.capture.claude_code.hooks."
 
 
@@ -325,7 +347,8 @@ def status(
         except HookInstallError:
             settings = {}
         hooks_cfg = settings.get("hooks") or {}
-        for event in EVENT_SCRIPTS:
+        for event, name in EVENT_SCRIPTS.items():
+            expected_script = th / f"opentraces_{name}"
             for entry in hooks_cfg.get(event) or []:
                 inner = entry.get("hooks") if isinstance(entry, dict) else None
                 cmds: list[str] = []
@@ -333,7 +356,7 @@ def status(
                     cmds = [h.get("command", "") for h in inner if isinstance(h, dict)]
                 elif isinstance(entry, dict):
                     cmds = [entry.get("command", "")]
-                if any("opentraces_" in c for c in cmds):
+                if any(_is_active_script_command(c, expected_script) for c in cmds):
                     registered[event] = True
                     break
 
@@ -358,6 +381,43 @@ def status(
         "hooks_dir": str(th),
         "settings_file": str(ts),
     }
+
+
+def registered_hook_commands(
+    hooks_dir: Path | None = None,
+    settings_file: Path | None = None,
+) -> tuple[str, ...]:
+    """Return the commands from one complete, observed production install.
+
+    This is read-only: portable Capture uses it to report the persistent
+    adapter actually present on the machine, never a command merely planned
+    by the current package.
+    """
+
+    th, ts = _resolve_paths(hooks_dir, settings_file)
+    observed = status(th, ts)
+    if observed.get("installed") is not True:
+        return ()
+    try:
+        settings = _load_settings(ts)
+    except HookInstallError:
+        return ()
+    hooks_cfg = settings.get("hooks") or {}
+    commands: list[str] = []
+    for event, name in EVENT_SCRIPTS.items():
+        expected_script = th / f"opentraces_{name}"
+        for entry in hooks_cfg.get(event) or []:
+            inner = entry.get("hooks") if isinstance(entry, dict) else None
+            rows = inner if isinstance(inner, list) else [entry]
+            for row in rows:
+                command = row.get("command") if isinstance(row, dict) else None
+                if _is_active_script_command(command, expected_script):
+                    commands.append(command)
+                    break
+            else:
+                continue
+            break
+    return tuple(commands) if len(commands) == len(EVENT_SCRIPTS) else ()
 
 
 @dataclass

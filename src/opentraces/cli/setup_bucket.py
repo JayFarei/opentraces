@@ -20,11 +20,13 @@ from ._options import dump_json as _dump_json
 from ._security_flags import (
     BUCKET_SECURITY_POLICIES,
     RECOMMENDED_BUCKET_SECURITY_TOOLS,
-    SECURITY_TOOL_NAMES,
     apply_bucket_security_policy,
+    security_tool_state_payload,
+)
+from ..security.config import (
+    SECURITY_TOOL_NAMES,
     apply_security_tool_flag_changes,
     enabled_security_tool_names,
-    security_tool_state_payload,
     set_security_tools_exact,
 )
 from .installers import setup_group, _wizard_confirm

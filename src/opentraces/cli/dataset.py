@@ -17,7 +17,7 @@ from ._options import dump_json as _dump_json
 from opentraces_schema import DatasetSecurityPolicy
 
 from ..security.dataset_rows import DATASET_ROW_FLOOR
-from ._security_flags import SECURITY_TOOL_NAMES
+from ..security.config import SECURITY_TOOL_NAMES
 from ..core.datasets import (
     add_dataset_remote,
     apply_dataset_security_edit,
