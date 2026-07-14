@@ -237,11 +237,7 @@ def test_version_drift_is_a_loud_named_refusal(tmp_path: Path) -> None:
             _completed(
                 ["crabbox", "inspect"],
                 stdout=json.dumps(
-                    {
-                        key: value
-                        for key, value in json.loads(_inspect()).items()
-                        if key != "sshKey"
-                    }
+                    {key: value for key, value in json.loads(_inspect()).items() if key != "sshKey"}
                 ),
             ),
             "lease_inspect_incomplete",
@@ -297,9 +293,7 @@ def test_cleanup_failure_keeps_inspect_refusal_primary_and_records_stop_diagnost
         runtime.lease()
 
     assert caught.value.code == "lease_inspect_invalid"
-    stop_diagnostics = [
-        row for row in runtime.diagnostic_records() if row["operation"] == "stop"
-    ]
+    stop_diagnostics = [row for row in runtime.diagnostic_records() if row["operation"] == "stop"]
     assert len(stop_diagnostics) == 1
     assert stop_diagnostics[0]["returncode"] == 1
     assert stop_diagnostics[0]["stderr"] == "cleanup failed\n"
@@ -424,7 +418,10 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
         if operation == "inspect":
             return _completed(list(argv), stdout=_inspect())
         if operation == "run":
-            return _completed(list(argv), stdout="/usr/bin/python3\n/usr/bin/git\n/usr/bin/curl\n/usr/bin/script\n")
+            return _completed(
+                list(argv),
+                stdout="/usr/bin/python3\n/usr/bin/git\n/usr/bin/curl\n/usr/bin/script\n",
+            )
         return _completed(list(argv))
 
     from opentraces.core.arena.engine import Bench, ScenarioSource
@@ -454,14 +451,18 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
     with bench.run(app_state="base-only") as run:
         run.verify(condition_holds)
 
-    timing_artifacts = [item for item in run.result["artifacts"] if item["kind"] == "crabbox_timing"]
-    assert timing_artifacts
-    assert run.result["pins"]["app_state"]["observation_refs"] == [
-        timing_artifacts[0]["path"]
+    timing_artifacts = [
+        item for item in run.result["artifacts"] if item["kind"] == "crabbox_timing"
     ]
+    assert timing_artifacts
+    assert set(run.result["pins"]["app_state"]["observation_refs"]) == {
+        artifact["path"] for artifact in timing_artifacts
+    }
     timing = json.loads((run.final_path / timing_artifacts[0]["path"]).read_text())
     assert timing["timing"] == {"exitCode": 0, "elapsedMs": 8}
-    serialized = json.dumps(run.result) + (run.final_path / "artifacts/box-lifecycle.json").read_text()
+    serialized = (
+        json.dumps(run.result) + (run.final_path / "artifacts/box-lifecycle.json").read_text()
+    )
     assert "top-secret-token" not in serialized
     assert "/Users/private/source" not in serialized
     assert "/tmp/key" not in serialized
@@ -583,21 +584,90 @@ def test_product_exec_uses_a_dedicated_home_and_writable_recording_workspace(
         [
             "sh",
             "-c",
+            'test "$(id -u)" -ne 0 && ! sudo -n true && '
             'test -w "$HOME" && test -w bench-recordings && '
             "opentraces dataset new scenario-2 --rows-file /tmp/rows.jsonl",
         ],
-        env={"HF_ENDPOINT": "http://127.0.0.1:14318"},
+        env={
+            "BASH_ENV": "/home/opentraces-product/product-shell-startup",
+            "HF_ENDPOINT": "http://127.0.0.1:14318",
+            "OPENAI_API_KEY": "ordinary-model-secret",
+            "PYTHONPATH": "/home/opentraces-product/scenario-modules",
+        },
         timing_path=timing,
     )
 
     command = runner.calls[0][0]
     rendered = " ".join(command)
     assert result.returncode == 0
-    assert "--allow-env HF_ENDPOINT" in rendered
-    assert "sudo install -d" in rendered
-    assert '"$PWD/bench-recordings"' in rendered
-    assert "sudo -H -u opentraces-product" in rendered
+    assert (
+        "--allow-env BASH_ENV --allow-env HF_ENDPOINT --allow-env OPENAI_API_KEY "
+        "--allow-env PYTHONPATH" in rendered
+    )
+    product_start = command.index("/usr/bin/sudo")
+    assert command[product_start:] == [
+        "/usr/bin/sudo",
+        "-H",
+        "-u",
+        "opentraces-product",
+        "--preserve-env=BASH_ENV,HF_ENDPOINT,OPENAI_API_KEY,PYTHONPATH",
+        "--",
+        "sh",
+        "-c",
+        'test "$(id -u)" -ne 0 && ! sudo -n true && '
+        'test -w "$HOME" && test -w bench-recordings && '
+        "opentraces dataset new scenario-2 --rows-file /tmp/rows.jsonl",
+    ]
+    assert "sh -c set -eu" not in rendered
     assert "opentraces dataset new scenario-2" in rendered
+    assert "http://127.0.0.1:14318" not in rendered
+    assert "ordinary-model-secret" not in rendered
+    assert "/home/opentraces-product/product-shell-startup" not in rendered
+    assert "/home/opentraces-product/scenario-modules" not in rendered
+    assert "http://127.0.0.1:14318" not in json.dumps(runtime.diagnostic_records())
+    assert "ordinary-model-secret" not in json.dumps(runtime.diagnostic_records())
+    assert "/home/opentraces-product/product-shell-startup" not in json.dumps(
+        runtime.diagnostic_records()
+    )
+    assert "/home/opentraces-product/scenario-modules" not in json.dumps(
+        runtime.diagnostic_records()
+    )
+
+
+@pytest.mark.parametrize(
+    "unsafe_name",
+    ["PATH", "HOME", "USER", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "SUDO_ASKPASS"],
+)
+def test_product_exec_rejects_shell_startup_environment_before_controller_launch(
+    tmp_path: Path,
+    unsafe_name: str,
+) -> None:
+    marker = tmp_path / "controller-marker"
+    hostile_value = f"{marker}; touch {marker}"
+    runner = ScriptedRunner([])
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path)
+    box = Box(
+        id="cbx_abc123",
+        slug="steady-crab",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="32222",
+        ssh_key="/tmp/key",
+    )
+
+    with pytest.raises(ValueError, match="unsafe product environment"):
+        runtime.exec_product(
+            box,
+            ["opentraces", "dataset", "list"],
+            env={unsafe_name: hostile_value},
+            timing_path=tmp_path / "hostile-timing.json",
+        )
+
+    assert runner.calls == []
+    assert not marker.exists()
+    assert hostile_value not in json.dumps(runtime.diagnostic_records())
 
 
 def test_collect_safely_falls_back_when_tarfile_extraction_filters_are_unavailable(

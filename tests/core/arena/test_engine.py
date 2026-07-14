@@ -273,12 +273,8 @@ def test_terminal_timeout_persists_complete_failure_exhaust_and_page_before_prop
 
     final_path = next(bench.store.root.glob("run_*"))
     action = final_path / "actions" / "0001"
-    assert (action / "stdout").read_text(encoding="utf-8") == (
-        "partial stdout before timeout\n"
-    )
-    assert (action / "stderr").read_text(encoding="utf-8") == (
-        "partial stderr before timeout\n"
-    )
+    assert (action / "stdout").read_text(encoding="utf-8") == ("partial stdout before timeout\n")
+    assert (action / "stderr").read_text(encoding="utf-8") == ("partial stderr before timeout\n")
     assert json.loads((action / "timing.json").read_text(encoding="utf-8")) == {
         "schemaVersion": 1,
         "timing": {"commandMs": 250, "exitCode": None},
@@ -431,7 +427,9 @@ def test_release_failure_is_always_diagnostic_without_rewriting_primary_outcome(
     assert result["execution_status"] == execution_status
     assert result["verdict"] == verdict
     assert result["reason"]["code"] == reason_code
-    diagnostic = next(item for item in result["artifacts"] if item["kind"] == "lifecycle_diagnostics")
+    diagnostic = next(
+        item for item in result["artifacts"] if item["kind"] == "lifecycle_diagnostics"
+    )
     payload = json.loads((final_path / diagnostic["path"]).read_text(encoding="utf-8"))
     assert payload["events"][-1]["code"] == "release_failed"
 
@@ -685,9 +683,7 @@ def test_assertion_failure_is_a_functional_fail_not_machinery_error(tmp_path: Pa
     assert result["verdict"] == "fail"
     assert result["reason"]["code"] == "assertion_failed"
     assert result["verifiers"] == []
-    artifact = next(
-        item for item in result["artifacts"] if item["kind"] == "assertion_failure"
-    )
+    artifact = next(item for item in result["artifacts"] if item["kind"] == "assertion_failure")
     observed = json.loads((run.final_path / artifact["path"]).read_text())
     assert observed["type"] == "AssertionError"
     assert observed["location"]["path"]

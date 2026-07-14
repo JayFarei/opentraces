@@ -20,6 +20,12 @@ source_archive_sha256=1b7bf14b50d7101274e0bb5f05e1b453631b81c97373802dc5270d9508
 $ <install exact project wheels and pinned Hub clients inside lease>
 Successfully installed opentraces-0.4.9 opentraces-schema-0.9.0 huggingface-hub-1.10.2 hf-xet-1.4.3
 
+Base install-only app-state digest (before the emulator pin is folded in):
+sha256:632376d019e9e00e227903f375edc55cfdc6bc02961d436b8fe6f07bdf7c4185
+
+Final binary-inclusive app-state digest recorded by the happy run:
+sha256:7634a71febcba9d9c675afb0de9330afbac2964a44228fad24dbb5c3c835a7cd
+
 $ python3 -c '<print installed contract package versions>'
 {"hf-xet": "1.4.3", "huggingface-hub": "1.10.2"}
 

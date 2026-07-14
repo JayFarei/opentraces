@@ -15,16 +15,23 @@
     "sandbox_tier": "container"
   },
   "app_state": {
-    "name": "install-only",
-    "digest": "sha256:632376d019e9e00e227903f375edc55cfdc6bc02961d436b8fe6f07bdf7c4185",
-    "dependencies": {
-      "huggingface-hub": "1.10.2",
-      "hf-xet": "1.4.3"
+    "base": {
+      "name": "install-only",
+      "digest": "sha256:632376d019e9e00e227903f375edc55cfdc6bc02961d436b8fe6f07bdf7c4185",
+      "dependencies": {
+        "huggingface-hub": "1.10.2",
+        "hf-xet": "1.4.3"
+      },
+      "wheel_sha256": [
+        "3122c6db3c8856d6756e9711157d491d11f233eda6298d21b1172b2cf5dd6be2",
+        "af63003242b1e648cc9920f37c9d2a5504423bf47a9ecd1748cb2719eee19821"
+      ]
     },
-    "wheel_sha256": [
-      "3122c6db3c8856d6756e9711157d491d11f233eda6298d21b1172b2cf5dd6be2",
-      "af63003242b1e648cc9920f37c9d2a5504423bf47a9ecd1748cb2719eee19821"
-    ]
+    "with_huggingface": {
+      "name": "install-only",
+      "digest": "sha256:7634a71febcba9d9c675afb0de9330afbac2964a44228fad24dbb5c3c835a7cd",
+      "emulator_sha256": "0e02960c92d91732a6039566cedd31ed1e26d216b7c597e2d2abe72aac1ba1da"
+    }
   },
   "binary": {
     "provenance": "verified",

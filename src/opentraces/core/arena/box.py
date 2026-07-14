@@ -23,6 +23,24 @@ PINNED_LOCAL_IMAGE = "ubuntu:24.04"
 PINNED_HF_HUB_VERSION = "1.10.2"
 PINNED_HF_XET_VERSION = "1.4.3"
 DEFAULT_PROVIDER = "local-container"
+PRODUCT_USER = "opentraces-product"
+PRODUCT_SUDO = "/usr/bin/sudo"
+PRODUCT_ENV_DENY_EXACT = frozenset(
+    {
+        "HOME",
+        "LOGNAME",
+        "PATH",
+        "SHELL",
+        "USER",
+    }
+)
+PRODUCT_ENV_DENY_PREFIXES = ("DYLD_", "LD_", "SUDO_")
+HF_CLIENT_LOCK_PATH = Path(__file__).parent / "emulate" / "huggingface" / "client-lock.json"
+
+
+def _unsafe_product_env_name(name: str) -> bool:
+    return name in PRODUCT_ENV_DENY_EXACT or name.startswith(PRODUCT_ENV_DENY_PREFIXES)
+
 
 VERSION_REAUDIT = (
     "re-audit warmup/run/checkpoint flags, the explicit image default, inspect JSON, "
@@ -130,6 +148,36 @@ def _operation_name(argv: Sequence[str]) -> str:
     if len(argv) > 1 and argv[0] == "crabbox":
         return str(argv[1]).lstrip("-") or "version"
     return Path(str(argv[0])).name
+
+
+def _hf_client_lock() -> tuple[dict[str, str], str]:
+    try:
+        encoded = HF_CLIENT_LOCK_PATH.read_bytes()
+        value = json.loads(encoded)
+        packages = value["packages"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise CrabboxRefusal(
+            "app_state_dependency_lock_invalid",
+            "the committed HF client environment lock is missing or invalid",
+        ) from exc
+    if not isinstance(packages, Mapping) or not all(
+        isinstance(name, str) and isinstance(version, str) for name, version in packages.items()
+    ):
+        raise CrabboxRefusal(
+            "app_state_dependency_lock_invalid",
+            "the committed HF client environment lock has invalid package entries",
+        )
+    normalized = {str(name): str(version) for name, version in sorted(packages.items())}
+    required = {
+        "huggingface-hub": PINNED_HF_HUB_VERSION,
+        "hf-xet": PINNED_HF_XET_VERSION,
+    }
+    if any(normalized.get(name) != version for name, version in required.items()):
+        raise CrabboxRefusal(
+            "app_state_dependency_lock_invalid",
+            "the committed HF client environment lock disagrees with the client pins",
+        )
+    return normalized, f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _subprocess_runner(
@@ -486,6 +534,68 @@ class CrabboxRuntime:
             timing=timing,
         )
 
+    def exec_product(
+        self,
+        box: Box,
+        argv: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float = 60,
+        timing_path: Path,
+    ) -> BoxCommandResult:
+        """Execute one public-drive action as the non-sudo product identity."""
+
+        environment = {str(name): str(value) for name, value in (env or {}).items()}
+        invalid = [
+            name for name in environment if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+        ]
+        if invalid:
+            raise ValueError(f"invalid product environment name: {invalid[0]!r}")
+        unsafe = sorted(name for name in environment if _unsafe_product_env_name(name))
+        if unsafe:
+            raise ValueError(f"unsafe product environment: {unsafe[0]!r}")
+        product_argv = [PRODUCT_SUDO, "-H", "-u", PRODUCT_USER]
+        if environment:
+            product_argv.append(f"--preserve-env={','.join(sorted(environment))}")
+        product_argv.extend(["--", *map(str, argv)])
+        return self.exec(
+            box,
+            product_argv,
+            cwd=cwd,
+            env=environment,
+            timeout=timeout,
+            timing_path=timing_path,
+        )
+
+    def _prepare_product_identity(self, box: Box, *, repository: Path) -> str | None:
+        timing = self._timing_path(repository, "product-identity")
+        prepared = self.exec(
+            box,
+            [
+                "sh",
+                "-c",
+                "set -eu; "
+                f"if ! id -u {PRODUCT_USER} >/dev/null 2>&1; then "
+                f"sudo useradd --create-home --home-dir /home/{PRODUCT_USER} "
+                f"--shell /bin/sh {PRODUCT_USER}; fi; "
+                f'test "$(id -u {PRODUCT_USER})" -ne 0; '
+                f"sudo -u {PRODUCT_USER} test -w /home/{PRODUCT_USER}; "
+                f"sudo install -d -m 0755 -o {PRODUCT_USER} -g {PRODUCT_USER} "
+                '"$PWD/bench-recordings"; '
+                f"if sudo -u {PRODUCT_USER} sudo -n true >/dev/null 2>&1; then exit 1; fi",
+            ],
+            cwd=repository,
+            timeout=30,
+            timing_path=timing,
+        )
+        if prepared.returncode != 0:
+            raise CrabboxRefusal(
+                "product_identity_invalid",
+                "the dedicated product identity is missing, non-writable, or sudo-capable",
+            )
+        return self._evidence_ref(timing)
+
     def copy_into_box(
         self,
         box: Box,
@@ -563,15 +673,20 @@ class CrabboxRuntime:
             )
             if probe.returncode != 0:
                 raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
-            material = f"{box.provider}\n{self.image}\npython3\ngit\ncurl\nscript\n"
+            identity_ref = self._prepare_product_identity(box, repository=repository)
+            material = (
+                f"{box.provider}\n{self.image}\npython3\ngit\ncurl\nscript\n"
+                f"product_user={PRODUCT_USER}\nproduct_sudo=false\n"
+            )
             pin = {
                 "name": app_state,
                 "digest": f"sha256:{hashlib.sha256(material.encode()).hexdigest()}",
                 "provides": ["python3", "git", "curl", "script"],
             }
             timing_ref = self._evidence_ref(timing_path)
-            if timing_ref is not None:
-                pin["observation_refs"] = [timing_ref]
+            observation_refs = [ref for ref in (timing_ref, identity_ref) if ref is not None]
+            if observation_refs:
+                pin["observation_refs"] = observation_refs
             return pin
         if app_state != "install-only":
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
@@ -589,6 +704,10 @@ class CrabboxRuntime:
             remote = f"/tmp/{wheel.name}"
             self.copy_into_box(box, wheel, remote, timeout=120)
             remote_wheels.append(remote)
+        dependency_lock, dependency_lock_sha256 = _hf_client_lock()
+        locked_requirements = " ".join(
+            shlex.quote(f"{name}=={version}") for name, version in dependency_lock.items()
+        )
         timing = self._timing_path(repository, "materialize")
         install = self.exec(
             box,
@@ -597,10 +716,9 @@ class CrabboxRuntime:
                 "-c",
                 "set -eu; sudo apt-get update >/dev/null; "
                 "sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip >/dev/null; "
-                f"sudo python3 -m pip install --break-system-packages "
+                f"sudo python3 -m pip install --break-system-packages --no-deps "
                 f"{' '.join(map(shlex.quote, remote_wheels))} "
-                f"huggingface-hub=={PINNED_HF_HUB_VERSION} "
-                f"hf-xet=={PINNED_HF_XET_VERSION}",
+                f"{locked_requirements}",
             ],
             timeout=600,
             timing_path=timing,
@@ -617,6 +735,7 @@ class CrabboxRuntime:
         if probe.returncode != 0:
             raise CrabboxRefusal("app_state_provides_missing", probe.stderr.strip())
         dependency_timing = self._timing_path(repository, "dependencies")
+        package_names = json.dumps(sorted(dependency_lock))
         dependency_probe = self.exec(
             box,
             [
@@ -624,8 +743,8 @@ class CrabboxRuntime:
                 "-c",
                 (
                     "import importlib.metadata as m,json; "
-                    "print(json.dumps({'huggingface-hub':m.version('huggingface-hub'),"
-                    "'hf-xet':m.version('hf-xet')},sort_keys=True))"
+                    f"names=json.loads({package_names!r}); "
+                    "print(json.dumps({name:m.version(name) for name in names},sort_keys=True))"
                 ),
             ],
             timeout=30,
@@ -638,18 +757,18 @@ class CrabboxRuntime:
                 "app_state_dependency_probe_failed",
                 "installed HF client versions were not observable",
             ) from exc
-        expected_dependencies = {
-            "huggingface-hub": PINNED_HF_HUB_VERSION,
-            "hf-xet": PINNED_HF_XET_VERSION,
-        }
+        expected_dependencies = dependency_lock
         if dependency_probe.returncode != 0 or dependencies != expected_dependencies:
             raise CrabboxRefusal(
                 "app_state_dependency_mismatch",
                 f"expected {expected_dependencies}, observed {dependencies}",
             )
+        identity_ref = self._prepare_product_identity(box, repository=repository)
         recipe = {
             "wheel_sha256": digests,
             "dependencies": expected_dependencies,
+            "dependency_lock_sha256": dependency_lock_sha256,
+            "execution_identity": {"user": PRODUCT_USER, "sudo": False},
         }
         app_digest = hashlib.sha256(
             json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
@@ -667,6 +786,7 @@ class CrabboxRuntime:
                 self._evidence_ref(timing),
                 self._evidence_ref(provides_timing),
                 self._evidence_ref(dependency_timing),
+                identity_ref,
             )
             if ref is not None
         ]

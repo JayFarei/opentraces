@@ -29,9 +29,11 @@ Re-run the derivation after either pin changes.
 
 The path-scoped `Hugging Face emulator contract` workflow provisions Bun
 1.3.6 and installs `huggingface-hub==1.10.2` plus `hf-xet==1.4.3` explicitly.
-The real `install-only` materializer installs and probes those same exact
-versions inside the lease, then includes the observed dependency map in the
-app-state recipe and digest.
+The real `install-only` materializer installs the complete exact environment in
+`client-lock.json` with dependency resolution disabled, probes every locked
+distribution inside the lease, and includes both the full observed map and the
+lock-file digest in the app-state recipe and digest. Changing any transitive
+package therefore changes app-state identity rather than silently reusing it.
 The tests assert those installed versions and fail when neither Bun nor a
 precompiled emulator is available. Only a leased runtime-free box may opt into
 the single, explicit compiled-build skip with `OPENTRACES_RUNTIME_FREE_BOX=1`.
@@ -48,11 +50,29 @@ declared in the readiness manifest and tested through the real client before
 the emulator pin changes.
 
 Every compiled binary has a sibling build-provenance record binding its SHA,
-source SHA, Bun version, target, and contract version. A configured or cached
-binary is refused unless that record matches the current build inputs. Inside
-the lease, the sidecar runs as the dedicated `opentraces-hf` user and writes
-its ledger outside the product workspace; a product-user write probe must fail
-before readiness. The runner freezes the ledger through the sidecar's
-read-only endpoint before stopping it and stores the complete manifest,
-baseline identity, seeded state, endpoint, and capability classes under
+source SHA, Bun version, target, and contract version. That self-description is
+necessary but not sufficient: a configured or cached binary is accepted only
+when it also matches the repository-controlled `trusted-build.json`, whose
+current digest came from the retained real-box build. After a source or
+toolchain change, regenerate both from one actual compile by calling
+`build_hf_emulator_binary(output, update_trusted_manifest=True)`, review the
+manifest diff, and attach a new real-box proof before merge. Normal bench runs
+can never update the trusted manifest.
+
+Inside the lease, privileged setup remains on the controller identity. Public
+terminal actions run as the dedicated non-sudo `opentraces-product` account
+with its own writable home and recording directory; the sidecar separately runs
+as `opentraces-hf` and writes its 0600 ledger outside both product locations.
+The public drive enters through absolute `/usr/bin/sudo` with no controller
+shell before the identity drop. Ordinary scenario variables and credentials
+remain supported, but controller-sensitive environment names are refused:
+`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, and every `LD_*`, `DYLD_*`, and
+`SUDO_*` name. Shell and language startup variables such as `BASH_ENV` and
+`PYTHONPATH` remain supported because their consumer starts only after the
+identity drop. Values remain ambient and appear only as hashes in run evidence,
+never in command argv or lifecycle diagnostics.
+The runner permits live verifier snapshots to refresh, then takes one final
+ledger snapshot while the sidecar is still running immediately before stop.
+Only post-stop reads use the cached final copy. The complete manifest, baseline
+identity, seeded state, endpoint, and capability classes remain under
 `world/huggingface.json`.

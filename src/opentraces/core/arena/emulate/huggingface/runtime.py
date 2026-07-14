@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 import shutil
@@ -12,8 +13,9 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Iterator, Mapping, Protocol
 
 
 BUN_VERSION = "1.3.6"
@@ -27,6 +29,11 @@ LEDGER_EVIDENCE_REF = "ledgers/huggingface.jsonl"
 WORLD_EVIDENCE_REF = "world/huggingface.json"
 BASELINE_TOKEN = "hf_bench_user_token"
 PROVENANCE_SCHEMA = "opentraces.hf-emulator-build.v1"
+TRUSTED_BUILD_SCHEMA = "opentraces.hf-emulator-trusted-build.v1"
+TRUSTED_BUILD_MANIFEST = SERVER_SOURCE.with_name("trusted-build.json")
+BUILD_TIMEOUT_SECONDS = 120.0
+BUILD_LOCK_TIMEOUT_SECONDS = BUILD_TIMEOUT_SECONDS + 10.0
+BUILD_WORK_ROOT = Path("/tmp/opentraces-hf-build-v1")
 
 
 class EmulatorReadinessError(RuntimeError):
@@ -46,7 +53,7 @@ class EmulatorBinaryPin:
     build_inputs_sha256: str | None = None
     provenance: str = "unverified"
 
-    def to_dict(self) -> dict[str, str | int]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -78,15 +85,29 @@ def emulator_provenance_path(binary: Path) -> Path:
     return binary.with_name(f"{binary.name}.provenance.json")
 
 
+def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"HF emulator {label} is missing or invalid") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"HF emulator {label} is not an object")
+    return value
+
+
+def _trusted_build_record() -> dict[str, Any]:
+    record = _read_json_object(TRUSTED_BUILD_MANIFEST, label="trusted build manifest")
+    if record.get("schema_version") != TRUSTED_BUILD_SCHEMA:
+        raise RuntimeError("HF emulator trusted build manifest has the wrong schema")
+    return record
+
+
 def verified_emulator_binary_pin(path: Path) -> EmulatorBinaryPin:
     """Return a pin only when the binary matches the frozen build inputs."""
 
     pin = emulator_binary_pin(path)
     provenance_path = emulator_provenance_path(path)
-    try:
-        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("HF emulator binary provenance is missing or invalid") from exc
+    provenance = _read_json_object(provenance_path, label="binary provenance")
     expected_inputs = _build_inputs()
     expected = {
         "schema_version": PROVENANCE_SCHEMA,
@@ -97,6 +118,18 @@ def verified_emulator_binary_pin(path: Path) -> EmulatorBinaryPin:
     }
     if provenance != expected:
         raise RuntimeError("HF emulator binary provenance does not match build inputs")
+    trusted = _trusted_build_record()
+    trusted_expected = {
+        "binary_sha256": pin.sha256,
+        "size_bytes": pin.size_bytes,
+        "source_sha256": expected_inputs["source_sha256"],
+        "build_inputs_sha256": expected["build_inputs_sha256"],
+        "bun_version": BUN_VERSION,
+        "target": COMPILE_TARGET,
+        "contract_version": "huggingface.v1",
+    }
+    if any(trusted.get(name) != value for name, value in trusted_expected.items()):
+        raise RuntimeError("HF emulator binary does not match the repository trusted build")
     return EmulatorBinaryPin(
         sha256=pin.sha256,
         size_bytes=pin.size_bytes,
@@ -146,38 +179,119 @@ def app_state_pin(
     }
 
 
-def build_hf_emulator_binary(output: Path) -> EmulatorBinaryPin:
-    """Compile the sidecar with the exact toolchain and target pins."""
+def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as temporary:
+        temporary.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        temporary_path = Path(temporary.name)
+    os.replace(temporary_path, path)
 
-    bunx = shutil.which("bunx")
-    if bunx is None:
-        raise RuntimeError("bunx is required to build the Hugging Face emulator")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            bunx,
-            f"bun@{BUN_VERSION}",
-            "build",
-            str(SERVER_SOURCE),
-            "--compile",
-            f"--target={COMPILE_TARGET}",
-            f"--outfile={output}",
-        ],
-        check=True,
-    )
-    pin = emulator_binary_pin(output)
-    provenance = {
+
+def _provenance_for_binary(path: Path) -> dict[str, Any]:
+    pin = emulator_binary_pin(path)
+    return {
         "schema_version": PROVENANCE_SCHEMA,
         **_build_inputs(),
         "build_inputs_sha256": _build_inputs_sha256(),
         "binary_sha256": pin.sha256,
         "size_bytes": pin.size_bytes,
     }
-    emulator_provenance_path(output).write_text(
-        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+
+
+def build_hf_emulator_binary(
+    output: Path,
+    *,
+    update_trusted_manifest: bool = False,
+) -> EmulatorBinaryPin:
+    """Compile the sidecar with the exact toolchain and target pins."""
+
+    bunx = shutil.which("bunx")
+    if bunx is None:
+        raise RuntimeError("bunx is required to build the Hugging Face emulator")
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    workspace = BUILD_WORK_ROOT / _build_inputs_sha256()
+    workspace.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if workspace.stat().st_uid != os.getuid():
+        raise RuntimeError("HF emulator deterministic build workspace has the wrong owner")
+    with _exclusive_build_lock(workspace / ".compile.lock"):
+        candidate = workspace / "opentraces-hf-emulator"
+        candidate_provenance = emulator_provenance_path(candidate)
+        candidate.unlink(missing_ok=True)
+        candidate_provenance.unlink(missing_ok=True)
+        subprocess.run(
+            [
+                bunx,
+                f"bun@{BUN_VERSION}",
+                "build",
+                str(SERVER_SOURCE),
+                "--compile",
+                f"--target={COMPILE_TARGET}",
+                f"--outfile={candidate}",
+            ],
+            check=True,
+            timeout=BUILD_TIMEOUT_SECONDS,
+        )
+        provenance = _provenance_for_binary(candidate)
+        _write_json_atomic(candidate_provenance, provenance)
+        if not update_trusted_manifest:
+            verified_emulator_binary_pin(candidate)
+        with tempfile.NamedTemporaryFile(
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_binary:
+            temporary_binary.write(candidate.read_bytes())
+            temporary_binary_path = Path(temporary_binary.name)
+        temporary_binary_path.chmod(0o755)
+        temporary_provenance = output.parent / f".{output.name}.provenance.tmp"
+        temporary_provenance.write_bytes(candidate_provenance.read_bytes())
+        os.replace(temporary_binary_path, output)
+        os.replace(temporary_provenance, emulator_provenance_path(output))
+    if update_trusted_manifest:
+        provenance = _read_json_object(emulator_provenance_path(output), label="binary provenance")
+        _write_json_atomic(
+            TRUSTED_BUILD_MANIFEST,
+            {
+                "schema_version": TRUSTED_BUILD_SCHEMA,
+                "binary_sha256": provenance["binary_sha256"],
+                "size_bytes": provenance["size_bytes"],
+                "source_sha256": provenance["source_sha256"],
+                "build_inputs_sha256": provenance["build_inputs_sha256"],
+                "bun_version": provenance["bun_version"],
+                "target": provenance["target"],
+                "contract_version": provenance["contract_version"],
+                "evidence": "actual pinned build; attach a new real-box proof before merge",
+            },
+        )
     return verified_emulator_binary_pin(output)
+
+
+@contextmanager
+def _exclusive_build_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + BUILD_LOCK_TIMEOUT_SECONDS
+    with path.open("a+", encoding="utf-8") as lock:
+        while True:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("timed out waiting for the HF emulator build cache lock")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def wait_for_hf_emulator(
@@ -302,6 +416,7 @@ class HuggingFaceEmulator:
         self.ledger = HuggingFaceLedger(self)
         self._stopped = False
         self._ledger_path: Path | None = None
+        self._ledger_finalized = False
 
     @property
     def pin(self) -> dict[str, Any]:
@@ -314,7 +429,7 @@ class HuggingFaceEmulator:
     def stop(self) -> None:
         if self._stopped:
             return
-        self.snapshot_ledger()
+        self.snapshot_ledger(final=True)
         timing = self.run_path / "artifacts" / "crabbox-timing" / "hf-stop.json"
         stopped = self.runtime.exec(
             self.box,
@@ -333,8 +448,10 @@ class HuggingFaceEmulator:
             raise RuntimeError("Hugging Face emulator did not stop cleanly")
         self._stopped = True
 
-    def snapshot_ledger(self) -> Path:
-        if self._ledger_path is not None:
+    def snapshot_ledger(self, *, final: bool = False) -> Path:
+        if self._stopped or self._ledger_finalized:
+            if self._ledger_path is None:
+                raise RuntimeError("Hugging Face emulator stopped without a ledger snapshot")
             return self._ledger_path
         target = self.run_path / LEDGER_EVIDENCE_REF
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -343,14 +460,15 @@ class HuggingFaceEmulator:
             ["curl", "-fsS", f"{self.env['HF_ENDPOINT']}/_emulate/ledger"],
             cwd=self.repository,
             timeout=30,
-            timing_path=(
-                self.run_path / "artifacts" / "crabbox-timing" / "hf-ledger.json"
-            ),
+            timing_path=(self.run_path / "artifacts" / "crabbox-timing" / "hf-ledger.json"),
         )
         if observed.returncode != 0:
             raise RuntimeError("Hugging Face emulator ledger could not be collected")
-        target.write_text(observed.stdout, encoding="utf-8")
+        temporary = target.with_name(f".{target.name}.tmp")
+        temporary.write_text(observed.stdout, encoding="utf-8")
+        os.replace(temporary, target)
         self._ledger_path = target
+        self._ledger_finalized = final
         return target
 
 
@@ -370,9 +488,12 @@ def _binary_for_run() -> Path:
         / build_digest
         / "opentraces-hf-emulator"
     )
-    if not binary.is_file() or not emulator_provenance_path(binary).is_file():
-        build_hf_emulator_binary(binary)
-    verified_emulator_binary_pin(binary)
+    with _exclusive_build_lock(binary.parent / ".build.lock"):
+        try:
+            verified_emulator_binary_pin(binary)
+        except (OSError, RuntimeError):
+            build_hf_emulator_binary(binary)
+        verified_emulator_binary_pin(binary)
     return binary
 
 
@@ -423,14 +544,11 @@ def start_huggingface_emulator(
         [
             "sh",
             "-c",
-            f"if printf CUSTODY_PROBE >> {REMOTE_LEDGER} 2>/dev/null; "
-            "then exit 1; else exit 0; fi",
+            f"if printf CUSTODY_PROBE >> {REMOTE_LEDGER} 2>/dev/null; then exit 1; else exit 0; fi",
         ],
         cwd=repository,
         timeout=30,
-        timing_path=(
-            run_path / "artifacts" / "crabbox-timing" / "hf-custody-probe.json"
-        ),
+        timing_path=(run_path / "artifacts" / "crabbox-timing" / "hf-custody-probe.json"),
     )
     if custody_probe.returncode != 0:
         raise RuntimeError("product user can write the Hugging Face witness ledger")

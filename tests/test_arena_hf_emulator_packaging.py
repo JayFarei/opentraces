@@ -80,8 +80,7 @@ def test_readiness_waits_for_manifest_and_rejects_a_missing_sidecar(
         bun = shutil.which("bun")
         if bun is None:
             pytest.fail(
-                "the HF emulator readiness contract requires bun or "
-                "OPENTRACES_HF_EMULATOR_BINARY"
+                "the HF emulator readiness contract requires bun or OPENTRACES_HF_EMULATOR_BINARY"
             )
         command = [bun, "run", str(SERVER_SOURCE)]
 
@@ -129,8 +128,7 @@ def test_default_hf_emulator_coexists_with_default_portable_otlp_receiver(
         bun = shutil.which("bun")
         if bun is None:
             pytest.fail(
-                "the HF/OTLP coexistence contract requires bun or "
-                "OPENTRACES_HF_EMULATOR_BINARY"
+                "the HF/OTLP coexistence contract requires bun or OPENTRACES_HF_EMULATOR_BINARY"
             )
         command = [bun, "run", str(SERVER_SOURCE)]
 
@@ -201,7 +199,9 @@ def test_compile_has_a_finite_deadline_and_failed_build_cannot_replace_last_good
     def timed_out(argv, **kwargs):
         nonlocal observed_timeout
         observed_timeout = kwargs.get("timeout")
-        candidate = Path(next(item.split("=", 1)[1] for item in argv if item.startswith("--outfile=")))
+        candidate = Path(
+            next(item.split("=", 1)[1] for item in argv if item.startswith("--outfile="))
+        )
         candidate.write_bytes(b"partial-new-binary")
         raise subprocess.TimeoutExpired(argv, observed_timeout)
 
@@ -272,9 +272,7 @@ def test_packaging_record_keeps_upstream_and_fallback_decisions_honest() -> None
         "target": "bun-linux-arm64",
     }
     assert record["port"] == 14318
-    assert record["core_reconciliation"]["canonical_upstream"] == (
-        "vercel-labs/emulate"
-    )
+    assert record["core_reconciliation"]["canonical_upstream"] == ("vercel-labs/emulate")
     assert record["core_reconciliation"]["runtime_dependency"] is None
     assert record["fallback"]["strategy"] == "bun-in-checkpoint-plus-bundle"
     assert record["fallback"]["measurement"]["scope"] == "real-box"
