@@ -646,7 +646,7 @@ def start_huggingface_emulator(
             'test -n "$state"; test "$state" != "Z"; '
             "owner_uid=$(awk '/^Uid:/{print $2}' \"/proc/$pid/status\"); "
             'sidecar_uid=$(id -u opentraces-hf); test "$owner_uid" = "$sidecar_uid"; '
-            'executable=$(readlink -f "/proc/$pid/exe"); '
+            'executable=$(sudo readlink -f "/proc/$pid/exe"); '
             'digest=$(sha256sum "$executable" | cut -d" " -f1); '
             f'test "$digest" = "{pin.sha256}"; '
             'printf "%s\\n%s\\n%s\\n" "$pid" "$owner_uid" "$digest"',
