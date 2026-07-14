@@ -14,11 +14,18 @@ from tests.core.arena.test_engine import FakeBoxRuntime, RecordingBoxRuntime
 class PublicBrowserSession:
     """External-browser boundary double exposing only rendered public state."""
 
-    def __init__(self, *, suppressed_channel: str | None = None, silent: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        suppressed_channel: str | None = None,
+        empty_channel: str | None = None,
+        silent: bool = False,
+    ) -> None:
         self.url = "about:blank"
         self.account = ""
         self.authorized = False
         self.suppressed_channel = suppressed_channel
+        self.empty_channel = empty_channel
         self.silent = silent
 
     def navigate(self, url: str) -> dict[str, object]:
@@ -57,11 +64,14 @@ class PublicBrowserSession:
             if self.silent:
                 return []
             raise RuntimeError(f"{kind} recorder token=private at /Users/private/recording")
-        return {
+        artifacts = {
             "browser_video": [("session.webm", b"browser-video")],
             "playwright_trace": [("trace.zip", b"playwright-trace")],
             "browser_screenshots": [("final.png", b"\x89PNG\r\nfinal")],
         }[kind]
+        if kind == self.empty_channel:
+            return [(filename, b"") for filename, _payload in artifacts]
+        return artifacts
 
     def close(self) -> None:
         pass
@@ -240,6 +250,42 @@ def test_silently_suppressed_screenshot_recorder_cannot_claim_complete(
         "reason": "browser screenshots recorder produced no artifacts",
     }
     assert not (final_path / "recordings/browser/screenshots.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("empty_channel", "artifact_ref"),
+    [
+        ("browser_video", "recordings/browser/video/session.webm"),
+        ("playwright_trace", "recordings/browser/trace/trace.zip"),
+        ("browser_screenshots", "recordings/browser/screenshots/final.png"),
+    ],
+)
+def test_zero_byte_browser_artifact_makes_only_its_channel_incomplete(
+    tmp_path: Path,
+    empty_channel: str,
+    artifact_ref: str,
+) -> None:
+    result, final_path = _run_inspection(
+        tmp_path,
+        lambda: PublicBrowserSession(empty_channel=empty_channel),
+    )
+
+    assert result["verdict"] == "pass"
+    assert result["reason"] is None
+    assert result["recordings"]["rewatchable"] is False
+    channels = {channel["kind"]: channel for channel in result["recordings"]["channels"]}
+    assert channels[empty_channel] == {
+        "kind": empty_channel,
+        "complete": False,
+        "path": None,
+        "reason": f"{empty_channel} recorder produced an empty artifact",
+    }
+    assert all(
+        channel["complete"] is True
+        for kind, channel in channels.items()
+        if kind != empty_channel
+    )
+    assert not (final_path / artifact_ref).exists()
 
 
 def test_missing_playwright_is_a_named_setup_refusal_before_browser_attempt(
