@@ -319,10 +319,16 @@ def _finalize_git(request: dict[str, Any]) -> dict[str, Any]:
     # A truncated maturation pass has already exhausted the shared deadline.
     # Do not enter the legacy full-log reader afterward; ``None`` records that
     # the count was not observed, rather than relabelling it as zero.
+    evidence_read_timed_out = False
     if summary.truncated:
         events = None
     elif event_log_head:
-        events = read_events(project, verify=True)
+        try:
+            events = read_events(project, verify=True, deadline=deadline)
+        except subprocess.TimeoutExpired as exc:
+            limitations.append(timeout_limitation(exc))
+            evidence_read_timed_out = True
+            events = None
     else:
         events = []
     details = {
@@ -331,11 +337,17 @@ def _finalize_git(request: dict[str, Any]) -> dict[str, Any]:
         "event_log_ref": EVENT_LOG_REF,
         "event_log_head": event_log_head,
         "events_count": len(events) if events is not None else None,
+        "evidence_read_timed_out": evidence_read_timed_out,
         "maturation": summary.to_dict(),
     }
     if summary.truncated:
         limitations.append("anchor maturation reached its deadline")
-    if event_log_head is not None and events is None:
+    if evidence_read_timed_out:
+        limitations.append(
+            "canonical trail event verification reached its deadline; no "
+            "post-deadline evidence re-read was attempted"
+        )
+    elif event_log_head is not None and events is None:
         limitations.append(
             "canonical trail event count was not re-read after maturation "
             "reached its deadline"

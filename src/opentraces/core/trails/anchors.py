@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import difflib
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -11,6 +10,7 @@ from typing import Any
 from ...enrichment._shared import path_matches
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .contract import ANCHOR_SEARCH_SCHEMA_VERSION
+from ._git_subprocess import run_git_until
 from .event_log import append_event_batch, read_events_scoped
 from .ids import (
     GIT_ANCHOR_CANONICALIZATION,
@@ -30,21 +30,31 @@ ANCHOR_ALGORITHMS_PHASE5 = ["exact_range_hash", "structural_match"]
 STRUCTURAL_MATCH_THRESHOLD = 0.85
 
 
-def _git(repo: Path, *args: str, check: bool = True) -> str:
-    proc = subprocess.run(
-        ["git", *args],
+def _git(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+    deadline: float | None = None,
+    input: str | None = None,
+) -> str:
+    proc = run_git_until(
+        list(args),
         cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
+        deadline=deadline,
+        input=input,
     )
     if check and proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
 
 
-def _oid(repo: Path, rev_path: str) -> dict[str, str] | None:
-    out = _git(repo, "rev-parse", rev_path, check=False)
+def _oid(
+    repo: Path,
+    rev_path: str,
+    *,
+    deadline: float | None = None,
+) -> dict[str, str] | None:
+    out = _git(repo, "rev-parse", rev_path, check=False, deadline=deadline)
     if not out:
         return None
     try:
@@ -53,15 +63,25 @@ def _oid(repo: Path, rev_path: str) -> dict[str, str] | None:
         return None
 
 
-def _stable_patch_id(repo: Path, commit: str) -> str | None:
-    diff = _git(repo, "show", "--format=", "--no-color", commit)
-    proc = subprocess.run(
-        ["git", "patch-id", "--stable"],
+def _stable_patch_id(
+    repo: Path,
+    commit: str,
+    *,
+    deadline: float | None = None,
+) -> str | None:
+    diff = _git(
+        repo,
+        "show",
+        "--format=",
+        "--no-color",
+        commit,
+        deadline=deadline,
+    )
+    proc = run_git_until(
+        ["patch-id", "--stable"],
         cwd=repo,
+        deadline=deadline,
         input=diff,
-        capture_output=True,
-        text=True,
-        check=False,
     )
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
@@ -179,6 +199,7 @@ def reconcile_commit_anchors(
     events: list[TrailEvent] | None = None,
     summary_out: dict[str, Any] | None = None,
     deadline: float | None = None,
+    git_deadline: float | None = None,
     patch_events: list[TrailEvent] | None = None,
     anchor_keys: set[tuple] | None = None,
     search_keys: set[tuple] | None = None,
@@ -209,15 +230,28 @@ def reconcile_commit_anchors(
     receives this chunk's ``search_results`` and ``anchor_drafts`` in
     ``summary_out`` and decides when to append them. Default callers keep the
     original append-on-return behavior.
+
+    ``deadline`` retains the reconciler's per-patch budget contract.
+    ``git_deadline`` is the absolute subprocess deadline used by finalization;
+    maturation passes the same value for both so Git work and Python work share
+    one clock without changing direct callers' deterministic budget seam.
     """
     repo = repo.resolve()
     effective_capture_method = (
         list(capture_method) if capture_method else ["post_commit_correlator"]
     )
     effective_attribution_version = attribution_version or ATTRIBUTION_VERSION
-    commit = _git(repo, "rev-parse", commit_ref)
+    commit = _git(repo, "rev-parse", commit_ref, deadline=git_deadline)
     commit_id = {"algo": "sha1", "hex": commit}
-    diff = _git(repo, "show", "--format=", "--no-color", "-U3", commit)
+    diff = _git(
+        repo,
+        "show",
+        "--format=",
+        "--no-color",
+        "-U3",
+        commit,
+        deadline=git_deadline,
+    )
     hunks = _parse_diff_hunks_with_content(diff)
     # #44 (d): normalize each hunk's added_text ONCE per reconcile and stash it on
     # the hunk dict (``_norm_added``). _find_exact_anchor reuses it per (patch,
@@ -260,6 +294,7 @@ def reconcile_commit_anchors(
                     "git_anchor_search_completed": "search_head",
                 },
                 commit_sha=commit,
+                deadline=git_deadline,
             )
         else:
             events = [
@@ -318,7 +353,11 @@ def reconcile_commit_anchors(
 
     def _patch_id() -> str | None:
         if commit not in _patch_id_cache:
-            _patch_id_cache[commit] = _stable_patch_id(repo, commit)
+            _patch_id_cache[commit] = _stable_patch_id(
+                repo,
+                commit,
+                deadline=git_deadline,
+            )
         return _patch_id_cache[commit]
 
     # #44 (c): _oid(repo, f"{commit}:{path}") is per-(commit, path) — cache it so
@@ -327,7 +366,11 @@ def reconcile_commit_anchors(
 
     def _oid_for(path: str) -> dict[str, str] | None:
         if path not in _oid_cache:
-            _oid_cache[path] = _oid(repo, f"{commit}:{path}")
+            _oid_cache[path] = _oid(
+                repo,
+                f"{commit}:{path}",
+                deadline=git_deadline,
+            )
         return _oid_cache[path]
 
     # #44 Phase 2: wall-clock budget. ``deadline`` (time.monotonic absolute) is
@@ -479,7 +522,7 @@ def reconcile_commit_anchors(
         drafts.extend(anchor_drafts)
 
         if drafts:
-            append_event_batch(repo, drafts, writer=writer)
+            append_event_batch(repo, drafts, writer=writer, deadline=git_deadline)
     if summary_out is not None:
         # #23: surface the per-patch search count to the caller so maturation can
         # sum these instead of re-reading the whole log twice (before/after) just

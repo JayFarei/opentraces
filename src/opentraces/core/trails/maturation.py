@@ -201,9 +201,13 @@ def mature_trails(
                     commits=commits,
                     attribution_version=effective_version,
                     writer=writer,
+                    deadline=deadline,
                 )
                 anchors_created = pending_anchors_created
                 searches_completed = pending_searches_completed
+            except subprocess.TimeoutExpired as exc:
+                errors.append(timeout_limitation(exc))
+                truncated = True
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"maturation flush failed: {type(exc).__name__}: {exc}")
                 truncated = True
@@ -490,6 +494,7 @@ def _flush_maturation_scratch(
     commits: list[str],
     attribution_version: str,
     writer: str,
+    deadline: float | None,
 ) -> None:
     for commit in commits:
         results = [
@@ -528,7 +533,7 @@ def _flush_maturation_scratch(
                 )
             )
         drafts.extend(anchor_drafts)
-        append_event_batch(repo, drafts, writer=writer)
+        append_event_batch(repo, drafts, writer=writer, deadline=deadline)
 
 
 def _mature_patch_chunk(
@@ -582,6 +587,7 @@ def _mature_patch_chunk(
                     search_keys=search_keys,
                     summary_out=per_commit_summary,
                     deadline=deadline,
+                    git_deadline=deadline,
                     append_events=False,
                 )
             )
@@ -600,6 +606,10 @@ def _mature_patch_chunk(
             if per_commit_summary.get("budget_exhausted"):
                 truncated = True
                 break
+        except subprocess.TimeoutExpired as exc:
+            errors.append(timeout_limitation(exc))
+            truncated = True
+            break
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{commit}: {type(exc).__name__}: {exc}")
     return MaturationSummary(

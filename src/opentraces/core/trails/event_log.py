@@ -117,8 +117,13 @@ def _ref_head(cwd: Path, *, deadline: float | None = None) -> str | None:
     return proc.stdout.strip()
 
 
-def _zero_object_id(cwd: Path) -> str:
-    proc = _git(cwd, ["rev-parse", "--show-object-format"], check=False)
+def _zero_object_id(cwd: Path, *, deadline: float | None = None) -> str:
+    proc = _git(
+        cwd,
+        ["rev-parse", "--show-object-format"],
+        check=False,
+        deadline=deadline,
+    )
     return "0" * 64 if proc.stdout.strip() == "sha256" else "0" * 40
 
 
@@ -126,6 +131,8 @@ def _ref_update_raced(
     cwd: Path,
     proc: subprocess.CompletedProcess[str],
     expected_head: str | None,
+    *,
+    deadline: float | None = None,
 ) -> bool:
     text = f"{proc.stderr}\n{proc.stdout}".lower()
     if not any(
@@ -138,20 +145,27 @@ def _ref_update_raced(
         )
     ):
         return False
-    current_head = _ref_head(cwd)
+    current_head = _ref_head(cwd, deadline=deadline)
     return current_head != expected_head
 
 
-def _update_event_log_ref(cwd: Path, commit_sha: str, expected_head: str | None) -> bool:
-    old_value = expected_head or _zero_object_id(cwd)
+def _update_event_log_ref(
+    cwd: Path,
+    commit_sha: str,
+    expected_head: str | None,
+    *,
+    deadline: float | None = None,
+) -> bool:
+    old_value = expected_head or _zero_object_id(cwd, deadline=deadline)
     proc = _git(
         cwd,
         ["update-ref", EVENT_LOG_REF, commit_sha, old_value],
         check=False,
+        deadline=deadline,
     )
     if proc.returncode == 0:
         return True
-    if _ref_update_raced(cwd, proc, expected_head):
+    if _ref_update_raced(cwd, proc, expected_head, deadline=deadline):
         return False
     raise RuntimeError(
         f"git update-ref {EVENT_LOG_REF} failed: "
@@ -159,12 +173,32 @@ def _update_event_log_ref(cwd: Path, commit_sha: str, expected_head: str | None)
     )
 
 
-def _hash_blob(cwd: Path, text: str) -> str:
-    return _git(cwd, ["hash-object", "-w", "--stdin"], input=text).stdout.strip()
+def _hash_blob(
+    cwd: Path,
+    text: str,
+    *,
+    deadline: float | None = None,
+) -> str:
+    return _git(
+        cwd,
+        ["hash-object", "-w", "--stdin"],
+        input=text,
+        deadline=deadline,
+    ).stdout.strip()
 
 
-def _object_type(cwd: Path, oid: GitObjectID) -> str | None:
-    proc = _git(cwd, ["cat-file", "-t", oid.hex], check=False)
+def _object_type(
+    cwd: Path,
+    oid: GitObjectID,
+    *,
+    deadline: float | None = None,
+) -> str | None:
+    proc = _git(
+        cwd,
+        ["cat-file", "-t", oid.hex],
+        check=False,
+        deadline=deadline,
+    )
     if proc.returncode != 0:
         return None
     return proc.stdout.strip()
@@ -190,7 +224,12 @@ def _safe_tree_entry_name(value: str) -> str:
     return value.replace(":", "-").replace("/", "-")
 
 
-def _tree_oid_from_payload(cwd: Path, event: TrailEvent) -> GitObjectID | None:
+def _tree_oid_from_payload(
+    cwd: Path,
+    event: TrailEvent,
+    *,
+    deadline: float | None = None,
+) -> GitObjectID | None:
     tree_id = event.payload.get("tree_id")
     if not tree_id:
         return None
@@ -198,32 +237,47 @@ def _tree_oid_from_payload(cwd: Path, event: TrailEvent) -> GitObjectID | None:
         oid = GitObjectID.model_validate(tree_id)
     except Exception:
         return None
-    if _object_type(cwd, oid) != "tree":
+    if _object_type(cwd, oid, deadline=deadline) != "tree":
         return None
     return oid
 
 
-def _write_batch_tree(cwd: Path, events: list[TrailEvent], batch: dict[str, Any]) -> str:
+def _write_batch_tree(
+    cwd: Path,
+    events: list[TrailEvent],
+    batch: dict[str, Any],
+    *,
+    deadline: float | None = None,
+) -> str:
     snapshot_tree_entries: list[tuple[str, str]] = []
     boundary_tree_entries: list[tuple[str, str]] = []
     with tempfile.TemporaryDirectory(prefix="opentraces-trails-index-") as td:
         index_path = str(Path(td) / "index")
         env = os.environ.copy()
         env["GIT_INDEX_FILE"] = index_path
-        _git(cwd, ["read-tree", "--empty"], env=env)
+        _git(cwd, ["read-tree", "--empty"], env=env, deadline=deadline)
 
-        batch_blob = _hash_blob(cwd, json.dumps(batch, sort_keys=True, indent=2) + "\n")
+        batch_blob = _hash_blob(
+            cwd,
+            json.dumps(batch, sort_keys=True, indent=2) + "\n",
+            deadline=deadline,
+        )
         _git(
             cwd,
             ["update-index", "--add", "--cacheinfo", f"100644,{batch_blob},batch.json"],
             env=env,
+            deadline=deadline,
         )
 
         retained_blobs: set[str] = set()
         retained_trees: set[str] = set()
         for event in events:
             payload = event.model_dump(mode="json")
-            event_blob = _hash_blob(cwd, json.dumps(payload, sort_keys=True, indent=2) + "\n")
+            event_blob = _hash_blob(
+                cwd,
+                json.dumps(payload, sort_keys=True, indent=2) + "\n",
+                deadline=deadline,
+            )
             _git(
                 cwd,
                 [
@@ -233,11 +287,12 @@ def _write_batch_tree(cwd: Path, events: list[TrailEvent], batch: dict[str, Any]
                     f"100644,{event_blob},events/{event.event_sequence:012d}.json",
                 ],
                 env=env,
+                deadline=deadline,
             )
             for oid in _collect_object_ids(event.payload):
                 if oid.hex in retained_blobs:
                     continue
-                if _object_type(cwd, oid) != "blob":
+                if _object_type(cwd, oid, deadline=deadline) != "blob":
                     continue
                 retained_blobs.add(oid.hex)
                 _git(
@@ -249,9 +304,10 @@ def _write_batch_tree(cwd: Path, events: list[TrailEvent], batch: dict[str, Any]
                         f"100644,{oid.hex},objects/blobs/{oid.hex}",
                     ],
                     env=env,
+                    deadline=deadline,
                 )
             snapshot_id = event.payload.get("snapshot_id")
-            oid = _tree_oid_from_payload(cwd, event)
+            oid = _tree_oid_from_payload(cwd, event, deadline=deadline)
             if oid:
                 safe_event_id = _safe_tree_entry_name(event.event_id)
                 boundary_tree_entries.append(
@@ -263,30 +319,57 @@ def _write_batch_tree(cwd: Path, events: list[TrailEvent], batch: dict[str, Any]
                     safe_snapshot_id = _safe_tree_entry_name(str(snapshot_id))
                     snapshot_tree_entries.append((safe_snapshot_id, oid.hex))
 
-        base_tree = _git(cwd, ["write-tree"], env=env).stdout.strip()
+        base_tree = _git(
+            cwd,
+            ["write-tree"],
+            env=env,
+            deadline=deadline,
+        ).stdout.strip()
 
     if not snapshot_tree_entries and not boundary_tree_entries:
         return base_tree
 
-    root_entries = _git(cwd, ["ls-tree", base_tree]).stdout
+    root_entries = _git(cwd, ["ls-tree", base_tree], deadline=deadline).stdout
     if snapshot_tree_entries:
         snapshots_tree_input = "".join(
             f"040000 tree {tree_hex}\t{name}\n"
             for name, tree_hex in sorted(snapshot_tree_entries)
         )
-        snapshots_tree = _git(cwd, ["mktree"], input=snapshots_tree_input).stdout.strip()
+        snapshots_tree = _git(
+            cwd,
+            ["mktree"],
+            input=snapshots_tree_input,
+            deadline=deadline,
+        ).stdout.strip()
         root_entries += f"040000 tree {snapshots_tree}\tsnapshots\n"
     if boundary_tree_entries:
         trees_tree_input = "".join(
             f"040000 tree {tree_hex}\t{name}\n"
             for name, tree_hex in sorted(boundary_tree_entries)
         )
-        trees_tree = _git(cwd, ["mktree"], input=trees_tree_input).stdout.strip()
+        trees_tree = _git(
+            cwd,
+            ["mktree"],
+            input=trees_tree_input,
+            deadline=deadline,
+        ).stdout.strip()
         root_entries += f"040000 tree {trees_tree}\ttrees\n"
-    return _git(cwd, ["mktree"], input=root_entries).stdout.strip()
+    return _git(
+        cwd,
+        ["mktree"],
+        input=root_entries,
+        deadline=deadline,
+    ).stdout.strip()
 
 
-def _commit_batch(cwd: Path, tree_sha: str, head: str | None, batch_id: str) -> str:
+def _commit_batch(
+    cwd: Path,
+    tree_sha: str,
+    head: str | None,
+    batch_id: str,
+    *,
+    deadline: float | None = None,
+) -> str:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "opentraces")
     env.setdefault("GIT_AUTHOR_EMAIL", "opentraces@local")
@@ -295,7 +378,7 @@ def _commit_batch(cwd: Path, tree_sha: str, head: str | None, batch_id: str) -> 
     args = ["commit-tree", tree_sha, "-m", f"opentraces trail event batch {batch_id}"]
     if head:
         args[2:2] = ["-p", head]
-    return _git(cwd, args, env=env).stdout.strip()
+    return _git(cwd, args, env=env, deadline=deadline).stdout.strip()
 
 
 def append_event_batch(
@@ -303,6 +386,7 @@ def append_event_batch(
     drafts: list[TrailEventDraft | dict[str, Any]],
     *,
     writer: str,
+    deadline: float | None = None,
 ) -> list[TrailEvent]:
     """Append a linear batch of TrailEvents to the local Git event log."""
     cwd = cwd.resolve()
@@ -314,11 +398,11 @@ def append_event_batch(
     ]
 
     for attempt in range(1, EVENT_LOG_APPEND_MAX_RETRIES + 1):
-        head = _ref_head(cwd)
+        head = _ref_head(cwd, deadline=deadline)
         # Bug B: derive (next_sequence, previous_event_id) from the HEAD batch's
         # tail blob, not by materialising the whole ~N-event history. Re-read
         # inside the retry loop so a concurrent writer's new HEAD is observed.
-        tail = _read_head_batch_tail(cwd, head) if head else None
+        tail = _read_head_batch_tail(cwd, head, deadline=deadline) if head else None
         next_sequence = (tail[0] + 1) if tail else 1
         previous_event_id = tail[1] if tail else None
         batch_id = f"batch-{uuid.uuid4().hex}"
@@ -354,10 +438,26 @@ def append_event_batch(
             "previous_event_log_head": head,
             "event_count": len(events),
         }
-        tree_sha = _write_batch_tree(cwd, events, batch)
-        commit_sha = _commit_batch(cwd, tree_sha, head, batch_id)
+        tree_sha = _write_batch_tree(cwd, events, batch, deadline=deadline)
+        commit_sha = _commit_batch(
+            cwd,
+            tree_sha,
+            head,
+            batch_id,
+            deadline=deadline,
+        )
 
-        if _update_event_log_ref(cwd, commit_sha, head):
+        updated = (
+            _update_event_log_ref(cwd, commit_sha, head)
+            if deadline is None
+            else _update_event_log_ref(
+                cwd,
+                commit_sha,
+                head,
+                deadline=deadline,
+            )
+        )
+        if updated:
             # #137: maintain the rebuildable OID index at the single append
             # chokepoint — O(K) in the K just-appended events, best-effort, and
             # never able to fail the append. The new commit's own tree carries
@@ -365,13 +465,14 @@ def append_event_batch(
             try:
                 from . import event_index
 
-                event_index.extend_after_append(
-                    cwd,
-                    previous_head=head,
-                    new_head=commit_sha,
-                    new_entries=_event_blob_entries(cwd, [commit_sha]),
-                    events=events,
-                )
+                if deadline is None:
+                    event_index.extend_after_append(
+                        cwd,
+                        previous_head=head,
+                        new_head=commit_sha,
+                        new_entries=_event_blob_entries(cwd, [commit_sha]),
+                        events=events,
+                    )
             except Exception:  # noqa: BLE001 — index is an accelerator, not a gate
                 pass
             return events
@@ -474,10 +575,19 @@ def import_event_log(
     }
 
 
-def _event_blob_entries(cwd: Path, commits: list[str]) -> list[tuple[str, str]]:
+def _event_blob_entries(
+    cwd: Path,
+    commits: list[str],
+    *,
+    deadline: float | None = None,
+) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
     for commit in commits:
-        proc = _git_bytes(cwd, ["ls-tree", "-r", "-z", commit, "events"])
+        proc = _git_bytes(
+            cwd,
+            ["ls-tree", "-r", "-z", commit, "events"],
+            deadline=deadline,
+        )
         commit_entries: list[tuple[str, str]] = []
         for raw_entry in proc.stdout.split(b"\0"):
             if not raw_entry:
@@ -608,23 +718,38 @@ def _iter_blobs_batch(
         feeder.join(timeout=5)
 
 
-def _read_events_in_range(cwd: Path, since: str | None, head: str) -> list[TrailEvent]:
+def _read_events_in_range(
+    cwd: Path,
+    since: str | None,
+    head: str,
+    *,
+    deadline: float | None = None,
+) -> list[TrailEvent]:
     """Parse events from commits in ``since..head`` (or all of ``head``).
 
     ``since`` is excluded; passing None reads the full history reachable
     from ``head``. Result is NOT sorted — callers merge + sort.
     """
     spec = f"{since}..{head}" if since else head
-    commits = _git(cwd, ["rev-list", "--reverse", spec]).stdout.splitlines()
-    entries = _event_blob_entries(cwd, commits)
+    commits = _git(
+        cwd,
+        ["rev-list", "--reverse", spec],
+        deadline=deadline,
+    ).stdout.splitlines()
+    entries = _event_blob_entries(cwd, commits, deadline=deadline)
     return [
         TrailEvent.model_validate_json(raw)
-        for raw in _read_blobs_batch(cwd, entries)
+        for raw in _read_blobs_batch(cwd, entries, deadline=deadline)
     ]
 
 
-def _read_events_from_head(cwd: Path, head: str) -> list[TrailEvent]:
-    events = _read_events_in_range(cwd, None, head)
+def _read_events_from_head(
+    cwd: Path,
+    head: str,
+    *,
+    deadline: float | None = None,
+) -> list[TrailEvent]:
+    events = _read_events_in_range(cwd, None, head, deadline=deadline)
     events.sort(key=lambda event: event.event_sequence)
     return events
 
@@ -660,7 +785,12 @@ def read_events_since(
     return head, events
 
 
-def _read_head_batch_tail(cwd: Path, head: str) -> tuple[int, str] | None:
+def _read_head_batch_tail(
+    cwd: Path,
+    head: str,
+    *,
+    deadline: float | None = None,
+) -> tuple[int, str] | None:
     """Return ``(max_event_sequence, last_event_id)`` from the HEAD commit's
     batch WITHOUT materialising history (Bug B append fast-path).
 
@@ -670,10 +800,10 @@ def _read_head_batch_tail(cwd: Path, head: str) -> tuple[int, str] | None:
     lexicographically by sequence, so the last entry is the tail. Returns None
     when there is no head / no events (caller treats it as an empty log).
     """
-    entries = _event_blob_entries(cwd, [head])
+    entries = _event_blob_entries(cwd, [head], deadline=deadline)
     if not entries:
         return None
-    blobs = _read_blobs_batch(cwd, [entries[-1]])
+    blobs = _read_blobs_batch(cwd, [entries[-1]], deadline=deadline)
     if not blobs:
         return None
     event = TrailEvent.model_validate_json(blobs[0])
@@ -1185,10 +1315,26 @@ _READ_EVENTS_CACHE: dict[
 _VERIFY_STATUS_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 
 
-def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
-    head = _ref_head(cwd)
+def read_events(
+    cwd: Path,
+    *,
+    verify: bool = True,
+    deadline: float | None = None,
+) -> list[TrailEvent]:
+    head = _ref_head(cwd, deadline=deadline)
     if head is None:
         return []
+    if deadline is not None:
+        # Finalization owns one absolute wall-clock budget. Avoid the normal
+        # snapshot/index/cache accelerators here: each may initiate additional
+        # Git work outside that budget. The canonical full read and its
+        # verification instead share the same killable deadline end to end.
+        events = _read_events_from_head(cwd, head, deadline=deadline)
+        if verify:
+            result = verify_event_log(cwd, events=events, deadline=deadline)
+            if result["errors"]:
+                raise ValueError("; ".join(result["errors"]))
+        return events
     cache_key = (str(Path(cwd).resolve()), head)
     cached = _READ_EVENTS_CACHE.get(cache_key)
     if cached is not None:
@@ -1261,10 +1407,18 @@ def invalidate_read_events_cache(cwd: Path | None = None) -> None:
     event_index.invalidate_event_index_memo(cwd)
 
 
-def _parents_are_linear(cwd: Path) -> tuple[bool, list[str], int]:
-    if _ref_head(cwd) is None:
+def _parents_are_linear(
+    cwd: Path,
+    *,
+    deadline: float | None = None,
+) -> tuple[bool, list[str], int]:
+    if _ref_head(cwd, deadline=deadline) is None:
         return False, [], 0
-    lines = _git(cwd, ["rev-list", "--reverse", "--parents", EVENT_LOG_REF]).stdout.splitlines()
+    lines = _git(
+        cwd,
+        ["rev-list", "--reverse", "--parents", EVENT_LOG_REF],
+        deadline=deadline,
+    ).stdout.splitlines()
     previous: str | None = None
     errors: list[str] = []
     for index, line in enumerate(lines):
@@ -1635,10 +1789,11 @@ def verify_event_log(
     cwd: Path,
     *,
     events: list[TrailEvent] | None = None,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Verify parent linearity and TrailEvent content addresses."""
     errors: list[str] = []
-    head = _ref_head(cwd)
+    head = _ref_head(cwd, deadline=deadline)
     if head is None:
         return {
             "ref": EVENT_LOG_REF,
@@ -1655,14 +1810,14 @@ def verify_event_log(
     # Whole-log verification (events is None) is keyed by head and memoized:
     # the log is append-only so the result can't change for a fixed head.
     cache_key = (str(Path(cwd).resolve()), head)
-    if events is None and cache_key in _VERIFY_STATUS_CACHE:
+    if deadline is None and events is None and cache_key in _VERIFY_STATUS_CACHE:
         return _VERIFY_STATUS_CACHE[cache_key]
 
     # Incremental fast-path: if a clean verification was persisted at an
     # ancestor head, re-verify only the events appended since — every event is
     # still verified exactly once over the life of the log, but no single call
     # re-hashes the whole history.
-    if events is None:
+    if events is None and deadline is None:
         wm = _load_verify_watermark(cwd)
         if wm is not None and wm.get("head") == head:
             result = _verify_result_from_watermark(wm)
@@ -1674,17 +1829,20 @@ def verify_event_log(
                 _VERIFY_STATUS_CACHE[cache_key] = inc
                 return inc
 
-    linear, parent_errors, batch_count = _parents_are_linear(cwd)
+    linear, parent_errors, batch_count = _parents_are_linear(
+        cwd,
+        deadline=deadline,
+    )
     errors.extend(parent_errors)
 
-    cache_result = events is None
+    cache_result = events is None and deadline is None
     if events is None:
         # Reuse the snapshot-backed batched reader instead of a ``git show``
         # per event — the per-blob form forked a subprocess for each of (here)
         # hundreds of thousands of events, pegging a core for minutes every
         # time sync called event_log_status.
         try:
-            events = read_events(cwd, verify=False)
+            events = read_events(cwd, verify=False, deadline=deadline)
         except Exception as exc:  # noqa: BLE001 — corrupt blob ⇒ report, don't crash
             result = {
                 "ref": EVENT_LOG_REF,

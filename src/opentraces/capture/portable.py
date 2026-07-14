@@ -169,6 +169,7 @@ def _finalizer_semantic_error(
     *,
     source: str,
     request: dict[str, Any],
+    deadline: float,
 ) -> str | None:
     """Validate source truth only after the child envelope is well typed."""
 
@@ -382,8 +383,7 @@ def _finalizer_semantic_error(
         return None
 
     if source == "git":
-        import subprocess
-
+        from ..core.trails._git_subprocess import run_git_until
         from ..core.trails.event_log import EVENT_LOG_REF, read_events
 
         project = Path(request["project"]).resolve()
@@ -405,19 +405,28 @@ def _finalizer_semantic_error(
             return "git maturation errors are not a string list"
         if not isinstance(maturation.get("truncated"), bool):
             return "git maturation truncated flag is not boolean"
-        head = subprocess.run(
-            ["git", "rev-parse", "--verify", EVENT_LOG_REF],
+        if not isinstance(details.get("evidence_read_timed_out", False), bool):
+            return "git evidence-read timeout flag is not boolean"
+        head = run_git_until(
+            ["rev-parse", "--verify", EVENT_LOG_REF],
             cwd=project,
-            capture_output=True,
-            text=True,
-            check=False,
+            deadline=deadline,
         )
+        evidence_read_timed_out = details.get("evidence_read_timed_out") is True
         evidence_deferred = (
             report["status"] == "partial"
-            and maturation["truncated"] is True
             and details.get("event_log_head") is None
             and details.get("events_count") is None
-            and any("timed out" in error.lower() for error in maturation["errors"])
+            and (
+                (
+                    maturation["truncated"] is True
+                    and any(
+                        "timed out" in error.lower()
+                        for error in maturation["errors"]
+                    )
+                )
+                or evidence_read_timed_out
+            )
         )
         if head.returncode != 0:
             if not (
@@ -434,12 +443,18 @@ def _finalizer_semantic_error(
                 return "git report event-log head is not current"
             count_deferred = (
                 report["status"] == "partial"
-                and maturation["truncated"] is True
                 and details.get("events_count") is None
+                and (maturation["truncated"] is True or evidence_read_timed_out)
             )
             if not count_deferred:
                 try:
-                    events = read_events(project, verify=True)
+                    events = read_events(
+                        project,
+                        verify=True,
+                        deadline=deadline,
+                    )
+                except subprocess.TimeoutExpired:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - fail-closed evidence validator
                     return f"git canonical event evidence is unreadable: {type(exc).__name__}"
                 if not events or details.get("events_count") != len(events):
@@ -1126,11 +1141,34 @@ class CaptureSession:
                 f"invalid finalizer report: {report_error}",
                 evidence_refs=refs,
             )
-        semantic_error = _finalizer_semantic_error(
-            report,
-            source=source,
-            request=request,
-        )
+        try:
+            semantic_error = _finalizer_semantic_error(
+                report,
+                source=source,
+                request=request,
+                deadline=deadline,
+            )
+        except subprocess.TimeoutExpired as exc:
+            from ..core.trails._git_subprocess import timeout_limitation
+
+            report_refs = (*refs, *report["evidence_refs"])
+            limitations = [*report["limitations"], timeout_limitation(exc)]
+            limitations.append(
+                f"{source} finalizer evidence validation reached the capture "
+                "deadline; no post-deadline validation re-read was attempted"
+            )
+            return CaptureSourceResult(
+                name=source,
+                view=_SOURCE_VIEW[source],
+                requested=True,
+                required=source in self.plan.required_sources,
+                status="partial",
+                completeness="partial",
+                evidence_refs=report_refs,
+                limitations=tuple(dict.fromkeys(limitations)),
+                duration_ms=_duration_ms(started),
+                details=dict(report["details"]),
+            )
         if semantic_error is not None:
             return self._unavailable(
                 source,
