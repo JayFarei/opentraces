@@ -619,6 +619,10 @@ class BenchRun:
         if hasattr(self, "browser"):
             self.browser.finalize_recordings()
 
+        terminal_settlement_errors: list[Exception] = []
+        if hasattr(self, "terminal"):
+            terminal_settlement_errors.extend(self.terminal.settle_completed())
+
         for emulator in self._emulators.values():
             try:
                 emulator.stop()
@@ -637,6 +641,14 @@ class BenchRun:
         if release_error is not None:
             self._lifecycle_diagnostics.append(
                 sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)
+            )
+        if hasattr(self, "terminal") and self.terminal.has_pending:
+            terminal_settlement_errors.extend(
+                self.terminal.settle_after_release(timeout=5.0)
+            )
+        for settlement_error in terminal_settlement_errors:
+            self._lifecycle_diagnostics.append(
+                sanitize_reason("terminal_settlement_failed", settlement_error)
             )
         self._finalize(
             execution_status=execution_status,
