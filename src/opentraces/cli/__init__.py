@@ -155,6 +155,12 @@ COMMAND_SECTIONS = [
         ],
     ),
     (
+        "Arena",
+        [
+            "bench",
+        ],
+    ),
+    (
         "Capsule",
         [
             "capsule",
@@ -2939,6 +2945,12 @@ from .capture_otlp import (  # noqa: E402
 )
 main.add_command(_capture_otlp_group, name="capture-otlp")
 _setup_group.add_command(_setup_capture_otlp_cmd, name="capture-otlp")
+
+# bench.v0 is kept in a focused module; registration here preserves the one
+# root command surface and its generated introspection manifest.
+from .bench_cli import bench_group as _bench_group  # noqa: E402
+
+main.add_command(_bench_group, name="bench")
 
 
 @main.command("list")

@@ -1,0 +1,20 @@
+name = "bench-command-smoke"
+description = "Help-surface smoke for the public acceptance-scenario runner kept in the Click/JTBD inventory."
+lane = "core"
+tier = 0
+tier_label = "bronze"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-installed-source"]
+status = "help-smoke"
+trajectories = ["verify-product-claim"]
+
+[[steps]]
+type = "cli"
+id = "bench-run-help"
+argv = ["bench", "run", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "bench-run-help"
+equals = 0

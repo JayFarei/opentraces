@@ -94,3 +94,6 @@ tests/search_eval/.cache/
 
 # --live ad-hoc report (machine/bucket-specific; regenerate with make search-eval-live)
 tests/search_eval/LIVE-EVAL.md
+# Crabbox's local timing/failure cache; bench freezes declared run evidence
+# into bucket/runs/v1 instead.
+.crabbox/
