@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from opentraces.core.arena.engine import Bench, ScenarioSource
+from opentraces.core.arena.drives.browser import BrowserSetupRefusal
 from opentraces.core.arena.run_store import RunStore
 from tests.core.arena.test_engine import FakeBoxRuntime
 
@@ -232,3 +233,43 @@ def test_silently_suppressed_screenshot_recorder_cannot_claim_complete(
         "reason": "browser screenshots recorder produced no artifacts",
     }
     assert not (final_path / "recordings/browser/screenshots.json").exists()
+
+
+def test_missing_playwright_is_a_named_setup_refusal_before_browser_attempt(
+    tmp_path: Path,
+) -> None:
+    def unavailable_browser():
+        raise BrowserSetupRefusal(
+            "Playwright token=private is missing at /Users/private/browser"
+        )
+
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=unavailable_browser,
+    )
+
+    with pytest.raises(BrowserSetupRefusal):
+        with bench.run(app_state="install-only") as run:
+            run.browser.navigate("http://127.0.0.1:8080/authorize")
+
+    result = json.loads((run.final_path / "result.json").read_text(encoding="utf-8"))
+    assert result["execution_status"] == "error"
+    assert result["verdict"] is None
+    assert result["reason"]["code"] == "browser_setup_refused"
+    assert "private" not in result["reason"]["message"]
+    assert "/Users/" not in result["reason"]["message"]
+    assert result["recordings"] == {
+        "rewatchable": False,
+        "channels": [
+            {
+                "kind": kind,
+                "complete": False,
+                "path": None,
+                "reason": "browser setup refused before recording",
+            }
+            for kind in ("browser_video", "playwright_trace", "browser_screenshots")
+        ],
+    }
