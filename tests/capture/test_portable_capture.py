@@ -3195,7 +3195,7 @@ def test_parity_executes_trace_ctx_and_trail_queries_in_both_placements(
     assert report.matches is False
 
 
-def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
+def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3214,14 +3214,39 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
     from opentraces.core.ingest import ingest_one_session
     from opentraces.core.trails.maturation import mature_trails
 
-    fixture = Path(__file__).parents[1] / "fixtures" / "pi" / "pi-linear-edit-real-session.jsonl"
+    fixture = (
+        Path(__file__).parents[1] / "fixtures" / "claude" / "claude-linear-edit-real-session.jsonl"
+    )
     assert fixture.is_file()
     provenance = json.loads(fixture.with_suffix(".provenance.json").read_text())
     assert provenance["source_release"] == "otbox-captures-v1"
     assert provenance["source_snapshot_sha256"] == (
-        "4bd322ff93ad141194b0df6eb2cae8586fd2d3dc5c0d3f90dd59ed2a0eb33bee"
+        "54466705324a1f44d510160fb3fa31213ef8584704afc6b443487441ca1bf03b"
     )
+    assert hashlib.sha256(fixture.read_bytes()).hexdigest() == provenance["derived_fixture_sha256"]
     project = _git_project(tmp_path / "project")
+    (project / "src").mkdir()
+    (project / "src" / "app.py").write_text(
+        'def greet(name: str) -> str:\n    return f"hello, {name}"\n', encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "src/app.py"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "commit", "--quiet", "-m", "seed real-session world"],
+        cwd=project,
+        check=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2026-07-13T10:00:01Z",
+            "GIT_COMMITTER_DATE": "2026-07-13T10:00:01Z",
+        },
+    )
+    session = tmp_path / fixture.name
+    session.write_text(
+        fixture.read_text(encoding="utf-8").replace(
+            "/workspace/claude-real-edit-box/project", str(project)
+        ),
+        encoding="utf-8",
+    )
     runtime_root = tmp_path / "runtime"
     home = tmp_path / "home"
     home.mkdir()
@@ -3233,9 +3258,9 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
         monkeypatch.setattr(module, "PROJECTS_DIR", runtime_root / "projects")
     monkeypatch.setattr(capture_paths, "STAGING_DIR", runtime_root / "staging")
     ingested = ingest_one_session(
-        fixture,
+        session,
         project,
-        parser_name="pi",
+        parser_name="claude-code",
         cfg=load_config(),
         reconcile_watcher=False,
     )
@@ -3270,9 +3295,10 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
             placement="persistent",
             requested_sources=("session_jsonl", "bucket"),
             required_sources=("session_jsonl", "bucket"),
-            actor="pi",
-            session_id="019eb1ff-4699-790c-9a4c-d637d93b8bc7",
-            session_path=fixture,
+            actor="claude-code",
+            session_id="164b9ad1-4c1b-4602-9102-5276951a1594",
+            session_path=session,
+            trace_id=ingested.trace_id,
             result_dir=tmp_path / "capture-result",
         )
     ).finish(deadline=time.monotonic() + 15.0)
@@ -3283,13 +3309,20 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
         legacy_trace_path=baseline_trace_path,
         legacy_project=project,
         captured=captured,
-        legacy_roots=(project, fixture.parent),
-        captured_roots=(project, fixture.parent),
+        legacy_roots=(project, session.parent),
+        captured_roots=(project, session.parent),
     )
-    assert report.matches is True
+    assert report.matches is False
     assert report.serialized_artifact_bytes_match is True
     assert report.semantic_material_match is True
-    assert report.query_behavior_match is True
+    assert report.query_behavior_match is False
+    assert report.query_behavior["legacy"]["proof"]["trail_substantive"] is False
+    assert report.query_behavior["capture"]["proof"]["trail_substantive"] is False
+    assert "query_behavior" in report.differences
+    assert report.limitations == (
+        "persistent query compatibility is unproven because the supplied source "
+        "material did not materialize substantive Trace, Ctx, and Trail reads",
+    )
 
     # Killed control: the comparator must detect captured behavior/material
     # drifting even though the direct legacy baseline is left untouched.
@@ -3301,8 +3334,8 @@ def test_persistent_capture_matches_direct_legacy_chain_on_committed_pi_fixture(
         legacy_trace_path=baseline_trace_path,
         legacy_project=project,
         captured=captured,
-        legacy_roots=(project, fixture.parent),
-        captured_roots=(project, fixture.parent),
+        legacy_roots=(project, session.parent),
+        captured_roots=(project, session.parent),
     )
     assert killed.matches is False
     assert killed.serialized_artifact_bytes_match is False

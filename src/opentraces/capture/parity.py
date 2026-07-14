@@ -62,20 +62,30 @@ class PlacementParityReport:
 @dataclass(frozen=True)
 class PersistentCompatibilityReport:
     matches: bool
-    byte_match: bool
+    serialized_artifact_bytes_match: bool
+    semantic_material_match: bool
     query_behavior_match: bool
-    legacy_digest: str
-    capture_digest: str
+    query_behavior: dict[str, Any]
+    legacy_artifact_digest: str
+    capture_artifact_digest: str
+    legacy_semantic_digest: str
+    capture_semantic_digest: str
     differences: tuple[str, ...]
+    limitations: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "matches": self.matches,
-            "byte_match": self.byte_match,
+            "serialized_artifact_bytes_match": self.serialized_artifact_bytes_match,
+            "semantic_material_match": self.semantic_material_match,
             "query_behavior_match": self.query_behavior_match,
-            "legacy_digest": self.legacy_digest,
-            "capture_digest": self.capture_digest,
+            "query_behavior": self.query_behavior,
+            "legacy_artifact_digest": self.legacy_artifact_digest,
+            "capture_artifact_digest": self.capture_artifact_digest,
+            "legacy_semantic_digest": self.legacy_semantic_digest,
+            "capture_semantic_digest": self.capture_semantic_digest,
             "differences": list(self.differences),
+            "limitations": list(self.limitations),
         }
 
 
@@ -355,7 +365,10 @@ def compare_persistent_compatibility(
     captured_material = _persistent_material(
         captured_trace_path, captured_trace, captured_replacements
     )
-    byte_match = legacy_material == captured_material
+    legacy_artifacts = _serialized_artifact_bytes(legacy_trace_path)
+    captured_artifacts = _serialized_artifact_bytes(captured_trace_path)
+    artifact_bytes_match = legacy_artifacts == captured_artifacts
+    semantic_material_match = legacy_material == captured_material
     legacy_query = _query_behavior(
         trace=legacy_trace,
         trace_path=legacy_trace_path,
@@ -376,18 +389,30 @@ def compare_persistent_compatibility(
     differences = tuple(
         name
         for name, matches in (
-            ("normalized_bytes", byte_match),
+            ("serialized_artifact_bytes", artifact_bytes_match),
+            ("semantic_material", semantic_material_match),
             ("query_behavior", query_match),
         )
         if not matches
     )
+    limitations: tuple[str, ...] = ()
+    if not legacy_query["proven"] or not captured_query["proven"]:
+        limitations = (
+            "persistent query compatibility is unproven because the supplied source "
+            "material did not materialize substantive Trace, Ctx, and Trail reads",
+        )
     return PersistentCompatibilityReport(
         matches=not differences,
-        byte_match=byte_match,
+        serialized_artifact_bytes_match=artifact_bytes_match,
+        semantic_material_match=semantic_material_match,
         query_behavior_match=query_match,
-        legacy_digest=_digest(legacy_material),
-        capture_digest=_digest(captured_material),
+        query_behavior={"legacy": legacy_query, "capture": captured_query},
+        legacy_artifact_digest=_artifact_digest(legacy_artifacts),
+        capture_artifact_digest=_artifact_digest(captured_artifacts),
+        legacy_semantic_digest=_digest(legacy_material),
+        capture_semantic_digest=_digest(captured_material),
         differences=differences,
+        limitations=limitations,
     )
 
 
@@ -583,18 +608,24 @@ def _query_behavior(
     )
     trace_nodes = trace_result.get("nodes") if isinstance(trace_result, dict) else None
     ctx_nodes = ctx_result.get("nodes") if isinstance(ctx_result, dict) else None
-    proven = (
-        not errors
-        and bool(trace_id)
-        and event_ref_present
-        and isinstance(trace_nodes, list)
-        and bool(trace_nodes)
-        and isinstance(ctx_nodes, list)
-        and bool(ctx_nodes)
-        and trace_path.is_file()
-    )
+    trail_patches = trail_result.get("patches") if isinstance(trail_result, dict) else None
+    trail_anchors = trail_result.get("anchors") if isinstance(trail_result, dict) else None
+    proof = {
+        "trace_id_present": bool(trace_id),
+        "trace_artifact_present": trace_path.is_file(),
+        "event_ref_present": event_ref_present,
+        "trace_substantive": isinstance(trace_nodes, list) and bool(trace_nodes),
+        "ctx_substantive": isinstance(ctx_nodes, list) and bool(ctx_nodes),
+        "trail_substantive": (
+            isinstance(trail_patches, list)
+            and isinstance(trail_anchors, list)
+            and bool(trail_patches or trail_anchors)
+        ),
+    }
+    proven = not errors and all(proof.values())
     return {
         "proven": proven,
+        "proof": proof,
         "errors": errors,
         "result": normalized,
     }
@@ -612,20 +643,65 @@ def _selected_fields(value: dict[str, Any], keys: set[str]) -> dict[str, Any]:
     return {key: value[key] for key in sorted(keys) if key in value}
 
 
-def _normalize_query_input(value: Any, replacements: dict[str, str]) -> Any:
+_QUERY_INPUT_PATH_FIELDS = frozenset({"file_path", "path", "cwd", "workdir", "working_directory"})
+_QUERY_RESULT_PATH_FIELDS = frozenset(
+    {
+        "file_path",
+        "files_read",
+        "files_modified",
+        "cwd",
+        "workdir",
+        "working_directory",
+    }
+)
+
+
+def _normalize_query_input(
+    value: Any,
+    replacements: dict[str, str],
+    *,
+    path: tuple[str, ...] = (),
+) -> Any:
     if isinstance(value, dict):
-        return {key: _normalize_query_input(child, replacements) for key, child in value.items()}
+        return {
+            key: _normalize_query_input(child, replacements, path=(*path, key))
+            for key, child in value.items()
+        }
     if isinstance(value, list):
-        return [_normalize_query_input(child, replacements) for child in value]
-    if isinstance(value, str):
+        return [_normalize_query_input(child, replacements, path=(*path, "[]")) for child in value]
+    if isinstance(value, str) and _query_input_path_slot(path):
         normalized = value
         for raw, replacement in sorted(
             replacements.items(), key=lambda item: len(item[0]), reverse=True
         ):
             if Path(raw).is_absolute():
-                normalized = normalized.replace(raw, replacement)
+                # Trace Map resolves typed paths. Keep the normalized value
+                # absolute so ``Path.resolve`` cannot re-anchor it under each
+                # placement's cwd and manufacture behavioral drift.
+                typed_replacement = (
+                    f"/{replacement}" if replacement == "<workspace>" else replacement
+                )
+                normalized = normalized.replace(raw, typed_replacement)
         return normalized
     return value
+
+
+def _query_input_path_slot(path: tuple[str, ...]) -> bool:
+    """Normalize only typed tool-input path fields, never semantic prose."""
+
+    return (
+        bool(path)
+        and path[-1] in _QUERY_INPUT_PATH_FIELDS
+        and "tool_calls" in path
+        and "input" in path
+    )
+
+
+def _query_result_path_slot(path: tuple[str, ...]) -> bool:
+    """Recognize typed path fields in the Trace/Trail query projections."""
+
+    leaf = next((part for part in reversed(path) if part != "[]"), "")
+    return leaf in _QUERY_RESULT_PATH_FIELDS
 
 
 def _compatibility_replacements(
@@ -665,7 +741,30 @@ def _persistent_material(
         "trail": _sanitize_companion_projection(
             _normalize(trail_raw, replacements, domain="companion")
         ),
+        "sources": _normalize(
+            _read_jsonl_gz(trace_path.with_name("sources.jsonl.gz")),
+            replacements,
+            domain="companion",
+        ),
     }
+
+
+def _serialized_artifact_bytes(trace_path: Path) -> dict[str, bytes]:
+    """Read the literal serialized artifacts promised by persistent #268."""
+
+    names = ("trace.json", "context.jsonl.gz", "trail.jsonl.gz", "sources.jsonl.gz")
+    return {name: trace_path.with_name(name).read_bytes() for name in names}
+
+
+def _artifact_digest(artifacts: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for name, material in sorted(artifacts.items()):
+        encoded_name = name.encode("utf-8")
+        digest.update(len(encoded_name).to_bytes(8, "big"))
+        digest.update(encoded_name)
+        digest.update(len(material).to_bytes(8, "big"))
+        digest.update(material)
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -911,7 +1010,7 @@ def _normalize(
         for raw, replacement in sorted(
             replacements.items(), key=lambda item: len(item[0]), reverse=True
         ):
-            if Path(raw).is_absolute():
+            if Path(raw).is_absolute() and (domain != "query" or _query_result_path_slot(path)):
                 normalized = normalized.replace(raw, replacement)
             elif replacement == "<trace-id>":
                 normalized = _normalize_trace_join(

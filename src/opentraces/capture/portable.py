@@ -103,6 +103,66 @@ def _finalizer_report_error(report: Any, invocation_nonce: str) -> str | None:
     return None
 
 
+def _read_bucket_companion(path: Path) -> tuple[list[Any], str | None]:
+    """Read one canonical gzip JSONL companion without accepting partial rows."""
+
+    rows: list[Any] = []
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    rows.append(json.loads(line))
+    except (OSError, EOFError, json.JSONDecodeError, UnicodeError) as exc:
+        return [], f"unreadable: {type(exc).__name__}"
+    return rows, None
+
+
+def _bucket_companion_content_error(
+    rows: list[Any],
+    *,
+    family: str,
+    trace_id: str,
+    required: bool,
+) -> str | None:
+    """Validate canonical, family-exact, trace-scoped bucket companion rows."""
+
+    if not rows:
+        return "is empty despite canonical trace state" if required else None
+    if family == "sources":
+        # sources.jsonl.gz is currently an explicitly empty placeholder.  No
+        # non-empty source-reference envelope has shipped, so accepting an
+        # arbitrary JSON object here would manufacture unsupported evidence.
+        return "contains unsupported non-empty source-reference rows"
+    if family not in {"context", "trail"}:
+        return f"has unknown family {family!r}"
+
+    from ..core.context_tree.contract import CONTEXT_EVENT_TYPES
+    from ..core.trails.models import TrailEvent, expected_event_id, payload_content_hash
+    from ..core.trails.search_records import summary_search_touches_trace
+
+    canonical_fields = set(TrailEvent.model_fields)
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict) or set(row) != canonical_fields:
+            return f"row {index} is not the exact canonical TrailEvent envelope"
+        try:
+            event = TrailEvent.model_validate(row)
+        except (TypeError, ValueError) as exc:
+            return f"row {index} is not a canonical TrailEvent: {type(exc).__name__}"
+        is_context = event.event_type in CONTEXT_EVENT_TYPES
+        if (family == "context") != is_context:
+            return f"row {index} belongs to the wrong companion family"
+        scoped = event.trace_id == trace_id or (
+            family == "trail" and summary_search_touches_trace(event, trace_id)
+        )
+        if not scoped:
+            return f"row {index} is not scoped to the current trace"
+        if event.content_hash != payload_content_hash(event.payload):
+            return f"row {index} payload content hash is invalid"
+        if event.event_id != expected_event_id(event):
+            return f"row {index} event identity is invalid"
+    return None
+
+
 def _finalizer_semantic_error(
     report: dict[str, Any],
     *,
@@ -472,14 +532,30 @@ def _finalizer_semantic_error(
             return "bucket current record pointer or envelope names another identity"
         if envelope.get("record") != trace_record.model_dump(mode="json"):
             return "bucket trace projection differs from its canonical current record"
-        for key in ("context_path", "trail_path", "sources_path"):
-            try:
-                with gzip.open(expected[key], "rt", encoding="utf-8") as handle:
-                    for line in handle:
-                        if line.strip():
-                            json.loads(line)
-            except (OSError, json.JSONDecodeError, UnicodeError) as exc:
-                return f"bucket {key} companion is unreadable: {type(exc).__name__}"
+        context_summary = trace_record.context_tree_summary or {}
+        context_required = any(
+            _is_nonnegative_int(context_summary.get(key)) and context_summary[key] > 0
+            for key in ("node_count", "layer_count")
+        )
+        companion_requirements = {
+            "context": context_required,
+            "trail": bool(trace_record.patches),
+            # The v2 envelope currently writes this as an empty placeholder.
+            "sources": False,
+        }
+        for family, required in companion_requirements.items():
+            key = f"{family}_path"
+            rows, read_error = _read_bucket_companion(expected[key])
+            if read_error is not None:
+                return f"bucket {key} companion is {read_error}"
+            content_error = _bucket_companion_content_error(
+                rows,
+                family=family,
+                trace_id=requested_trace_id,
+                required=required,
+            )
+            if content_error is not None:
+                return f"bucket {key} companion {content_error}"
     return None
 
 
