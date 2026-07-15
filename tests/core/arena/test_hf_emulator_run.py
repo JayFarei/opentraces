@@ -155,14 +155,14 @@ class WorldRuntime:
         elif control_url.endswith("/_emulate/reset"):
             self.control_calls.append(("reset", list(map(str, argv)), environment))
             stdout, returncode = '{"ok":true}\n', 0
-        elif "/proc/$pid/exe" in rendered:
+        elif "/proc/$pid/exe" in rendered and "sudo kill" not in rendered:
             self.events.append("process-binding")
             stdout, returncode = (
                 (json.dumps({"pid": 4242, "user": "opentraces-hf"}) + "\n", 0)
                 if self.process_alive
                 else ("", 1)
             )
-        elif "sha256sum" in rendered:
+        elif "sha256sum" in rendered and "sudo kill" not in rendered:
             assert self.copied is not None
             self.events.append("sha256")
             digest = hashlib.sha256(self.copied[0].read_bytes()).hexdigest()
