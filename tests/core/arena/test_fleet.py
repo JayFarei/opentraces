@@ -9,7 +9,6 @@ from opentraces.core.arena.box import Box
 from opentraces.core.arena.engine import Bench, ScenarioSource
 from opentraces.core.arena.fleet import (
     LOCAL_CONTAINER,
-    FleetAttempt,
     RecipeInputs,
     UnsupportedPlacement,
     collect_selected_nodeids,
@@ -105,7 +104,7 @@ def test_two_attempts_overlap_without_crossing_run_or_recipe_state(tmp_path: Pat
         prepare_calls += 1
         return RecipeInputs.capture([recipe_file])
 
-    def attempt(nodeid: str, recipe: RecipeInputs) -> FleetAttempt:
+    def attempt(nodeid: str, recipe: RecipeInputs) -> Path:
         assert recipe.verify() is True
         runtime = ConcurrentRuntime(
             nodeid,
@@ -124,7 +123,7 @@ def test_two_attempts_overlap_without_crossing_run_or_recipe_state(tmp_path: Pat
             assert run.draft is not None
             run.draft.write_text("artifacts/attempt-marker.txt", nodeid)
             run.verify(_marker_is_local)
-        return FleetAttempt.from_run(run.final_path, store=store)
+        return run.final_path
 
     fleet = execute_fleet(
         ("scenario-a", "scenario-b"),
@@ -183,14 +182,7 @@ def test_fleet_reloads_every_attempt_from_the_finalized_store(tmp_path: Path) ->
             concurrency=1,
             placement=LOCAL_CONTAINER,
             prepare_recipe=RecipeInputs.empty,
-            run_attempt=lambda _nodeid, _recipe: FleetAttempt(
-                nodeid="scenario-a",
-                run_id="run_forged",
-                run_path=tmp_path / "not-a-stored-run",
-                verdict="pass",
-                execution_status="complete",
-                provider="local-container",
-            ),
+            run_attempt=lambda _nodeid, _recipe: tmp_path / "not-a-stored-run",
         )
 
 

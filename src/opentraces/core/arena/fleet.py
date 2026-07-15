@@ -64,19 +64,12 @@ LOCAL_CONTAINER_HOLES = (REMOTE_RENTED_GLIBC_HOLE, X86_64_EMULATOR_HOLE)
 
 @dataclass(frozen=True)
 class RecipeArtifact:
-    """An immutable host-side materialization input."""
+    """Immutable cached bytes for one host-side materialization input."""
 
-    path: Path
+    name: str
+    content: bytes
     size: int
     sha256: str
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
 
 
 @dataclass(frozen=True)
@@ -88,16 +81,24 @@ class RecipeInputs:
 
     @classmethod
     def capture(cls, paths: Iterable[Path]) -> "RecipeInputs":
-        artifacts = tuple(
-            RecipeArtifact(
-                path=path.resolve(strict=True),
-                size=path.stat().st_size,
-                sha256=_file_sha256(path),
-            )
+        resolved = tuple(
+            path.resolve(strict=True)
             for path in sorted((Path(path) for path in paths), key=lambda item: str(item))
         )
+        names = [path.name for path in resolved]
+        if len(set(names)) != len(names):
+            raise ValueError("recipe input names must be unique")
+        artifacts = tuple(
+            RecipeArtifact(
+                name=path.name,
+                content=(content := path.read_bytes()),
+                size=len(content),
+                sha256=f"sha256:{hashlib.sha256(content).hexdigest()}",
+            )
+            for path in resolved
+        )
         material = [
-            {"ordinal": ordinal, "name": item.path.name, "size": item.size, "sha256": item.sha256}
+            {"ordinal": ordinal, "name": item.name, "size": item.size, "sha256": item.sha256}
             for ordinal, item in enumerate(artifacts)
         ]
         encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -110,12 +111,23 @@ class RecipeInputs:
     def verify(self) -> bool:
         for artifact in self.artifacts:
             if (
-                not artifact.path.is_file()
-                or artifact.path.stat().st_size != artifact.size
-                or _file_sha256(artifact.path) != artifact.sha256
+                len(artifact.content) != artifact.size
+                or f"sha256:{hashlib.sha256(artifact.content).hexdigest()}" != artifact.sha256
             ):
-                raise RecipeInputChanged(f"immutable recipe input changed: {artifact.path.name}")
+                raise RecipeInputChanged(f"immutable recipe input changed: {artifact.name}")
         return True
+
+    def materialize(self, destination: Path) -> tuple[Path, ...]:
+        """Create one attempt-private writable copy of the cached inputs."""
+
+        root = Path(destination)
+        root.mkdir(parents=True, exist_ok=False)
+        materialized: list[Path] = []
+        for artifact in self.artifacts:
+            path = root / artifact.name
+            path.write_bytes(artifact.content)
+            materialized.append(path)
+        return tuple(materialized)
 
 
 @dataclass(frozen=True)
@@ -131,7 +143,13 @@ class FleetAttempt:
 
     @classmethod
     def from_run(cls, run_path: Path, *, store: RunStore) -> "FleetAttempt":
-        resolved = Path(run_path).resolve(strict=True)
+        try:
+            resolved = Path(run_path).resolve(strict=True)
+            store_root = store.root.resolve(strict=True)
+        except OSError as exc:
+            raise FleetError("fleet attempt is not a finalized stored run") from exc
+        if resolved.parent != store_root:
+            raise FleetError("fleet attempt is outside the finalized RunStore")
         store.verify(resolved)
         result = json.loads((resolved / "result.json").read_text(encoding="utf-8"))
         run_id = result.get("run_id")
@@ -177,10 +195,11 @@ def _resolve_placement(value: FleetPlacement | str) -> FleetPlacement:
 def execute_fleet(
     nodeids: Sequence[str],
     *,
+    store: RunStore,
     concurrency: int,
     placement: FleetPlacement | str,
     prepare_recipe: Callable[[], RecipeInputs],
-    run_attempt: Callable[[str, RecipeInputs], FleetAttempt],
+    run_attempt: Callable[[str, RecipeInputs], Path | str],
 ) -> FleetResult:
     """Run selected node ids concurrently with one lifecycle per attempt.
 
@@ -205,11 +224,20 @@ def execute_fleet(
 
     with ThreadPoolExecutor(max_workers=min(concurrency, len(selected))) as executor:
         futures = [executor.submit(run_attempt, nodeid, recipe) for nodeid in selected]
-        attempts = tuple(future.result() for future in futures)
+        returned = tuple(future.result() for future in futures)
 
     recipe.verify()
-    if any(not isinstance(attempt, FleetAttempt) for attempt in attempts):
-        raise TypeError("run_attempt must return FleetAttempt")
+    attempt_paths: list[Path] = []
+    for value in returned:
+        if isinstance(value, str):
+            if Path(value).name != value or not value.startswith("run_"):
+                raise FleetError("run_attempt returned an invalid finalized run id")
+            attempt_paths.append(store.root / value)
+        elif isinstance(value, Path):
+            attempt_paths.append(value)
+        else:
+            raise TypeError("run_attempt must return a finalized run path or run id")
+    attempts = tuple(FleetAttempt.from_run(path, store=store) for path in attempt_paths)
     if tuple(attempt.nodeid for attempt in attempts) != selected:
         raise FleetError("fleet result node ids do not match the selected attempts")
     if len({attempt.run_id for attempt in attempts}) != len(attempts):
