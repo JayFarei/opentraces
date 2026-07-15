@@ -59,6 +59,17 @@ def test_bad_probe_or_schema_is_a_named_machinery_error() -> None:
         )
     assert wrong.value.code == "capability_probe_schema"
 
+    with pytest.raises(CapabilityProbeError, match="interfaces") as malformed:
+        parse_capabilities_probe(
+            returncode=0,
+            stdout=(
+                '{"schema_version":"opentraces.capabilities.v0",'
+                '"interfaces":"not-an-array","cli":{},"emulation_seams":[]}'
+            ),
+            stderr="",
+        )
+    assert malformed.value.code == "capability_probe_invalid"
+
 
 def test_absent_valid_capability_is_a_named_skip_not_pass_or_error() -> None:
     outcome = evaluate_capabilities(
@@ -207,6 +218,32 @@ def test_broken_capability_probe_is_a_stored_run_error(tmp_path: Path) -> None:
     assert result["execution_status"] == "error"
     assert result["verdict"] is None
     assert result["reason"]["code"] == "capability_probe_failed"
+
+
+def test_malformed_capability_envelope_is_a_stored_run_error(tmp_path: Path) -> None:
+    runtime = CapabilityRuntime(
+        manifest={
+            "schema_version": "opentraces.capabilities.v0",
+            "interfaces": "not-an-array",
+            "cli": {},
+            "emulation_seams": [],
+        }
+    )
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    with pytest.raises(CapabilityProbeError, match="interfaces"):
+        with bench.run(app_state="install-only") as run:
+            run.require_capabilities("cli")
+
+    result = json.loads((run.final_path / "result.json").read_text())
+    assert result["execution_status"] == "error"
+    assert result["verdict"] is None
+    assert result["reason"]["code"] == "capability_probe_invalid"
 
 
 def test_declared_seam_environment_is_exported_to_later_product_actions(

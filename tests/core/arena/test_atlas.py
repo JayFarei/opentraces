@@ -42,7 +42,7 @@ def _result(
 def _guarantee(guarantee_id: str, nodeid: str) -> dict[str, object]:
     return {
         "id": guarantee_id,
-        "claim": f"guarantee {guarantee_id}",
+        "claim": f"claim for {nodeid}",
         "nodeid": nodeid,
         "verifier": {"name": "verify_world", "digest": "sha256:verifier-v1"},
         "black_box_review": "unreviewed",
@@ -60,7 +60,7 @@ def test_unbound_guarantee_is_a_hole_and_never_green() -> None:
     assert atlas["rows"] == [
         {
             "id": "remote-emulator",
-            "claim": "guarantee remote-emulator",
+            "claim": "claim for scenario::remote",
             "nodeid": "scenario::remote",
             "state": "unbound",
             "latest_run_id": None,
@@ -116,6 +116,31 @@ def test_proven_row_is_pinned_to_the_exact_stored_result() -> None:
 
     row["latest_run_id"] = "run-missing"
     with pytest.raises(AtlasIntegrityError, match="run-missing"):
+        cross_check_atlas(atlas, results=[result])
+
+
+@pytest.mark.parametrize(
+    ("field", "forged"),
+    [
+        ("state", "proven"),
+        ("verdict", "pass"),
+        ("claim", "A forged claim replaces the stored claim."),
+    ],
+)
+def test_cross_check_recomputes_every_truth_bearing_row_field(
+    field: str, forged: str
+) -> None:
+    result = _result(run_id="run-red", nodeid="scenario::red", verdict="fail")
+    atlas = build_atlas(
+        guarantees=[_guarantee("red", "scenario::red")],
+        results=[result],
+        product_commit=PRODUCT_COMMIT,
+        capabilities_digest=CAPABILITIES_DIGEST,
+    )
+    assert atlas["rows"][0]["state"] == "failing"
+
+    atlas["rows"][0][field] = forged
+    with pytest.raises(AtlasIntegrityError, match=field):
         cross_check_atlas(atlas, results=[result])
 
 

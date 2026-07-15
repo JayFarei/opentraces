@@ -172,6 +172,42 @@ def test_bench_reverify_requires_the_exact_callable_name_and_digest(
     }
 
 
+def test_bench_reverify_refuses_invalid_run_before_importing_verifier(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    marker = tmp_path / "imported.txt"
+    module_path = tmp_path / "side_effect_verifier.py"
+    module_path.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('imported', encoding='utf-8')\n"
+        "def verify_stored(evidence): return {'evidence_refs': []}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+
+    invoked = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "reverify",
+            "run_missing",
+            "--store-root",
+            str(store.root),
+            "--verifier-name",
+            "side_effect_verifier.verify_stored",
+            "--verifier-digest",
+            "sha256:" + "0" * 64,
+            "--json",
+        ],
+    )
+
+    assert invoked.exit_code != 0
+    assert "missing result" in invoked.output
+    assert not marker.exists(), "invalid stored evidence must fail before module import"
+
+
 def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
     tmp_path: Path,
 ) -> None:
@@ -330,3 +366,69 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
         ),
         "run_id": latest_red.name,
     }
+
+
+def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
+    tmp_path: Path,
+) -> None:
+    product_commit = "a" * 40
+    capabilities_digest = "sha256:" + "b" * 64
+    verifier_digest = "sha256:" + "c" * 64
+    verifier_name = "arena_guarantees.verify_publish"
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    failed = _finalize_run(
+        store,
+        claim="Dataset publication reaches the remote.",
+        nodeid="arena::publish",
+        verdict="fail",
+        verifier_name=verifier_name,
+        verifier_digest=verifier_digest,
+        product_commit=product_commit,
+        capabilities_digest=capabilities_digest,
+    )
+    atlas_path = tmp_path / "atlas.json"
+    atlas_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "opentraces.arena.atlas.v0",
+                "product_commit": product_commit,
+                "capabilities_digest": capabilities_digest,
+                "inactive_hole_states": ["no-red-proof", "unrepresentative-world"],
+                "rows": [
+                    {
+                        "id": "publish",
+                        "claim": "Dataset publication reaches the remote.",
+                        "nodeid": "arena::publish",
+                        "verifier": {
+                            "name": verifier_name,
+                            "digest": verifier_digest,
+                        },
+                        "state": "proven",
+                        "latest_run_id": failed.name,
+                        "verdict": "pass",
+                        "evidence_ref": f"runs/v1/{failed.name}/result.json",
+                        "black_box_review": "unreviewed",
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    summarized = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "atlas",
+            "summary",
+            str(atlas_path),
+            "--store-root",
+            str(store.root),
+            "--json",
+        ],
+    )
+
+    assert summarized.exit_code != 0
+    assert "state" in summarized.output
+    assert "disagrees" in summarized.output
