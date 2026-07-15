@@ -1,11 +1,11 @@
 {
-  "schema_version": "opentraces.hf-emulator-trusted-build.v1",
-  "binary_sha256": "9b70ee81f004f101e4ee77dca19d86e319e64c6edf6655a9e89b5626600312ad",
-  "size_bytes": 94089101,
-  "source_sha256": "9c5d8893616522f34cdaf9714906f75d13fd37787560f46f81f6bc1725729c83",
-  "build_inputs_sha256": "5bb8b549b32ec07dc54612308d7cc20e3646c5362e3644e397f373fa9c4dc2e2",
+  "binary_sha256": "07a0b96d9cd927adc2a00692968ef5acf633746f00a0dc2fa2a0726c360bd0c2",
+  "build_inputs_sha256": "22cb2e6ce61e3254558b13d25f38a085239f5276960ca5bc5f41fe42dd5f88e3",
   "bun_version": "1.3.6",
-  "target": "bun-linux-arm64",
   "contract_version": "huggingface.v1",
-  "evidence": "tests/manual/a2_hf_emulator_real_box.json (LOCAL diagnostic only; remote issue #264 gate remains required)"
+  "evidence": "ubuntu:24.04 local-container execution 2026-07-14: exact binary manifest-ready; product bearer received 401 on credentials, seed, and reset; harness bearer received 200; rejected and accepted attempts present in the append-only ledger",
+  "schema_version": "opentraces.hf-emulator-trusted-build.v1",
+  "size_bytes": 94089960,
+  "source_sha256": "a2babbed98121bdf04ef110786269215e402e2555cab7bf863616f920afafed1",
+  "target": "bun-linux-arm64"
 }

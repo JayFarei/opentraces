@@ -43,11 +43,17 @@ precompiled emulator is available. Only a leased runtime-free box may opt into
 the single, explicit compiled-build skip with `OPENTRACES_RUNTIME_FREE_BOX=1`.
 
 Mutable Hub operations require a token present in emulator state. The baseline
-world contains the deterministic `bench` credential; `POST
-/_emulate/credentials` deterministically mints other identities. `POST
-/_emulate/seed` creates declared empty repositories and `POST /_emulate/reset`
-returns repositories, files, revisions, and credentials to that baseline.
-Bearer-looking strings that were never minted are not credentials.
+world contains the deterministic `bench` credential. The three mutation routes
+`POST /_emulate/credentials`, `POST /_emulate/seed`, and `POST
+/_emulate/reset` additionally require the per-launch `X-Bench-Control-Token`
+bearer. The runner generates that bearer, supplies it only to the sidecar and
+its controller-side client, and never includes it in `hf.env` or a product
+terminal action. Rejected control attempts are ledgered before their request
+body is read. Authorized credentials calls deterministically mint other
+identities, seed creates declared empty repositories, and reset returns
+repositories, files, revisions, and credentials to the baseline. Bearer-looking
+strings that were never minted are not credentials, and a product credential is
+never a control-plane credential.
 
 The supported operation set is deliberately finite. New client calls must be
 declared in the readiness manifest and tested through the real client before
