@@ -128,6 +128,7 @@ def test_two_attempts_overlap_without_crossing_run_or_recipe_state(tmp_path: Pat
 
     fleet = execute_fleet(
         ("scenario-a", "scenario-b"),
+        store=store,
         concurrency=2,
         placement=LOCAL_CONTAINER,
         prepare_recipe=prepare,
@@ -151,6 +152,46 @@ def test_two_attempts_overlap_without_crossing_run_or_recipe_state(tmp_path: Pat
     assert markers == {"scenario-a", "scenario-b"}
     assert recipe_file.read_bytes() == b"immutable wheel input"
     assert fleet.recipe.verify() is True
+
+
+def test_recipe_cache_exposes_immutable_content_not_shared_writable_paths(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "opentraces.whl"
+    source.write_bytes(b"clean")
+
+    recipe = RecipeInputs.capture([source])
+    source.write_bytes(b"poisoned after capture")
+
+    artifact = recipe.artifacts[0]
+    assert not hasattr(artifact, "path")
+    assert artifact.content == b"clean"
+    first = recipe.materialize(tmp_path / "attempt-a")
+    second = recipe.materialize(tmp_path / "attempt-b")
+    first[0].write_bytes(b"attempt-a mutation")
+    assert second[0].read_bytes() == b"clean"
+    assert recipe.verify() is True
+
+
+def test_fleet_reloads_every_attempt_from_the_finalized_store(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+
+    with pytest.raises(Exception, match="stored|finalized|exist|index"):
+        execute_fleet(
+            ("scenario-a",),
+            store=store,
+            concurrency=1,
+            placement=LOCAL_CONTAINER,
+            prepare_recipe=RecipeInputs.empty,
+            run_attempt=lambda _nodeid, _recipe: FleetAttempt(
+                nodeid="scenario-a",
+                run_id="run_forged",
+                run_path=tmp_path / "not-a-stored-run",
+                verdict="pass",
+                execution_status="complete",
+                provider="local-container",
+            ),
+        )
 
 
 def test_selection_is_pytest_node_path_and_marker_selection(tmp_path: Path) -> None:
@@ -189,6 +230,7 @@ def test_remote_placement_is_a_named_hole_not_local_proof() -> None:
     ):
         execute_fleet(
             ("scenario-a",),
+            store=RunStore(Path("unused-store")),
             concurrency=1,
             placement="remote-rented",
             prepare_recipe=lambda: RecipeInputs.empty(),
