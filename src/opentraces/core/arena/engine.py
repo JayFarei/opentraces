@@ -14,10 +14,12 @@ from types import TracebackType
 from typing import Any, Callable, Literal, Mapping
 
 from ... import __version__
+from .agent import AgentDrive
 from .box import Box, CrabboxRuntime
 from .contract import build_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.actions import RunActionSequence
+from .drives.agent import AgentTerminalSessionFactory, TermctrlAgentSession
 from .drives.browser import BrowserDrive, BrowserFactory, open_playwright_session
 from .drives.terminal import TerminalDrive
 from .emulate.huggingface.runtime import (
@@ -88,6 +90,8 @@ class Bench:
         box_runtime: CrabboxRuntime | None = None,
         repository_path: Path | None = None,
         browser_factory: BrowserFactory | None = None,
+        agent_session_factory: AgentTerminalSessionFactory = TermctrlAgentSession,
+        agent_poll_interval: float = 0.3,
     ) -> None:
         self.source = source
         self.store = store or RunStore()
@@ -97,6 +101,8 @@ class Bench:
         )
         self.repository_path = Path(repository_path or Path.cwd())
         self.browser_factory = browser_factory or open_playwright_session
+        self.agent_session_factory = agent_session_factory
+        self.agent_poll_interval = agent_poll_interval
 
     def run(
         self,
@@ -132,6 +138,7 @@ class BenchRun:
         self.box: Box | None = None
         self.terminal: TerminalDrive
         self.browser: BrowserDrive
+        self.agent: AgentDrive
         self.actions: RunActionSequence
         self.verifiers: list[dict[str, Any]] = []
         self.verifier_sources: list[dict[str, str]] = []
@@ -195,6 +202,17 @@ class BenchRun:
                 actions=self.actions,
                 factory=self.bench.browser_factory,
             )
+            self.agent = AgentDrive(
+                box=self.box,
+                draft=self.draft,
+                actions=self.actions,
+                terminal=self.terminal,
+                browser=self.browser,
+                execution_mode=self.execution_mode,
+                product_environment=self._agent_product_environment,
+                session_factory=self.bench.agent_session_factory,
+                poll_interval=self.bench.agent_poll_interval,
+            )
         except Exception as exc:
             if self.box is not None:
                 try:
@@ -243,6 +261,15 @@ class BenchRun:
             hf_emulator=emulator.binary_pin,
         )
         return emulator
+
+    def _agent_product_environment(self) -> dict[str, str]:
+        environment: dict[str, str] = {}
+        for emulator in self._emulators.values():
+            for key, value in emulator.env.items():
+                if key in environment and environment[key] != value:
+                    raise ValueError(f"agent product environment disagrees on {key}")
+                environment[key] = value
+        return environment
 
     def _source_ref(self, source_object: object) -> dict[str, str]:
         path_value = inspect.getsourcefile(source_object)
@@ -468,6 +495,15 @@ class BenchRun:
                     "kind": "assertion_failure",
                 }
             )
+        agent_attempt = self.draft.path / "artifacts" / "agent-attempt.json"
+        if agent_attempt.is_file():
+            artifacts.append(
+                {
+                    "path": "artifacts/agent-attempt.json",
+                    "media_type": "application/json",
+                    "kind": "agent_attempt",
+                }
+            )
         duration_ms = max(0, int((time.monotonic() - self._started) * 1000))
         evidence_requirements = [
             {
@@ -541,8 +577,10 @@ class BenchRun:
                 },
                 "observer": {"package": "opentraces", "version": __version__},
                 "environment": box_pin,
-                "harness": None,
-                "model_wire": None,
+                "harness": self.agent.harness_pin if hasattr(self, "agent") else None,
+                "model_wire": (
+                    self.agent.inference_pin if hasattr(self, "agent") else None
+                ),
                 "emulators": {name: emulator.pin for name, emulator in self._emulators.items()},
                 "app_state": self._app_state_pin,
             },
@@ -560,6 +598,8 @@ class BenchRun:
             summaries.append(self.terminal.recording_summary())
         if hasattr(self, "browser") and self.browser.has_actions:
             summaries.append(self.browser.recording_summary())
+        if hasattr(self, "agent") and self.agent.has_actions:
+            summaries.append(self.agent.recording_summary())
         if summaries:
             timeline = self.actions.timeline_status()
             result: dict[str, Any] = {

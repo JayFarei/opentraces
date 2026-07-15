@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
 
 from opentraces.core.arena.agent import AgentDrive
+from opentraces.core.arena.drives.actions import RunActionSequence
 from opentraces.core.arena.drives.agent import AgentTerminalObservation
 from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.run_store import RunStore
@@ -51,6 +53,7 @@ class CompletingHarnessSession:
 
 
 def _bench(tmp_path: Path, session: CompletingHarnessSession) -> Bench:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     return Bench(
         source=_scenario(tmp_path),
         store=RunStore(tmp_path / "runs" / "v1"),
@@ -174,8 +177,9 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
     remote = session.started_argv[session.started_argv.index("--") + 1 :]
     assert "/usr/bin/sudo" in remote
     sudo = remote.index("/usr/bin/sudo")
-    assert remote[sudo : sudo + 5] == [
+    assert remote[sudo : sudo + 6] == [
         "/usr/bin/sudo",
+        "-H",
         "-n",
         "-u",
         "opentraces-product",
@@ -234,7 +238,7 @@ def test_agent_authority_refuses_controller_bearer_before_any_action(
     drive = AgentDrive(
         box=FakeBoxRuntime().lease(),
         draft=draft,
-        actions=None,
+        actions=RunActionSequence(draft=draft, run_started_monotonic=time.monotonic()),
         terminal=terminal,
         browser=browser,
         execution_mode="agent_live",
@@ -255,7 +259,54 @@ def test_agent_authority_refuses_controller_bearer_before_any_action(
         )
 
     assert session.start_count == 0
-    assert "controller-secret" not in json.dumps(store.root.as_posix())
+    assert not any((draft.path / "actions").iterdir())
+    retained = b"".join(path.read_bytes() for path in draft.path.rglob("*") if path.is_file())
+    assert b"controller-secret" not in retained
+
+
+def test_agent_receives_only_product_facing_emulator_environment(
+    tmp_path: Path,
+) -> None:
+    session = CompletingHarnessSession()
+    draft = RunStore(tmp_path / "runs" / "v1").begin()
+    terminal = object()
+    drive = AgentDrive(
+        box=FakeBoxRuntime().lease(),
+        draft=draft,
+        actions=RunActionSequence(draft=draft, run_started_monotonic=time.monotonic()),
+        terminal=terminal,
+        browser=object(),
+        execution_mode="agent_live",
+        product_environment=lambda: {
+            "HF_ENDPOINT": "http://127.0.0.1:8765",
+            "HF_TOKEN": "product-credential",
+        },
+        session_factory=lambda _name: session,
+        poll_interval=0,
+    )
+
+    attempt = drive.attempt(
+        harness="claude",
+        task="Inspect the configured Hub identity.",
+        access=[terminal],
+        inference="live",
+    )
+
+    assert attempt.completed is True
+    assert session.started_argv is not None
+    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    assert remote[:3] == [
+        "env",
+        "HF_ENDPOINT=http://127.0.0.1:8765",
+        "HF_TOKEN=product-credential",
+    ]
+    assert "--preserve-env=HF_ENDPOINT,HF_TOKEN" in remote
+    invocation = (draft.path / "actions/0001/invocation.json").read_text(encoding="utf-8")
+    artifact = (draft.path / attempt.artifact_ref).read_text(encoding="utf-8")
+    assert "product-credential" not in invocation
+    assert "product-credential" not in artifact
+    assert "OPENTRACES_HF_CONTROL_TOKEN" not in invocation
+    assert "OPENTRACES_HF_CONTROL_TOKEN" not in artifact
 
 
 def test_unknown_harness_is_refused_by_the_closed_registry_before_spawn(
