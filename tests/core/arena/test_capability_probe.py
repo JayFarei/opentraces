@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -26,16 +27,30 @@ def _manifest() -> dict[str, object]:
             "security_version": "test",
         },
         "interfaces": [
-            {"id": "cli", "kind": "cli", "drive": "cli", "maturity": "stable"},
+            {
+                "id": "cli",
+                "kind": "cli",
+                "drive": "cli",
+                "maturity": "stable",
+                "entrypoint": "opentraces",
+            },
             {
                 "id": "agent",
                 "kind": "agent",
                 "drive": "agent",
                 "maturity": "seed-plays",
+                "composite_over": ["cli"],
                 "harnesses": ["claude-code"],
+                "skill": "skill/SKILL.md",
+                "lifecycle": {"start": "setup.claude-code"},
             },
         ],
-        "cli": {"verbs": [{"path": "dataset.publish", "hidden": False}]},
+        "cli": {
+            "entrypoint": "opentraces",
+            "json_flag": "--json",
+            "pure_json_under_flag": True,
+            "verbs": [{"path": "dataset.publish", "hidden": False}],
+        },
         "integration_seams": [],
         "emulation_seams": [
             {
@@ -43,12 +58,25 @@ def _manifest() -> dict[str, object]:
                 "kind": "redirect",
                 "env": ["HF_ENDPOINT"],
                 "auth_env": ["HF_TOKEN", "HUGGINGFACE_TOKEN"],
+                "honored_by": "huggingface_hub constants.ENDPOINT",
+                "declared_in": "opentraces.core.capabilities:EMULATION_SEAMS",
             },
             {
                 "dependency": "pypi-version-check",
                 "kind": "disable",
                 "env": ["OPENTRACES_DISABLE_VERSION_CHECK"],
                 "auth_env": [],
+                "honored_by": "opentraces.core.integration_versions:version_status",
+                "declared_in": "opentraces.core.capabilities:EMULATION_SEAMS",
+            },
+            {
+                "dependency": "llm-openai-compat",
+                "kind": "config",
+                "env": [],
+                "auth_env": ["ANTHROPIC_API_KEY"],
+                "honored_by": "opentraces.security.llm_provider:OpenAICompatProvider",
+                "declared_in": "opentraces.core.capabilities:EMULATION_SEAMS",
+                "config_key": "review_llm.base_url",
             },
         ],
         "introspection": {"command": "opentraces introspect", "provides": []},
@@ -95,6 +123,41 @@ def test_malformed_integration_seam_is_machinery_error_not_capability_skip() -> 
         )
 
     assert malformed.value.code == "capability_probe_invalid"
+
+
+@pytest.mark.parametrize(
+    ("path", "malformed", "message"),
+    [
+        (("interfaces", 0, "entrypoint"), 7, "interface entrypoint"),
+        (("interfaces", 1, "composite_over"), "cli", "interface composite_over"),
+        (("interfaces", 1, "skill"), 7, "interface skill"),
+        (("interfaces", 1, "lifecycle"), [], "interface lifecycle"),
+        (("cli", "entrypoint"), 7, "cli.entrypoint"),
+        (("cli", "json_flag"), 7, "cli.json_flag"),
+        (("cli", "pure_json_under_flag"), "yes", "cli.pure_json_under_flag"),
+        (("emulation_seams", 0, "honored_by"), 7, "emulation seam honored_by"),
+        (("emulation_seams", 0, "declared_in"), 7, "emulation seam declared_in"),
+        (("emulation_seams", 2, "config_key"), 7, "emulation seam config_key"),
+        (("introspection", "command"), "", "introspection command"),
+    ],
+)
+def test_every_emitted_capability_field_rejects_malformed_shapes(
+    path: tuple[str | int, ...], malformed: object, message: str
+) -> None:
+    manifest: Any = _manifest()
+    target = manifest
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = malformed
+
+    with pytest.raises(CapabilityProbeError, match=message) as error:
+        parse_capabilities_probe(
+            returncode=0,
+            stdout=json.dumps(manifest),
+            stderr="",
+        )
+
+    assert error.value.code == "capability_probe_invalid"
 
 
 def test_absent_valid_capability_is_a_named_skip_not_pass_or_error() -> None:

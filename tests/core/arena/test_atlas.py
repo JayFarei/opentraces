@@ -7,6 +7,7 @@ from opentraces.core.arena.atlas import AtlasIntegrityError, build_atlas, cross_
 
 CAPABILITIES_DIGEST = "sha256:current-surface"
 PRODUCT_COMMIT = "product-current"
+GUARANTEES_DIGEST = "sha256:" + "d" * 64
 
 
 def _result(
@@ -144,6 +145,27 @@ def test_cross_check_recomputes_every_truth_bearing_row_field(field: str, forged
     atlas["rows"][0][field] = forged
     with pytest.raises(AtlasIntegrityError, match=field):
         cross_check_atlas(atlas, results=[result])
+
+
+def test_cross_check_rejects_forged_review_against_canonical_guarantees() -> None:
+    guarantee = _guarantee("red", "scenario::red")
+    result = _result(run_id="run-red", nodeid="scenario::red", verdict="fail")
+    atlas = build_atlas(
+        guarantees=[guarantee],
+        results=[result],
+        product_commit=PRODUCT_COMMIT,
+        capabilities_digest=CAPABILITIES_DIGEST,
+    )
+    atlas["guarantees_digest"] = GUARANTEES_DIGEST
+    atlas["rows"][0]["black_box_review"] = "confirmed"
+
+    with pytest.raises(AtlasIntegrityError, match="black_box_review"):
+        cross_check_atlas(
+            atlas,
+            results=[result],
+            guarantees=[guarantee],
+            guarantees_digest=GUARANTEES_DIGEST,
+        )
 
 
 def test_remote_and_x86_coverage_ship_as_explicit_unbound_rows() -> None:

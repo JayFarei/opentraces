@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from click.testing import CliRunner
+import pytest
 
 from opentraces.cli import main
 from opentraces.core.arena.contract import build_result
@@ -454,3 +455,49 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
     assert summarized.exit_code != 0
     assert "state" in summarized.output
     assert "disagrees" in summarized.output
+
+
+@pytest.mark.parametrize("consumer", ["query", "render"])
+def test_atlas_consumers_refuse_review_without_canonical_guarantees(
+    tmp_path: Path,
+    consumer: str,
+) -> None:
+    atlas_path = tmp_path / "atlas.json"
+    atlas_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "opentraces.arena.atlas.v0",
+                "product_commit": "a" * 40,
+                "capabilities_digest": "sha256:" + "b" * 64,
+                "inactive_hole_states": ["no-red-proof", "unrepresentative-world"],
+                "rows": [
+                    {
+                        "id": "remote-rented-glibc",
+                        "claim": "The emulator runs on a remote rented glibc box.",
+                        "nodeid": "arena::remote-rented",
+                        "verifier": {
+                            "name": "arena_guarantees.verify_publish",
+                            "digest": "sha256:" + "c" * 64,
+                        },
+                        "state": "unbound",
+                        "latest_run_id": None,
+                        "verdict": None,
+                        "evidence_ref": None,
+                        "black_box_review": "confirmed",
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    arguments = ["bench", "atlas", consumer, str(atlas_path)]
+    if consumer == "query":
+        arguments.append("--json")
+    else:
+        arguments.extend(["--output", str(tmp_path / "atlas.html"), "--json"])
+
+    consumed = CliRunner().invoke(main, arguments)
+
+    assert consumed.exit_code != 0
+    assert "guarantees" in consumed.output
