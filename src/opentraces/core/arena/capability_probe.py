@@ -94,6 +94,15 @@ def _validate_manifest(payload: Mapping[str, Any]) -> None:
         not isinstance(row, Mapping) for row in integration_seams
     ):
         raise _invalid("capabilities integration_seams must be an array of objects")
+    integration_ids: set[str] = set()
+    for row in integration_seams:
+        for field in ("id", "kind", "direction", "installed_by"):
+            if not isinstance(row.get(field), str) or not row.get(field):
+                raise _invalid(f"capabilities integration seam {field} must be a string")
+        seam_id = str(row["id"])
+        if seam_id in integration_ids:
+            raise _invalid(f"capabilities integration_seams has duplicate id {seam_id}")
+        integration_ids.add(seam_id)
     introspection = payload.get("introspection")
     if not isinstance(introspection, Mapping) or not isinstance(introspection.get("command"), str):
         raise _invalid("capabilities introspection must be an object with command")
