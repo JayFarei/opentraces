@@ -80,6 +80,23 @@ def test_bad_probe_or_schema_is_a_named_machinery_error() -> None:
     assert malformed.value.code == "capability_probe_invalid"
 
 
+def test_malformed_integration_seam_is_machinery_error_not_capability_skip() -> None:
+    manifest = _manifest()
+    manifest["integration_seams"] = [{}]
+
+    with pytest.raises(CapabilityProbeError, match="integration seam id") as malformed:
+        evaluate_capabilities(
+            manifest,
+            requirements=["mcp"],
+            runner_drives={"cli", "agent"},
+            runner_harnesses={"claude-code"},
+            runner_emulators={"huggingface"},
+            seam_values={},
+        )
+
+    assert malformed.value.code == "capability_probe_invalid"
+
+
 def test_absent_valid_capability_is_a_named_skip_not_pass_or_error() -> None:
     outcome = evaluate_capabilities(
         _manifest(),
