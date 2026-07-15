@@ -14,11 +14,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import click
 
 from ..core import paths
+from ..core.arena.atlas import AtlasIntegrityError, build_atlas, cross_check_atlas
+from ..core.arena.atlas_page import render_atlas_page
+from ..core.arena.atlas_views import (
+    build_agent_summary,
+    format_pr_evidence_link,
+    query_atlas,
+)
 from ..core.arena.contract import result_exit_code, validate_result
 from ..core.arena.fleet import (
     LOCAL_CONTAINER,
@@ -413,6 +420,204 @@ def bench_reverify(
         raise click.exceptions.Exit(1)
     if result["status"] == "error":
         raise click.exceptions.Exit(2)
+
+
+def _load_json_object(path: Path, *, name: str) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"could not read {name}: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise click.ClickException(f"{name} must contain a JSON object")
+    return payload
+
+
+def _verified_results(store: RunStore) -> list[Mapping[str, Any]]:
+    """Read result bytes only after their run has passed external-index verification."""
+
+    records = list_stored_runs(store)
+    results: list[Mapping[str, Any]] = []
+    for record in records:
+        run_path = store.root / record.run_id
+        store.verify(run_path)
+        payload = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
+        store.verify(run_path)
+        if not isinstance(payload, Mapping):
+            raise RunIntegrityError(f"stored run {record.run_id} result is not an object")
+        results.append(payload)
+    return results
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return destination
+
+
+@bench_group.group("atlas")
+def bench_atlas() -> None:
+    """Build and consume honest projections of stored fleet evidence."""
+
+
+@bench_atlas.command("build")
+@click.argument("guarantees_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--store-root",
+    type=click.Path(path_type=Path),
+    help="Override bucket/runs/v1 (primarily for isolated retrieval).",
+)
+@click.option("--product-commit", required=True, help="Exact product commit the atlas describes.")
+@click.option(
+    "--capabilities-digest",
+    required=True,
+    help="Exact opentraces.capabilities.v0 manifest digest.",
+)
+@click.option("--output", required=True, type=click.Path(path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
+def bench_atlas_build(
+    guarantees_path: Path,
+    store_root: Path | None,
+    product_commit: str,
+    capabilities_digest: str,
+    output: Path,
+    as_json: bool,
+) -> None:
+    """Generate and cross-check an atlas from guarantees and verified results."""
+
+    source = _load_json_object(guarantees_path, name="guarantees input")
+    guarantees = source.get("guarantees")
+    if not isinstance(guarantees, list) or any(
+        not isinstance(guarantee, Mapping) for guarantee in guarantees
+    ):
+        raise click.ClickException("guarantees input must contain a guarantees object array")
+    try:
+        results = _verified_results(_run_store(store_root))
+        atlas = build_atlas(
+            guarantees=guarantees,
+            results=results,
+            product_commit=product_commit,
+            capabilities_digest=capabilities_digest,
+        )
+        checked = cross_check_atlas(atlas, results=results)
+        destination = _write_json(output, atlas)
+    except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    summary = {
+        "status": "ok",
+        "cross_check": checked,
+        "row_count": len(atlas["rows"]),
+        "output": str(destination),
+    }
+    if as_json:
+        click.echo(json.dumps(summary, sort_keys=True))
+    else:
+        click.echo(f"atlas cross-check: ok ({summary['row_count']} rows) -> {destination}")
+
+
+@bench_atlas.command("render")
+@click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--output", required=True, type=click.Path(path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
+def bench_atlas_render(atlas_path: Path, output: Path, as_json: bool) -> None:
+    """Render the deterministic human atlas page."""
+
+    atlas = _load_json_object(atlas_path, name="atlas")
+    try:
+        destination = render_atlas_page(atlas, output)
+    except (AtlasIntegrityError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    summary = {"status": "ok", "output": str(destination)}
+    if as_json:
+        click.echo(json.dumps(summary, sort_keys=True))
+    else:
+        click.echo(f"atlas page: {destination}")
+
+
+@bench_atlas.command("summary")
+@click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Emit only the agent summary envelope.")
+def bench_atlas_summary(atlas_path: Path, as_json: bool) -> None:
+    """Emit the compact latest-failure and named-hole view for agents."""
+
+    try:
+        summary = build_agent_summary(_load_json_object(atlas_path, name="atlas"))
+    except (AtlasIntegrityError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json:
+        click.echo(json.dumps(summary, sort_keys=True))
+        return
+    click.echo(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+
+
+@bench_atlas.command("query")
+@click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--state", "states", multiple=True, help="Match an exact atlas state (repeatable).")
+@click.option("--id", "guarantee_ids", multiple=True, help="Match an exact guarantee id (repeatable).")
+@click.option("--json", "as_json", is_flag=True, help="Emit only matching rows.")
+def bench_atlas_query(
+    atlas_path: Path,
+    states: tuple[str, ...],
+    guarantee_ids: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Query atlas rows by exact state or exact guarantee id."""
+
+    try:
+        rows = query_atlas(
+            _load_json_object(atlas_path, name="atlas"),
+            states=states or None,
+            guarantee_ids=guarantee_ids or None,
+        )
+    except (AtlasIntegrityError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    payload = {"count": len(rows), "rows": rows}
+    if as_json:
+        click.echo(json.dumps(payload, sort_keys=True))
+        return
+    for row in rows:
+        click.echo(
+            f"{row.get('id')} {row.get('state')} "
+            f"{row.get('latest_run_id') or '-'} {row.get('evidence_ref') or '-'}"
+        )
+
+
+@bench_atlas.command("pr-link")
+@click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("guarantee_id")
+@click.option("--page-url", required=True, help="Published human atlas page URL.")
+@click.option("--json", "as_json", is_flag=True, help="Emit only the evidence-link projection.")
+def bench_atlas_pr_link(
+    atlas_path: Path,
+    guarantee_id: str,
+    page_url: str,
+    as_json: bool,
+) -> None:
+    """Format one bound atlas row as stable PR evidence."""
+
+    atlas = _load_json_object(atlas_path, name="atlas")
+    try:
+        rows = query_atlas(atlas, guarantee_ids=(guarantee_id,))
+        if len(rows) != 1:
+            raise AtlasIntegrityError(f"atlas has no unique row {guarantee_id!r}")
+        row = rows[0]
+        link = format_pr_evidence_link(row, page_url=page_url)
+    except (AtlasIntegrityError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    payload = {
+        "id": row.get("id"),
+        "run_id": row.get("latest_run_id"),
+        "evidence_ref": row.get("evidence_ref"),
+        "link": link,
+    }
+    if as_json:
+        click.echo(json.dumps(payload, sort_keys=True))
+    else:
+        click.echo(link)
 
 
 @bench_group.command("run")
