@@ -552,6 +552,33 @@ def test_startup_liveness_probe_does_not_signal_differently_owned_process(
     assert "/proc/$pid/stat" in runtime.binding_commands[0]
 
 
+def test_stop_kills_the_attested_process_group_across_the_sudo_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The PID-file child may not be the setsid process-group leader."""
+
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _trust_test_binary(binary, monkeypatch)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+
+    handle = start_huggingface_emulator(
+        runtime=runtime,
+        box=runtime.lease(),
+        repository=tmp_path,
+        run_path=tmp_path / "run",
+    )
+    handle.stop()
+
+    assert runtime.stop_command is not None
+    assert 'pgid=$(ps -o pgid= -p "$pid"' in runtime.stop_command
+    assert 'sudo kill -- -"$pgid"' in runtime.stop_command
+    assert 'digest=$(sudo -u opentraces-hf sha256sum "$executable"' in runtime.stop_command
+    assert f'test "$digest" = "{handle.binary_pin.sha256}"' in runtime.stop_command
+
+
 def test_configured_binary_requires_matching_build_provenance(
     tmp_path: Path,
 ) -> None:
