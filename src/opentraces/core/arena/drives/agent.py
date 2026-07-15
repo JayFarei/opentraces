@@ -181,13 +181,14 @@ class AgentTerminalDrive:
         self,
         harness_argv: Sequence[str],
         env: Mapping[str, str],
+        reverse_forwards: Sequence[tuple[int, int]],
     ) -> list[str]:
         remote_argv = [
             "env",
             *(f"{name}={value}" for name, value in sorted(env.items())),
             *harness_argv,
         ]
-        return [
+        argv = [
             "ssh",
             "-tt",
             "-F",
@@ -204,6 +205,18 @@ class AgentTerminalDrive:
             self.box.ssh_key,
             "-p",
             self.box.ssh_port,
+        ]
+        for remote_port, local_port in reverse_forwards:
+            argv.extend(
+                [
+                    "-o",
+                    "ExitOnForwardFailure=yes",
+                    "-R",
+                    f"127.0.0.1:{remote_port}:127.0.0.1:{local_port}",
+                ]
+            )
+        return [
+            *argv,
             f"{self.box.ssh_user}@{self.box.ssh_host}",
             "--",
             *remote_argv,
@@ -223,6 +236,7 @@ class AgentTerminalDrive:
         expect_regex: str,
         timeout: float,
         env: Mapping[str, str] | None = None,
+        reverse_forwards: Sequence[tuple[int, int]] = (),
         cols: int = 110,
         rows: int = 32,
     ) -> AgentTerminalResult:
@@ -268,7 +282,7 @@ class AgentTerminalDrive:
                 # Box.ssh_user is the transport identity, not automatically the
                 # product actor. The high-level harness adapter must supply any
                 # required actor switch in harness_argv.
-                self._ssh_argv(harness_argv, environment),
+                self._ssh_argv(harness_argv, environment, reverse_forwards),
                 recording_path=recording_path,
                 cols=cols,
                 rows=rows,

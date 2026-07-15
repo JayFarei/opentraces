@@ -44,10 +44,7 @@ class CompletingHarnessSession:
     def observe(self) -> AgentTerminalObservation:
         return AgentTerminalObservation(
             state="running",
-            screen=(
-                "OPENTRACES_HARNESS_VERSION=2.1.143\n"
-                "OPENTRACES_AGENT_ATTEMPT_COMPLETE"
-            ),
+            screen=("OPENTRACES_HARNESS_VERSION=2.1.143\nOPENTRACES_AGENT_ATTEMPT_COMPLETE"),
             logs="",
         )
 
@@ -280,7 +277,7 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
     assert "--allowedTools" in remote
     assert "Bash" in remote
     assert "--disallowedTools" in remote
-    assert "mcp__playwright__*" in remote
+    assert "mcp__opentraces_browser__*" in remote
 
     attempt_record = json.loads(
         (run.final_path / "artifacts/agent-attempt.json").read_text(encoding="utf-8")
@@ -309,7 +306,8 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
     assert run.result["pins"]["model_wire"] == {"mode": "live"}
     assert run.result["recordings"]["timeline"]["complete"] is True
     assert any(
-        channel == {
+        channel
+        == {
             "kind": "agent_terminal",
             "complete": True,
             "path": "recordings/agent-0001.termctrl",
@@ -381,9 +379,12 @@ def test_browser_grant_routes_mcp_call_into_exact_run_drive_and_shared_timeline(
     ]
     assert invocations[1]["url"] == "http://127.0.0.1:8080/authorize"
     assert run.result["recordings"]["timeline"]["complete"] is True
-    assert {
-        channel["kind"] for channel in run.result["recordings"]["channels"]
-    } >= {"agent_terminal", "browser_video", "playwright_trace", "browser_screenshots"}
+    assert {channel["kind"] for channel in run.result["recordings"]["channels"]} >= {
+        "agent_terminal",
+        "browser_video",
+        "playwright_trace",
+        "browser_screenshots",
+    }
 
 
 def test_valid_agent_recording_remains_rewatchable_when_attempt_did_not_complete(

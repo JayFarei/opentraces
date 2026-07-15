@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
@@ -19,6 +21,7 @@ from .drives.agent import (
     AgentTerminalSessionFactory,
     TermctrlAgentSession,
 )
+from .drives.browser_mcp import BrowserMcpBridge, SERVER_NAME
 from .run_store import RunDraft
 
 
@@ -47,7 +50,7 @@ _HARNESSES = {
         executable="claude",
         surface_tools={
             "terminal": ("Bash", "Read", "Edit", "Write", "Glob", "Grep"),
-            "browser": ("mcp__playwright__*",),
+            "browser": (f"mcp__{SERVER_NAME}__*",),
         },
     )
 }
@@ -150,26 +153,21 @@ class AgentDrive:
         )
 
     @staticmethod
-    def _environment(
-        product: Mapping[str, str], inference: Mapping[str, str]
-    ) -> dict[str, str]:
+    def _environment(product: Mapping[str, str], inference: Mapping[str, str]) -> dict[str, str]:
         environment = {str(key): str(value) for key, value in product.items()}
         for key, value in inference.items():
             if key in environment and environment[key] != value:
                 raise ValueError(f"agent environment disagrees on {key}")
             environment[key] = value
         invalid = [
-            name
-            for name in environment
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+            name for name in environment if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
         ]
         if invalid:
             raise ValueError(f"invalid agent environment name: {invalid[0]!r}")
         unsafe = sorted(
             name
             for name in environment
-            if name in PRODUCT_ENV_DENY_EXACT
-            or name.startswith(PRODUCT_ENV_DENY_PREFIXES)
+            if name in PRODUCT_ENV_DENY_EXACT or name.startswith(PRODUCT_ENV_DENY_PREFIXES)
         )
         if unsafe:
             raise ValueError(f"unsafe agent product environment: {unsafe[0]!r}")
@@ -182,7 +180,10 @@ class AgentDrive:
 
     @staticmethod
     def _harness_argv(
-        spec: HarnessSpec, grants: Sequence[str], environment: Mapping[str, str]
+        spec: HarnessSpec,
+        grants: Sequence[str],
+        environment: Mapping[str, str],
+        mcp_config: Mapping[str, Any],
     ) -> list[str]:
         allowed = [tool for grant in grants for tool in spec.surface_tools[grant]]
         denied = [
@@ -195,11 +196,16 @@ class AgentDrive:
         if environment:
             sudo.append("--preserve-env=" + ",".join(sorted(environment)))
         sudo.append("--")
+        encoded_config = base64.b64encode(
+            json.dumps(mcp_config, sort_keys=True, separators=(",", ":")).encode()
+        ).decode()
         wrapper = (
-            'set -eu; executable="$1"; shift; '
+            'set -eu; executable="$1"; encoded_config="$2"; mcp_config="$3"; shift 3; '
+            "trap 'rm -f \"$mcp_config\"' EXIT HUP INT TERM; "
+            'printf "%s" "$encoded_config" | base64 -d > "$mcp_config"; '
             'version=$("$executable" --version); '
             'printf "OPENTRACES_HARNESS_VERSION=%s\\n" "$version"; '
-            'exec "$executable" "$@"'
+            '"$executable" "$@"'
         )
         argv = [
             *sudo,
@@ -208,6 +214,11 @@ class AgentDrive:
             wrapper,
             "opentraces-agent",
             spec.executable,
+            encoded_config,
+            "/tmp/opentraces-agent-mcp.json",
+            "--mcp-config",
+            "/tmp/opentraces-agent-mcp.json",
+            "--strict-mcp-config",
             "--allowedTools",
             *allowed,
         ]
@@ -236,8 +247,18 @@ class AgentDrive:
         grants = self._grants(access)
         inference_pin, inference_environment = self._inference(inference)
         environment = self._environment(self.product_environment(), inference_environment)
-        argv = self._harness_argv(spec, grants, environment)
         self._attempted = True
+
+        browser_bridge: BrowserMcpBridge | None = None
+        reverse_forwards: tuple[tuple[int, int], ...] = ()
+        if "browser" in grants:
+            browser_bridge = BrowserMcpBridge(self.browser)
+            browser_bridge.start()
+            mcp_config = browser_bridge.config()
+            reverse_forwards = ((browser_bridge.remote_port, browser_bridge.local_port),)
+        else:
+            mcp_config = {"mcpServers": {}}
+        argv = self._harness_argv(spec, grants, environment, mcp_config)
 
         low_level = AgentTerminalDrive(
             box=self.box,
@@ -251,13 +272,18 @@ class AgentDrive:
             "This completion marker is machinery only, not evidence that the task worked. "
             f"When your attempt is finished, print exactly {ATTEMPT_COMPLETE_MARKER}."
         )
-        observed = low_level.run(
-            harness_argv=argv,
-            prompt=prompt,
-            expect_regex=rf"(?m)^{ATTEMPT_COMPLETE_MARKER}$",
-            timeout=180,
-            env=environment,
-        )
+        try:
+            observed = low_level.run(
+                harness_argv=argv,
+                prompt=prompt,
+                expect_regex=rf"(?m)^{ATTEMPT_COMPLETE_MARKER}$",
+                timeout=180,
+                env=environment,
+                reverse_forwards=reverse_forwards,
+            )
+        finally:
+            if browser_bridge is not None:
+                browser_bridge.close()
         transcript = (self.draft.path / observed.transcript_ref).read_text(encoding="utf-8")
         matched_version = _VERSION_RE.search(transcript)
         failure = observed.reason
@@ -304,20 +330,15 @@ class AgentDrive:
         if self._attempt is None:
             return {"rewatchable": False, "channels": []}
         recording_ref = self._attempt.recording_refs[0]
-        recording_exists = (self.draft.path / recording_ref).is_file()
-        complete = self._attempt.completed and recording_exists
-        reason = None
-        if not complete:
-            reason = str(
-                (self._attempt.failure or {}).get("message")
-                or "agent terminal recording is incomplete"
-            )
+        recording_path = self.draft.path / recording_ref
+        recording_exists = recording_path.is_file() and recording_path.stat().st_size > 0
+        reason = None if recording_exists else "agent terminal recording is missing or empty"
         return {
-            "rewatchable": complete,
+            "rewatchable": recording_exists,
             "channels": [
                 {
                     "kind": "agent_terminal",
-                    "complete": complete,
+                    "complete": recording_exists,
                     "path": recording_ref if recording_exists else None,
                     "reason": reason,
                 }
