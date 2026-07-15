@@ -424,6 +424,7 @@ def write_trace_to_bucket(
     parser_name: str,
     source_jsonl: Path,
     trace_record_only: bool,
+    source_layer: str = "canonical",
 ) -> BucketWriteOutcome:
     """Persist a parsed record to the private bucket as ONE attributable unit.
 
@@ -449,9 +450,29 @@ def write_trace_to_bucket(
     write_trace_record(
         final_record,
         project_slug=project_slug,
-        source_layer="canonical",
+        source_layer=source_layer,
         legacy_mirror=True,
     )
+    # A8 #290 — the invoking trace is the only implicit origin channel. Run
+    # this after the canonical spine exists so the label companion cannot
+    # point at a phantom trace. The projector verifies the finalized run and
+    # captured claim/verdict before it mints through the shared label contract;
+    # a refusal is fail-closed for labels and remains attributable here without
+    # making unrelated trace capture fragile.
+    try:
+        from .arena.origin import attach_captured_bench_labels
+
+        attachments = attach_captured_bench_labels(
+            final_record,
+            project_slug=project_slug,
+        )
+        if attachments:
+            outcome.writes["arena_origin_labels"] = None
+    except Exception as exc:  # noqa: BLE001
+        outcome.writes["arena_origin_labels"] = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "arena origin label projection refused for %s", trace_id, exc_info=True
+        )
     # NOTE: this raw-source link is load-bearing beyond re-parse capability —
     # it is the per-trace capture-time provenance marker that
     # ``bucket_store._is_legacy_read_in_place_mirror`` keys on (PR #63) to

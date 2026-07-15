@@ -66,6 +66,12 @@ def trace_v1_sources_path(project_slug: str, trace_id: str) -> Path:
     return traces_v1_dir(project_slug, trace_id) / "sources.jsonl.gz"
 
 
+def trace_v1_labels_path(project_slug: str, trace_id: str) -> Path:
+    """Return the arena-label companion beside the other trace projections."""
+
+    return traces_v1_dir(project_slug, trace_id) / "labels.jsonl.gz"
+
+
 def trace_v1_history_dir(project_slug: str, trace_id: str) -> Path:
     return traces_v1_dir(project_slug, trace_id) / "trace_history"
 

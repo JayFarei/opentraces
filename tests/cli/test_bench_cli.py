@@ -9,8 +9,12 @@ import pytest
 from click.testing import CliRunner
 
 from opentraces.cli import main
+from opentraces.core import paths
 from opentraces.core.arena.contract import build_result
-from opentraces.core.arena.run_store import RunStore
+from opentraces.core.arena.labels import label_summary_for_trace
+from opentraces.core.arena.run_store import RunIntegrityError, RunStore
+from opentraces.core.bucket_layout import trace_v1_json_path, trace_v1_labels_path
+from opentraces_schema import Agent, Outcome, Step, TraceRecord
 
 
 def _scenario(tmp_path: Path) -> Path:
@@ -22,9 +26,7 @@ def _scenario(tmp_path: Path) -> Path:
     return path
 
 
-def test_bench_run_prints_claim_and_returns_result_exit_code(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_bench_run_prints_claim_and_returns_result_exit_code(tmp_path: Path, monkeypatch) -> None:
     from opentraces.cli import bench_cli
 
     scenario = _scenario(tmp_path)
@@ -62,11 +64,68 @@ def test_bench_run_prints_claim_and_returns_result_exit_code(
         ["bench", "run", f"{scenario}::test_install", "--store-root", str(store_root)],
     )
 
+    finalized = next(path for path in store_root.iterdir() if path.name.startswith("run_"))
     assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[0] == (
+        f"bench_run_{finalized.name} pass Install is healthy on a fresh box."
+    )
     assert "Install is healthy on a fresh box." in result.output
     assert "verdict: pass" in result.output
-    finalized = next(path for path in store_root.iterdir() if path.name.startswith("run_"))
     assert json.loads((finalized / "result.json").read_text())["verdict"] == "pass"
+
+
+def test_bench_run_keeps_a_multiline_claim_on_one_detectable_first_line(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from opentraces.cli import bench_cli
+
+    claim = "Install is healthy\non a fresh box."
+    scenario = tmp_path / "test_install_multiline.py"
+    scenario.write_text(
+        'def test_install(bench):\n    """Install is healthy\n    on a fresh box.\n\n    Details."""\n',
+        encoding="utf-8",
+    )
+    store_root = tmp_path / "runs" / "v1"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        draft.stage_result(
+            build_result(
+                run_id=draft.run_id,
+                claim=claim,
+                nodeid=target,
+                source_ref="source/scenario.py",
+                execution_mode="direct",
+                started_at="2026-07-13T12:00:00Z",
+                duration_ms=1,
+                execution_status="complete",
+                verdict="pass",
+                reason=None,
+                verifiers=[],
+                evidence={"complete": True, "requirements": []},
+                recordings={"rewatchable": False, "channels": []},
+                artifacts=[],
+                capture=None,
+                pins={},
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    result = CliRunner().invoke(
+        main,
+        ["bench", "run", f"{scenario}::test_install", "--store-root", str(store_root)],
+    )
+
+    finalized = next(path for path in store_root.iterdir() if path.name.startswith("run_"))
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[0] == (
+        f'bench_run_{finalized.name} pass json:"Install is healthy\\non a fresh box."'
+    )
+    assert json.loads((finalized / "result.json").read_text())["scenario"]["claim"] == claim
 
 
 def test_bench_run_returns_one_for_a_functional_failure(tmp_path: Path, monkeypatch) -> None:
@@ -109,6 +168,177 @@ def test_bench_run_returns_one_for_a_functional_failure(tmp_path: Path, monkeypa
 
     assert result.exit_code == 1
     assert "verdict: fail" in result.output
+
+
+def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatch) -> None:
+    from opentraces.cli import bench_cli
+
+    scenario = _scenario(tmp_path)
+    bucket_root = tmp_path / "bucket"
+    store_root = bucket_root / "runs" / "v1"
+    monkeypatch.setattr(paths, "bucket_dir", lambda: bucket_root)
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        assert env["OT_BENCH_ORIGIN_ADDRESS"] == "trace-origin-123:1-2"
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        result = build_result(
+            run_id=draft.run_id,
+            claim="Install is healthy on a fresh box.",
+            nodeid=target,
+            source_ref="source/scenario.py",
+            execution_mode="direct",
+            started_at="2026-07-13T12:00:00Z",
+            duration_ms=1,
+            execution_status="complete",
+            verdict="pass",
+            reason=None,
+            verifiers=[],
+            evidence={"complete": True, "requirements": []},
+            recordings={"rewatchable": False, "channels": []},
+            artifacts=[],
+            capture=None,
+            pins={},
+        )
+        draft.stage_result(result)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    attached: dict[str, object] = {}
+
+    def fake_attach(run_path: Path, *, address: str, store: RunStore):
+        attached.update(run_path=run_path, address=address, store=store)
+        assert (run_path / "result.json").is_file()
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+    monkeypatch.setattr(bench_cli, "attach_explicit_bench_labels", fake_attach)
+
+    invoked = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "run",
+            f"{scenario}::test_install",
+            "--store-root",
+            str(store_root),
+            "--origin",
+            "trace-origin-123:1-2",
+        ],
+    )
+
+    assert invoked.exit_code == 0, invoked.output
+    assert attached["address"] == "trace-origin-123:1-2"
+    assert attached["store"].root == store_root
+
+
+def test_bench_run_refuses_divergent_store_root_with_origin_before_side_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from opentraces.cli import bench_cli
+
+    scenario = _scenario(tmp_path)
+    default_bucket = tmp_path / "default-bucket"
+    divergent_store = tmp_path / "divergent" / "runs" / "v1"
+    project_slug = "project-origin"
+    trace_id = "trace-origin-123"
+    monkeypatch.setattr(paths, "bucket_dir", lambda: default_bucket)
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+    record = TraceRecord(
+        trace_id=trace_id,
+        session_id="session-origin-123",
+        agent=Agent(name="test-agent"),
+        task={"description": "Run a bench scenario."},
+        steps=[Step(step_index=1, role="agent", content="existing trace")],
+        outcome=Outcome(success=None),
+    )
+    trace_path = trace_v1_json_path(project_slug, trace_id)
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(record.model_dump_json() + "\n", encoding="utf-8")
+    pytest_called = False
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        nonlocal pytest_called
+        pytest_called = True
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        draft.write_text("source/scenario.py", "def test_install(): pass\n")
+        draft.write_json("actions/0001/result.json", {"returncode": 0})
+        draft.stage_result(
+            build_result(
+                run_id=draft.run_id,
+                claim="Install is healthy on a fresh box.",
+                nodeid=target,
+                source_ref="source/scenario.py",
+                execution_mode="direct",
+                started_at="2026-07-15T08:00:00Z",
+                duration_ms=1,
+                execution_status="complete",
+                verdict="pass",
+                reason=None,
+                verifiers=[
+                    {
+                        "name": "test_install.installed_cli_reports_health",
+                        "source_ref": {
+                            "path": "tests/test_install.py",
+                            "digest": "sha256:" + "a" * 64,
+                        },
+                        "status": "pass",
+                        "duration_ms": 1,
+                        "evidence_refs": ["actions/0001/result.json"],
+                        "reason": None,
+                    }
+                ],
+                evidence={"complete": True, "requirements": []},
+                recordings={"rewatchable": False, "channels": []},
+                artifacts=[],
+                capture=None,
+                pins={
+                    "product": {
+                        "commit": "a" * 40,
+                        "worktree": "clean",
+                        "dirty_diff_digest": None,
+                    }
+                },
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    invoked = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "run",
+            f"{scenario}::test_install",
+            "--store-root",
+            str(divergent_store),
+            "--origin",
+            trace_id,
+        ],
+    )
+
+    read_error: str | None = None
+    try:
+        label_summary_for_trace(trace_id)
+    except RunIntegrityError as exc:
+        read_error = str(exc)
+    observed = {
+        "exit_code": invoked.exit_code,
+        "pytest_called": pytest_called,
+        "run_count": len(list(divergent_store.glob("run_*"))),
+        "label_exists": trace_v1_labels_path(project_slug, trace_id).exists(),
+        "read_error": read_error,
+    }
+    assert observed == {
+        "exit_code": 2,
+        "pytest_called": False,
+        "run_count": 0,
+        "label_exists": False,
+        "read_error": None,
+    }, invoked.output
+    assert "--origin requires the default run store" in invoked.output
 
 
 def test_bench_run_json_is_pure_and_persists_pytest_diagnostics(
@@ -564,9 +794,7 @@ def test_runner_reports_machinery_error(bench):
         assert result["verdict"] == verdict
         assert (result["reason"] or {}).get("code") == reason_code
         diagnostic = next(
-            artifact
-            for artifact in result["artifacts"]
-            if artifact["kind"] == "pytest_diagnostics"
+            artifact for artifact in result["artifacts"] if artifact["kind"] == "pytest_diagnostics"
         )
         assert diagnostic["phase_report_ref"] == "artifacts/pytest/phases.json"
         assert store.verify(run_path) is True

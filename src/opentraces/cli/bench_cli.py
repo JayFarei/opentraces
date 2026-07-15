@@ -17,6 +17,11 @@ import click
 
 from ..core import paths
 from ..core.arena.contract import result_exit_code, validate_result
+from ..core.arena.origin import (
+    OriginJoinError,
+    attach_explicit_bench_labels,
+    origin_claim_token,
+)
 from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
 
@@ -38,9 +43,7 @@ def discover_claim(target: str) -> str:
         and (function_name is None or node.name == function_name)
     ]
     if len(candidates) != 1:
-        raise click.UsageError(
-            "bench run requires one pytest function target (path.py::test_name)"
-        )
+        raise click.UsageError("bench run requires one pytest function target (path.py::test_name)")
     doc = ast.get_docstring(candidates[0], clean=True)
     if not doc or not doc.split("\n\n", 1)[0].strip():
         raise click.UsageError("bench scenario requires a non-empty first docstring paragraph")
@@ -152,7 +155,9 @@ def _pending_ids(store: RunStore) -> set[str]:
 
 
 def _finalize_after_pytest(
-    store: RunStore, run_id: str, outcome: PytestOutcome
+    store: RunStore,
+    run_id: str,
+    outcome: PytestOutcome,
 ) -> tuple[Path, dict[str, Any]]:
     draft = store.open_pending(run_id)
     result = draft.take_staged_result()
@@ -175,9 +180,7 @@ def _finalize_after_pytest(
     result["artifacts"].append(diagnostic)
     if outcome.returncode != 0 and result["execution_status"] != "error":
         failed_phases = {
-            str(report.get("when"))
-            for report in phase_reports
-            if report.get("outcome") == "failed"
+            str(report.get("when")) for report in phase_reports if report.get("outcome") == "failed"
         }
         call_observed = any(report.get("when") == "call" for report in phase_reports)
         refs = [stdout_ref, stderr_ref, *([phase_ref] if phase_reports else [])]
@@ -230,10 +233,30 @@ def bench_group() -> None:
     type=click.Path(path_type=Path),
     help="Override bucket/runs/v1 (primarily for isolated execution).",
 )
+@click.option(
+    "--origin",
+    "origin_address",
+    help="Attach verified labels to an existing trace, point, or span address.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
-def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
+def bench_run(
+    target: str,
+    store_root: Path | None,
+    origin_address: str | None,
+    as_json: bool,
+) -> None:
     """Run one pytest scenario target (PATH::TEST) on a disposable box."""
 
+    canonical_store_root = paths.bucket_dir() / "runs" / "v1"
+    if (
+        origin_address is not None
+        and store_root is not None
+        and store_root.resolve() != canonical_store_root.resolve()
+    ):
+        raise click.UsageError(
+            "--origin requires the default run store; "
+            "omit --store-root or use the canonical run store"
+        )
     repository_text = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         text=True,
@@ -247,7 +270,7 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
     )
     claim = discover_claim(target)
     build_local_wheels(repository)
-    store = RunStore(store_root or paths.bucket_dir() / "runs" / "v1")
+    store = RunStore(store_root or canonical_store_root)
     before = _pending_ids(store) | _finalized_ids(store)
     env = dict(os.environ)
     env["OT_BENCH_RUN_ROOT"] = str(store.root)
@@ -255,6 +278,8 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
     env["OT_BENCH_SCENARIOS"] = "1"
     env["OT_BENCH_REAL_HOME"] = str(Path.home())
     env["OT_BENCH_DEFER_FINALIZE"] = "1"
+    if origin_address is not None:
+        env["OT_BENCH_ORIGIN_ADDRESS"] = origin_address
     pytest_outcome = run_pytest(target, repository=repository, env=env)
     created = sorted(_pending_ids(store) - before)
     if not created:
@@ -264,8 +289,20 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
         )
     if len(created) != 1:
         raise click.ClickException(f"expected one finalized run, observed {len(created)}")
-    run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
+    try:
+        run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
+    except OriginJoinError as exc:
+        raise click.ClickException(str(exc)) from exc
     exit_code = result_exit_code(result)
+    if origin_address is not None:
+        try:
+            attach_explicit_bench_labels(
+                run_path,
+                address=origin_address,
+                store=store,
+            )
+        except OriginJoinError as exc:
+            raise click.ClickException(str(exc)) from exc
     page_path: Path | None = None
     page_error: str | None = None
     try:
@@ -286,6 +323,10 @@ def bench_run(target: str, store_root: Path | None, as_json: bool) -> None:
     if as_json:
         click.echo(json.dumps(summary, ensure_ascii=False, sort_keys=True))
     else:
+        click.echo(
+            f"bench_run_{result['run_id']} {result['verdict'] or 'error'} "
+            f"{origin_claim_token(claim)}"
+        )
         click.echo(f"claim: {claim}")
         click.echo(f"verdict: {result['verdict'] or 'error'}")
         click.echo(f"run: {run_path}")

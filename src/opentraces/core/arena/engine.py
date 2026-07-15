@@ -136,6 +136,7 @@ class BenchRun:
         self._app_state_pin: dict[str, Any] = {}
         self._emulators: dict[str, HuggingFaceEmulator] = {}
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
+        self.origin_evidence_ref: str | None = None
 
     def __enter__(self) -> "BenchRun":
         self._started_at = _utc_now()
@@ -153,6 +154,18 @@ class BenchRun:
         )
         self.draft.write_json("source/verifiers.json", {"sources": []})
         try:
+            origin_address = os.environ.get("OT_BENCH_ORIGIN_ADDRESS")
+            if origin_address:
+                from .origin import stage_explicit_origin_slice
+
+                staged = stage_explicit_origin_slice(
+                    self.draft,
+                    address=origin_address,
+                )
+                artifact_ref = staged.get("artifact_ref")
+                self.origin_evidence_ref = (
+                    str(artifact_ref) if isinstance(artifact_ref, str) else None
+                )
             configure_evidence = getattr(self.bench.box_runtime, "configure_run_evidence", None)
             if callable(configure_evidence):
                 configure_evidence(self.draft.path)
@@ -300,8 +313,7 @@ class BenchRun:
             reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
             try:
                 evidence_refs = [
-                    self._persisted_evidence_ref(item)
-                    for item in getattr(exc, "evidence_refs", [])
+                    self._persisted_evidence_ref(item) for item in getattr(exc, "evidence_refs", [])
                 ]
             except EvidenceReferenceError:
                 evidence_refs = []

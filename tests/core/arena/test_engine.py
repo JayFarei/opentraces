@@ -11,9 +11,12 @@ import pytest
 from opentraces import __version__
 from opentraces.core.arena.box import Box, BoxCommandResult
 from opentraces.core.arena.engine import Bench, ScenarioSource, extract_claim
+from opentraces.core.arena.labels import read_labels
+from opentraces.core.arena.origin import attach_explicit_bench_labels
 from opentraces.core.arena.page import render_evidence_page
 from opentraces.core.arena.run_store import RunStore
 from tests.core.arena.fixtures.verifier_helper import assert_healthy_payload
+from tests.core.arena.test_origin_join import PROJECT_SLUG, _origin_record, _write_trace
 
 
 class FakeBoxRuntime:
@@ -217,6 +220,44 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
     assert not any(token in external_source.lower() for token in ("/users/", "/home/", "jayfarei"))
     assert (run.final_path / "actions" / "0001" / "stdout").read_text() == '{"healthy":true}\n'
     assert runtime.released is True
+
+
+def test_slice_origin_is_staged_before_verification_and_only_the_verifier_can_name_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _origin_record()
+    _write_trace(tmp_path, monkeypatch, record)
+    monkeypatch.setenv("OT_BENCH_ORIGIN_ADDRESS", f"{record.trace_id}:1-3")
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def selected_slice_is_the_graded_evidence(run):
+        assert run.origin_evidence_ref is not None
+        assert (run.draft.path / run.origin_evidence_ref).is_file()
+        return {"evidence_refs": [run.origin_evidence_ref]}
+
+    with bench.run(app_state="install-only") as run:
+        assert run.origin_evidence_ref is not None
+        run.verify(selected_slice_is_the_graded_evidence)
+
+    assert run.result["verifiers"][0]["evidence_refs"] == [run.origin_evidence_ref]
+    integrity = json.loads((run.final_path / ".integrity.json").read_text(encoding="utf-8"))
+    assert run.origin_evidence_ref in integrity["files"]
+    attachment = attach_explicit_bench_labels(
+        run.final_path,
+        address=f"{record.trace_id}:1-3",
+        store=bench.store,
+    )
+    assert attachment.address == f"{record.trace_id}:1-3"
+    assert (
+        read_labels(PROJECT_SLUG, record.trace_id)[0]["slice_pin"]["materialized_ref"]
+        == run.origin_evidence_ref
+    )
 
 
 def test_terminal_action_honors_the_remote_cwd_that_it_records(tmp_path: Path) -> None:
