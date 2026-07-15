@@ -174,6 +174,7 @@ def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatc
     monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
 
     def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):
+        assert env["OT_BENCH_ORIGIN_ADDRESS"] == "trace-origin-123:1-2"
         store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
         draft = store.begin()
         result = build_result(
@@ -198,18 +199,12 @@ def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatc
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     attached: dict[str, object] = {}
-    staged: dict[str, object] = {}
-
-    def fake_stage(draft, result, *, address: str):
-        staged.update(draft=draft, result=result, address=address)
-        assert not (draft.path / "result.json").exists()
 
     def fake_attach(run_path: Path, *, address: str, store: RunStore):
         attached.update(run_path=run_path, address=address, store=store)
         assert (run_path / "result.json").is_file()
 
     monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
-    monkeypatch.setattr(bench_cli, "stage_explicit_origin_evidence", fake_stage)
     monkeypatch.setattr(bench_cli, "attach_explicit_bench_labels", fake_attach)
 
     invoked = CliRunner().invoke(
@@ -226,7 +221,6 @@ def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatc
     )
 
     assert invoked.exit_code == 0, invoked.output
-    assert staged["address"] == "trace-origin-123:1-2"
     assert attached["address"] == "trace-origin-123:1-2"
     assert attached["store"].root == store_root
 

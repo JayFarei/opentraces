@@ -21,7 +21,6 @@ from ..core.arena.origin import (
     OriginJoinError,
     attach_explicit_bench_labels,
     origin_claim_token,
-    stage_explicit_origin_evidence,
 )
 from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
@@ -159,8 +158,6 @@ def _finalize_after_pytest(
     store: RunStore,
     run_id: str,
     outcome: PytestOutcome,
-    *,
-    origin_address: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     draft = store.open_pending(run_id)
     result = draft.take_staged_result()
@@ -220,8 +217,6 @@ def _finalize_after_pytest(
                     "evidence_refs": refs,
                 }
             )
-    if origin_address is not None:
-        stage_explicit_origin_evidence(draft, result, address=origin_address)
     validate_result(result)
     return draft.finalize(result), result
 
@@ -273,6 +268,8 @@ def bench_run(
     env["OT_BENCH_SCENARIOS"] = "1"
     env["OT_BENCH_REAL_HOME"] = str(Path.home())
     env["OT_BENCH_DEFER_FINALIZE"] = "1"
+    if origin_address is not None:
+        env["OT_BENCH_ORIGIN_ADDRESS"] = origin_address
     pytest_outcome = run_pytest(target, repository=repository, env=env)
     created = sorted(_pending_ids(store) - before)
     if not created:
@@ -283,12 +280,7 @@ def bench_run(
     if len(created) != 1:
         raise click.ClickException(f"expected one finalized run, observed {len(created)}")
     try:
-        run_path, result = _finalize_after_pytest(
-            store,
-            created[0],
-            pytest_outcome,
-            origin_address=origin_address,
-        )
+        run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
     except OriginJoinError as exc:
         raise click.ClickException(str(exc)) from exc
     exit_code = result_exit_code(result)

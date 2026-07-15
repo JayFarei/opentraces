@@ -14,7 +14,7 @@ from opentraces.core.arena.origin import (
     attach_captured_bench_labels,
     attach_explicit_bench_labels,
     detect_bench_invocations,
-    stage_explicit_origin_evidence,
+    stage_explicit_origin_slice,
 )
 from opentraces.core.arena.run_store import RunStore
 from opentraces.core.bucket_trace_records import (
@@ -76,12 +76,21 @@ def _finalized_run(
     verdict: str = "pass",
     product_pin: dict | None = None,
     explicit_origin: str | None = None,
+    verifier_names_origin: bool = True,
 ) -> RunStore:
     monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
     draft.write_text("source/scenario.py", "def test_publish(): pass\n")
     draft.write_json("actions/0001/result.json", {"returncode": 0})
+    origin_ref: str | None = None
+    if explicit_origin is not None:
+        staged = stage_explicit_origin_slice(draft, address=explicit_origin)
+        artifact_ref = staged.get("artifact_ref")
+        origin_ref = str(artifact_ref) if isinstance(artifact_ref, str) else None
+    evidence_refs = ["actions/0001/result.json"]
+    if verifier_names_origin and origin_ref is not None:
+        evidence_refs.append(origin_ref)
     result = build_result(
         run_id=draft.run_id,
         claim=claim,
@@ -104,13 +113,17 @@ def _finalized_run(
                 },
                 "status": verdict,
                 "duration_ms": 1,
-                "evidence_refs": ["actions/0001/result.json"],
+                "evidence_refs": evidence_refs,
                 "reason": None,
             }
         ],
         evidence={"complete": True, "requirements": []},
         recordings={"rewatchable": False, "channels": []},
-        artifacts=[],
+        artifacts=(
+            [{"path": origin_ref, "media_type": "application/json"}]
+            if origin_ref is not None
+            else []
+        ),
         capture=None,
         pins={
             "product": product_pin
@@ -121,12 +134,6 @@ def _finalized_run(
             }
         },
     )
-    if explicit_origin is not None:
-        stage_explicit_origin_evidence(
-            draft,
-            result,
-            address=explicit_origin,
-        )
     draft.finalize(result)
     return store
 
@@ -472,6 +479,7 @@ def test_explicit_slice_origin_refuses_post_execution_evidence_fabrication(
         tmp_path,
         monkeypatch,
         explicit_origin=address,
+        verifier_names_origin=False,
     )
 
     with pytest.raises(OriginJoinError, match="verifier evidence_refs"):

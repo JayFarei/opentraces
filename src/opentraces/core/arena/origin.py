@@ -340,12 +340,11 @@ def _explicit_subject(
     return project_slug, subject, trace_ref
 
 
-def stage_explicit_origin_evidence(
+def stage_explicit_origin_slice(
     draft: RunDraft,
-    result: dict,
     *,
     address: str,
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Stage a slice origin while its run is still mutable.
 
     Slice subjects are immutable run evidence, so the canonical materialized
@@ -355,25 +354,13 @@ def stage_explicit_origin_evidence(
 
     _project_slug, subject, trace_ref = _explicit_subject(address)
     if subject["kind"] == "trace":
-        return subject
+        return {"subject": subject, "artifact_ref": None}
     if trace_ref is None:  # pragma: no cover - guarded by _explicit_subject
         raise OriginJoinError("explicit slice origin has no materialization reference")
     try:
-        staged = stage_slice_artifact(draft, trace_ref, subject=subject)
+        return stage_slice_artifact(draft, trace_ref, subject=subject)
     except (LabelContractError, LabelIntegrityError, ValueError) as exc:
         raise OriginJoinError(f"explicit origin slice could not be staged: {exc}") from exc
-
-    verifiers = result.get("verifiers")
-    if not isinstance(verifiers, list):
-        raise OriginJoinError("explicit origin run has no verifier array")
-    artifact_ref = staged["artifact_ref"]
-    for verifier in verifiers:
-        evidence_refs = verifier.get("evidence_refs") if isinstance(verifier, dict) else None
-        if not isinstance(evidence_refs, list):
-            raise OriginJoinError("explicit origin verifier has no evidence_refs array")
-        if artifact_ref not in evidence_refs:
-            evidence_refs.append(artifact_ref)
-    return subject
 
 
 def attach_explicit_bench_labels(
@@ -417,5 +404,5 @@ __all__ = [
     "attach_explicit_bench_labels",
     "detect_bench_invocations",
     "origin_claim_token",
-    "stage_explicit_origin_evidence",
+    "stage_explicit_origin_slice",
 ]
