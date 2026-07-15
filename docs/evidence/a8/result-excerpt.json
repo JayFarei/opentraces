@@ -1,0 +1,46 @@
+{
+  "schema_version": "opentraces.bench.result.v0",
+  "run_id": "run_20260715T005147520253Z_4639683dffd8",
+  "scenario": {
+    "claim": "Install is healthy on a fresh box.",
+    "nodeid": "tests/arena/scenarios/test_install_health.py::test_install_is_healthy_on_a_fresh_box"
+  },
+  "execution_mode": "direct",
+  "execution_status": "complete",
+  "verdict": "pass",
+  "evidence": {
+    "complete": true
+  },
+  "recordings": {
+    "rewatchable": true
+  },
+  "pins": {
+    "product": {
+      "commit": "376cfc3950b76e1c291ae42b8f33a7d09d3fa516",
+      "dirty_diff_digest": null,
+      "worktree": "clean"
+    },
+    "environment": {
+      "image": "ubuntu:24.04",
+      "provider": "local-container",
+      "runtime": {
+        "name": "crabbox",
+        "version": "0.38.0"
+      },
+      "sandbox_tier": "container"
+    }
+  },
+  "verifiers": [
+    {
+      "name": "test_install_health.installed_cli_reports_health",
+      "status": "pass",
+      "evidence_refs": [
+        "actions/0001/result.json"
+      ],
+      "source_ref": {
+        "digest": "sha256:83c1dab3f3b940af2585e265522ab630931546fe24e369e354d78c39ac58bfbd",
+        "path": "tests/arena/scenarios/test_install_health.py"
+      }
+    }
+  ]
+}
