@@ -174,7 +174,9 @@ def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatc
     from opentraces.cli import bench_cli
 
     scenario = _scenario(tmp_path)
-    store_root = tmp_path / "runs" / "v1"
+    bucket_root = tmp_path / "bucket"
+    store_root = bucket_root / "runs" / "v1"
+    monkeypatch.setattr(paths, "bucket_dir", lambda: bucket_root)
     monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
 
     def fake_pytest(target: str, *, repository: Path, env: dict[str, str]):

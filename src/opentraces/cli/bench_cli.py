@@ -247,6 +247,16 @@ def bench_run(
 ) -> None:
     """Run one pytest scenario target (PATH::TEST) on a disposable box."""
 
+    canonical_store_root = paths.bucket_dir() / "runs" / "v1"
+    if (
+        origin_address is not None
+        and store_root is not None
+        and store_root.resolve() != canonical_store_root.resolve()
+    ):
+        raise click.UsageError(
+            "--origin requires the default run store; "
+            "omit --store-root or use the canonical run store"
+        )
     repository_text = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         text=True,
@@ -260,7 +270,7 @@ def bench_run(
     )
     claim = discover_claim(target)
     build_local_wheels(repository)
-    store = RunStore(store_root or paths.bucket_dir() / "runs" / "v1")
+    store = RunStore(store_root or canonical_store_root)
     before = _pending_ids(store) | _finalized_ids(store)
     env = dict(os.environ)
     env["OT_BENCH_RUN_ROOT"] = str(store.root)
