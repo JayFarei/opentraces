@@ -69,7 +69,7 @@ def _closed_mcp_config(argv: list[str]) -> dict[str, object]:
     assert "--strict-mcp-config" in remote
     assert "--mcp-config" in remote
     marker = remote.index("opentraces-agent")
-    encoded = remote[marker + 2]
+    encoded = remote[marker + 3]
     return json.loads(base64.b64decode(encoded).decode("utf-8"))
 
 

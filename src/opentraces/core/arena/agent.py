@@ -22,6 +22,11 @@ from .drives.agent import (
     TermctrlAgentSession,
 )
 from .drives.browser_mcp import BrowserMcpBridge, SERVER_NAME
+from .harnesses import (
+    CLAUDE_HARNESS_EXECUTABLE,
+    CLAUDE_HARNESS_NAME,
+    CLAUDE_HARNESS_VERSION,
+)
 from .run_store import RunDraft
 
 
@@ -41,13 +46,15 @@ _CONTROLLER_ENV = frozenset(
 class HarnessSpec:
     name: str
     executable: str
+    version: str
     surface_tools: Mapping[str, tuple[str, ...]]
 
 
 _HARNESSES = {
     "claude": HarnessSpec(
-        name="claude",
-        executable="claude",
+        name=CLAUDE_HARNESS_NAME,
+        executable=CLAUDE_HARNESS_EXECUTABLE,
+        version=CLAUDE_HARNESS_VERSION,
         surface_tools={
             "terminal": ("Bash", "Read", "Edit", "Write", "Glob", "Grep"),
             "browser": (f"mcp__{SERVER_NAME}__*",),
@@ -65,9 +72,11 @@ class AgentAttempt:
     artifact_ref: str
     action_refs: tuple[str, ...]
     recording_refs: tuple[str, ...]
+    recording_complete: bool
 
 
 ProductEnvironment = Callable[[], Mapping[str, str]]
+ReplayInference = Callable[[], object | None]
 
 
 class AgentDrive:
@@ -83,6 +92,7 @@ class AgentDrive:
         browser: object,
         execution_mode: str,
         product_environment: ProductEnvironment,
+        replay_inference: ReplayInference = lambda: None,
         session_factory: AgentTerminalSessionFactory = TermctrlAgentSession,
         poll_interval: float = 0.3,
     ) -> None:
@@ -93,6 +103,7 @@ class AgentDrive:
         self.browser = browser
         self.execution_mode = execution_mode
         self.product_environment = product_environment
+        self.replay_inference = replay_inference
         self.session_factory = session_factory
         self.poll_interval = poll_interval
         self._attempted = False
@@ -111,6 +122,10 @@ class AgentDrive:
     @property
     def inference_pin(self) -> dict[str, Any] | None:
         return self._inference_pin
+
+    @property
+    def attempt_result(self) -> AgentAttempt | None:
+        return self._attempt
 
     def _grants(self, access: Sequence[object]) -> list[str]:
         if not isinstance(access, (list, tuple)) or not access:
@@ -141,6 +156,8 @@ class AgentDrive:
             raise ValueError("run.agent requires agent_live or agent_replay execution mode")
         if inference == "live" or isinstance(inference, str):
             raise ValueError("agent_replay requires a model-wire inference object")
+        if inference is not self.replay_inference():
+            raise ValueError("agent_replay requires the exact run-owned Anthropic replay emulator")
         pin = getattr(inference, "pin", None)
         if not isinstance(pin, Mapping):
             raise ValueError("agent_replay inference must expose a model-wire pin")
@@ -200,11 +217,13 @@ class AgentDrive:
             json.dumps(mcp_config, sort_keys=True, separators=(",", ":")).encode()
         ).decode()
         wrapper = (
-            'set -eu; executable="$1"; encoded_config="$2"; mcp_config="$3"; shift 3; '
+            'set -eu; executable="$1"; expected="$2"; encoded_config="$3"; '
+            'mcp_config="$4"; shift 4; '
             "trap 'rm -f \"$mcp_config\"' EXIT HUP INT TERM; "
             'printf "%s" "$encoded_config" | base64 -d > "$mcp_config"; '
             'version=$("$executable" --version); '
             'printf "OPENTRACES_HARNESS_VERSION=%s\\n" "$version"; '
+            'observed=${version%% *}; test "$observed" = "$expected"; '
             '"$executable" "$@"'
         )
         argv = [
@@ -214,6 +233,7 @@ class AgentDrive:
             wrapper,
             "opentraces-agent",
             spec.executable,
+            spec.version,
             encoded_config,
             "/tmp/opentraces-agent-mcp.json",
             "--mcp-config",
@@ -292,10 +312,22 @@ class AgentDrive:
                 "code": "agent_harness_version_unobserved",
                 "message": "agent harness version was not observed in its retained transcript",
             }
+        observed_version = (
+            matched_version.group(1).strip().split(maxsplit=1)[0]
+            if matched_version is not None
+            else None
+        )
+        if observed_version not in {None, spec.version}:
+            failure = {
+                "code": "agent_harness_version_mismatch",
+                "message": (
+                    f"expected Claude Code {spec.version}, observed {observed_version}"
+                ),
+            }
         completed = observed.status == "pass" and failure is None
         version = (
-            str(sanitize_diagnostic_value(matched_version.group(1).strip()))
-            if matched_version is not None
+            str(sanitize_diagnostic_value(observed_version))
+            if observed_version is not None
             else None
         )
         harness_pin = {
@@ -323,6 +355,7 @@ class AgentDrive:
             artifact_ref=ATTEMPT_ARTIFACT_REF,
             action_refs=tuple(record["action_refs"]),
             recording_refs=tuple(record["recording_refs"]),
+            recording_complete=observed.recording_complete,
         )
         return self._attempt
 
@@ -330,16 +363,19 @@ class AgentDrive:
         if self._attempt is None:
             return {"rewatchable": False, "channels": []}
         recording_ref = self._attempt.recording_refs[0]
-        recording_path = self.draft.path / recording_ref
-        recording_exists = recording_path.is_file() and recording_path.stat().st_size > 0
-        reason = None if recording_exists else "agent terminal recording is missing or empty"
+        recording_complete = self._attempt.recording_complete
+        reason = (
+            None
+            if recording_complete
+            else "agent terminal recording did not finalize cleanly"
+        )
         return {
-            "rewatchable": recording_exists,
+            "rewatchable": recording_complete,
             "channels": [
                 {
                     "kind": "agent_terminal",
-                    "complete": recording_exists,
-                    "path": recording_ref if recording_exists else None,
+                    "complete": recording_complete,
+                    "path": recording_ref if recording_complete else None,
                     "reason": reason,
                 }
             ],

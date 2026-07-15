@@ -214,6 +214,7 @@ class BenchRun:
                 browser=self.browser,
                 execution_mode=self.execution_mode,
                 product_environment=self._agent_product_environment,
+                replay_inference=lambda: self._emulators.get("anthropic"),
                 session_factory=self.bench.agent_session_factory,
                 poll_interval=self.bench.agent_poll_interval,
             )
@@ -419,6 +420,10 @@ class BenchRun:
         return record
 
     def _outcome_from_verifiers(self) -> tuple[str, str | None, dict[str, str] | None]:
+        if hasattr(self, "agent"):
+            attempt = self.agent.attempt_result
+            if attempt is not None and not attempt.completed:
+                return "complete", "fail", attempt.failure
         if not self.verifiers:
             return (
                 "error",
@@ -541,6 +546,15 @@ class BenchRun:
             }
             for verifier in self.verifiers
         ]
+        if hasattr(self, "agent") and self.agent.attempt_result is not None:
+            attempt = self.agent.attempt_result
+            evidence_requirements.append(
+                {
+                    "name": "agent.attempt",
+                    "complete": attempt.completed and attempt.recording_complete,
+                    "evidence_refs": [attempt.artifact_ref],
+                }
+            )
         if scenario_assertion:
             evidence_requirements.append(
                 {

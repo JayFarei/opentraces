@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +37,7 @@ class AgentTerminalSession(Protocol):
         recording_path: Path,
         cols: int,
         rows: int,
+        env: Mapping[str, str] | None = None,
     ) -> None: ...
 
     def send(self, text: str) -> None: ...
@@ -42,6 +45,8 @@ class AgentTerminalSession(Protocol):
     def observe(self) -> AgentTerminalObservation: ...
 
     def stop(self) -> None: ...
+
+    def recording_complete(self, recording_path: Path) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,7 @@ class AgentTerminalResult:
     result_ref: str
     transcript_ref: str
     recording_ref: str
+    recording_complete: bool
 
 
 TermctrlRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -63,6 +69,7 @@ def _run_termctrl(
     *,
     input_text: str | None = None,
     timeout: float = 5,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(argv),
@@ -71,6 +78,7 @@ def _run_termctrl(
         capture_output=True,
         check=False,
         timeout=timeout,
+        env={**os.environ, **dict(env or {})},
     )
 
 
@@ -86,11 +94,13 @@ class TermctrlAgentSession:
         *args: str,
         input_text: str | None = None,
         timeout: float = 5,
+        env: Mapping[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         return self.runner(
             ["termctrl", *args],
             input_text=input_text,
             timeout=timeout,
+            env=env,
         )
 
     def start(
@@ -100,6 +110,7 @@ class TermctrlAgentSession:
         recording_path: Path,
         cols: int,
         rows: int,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         started = self._call(
             "start",
@@ -113,6 +124,7 @@ class TermctrlAgentSession:
             "--",
             *argv,
             timeout=10,
+            env=env,
         )
         if started.returncode != 0:
             raise RuntimeError("terminal-control could not start the agent session")
@@ -144,7 +156,26 @@ class TermctrlAgentSession:
         )
 
     def stop(self) -> None:
-        self._call("stop", self.name)
+        stopped = self._call("stop", self.name)
+        if stopped.returncode != 0:
+            raise RuntimeError("terminal-control could not stop the agent session")
+
+    def recording_complete(self, recording_path: Path) -> bool:
+        if not recording_path.is_file() or recording_path.stat().st_size == 0:
+            return False
+        with tempfile.TemporaryDirectory(prefix="opentraces-termctrl-") as directory:
+            output = Path(directory) / "recording.txt"
+            saved = self._call(
+                "save",
+                "--recording",
+                str(recording_path),
+                "--format",
+                "txt",
+                "--out",
+                str(output),
+                timeout=10,
+            )
+            return saved.returncode == 0 and output.is_file()
 
 
 AgentTerminalSessionFactory = Callable[[str], AgentTerminalSession]
@@ -183,11 +214,6 @@ class AgentTerminalDrive:
         env: Mapping[str, str],
         reverse_forwards: Sequence[tuple[int, int]],
     ) -> list[str]:
-        remote_argv = [
-            "env",
-            *(f"{name}={value}" for name, value in sorted(env.items())),
-            *harness_argv,
-        ]
         argv = [
             "ssh",
             "-tt",
@@ -201,11 +227,17 @@ class AgentTerminalDrive:
             "ServerAliveInterval=15",
             "-o",
             "ServerAliveCountMax=4",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
             "-i",
             self.box.ssh_key,
             "-p",
             self.box.ssh_port,
         ]
+        for name in sorted(env):
+            argv.extend(["-o", f"SendEnv={name}"])
         for remote_port, local_port in reverse_forwards:
             argv.extend(
                 [
@@ -219,7 +251,7 @@ class AgentTerminalDrive:
             *argv,
             f"{self.box.ssh_user}@{self.box.ssh_host}",
             "--",
-            *remote_argv,
+            *harness_argv,
         ]
 
     @staticmethod
@@ -276,7 +308,8 @@ class AgentTerminalDrive:
         latest = ""
         reason: dict[str, str] | None = None
         status = "fail"
-        connected = False
+        started = False
+        cleanup_error: Exception | None = None
         try:
             session.start(
                 # Box.ssh_user is the transport identity, not automatically the
@@ -286,8 +319,9 @@ class AgentTerminalDrive:
                 recording_path=recording_path,
                 cols=cols,
                 rows=rows,
+                env=environment,
             )
-            connected = True
+            started = True
             session.send(prompt)
             deadline = time.monotonic() + timeout
             while True:
@@ -306,14 +340,12 @@ class AgentTerminalDrive:
                         "code": "agent_drive_disconnected",
                         "message": f"agent terminal disconnected during {action}",
                     }
-                    connected = False
                     break
                 if observation.state == "exited":
                     reason = {
                         "code": "agent_drive_exited_before_expectation",
                         "message": f"agent terminal exited before expectation during {action}",
                     }
-                    connected = False
                     break
                 if time.monotonic() >= deadline:
                     reason = {
@@ -323,15 +355,28 @@ class AgentTerminalDrive:
                     break
                 if self.poll_interval:
                     time.sleep(self.poll_interval)
-        except Exception:
+        except Exception as exc:
             reason = {
-                "code": "agent_drive_disconnected",
-                "message": f"agent terminal disconnected during {action}",
+                "code": "agent_drive_control_failed",
+                "message": f"agent terminal control failed during {action}: {type(exc).__name__}",
             }
-            connected = False
         finally:
-            if connected:
-                session.stop()
+            if started:
+                try:
+                    session.stop()
+                except Exception as exc:
+                    cleanup_error = exc
+
+        if cleanup_error is not None and status == "pass":
+            status = "fail"
+            reason = {
+                "code": "agent_drive_cleanup_failed",
+                "message": f"agent terminal cleanup failed during {action}",
+            }
+        try:
+            recording_complete = started and session.recording_complete(recording_path)
+        except Exception:
+            recording_complete = False
 
         duration_ms = self.actions.complete(allocation)
         self.draft.write_text(transcript_ref, latest)
@@ -344,6 +389,7 @@ class AgentTerminalDrive:
                 "reason": reason,
                 "transcript_ref": transcript_ref,
                 "recording_ref": recording_ref,
+                "recording_complete": recording_complete,
             },
         )
         return AgentTerminalResult(
@@ -354,4 +400,5 @@ class AgentTerminalDrive:
             result_ref=result_ref,
             transcript_ref=transcript_ref,
             recording_ref=recording_ref,
+            recording_complete=recording_complete,
         )

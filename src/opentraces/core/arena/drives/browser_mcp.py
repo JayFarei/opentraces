@@ -11,6 +11,8 @@ from .browser import BrowserDrive
 
 
 SERVER_NAME = "opentraces_browser"
+MAX_REQUEST_BYTES = 512 * 1024
+REQUEST_READ_TIMEOUT_SECONDS = 0.25
 
 
 _TOOLS: tuple[dict[str, Any], ...] = (
@@ -138,9 +140,15 @@ class BrowserMcpBridge:
                     return
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
-                    request = json.loads(self.rfile.read(length))
+                    if length <= 0 or length > MAX_REQUEST_BYTES:
+                        raise ValueError("invalid MCP request size")
+                    self.connection.settimeout(REQUEST_READ_TIMEOUT_SECONDS)
+                    body = self.rfile.read(length)
+                    if len(body) != length:
+                        raise ValueError("incomplete MCP request body")
+                    request = json.loads(body)
                     response = bridge._respond(request)
-                except Exception as exc:
+                except (OSError, ValueError) as exc:
                     response = {
                         "jsonrpc": "2.0",
                         "id": None,

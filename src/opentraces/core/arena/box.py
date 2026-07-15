@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value, sanitize_reason
+from .harnesses import (
+    CLAUDE_HARNESS_EXECUTABLE,
+    CLAUDE_HARNESS_NAME,
+    CLAUDE_HARNESS_VERSION,
+    CLAUDE_INSTALL_URL,
+)
 
 
 PINNED_CRABBOX_VERSION = "0.38.0"
@@ -602,7 +608,14 @@ class CrabboxRuntime:
                 f"sudo -u {PRODUCT_USER} test -w /home/{PRODUCT_USER}; "
                 f"sudo install -d -m 0755 -o {PRODUCT_USER} -g {PRODUCT_USER} "
                 '"$PWD/bench-recordings"; '
-                f"if sudo -u {PRODUCT_USER} sudo -n true >/dev/null 2>&1; then exit 1; fi",
+                f"if sudo -u {PRODUCT_USER} sudo -n true >/dev/null 2>&1; then exit 1; fi; "
+                "sudo install -d -m 0755 /etc/ssh/sshd_config.d; "
+                "printf '%s\n' 'AcceptEnv *' | "
+                "sudo tee /etc/ssh/sshd_config.d/opentraces-agent-env.conf >/dev/null; "
+                "sudo sshd -t; "
+                "if test -r /run/sshd.pid; then "
+                "sudo kill -HUP \"$(cat /run/sshd.pid)\"; "
+                "else sudo pkill -HUP -x sshd || true; fi",
             ],
             cwd=repository,
             timeout=30,
@@ -765,7 +778,7 @@ class CrabboxRuntime:
             if observation_refs:
                 pin["observation_refs"] = observation_refs
             return pin
-        if app_state != "install-only":
+        if app_state not in {"install-only", "agent-ready"}:
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
         wheels = sorted((repository / "dist").glob("*.whl"))
         if not wheels:
@@ -841,19 +854,70 @@ class CrabboxRuntime:
                 f"expected {expected_dependencies}, observed {dependencies}",
             )
         identity_ref = self._prepare_product_identity(box, repository=repository)
+        harness_install_ref: str | None = None
+        harness_probe_ref: str | None = None
+        harness_recipe: dict[str, str] | None = None
+        if app_state == "agent-ready":
+            harness_install_timing = self._timing_path(repository, "agent-harness-install")
+            harness_install = self.exec_product(
+                box,
+                [
+                    "sh",
+                    "-c",
+                    f"curl -fsSL {CLAUDE_INSTALL_URL} | "
+                    f"bash -s -- {CLAUDE_HARNESS_VERSION}",
+                ],
+                timeout=600,
+                timing_path=harness_install_timing,
+            )
+            if harness_install.returncode != 0:
+                raise CrabboxRefusal(
+                    "agent_harness_install_failed",
+                    "the exact supported Claude Code harness could not be installed",
+                )
+            harness_probe_timing = self._timing_path(repository, "agent-harness-probe")
+            harness_probe = self.exec_product(
+                box,
+                [CLAUDE_HARNESS_EXECUTABLE, "--version"],
+                timeout=30,
+                timing_path=harness_probe_timing,
+            )
+            observed_harness_version = harness_probe.stdout.strip().split(maxsplit=1)[0]
+            if (
+                harness_probe.returncode != 0
+                or observed_harness_version != CLAUDE_HARNESS_VERSION
+            ):
+                raise CrabboxRefusal(
+                    "agent_harness_version_mismatch",
+                    f"expected Claude Code {CLAUDE_HARNESS_VERSION}, "
+                    f"observed {observed_harness_version or 'unavailable'}",
+                )
+            harness_recipe = {
+                "name": CLAUDE_HARNESS_NAME,
+                "executable": CLAUDE_HARNESS_EXECUTABLE,
+                "version": CLAUDE_HARNESS_VERSION,
+            }
+            harness_install_ref = self._evidence_ref(harness_install_timing)
+            harness_probe_ref = self._evidence_ref(harness_probe_timing)
         recipe = {
             "wheel_sha256": digests,
             "dependencies": expected_dependencies,
             "dependency_lock_sha256": dependency_lock_sha256,
             "execution_identity": {"user": PRODUCT_USER, "sudo": False},
         }
+        if harness_recipe is not None:
+            recipe["harness"] = harness_recipe
         app_digest = hashlib.sha256(
             json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         pin = {
             "name": app_state,
             "digest": f"sha256:{app_digest}",
-            "provides": ["cli", "script"],
+            "provides": [
+                "cli",
+                "script",
+                *([f"agent:{CLAUDE_HARNESS_NAME}"] if harness_recipe is not None else []),
+            ],
             "dependencies": expected_dependencies,
             "recipe": recipe,
         }
@@ -864,6 +928,8 @@ class CrabboxRuntime:
                 self._evidence_ref(provides_timing),
                 self._evidence_ref(dependency_timing),
                 identity_ref,
+                harness_install_ref,
+                harness_probe_ref,
             )
             if ref is not None
         ]
