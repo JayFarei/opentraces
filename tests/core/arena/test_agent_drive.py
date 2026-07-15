@@ -110,9 +110,10 @@ def test_forced_agent_disconnect_is_one_bounded_named_failure_in_a_verifiable_ru
     assert session.stop_count == 0
     assert session.sent == ["Make the small change and commit it."]
     assert (draft.path / result.recording_ref).read_bytes().startswith(b"partial")
-    assert json.loads((draft.path / result.result_ref).read_text(encoding="utf-8"))[
-        "reason"
-    ] == result.reason
+    assert (
+        json.loads((draft.path / result.result_ref).read_text(encoding="utf-8"))["reason"]
+        == result.reason
+    )
     assert actions.timeline_status() == {
         "complete": True,
         "path": "recordings/timeline.jsonl",
@@ -185,6 +186,7 @@ def test_agent_drive_uses_box_ssh_facts_and_only_local_polls(tmp_path: Path) -> 
         prompt="Commit the change.",
         expect_regex=r"commit [0-9a-f]{7,}",
         timeout=5,
+        env={"ANTHROPIC_API_KEY": "live-secret"},
     )
 
     assert result.status == "pass"
@@ -208,9 +210,43 @@ def test_agent_drive_uses_box_ssh_facts_and_only_local_polls(tmp_path: Path) -> 
         "2222",
         "bench@127.0.0.1",
         "--",
+        "env",
+        "ANTHROPIC_API_KEY=live-secret",
         "claude",
         "--permission-mode",
         "acceptEdits",
     ]
     assert session.observe_count == 2
     assert session.start_count == 1
+    invocation = (draft.path / result.invocation_ref).read_text(encoding="utf-8")
+    assert "live-secret" not in invocation
+    assert "ANTHROPIC_API_KEY" in invocation
+
+
+def test_agent_harness_exit_before_match_is_not_reported_as_ssh_disconnect(
+    tmp_path: Path,
+) -> None:
+    _store, draft, actions = _draft(tmp_path)
+    session = ScriptedTerminalControlSession(
+        [AgentTerminalObservation(state="exited", screen="goodbye", logs="goodbye")]
+    )
+    drive = AgentTerminalDrive(
+        box=_box(),
+        draft=draft,
+        actions=actions,
+        session_factory=lambda _name: session,
+        poll_interval=0,
+    )
+
+    result = drive.run(
+        harness_argv=["claude"],
+        prompt="Commit the change.",
+        expect_regex=r"commit [0-9a-f]{7,}",
+        timeout=5,
+    )
+
+    assert result.status == "fail"
+    assert result.reason == {
+        "code": "agent_drive_exited_before_expectation",
+        "message": "agent terminal exited before expectation during actions/0001",
+    }
