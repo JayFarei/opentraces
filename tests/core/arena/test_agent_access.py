@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
 import time
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -12,6 +14,7 @@ from opentraces.core.arena.drives.agent import AgentTerminalObservation
 from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.run_store import RunStore
 from tests.core.arena.test_engine import FakeBoxRuntime, _scenario
+from tests.core.arena.test_browser_drive import PublicBrowserSession
 
 
 class CompletingHarnessSession:
@@ -50,6 +53,95 @@ class CompletingHarnessSession:
 
     def stop(self) -> None:
         return None
+
+
+def _closed_mcp_config(argv: list[str]) -> dict[str, object]:
+    remote = argv[argv.index("--") + 1 :]
+    assert "--strict-mcp-config" in remote
+    assert "--mcp-config" in remote
+    marker = remote.index("opentraces-agent")
+    encoded = remote[marker + 2]
+    return json.loads(base64.b64decode(encoded).decode("utf-8"))
+
+
+class BrowserAttemptingHarnessSession(CompletingHarnessSession):
+    """Exercise the closed MCP authority decision at the harness boundary."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.browser_refused = False
+
+    def start(
+        self,
+        argv: list[str],
+        *,
+        recording_path: Path,
+        cols: int,
+        rows: int,
+    ) -> None:
+        super().start(argv, recording_path=recording_path, cols=cols, rows=rows)
+        config = _closed_mcp_config(argv)
+        self.browser_refused = config == {"mcpServers": {}}
+
+    def observe(self) -> AgentTerminalObservation:
+        browser_result = (
+            "BROWSER_TOOL_REFUSED: no browser MCP server is configured"
+            if self.browser_refused
+            else "BROWSER_TOOL_SUCCEEDED"
+        )
+        return AgentTerminalObservation(
+            state="running",
+            screen=(
+                "OPENTRACES_HARNESS_VERSION=2.1.143\n"
+                f"{browser_result}\n"
+                "OPENTRACES_AGENT_ATTEMPT_COMPLETE"
+            ),
+            logs="",
+        )
+
+
+class BrowserCallingHarnessSession(CompletingHarnessSession):
+    """Call the exact run-owned browser through the SSH-forwarded MCP bridge."""
+
+    def start(
+        self,
+        argv: list[str],
+        *,
+        recording_path: Path,
+        cols: int,
+        rows: int,
+    ) -> None:
+        super().start(argv, recording_path=recording_path, cols=cols, rows=rows)
+        config = _closed_mcp_config(argv)
+        server = config["mcpServers"]["opentraces_browser"]
+        assert server["type"] == "http"
+        reverse = argv[argv.index("-R") + 1]
+        _remote_host, _remote_port, local_host, local_port = reverse.split(":")
+        assert local_host == "127.0.0.1"
+        request = Request(
+            f"http://127.0.0.1:{local_port}/mcp",
+            data=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "browser_navigate",
+                        "arguments": {"url": "http://127.0.0.1:8080/authorize"},
+                    },
+                }
+            ).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=2) as response:
+            payload = json.loads(response.read())
+        assert payload["result"]["isError"] is False
+
+
+class DisconnectedRecordedHarnessSession(CompletingHarnessSession):
+    def observe(self) -> AgentTerminalObservation:
+        return AgentTerminalObservation(state="disconnected", screen="", logs="")
 
 
 def _bench(tmp_path: Path, session: CompletingHarnessSession) -> Bench:
@@ -225,6 +317,103 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
         }
         for channel in run.result["recordings"]["channels"]
     )
+
+
+def test_terminal_only_agent_browser_attempt_is_refused_by_closed_mcp_config(
+    tmp_path: Path,
+) -> None:
+    session = BrowserAttemptingHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Use the browser to open the authorization page.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert attempt.completed is True
+    assert session.browser_refused is True
+    assert session.started_argv is not None
+    assert _closed_mcp_config(session.started_argv) == {"mcpServers": {}}
+    transcript = (run.final_path / "actions/0001/transcript.txt").read_text(encoding="utf-8")
+    assert "BROWSER_TOOL_REFUSED" in transcript
+    assert [path.name for path in (run.final_path / "actions").iterdir()] == ["0001"]
+    assert not (run.final_path / "recordings/browser").exists()
+
+
+def test_browser_grant_routes_mcp_call_into_exact_run_drive_and_shared_timeline(
+    tmp_path: Path,
+) -> None:
+    session = BrowserCallingHarnessSession()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+        browser_factory=PublicBrowserSession,
+        agent_session_factory=lambda _name: session,
+        agent_poll_interval=0,
+    )
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Use the browser to open the authorization page.",
+            access=[run.terminal, run.browser],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert attempt.completed is True
+    assert session.started_argv is not None
+    config = _closed_mcp_config(session.started_argv)
+    assert list(config["mcpServers"]) == ["opentraces_browser"]
+    invocations = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((run.final_path / "actions").glob("*/invocation.json"))
+    ]
+    assert [(item["ordinal"], item.get("surface"), item["kind"]) for item in invocations] == [
+        (1, "agent", "interactive_prompt"),
+        (2, None, "navigate"),
+    ]
+    assert invocations[1]["url"] == "http://127.0.0.1:8080/authorize"
+    assert run.result["recordings"]["timeline"]["complete"] is True
+    assert {
+        channel["kind"] for channel in run.result["recordings"]["channels"]
+    } >= {"agent_terminal", "browser_video", "playwright_trace", "browser_screenshots"}
+
+
+def test_valid_agent_recording_remains_rewatchable_when_attempt_did_not_complete(
+    tmp_path: Path,
+) -> None:
+    session = DisconnectedRecordedHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Inspect the terminal.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert attempt.completed is False
+    agent_channel = next(
+        channel
+        for channel in run.result["recordings"]["channels"]
+        if channel["kind"] == "agent_terminal"
+    )
+    assert agent_channel == {
+        "kind": "agent_terminal",
+        "complete": True,
+        "path": "recordings/agent-0001.termctrl",
+        "reason": None,
+    }
+    assert run.result["recordings"]["rewatchable"] is True
 
 
 def test_agent_authority_refuses_controller_bearer_before_any_action(
