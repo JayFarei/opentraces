@@ -136,7 +136,7 @@ def rerender_stored_run(
 
 def _callable_identity(verifier: Callable[[StoredEvidence], object]) -> tuple[str, str]:
     name = f"{verifier.__module__}.{verifier.__qualname__}"
-    source_value = inspect.getsourcefile(inspect.unwrap(verifier))
+    source_value = inspect.getsourcefile(verifier)
     if source_value is None:
         raise StoredVerifierMismatch("cannot locate the requested verifier source")
     try:
@@ -146,9 +146,27 @@ def _callable_identity(verifier: Callable[[StoredEvidence], object]) -> tuple[st
     return name, f"sha256:{digest}"
 
 
-def _stored_verifier(
-    result: Mapping[str, Any], *, name: str, digest: str
-) -> Mapping[str, Any]:
+def _canonical_verifier(
+    verifier: Callable[[StoredEvidence], object],
+) -> Callable[[StoredEvidence], object]:
+    """Return the exact callable whose identity and body may be trusted.
+
+    A wrapper can forge the bound verifier's public name and point ``__wrapped__``
+    at its source while executing a different outer body.  Stored reverification
+    has no need for decorator adaptation, so it rejects that split identity
+    instead of hashing one callable and invoking another.
+    """
+
+    try:
+        unwrapped = inspect.unwrap(verifier)
+    except (TypeError, ValueError) as exc:
+        raise StoredVerifierMismatch("cannot resolve the requested verifier callable") from exc
+    if unwrapped is not verifier:
+        raise StoredVerifierMismatch("wrapped callable cannot be used for stored reverification")
+    return verifier
+
+
+def _stored_verifier(result: Mapping[str, Any], *, name: str, digest: str) -> Mapping[str, Any]:
     verifiers = result.get("verifiers")
     if not isinstance(verifiers, list):
         raise StoredVerifierMismatch("stored run has no verifier records")
@@ -179,18 +197,21 @@ def reverify_stored_run(
 
     run_path = _verified_run_path(store, run_id)
     result = _read_result(run_path)
+    target = _canonical_verifier(verifier)
     _stored_verifier(result, name=verifier_name, digest=verifier_digest)
-    actual_name, actual_digest = _callable_identity(verifier)
+    actual_name, actual_digest = _callable_identity(target)
     if actual_name != verifier_name:
         raise StoredVerifierMismatch("requested verifier name differs from the callable identity")
     if actual_digest != verifier_digest:
-        raise StoredVerifierMismatch("requested verifier source digest differs from the callable source")
+        raise StoredVerifierMismatch(
+            "requested verifier source digest differs from the callable source"
+        )
 
     evidence = StoredEvidence(run_path)
     evidence_refs: list[str] = []
     reason: dict[str, str] | None = None
     try:
-        returned = verifier(evidence)
+        returned = target(evidence)
         if isinstance(returned, Mapping):
             raw_refs = returned.get("evidence_refs", [])
             if not isinstance(raw_refs, list) or not all(isinstance(ref, str) for ref in raw_refs):

@@ -172,8 +172,7 @@ def test_read_projections_fail_closed_when_an_indexed_byte_changes(
                 store,
                 finalized.name,
                 verifier_name=(
-                    f"{stored_artifact_verifier.__module__}."
-                    f"{stored_artifact_verifier.__qualname__}"
+                    f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}"
                 ),
                 verifier_digest=_source_digest(),
                 verifier=stored_artifact_verifier,
@@ -260,8 +259,7 @@ def test_reverify_rejects_a_forged_wrapper_before_invocation(tmp_path: Path) -> 
             store,
             finalized.name,
             verifier_name=(
-                f"{stored_artifact_verifier.__module__}."
-                f"{stored_artifact_verifier.__qualname__}"
+                f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}"
             ),
             verifier_digest=_source_digest(),
             verifier=forged_wrapper,
