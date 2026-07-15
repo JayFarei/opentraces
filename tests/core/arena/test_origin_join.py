@@ -461,6 +461,29 @@ def test_explicit_slice_origin_refuses_a_finalized_run_without_staged_evidence(
     assert not trace_v1_labels_path(PROJECT_SLUG, record.trace_id).exists()
 
 
+def test_explicit_slice_origin_refuses_post_execution_evidence_fabrication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _origin_record()
+    _write_trace(tmp_path, monkeypatch, record)
+    address = f"{record.trace_id}:1-3"
+    store = _finalized_run(
+        tmp_path,
+        monkeypatch,
+        explicit_origin=address,
+    )
+
+    with pytest.raises(OriginJoinError, match="verifier evidence_refs"):
+        attach_explicit_bench_labels(
+            store.root / RUN_ID,
+            address=address,
+            store=store,
+        )
+
+    assert not trace_v1_labels_path(PROJECT_SLUG, record.trace_id).exists()
+
+
 @pytest.mark.parametrize("address", ["trace-origin-123:4", "trace-origin-123:3-1"])
 def test_explicit_origin_refuses_dangling_or_invalid_points_and_spans(
     tmp_path: Path,
