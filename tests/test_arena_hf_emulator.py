@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
+import shutil
 import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from importlib.metadata import version
@@ -94,15 +97,40 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
 class _RealLocalStopRuntime:
     """Execute the production stop script against a real local sidecar process."""
 
-    def __init__(self, *, pid_path: Path, ledger_path: Path) -> None:
+    def __init__(self, *, pid_path: Path, ledger_path: Path, executable: Path) -> None:
         self.pid_path = pid_path
         self.ledger_path = ledger_path
+        self.executable = executable
 
     def exec(self, _box, argv, *, cwd=None, env=None, timeout=60, timing_path=None):
         assert argv[:2] == ["sh", "-c"]
         script = argv[2]
         script = script.replace("/tmp/opentraces-hf-emulator.pid", str(self.pid_path))
         script = script.replace(f"sudo -u opentraces-hf cat {REMOTE_LEDGER}", f"cat {self.ledger_path}")
+        script = script.replace("sudo -u opentraces-hf ", "")
+        script = script.replace("id -u opentraces-hf", "id -u")
+        if sys.platform == "darwin":
+            script = script.replace('test -r "/proc/$pid/stat"; ', 'kill -0 "$pid"; ')
+            script = script.replace(
+                "state=$(sed -n 's/^.*) \\([A-Z]\\) .*$/\\1/p' \"/proc/$pid/stat\"); ",
+                "state=R; ",
+            )
+            script = script.replace(
+                "owner_uid=$(awk '/^Uid:/{print $2}' \"/proc/$pid/status\"); ",
+                "owner_uid=$(ps -o uid= -p \"$pid\" | tr -d ' '); ",
+            )
+            script = script.replace(
+                'executable=$(readlink -f "/proc/$pid/exe"); '
+                'digest=$(sha256sum "$executable" | cut -d" " -f1); ',
+                f"executable={shlex.quote(str(self.executable))}; "
+                'digest=$(shasum -a 256 "$executable" | cut -d" " -f1); ',
+            )
+            script = script.replace("sudo kill -- ", "kill -- ")
+            script = script.replace(
+                "state=$(sed -n 's/^.*) \\([A-Z]\\) .*$/\\1/p' \"/proc/$pid/stat\" "
+                "2>/dev/null || true); ",
+                "state=; ",
+            )
         observed = subprocess.run(
             ["sh", "-c", script],
             cwd=cwd,
@@ -162,6 +190,17 @@ def _assert_control_denied(
         )
     assert caught.value.code == 401
     assert caught.value.headers["X-Error-Code"] == "InvalidControlToken"
+
+
+def _request_form(url: str, payload: dict[str, str]) -> tuple[int, str]:
+    request = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(payload).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request) as response:
+        return response.status, response.read().decode()
 
 
 def _assert_invalid_token(
@@ -255,6 +294,10 @@ def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> N
         "preupload": "hand-authored",
         "commit": "hand-authored",
         "whoami": "hand-authored",
+        "issueDeviceCode": "hand-authored",
+        "viewDeviceAuthorization": "hand-authored",
+        "authorizeDeviceCode": "hand-authored",
+        "completeDeviceCode": "hand-authored",
         "updateSettings": "hand-authored",
         "validateYaml": "hand-authored",
         "listDatasets": "partial",
@@ -558,6 +601,118 @@ print(json.dumps({
         "organization": "bench",
         "type": "dataset",
     }
+
+
+def test_real_cli_device_flow_crosses_human_page_then_persists_auth(
+    tmp_path: Path,
+) -> None:
+    scripts_dir = Path(sys.executable).parent
+    opentraces = shutil.which("opentraces", path=str(scripts_dir))
+    assert opentraces is not None, (
+        f"opentraces console script is not installed alongside {sys.executable}"
+    )
+    home = tmp_path / "isolated-home"
+    home.mkdir()
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in {"HF_TOKEN", "HUGGINGFACE_TOKEN", "HF_HOME"}
+    }
+    environment.update(
+        {
+            "HOME": str(home),
+            "BROWSER": "/usr/bin/true",
+        }
+    )
+
+    with running_emulator(tmp_path) as (endpoint, ledger_path):
+        environment["HF_ENDPOINT"] = endpoint
+        with urllib.request.urlopen(f"{endpoint}/oauth/authorize") as response:
+            waiting_page = response.read().decode()
+        assert 'http-equiv="refresh"' in waiting_page
+        credentials = home / ".opentraces" / "credentials"
+        assert not credentials.exists()
+        login = subprocess.Popen(
+            [
+                opentraces,
+                "auth",
+                "login",
+                "--device-timeout",
+                "15",
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            authorization_page = ""
+            while time.monotonic() < deadline:
+                try:
+                    with urllib.request.urlopen(f"{endpoint}/oauth/authorize") as response:
+                        authorization_page = response.read().decode()
+                except OSError:
+                    pass
+                if "Authorize OpenTraces" in authorization_page:
+                    break
+                time.sleep(0.02)
+            assert "Authorize OpenTraces" in authorization_page
+            assert "button" in authorization_page
+            status, authorized_page = _request_form(
+                f"{endpoint}/oauth/authorize",
+                {},
+            )
+            assert status == 200
+            assert "Authorized" in authorized_page
+            stdout, stderr = login.communicate(timeout=10)
+        finally:
+            if login.poll() is None:
+                login.kill()
+                login.wait(timeout=2)
+
+        assert login.returncode == 0, f"stdout:\n{stdout}\nstderr:\n{stderr}"
+        assert credentials.is_file()
+        assert credentials.stat().st_mode & 0o777 == 0o600
+        assert "hf_bench_user_token" not in stdout
+
+        whoami = subprocess.run(
+            [
+                opentraces,
+                "--json",
+                "auth",
+                "whoami",
+            ],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert whoami.returncode == 0, whoami.stderr
+        assert json.loads(whoami.stdout) == {
+            "status": "ok",
+            "authenticated": True,
+            "username": "bench",
+        }
+
+    raw_ledger = ledger_path.read_text(encoding="utf-8")
+    ledger_rows = [json.loads(line) for line in raw_ledger.splitlines()]
+    successful_operations = {
+        row["operation_id"]
+        for row in ledger_rows
+        if row["response"]["status"] == 200
+    }
+    assert {
+        "issueDeviceCode",
+        "viewDeviceAuthorization",
+        "authorizeDeviceCode",
+        "completeDeviceCode",
+        "whoami",
+    } <= successful_operations
+    assert "hf_bench_user_token" not in raw_ledger
+    assert "device_code" not in raw_ledger
+    assert "user_code" not in raw_ledger
 
 
 def test_real_hf_client_listing_is_scoped_to_authenticated_owner(
@@ -1518,12 +1673,23 @@ HfApi(token="hf_bench_user_token").whoami()
         pre_stop_whoami = next(row for row in pre_stop_rows if row["operation_id"] == "whoami")
 
         run_path = tmp_path / "run"
+        bun_command = shutil.which(pinned_bun_command("--version")[0])
+        assert bun_command is not None
+        bun_executable = Path(bun_command).resolve()
+        bun_bytes = bun_executable.read_bytes()
         hf = HuggingFaceEmulator(
-            runtime=_RealLocalStopRuntime(pid_path=pid_path, ledger_path=ledger_path),
+            runtime=_RealLocalStopRuntime(
+                pid_path=pid_path,
+                ledger_path=ledger_path,
+                executable=bun_executable,
+            ),
             box=None,
             repository=ROOT,
             run_path=run_path,
-            binary_pin=EmulatorBinaryPin(sha256="0" * 64, size_bytes=0),
+            binary_pin=EmulatorBinaryPin(
+                sha256=hashlib.sha256(bun_bytes).hexdigest(),
+                size_bytes=len(bun_bytes),
+            ),
             world_setup={},
             control_token=CONTROL_TOKEN,
         )

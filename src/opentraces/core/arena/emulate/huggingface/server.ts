@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.PORT ?? "14318", 10);
@@ -29,6 +29,10 @@ const operations = [
   },
   { operationId: "commit", method: "POST", path: "/api/datasets/{id}/commit/{rev}", status: "hand-authored" },
   { operationId: "whoami", method: "GET", path: "/api/whoami-v2", status: "hand-authored" },
+  { operationId: "issueDeviceCode", method: "POST", path: "/oauth/device", status: "hand-authored" },
+  { operationId: "viewDeviceAuthorization", method: "GET", path: "/oauth/authorize", status: "hand-authored" },
+  { operationId: "authorizeDeviceCode", method: "POST", path: "/oauth/authorize", status: "hand-authored" },
+  { operationId: "completeDeviceCode", method: "POST", path: "/oauth/token", status: "hand-authored" },
   { operationId: "updateSettings", method: "PUT", path: "/api/datasets/{id}/settings", status: "hand-authored" },
   {
     operationId: "validateYaml",
@@ -124,8 +128,48 @@ type Identity = {
 const BASELINE_TOKEN = "hf_bench_user_token";
 const credentials = new Map<string, Identity>();
 
+type DeviceAuthorization = {
+  deviceCode: string;
+  userCode: string;
+  identity: Identity;
+  token: string;
+  expiresAt: number;
+  authorized: boolean;
+};
+
+const deviceAuthorizations = new Map<string, DeviceAuthorization>();
+
+function activeDeviceAuthorization(userCode?: string | null): DeviceAuthorization | undefined {
+  const now = Date.now();
+  for (const [deviceCode, authorization] of deviceAuthorizations) {
+    if (authorization.expiresAt <= now) deviceAuthorizations.delete(deviceCode);
+  }
+  if (userCode) {
+    return [...deviceAuthorizations.values()].find(
+      (authorization) => authorization.userCode === userCode,
+    );
+  }
+  return [...deviceAuthorizations.values()].find(
+    (authorization) => !authorization.authorized,
+  );
+}
+
+function htmlResponse(content: string, status = 200, head = ""): Response {
+  return new Response(
+    `<!doctype html><html><head><meta charset="utf-8"><title>Hugging Face device authorization</title>${head}</head><body><main>${content}</main></body></html>`,
+    { status, headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
+}
+
+function deviceAuthorizationPage(authorization: DeviceAuthorization): Response {
+  return htmlResponse(
+    `<h1>Authorize OpenTraces</h1><p>Device code <strong>${authorization.userCode}</strong></p><form method="post" action="/oauth/authorize"><input type="hidden" name="user_code" value="${authorization.userCode}"><button type="submit">Authorize</button></form>`,
+  );
+}
+
 function resetCredentials(): void {
   credentials.clear();
+  deviceAuthorizations.clear();
   credentials.set(BASELINE_TOKEN, { name: "bench", type: "user" });
 }
 
@@ -303,6 +347,90 @@ Bun.serve({
       return new Response(content, {
         status: 200,
         headers: { "Content-Type": "application/x-ndjson" },
+      });
+    }
+    if (request.method === "POST" && path === "/oauth/device") {
+      const body = await request.formData();
+      const clientId = String(body.get("client_id") ?? "");
+      if (!clientId) {
+        appendLedger(request, "issueDeviceCode", 400, { valid_client: false });
+        return jsonResponse({ error: "invalid_request" }, 400);
+      }
+      const random = randomBytes(18).toString("hex");
+      const userMaterial = createHash("sha256").update(random).digest("hex").slice(0, 8).toUpperCase();
+      const authorization: DeviceAuthorization = {
+        deviceCode: `device_${random}`,
+        userCode: `${userMaterial.slice(0, 4)}-${userMaterial.slice(4)}`,
+        identity: { name: "bench", type: "user" },
+        token: BASELINE_TOKEN,
+        expiresAt: Date.now() + 300_000,
+        authorized: false,
+      };
+      deviceAuthorizations.set(authorization.deviceCode, authorization);
+      const verificationUri = `${new URL(request.url).origin}/oauth/authorize`;
+      appendLedger(
+        request,
+        "issueDeviceCode",
+        200,
+        { valid_client: true },
+        { expires_in: 300, interval: 1 },
+      );
+      return jsonResponse({
+        device_code: authorization.deviceCode,
+        user_code: authorization.userCode,
+        verification_uri: verificationUri,
+        verification_uri_complete: `${verificationUri}?user_code=${encodeURIComponent(authorization.userCode)}`,
+        expires_in: 300,
+        interval: 1,
+      });
+    }
+    if (request.method === "GET" && path === "/oauth/authorize") {
+      const authorization = activeDeviceAuthorization(
+        new URL(request.url).searchParams.get("user_code"),
+      );
+      if (authorization === undefined) {
+        appendLedger(request, "viewDeviceAuthorization", 200, { pending: false });
+        return htmlResponse(
+          "<h1>Waiting for a device code</h1>",
+          200,
+          '<meta http-equiv="refresh" content="0.25">',
+        );
+      }
+      appendLedger(request, "viewDeviceAuthorization", 200, { pending: true });
+      return deviceAuthorizationPage(authorization);
+    }
+    if (request.method === "POST" && path === "/oauth/authorize") {
+      const body = await request.formData();
+      const userCode = body.get("user_code");
+      const authorization = activeDeviceAuthorization(
+        userCode === null ? null : String(userCode),
+      );
+      if (authorization === undefined) {
+        appendLedger(request, "authorizeDeviceCode", 409, { pending: false });
+        return htmlResponse("<h1>No pending device authorization</h1>", 409);
+      }
+      authorization.authorized = true;
+      credentials.set(authorization.token, authorization.identity);
+      appendLedger(request, "authorizeDeviceCode", 200, { authorized: true });
+      return htmlResponse("<h1>Authorized</h1><p>You can return to the terminal.</p>");
+    }
+    if (request.method === "POST" && path === "/oauth/token") {
+      const body = await request.formData();
+      const deviceCode = String(body.get("device_code") ?? "");
+      const authorization = deviceAuthorizations.get(deviceCode);
+      if (authorization === undefined || authorization.expiresAt <= Date.now()) {
+        appendLedger(request, "completeDeviceCode", 400, { state: "expired" });
+        return jsonResponse({ error: "expired_token" }, 400);
+      }
+      if (!authorization.authorized) {
+        appendLedger(request, "completeDeviceCode", 400, { state: "pending" });
+        return jsonResponse({ error: "authorization_pending" }, 400);
+      }
+      appendLedger(request, "completeDeviceCode", 200, { completed: true });
+      return jsonResponse({
+        access_token: authorization.token,
+        token_type: "Bearer",
+        scope: "openid profile write-repos manage-repos",
       });
     }
     if (request.method === "POST" && path === "/api/validate-yaml") {

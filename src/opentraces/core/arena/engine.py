@@ -17,6 +17,8 @@ from ... import __version__
 from .box import Box, CrabboxRuntime
 from .contract import build_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
+from .drives.actions import RunActionSequence
+from .drives.browser import BrowserDrive, BrowserFactory, open_playwright_session
 from .drives.terminal import TerminalDrive
 from .emulate.huggingface.runtime import (
     HuggingFaceEmulator,
@@ -85,6 +87,7 @@ class Bench:
         store: RunStore | None = None,
         box_runtime: CrabboxRuntime | None = None,
         repository_path: Path | None = None,
+        browser_factory: BrowserFactory | None = None,
     ) -> None:
         self.source = source
         self.store = store or RunStore()
@@ -93,6 +96,7 @@ class Bench:
             home=Path(runtime_home) if runtime_home else None
         )
         self.repository_path = Path(repository_path or Path.cwd())
+        self.browser_factory = browser_factory or open_playwright_session
 
     def run(
         self,
@@ -127,6 +131,8 @@ class BenchRun:
         self.draft: RunDraft | None = None
         self.box: Box | None = None
         self.terminal: TerminalDrive
+        self.browser: BrowserDrive
+        self.actions: RunActionSequence
         self.verifiers: list[dict[str, Any]] = []
         self.verifier_sources: list[dict[str, str]] = []
         self.final_path: Path
@@ -173,11 +179,21 @@ class BenchRun:
             self._app_state_pin = self.bench.box_runtime.materialize(
                 self.box, self.app_state, repository=self.bench.repository_path
             )
+            self.actions = RunActionSequence(
+                draft=self.draft,
+                run_started_monotonic=self._started,
+            )
             self.terminal = TerminalDrive(
                 runtime=self.bench.box_runtime,
                 box=self.box,
                 draft=self.draft,
                 repository=self.bench.repository_path,
+                actions=self.actions,
+            )
+            self.browser = BrowserDrive(
+                draft=self.draft,
+                actions=self.actions,
+                factory=self.bench.browser_factory,
             )
         except Exception as exc:
             if self.box is not None:
@@ -514,21 +530,7 @@ class BenchRun:
             reason=reason,
             verifiers=self.verifiers,
             evidence={"complete": evidence_complete, "requirements": evidence_requirements},
-            recordings=(
-                self.terminal.recording_summary()
-                if hasattr(self, "terminal")
-                else {
-                    "rewatchable": False,
-                    "channels": [
-                        {
-                            "kind": "terminal",
-                            "complete": False,
-                            "path": None,
-                            "reason": "terminal cast not produced",
-                        }
-                    ],
-                }
-            ),
+            recordings=self._recording_summary(),
             artifacts=artifacts,
             capture=None,
             pins={
@@ -551,6 +553,47 @@ class BenchRun:
         else:
             self.final_path = self.draft.finalize(result)
         self.result = result
+
+    def _recording_summary(self) -> dict[str, Any]:
+        summaries: list[dict[str, Any]] = []
+        if hasattr(self, "terminal") and self.terminal.has_actions:
+            summaries.append(self.terminal.recording_summary())
+        if hasattr(self, "browser") and self.browser.has_actions:
+            summaries.append(self.browser.recording_summary())
+        if summaries:
+            timeline = self.actions.timeline_status()
+            result: dict[str, Any] = {
+                "rewatchable": timeline["complete"]
+                and all(summary["rewatchable"] for summary in summaries),
+                "channels": [
+                    channel for summary in summaries for channel in summary["channels"]
+                ],
+                "timeline_ref": timeline["path"],
+                "timeline": timeline,
+            }
+            return result
+        timeline = (
+            self.actions.timeline_status()
+            if hasattr(self, "actions")
+            else {
+                "complete": False,
+                "path": "recordings/timeline.jsonl",
+                "reason": "execution timeline was not initialized",
+            }
+        )
+        return {
+            "rewatchable": False,
+            "channels": [
+                {
+                    "kind": "terminal",
+                    "complete": False,
+                    "path": None,
+                    "reason": "terminal cast not produced",
+                }
+            ],
+            "timeline_ref": timeline["path"],
+            "timeline": timeline,
+        }
 
     def __exit__(
         self,
@@ -581,9 +624,16 @@ class BenchRun:
         else:
             execution_status, verdict = "error", None
             reason = sanitize_reason(
-                "machinery_error",
+                getattr(exc, "code", "machinery_error"),
                 f"{type(exc).__name__}: {exc}" if exc is not None else "unknown error",
             )
+
+        if hasattr(self, "browser"):
+            self.browser.finalize_recordings()
+
+        terminal_settlement_errors: list[Exception] = []
+        if hasattr(self, "terminal"):
+            terminal_settlement_errors.extend(self.terminal.settle_completed())
 
         for emulator in self._emulators.values():
             try:
@@ -603,6 +653,14 @@ class BenchRun:
         if release_error is not None:
             self._lifecycle_diagnostics.append(
                 sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)
+            )
+        if hasattr(self, "terminal") and self.terminal.has_pending:
+            terminal_settlement_errors.extend(
+                self.terminal.settle_after_release(timeout=5.0)
+            )
+        for settlement_error in terminal_settlement_errors:
+            self._lifecycle_diagnostics.append(
+                sanitize_reason("terminal_settlement_failed", settlement_error)
             )
         self._finalize(
             execution_status=execution_status,

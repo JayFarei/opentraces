@@ -12,7 +12,9 @@ correct without any test changes.
 
 from __future__ import annotations
 
+import os
 import sys
+from urllib.parse import urlsplit
 
 import click
 
@@ -21,6 +23,23 @@ HF_OAUTH_SCOPES = "openid profile write-repos manage-repos"
 HF_DEVICE_CODE_URL = "https://huggingface.co/oauth/device"
 HF_TOKEN_URL = "https://huggingface.co/oauth/token"
 HF_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+
+
+def _oauth_url(default: str) -> str:
+    """Keep production OAuth defaults while honoring the public HF endpoint seam."""
+
+    endpoint = os.environ.get("HF_ENDPOINT", "").strip().rstrip("/")
+    if not endpoint:
+        return default
+    return f"{endpoint}{urlsplit(default).path}"
+
+
+def _device_code_url() -> str:
+    return _oauth_url(HF_DEVICE_CODE_URL)
+
+
+def _token_url() -> str:
+    return _oauth_url(HF_TOKEN_URL)
 
 
 def _login_impl(token: bool, device_timeout: int | None = None) -> None:
@@ -128,7 +147,7 @@ def _login_with_device_code(
 
     # Step 1: Request device code
     try:
-        resp = requests.post(HF_DEVICE_CODE_URL, data={
+        resp = requests.post(_device_code_url(), data={
             "client_id": HF_OAUTH_CLIENT_ID,
             "scope": HF_OAUTH_SCOPES,
         }, timeout=15)
@@ -175,7 +194,7 @@ def _login_with_device_code(
         _time.sleep(interval)
 
         try:
-            resp = requests.post(HF_TOKEN_URL, data={
+            resp = requests.post(_token_url(), data={
                 "grant_type": HF_DEVICE_GRANT_TYPE,
                 "device_code": device_code,
                 "client_id": HF_OAUTH_CLIENT_ID,

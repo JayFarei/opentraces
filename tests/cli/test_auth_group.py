@@ -18,6 +18,7 @@ import pytest
 from click.testing import CliRunner
 
 from opentraces.cli import SENTINEL, main
+from opentraces.cli._auth_impl import _device_code_url, _token_url
 
 
 @pytest.fixture
@@ -41,6 +42,16 @@ class TestAuthGroupExists:
 
 
 class TestAuthSubcommands:
+    def test_hf_endpoint_redirects_the_existing_device_flow(self, monkeypatch) -> None:
+        monkeypatch.setenv("HF_ENDPOINT", "http://127.0.0.1:14318/")
+
+        assert _device_code_url() == "http://127.0.0.1:14318/oauth/device"
+        assert _token_url() == "http://127.0.0.1:14318/oauth/token"
+
+        monkeypatch.delenv("HF_ENDPOINT")
+        assert _device_code_url() == "https://huggingface.co/oauth/device"
+        assert _token_url() == "https://huggingface.co/oauth/token"
+
     def test_ot_auth_whoami_runs(self, runner, tmp_path, monkeypatch) -> None:
         """auth whoami should run without crashing."""
         home = tmp_path / "home"

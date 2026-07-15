@@ -206,6 +206,21 @@ class RunDraft:
         _atomic_write_json(target, payload)
         return target
 
+    def append_jsonl(self, relative: str | Path, payload: dict[str, Any]) -> Path:
+        """Append one durable canonical row while the run is still mutable."""
+
+        target = self._target(relative)
+        serialized = (_canonical_json(payload, pretty=False) + "\n").encode("utf-8")
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            with os.fdopen(descriptor, "ab", closefd=False) as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            os.close(descriptor)
+        return target
+
     def record_source(
         self,
         *,

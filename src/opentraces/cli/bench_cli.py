@@ -26,6 +26,17 @@ from ..core.arena.page import render_evidence_page
 from ..core.arena.run_store import RunStore
 
 
+def _playwright_browser_cache(home: Path, *, platform: str | None = None) -> Path:
+    """Resolve Playwright's host cache before pytest redirects ``HOME``."""
+
+    selected = platform or sys.platform
+    if selected == "darwin":
+        return home / "Library" / "Caches" / "ms-playwright"
+    if selected == "win32":
+        return home / "AppData" / "Local" / "ms-playwright"
+    return home / ".cache" / "ms-playwright"
+
+
 def _target_path(target: str) -> Path:
     return Path(target.split("::", 1)[0]).expanduser().resolve()
 
@@ -276,7 +287,9 @@ def bench_run(
     env["OT_BENCH_RUN_ROOT"] = str(store.root)
     env["OT_BENCH_REPOSITORY"] = str(repository)
     env["OT_BENCH_SCENARIOS"] = "1"
-    env["OT_BENCH_REAL_HOME"] = str(Path.home())
+    runtime_home = Path.home()
+    env["OT_BENCH_REAL_HOME"] = str(runtime_home)
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(_playwright_browser_cache(runtime_home)))
     env["OT_BENCH_DEFER_FINALIZE"] = "1"
     if origin_address is not None:
         env["OT_BENCH_ORIGIN_ADDRESS"] = origin_address

@@ -407,6 +407,8 @@ class _BoxRuntime(Protocol):
         timeout: float = 120,
     ) -> str: ...
 
+    def open_port_forward(self, box: Any, remote_port: int) -> "_PortForward": ...
+
     def exec(
         self,
         box: Any,
@@ -437,6 +439,12 @@ class _BoxRuntime(Protocol):
         destination: Path,
         repository: Path,
     ) -> dict[str, Path]: ...
+
+
+class _PortForward(Protocol):
+    endpoint: str
+
+    def close(self) -> None: ...
 
 
 class HuggingFaceLedger:
@@ -503,6 +511,7 @@ class HuggingFaceEmulator:
         self._stopped = False
         self._ledger_path: Path | None = None
         self._ledger_finalized = False
+        self._browser_forward: _PortForward | None = None
 
     def _control_request(self, route: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         if self._stopped:
@@ -574,9 +583,20 @@ class HuggingFaceEmulator:
             "evidence_ref": WORLD_EVIDENCE_REF,
         }
 
+    @property
+    def browser_endpoint(self) -> str:
+        """Return the host-loopback view of the in-box provider endpoint."""
+
+        if self._browser_forward is None:
+            self._browser_forward = self.runtime.open_port_forward(self.box, DEFAULT_PORT)
+        return self._browser_forward.endpoint
+
     def stop(self) -> None:
         if self._stopped:
             return
+        if self._browser_forward is not None:
+            self._browser_forward.close()
+            self._browser_forward = None
         timing = self.run_path / "artifacts" / "crabbox-timing" / "hf-stop.json"
         stopped = self.runtime.exec(
             self.box,
@@ -585,15 +605,33 @@ class HuggingFaceEmulator:
                 "-c",
                 "set -eu; test -f /tmp/opentraces-hf-emulator.pid; "
                 "pid=$(cat /tmp/opentraces-hf-emulator.pid); "
-                "if kill -0 \"$pid\" 2>/dev/null; then "
-                "kill -- -\"$pid\" 2>/dev/null || kill \"$pid\"; fi; "
+                "sudo -u opentraces-hf test -r \"/proc/$pid/stat\"; "
+                "state=$(sudo -u opentraces-hf sed -n "
+                "'s/^.*) \\([A-Z]\\) .*$/\\1/p' \"/proc/$pid/stat\"); "
+                "test -n \"$state\"; test \"$state\" != Z; "
+                "owner_uid=$(sudo -u opentraces-hf awk '/^Uid:/{print $2}' "
+                "\"/proc/$pid/status\"); "
+                "sidecar_uid=$(id -u opentraces-hf); "
+                "test \"$owner_uid\" = \"$sidecar_uid\"; "
+                "executable=$(sudo -u opentraces-hf readlink -f \"/proc/$pid/exe\"); "
+                "digest=$(sudo -u opentraces-hf sha256sum \"$executable\" "
+                "| cut -d\" \" -f1); "
+                f"test \"$digest\" = \"{self.binary_pin.sha256}\"; "
+                "pgid=$(ps -o pgid= -p \"$pid\" | tr -d ' '); "
+                "case \"$pgid\" in ''|*[!0-9]*) exit 1;; esac; "
+                "test \"$pgid\" -gt 1; "
+                "self_pgid=$(ps -o pgid= -p \"$$\" | tr -d ' '); "
+                "test \"$pgid\" != \"$self_pgid\"; "
+                "sudo kill -- -\"$pgid\"; "
                 "i=0; while kill -0 \"$pid\" 2>/dev/null; do "
                 "state=$(sed -n 's/^.*) \\([A-Z]\\) .*$/\\1/p' \"/proc/$pid/stat\" "
                 "2>/dev/null || true); "
                 "test \"$state\" = Z && break; "
                 "test $i -lt 100 || exit 1; i=$((i+1)); sleep 0.05; done; "
-                f"if curl -fsS http://127.0.0.1:{DEFAULT_PORT}/_emulate/manifest "
-                ">/dev/null 2>&1; then exit 1; fi; "
+                "i=0; "
+                f"while curl -fsS http://127.0.0.1:{DEFAULT_PORT}/_emulate/manifest "
+                ">/dev/null 2>&1; do "
+                "test $i -lt 100 || exit 1; i=$((i+1)); sleep 0.05; done; "
                 f"sudo -u opentraces-hf cat {REMOTE_LEDGER}",
             ],
             cwd=self.repository,

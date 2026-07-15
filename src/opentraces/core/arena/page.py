@@ -31,6 +31,15 @@ def _resolve_run_ref(run_path: Path, reference: object) -> Path | None:
     return target
 
 
+def _action_label(invocation: dict[str, object]) -> str:
+    argv = invocation.get("argv")
+    if isinstance(argv, list):
+        return " ".join(str(part) for part in argv)
+    kind = str(invocation.get("kind") or "browser action")
+    subject = invocation.get("selector") or invocation.get("url") or invocation.get("name")
+    return f"{kind} {subject}" if subject else kind
+
+
 def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Path:
     """Render only frozen bytes; never execute a verifier or recompute a verdict."""
 
@@ -59,9 +68,10 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                 relative_label = target.relative_to(run_path).as_posix()
                 links.append(f'<a href="{_h(_href(page_dir, target))}">{_h(relative_label)}</a>')
         action_cards.append(
-            '<article class="card action">'
+            f'<article class="card action" id="action-{_h(action.name)}" '
+            f'data-action-ref="actions/{_h(action.name)}">'
             f'<div class="eyebrow">ACTION {_h(invocation.get("ordinal"))}</div>'
-            f"<code>{_h(' '.join(invocation.get('argv', [])))}</code>"
+            f"<code>{_h(_action_label(invocation))}</code>"
             f'<span class="rc">rc={_h(observed.get("returncode"))}</span>'
             f"<nav>{''.join(links)}</nav>"
             "</article>"
@@ -80,10 +90,44 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
             "</article>"
         )
 
-    players = []
+    recordings = result.get("recordings", {})
+    timeline_status = recordings.get("timeline") or {}
+    timeline_ref = recordings.get("timeline_ref")
+    timeline_rows: list[dict[str, object]] = []
+    if timeline_status.get("complete"):
+        timeline_path = _resolve_run_ref(run_path, timeline_ref)
+        if timeline_path is not None:
+            try:
+                timeline_rows = [
+                    row
+                    for line in timeline_path.read_text(encoding="utf-8").splitlines()
+                    if isinstance((row := json.loads(line)), dict)
+                ]
+            except (OSError, json.JSONDecodeError):
+                timeline_rows = []
+    media_start_offsets = {
+        str(row["action_ref"]): int(row["offset_ms"])
+        for row in timeline_rows
+        if row.get("event") == "action_started"
+        and isinstance(row.get("action_ref"), str)
+        and isinstance(row.get("offset_ms"), int)
+    }
+    browser_start_offset = min(
+        (
+            int(row["offset_ms"])
+            for row in timeline_rows
+            if row.get("event") == "action_started"
+            and row.get("surface") == "browser"
+            and isinstance(row.get("offset_ms"), int)
+        ),
+        default=0,
+    )
+
+    players: list[str] = []
     for index, channel in enumerate(result.get("recordings", {}).get("channels", []), start=1):
         path = channel.get("path")
-        if channel.get("complete") and path:
+        kind = channel.get("kind")
+        if channel.get("complete") and path and kind == "terminal":
             casts = channel.get("casts") or [{"cast_ref": path, "label": channel["kind"]}]
             for cast_index, cast in enumerate(casts, start=1):
                 cast_ref = cast.get("cast_ref")
@@ -97,14 +141,93 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                     )
                     continue
                 player_id = f"cast-{index}-{cast_index}"
+                ordinal = int(cast.get("ordinal") or cast_index)
+                action_ref = f"actions/{ordinal:04d}"
+                media_start_offset = media_start_offsets.get(action_ref, 0)
                 players.append(
                     '<article class="card player">'
                     f'<div class="eyebrow">{_h(cast.get("label", "TERMINAL"))}</div>'
                     f'<button data-cast="{_h(_href(page_dir, cast_path))}" '
-                    f'data-target="{player_id}">Play terminal recording</button>'
+                    f'data-target="{player_id}" data-action-ref="{action_ref}" '
+                    f'data-media-start-offset-ms="{media_start_offset}">'
+                    "Play terminal recording</button>"
                     f'<pre id="{player_id}"></pre>'
                     "</article>"
                 )
+        elif channel.get("complete") and path and kind == "browser_video":
+            video_path = _resolve_run_ref(run_path, path)
+            if video_path is None:
+                players.append(
+                    '<article class="card incomplete">'
+                    '<div class="eyebrow">MISSING RECORDING</div>'
+                    f"<p>{_h(path)}</p>"
+                    "</article>"
+                )
+                continue
+            players.append(
+                '<article class="card player" data-media-kind="browser_video">'
+                '<div class="eyebrow">BROWSER VIDEO</div>'
+                f'<video controls preload="metadata" data-media-start-offset-ms="{browser_start_offset}" '
+                f'src="{_h(_href(page_dir, video_path))}"></video>'
+                f'<nav><a href="{_h(_href(page_dir, video_path))}">{_h(path)}</a></nav>'
+                "</article>"
+            )
+        elif channel.get("complete") and path and kind == "playwright_trace":
+            trace_path = _resolve_run_ref(run_path, path)
+            if trace_path is None:
+                players.append(
+                    '<article class="card incomplete">'
+                    '<div class="eyebrow">MISSING RECORDING</div>'
+                    f"<p>{_h(path)}</p>"
+                    "</article>"
+                )
+                continue
+            players.append(
+                '<article class="card player" data-media-kind="playwright_trace">'
+                '<div class="eyebrow">PLAYWRIGHT TRACE</div>'
+                f'<a href="{_h(_href(page_dir, trace_path))}">Open Playwright trace</a>'
+                f'<div>{_h(path)}</div>'
+                "</article>"
+            )
+        elif channel.get("complete") and path and kind == "browser_screenshots":
+            manifest_path = _resolve_run_ref(run_path, path)
+            if manifest_path is None:
+                players.append(
+                    '<article class="card incomplete">'
+                    '<div class="eyebrow">MISSING RECORDING</div>'
+                    f"<p>{_h(path)}</p>"
+                    "</article>"
+                )
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                screenshot_refs = manifest.get("screenshots") or []
+            except (OSError, json.JSONDecodeError):
+                screenshot_refs = []
+            screenshot_items: list[str] = []
+            for ref in screenshot_refs:
+                screenshot_path = _resolve_run_ref(run_path, ref)
+                if screenshot_path is None:
+                    screenshot_items.append(
+                        '<div class="card incomplete">'
+                        '<div class="eyebrow">MISSING RECORDING</div>'
+                        f"<p>{_h(ref)}</p>"
+                        "</div>"
+                    )
+                    continue
+                screenshot_items.append(
+                    '<figure>'
+                    f'<img loading="lazy" src="{_h(_href(page_dir, screenshot_path))}" '
+                    f'alt="Browser screenshot {_h(ref)}">'
+                    f'<figcaption><a href="{_h(_href(page_dir, screenshot_path))}">{_h(ref)}</a></figcaption>'
+                    "</figure>"
+                )
+            players.append(
+                '<article class="card player screenshots" data-media-kind="browser_screenshots">'
+                '<div class="eyebrow">BROWSER SCREENSHOTS</div>'
+                f"{''.join(screenshot_items)}"
+                "</article>"
+            )
         else:
             players.append(
                 '<article class="card incomplete">'
@@ -112,6 +235,28 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
                 f"<p>{_h(channel.get('reason') or 'No recording was produced.')}</p>"
                 "</article>"
             )
+
+    timeline_cards = "".join(
+        '<button class="timeline-row" data-focus-boundary '
+        f'data-sequence="{_h(row.get("sequence"))}" '
+        f'data-offset-ms="{_h(row.get("offset_ms"))}" '
+        f'data-surface="{_h(row.get("surface"))}" '
+        f'data-event="{_h(row.get("event"))}" '
+        f'data-action-ref="{_h(row.get("action_ref"))}">'
+        f'<strong>{_h(row.get("offset_ms"))} ms · {_h(row.get("surface"))}</strong>'
+        f'<span>{_h(row.get("event"))} · {_h(row.get("action_ref"))}</span>'
+        f'<small>Causal: {_h(", ".join(row.get("causal_refs") or []) or "none")}</small>'
+        "</button>"
+        for row in timeline_rows
+    )
+    timeline_html = (
+        '<h2>Cross-surface timeline</h2>'
+        f'<section class="timeline" data-timeline-ref="{_h(timeline_ref)}">'
+        f"{timeline_cards}</section>"
+        if timeline_rows
+        else '<h2>Cross-surface timeline</h2><section class="card incomplete">'
+        f'<p>{_h(timeline_status.get("reason") or f"Stored timeline is unavailable: {timeline_ref}")}</p></section>'
+    )
 
     player_js = (Path(__file__).with_name("assets") / "asciicast-player.js").read_text(
         encoding="utf-8"
@@ -203,6 +348,8 @@ main{{width:min(960px,calc(100% - 32px));margin:48px auto 96px}} h1{{font:700 cl
 h2{{font:700 22px system-ui,sans-serif;margin-top:48px}} .stack{{display:grid;gap:12px}} .card{{min-width:0;border:1px solid var(--line);background:#fffaf0;padding:16px;overflow-wrap:anywhere}}
 .action code{{display:block;margin-bottom:10px}} .rc{{display:inline-block;border:1px solid var(--line);padding:2px 7px}} nav{{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}} a{{color:#254d80}}
 button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14px;cursor:pointer}} pre{{white-space:pre-wrap;min-height:120px;background:#141414;color:#eee;padding:12px;overflow:auto}}
+.timeline{{display:grid;gap:6px}} .timeline-row{{display:grid;grid-template-columns:180px 1fr auto;text-align:left;gap:12px;align-items:center}}
+.timeline-row small{{color:#d8d0c0}} video,img{{display:block;width:100%;max-height:540px;object-fit:contain;background:#141414}} figure{{margin:12px 0}}
 </style></head><body><main>
 <div class="eyebrow">OPENTRACES · BENCH.V0 · {_h(result["run_id"])}</div>
 <h1>{_h(result["scenario"]["claim"])}</h1>
@@ -214,10 +361,32 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>
 {reason_html}
 {world_html}
+{timeline_html}
 <h2>Recording</h2><section class="stack">{"".join(players)}</section>
 <h2>Actions and raw output</h2><section class="stack">{"".join(action_cards)}</section>
 <h2>Explicit verifiers</h2><section class="stack">{"".join(verifier_cards)}</section>
 <h2>Complete stored exhaust</h2><nav class="card exhaust">{exhaust_links}</nav>
-</main><script>{player_js}</script></body></html>"""
+</main><script>{player_js}</script><script>
+document.addEventListener("click", (event) => {{
+  const boundary = event.target.closest("[data-focus-boundary]");
+  if (!boundary) return;
+  const actionRef = boundary.dataset.actionRef;
+  const action = document.getElementById("action-" + actionRef.split("/").pop());
+  const media = boundary.dataset.surface === "terminal"
+    ? document.querySelector('[data-cast][data-action-ref="' + actionRef + '"]')
+    : document.querySelector('[data-media-kind="browser_video"] video');
+  const boundaryOffsetMs = Number(boundary.dataset.offsetMs);
+  const mediaStartOffsetMs = Number(media?.dataset.mediaStartOffsetMs || 0);
+  const seekOffsetMs = Math.max(0, boundaryOffsetMs - mediaStartOffsetMs);
+  if (media instanceof HTMLVideoElement) {{
+    media.currentTime = seekOffsetMs / 1000;
+    media.play().catch((error) => {{ media.title = String(error); }});
+  }} else if (media) {{
+    media.dataset.seekOffsetMs = String(seekOffsetMs);
+    media.click();
+  }}
+  (media || action)?.scrollIntoView({{behavior: "smooth", block: "center"}});
+}});
+</script></body></html>"""
     _atomic_write_text(output_path, document)
     return output_path

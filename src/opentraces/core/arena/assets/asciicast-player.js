@@ -5,10 +5,15 @@
     const target = document.getElementById(button.dataset.target);
     const response = await fetch(button.dataset.cast);
     const lines = (await response.text()).trim().split("\n").slice(1);
+    const seek = Math.max(0, Number(button.dataset.seekOffsetMs || 0) / 1000);
     target.textContent = "";
-    let prior = 0;
+    let prior = seek;
     for (const line of lines) {
       const event = JSON.parse(line);
+      if (event[0] < seek) {
+        target.textContent += event[2];
+        continue;
+      }
       await sleep(Math.max(0, (event[0] - prior) * 1000));
       target.textContent += event[2];
       prior = event[0];

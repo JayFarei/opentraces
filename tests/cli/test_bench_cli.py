@@ -34,6 +34,10 @@ def test_bench_run_prints_claim_and_returns_result_exit_code(tmp_path: Path, mon
     monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
 
     def fake_pytest(target: str, *, repository: Path, env: dict[str, str]) -> int:
+        runtime_home = Path(env["OT_BENCH_REAL_HOME"])
+        assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(
+            bench_cli._playwright_browser_cache(runtime_home)
+        )
         store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
         draft = store.begin()
         result = build_result(

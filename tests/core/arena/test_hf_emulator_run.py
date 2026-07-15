@@ -111,6 +111,7 @@ class WorldRuntime:
         self.copied: tuple[Path, str] | None = None
         self.stop_command: str | None = None
         self.control_calls: list[tuple[str, list[str], dict[str, str]]] = []
+        self.port_forward = WorldPortForward()
 
     def lease(self) -> Box:
         return Box(
@@ -154,14 +155,14 @@ class WorldRuntime:
         elif control_url.endswith("/_emulate/reset"):
             self.control_calls.append(("reset", list(map(str, argv)), environment))
             stdout, returncode = '{"ok":true}\n', 0
-        elif "/proc/$pid/exe" in rendered:
+        elif "/proc/$pid/exe" in rendered and "sudo kill" not in rendered:
             self.events.append("process-binding")
             stdout, returncode = (
                 (json.dumps({"pid": 4242, "user": "opentraces-hf"}) + "\n", 0)
                 if self.process_alive
                 else ("", 1)
             )
-        elif "sha256sum" in rendered:
+        elif "sha256sum" in rendered and "sudo kill" not in rendered:
             assert self.copied is not None
             self.events.append("sha256")
             digest = hashlib.sha256(self.copied[0].read_bytes()).hexdigest()
@@ -283,6 +284,21 @@ class WorldRuntime:
     def release(self, box: Box) -> None:
         self.events.append("release")
 
+    def open_port_forward(self, box: Box, remote_port: int):
+        assert remote_port == 14318
+        self.events.append("port-forward")
+        return self.port_forward
+
+
+class WorldPortForward:
+    endpoint = "http://127.0.0.1:43182"
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
 
 def _source() -> ScenarioSource:
     path = Path(inspect.getsourcefile(scenario_2.test_publish_reaches_hf_remote) or "")
@@ -344,6 +360,7 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
             "HF_ENDPOINT": "http://127.0.0.1:14318",
             "HF_TOKEN": hf.env["HF_TOKEN"],
         }
+        assert hf.browser_endpoint == "http://127.0.0.1:43182"
         assert hf.env["HF_TOKEN"].startswith("hf_")
         runtime.raw_ledger = (json.dumps(_COMMIT_ROW, separators=(",", ":")) + "\n").encode()
         forged = run.terminal.exec(
@@ -401,6 +418,7 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
     assert runtime.events.count("custody-probe") == 0
     assert runtime.events.count("product-custody-probe") == 1
     assert runtime.events.count("custody-unchanged") == 1
+    assert runtime.port_forward.closed is True
     assert runtime.events.count("process-binding") == 1
     assert b"FORGED_LEDGER_ROW" not in stored_ledger.read_bytes()
 
@@ -532,6 +550,33 @@ def test_startup_liveness_probe_does_not_signal_differently_owned_process(
     assert len(runtime.binding_commands) == 1
     assert "kill -0" not in runtime.binding_commands[0]
     assert "/proc/$pid/stat" in runtime.binding_commands[0]
+
+
+def test_stop_kills_the_attested_process_group_across_the_sudo_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The PID-file child may not be the setsid process-group leader."""
+
+    binary = tmp_path / "opentraces-hf-emulator"
+    binary.write_bytes(b"exact-linux-arm64-emulator")
+    binary.chmod(0o755)
+    _trust_test_binary(binary, monkeypatch)
+    monkeypatch.setenv("OPENTRACES_HF_EMULATOR_BINARY", str(binary))
+    runtime = WorldRuntime()
+
+    handle = start_huggingface_emulator(
+        runtime=runtime,
+        box=runtime.lease(),
+        repository=tmp_path,
+        run_path=tmp_path / "run",
+    )
+    handle.stop()
+
+    assert runtime.stop_command is not None
+    assert 'pgid=$(ps -o pgid= -p "$pid"' in runtime.stop_command
+    assert 'sudo kill -- -"$pgid"' in runtime.stop_command
+    assert 'digest=$(sudo -u opentraces-hf sha256sum "$executable"' in runtime.stop_command
+    assert f'test "$digest" = "{handle.binary_pin.sha256}"' in runtime.stop_command
 
 
 def test_configured_binary_requires_matching_build_provenance(
