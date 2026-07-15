@@ -118,6 +118,7 @@ def test_scripted_anthropic_server_streams_exact_turns_and_ledgers_wire(
 def test_replay_scenario_freezes_real_harness_world_and_mutation_control() -> None:
     assert SCRIPT_SCHEMA == "opentraces.anthropic-replay-script.v0"
     source = inspect.getsource(replay_scenario.test_real_claude_known_interaction_replay)
+    assert 'app_state="agent-ready"' in source
     assert 'execution_mode="agent_replay"' in source
     assert 'harness="claude"' in source
     assert "access=[run.terminal]" in source

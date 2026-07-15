@@ -528,6 +528,72 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
     assert pin["recipe"]["wheel_sha256"]
 
 
+def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    (dist / "opentraces-0.0.0-py3-none-any.whl").write_bytes(b"local wheel bytes")
+    controller_commands: list[str] = []
+    product_commands: list[str] = []
+    runtime = CrabboxRuntime(runner=lambda *args, **kwargs: _completed([]), home=tmp_path)
+    box = Box(
+        id="box",
+        slug="box",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        controller_commands.append(command)
+        stdout = (
+            json.dumps(EXPECTED_INSTALL_LOCK)
+            if "importlib.metadata" in command
+            else "/usr/bin/opentraces\n/usr/bin/script\n"
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def fake_exec_product(_box, argv, **kwargs):
+        command = " ".join(argv)
+        product_commands.append(command)
+        stdout = "2.1.210 (Claude Code)\n" if "--version" in command else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+    monkeypatch.setattr(runtime, "exec_product", fake_exec_product)
+
+    pin = runtime.materialize(box, "agent-ready", repository=repository)
+
+    install = next(command for command in product_commands if "claude.ai/install.sh" in command)
+    assert "bash -s -- 2.1.210" in install
+    assert "latest" not in install and "stable" not in install
+    probe = next(command for command in product_commands if "--version" in command)
+    assert probe == "/home/opentraces-product/.local/bin/claude --version"
+    assert "agent:claude" in pin["provides"]
+    assert pin["recipe"]["harness"] == {
+        "name": "claude",
+        "executable": "/home/opentraces-product/.local/bin/claude",
+        "version": "2.1.210",
+    }
+
+
 def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Path) -> None:
     timing = tmp_path / "timing.json"
 

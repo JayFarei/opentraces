@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Mapping
 
 from opentraces.core.arena.box import Box
 from opentraces.core.arena.contract import build_result
@@ -20,6 +21,7 @@ class ScriptedTerminalControlSession:
     def __init__(self, observations: list[AgentTerminalObservation]) -> None:
         self.observations = iter(observations)
         self.started_argv: list[str] | None = None
+        self.started_env: dict[str, str] = {}
         self.sent: list[str] = []
         self.start_count = 0
         self.stop_count = 0
@@ -32,9 +34,11 @@ class ScriptedTerminalControlSession:
         recording_path: Path,
         cols: int,
         rows: int,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self.start_count += 1
         self.started_argv = list(argv)
+        self.started_env = dict(env or {})
         recording_path.parent.mkdir(parents=True, exist_ok=True)
         recording_path.write_bytes(b"partial terminal-control recording")
 
@@ -47,6 +51,9 @@ class ScriptedTerminalControlSession:
 
     def stop(self) -> None:
         self.stop_count += 1
+
+    def recording_complete(self, recording_path: Path) -> bool:
+        return recording_path.is_file() and recording_path.stat().st_size > 0
 
 
 def _box() -> Box:
@@ -107,7 +114,7 @@ def test_forced_agent_disconnect_is_one_bounded_named_failure_in_a_verifiable_ru
     }
     assert session.start_count == 1
     assert session.observe_count == 1
-    assert session.stop_count == 0
+    assert session.stop_count == 1
     assert session.sent == ["Make the small change and commit it."]
     assert (draft.path / result.recording_ref).read_bytes().startswith(b"partial")
     assert (
@@ -191,31 +198,12 @@ def test_agent_drive_uses_box_ssh_facts_and_only_local_polls(tmp_path: Path) -> 
 
     assert result.status == "pass"
     assert result.reason is None
-    assert session.started_argv == [
-        "ssh",
-        "-tt",
-        "-F",
-        "/dev/null",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "ServerAliveInterval=15",
-        "-o",
-        "ServerAliveCountMax=4",
-        "-i",
-        "/keys/bench_ed25519",
-        "-p",
-        "2222",
-        "bench@127.0.0.1",
-        "--",
-        "env",
-        "ANTHROPIC_API_KEY=live-secret",
-        "claude",
-        "--permission-mode",
-        "acceptEdits",
-    ]
+    assert session.started_argv is not None
+    assert not any("live-secret" in argument for argument in session.started_argv)
+    assert session.started_env == {"ANTHROPIC_API_KEY": "live-secret"}
+    assert "SendEnv=ANTHROPIC_API_KEY" in session.started_argv
+    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    assert remote == ["claude", "--permission-mode", "acceptEdits"]
     assert session.observe_count == 2
     assert session.start_count == 1
     invocation = (draft.path / result.invocation_ref).read_text(encoding="utf-8")

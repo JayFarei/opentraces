@@ -103,7 +103,7 @@ def test_real_claude_known_interaction_replay(bench):
     """The real Claude harness can carry out a known interaction through Bash."""
 
     mutated = os.environ.get("OT_BENCH_REPLAY_MUTATE_TOOL_RESULT") == "1"
-    with bench.run(app_state="install-only", execution_mode="agent_replay") as run:
+    with bench.run(app_state="agent-ready", execution_mode="agent_replay") as run:
         model = run.emulate(
             "anthropic",
             script=known_wire_script(mutate_tool_result=mutated),

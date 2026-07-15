@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
+import socket
+import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Mapping
 from urllib.request import Request, urlopen
 
 import pytest
@@ -11,6 +15,7 @@ import pytest
 from opentraces.core.arena.agent import AgentDrive
 from opentraces.core.arena.drives.actions import RunActionSequence
 from opentraces.core.arena.drives.agent import AgentTerminalObservation
+from opentraces.core.arena.drives.browser_mcp import BrowserMcpBridge
 from opentraces.core.arena.engine import Bench
 from opentraces.core.arena.run_store import RunStore
 from tests.core.arena.test_engine import FakeBoxRuntime, _scenario
@@ -22,8 +27,10 @@ class CompletingHarnessSession:
 
     def __init__(self) -> None:
         self.started_argv: list[str] | None = None
+        self.started_env: dict[str, str] = {}
         self.prompts: list[str] = []
         self.start_count = 0
+        self.stop_count = 0
 
     def start(
         self,
@@ -32,9 +39,11 @@ class CompletingHarnessSession:
         recording_path: Path,
         cols: int,
         rows: int,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self.start_count += 1
         self.started_argv = list(argv)
+        self.started_env = dict(env or {})
         recording_path.parent.mkdir(parents=True, exist_ok=True)
         recording_path.write_bytes(b"agent recording")
 
@@ -44,12 +53,15 @@ class CompletingHarnessSession:
     def observe(self) -> AgentTerminalObservation:
         return AgentTerminalObservation(
             state="running",
-            screen=("OPENTRACES_HARNESS_VERSION=2.1.143\nOPENTRACES_AGENT_ATTEMPT_COMPLETE"),
+            screen=("OPENTRACES_HARNESS_VERSION=2.1.210\nOPENTRACES_AGENT_ATTEMPT_COMPLETE"),
             logs="",
         )
 
     def stop(self) -> None:
-        return None
+        self.stop_count += 1
+
+    def recording_complete(self, recording_path: Path) -> bool:
+        return recording_path.is_file() and recording_path.stat().st_size > 0
 
 
 def _closed_mcp_config(argv: list[str]) -> dict[str, object]:
@@ -75,8 +87,15 @@ class BrowserAttemptingHarnessSession(CompletingHarnessSession):
         recording_path: Path,
         cols: int,
         rows: int,
+        env: Mapping[str, str] | None = None,
     ) -> None:
-        super().start(argv, recording_path=recording_path, cols=cols, rows=rows)
+        super().start(
+            argv,
+            recording_path=recording_path,
+            cols=cols,
+            rows=rows,
+            env=env,
+        )
         config = _closed_mcp_config(argv)
         self.browser_refused = config == {"mcpServers": {}}
 
@@ -89,7 +108,7 @@ class BrowserAttemptingHarnessSession(CompletingHarnessSession):
         return AgentTerminalObservation(
             state="running",
             screen=(
-                "OPENTRACES_HARNESS_VERSION=2.1.143\n"
+                "OPENTRACES_HARNESS_VERSION=2.1.210\n"
                 f"{browser_result}\n"
                 "OPENTRACES_AGENT_ATTEMPT_COMPLETE"
             ),
@@ -107,8 +126,15 @@ class BrowserCallingHarnessSession(CompletingHarnessSession):
         recording_path: Path,
         cols: int,
         rows: int,
+        env: Mapping[str, str] | None = None,
     ) -> None:
-        super().start(argv, recording_path=recording_path, cols=cols, rows=rows)
+        super().start(
+            argv,
+            recording_path=recording_path,
+            cols=cols,
+            rows=rows,
+            env=env,
+        )
         config = _closed_mcp_config(argv)
         server = config["mcpServers"]["opentraces_browser"]
         assert server["type"] == "http"
@@ -139,6 +165,18 @@ class BrowserCallingHarnessSession(CompletingHarnessSession):
 class DisconnectedRecordedHarnessSession(CompletingHarnessSession):
     def observe(self) -> AgentTerminalObservation:
         return AgentTerminalObservation(state="disconnected", screen="", logs="")
+
+    def recording_complete(self, recording_path: Path) -> bool:
+        return False
+
+
+class WrongVersionHarnessSession(CompletingHarnessSession):
+    def observe(self) -> AgentTerminalObservation:
+        return AgentTerminalObservation(
+            state="running",
+            screen=("OPENTRACES_HARNESS_VERSION=2.1.209\nOPENTRACES_AGENT_ATTEMPT_COMPLETE"),
+            logs="",
+        )
 
 
 def _bench(tmp_path: Path, session: CompletingHarnessSession) -> Bench:
@@ -288,8 +326,8 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
         "granted_surfaces": ["terminal"],
         "harness": {
             "name": "claude",
-            "executable": "claude",
-            "version": "2.1.143",
+            "executable": "/home/opentraces-product/.local/bin/claude",
+            "version": "2.1.210",
         },
         "inference": {"mode": "live"},
         "action_refs": ["actions/0001"],
@@ -387,7 +425,7 @@ def test_browser_grant_routes_mcp_call_into_exact_run_drive_and_shared_timeline(
     }
 
 
-def test_valid_agent_recording_remains_rewatchable_when_attempt_did_not_complete(
+def test_unfinalized_agent_recording_is_not_reported_rewatchable(
     tmp_path: Path,
 ) -> None:
     session = DisconnectedRecordedHarnessSession()
@@ -410,11 +448,141 @@ def test_valid_agent_recording_remains_rewatchable_when_attempt_did_not_complete
     )
     assert agent_channel == {
         "kind": "agent_terminal",
-        "complete": True,
-        "path": "recordings/agent-0001.termctrl",
-        "reason": None,
+        "complete": False,
+        "path": None,
+        "reason": "agent terminal recording did not finalize cleanly",
     }
-    assert run.result["recordings"]["rewatchable"] is True
+    assert run.result["recordings"]["rewatchable"] is False
+    assert session.stop_count == 1
+
+
+def test_failed_agent_attempt_overrides_passing_verifier_and_incompletes_evidence(
+    tmp_path: Path,
+) -> None:
+    session = DisconnectedRecordedHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Inspect the terminal.",
+            access=[run.terminal],
+            inference="live",
+        )
+        assert attempt.completed is False
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert run.result["execution_status"] == "complete"
+    assert run.result["verdict"] == "fail"
+    assert run.result["reason"] == {
+        "code": "agent_drive_disconnected",
+        "message": "agent terminal disconnected during actions/0001",
+    }
+    assert run.result["evidence"]["complete"] is False
+    agent_requirement = next(
+        requirement
+        for requirement in run.result["evidence"]["requirements"]
+        if requirement["name"] == "agent.attempt"
+    )
+    assert agent_requirement == {
+        "name": "agent.attempt",
+        "complete": False,
+        "evidence_refs": [attempt.artifact_ref],
+    }
+
+
+def test_wrong_claude_version_is_a_named_failed_attempt(tmp_path: Path) -> None:
+    session = WrongVersionHarnessSession()
+    draft = RunStore(tmp_path / "runs" / "v1").begin()
+    terminal = object()
+    registered = SimpleNamespace(
+        pin={"kind": "anthropic-scripted", "script_sha256": "sha256:registered"},
+        env={},
+    )
+    drive = AgentDrive(
+        box=FakeBoxRuntime().lease(),
+        draft=draft,
+        actions=RunActionSequence(draft=draft, run_started_monotonic=time.monotonic()),
+        terminal=terminal,
+        browser=object(),
+        execution_mode="agent_replay",
+        product_environment=lambda: {},
+        replay_inference=lambda: registered,
+        session_factory=lambda _name: session,
+        poll_interval=0,
+    )
+
+    attempt = drive.attempt(
+        harness="claude",
+        task="Complete the replay.",
+        access=[terminal],
+        inference=registered,
+    )
+
+    assert attempt.completed is False
+    assert attempt.failure == {
+        "code": "agent_harness_version_mismatch",
+        "message": "expected Claude Code 2.1.210, observed 2.1.209",
+    }
+
+
+def test_replay_refuses_foreign_or_duck_typed_inference_before_spawn(tmp_path: Path) -> None:
+    session = CompletingHarnessSession()
+    draft = RunStore(tmp_path / "runs" / "v1").begin()
+    terminal = object()
+    registered = SimpleNamespace(
+        pin={"kind": "anthropic-scripted", "script_sha256": "sha256:registered"},
+        env={"ANTHROPIC_API_KEY": "registered-replay-key"},
+    )
+    foreign = SimpleNamespace(
+        pin={"kind": "forged-wire", "script_sha256": "sha256:not-real"},
+        env={"ANTHROPIC_API_KEY": "foreign-key"},
+    )
+    drive = AgentDrive(
+        box=FakeBoxRuntime().lease(),
+        draft=draft,
+        actions=RunActionSequence(draft=draft, run_started_monotonic=time.monotonic()),
+        terminal=terminal,
+        browser=object(),
+        execution_mode="agent_replay",
+        product_environment=lambda: {},
+        replay_inference=lambda: registered,
+        session_factory=lambda _name: session,
+        poll_interval=0,
+    )
+
+    with pytest.raises(ValueError, match="exact run-owned Anthropic replay emulator"):
+        drive.attempt(
+            harness="claude",
+            task="Do not accept a forged model wire.",
+            access=[terminal],
+            inference=foreign,
+        )
+
+    assert session.start_count == 0
+    assert not any((draft.path / "actions").iterdir())
+
+
+def test_browser_mcp_partial_body_cannot_block_bounded_shutdown() -> None:
+    class Browser:
+        def finalize_recordings(self) -> None:
+            return None
+
+    bridge = BrowserMcpBridge(Browser())  # type: ignore[arg-type]
+    bridge.start()
+    client = socket.create_connection(("127.0.0.1", bridge.local_port), timeout=1)
+    closed = threading.Event()
+    shutdown = threading.Thread(target=lambda: (bridge.close(), closed.set()), daemon=True)
+    try:
+        client.sendall(
+            b"POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1000000\r\n\r\n{}"
+        )
+        time.sleep(0.05)
+        shutdown.start()
+        assert closed.wait(1.0), "partial MCP request blocked bridge shutdown"
+    finally:
+        client.close()
+        shutdown.join(timeout=2)
 
 
 def test_agent_authority_refuses_controller_bearer_before_any_action(
@@ -484,12 +652,13 @@ def test_agent_receives_only_product_facing_emulator_environment(
 
     assert attempt.completed is True
     assert session.started_argv is not None
+    assert session.started_env == {
+        "HF_ENDPOINT": "http://127.0.0.1:8765",
+        "HF_TOKEN": "product-credential",
+    }
+    assert not any("product-credential" in argument for argument in session.started_argv)
     remote = session.started_argv[session.started_argv.index("--") + 1 :]
-    assert remote[:3] == [
-        "env",
-        "HF_ENDPOINT=http://127.0.0.1:8765",
-        "HF_TOKEN=product-credential",
-    ]
+    assert remote[0] == "/usr/bin/sudo"
     assert "--preserve-env=HF_ENDPOINT,HF_TOKEN" in remote
     invocation = (draft.path / "actions/0001/invocation.json").read_text(encoding="utf-8")
     artifact = (draft.path / attempt.artifact_ref).read_text(encoding="utf-8")
