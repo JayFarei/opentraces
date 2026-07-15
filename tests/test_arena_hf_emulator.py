@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -96,15 +97,40 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
 class _RealLocalStopRuntime:
     """Execute the production stop script against a real local sidecar process."""
 
-    def __init__(self, *, pid_path: Path, ledger_path: Path) -> None:
+    def __init__(self, *, pid_path: Path, ledger_path: Path, executable: Path) -> None:
         self.pid_path = pid_path
         self.ledger_path = ledger_path
+        self.executable = executable
 
     def exec(self, _box, argv, *, cwd=None, env=None, timeout=60, timing_path=None):
         assert argv[:2] == ["sh", "-c"]
         script = argv[2]
         script = script.replace("/tmp/opentraces-hf-emulator.pid", str(self.pid_path))
         script = script.replace(f"sudo -u opentraces-hf cat {REMOTE_LEDGER}", f"cat {self.ledger_path}")
+        script = script.replace("sudo -u opentraces-hf ", "")
+        script = script.replace("id -u opentraces-hf", "id -u")
+        if sys.platform == "darwin":
+            script = script.replace('test -r "/proc/$pid/stat"; ', 'kill -0 "$pid"; ')
+            script = script.replace(
+                "state=$(sed -n 's/^.*) \\([A-Z]\\) .*$/\\1/p' \"/proc/$pid/stat\"); ",
+                "state=R; ",
+            )
+            script = script.replace(
+                "owner_uid=$(awk '/^Uid:/{print $2}' \"/proc/$pid/status\"); ",
+                "owner_uid=$(ps -o uid= -p \"$pid\" | tr -d ' '); ",
+            )
+            script = script.replace(
+                'executable=$(readlink -f "/proc/$pid/exe"); '
+                'digest=$(sha256sum "$executable" | cut -d" " -f1); ',
+                f"executable={shlex.quote(str(self.executable))}; "
+                'digest=$(shasum -a 256 "$executable" | cut -d" " -f1); ',
+            )
+            script = script.replace("sudo kill -- ", "kill -- ")
+            script = script.replace(
+                "state=$(sed -n 's/^.*) \\([A-Z]\\) .*$/\\1/p' \"/proc/$pid/stat\" "
+                "2>/dev/null || true); ",
+                "state=; ",
+            )
         observed = subprocess.run(
             ["sh", "-c", script],
             cwd=cwd,
@@ -1647,12 +1673,23 @@ HfApi(token="hf_bench_user_token").whoami()
         pre_stop_whoami = next(row for row in pre_stop_rows if row["operation_id"] == "whoami")
 
         run_path = tmp_path / "run"
+        bun_command = shutil.which(pinned_bun_command("--version")[0])
+        assert bun_command is not None
+        bun_executable = Path(bun_command).resolve()
+        bun_bytes = bun_executable.read_bytes()
         hf = HuggingFaceEmulator(
-            runtime=_RealLocalStopRuntime(pid_path=pid_path, ledger_path=ledger_path),
+            runtime=_RealLocalStopRuntime(
+                pid_path=pid_path,
+                ledger_path=ledger_path,
+                executable=bun_executable,
+            ),
             box=None,
             repository=ROOT,
             run_path=run_path,
-            binary_pin=EmulatorBinaryPin(sha256="0" * 64, size_bytes=0),
+            binary_pin=EmulatorBinaryPin(
+                sha256=hashlib.sha256(bun_bytes).hexdigest(),
+                size_bytes=len(bun_bytes),
+            ),
             world_setup={},
             control_token=CONTROL_TOKEN,
         )
