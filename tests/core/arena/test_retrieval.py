@@ -137,6 +137,49 @@ def test_rerender_verifies_first_and_is_byte_stable(tmp_path: Path, monkeypatch)
     assert len(calls) >= 2
 
 
+def test_rerender_uses_no_process_network_or_new_run(tmp_path: Path, monkeypatch) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    finalized = _finalized(store)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("rerender attempted a side effect")
+
+    monkeypatch.setattr(RunStore, "begin", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+
+    rendered = rerender_stored_run(store, finalized.name)
+
+    assert rendered.is_file()
+    assert rendered.name == "index.html"
+
+
+@pytest.mark.parametrize("operation", ["rerender", "reverify"])
+def test_read_projections_fail_closed_when_an_indexed_byte_changes(
+    tmp_path: Path, operation: str
+) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    finalized = _finalized(store)
+    artifact = finalized / "artifacts" / "observation.json"
+    artifact.chmod(0o600)
+    artifact.write_text('{"healthy":false}\n', encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="artifacts/observation.json"):
+        if operation == "rerender":
+            rerender_stored_run(store, finalized.name)
+        else:
+            reverify_stored_run(
+                store,
+                finalized.name,
+                verifier_name=(
+                    f"{stored_artifact_verifier.__module__}."
+                    f"{stored_artifact_verifier.__qualname__}"
+                ),
+                verifier_digest=_source_digest(),
+                verifier=stored_artifact_verifier,
+            )
+
+
 def test_reverify_uses_stored_evidence_only(tmp_path: Path, monkeypatch) -> None:
     store = RunStore(tmp_path / "runs" / "v1")
     finalized = _finalized(store)
@@ -196,3 +239,32 @@ def test_reverify_rejects_a_name_or_digest_not_bound_to_the_run(tmp_path: Path) 
             verifier_digest="sha256:" + "0" * 64,
             verifier=stored_artifact_verifier,
         )
+
+
+def test_reverify_rejects_a_forged_wrapper_before_invocation(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    finalized = _finalized(store)
+    invoked = False
+
+    def forged_wrapper(evidence):
+        nonlocal invoked
+        invoked = True
+        return {"evidence_refs": []}
+
+    forged_wrapper.__module__ = stored_artifact_verifier.__module__
+    forged_wrapper.__qualname__ = stored_artifact_verifier.__qualname__
+    forged_wrapper.__wrapped__ = stored_artifact_verifier
+
+    with pytest.raises(StoredVerifierMismatch, match="wrapped callable"):
+        reverify_stored_run(
+            store,
+            finalized.name,
+            verifier_name=(
+                f"{stored_artifact_verifier.__module__}."
+                f"{stored_artifact_verifier.__qualname__}"
+            ),
+            verifier_digest=_source_digest(),
+            verifier=forged_wrapper,
+        )
+
+    assert invoked is False
