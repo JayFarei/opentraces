@@ -27,6 +27,10 @@ from opentraces.core.arena.labels import (
     verify_label,
     verify_labels,
 )
+from opentraces.core.arena.origin import (
+    attach_explicit_bench_labels,
+    stage_explicit_origin_slice,
+)
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 from opentraces.core.bucket_layout import trace_v1_json_path
 from opentraces.core.slicing.models import Trajectory
@@ -506,6 +510,44 @@ def test_rich_trail_refs_and_limitations_survive_pin_and_fresh_reverification(
     assert label["slice_pin"]["trace_patch_refs"] == [patch_id]
     assert label["slice_pin"]["git_anchor_refs"] == [anchor_id]
     assert label["slice_pin"]["limitations"] == ["path_normalization_failed"]
+    assert verify_label(label, store=store)
+
+
+def test_explicit_slice_stages_and_reverifies_the_same_authoritative_trail_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_bucket(tmp_path, monkeypatch)
+    record = _real_capture_record()
+    project_slug, _source_repo, patch_id, anchor_id = _install_authoritative_trail(
+        tmp_path,
+        record,
+    )
+    _persist_subject(record, project_slug=project_slug)
+    monkeypatch.setattr(run_store_module, "_new_run_id", lambda: RUN_ID)
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    draft.write_text("source/scenario.py", "def test_selected_trajectory(): pass\n")
+
+    staged = stage_explicit_origin_slice(
+        draft,
+        address=f"{record.trace_id}:1-3",
+    )
+    artifact_ref = str(staged["artifact_ref"])
+    materialized = json.loads((draft.path / artifact_ref).read_text(encoding="utf-8"))
+    assert materialized["trace_patch_refs"] == [patch_id]
+    assert materialized["git_anchor_refs"] == [anchor_id]
+
+    run_path = draft.finalize(_result(run_id=draft.run_id, evidence_ref=artifact_ref))
+    attachment = attach_explicit_bench_labels(
+        run_path,
+        address=f"{record.trace_id}:1-3",
+        store=store,
+    )
+    assert attachment.address == f"{record.trace_id}:1-3"
+    label = read_labels(project_slug, record.trace_id)[0]
+    assert label["slice_pin"]["trace_patch_refs"] == [patch_id]
+    assert label["slice_pin"]["git_anchor_refs"] == [anchor_id]
     assert verify_label(label, store=store)
 
 
