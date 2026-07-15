@@ -21,6 +21,8 @@ def _finalize_run(
     verdict: str = "pass",
     verifier_name: str | None = None,
     verifier_digest: str | None = None,
+    product_commit: str | None = None,
+    capabilities_digest: str | None = None,
 ) -> Path:
     draft = store.begin()
     draft.write_text("source/scenario.py", "def scenario(): pass\n")
@@ -41,6 +43,15 @@ def _finalize_run(
                 "reason": None,
             }
         )
+    pins = {}
+    if product_commit is not None:
+        pins["product"] = {
+            "commit": product_commit,
+            "worktree": "clean",
+            "dirty_diff_digest": None,
+        }
+    if capabilities_digest is not None:
+        pins["capabilities"] = {"digest": capabilities_digest}
     return draft.finalize(
         build_result(
             run_id=draft.run_id,
@@ -58,7 +69,7 @@ def _finalize_run(
             recordings={"rewatchable": False, "channels": []},
             artifacts=["artifacts/observation.json"],
             capture=None,
-            pins={},
+            pins=pins,
         )
     )
 
@@ -158,4 +169,164 @@ def test_bench_reverify_requires_the_exact_callable_name_and_digest(
         "schema_version": "opentraces.bench.reverification.v0",
         "status": "pass",
         "verifier": {"digest": verifier_digest, "name": verifier_name},
+    }
+
+
+def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
+    tmp_path: Path,
+) -> None:
+    product_commit = "a" * 40
+    capabilities_digest = "sha256:" + "b" * 64
+    verifier_digest = "sha256:" + "c" * 64
+    verifier_name = "arena_guarantees.verify_publish"
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    older_green = _finalize_run(
+        store,
+        claim="Dataset publication reaches the remote.",
+        nodeid="arena::publish",
+        started_at="2026-07-14T23:00:00Z",
+        verifier_name=verifier_name,
+        verifier_digest=verifier_digest,
+        product_commit=product_commit,
+        capabilities_digest=capabilities_digest,
+    )
+    latest_red = _finalize_run(
+        store,
+        claim="Dataset publication reaches the remote.",
+        nodeid="arena::publish",
+        started_at="2026-07-15T01:00:00Z",
+        verdict="fail",
+        verifier_name=verifier_name,
+        verifier_digest=verifier_digest,
+        product_commit=product_commit,
+        capabilities_digest=capabilities_digest,
+    )
+    guarantees_path = tmp_path / "guarantees.json"
+    guarantees_path.write_text(
+        json.dumps(
+            {
+                "guarantees": [
+                    {
+                        "id": "publish",
+                        "claim": "Dataset publication reaches the remote.",
+                        "nodeid": "arena::publish",
+                        "verifier": {"name": verifier_name, "digest": verifier_digest},
+                        "black_box_review": "unreviewed",
+                    },
+                    {
+                        "id": "remote-rented-glibc",
+                        "claim": "The emulator runs on a remote rented glibc box.",
+                        "nodeid": "arena::remote-rented",
+                        "verifier": {"name": verifier_name, "digest": verifier_digest},
+                        "black_box_review": "unreviewed",
+                    },
+                ]
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    atlas_path = tmp_path / "atlas" / "atlas.json"
+    runner = CliRunner()
+
+    built = runner.invoke(
+        main,
+        [
+            "bench",
+            "atlas",
+            "build",
+            str(guarantees_path),
+            "--store-root",
+            str(store.root),
+            "--product-commit",
+            product_commit,
+            "--capabilities-digest",
+            capabilities_digest,
+            "--output",
+            str(atlas_path),
+            "--json",
+        ],
+    )
+    page_path = tmp_path / "atlas" / "index.html"
+    rendered = runner.invoke(
+        main,
+        [
+            "bench",
+            "atlas",
+            "render",
+            str(atlas_path),
+            "--output",
+            str(page_path),
+            "--json",
+        ],
+    )
+    summarized = runner.invoke(
+        main,
+        ["bench", "atlas", "summary", str(atlas_path), "--json"],
+    )
+    queried = runner.invoke(
+        main,
+        ["bench", "atlas", "query", str(atlas_path), "--state", "failing", "--json"],
+    )
+    linked = runner.invoke(
+        main,
+        [
+            "bench",
+            "atlas",
+            "pr-link",
+            str(atlas_path),
+            "publish",
+            "--page-url",
+            "https://evidence.example/atlas/index.html#publish",
+            "--json",
+        ],
+    )
+
+    assert built.exit_code == 0, built.output
+    assert json.loads(built.output) == {
+        "cross_check": True,
+        "output": str(atlas_path),
+        "row_count": 2,
+        "status": "ok",
+    }
+    atlas = json.loads(atlas_path.read_text(encoding="utf-8"))
+    assert [(row["id"], row["state"]) for row in atlas["rows"]] == [
+        ("publish", "failing"),
+        ("remote-rented-glibc", "unbound"),
+    ]
+    assert atlas["rows"][0]["latest_run_id"] == latest_red.name
+    assert atlas["rows"][0]["latest_run_id"] != older_green.name
+
+    assert rendered.exit_code == 0, rendered.output
+    assert json.loads(rendered.output) == {"output": str(page_path), "status": "ok"}
+    assert "FAILING" in page_path.read_text(encoding="utf-8")
+
+    assert summarized.exit_code == 0, summarized.output
+    summary = json.loads(summarized.output)
+    assert summary["failures"] == [
+        {
+            "claim": "Dataset publication reaches the remote.",
+            "evidence_ref": f"runs/v1/{latest_red.name}/result.json",
+            "id": "publish",
+            "run_id": latest_red.name,
+            "state": "failing",
+            "verdict": "fail",
+        }
+    ]
+    assert summary["holes"][0]["id"] == "remote-rented-glibc"
+
+    assert queried.exit_code == 0, queried.output
+    query = json.loads(queried.output)
+    assert query["count"] == 1
+    assert query["rows"][0]["id"] == "publish"
+    assert linked.exit_code == 0, linked.output
+    assert json.loads(linked.output) == {
+        "evidence_ref": f"runs/v1/{latest_red.name}/result.json",
+        "id": "publish",
+        "link": (
+            f"[bench evidence: {latest_red.name}]"
+            "(https://evidence.example/atlas/index.html#publish) "
+            f"(`runs/v1/{latest_red.name}/result.json`)"
+        ),
+        "run_id": latest_red.name,
     }
