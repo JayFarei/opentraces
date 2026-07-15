@@ -3,7 +3,7 @@
   "build_inputs_sha256": "2e0c58e8135e730a9f956b513211dda530b40fd1148d870c50b4e56da2f65118",
   "bun_version": "1.3.6",
   "contract_version": "huggingface.v1",
-  "evidence": "actual pinned build; attach a new real-box proof before merge",
+  "evidence": "ubuntu:24.04 local-container run_20260715T095325567383Z_6462d841b326: exact binary verified; six unauthenticated control mutations denied without state change; three authenticated harness controls accepted; browser authorization and CLI identity authenticated; endpoint stopped; final ledger retained; RunStore.verify=true",
   "schema_version": "opentraces.hf-emulator-trusted-build.v1",
   "size_bytes": 94095202,
   "source_sha256": "c58c0c27e5256aea048486081386819d8d9b0c1172762ffaee91853705939ff9",
