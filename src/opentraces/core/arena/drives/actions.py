@@ -42,6 +42,12 @@ class RunActionSequence:
         self._previous_action_ref: str | None = None
         self.draft.write_text(TIMELINE_REF, "")
 
+    @property
+    def has_actions(self) -> bool:
+        """Whether any public scenario action has been allocated."""
+
+        return self._ordinal > 0
+
     def _offset_ms(self, observed: float) -> int:
         return max(0, int((observed - self.run_started_monotonic) * 1000))
 

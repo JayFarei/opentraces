@@ -70,6 +70,7 @@ def evaluate_capabilities(
     *,
     requirements: Iterable[str],
     runner_drives: set[str],
+    runner_harnesses: set[str],
     runner_emulators: set[str],
     seam_values: Mapping[str, str],
 ) -> CapabilityOutcome:
@@ -138,6 +139,8 @@ def evaluate_capabilities(
             drive = str(interface.get("drive") or "")
             if drive not in runner_drives:
                 return _skip(requirement, f"runner: no drive for {drive}")
+            if value not in runner_harnesses:
+                return _skip(requirement, f"runner: no harness for {value}")
             continue
 
         seam = seam_by_dependency.get(value)

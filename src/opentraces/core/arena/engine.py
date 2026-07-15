@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import os
 import time
 import traceback as traceback_module
@@ -15,6 +16,7 @@ from typing import Any, Callable, Literal, Mapping
 
 from ... import __version__
 from .box import Box, CrabboxRuntime
+from .capability_probe import evaluate_capabilities, parse_capabilities_probe
 from .contract import build_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.actions import RunActionSequence
@@ -141,6 +143,7 @@ class BenchRun:
         self._started = 0.0
         self._app_state_pin: dict[str, Any] = {}
         self._emulators: dict[str, HuggingFaceEmulator] = {}
+        self._capabilities_pin: dict[str, str] | None = None
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
         self.origin_evidence_ref: str | None = None
 
@@ -215,6 +218,65 @@ class BenchRun:
 
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
+
+    def require_capabilities(self, *requirements: str) -> None:
+        """Probe the installed product and bind only runner-supported seams."""
+
+        if self.draft is None or self.box is None:
+            raise RuntimeError("BenchRun is not active")
+        if self.actions.has_actions:
+            raise RuntimeError("capabilities must be required before scenario actions")
+        if self._capabilities_pin is not None:
+            raise RuntimeError("capabilities are already bound for this run")
+
+        timing_path = self.draft.path / "artifacts" / "crabbox-timing" / "capabilities.json"
+        observed = self.bench.box_runtime.exec_product(
+            self.box,
+            ["opentraces", "capabilities", "--json"],
+            cwd=self.bench.repository_path,
+            env={},
+            timeout=30,
+            timing_path=timing_path,
+        )
+        self.draft.write_text("artifacts/capabilities.stdout", observed.stdout)
+        self.draft.write_text("artifacts/capabilities.stderr", observed.stderr)
+        manifest = parse_capabilities_probe(
+            returncode=observed.returncode,
+            stdout=observed.stdout,
+            stderr=observed.stderr,
+        )
+        manifest_payload = dict(manifest)
+        evidence_ref = "artifacts/capabilities.json"
+        self.draft.write_json(evidence_ref, manifest_payload)
+        canonical = json.dumps(
+            manifest_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self._capabilities_pin = {
+            "digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+            "evidence_ref": evidence_ref,
+        }
+
+        seam_values: dict[str, str] = {}
+        for emulator in self._emulators.values():
+            seam_values.update(emulator.env)
+        outcome = evaluate_capabilities(
+            manifest,
+            requirements=requirements,
+            runner_drives={"cli", "browser"},
+            runner_harnesses=set(),
+            runner_emulators=set(self._emulators),
+            seam_values=seam_values,
+        )
+        if outcome.status == "skip":
+            reason = outcome.reason or {
+                "code": "capability_unsatisfied",
+                "message": "required capability is unavailable",
+            }
+            raise BenchSkip(str(reason["code"]), str(reason["message"]))
+        self.terminal.set_base_environment(outcome.environment)
 
     def emulate(self, name: str) -> HuggingFaceEmulator:
         """Start the one concrete bench.v0 provider world."""
@@ -543,6 +605,7 @@ class BenchRun:
                 "environment": box_pin,
                 "harness": None,
                 "model_wire": None,
+                "capabilities": self._capabilities_pin,
                 "emulators": {name: emulator.pin for name, emulator in self._emulators.items()},
                 "app_state": self._app_state_pin,
             },

@@ -111,6 +111,17 @@ class TerminalDrive:
         self._recording_channels: list[dict[str, Any]] = []
         self._markers: list[dict[str, Any]] = []
         self._pending: list[TerminalAction] = []
+        self._base_environment: dict[str, str] = {}
+
+    def set_base_environment(self, environment: Mapping[str, str]) -> None:
+        """Bind probe-approved product environment before the first action."""
+
+        if self.actions.has_actions:
+            raise RuntimeError("terminal base environment must be set before actions")
+        candidate = dict(environment)
+        if self._base_environment and candidate != self._base_environment:
+            raise RuntimeError("terminal base environment is already bound")
+        self._base_environment = candidate
 
     @property
     def has_pending(self) -> bool:
@@ -220,7 +231,13 @@ class TerminalDrive:
         action = f"actions/{ordinal:04d}"
         invocation_ref = f"{action}/invocation.json"
         result_ref = f"{action}/result.json"
-        environment = dict(env or {})
+        environment = dict(self._base_environment)
+        for name, value in dict(env or {}).items():
+            if name in environment and environment[name] != value:
+                raise ValueError(
+                    f"terminal environment conflicts with capability seam: {name}"
+                )
+            environment[name] = value
         self.draft.write_json(
             invocation_ref,
             {
