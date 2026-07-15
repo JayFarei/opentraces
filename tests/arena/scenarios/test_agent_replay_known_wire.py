@@ -28,6 +28,8 @@ def known_wire_script(*, mutate_tool_result: bool = False) -> dict:
         "responses": [
             {
                 "id": "msg_opentraces_replay_0001",
+                "type": "message",
+                "role": "assistant",
                 "model": "claude-opentraces-replay-v0",
                 "content": [
                     {
@@ -41,9 +43,13 @@ def known_wire_script(*, mutate_tool_result: bool = False) -> dict:
                     }
                 ],
                 "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
             },
             {
                 "id": "msg_opentraces_replay_0002",
+                "type": "message",
+                "role": "assistant",
                 "model": "claude-opentraces-replay-v0",
                 "content": [
                     {
@@ -52,6 +58,8 @@ def known_wire_script(*, mutate_tool_result: bool = False) -> dict:
                     }
                 ],
                 "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
             },
         ],
     }
@@ -62,6 +70,7 @@ def known_wire_reached_world(run, *, model):
 
     observed = run.terminal.exec("cat", PROOF_PATH)
     rows = model.ledger.rows()
+    evidence_refs = [observed.result_ref, model.ledger.evidence_ref]
     try:
         assert observed.returncode == 0, observed.stderr
         assert observed.stdout.strip() == EXPECTED_PROOF
@@ -69,32 +78,25 @@ def known_wire_reached_world(run, *, model):
         assert [row["response"]["body"] for row in rows] == model.script["responses"]
 
         first_request = rows[0]["request"]["body"]
-        system_text = "\n".join(
-            block.get("text", "") for block in first_request.get("system", [])
-        )
+        system_text = "\n".join(block.get("text", "") for block in first_request.get("system", []))
         assert "You are a Claude agent" in system_text
         assert "Bash" in {tool.get("name") for tool in first_request.get("tools", [])}
-        assert "Create the deterministic replay proof" in str(
-            first_request.get("messages", [])
-        )
+        assert "Create the deterministic replay proof" in str(first_request.get("messages", []))
 
         second_messages = rows[1]["request"]["body"].get("messages", [])
         assert any(
-            block.get("type") == "tool_result"
-            and block.get("tool_use_id") == TOOL_USE_ID
+            block.get("type") == "tool_result" and block.get("tool_use_id") == TOOL_USE_ID
             for message in second_messages
             for block in (
-                message.get("content", [])
-                if isinstance(message.get("content"), list)
-                else []
+                message.get("content", []) if isinstance(message.get("content"), list) else []
             )
         )
     except AssertionError as exc:
         raise VerificationFailed(
             str(exc) or "scripted model wire did not produce the expected world",
-            evidence_refs=[model.ledger.evidence_ref],
+            evidence_refs=evidence_refs,
         ) from exc
-    return {"evidence_refs": [model.ledger.evidence_ref]}
+    return {"evidence_refs": evidence_refs}
 
 
 def test_real_claude_known_interaction_replay(bench):

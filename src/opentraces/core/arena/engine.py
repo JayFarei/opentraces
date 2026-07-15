@@ -22,6 +22,10 @@ from .drives.actions import RunActionSequence
 from .drives.agent import AgentTerminalSessionFactory, TermctrlAgentSession
 from .drives.browser import BrowserDrive, BrowserFactory, open_playwright_session
 from .drives.terminal import TerminalDrive
+from .emulate.anthropic.runtime import (
+    AnthropicReplayEmulator,
+    start_anthropic_replay_emulator,
+)
 from .emulate.huggingface.runtime import (
     HuggingFaceEmulator,
     app_state_pin as app_state_with_hf,
@@ -147,7 +151,7 @@ class BenchRun:
         self._started_at = ""
         self._started = 0.0
         self._app_state_pin: dict[str, Any] = {}
-        self._emulators: dict[str, HuggingFaceEmulator] = {}
+        self._emulators: dict[str, HuggingFaceEmulator | AnthropicReplayEmulator] = {}
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
         self.origin_evidence_ref: str | None = None
 
@@ -234,32 +238,56 @@ class BenchRun:
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
 
-    def emulate(self, name: str) -> HuggingFaceEmulator:
-        """Start the one concrete bench.v0 provider world."""
+    def emulate(
+        self,
+        name: str,
+        **options: Any,
+    ) -> HuggingFaceEmulator | AnthropicReplayEmulator:
+        """Start one registered per-run provider or model-wire sidecar."""
 
-        if name != "huggingface":
-            raise ValueError(f"unknown emulator {name!r}; expected 'huggingface'")
+        if name not in {"huggingface", "anthropic"}:
+            raise ValueError(f"unknown emulator {name!r}; expected 'huggingface' or 'anthropic'")
         if self.draft is None or self.box is None:
             raise RuntimeError("BenchRun is not active")
         existing = self._emulators.get(name)
         if existing is not None:
+            if options:
+                raise ValueError(f"emulator {name!r} is already running")
             return existing
-        emulator = start_huggingface_emulator(
-            runtime=self.bench.box_runtime,
-            box=self.box,
-            repository=self.bench.repository_path,
-            run_path=self.draft.path,
-        )
+        if name == "huggingface":
+            if options:
+                raise ValueError("Hugging Face emulator accepts no options")
+            emulator: HuggingFaceEmulator | AnthropicReplayEmulator
+            emulator = start_huggingface_emulator(
+                runtime=self.bench.box_runtime,
+                box=self.box,
+                repository=self.bench.repository_path,
+                run_path=self.draft.path,
+            )
+        else:
+            unknown = sorted(set(options).difference({"script"}))
+            if unknown:
+                raise ValueError(f"unknown Anthropic replay option: {unknown[0]}")
+            if "script" not in options:
+                raise ValueError("Anthropic replay emulator requires script")
+            emulator = start_anthropic_replay_emulator(
+                runtime=self.bench.box_runtime,
+                box=self.box,
+                repository=self.bench.repository_path,
+                run_path=self.draft.path,
+                script=options["script"],
+            )
         self._emulators[name] = emulator
-        self._app_state_pin = app_state_with_hf(
-            name=str(self._app_state_pin.get("name") or self.app_state),
-            recipe=self._app_state_pin,
-            provides=[
-                *list(self._app_state_pin.get("provides") or []),
-                "hf-emulator",
-            ],
-            hf_emulator=emulator.binary_pin,
-        )
+        if isinstance(emulator, HuggingFaceEmulator):
+            self._app_state_pin = app_state_with_hf(
+                name=str(self._app_state_pin.get("name") or self.app_state),
+                recipe=self._app_state_pin,
+                provides=[
+                    *list(self._app_state_pin.get("provides") or []),
+                    "hf-emulator",
+                ],
+                hf_emulator=emulator.binary_pin,
+            )
         return emulator
 
     def _agent_product_environment(self) -> dict[str, str]:
@@ -578,9 +606,7 @@ class BenchRun:
                 "observer": {"package": "opentraces", "version": __version__},
                 "environment": box_pin,
                 "harness": self.agent.harness_pin if hasattr(self, "agent") else None,
-                "model_wire": (
-                    self.agent.inference_pin if hasattr(self, "agent") else None
-                ),
+                "model_wire": (self.agent.inference_pin if hasattr(self, "agent") else None),
                 "emulators": {name: emulator.pin for name, emulator in self._emulators.items()},
                 "app_state": self._app_state_pin,
             },
@@ -605,9 +631,7 @@ class BenchRun:
             result: dict[str, Any] = {
                 "rewatchable": timeline["complete"]
                 and all(summary["rewatchable"] for summary in summaries),
-                "channels": [
-                    channel for summary in summaries for channel in summary["channels"]
-                ],
+                "channels": [channel for summary in summaries for channel in summary["channels"]],
                 "timeline_ref": timeline["path"],
                 "timeline": timeline,
             }
@@ -695,9 +719,7 @@ class BenchRun:
                 sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)
             )
         if hasattr(self, "terminal") and self.terminal.has_pending:
-            terminal_settlement_errors.extend(
-                self.terminal.settle_after_release(timeout=5.0)
-            )
+            terminal_settlement_errors.extend(self.terminal.settle_after_release(timeout=5.0))
         for settlement_error in terminal_settlement_errors:
             self._lifecycle_diagnostics.append(
                 sanitize_reason("terminal_settlement_failed", settlement_error)

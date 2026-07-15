@@ -8,11 +8,15 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from opentraces.core.arena.emulate.anthropic.runtime import (
     SERVER_SOURCE,
     SCRIPT_SCHEMA,
 )
+from opentraces.core.arena.engine import VerificationFailed
 from tests.arena.scenarios import test_agent_replay_known_wire as replay_scenario
 
 
@@ -73,9 +77,7 @@ def test_scripted_anthropic_server_streams_exact_turns_and_ledgers_wire(
             "stream": True,
             "system": [{"type": "text", "text": "You are a Claude agent"}],
             "tools": [{"name": "Bash", "input_schema": {"type": "object"}}],
-            "messages": [
-                {"role": "user", "content": "Create the deterministic replay proof"}
-            ],
+            "messages": [{"role": "user", "content": "Create the deterministic replay proof"}],
         }
         first_stream = _post_messages(endpoint, first)
         assert '"type":"tool_use"' in first_stream
@@ -128,3 +130,71 @@ def test_replay_scenario_freezes_real_harness_world_and_mutation_control() -> No
     assert green["responses"][0] != mutated["responses"][0]
     assert replay_scenario.EXPECTED_PROOF in json.dumps(green["responses"][0])
     assert replay_scenario.EXPECTED_PROOF not in json.dumps(mutated["responses"][0])
+
+
+def _verifier_inputs(*, world_value: str, script: dict) -> tuple[object, object]:
+    first_request = {
+        "system": [{"type": "text", "text": "You are a Claude agent"}],
+        "tools": [{"name": "Bash"}],
+        "messages": [{"role": "user", "content": "Create the deterministic replay proof"}],
+    }
+    second_request = {
+        **first_request,
+        "messages": [
+            *first_request["messages"],
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": replay_scenario.TOOL_USE_ID,
+                        "content": "",
+                    }
+                ],
+            },
+        ],
+    }
+    rows = [
+        {
+            "request": {"body": request},
+            "response": {"body": response},
+        }
+        for request, response in zip(
+            [first_request, second_request], script["responses"], strict=True
+        )
+    ]
+    run = SimpleNamespace(
+        terminal=SimpleNamespace(
+            exec=lambda *_args: SimpleNamespace(
+                returncode=0,
+                stdout=world_value + "\n",
+                stderr="",
+                result_ref="actions/0002/result.json",
+            )
+        )
+    )
+    model = SimpleNamespace(
+        script=script,
+        ledger=SimpleNamespace(
+            rows=lambda: rows,
+            evidence_ref="ledgers/anthropic.jsonl",
+        ),
+    )
+    return run, model
+
+
+def test_mutated_tool_line_keeps_exact_wire_but_independent_world_verifier_is_red() -> None:
+    green = replay_scenario.known_wire_script()
+    run, model = _verifier_inputs(world_value=replay_scenario.EXPECTED_PROOF, script=green)
+    assert replay_scenario.known_wire_reached_world(run, model=model) == {
+        "evidence_refs": ["actions/0002/result.json", "ledgers/anthropic.jsonl"]
+    }
+
+    mutated = replay_scenario.known_wire_script(mutate_tool_result=True)
+    run, model = _verifier_inputs(world_value="mutated-wire-value", script=mutated)
+    with pytest.raises(VerificationFailed) as failure:
+        replay_scenario.known_wire_reached_world(run, model=model)
+    assert failure.value.evidence_refs == [
+        "actions/0002/result.json",
+        "ledgers/anthropic.jsonl",
+    ]
