@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import socket
 import subprocess
 from pathlib import Path
