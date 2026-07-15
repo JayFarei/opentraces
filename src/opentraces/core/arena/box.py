@@ -767,7 +767,9 @@ class CrabboxRuntime:
             return pin
         if app_state != "install-only":
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
-        wheels = sorted((repository / "dist").glob("*.whl"))
+        recipe_root = os.environ.get("OT_BENCH_RECIPE_ROOT")
+        wheel_root = Path(recipe_root) if recipe_root else repository / "dist"
+        wheels = sorted(wheel_root.glob("*.whl"))
         if not wheels:
             raise CrabboxRefusal(
                 "app_state_wheel_missing",

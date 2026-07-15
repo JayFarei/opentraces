@@ -126,8 +126,7 @@ class RunStore:
             path.relative_to(run_path).as_posix()
             for path in run_path.rglob("*")
             if path.is_file()
-            and path.relative_to(run_path).as_posix()
-            not in {"result.json", ".integrity.json"}
+            and path.relative_to(run_path).as_posix() not in {"result.json", ".integrity.json"}
         }
         unexpected = actual - set(expected)
         if unexpected:
@@ -150,9 +149,7 @@ class RunStore:
                 raise RunIntegrityError(f"invalid finalization intent: {intent_path.name}")
             validate_result(result)
             if result["run_id"] != run_id:
-                raise RunIntegrityError(
-                    f"finalization intent run_id mismatch: {intent_path.name}"
-                )
+                raise RunIntegrityError(f"finalization intent run_id mismatch: {intent_path.name}")
             final_path = self.root / run_id
             staging_path = self.staging_root / run_id
             if final_path.is_dir():
@@ -251,8 +248,7 @@ class RunDraft:
             path.relative_to(self.path).as_posix(): _sha256(path)
             for path in sorted(self.path.rglob("*"))
             if path.is_file()
-            and path.relative_to(self.path).as_posix()
-            not in {"result.json", ".integrity.json"}
+            and path.relative_to(self.path).as_posix() not in {"result.json", ".integrity.json"}
         }
         return {"schema_version": "opentraces.bench.integrity.v0", "files": files}
 
@@ -266,6 +262,12 @@ class RunDraft:
         if result["run_id"] != self.run_id:
             raise ValueError("result run_id does not match the draft")
         self.write_json(".pending-result.json", result)
+        report_value = os.environ.get("OT_BENCH_PENDING_RUN_REPORT")
+        if report_value:
+            report_path = Path(report_value)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            with report_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"run_id": self.run_id}, sort_keys=True) + "\n")
 
     def take_staged_result(self) -> dict[str, Any]:
         pending = self.path / ".pending-result.json"
@@ -351,9 +353,7 @@ class RunDraft:
             self.path.replace(final_path)
             self.path = final_path
         else:
-            raise FinalizedRunError(
-                f"run {self.run_id} is outside staging and final namespaces"
-            )
+            raise FinalizedRunError(f"run {self.run_id} is outside staging and final namespaces")
 
         integrity_path = final_path / ".integrity.json"
         if not integrity_path.is_file():
@@ -369,9 +369,7 @@ class RunDraft:
         result_path = final_path / "result.json"
         if result_path.is_file():
             if _sha256(result_path) != index["result_digest"]:
-                raise RunIntegrityError(
-                    "existing result.json differs from finalization intent"
-                )
+                raise RunIntegrityError("existing result.json differs from finalization intent")
         else:
             self._write_result(result_path, result)
         return final_path
