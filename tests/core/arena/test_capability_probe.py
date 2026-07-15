@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from opentraces.core.arena.capability_probe import (
@@ -7,6 +10,10 @@ from opentraces.core.arena.capability_probe import (
     evaluate_capabilities,
     parse_capabilities_probe,
 )
+from opentraces.core.arena.box import BoxCommandResult
+from opentraces.core.arena.engine import Bench
+from opentraces.core.arena.run_store import RunStore
+from tests.core.arena.test_engine import FakeBoxRuntime, _scenario
 
 
 def _manifest() -> dict[str, object]:
@@ -58,6 +65,7 @@ def test_absent_valid_capability_is_a_named_skip_not_pass_or_error() -> None:
         _manifest(),
         requirements=["mcp"],
         runner_drives={"cli", "agent"},
+        runner_harnesses={"claude-code"},
         runner_emulators={"huggingface"},
         seam_values={},
     )
@@ -76,6 +84,7 @@ def test_probe_checks_both_installed_surface_and_runner_drive() -> None:
         _manifest(),
         requirements=["cli:dataset.run"],
         runner_drives={"cli", "agent"},
+        runner_harnesses={"claude-code"},
         runner_emulators=set(),
         seam_values={},
     )
@@ -83,6 +92,7 @@ def test_probe_checks_both_installed_surface_and_runner_drive() -> None:
         _manifest(),
         requirements=["agent:claude-code"],
         runner_drives={"cli"},
+        runner_harnesses=set(),
         runner_emulators=set(),
         seam_values={},
     )
@@ -96,6 +106,7 @@ def test_satisfied_emulator_exports_only_declared_product_vars_and_disables() ->
         _manifest(),
         requirements=["cli:dataset.publish", "emulator:huggingface"],
         runner_drives={"cli"},
+        runner_harnesses=set(),
         runner_emulators={"huggingface"},
         seam_values={
             "HF_ENDPOINT": "http://127.0.0.1:14318",
@@ -112,3 +123,106 @@ def test_satisfied_emulator_exports_only_declared_product_vars_and_disables() ->
         "OPENTRACES_DISABLE_VERSION_CHECK": "1",
     }
     assert "OPENTRACES_HF_CONTROL_TOKEN" not in outcome.environment
+
+
+def test_runner_harness_is_checked_separately_from_installed_agent_support() -> None:
+    outcome = evaluate_capabilities(
+        _manifest(),
+        requirements=["agent:claude-code"],
+        runner_drives={"agent"},
+        runner_harnesses=set(),
+        runner_emulators=set(),
+        seam_values={},
+    )
+
+    assert outcome.status == "skip"
+    assert outcome.reason["message"] == "runner: no harness for claude-code"
+
+
+class CapabilityRuntime(FakeBoxRuntime):
+    def __init__(self, *, returncode: int = 0, manifest: dict | None = None) -> None:
+        super().__init__()
+        self.returncode = returncode
+        self.manifest = manifest or _manifest()
+        self.probe_count = 0
+        self.product_envs: list[dict[str, str]] = []
+
+    def exec_product(self, box, argv, *, cwd=None, env=None, timeout=60, timing_path):
+        if list(argv) == ["opentraces", "capabilities", "--json"]:
+            self.probe_count += 1
+            return BoxCommandResult(
+                argv=list(argv),
+                returncode=self.returncode,
+                stdout=json.dumps(self.manifest),
+                stderr="probe failed" if self.returncode else "",
+                timing={},
+            )
+        self.product_envs.append(dict(env or {}))
+        return super().exec_product(
+            box,
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            timing_path=timing_path,
+        )
+
+
+def test_run_capability_absence_is_a_stored_named_skip_before_actions(tmp_path: Path) -> None:
+    runtime = CapabilityRuntime()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.require_capabilities("mcp")
+        pytest.fail("an unsatisfied capability must stop before scenario actions")
+
+    assert runtime.probe_count == 1
+    assert not list((run.final_path / "actions").iterdir())
+    result = json.loads((run.final_path / "result.json").read_text())
+    assert result["execution_status"] == "complete"
+    assert result["verdict"] == "skip"
+    assert result["reason"]["code"] == "capability_unsatisfied"
+    assert result["pins"]["capabilities"]["digest"].startswith("sha256:")
+
+
+def test_broken_capability_probe_is_a_stored_run_error(tmp_path: Path) -> None:
+    runtime = CapabilityRuntime(returncode=9)
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    with pytest.raises(CapabilityProbeError, match="exit 9"):
+        with bench.run(app_state="install-only") as run:
+            run.require_capabilities("cli")
+
+    result = json.loads((run.final_path / "result.json").read_text())
+    assert result["execution_status"] == "error"
+    assert result["verdict"] is None
+    assert result["reason"]["code"] == "capability_probe_failed"
+
+
+def test_declared_seam_environment_is_exported_to_later_product_actions(
+    tmp_path: Path,
+) -> None:
+    runtime = CapabilityRuntime()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "runs" / "v1"),
+        box_runtime=runtime,
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.require_capabilities("cli:dataset.publish")
+        run.terminal.exec("opentraces", "dataset", "list")
+        run.verify(lambda _run: {"evidence_refs": []})
+
+    assert runtime.product_envs[-1] == {"OPENTRACES_DISABLE_VERSION_CHECK": "1"}
