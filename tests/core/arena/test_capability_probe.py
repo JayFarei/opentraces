@@ -19,16 +19,24 @@ from tests.core.arena.test_engine import FakeBoxRuntime, _scenario
 def _manifest() -> dict[str, object]:
     return {
         "schema_version": "opentraces.capabilities.v0",
+        "app": {
+            "name": "opentraces",
+            "version": "test",
+            "trace_schema_version": "test",
+            "security_version": "test",
+        },
         "interfaces": [
-            {"id": "cli", "kind": "cli", "drive": "cli"},
+            {"id": "cli", "kind": "cli", "drive": "cli", "maturity": "stable"},
             {
                 "id": "agent",
                 "kind": "agent",
                 "drive": "agent",
+                "maturity": "seed-plays",
                 "harnesses": ["claude-code"],
             },
         ],
         "cli": {"verbs": [{"path": "dataset.publish", "hidden": False}]},
+        "integration_seams": [],
         "emulation_seams": [
             {
                 "dependency": "huggingface",
@@ -43,6 +51,7 @@ def _manifest() -> dict[str, object]:
                 "auth_env": [],
             },
         ],
+        "introspection": {"command": "opentraces introspect", "provides": []},
     }
 
 

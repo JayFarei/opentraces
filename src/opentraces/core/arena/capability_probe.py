@@ -25,9 +25,82 @@ class CapabilityProbeError(RuntimeError):
         self.code = code
 
 
-def parse_capabilities_probe(
-    *, returncode: int, stdout: str, stderr: str
-) -> Mapping[str, Any]:
+def _invalid(message: str) -> CapabilityProbeError:
+    return CapabilityProbeError("capability_probe_invalid", message)
+
+
+def _string_list(value: object, *, field: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise _invalid(f"capabilities {field} must be an array of strings")
+    return value
+
+
+def _validate_manifest(payload: Mapping[str, Any]) -> None:
+    interfaces = payload.get("interfaces")
+    if not isinstance(interfaces, list) or any(not isinstance(row, Mapping) for row in interfaces):
+        raise _invalid("capabilities interfaces must be an array of objects")
+    interface_kinds: set[str] = set()
+    for row in interfaces:
+        for field in ("id", "kind", "drive", "maturity"):
+            if not isinstance(row.get(field), str) or not row.get(field):
+                raise _invalid(f"capabilities interface {field} must be a string")
+        kind = str(row["kind"])
+        if kind in interface_kinds:
+            raise _invalid(f"capabilities interfaces has duplicate kind {kind}")
+        interface_kinds.add(kind)
+        if "harnesses" in row:
+            _string_list(row["harnesses"], field="interface harnesses")
+
+    cli = payload.get("cli")
+    if not isinstance(cli, Mapping):
+        raise _invalid("capabilities cli must be an object")
+    verbs = cli.get("verbs")
+    if not isinstance(verbs, list) or any(not isinstance(row, Mapping) for row in verbs):
+        raise _invalid("capabilities cli.verbs must be an array of objects")
+    verb_paths: set[str] = set()
+    for row in verbs:
+        path = row.get("path")
+        if not isinstance(path, str) or not path or not isinstance(row.get("hidden"), bool):
+            raise _invalid("capabilities cli verb requires path and hidden")
+        if path in verb_paths:
+            raise _invalid(f"capabilities cli.verbs has duplicate path {path}")
+        verb_paths.add(path)
+
+    seams = payload.get("emulation_seams")
+    if not isinstance(seams, list) or any(not isinstance(row, Mapping) for row in seams):
+        raise _invalid("capabilities emulation_seams must be an array of objects")
+    dependencies: set[str] = set()
+    for row in seams:
+        dependency = row.get("dependency")
+        kind = row.get("kind")
+        if not isinstance(dependency, str) or not dependency:
+            raise _invalid("capabilities emulation seam dependency must be a string")
+        if kind not in {"redirect", "disable", "config"}:
+            raise _invalid("capabilities emulation seam kind is invalid")
+        if dependency in dependencies:
+            raise _invalid(f"capabilities emulation_seams has duplicate dependency {dependency}")
+        dependencies.add(dependency)
+        _string_list(row.get("env"), field="emulation seam env")
+        _string_list(row.get("auth_env"), field="emulation seam auth_env")
+
+    app = payload.get("app")
+    if not isinstance(app, Mapping) or any(
+        not isinstance(app.get(field), str) or not app.get(field)
+        for field in ("name", "version", "trace_schema_version", "security_version")
+    ):
+        raise _invalid("capabilities app must contain its four version strings")
+    integration_seams = payload.get("integration_seams")
+    if not isinstance(integration_seams, list) or any(
+        not isinstance(row, Mapping) for row in integration_seams
+    ):
+        raise _invalid("capabilities integration_seams must be an array of objects")
+    introspection = payload.get("introspection")
+    if not isinstance(introspection, Mapping) or not isinstance(introspection.get("command"), str):
+        raise _invalid("capabilities introspection must be an object with command")
+    _string_list(introspection.get("provides"), field="introspection provides")
+
+
+def parse_capabilities_probe(*, returncode: int, stdout: str, stderr: str) -> Mapping[str, Any]:
     """Parse the public in-box probe; failures are machinery errors, not skips."""
 
     if returncode != 0:
@@ -50,6 +123,7 @@ def parse_capabilities_probe(
             "capability_probe_schema",
             "capabilities probe has an unsupported schema_version",
         )
+    _validate_manifest(payload)
     return payload
 
 
@@ -81,6 +155,7 @@ def evaluate_capabilities(
             "capability_probe_schema",
             "capabilities manifest has an unsupported schema_version",
         )
+    _validate_manifest(manifest)
     interfaces = [row for row in manifest.get("interfaces") or [] if isinstance(row, Mapping)]
     interface_by_kind = {str(row.get("kind")): row for row in interfaces}
     cli = manifest.get("cli") if isinstance(manifest.get("cli"), Mapping) else {}
@@ -89,9 +164,7 @@ def evaluate_capabilities(
         for row in cli.get("verbs") or []
         if isinstance(row, Mapping) and row.get("path")
     }
-    seams = [
-        row for row in manifest.get("emulation_seams") or [] if isinstance(row, Mapping)
-    ]
+    seams = [row for row in manifest.get("emulation_seams") or [] if isinstance(row, Mapping)]
     seam_by_dependency = {str(row.get("dependency")): row for row in seams}
     selected_redirects: list[Mapping[str, Any]] = []
 

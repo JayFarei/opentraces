@@ -95,6 +95,12 @@ def _read_result(run_path: Path) -> Mapping[str, Any]:
     return result
 
 
+def verified_stored_result(store: RunStore, run_id: str) -> Mapping[str, Any]:
+    """Verify one finalized run before any caller loads executable verifier code."""
+
+    return _read_result(_verified_run_path(store, run_id))
+
+
 def list_stored_runs(store: RunStore) -> list[StoredRunRecord]:
     """List verified finalized runs, excluding staging and recovery attempts."""
 

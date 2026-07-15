@@ -44,6 +44,7 @@ from ..core.arena.retrieval import (
     list_stored_runs,
     rerender_stored_run,
     reverify_stored_run,
+    verified_stored_result,
 )
 from ..core.arena.run_store import RunIntegrityError, RunStore
 
@@ -309,9 +310,7 @@ def _load_exact_callable(name: str) -> Callable[..., object]:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as exc:
             if exc.name != module_name and not module_name.startswith(f"{exc.name}."):
-                raise click.ClickException(
-                    f"could not import verifier {name!r}: {exc}"
-                ) from exc
+                raise click.ClickException(f"could not import verifier {name!r}: {exc}") from exc
             continue
         except Exception as exc:
             raise click.ClickException(f"could not import verifier {name!r}: {exc}") from exc
@@ -390,7 +389,9 @@ def bench_render(
     help="Override bucket/runs/v1 (primarily for isolated retrieval).",
 )
 @click.option("--verifier-name", required=True, help="Exact importable verifier callable name.")
-@click.option("--verifier-digest", required=True, help="Exact sha256 source digest bound to the run.")
+@click.option(
+    "--verifier-digest", required=True, help="Exact sha256 source digest bound to the run."
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit only the reverification envelope.")
 def bench_reverify(
     run_id: str,
@@ -401,10 +402,15 @@ def bench_reverify(
 ) -> None:
     """Re-run one exact verifier over stored evidence, with no box or scenario."""
 
+    store = _run_store(store_root)
+    try:
+        verified_stored_result(store, run_id)
+    except (RunIntegrityError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
     verifier = _load_exact_callable(verifier_name)
     try:
         result = reverify_stored_run(
-            _run_store(store_root),
+            store,
             run_id,
             verifier_name=verifier_name,
             verifier_digest=verifier_digest,
@@ -446,6 +452,17 @@ def _verified_results(store: RunStore) -> list[Mapping[str, Any]]:
             raise RunIntegrityError(f"stored run {record.run_id} result is not an object")
         results.append(payload)
     return results
+
+
+def _verified_atlas(
+    atlas_path: Path,
+    *,
+    store_root: Path | None,
+) -> Mapping[str, Any]:
+    atlas = _load_json_object(atlas_path, name="atlas")
+    results = _verified_results(_run_store(store_root))
+    cross_check_atlas(atlas, results=results)
+    return atlas
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
@@ -521,15 +538,18 @@ def bench_atlas_build(
 
 @bench_atlas.command("render")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--output", required=True, type=click.Path(path_type=Path))
 @click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
-def bench_atlas_render(atlas_path: Path, output: Path, as_json: bool) -> None:
+def bench_atlas_render(
+    atlas_path: Path, store_root: Path | None, output: Path, as_json: bool
+) -> None:
     """Render the deterministic human atlas page."""
 
-    atlas = _load_json_object(atlas_path, name="atlas")
     try:
+        atlas = _verified_atlas(atlas_path, store_root=store_root)
         destination = render_atlas_page(atlas, output)
-    except (AtlasIntegrityError, OSError, ValueError) as exc:
+    except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     summary = {"status": "ok", "output": str(destination)}
     if as_json:
@@ -540,13 +560,14 @@ def bench_atlas_render(atlas_path: Path, output: Path, as_json: bool) -> None:
 
 @bench_atlas.command("summary")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--json", "as_json", is_flag=True, help="Emit only the agent summary envelope.")
-def bench_atlas_summary(atlas_path: Path, as_json: bool) -> None:
+def bench_atlas_summary(atlas_path: Path, store_root: Path | None, as_json: bool) -> None:
     """Emit the compact latest-failure and named-hole view for agents."""
 
     try:
-        summary = build_agent_summary(_load_json_object(atlas_path, name="atlas"))
-    except (AtlasIntegrityError, ValueError) as exc:
+        summary = build_agent_summary(_verified_atlas(atlas_path, store_root=store_root))
+    except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     if as_json:
         click.echo(json.dumps(summary, sort_keys=True))
@@ -556,11 +577,15 @@ def bench_atlas_summary(atlas_path: Path, as_json: bool) -> None:
 
 @bench_atlas.command("query")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--state", "states", multiple=True, help="Match an exact atlas state (repeatable).")
-@click.option("--id", "guarantee_ids", multiple=True, help="Match an exact guarantee id (repeatable).")
+@click.option(
+    "--id", "guarantee_ids", multiple=True, help="Match an exact guarantee id (repeatable)."
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit only matching rows.")
 def bench_atlas_query(
     atlas_path: Path,
+    store_root: Path | None,
     states: tuple[str, ...],
     guarantee_ids: tuple[str, ...],
     as_json: bool,
@@ -569,11 +594,11 @@ def bench_atlas_query(
 
     try:
         rows = query_atlas(
-            _load_json_object(atlas_path, name="atlas"),
+            _verified_atlas(atlas_path, store_root=store_root),
             states=states or None,
             guarantee_ids=guarantee_ids or None,
         )
-    except (AtlasIntegrityError, ValueError) as exc:
+    except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     payload = {"count": len(rows), "rows": rows}
     if as_json:
@@ -589,24 +614,26 @@ def bench_atlas_query(
 @bench_atlas.command("pr-link")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("guarantee_id")
+@click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--page-url", required=True, help="Published human atlas page URL.")
 @click.option("--json", "as_json", is_flag=True, help="Emit only the evidence-link projection.")
 def bench_atlas_pr_link(
     atlas_path: Path,
     guarantee_id: str,
+    store_root: Path | None,
     page_url: str,
     as_json: bool,
 ) -> None:
     """Format one bound atlas row as stable PR evidence."""
 
-    atlas = _load_json_object(atlas_path, name="atlas")
     try:
+        atlas = _verified_atlas(atlas_path, store_root=store_root)
         rows = query_atlas(atlas, guarantee_ids=(guarantee_id,))
         if len(rows) != 1:
             raise AtlasIntegrityError(f"atlas has no unique row {guarantee_id!r}")
         row = rows[0]
         link = format_pr_evidence_link(row, page_url=page_url)
-    except (AtlasIntegrityError, ValueError) as exc:
+    except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     payload = {
         "id": row.get("id"),

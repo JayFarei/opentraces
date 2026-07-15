@@ -62,6 +62,10 @@ def test_unbound_guarantee_is_a_hole_and_never_green() -> None:
             "id": "remote-emulator",
             "claim": "claim for scenario::remote",
             "nodeid": "scenario::remote",
+            "verifier": {
+                "name": "verify_world",
+                "digest": "sha256:verifier-v1",
+            },
             "state": "unbound",
             "latest_run_id": None,
             "verdict": None,
@@ -115,7 +119,7 @@ def test_proven_row_is_pinned_to_the_exact_stored_result() -> None:
     assert cross_check_atlas(atlas, results=[result]) is True
 
     row["latest_run_id"] = "run-missing"
-    with pytest.raises(AtlasIntegrityError, match="run-missing"):
+    with pytest.raises(AtlasIntegrityError, match="latest_run_id"):
         cross_check_atlas(atlas, results=[result])
 
 
@@ -127,9 +131,7 @@ def test_proven_row_is_pinned_to_the_exact_stored_result() -> None:
         ("claim", "A forged claim replaces the stored claim."),
     ],
 )
-def test_cross_check_recomputes_every_truth_bearing_row_field(
-    field: str, forged: str
-) -> None:
+def test_cross_check_recomputes_every_truth_bearing_row_field(field: str, forged: str) -> None:
     result = _result(run_id="run-red", nodeid="scenario::red", verdict="fail")
     atlas = build_atlas(
         guarantees=[_guarantee("red", "scenario::red")],

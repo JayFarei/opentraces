@@ -30,9 +30,7 @@ def _latest(results: list[Mapping[str, Any]]) -> Mapping[str, Any]:
     )
 
 
-def _verifier_matches(
-    result: Mapping[str, Any], *, name: str, digest: str
-) -> bool:
+def _verifier_matches(result: Mapping[str, Any], *, name: str, digest: str) -> bool:
     for verifier in result.get("verifiers") or []:
         row = _object(verifier)
         source_ref = _object(row.get("source_ref"))
@@ -55,9 +53,7 @@ def _row_state(
     evidence = _object(result.get("evidence"))
     if product.get("commit") != product_commit:
         return "stale-run"
-    if not _verifier_matches(
-        result, name=verifier_name, digest=verifier_digest
-    ):
+    if not _verifier_matches(result, name=verifier_name, digest=verifier_digest):
         return "stale-verifier"
     if capabilities.get("digest") != capabilities_digest:
         return "surface-drift"
@@ -108,10 +104,7 @@ def build_atlas(
             raise AtlasIntegrityError(f"invalid black_box_review for {guarantee_id}")
         verifier_name = verifier.get("name")
         verifier_digest = verifier.get("digest")
-        if not all(
-            isinstance(value, str) and value
-            for value in (verifier_name, verifier_digest)
-        ):
+        if not all(isinstance(value, str) and value for value in (verifier_name, verifier_digest)):
             raise AtlasIntegrityError(f"guarantee {guarantee_id} has no verifier pin")
 
         candidates = results_by_nodeid.get(nodeid, [])
@@ -121,6 +114,10 @@ def build_atlas(
                     "id": guarantee_id,
                     "claim": claim,
                     "nodeid": nodeid,
+                    "verifier": {
+                        "name": verifier_name,
+                        "digest": verifier_digest,
+                    },
                     "state": "unbound",
                     "latest_run_id": None,
                     "verdict": None,
@@ -131,12 +128,21 @@ def build_atlas(
             continue
 
         latest = _latest(candidates)
+        scenario = _object(latest.get("scenario"))
+        if scenario.get("claim") != claim:
+            raise AtlasIntegrityError(
+                f"guarantee {guarantee_id} claim differs from its stored result"
+            )
         run_id = str(latest["run_id"])
         rows.append(
             {
                 "id": guarantee_id,
                 "claim": claim,
                 "nodeid": nodeid,
+                "verifier": {
+                    "name": verifier_name,
+                    "digest": verifier_digest,
+                },
                 "state": _row_state(
                     latest,
                     verifier_name=str(verifier_name),
@@ -160,29 +166,87 @@ def build_atlas(
     }
 
 
-def cross_check_atlas(
-    atlas: Mapping[str, Any], *, results: Iterable[Mapping[str, Any]]
-) -> bool:
+def cross_check_atlas(atlas: Mapping[str, Any], *, results: Iterable[Mapping[str, Any]]) -> bool:
     """Fail closed unless every bound row resolves to its exact result."""
 
     if atlas.get("schema_version") != ATLAS_SCHEMA_VERSION:
         raise AtlasIntegrityError("unsupported atlas schema_version")
-    results_by_id = {str(result.get("run_id")): result for result in results}
-    for raw_row in atlas.get("rows") or []:
+    product_commit = atlas.get("product_commit")
+    capabilities_digest = atlas.get("capabilities_digest")
+    if not isinstance(product_commit, str) or not product_commit:
+        raise AtlasIntegrityError("atlas product_commit is missing")
+    if not isinstance(capabilities_digest, str) or not capabilities_digest:
+        raise AtlasIntegrityError("atlas capabilities_digest is missing")
+    result_rows = list(results)
+    results_by_id = {str(result.get("run_id")): result for result in result_rows}
+    if len(results_by_id) != len(result_rows):
+        raise AtlasIntegrityError("stored results contain duplicate run ids")
+    results_by_nodeid: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for result in result_rows:
+        nodeid = _object(result.get("scenario")).get("nodeid")
+        if not isinstance(nodeid, str) or not nodeid:
+            raise AtlasIntegrityError("stored result has no scenario nodeid")
+        results_by_nodeid[nodeid].append(result)
+
+    rows = atlas.get("rows")
+    if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+        raise AtlasIntegrityError("atlas rows must be an array of objects")
+    seen_ids: set[str] = set()
+    for raw_row in rows:
         row = _object(raw_row)
+        row_id = row.get("id")
+        nodeid = row.get("nodeid")
+        if not isinstance(row_id, str) or not row_id or row_id in seen_ids:
+            raise AtlasIntegrityError("atlas row id is missing or duplicated")
+        seen_ids.add(row_id)
+        if not isinstance(nodeid, str) or not nodeid:
+            raise AtlasIntegrityError(f"atlas row {row_id} nodeid is missing")
+        if row.get("black_box_review") not in BLACK_BOX_REVIEW_VALUES:
+            raise AtlasIntegrityError(f"atlas row {row_id} black_box_review is invalid")
+        verifier = _object(row.get("verifier"))
+        verifier_name = verifier.get("name")
+        verifier_digest = verifier.get("digest")
+        if not all(isinstance(value, str) and value for value in (verifier_name, verifier_digest)):
+            raise AtlasIntegrityError(f"atlas row {row_id} verifier pin is missing")
+        candidates = results_by_nodeid.get(nodeid, [])
         run_id = row.get("latest_run_id")
         state = row.get("state")
         if state == "unbound":
+            if candidates:
+                raise AtlasIntegrityError(f"atlas row {row_id} state disagrees with stored results")
             if run_id is not None or row.get("evidence_ref") is not None:
                 raise AtlasIntegrityError("unbound row carries stored-run evidence")
+            if row.get("verdict") is not None:
+                raise AtlasIntegrityError(f"atlas row {row_id} verdict disagrees with unbound")
             continue
+        if not candidates:
+            raise AtlasIntegrityError(f"atlas row {row_id} state disagrees with stored results")
+        latest = _latest(candidates)
+        expected_run_id = str(latest.get("run_id"))
+        if run_id != expected_run_id:
+            raise AtlasIntegrityError(
+                f"atlas row {row_id} latest_run_id disagrees with stored results"
+            )
         if not isinstance(run_id, str) or run_id not in results_by_id:
             raise AtlasIntegrityError(f"atlas row does not resolve to stored run {run_id}")
         result = results_by_id[run_id]
         scenario = _object(result.get("scenario"))
-        if scenario.get("nodeid") != row.get("nodeid"):
-            raise AtlasIntegrityError(f"atlas row {row.get('id')} resolves to the wrong scenario")
+        if scenario.get("nodeid") != nodeid:
+            raise AtlasIntegrityError(f"atlas row {row_id} resolves to the wrong scenario")
+        if row.get("claim") != scenario.get("claim"):
+            raise AtlasIntegrityError(f"atlas row {row_id} claim disagrees with stored result")
         expected_ref = f"runs/v1/{run_id}/result.json"
         if row.get("evidence_ref") != expected_ref:
-            raise AtlasIntegrityError(f"atlas row {row.get('id')} has a false evidence ref")
+            raise AtlasIntegrityError(f"atlas row {row_id} has a false evidence ref")
+        if row.get("verdict") != result.get("verdict"):
+            raise AtlasIntegrityError(f"atlas row {row_id} verdict disagrees with stored result")
+        expected_state = _row_state(
+            result,
+            verifier_name=str(verifier_name),
+            verifier_digest=str(verifier_digest),
+            product_commit=product_commit,
+            capabilities_digest=capabilities_digest,
+        )
+        if state != expected_state:
+            raise AtlasIntegrityError(f"atlas row {row_id} state disagrees with stored result")
     return True

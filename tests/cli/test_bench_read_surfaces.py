@@ -291,6 +291,8 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "atlas",
             "render",
             str(atlas_path),
+            "--store-root",
+            str(store.root),
             "--output",
             str(page_path),
             "--json",
@@ -298,11 +300,29 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
     )
     summarized = runner.invoke(
         main,
-        ["bench", "atlas", "summary", str(atlas_path), "--json"],
+        [
+            "bench",
+            "atlas",
+            "summary",
+            str(atlas_path),
+            "--store-root",
+            str(store.root),
+            "--json",
+        ],
     )
     queried = runner.invoke(
         main,
-        ["bench", "atlas", "query", str(atlas_path), "--state", "failing", "--json"],
+        [
+            "bench",
+            "atlas",
+            "query",
+            str(atlas_path),
+            "--store-root",
+            str(store.root),
+            "--state",
+            "failing",
+            "--json",
+        ],
     )
     linked = runner.invoke(
         main,
@@ -312,6 +332,8 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "pr-link",
             str(atlas_path),
             "publish",
+            "--store-root",
+            str(store.root),
             "--page-url",
             "https://evidence.example/atlas/index.html#publish",
             "--json",
@@ -405,7 +427,7 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
                         },
                         "state": "proven",
                         "latest_run_id": failed.name,
-                        "verdict": "pass",
+                        "verdict": "fail",
                         "evidence_ref": f"runs/v1/{failed.name}/result.json",
                         "black_box_review": "unreviewed",
                     }
