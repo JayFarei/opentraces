@@ -53,6 +53,7 @@ def _guarantee(guarantee_id: str, nodeid: str) -> dict[str, object]:
 def test_unbound_guarantee_is_a_hole_and_never_green() -> None:
     atlas = build_atlas(
         guarantees=[_guarantee("remote-emulator", "scenario::remote")],
+        guarantees_digest=GUARANTEES_DIGEST,
         results=[],
         product_commit=PRODUCT_COMMIT,
         capabilities_digest=CAPABILITIES_DIGEST,
@@ -75,7 +76,15 @@ def test_unbound_guarantee_is_a_hole_and_never_green() -> None:
         }
     ]
     assert atlas["inactive_hole_states"] == ["no-red-proof", "unrepresentative-world"]
-    assert cross_check_atlas(atlas, results=[]) is True
+    assert (
+        cross_check_atlas(
+            atlas,
+            guarantees=[_guarantee("remote-emulator", "scenario::remote")],
+            guarantees_digest=GUARANTEES_DIGEST,
+            results=[],
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -94,6 +103,7 @@ def test_atlas_names_every_non_green_state(
     result = _result(run_id="run-one", nodeid="scenario::one", **result_overrides)
     atlas = build_atlas(
         guarantees=[_guarantee("one", "scenario::one")],
+        guarantees_digest=GUARANTEES_DIGEST,
         results=[result],
         product_commit=PRODUCT_COMMIT,
         capabilities_digest=CAPABILITIES_DIGEST,
@@ -101,13 +111,22 @@ def test_atlas_names_every_non_green_state(
 
     assert atlas["rows"][0]["state"] == expected_state
     assert atlas["rows"][0]["state"] != "proven"
-    assert cross_check_atlas(atlas, results=[result]) is True
+    assert (
+        cross_check_atlas(
+            atlas,
+            guarantees=[_guarantee("one", "scenario::one")],
+            guarantees_digest=GUARANTEES_DIGEST,
+            results=[result],
+        )
+        is True
+    )
 
 
 def test_proven_row_is_pinned_to_the_exact_stored_result() -> None:
     result = _result(run_id="run-green", nodeid="scenario::green")
     atlas = build_atlas(
         guarantees=[_guarantee("green", "scenario::green")],
+        guarantees_digest=GUARANTEES_DIGEST,
         results=[result],
         product_commit=PRODUCT_COMMIT,
         capabilities_digest=CAPABILITIES_DIGEST,
@@ -117,11 +136,24 @@ def test_proven_row_is_pinned_to_the_exact_stored_result() -> None:
     assert row["state"] == "proven"
     assert row["latest_run_id"] == "run-green"
     assert row["evidence_ref"] == "runs/v1/run-green/result.json"
-    assert cross_check_atlas(atlas, results=[result]) is True
+    assert (
+        cross_check_atlas(
+            atlas,
+            guarantees=[_guarantee("green", "scenario::green")],
+            guarantees_digest=GUARANTEES_DIGEST,
+            results=[result],
+        )
+        is True
+    )
 
     row["latest_run_id"] = "run-missing"
     with pytest.raises(AtlasIntegrityError, match="latest_run_id"):
-        cross_check_atlas(atlas, results=[result])
+        cross_check_atlas(
+            atlas,
+            guarantees=[_guarantee("green", "scenario::green")],
+            guarantees_digest=GUARANTEES_DIGEST,
+            results=[result],
+        )
 
 
 @pytest.mark.parametrize(
@@ -136,6 +168,7 @@ def test_cross_check_recomputes_every_truth_bearing_row_field(field: str, forged
     result = _result(run_id="run-red", nodeid="scenario::red", verdict="fail")
     atlas = build_atlas(
         guarantees=[_guarantee("red", "scenario::red")],
+        guarantees_digest=GUARANTEES_DIGEST,
         results=[result],
         product_commit=PRODUCT_COMMIT,
         capabilities_digest=CAPABILITIES_DIGEST,
@@ -144,7 +177,12 @@ def test_cross_check_recomputes_every_truth_bearing_row_field(field: str, forged
 
     atlas["rows"][0][field] = forged
     with pytest.raises(AtlasIntegrityError, match=field):
-        cross_check_atlas(atlas, results=[result])
+        cross_check_atlas(
+            atlas,
+            guarantees=[_guarantee("red", "scenario::red")],
+            guarantees_digest=GUARANTEES_DIGEST,
+            results=[result],
+        )
 
 
 def test_cross_check_rejects_forged_review_against_canonical_guarantees() -> None:
@@ -152,11 +190,11 @@ def test_cross_check_rejects_forged_review_against_canonical_guarantees() -> Non
     result = _result(run_id="run-red", nodeid="scenario::red", verdict="fail")
     atlas = build_atlas(
         guarantees=[guarantee],
+        guarantees_digest=GUARANTEES_DIGEST,
         results=[result],
         product_commit=PRODUCT_COMMIT,
         capabilities_digest=CAPABILITIES_DIGEST,
     )
-    atlas["guarantees_digest"] = GUARANTEES_DIGEST
     atlas["rows"][0]["black_box_review"] = "confirmed"
 
     with pytest.raises(AtlasIntegrityError, match="black_box_review"):
@@ -174,6 +212,7 @@ def test_remote_and_x86_coverage_ship_as_explicit_unbound_rows() -> None:
             _guarantee("remote-rented-glibc", "fleet::remote-rented"),
             _guarantee("emulator-linux-x86-64", "fleet::linux-x86-64"),
         ],
+        guarantees_digest=GUARANTEES_DIGEST,
         results=[],
         product_commit=PRODUCT_COMMIT,
         capabilities_digest=CAPABILITIES_DIGEST,

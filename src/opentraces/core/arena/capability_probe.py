@@ -35,25 +35,56 @@ def _string_list(value: object, *, field: str) -> list[str]:
     return value
 
 
+def _string(value: object, *, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise _invalid(f"capabilities {field} must be a string")
+    return value
+
+
+def _string_mapping(value: object, *, field: str) -> Mapping[str, str]:
+    if not isinstance(value, Mapping) or any(
+        not isinstance(key, str) or not key or not isinstance(item, str) or not item
+        for key, item in value.items()
+    ):
+        raise _invalid(f"capabilities {field} must be an object of strings")
+    return value
+
+
 def _validate_manifest(payload: Mapping[str, Any]) -> None:
     interfaces = payload.get("interfaces")
     if not isinstance(interfaces, list) or any(not isinstance(row, Mapping) for row in interfaces):
         raise _invalid("capabilities interfaces must be an array of objects")
+    interface_ids: set[str] = set()
     interface_kinds: set[str] = set()
     for row in interfaces:
         for field in ("id", "kind", "drive", "maturity"):
-            if not isinstance(row.get(field), str) or not row.get(field):
-                raise _invalid(f"capabilities interface {field} must be a string")
+            _string(row.get(field), field=f"interface {field}")
+        interface_id = str(row["id"])
         kind = str(row["kind"])
+        if interface_id in interface_ids:
+            raise _invalid(f"capabilities interfaces has duplicate id {interface_id}")
         if kind in interface_kinds:
             raise _invalid(f"capabilities interfaces has duplicate kind {kind}")
+        interface_ids.add(interface_id)
         interface_kinds.add(kind)
+        if "entrypoint" in row:
+            _string(row["entrypoint"], field="interface entrypoint")
+        if "composite_over" in row:
+            _string_list(row["composite_over"], field="interface composite_over")
         if "harnesses" in row:
             _string_list(row["harnesses"], field="interface harnesses")
+        if "skill" in row:
+            _string(row["skill"], field="interface skill")
+        if "lifecycle" in row:
+            _string_mapping(row["lifecycle"], field="interface lifecycle")
 
     cli = payload.get("cli")
     if not isinstance(cli, Mapping):
         raise _invalid("capabilities cli must be an object")
+    _string(cli.get("entrypoint"), field="cli.entrypoint")
+    _string(cli.get("json_flag"), field="cli.json_flag")
+    if not isinstance(cli.get("pure_json_under_flag"), bool):
+        raise _invalid("capabilities cli.pure_json_under_flag must be a boolean")
     verbs = cli.get("verbs")
     if not isinstance(verbs, list) or any(not isinstance(row, Mapping) for row in verbs):
         raise _invalid("capabilities cli.verbs must be an array of objects")
@@ -82,6 +113,10 @@ def _validate_manifest(payload: Mapping[str, Any]) -> None:
         dependencies.add(dependency)
         _string_list(row.get("env"), field="emulation seam env")
         _string_list(row.get("auth_env"), field="emulation seam auth_env")
+        _string(row.get("honored_by"), field="emulation seam honored_by")
+        _string(row.get("declared_in"), field="emulation seam declared_in")
+        if "config_key" in row:
+            _string(row["config_key"], field="emulation seam config_key")
 
     app = payload.get("app")
     if not isinstance(app, Mapping) or any(
@@ -104,8 +139,9 @@ def _validate_manifest(payload: Mapping[str, Any]) -> None:
             raise _invalid(f"capabilities integration_seams has duplicate id {seam_id}")
         integration_ids.add(seam_id)
     introspection = payload.get("introspection")
-    if not isinstance(introspection, Mapping) or not isinstance(introspection.get("command"), str):
+    if not isinstance(introspection, Mapping):
         raise _invalid("capabilities introspection must be an object with command")
+    _string(introspection.get("command"), field="introspection command")
     _string_list(introspection.get("provides"), field="introspection provides")
 
 

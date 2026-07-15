@@ -9,6 +9,7 @@ from click.testing import CliRunner
 import pytest
 
 from opentraces.cli import main
+from opentraces.core.arena.atlas import guarantees_source_digest
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.run_store import RunStore
 
@@ -292,6 +293,8 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "atlas",
             "render",
             str(atlas_path),
+            "--guarantees",
+            str(guarantees_path),
             "--store-root",
             str(store.root),
             "--output",
@@ -306,6 +309,8 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "atlas",
             "summary",
             str(atlas_path),
+            "--guarantees",
+            str(guarantees_path),
             "--store-root",
             str(store.root),
             "--json",
@@ -318,6 +323,8 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "atlas",
             "query",
             str(atlas_path),
+            "--guarantees",
+            str(guarantees_path),
             "--store-root",
             str(store.root),
             "--state",
@@ -333,6 +340,8 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "pr-link",
             str(atlas_path),
             "publish",
+            "--guarantees",
+            str(guarantees_path),
             "--store-root",
             str(store.root),
             "--page-url",
@@ -349,6 +358,7 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
         "status": "ok",
     }
     atlas = json.loads(atlas_path.read_text(encoding="utf-8"))
+    assert atlas["guarantees_digest"] == guarantees_source_digest(guarantees_path.read_bytes())
     assert [(row["id"], row["state"]) for row in atlas["rows"]] == [
         ("publish", "failing"),
         ("remote-rented-glibc", "unbound"),
@@ -410,10 +420,29 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
         capabilities_digest=capabilities_digest,
     )
     atlas_path = tmp_path / "atlas.json"
+    guarantees_path = tmp_path / "guarantees.json"
+    guarantees_path.write_text(
+        json.dumps(
+            {
+                "guarantees": [
+                    {
+                        "id": "publish",
+                        "claim": "Dataset publication reaches the remote.",
+                        "nodeid": "arena::publish",
+                        "verifier": {"name": verifier_name, "digest": verifier_digest},
+                        "black_box_review": "unreviewed",
+                    }
+                ]
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
     atlas_path.write_text(
         json.dumps(
             {
                 "schema_version": "opentraces.arena.atlas.v0",
+                "guarantees_digest": guarantees_source_digest(guarantees_path.read_bytes()),
                 "product_commit": product_commit,
                 "capabilities_digest": capabilities_digest,
                 "inactive_hole_states": ["no-red-proof", "unrepresentative-world"],
@@ -446,6 +475,8 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
             "atlas",
             "summary",
             str(atlas_path),
+            "--guarantees",
+            str(guarantees_path),
             "--store-root",
             str(store.root),
             "--json",
@@ -458,15 +489,31 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
 
 
 @pytest.mark.parametrize("consumer", ["query", "render"])
-def test_atlas_consumers_refuse_review_without_canonical_guarantees(
+def test_atlas_consumers_reject_forged_review_against_canonical_guarantees(
     tmp_path: Path,
     consumer: str,
 ) -> None:
+    guarantee = {
+        "id": "remote-rented-glibc",
+        "claim": "The emulator runs on a remote rented glibc box.",
+        "nodeid": "arena::remote-rented",
+        "verifier": {
+            "name": "arena_guarantees.verify_publish",
+            "digest": "sha256:" + "c" * 64,
+        },
+        "black_box_review": "unreviewed",
+    }
+    guarantees_path = tmp_path / "guarantees.json"
+    guarantees_path.write_text(
+        json.dumps({"guarantees": [guarantee]}, sort_keys=True),
+        encoding="utf-8",
+    )
     atlas_path = tmp_path / "atlas.json"
     atlas_path.write_text(
         json.dumps(
             {
                 "schema_version": "opentraces.arena.atlas.v0",
+                "guarantees_digest": guarantees_source_digest(guarantees_path.read_bytes()),
                 "product_commit": "a" * 40,
                 "capabilities_digest": "sha256:" + "b" * 64,
                 "inactive_hole_states": ["no-red-proof", "unrepresentative-world"],
@@ -491,7 +538,14 @@ def test_atlas_consumers_refuse_review_without_canonical_guarantees(
         ),
         encoding="utf-8",
     )
-    arguments = ["bench", "atlas", consumer, str(atlas_path)]
+    arguments = [
+        "bench",
+        "atlas",
+        consumer,
+        str(atlas_path),
+        "--guarantees",
+        str(guarantees_path),
+    ]
     if consumer == "query":
         arguments.append("--json")
     else:

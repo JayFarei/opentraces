@@ -19,7 +19,12 @@ from typing import Any, Mapping
 import click
 
 from ..core import paths
-from ..core.arena.atlas import AtlasIntegrityError, build_atlas, cross_check_atlas
+from ..core.arena.atlas import (
+    AtlasIntegrityError,
+    build_atlas,
+    cross_check_atlas,
+    guarantees_source_digest,
+)
 from ..core.arena.atlas_page import render_atlas_page
 from ..core.arena.atlas_views import (
     build_agent_summary,
@@ -438,6 +443,24 @@ def _load_json_object(path: Path, *, name: str) -> Mapping[str, Any]:
     return payload
 
 
+def _load_guarantees_source(
+    path: Path,
+) -> tuple[list[Mapping[str, Any]], str]:
+    try:
+        source = Path(path).read_bytes()
+        payload = json.loads(source.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"could not read guarantees input: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise click.ClickException("guarantees input must contain a JSON object")
+    guarantees = payload.get("guarantees")
+    if not isinstance(guarantees, list) or any(
+        not isinstance(guarantee, Mapping) for guarantee in guarantees
+    ):
+        raise click.ClickException("guarantees input must contain a guarantees object array")
+    return guarantees, guarantees_source_digest(source)
+
+
 def _verified_results(store: RunStore) -> list[Mapping[str, Any]]:
     """Read result bytes only after their run has passed external-index verification."""
 
@@ -457,11 +480,18 @@ def _verified_results(store: RunStore) -> list[Mapping[str, Any]]:
 def _verified_atlas(
     atlas_path: Path,
     *,
+    guarantees_path: Path,
     store_root: Path | None,
 ) -> Mapping[str, Any]:
     atlas = _load_json_object(atlas_path, name="atlas")
+    guarantees, guarantees_digest = _load_guarantees_source(guarantees_path)
     results = _verified_results(_run_store(store_root))
-    cross_check_atlas(atlas, results=results)
+    cross_check_atlas(
+        atlas,
+        guarantees=guarantees,
+        guarantees_digest=guarantees_digest,
+        results=results,
+    )
     return atlas
 
 
@@ -506,21 +536,22 @@ def bench_atlas_build(
 ) -> None:
     """Generate and cross-check an atlas from guarantees and verified results."""
 
-    source = _load_json_object(guarantees_path, name="guarantees input")
-    guarantees = source.get("guarantees")
-    if not isinstance(guarantees, list) or any(
-        not isinstance(guarantee, Mapping) for guarantee in guarantees
-    ):
-        raise click.ClickException("guarantees input must contain a guarantees object array")
     try:
+        guarantees, guarantees_digest = _load_guarantees_source(guarantees_path)
         results = _verified_results(_run_store(store_root))
         atlas = build_atlas(
             guarantees=guarantees,
+            guarantees_digest=guarantees_digest,
             results=results,
             product_commit=product_commit,
             capabilities_digest=capabilities_digest,
         )
-        checked = cross_check_atlas(atlas, results=results)
+        checked = cross_check_atlas(
+            atlas,
+            guarantees=guarantees,
+            guarantees_digest=guarantees_digest,
+            results=results,
+        )
         destination = _write_json(output, atlas)
     except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -538,16 +569,30 @@ def bench_atlas_build(
 
 @bench_atlas.command("render")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--guarantees",
+    "guarantees_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--output", required=True, type=click.Path(path_type=Path))
 @click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
 def bench_atlas_render(
-    atlas_path: Path, store_root: Path | None, output: Path, as_json: bool
+    atlas_path: Path,
+    guarantees_path: Path,
+    store_root: Path | None,
+    output: Path,
+    as_json: bool,
 ) -> None:
     """Render the deterministic human atlas page."""
 
     try:
-        atlas = _verified_atlas(atlas_path, store_root=store_root)
+        atlas = _verified_atlas(
+            atlas_path,
+            guarantees_path=guarantees_path,
+            store_root=store_root,
+        )
         destination = render_atlas_page(atlas, output)
     except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -560,13 +605,30 @@ def bench_atlas_render(
 
 @bench_atlas.command("summary")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--guarantees",
+    "guarantees_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--json", "as_json", is_flag=True, help="Emit only the agent summary envelope.")
-def bench_atlas_summary(atlas_path: Path, store_root: Path | None, as_json: bool) -> None:
+def bench_atlas_summary(
+    atlas_path: Path,
+    guarantees_path: Path,
+    store_root: Path | None,
+    as_json: bool,
+) -> None:
     """Emit the compact latest-failure and named-hole view for agents."""
 
     try:
-        summary = build_agent_summary(_verified_atlas(atlas_path, store_root=store_root))
+        summary = build_agent_summary(
+            _verified_atlas(
+                atlas_path,
+                guarantees_path=guarantees_path,
+                store_root=store_root,
+            )
+        )
     except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     if as_json:
@@ -577,6 +639,12 @@ def bench_atlas_summary(atlas_path: Path, store_root: Path | None, as_json: bool
 
 @bench_atlas.command("query")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--guarantees",
+    "guarantees_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--state", "states", multiple=True, help="Match an exact atlas state (repeatable).")
 @click.option(
@@ -585,6 +653,7 @@ def bench_atlas_summary(atlas_path: Path, store_root: Path | None, as_json: bool
 @click.option("--json", "as_json", is_flag=True, help="Emit only matching rows.")
 def bench_atlas_query(
     atlas_path: Path,
+    guarantees_path: Path,
     store_root: Path | None,
     states: tuple[str, ...],
     guarantee_ids: tuple[str, ...],
@@ -594,7 +663,11 @@ def bench_atlas_query(
 
     try:
         rows = query_atlas(
-            _verified_atlas(atlas_path, store_root=store_root),
+            _verified_atlas(
+                atlas_path,
+                guarantees_path=guarantees_path,
+                store_root=store_root,
+            ),
             states=states or None,
             guarantee_ids=guarantee_ids or None,
         )
@@ -614,12 +687,19 @@ def bench_atlas_query(
 @bench_atlas.command("pr-link")
 @click.argument("atlas_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("guarantee_id")
+@click.option(
+    "--guarantees",
+    "guarantees_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.option("--store-root", type=click.Path(path_type=Path))
 @click.option("--page-url", required=True, help="Published human atlas page URL.")
 @click.option("--json", "as_json", is_flag=True, help="Emit only the evidence-link projection.")
 def bench_atlas_pr_link(
     atlas_path: Path,
     guarantee_id: str,
+    guarantees_path: Path,
     store_root: Path | None,
     page_url: str,
     as_json: bool,
@@ -627,7 +707,11 @@ def bench_atlas_pr_link(
     """Format one bound atlas row as stable PR evidence."""
 
     try:
-        atlas = _verified_atlas(atlas_path, store_root=store_root)
+        atlas = _verified_atlas(
+            atlas_path,
+            guarantees_path=guarantees_path,
+            store_root=store_root,
+        )
         rows = query_atlas(atlas, guarantee_ids=(guarantee_id,))
         if len(rows) != 1:
             raise AtlasIntegrityError(f"atlas has no unique row {guarantee_id!r}")
