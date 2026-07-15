@@ -817,16 +817,21 @@ def _canonical_subject_trace(trace_id: str) -> tuple[str, TraceRecord]:
     return next(iter(candidates.values()))
 
 
-def _trace_ref_for_label(row: Mapping[str, Any], run_path: Path) -> TraceMaterializationRef:
-    del run_path
-    pin = row["slice_pin"]
-    project_slug, record = _canonical_subject_trace(pin["trace_id"])
-    if record.generation_index != pin["generation_index"]:
-        raise LabelIntegrityError("slice pin generation does not match the canonical trace")
+def authoritative_trace_materialization_ref(
+    project_slug: str,
+    record: TraceRecord,
+) -> TraceMaterializationRef:
+    """Rebuild the current materialization map from registered Trail state.
+
+    A canonical project registration makes its source repository authoritative.
+    Record-only materialization is retained only for traces whose project has no
+    registration, never as a fallback for a broken registered source.
+    """
+
     from .. import paths
 
     identity_path = paths.PROJECTS_DIR / project_slug / "project.json"
-    if not identity_path.is_file():
+    if not identity_path.exists():
         return TraceMaterializationRef.from_record(record)
     identity = _read_object(identity_path, name="canonical project identity")
     source_path = identity.get("path") or identity.get("project_dir")
@@ -844,6 +849,14 @@ def _trace_ref_for_label(row: Mapping[str, Any], run_path: Path) -> TraceMateria
         raise LabelIntegrityError(
             "authoritative current Trace Map could not be rebuilt from Trail world-state"
         ) from exc
+
+
+def _trace_ref_for_label(row: Mapping[str, Any]) -> TraceMaterializationRef:
+    pin = row["slice_pin"]
+    project_slug, record = _canonical_subject_trace(pin["trace_id"])
+    if record.generation_index != pin["generation_index"]:
+        raise LabelIntegrityError("slice pin generation does not match the canonical trace")
+    return authoritative_trace_materialization_ref(project_slug, record)
 
 
 def verify_labels(
@@ -870,7 +883,7 @@ def verify_labels(
         trace_ref: TraceMaterializationRef | None = None
         trajectory: Mapping[str, Any] | None = None
         if group[0]["subject"]["kind"] == "slice":
-            trace_ref = _trace_ref_for_label(group[0], run_path)
+            trace_ref = _trace_ref_for_label(group[0])
             if group[0]["slice_pin"]["provenance_kind"] == "trajectory":
                 trajectory = group[0]["slice_pin"]["trajectory"]
         expected_rows = mint_labels_for_run(

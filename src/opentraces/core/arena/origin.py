@@ -15,6 +15,7 @@ from .contract import VERDICTS, validate_result
 from .labels import (
     LabelContractError,
     LabelIntegrityError,
+    authoritative_trace_materialization_ref,
     attach_labels,
     mint_labels_for_run,
     stage_slice_artifact,
@@ -325,18 +326,12 @@ def _explicit_subject(
         subject = {"kind": "trace", "address": trace_id}
     trace_ref: TraceMaterializationRef | None = None
     if subject["kind"] == "slice":
-        from ..trace_index import get_trace_map
-
-        trace_map = get_trace_map(trace_id)
-        if trace_map is None:
-            trace_ref = TraceMaterializationRef.from_record(record)
-        else:
-            try:
-                trace_ref = TraceMaterializationRef(record=record, trace_map=trace_map)
-            except ValueError as exc:
-                raise OriginJoinError(
-                    "explicit origin trace and canonical Trace Map disagree"
-                ) from exc
+        try:
+            trace_ref = authoritative_trace_materialization_ref(project_slug, record)
+        except LabelIntegrityError as exc:
+            raise OriginJoinError(
+                "explicit origin authoritative Trace Map could not be rebuilt"
+            ) from exc
     return project_slug, subject, trace_ref
 
 
