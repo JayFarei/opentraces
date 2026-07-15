@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +32,13 @@ from ..core.arena.origin import (
     origin_claim_token,
 )
 from ..core.arena.page import render_evidence_page
-from ..core.arena.run_store import RunStore
+from ..core.arena.retrieval import (
+    StoredVerifierMismatch,
+    list_stored_runs,
+    rerender_stored_run,
+    reverify_stored_run,
+)
+from ..core.arena.run_store import RunIntegrityError, RunStore
 
 
 def _playwright_browser_cache(home: Path, *, platform: str | None = None) -> Path:
@@ -273,6 +282,137 @@ def _finalize_after_pytest(
 @click.group("bench")
 def bench_group() -> None:
     """Run executable product claims and retain their complete private evidence."""
+
+
+def _run_store(store_root: Path | None) -> RunStore:
+    return RunStore(store_root or paths.bucket_dir() / "runs" / "v1")
+
+
+def _load_exact_callable(name: str) -> Callable[..., object]:
+    """Resolve one explicit dotted callable without maintaining a registry."""
+
+    if not name or "<locals>" in name:
+        raise click.ClickException("verifier name must identify an importable exact callable")
+    parts = name.split(".")
+    module = None
+    attributes: list[str] = []
+    for boundary in range(len(parts) - 1, 0, -1):
+        module_name = ".".join(parts[:boundary])
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name != module_name and not module_name.startswith(f"{exc.name}."):
+                raise click.ClickException(
+                    f"could not import verifier {name!r}: {exc}"
+                ) from exc
+            continue
+        except Exception as exc:
+            raise click.ClickException(f"could not import verifier {name!r}: {exc}") from exc
+        attributes = parts[boundary:]
+        break
+    if module is None:
+        raise click.ClickException(f"could not import verifier {name!r}")
+    target: object = module
+    try:
+        for attribute in attributes:
+            target = getattr(target, attribute)
+    except AttributeError as exc:
+        raise click.ClickException(f"could not resolve verifier {name!r}") from exc
+    if not callable(target):
+        raise click.ClickException(f"verifier {name!r} is not callable")
+    return target
+
+
+@bench_group.command("list")
+@click.option(
+    "--store-root",
+    type=click.Path(path_type=Path),
+    help="Override bucket/runs/v1 (primarily for isolated retrieval).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit only machine-readable runs.")
+def bench_list(store_root: Path | None, as_json: bool) -> None:
+    """List verified finalized runs; omit staging and recovery attempts."""
+
+    try:
+        records = [asdict(record) for record in list_stored_runs(_run_store(store_root))]
+    except (RunIntegrityError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json:
+        click.echo(json.dumps({"count": len(records), "runs": records}, sort_keys=True))
+        return
+    for record in records:
+        click.echo(
+            f"{record['run_id']} {record['verdict'] or 'error'} "
+            f"{record['execution_status']} {record['claim']}"
+        )
+
+
+@bench_group.command("render")
+@click.argument("run_id")
+@click.option(
+    "--store-root",
+    type=click.Path(path_type=Path),
+    help="Override bucket/runs/v1 (primarily for isolated retrieval).",
+)
+@click.option("--output", type=click.Path(path_type=Path), help="Write the regenerated page here.")
+@click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
+def bench_render(
+    run_id: str,
+    store_root: Path | None,
+    output: Path | None,
+    as_json: bool,
+) -> None:
+    """Re-render a page from one verified finalized run without execution."""
+
+    try:
+        page = rerender_stored_run(_run_store(store_root), run_id, output_path=output)
+    except (RunIntegrityError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    summary = {"status": "ok", "run_id": run_id, "page": str(page)}
+    if as_json:
+        click.echo(json.dumps(summary, sort_keys=True))
+    else:
+        click.echo(f"rendered {run_id}: {page}")
+
+
+@bench_group.command("reverify")
+@click.argument("run_id")
+@click.option(
+    "--store-root",
+    type=click.Path(path_type=Path),
+    help="Override bucket/runs/v1 (primarily for isolated retrieval).",
+)
+@click.option("--verifier-name", required=True, help="Exact importable verifier callable name.")
+@click.option("--verifier-digest", required=True, help="Exact sha256 source digest bound to the run.")
+@click.option("--json", "as_json", is_flag=True, help="Emit only the reverification envelope.")
+def bench_reverify(
+    run_id: str,
+    store_root: Path | None,
+    verifier_name: str,
+    verifier_digest: str,
+    as_json: bool,
+) -> None:
+    """Re-run one exact verifier over stored evidence, with no box or scenario."""
+
+    verifier = _load_exact_callable(verifier_name)
+    try:
+        result = reverify_stored_run(
+            _run_store(store_root),
+            run_id,
+            verifier_name=verifier_name,
+            verifier_digest=verifier_digest,
+            verifier=verifier,
+        )
+    except (RunIntegrityError, StoredVerifierMismatch, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json:
+        click.echo(json.dumps(result, sort_keys=True))
+    else:
+        click.echo(f"{run_id} {result['status']} {verifier_name} {verifier_digest}")
+    if result["status"] == "fail":
+        raise click.exceptions.Exit(1)
+    if result["status"] == "error":
+        raise click.exceptions.Exit(2)
 
 
 @bench_group.command("run")
