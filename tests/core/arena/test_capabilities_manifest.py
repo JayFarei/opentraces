@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import urllib.request
 
 from click.testing import CliRunner
 
 from opentraces.cli import main
+from opentraces.core import integration_versions
+from opentraces.security.llm_provider import OpenAICompatProvider
 
 
 def _manifest() -> tuple[str, dict[str, object]]:
@@ -80,3 +86,58 @@ def test_capabilities_declares_probeable_interfaces_and_seams() -> None:
     ]
     assert emulation["llm-openai-compat"]["kind"] == "config"
     assert emulation["llm-openai-compat"]["config_key"] == "review_llm.base_url"
+
+
+def test_huggingface_redirect_seam_is_honored_before_process_start() -> None:
+    endpoint = "http://127.0.0.1:43181"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from huggingface_hub import HfApi; print(HfApi().endpoint)",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HF_ENDPOINT": endpoint},
+    )
+
+    assert completed.stdout.strip() == endpoint
+
+
+def test_version_check_disable_seam_short_circuits_network(monkeypatch) -> None:
+    monkeypatch.setenv("OPENTRACES_DISABLE_VERSION_CHECK", "1")
+    monkeypatch.setattr(
+        integration_versions,
+        "_fetch_latest_pypi_version",
+        lambda: (_ for _ in ()).throw(AssertionError("network must not run")),
+    )
+
+    assert integration_versions.version_status()["check_state"] == "disabled"
+
+
+def test_openai_compat_config_seam_targets_injected_base(monkeypatch) -> None:
+    observed: list[str] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+    def open_url(request: urllib.request.Request, **_kwargs: object) -> Response:
+        observed.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", open_url)
+    provider = OpenAICompatProvider(
+        model="test-model",
+        base_url="http://127.0.0.1:43182/v1/",
+    )
+
+    assert provider.complete_json("probe") == {"ok": True}
+    assert observed == ["http://127.0.0.1:43182/v1/chat/completions"]
