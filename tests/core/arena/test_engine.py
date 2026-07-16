@@ -475,6 +475,149 @@ def test_verifier_identity_precedence_prefers_deeper_real_package_ancestry(
         importlib.invalidate_caches()
 
 
+def test_verifier_identity_fails_closed_when_source_yields_no_canonical_name_but_coordinate_is_shadowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    for root, origin in ((root_a, "a"), (root_b, "b")):
+        package = root / "fallbackpkg"
+        package.mkdir(parents=True)
+        (package / "checks.py").write_text(
+            f'def verify(_run):\n    return {{"origin": {origin!r}}}\n',
+            encoding="utf-8",
+        )
+
+    try:
+        monkeypatch.syspath_prepend(str(root_a))
+        importlib.invalidate_caches()
+        cached = importlib.import_module("fallbackpkg.checks")
+        assert cached.verify(None) == {"origin": "a"}
+
+        monkeypatch.syspath_prepend(str(root_b))
+        importlib.invalidate_caches()
+
+        with pytest.raises(VerifierIdentityError):
+            resolve_verifier(cached.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "fallbackpkg" or module_name.startswith("fallbackpkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_rejects_a_nested_symlink_package_alias_as_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "pkg"
+    real_subpackage = package / "realsub"
+    real_subpackage.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (real_subpackage / "__init__.py").write_text("", encoding="utf-8")
+    (real_subpackage / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    try:
+        os.symlink(
+            real_subpackage,
+            package / "aliassub",
+            target_is_directory=True,
+        )
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        realsub_checks = importlib.import_module("pkg.realsub.checks")
+        aliassub_checks = importlib.import_module("pkg.aliassub.checks")
+        assert Path(realsub_checks.__file__).resolve() == Path(
+            aliassub_checks.__file__
+        ).resolve()
+
+        with pytest.raises(
+            VerifierIdentityError,
+            match="multiple canonical import paths",
+        ):
+            resolve_verifier(realsub_checks.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "pkg" or module_name.startswith("pkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_accepts_a_case_variant_sys_path_spelling_of_one_real_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    package = root / "pkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    variant = tmp_path / "ROOT"
+    if not (variant.exists() and os.path.samefile(root, variant)):
+        pytest.skip("filesystem is case-sensitive")
+
+    try:
+        monkeypatch.syspath_prepend(str(root))
+        monkeypatch.syspath_prepend(str(variant))
+        importlib.invalidate_caches()
+        mod = importlib.import_module("pkg.checks")
+
+        name, _digest = callable_identity(mod.verify)
+
+        assert name == "pkg.checks.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "pkg" or module_name.startswith("pkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_accepts_a_package_that_shadows_a_same_named_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "parent"
+    package = parent / "dupe"
+    package.mkdir(parents=True)
+    (parent / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    (parent / "dupe.py").write_text(
+        'def verify(_run):\n    return {"healthy": False}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        mod = importlib.import_module("parent.dupe")
+        assert mod.verify(None) == {"healthy": True}
+
+        name, _digest = callable_identity(mod.verify)
+
+        assert name == "parent.dupe.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if (
+                module_name in {"parent", "dupe"}
+                or module_name.startswith("parent.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
 def test_local_verifier_is_rejected_before_invocation_and_cannot_finalize_pass(
     tmp_path: Path,
 ) -> None:
