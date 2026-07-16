@@ -184,6 +184,18 @@ def _partial_output_text(value: str | bytes | None) -> str:
     return str(value or "")
 
 
+def _unique_lease_identity(stdout: str, stderr: str) -> str | None:
+    candidates = set(
+        re.findall(
+            r"(?<![A-Za-z0-9_-])cbx_[A-Za-z0-9]+(?![A-Za-z0-9_-])",
+            f"{stdout}\n{stderr}",
+        )
+    )
+    if len(candidates) != 1:
+        return None
+    return candidates.pop()
+
+
 def _hf_client_lock() -> tuple[dict[str, str], str]:
     try:
         encoded = HF_CLIENT_LOCK_PATH.read_bytes()
@@ -409,14 +421,11 @@ class CrabboxRuntime:
             warmup = self._call(warmup_argv, timeout=600)
         except CrabboxRefusal as primary:
             if primary.code == "crabbox_timeout":
-                match = re.search(
-                    r"\bcbx_[A-Za-z0-9]+\b",
-                    f"{primary.partial_stdout}\n{primary.partial_stderr}",
+                lease_id = _unique_lease_identity(
+                    primary.partial_stdout, primary.partial_stderr
                 )
-                if match:
-                    self._best_effort_release_after_refusal(
-                        match.group(0), provider=self.provider
-                    )
+                if lease_id:
+                    self._best_effort_release_after_refusal(lease_id, provider=self.provider)
             raise
         match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
         if warmup.returncode != 0:
