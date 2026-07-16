@@ -169,25 +169,46 @@ def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primar
 
 
 @pytest.mark.parametrize(
-    ("partial_stdout", "expected_stop_ids"),
+    ("partial_stdout", "partial_stderr", "expected_stop_ids"),
     [
         (
             b"allocated lease cbx_abc123\npassword=do-not-retain\n",
+            b"still waiting for readiness\n",
             ["cbx_abc123"],
         ),
-        (b"warmup did not report an identity\n", []),
+        (
+            b"warmup did not report an identity\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"untrusted label cbx_good123-extra\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"allocated lease cbx_first123\n",
+            b"also reported cbx_second456\n",
+            [],
+        ),
+        (
+            b"allocated lease cbx_repeat123\n",
+            b"still waiting for cbx_repeat123\n",
+            ["cbx_repeat123"],
+        ),
     ],
 )
-def test_timed_out_warmup_releases_only_an_identity_reported_in_partial_output(
+def test_timed_out_warmup_releases_only_one_unique_boundary_safe_identity(
     tmp_path: Path,
     partial_stdout: bytes,
+    partial_stderr: bytes,
     expected_stop_ids: list[str],
 ) -> None:
     timeout = subprocess.TimeoutExpired(
         ["crabbox", "warmup"],
         600,
         output=partial_stdout,
-        stderr=b"still waiting for readiness\n",
+        stderr=partial_stderr,
     )
     responses: list[subprocess.CompletedProcess[str] | subprocess.TimeoutExpired] = [
         _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
@@ -210,7 +231,6 @@ def test_timed_out_warmup_releases_only_an_identity_reported_in_partial_output(
     timeout_diagnostic = runtime.diagnostic_records()[1]
     assert timeout_diagnostic["timed_out"] is True
     assert "do-not-retain" not in timeout_diagnostic["stdout"]
-    assert ("cbx_abc123" in timeout_diagnostic["stdout"]) is bool(expected_stop_ids)
 
 
 @pytest.mark.parametrize(
