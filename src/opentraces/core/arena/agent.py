@@ -127,6 +127,7 @@ class AgentDrive:
         self._attempt: AgentAttempt | None = None
         self._harness_pin: dict[str, Any] | None = None
         self._inference_pin: dict[str, Any] | None = None
+        self._sensitive_environment: dict[str, str] = {}
 
     @property
     def has_actions(self) -> bool:
@@ -143,6 +144,12 @@ class AgentDrive:
     @property
     def attempt_result(self) -> AgentAttempt | None:
         return self._attempt
+
+    @property
+    def sensitive_environment(self) -> Mapping[str, str]:
+        """Process-only values retained in memory solely for the absence scan."""
+
+        return self._sensitive_environment
 
     def _grants(self, access: Sequence[object]) -> list[str]:
         if not isinstance(access, (list, tuple)) or not access:
@@ -311,6 +318,9 @@ class AgentDrive:
         grants = self._grants(access)
         inference_pin, inference_environment = self._inference(inference)
         environment = self._environment(self.product_environment(), inference_environment)
+        self._sensitive_environment = (
+            dict(inference_environment) if self.execution_mode == "agent_live" else {}
+        )
         capture_session_id = str(uuid.uuid4()) if self.capture_required else None
         capture_glob = (
             f".opentraces/bench-capture/{capture_session_id}/**/*"

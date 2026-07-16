@@ -18,7 +18,7 @@ from typing import Any, Callable, Literal, Mapping
 from ... import __version__
 from .agent import AgentDrive, AgentPrerequisiteMissing
 from .box import Box, CrabboxRuntime
-from .contract import build_result
+from .contract import build_result, validate_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.actions import RunActionSequence
 from .drives.agent import AgentTerminalSessionFactory, TermctrlAgentSession
@@ -606,6 +606,58 @@ class BenchRun:
                     + ", ".join(missing_capture)
                 ),
             }
+        custody_report: dict[str, Any] | None = None
+        custody_requirement: dict[str, Any] | None = None
+        sensitive_environment = (
+            self.agent.sensitive_environment if hasattr(self, "agent") else {}
+        )
+        if sensitive_environment:
+            sensitive_values = [value.encode() for value in sensitive_environment.values()]
+            stored_paths = sorted(path for path in self.draft.path.rglob("*") if path.is_file())
+            matches: list[str] = []
+            bytes_checked = 0
+            capture_files_checked = 0
+            for stored_path in stored_paths:
+                relative = stored_path.relative_to(self.draft.path).as_posix()
+                if relative.startswith("capture/"):
+                    capture_files_checked += 1
+                if stored_path.is_symlink():
+                    matches.append(f"{relative} [symlink not frozen]")
+                    continue
+                payload = stored_path.read_bytes()
+                bytes_checked += len(payload)
+                if any(secret in payload for secret in sensitive_values):
+                    matches.append(relative)
+            custody_report = {
+                "schema_version": "opentraces.bench.secret-absence.v0",
+                "secret_names": sorted(sensitive_environment),
+                "files_checked": len(stored_paths),
+                "bytes_checked": bytes_checked,
+                "capture_files_checked": capture_files_checked,
+                "candidate_result_checked": True,
+                "matches": matches,
+                "absent": not matches,
+            }
+            custody_ref = "artifacts/live-key-absence.json"
+            artifacts.append(
+                {
+                    "path": custody_ref,
+                    "media_type": "application/json",
+                    "kind": "secret_absence",
+                }
+            )
+            custody_requirement = {
+                "name": "agent.live_key_absence",
+                "complete": not matches,
+                "evidence_refs": [custody_ref],
+            }
+            evidence_requirements.append(custody_requirement)
+            if matches and execution_status == "complete" and verdict == "pass":
+                verdict = "fail"
+                reason = {
+                    "code": "live_key_stored",
+                    "message": "the live inference key appeared in stored run evidence",
+                }
         if scenario_assertion:
             evidence_requirements.append(
                 {
@@ -676,6 +728,25 @@ class BenchRun:
                 "app_state": self._app_state_pin,
             },
         )
+        if custody_report is not None and custody_requirement is not None:
+            candidate_result = json.dumps(
+                result, sort_keys=True, separators=(",", ":")
+            ).encode()
+            custody_report["bytes_checked"] += len(candidate_result)
+            sensitive_values = [value.encode() for value in sensitive_environment.values()]
+            if any(secret in candidate_result for secret in sensitive_values):
+                custody_report["matches"].append("result.json")
+                custody_report["absent"] = False
+                custody_requirement["complete"] = False
+                result["evidence"]["complete"] = False
+                if result["execution_status"] == "complete" and result["verdict"] == "pass":
+                    result["verdict"] = "fail"
+                    result["reason"] = {
+                        "code": "live_key_stored",
+                        "message": "the live inference key appeared in stored run evidence",
+                    }
+                validate_result(result)
+            self.draft.write_json("artifacts/live-key-absence.json", custody_report)
         if os.environ.get("OT_BENCH_DEFER_FINALIZE") == "1":
             self.draft.stage_result(result)
             self.final_path = self.draft.path
