@@ -277,6 +277,33 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
     assert runtime.released is True
 
 
+def test_local_verifier_is_rejected_before_invocation_and_cannot_finalize_pass(
+    tmp_path: Path,
+) -> None:
+    invoked = False
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def local_verifier(_run):
+        nonlocal invoked
+        invoked = True
+        return {"evidence_refs": []}
+
+    with pytest.raises(ValueError, match="importable module-level callable"):
+        with bench.run(app_state="install-only") as run:
+            run.verify(local_verifier)
+
+    assert invoked is False
+    result = json.loads(next(bench.store.root.glob("run_*/result.json")).read_text())
+    assert result["execution_status"] == "error"
+    assert result["verdict"] is None
+    assert result["reason"]["code"] == "ValueError"
+
+
 def test_slice_origin_is_staged_before_verification_and_only_the_verifier_can_name_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
