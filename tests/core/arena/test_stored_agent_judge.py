@@ -18,7 +18,15 @@ COMMIT = "a" * 40
 CLAIM = "The agent makes a small change and commits it."
 
 
-def _finalized_run(tmp_path: Path, *, trail_evidence: bool) -> Path:
+def _finalized_run(
+    tmp_path: Path,
+    *,
+    trail_evidence: bool,
+    absolute_evidence: bool = False,
+    harness_version: str = "2.1.210",
+    omit_capture_source: str | None = None,
+    agent_attempt_state: str = "complete",
+) -> Path:
     store = RunStore(tmp_path / "runs" / "v1")
     draft = store.begin()
 
@@ -80,6 +88,8 @@ def _finalized_run(tmp_path: Path, *, trail_evidence: bool) -> Path:
             json.dumps({"status": "ok", "ok": True}),
         ),
     ]
+    if absolute_evidence:
+        refs = [str(store.root / draft.run_id / reference) for reference in refs]
     custody_ref = "artifacts/live-key-absence.json"
     draft.write_json(
         custody_ref,
@@ -94,6 +104,26 @@ def _finalized_run(tmp_path: Path, *, trail_evidence: bool) -> Path:
             "absent": True,
         },
     )
+    attempt_ref = "artifacts/agent-attempt.json"
+    if agent_attempt_state != "absent":
+        draft.write_json(
+            attempt_ref,
+            {
+                "schema_version": "opentraces.bench.agent-attempt.v0",
+                "task": "Make and commit the exact scenario-4 world-state change.",
+                "harness": {"name": "claude", "version": harness_version},
+                "inference": {"mode": "live"},
+                "capture": {
+                    "required_sources": [
+                        "session_jsonl",
+                        "telemetry",
+                        "git",
+                        "bucket",
+                    ]
+                },
+                "completed": agent_attempt_state == "complete",
+            },
+        )
     capture = {
         "schema_version": "opentraces.capture.result.v1",
         "completeness": "complete",
@@ -108,16 +138,34 @@ def _finalized_run(tmp_path: Path, *, trail_evidence: bool) -> Path:
             for name in ("session_jsonl", "telemetry", "git", "bucket")
         ],
     }
+    draft.write_json("capture/capture_result.json", capture)
+    for source in capture["sources"]:
+        if source["name"] == omit_capture_source:
+            continue
+        for reference in source["evidence_refs"]:
+            draft.write_json(Path("capture") / reference, {"source": source["name"]})
+    capture_requirement_refs = {
+        "trace": ["capture/finalizers/session_jsonl.report.json"],
+        "context": ["capture/finalizers/telemetry.report.json"],
+        "trail": ["capture/finalizers/git.report.json"],
+        "storage": ["capture/finalizers/bucket.report.json"],
+        "lifecycle": ["capture/capture_result.json"],
+    }
     requirements = [
         {"name": "scenario_4_world_state", "complete": True, "evidence_refs": refs},
         *[
             {
                 "name": f"capture.{name}",
                 "complete": True,
-                "evidence_refs": [],
+                "evidence_refs": capture_requirement_refs[name],
             }
             for name in ("trace", "context", "trail", "storage", "lifecycle")
         ],
+        {
+            "name": "agent.attempt",
+            "complete": True,
+            "evidence_refs": [attempt_ref],
+        },
         {
             "name": "agent.live_key_absence",
             "complete": True,
@@ -153,7 +201,7 @@ def _finalized_run(tmp_path: Path, *, trail_evidence: bool) -> Path:
             capture=capture,
             pins={
                 "product": {"commit": COMMIT, "worktree": "clean"},
-                "harness": {"name": "claude", "version": "2.1.210"},
+                "harness": {"name": "claude", "version": harness_version},
                 "model_wire": {"mode": "live"},
             },
         )
@@ -196,4 +244,54 @@ def test_stored_judge_rejects_green_result_without_public_trail_evidence(
     run_path = _finalized_run(tmp_path, trail_evidence=False)
 
     with pytest.raises(StoredJudgeError, match="public blame has no Trail evidence"):
+        judge_agent_commit_run(run_path)
+
+
+def test_stored_judge_rejects_absolute_refs_even_when_they_point_inside_run(
+    tmp_path: Path,
+) -> None:
+    run_path = _finalized_run(
+        tmp_path,
+        trail_evidence=True,
+        absolute_evidence=True,
+    )
+
+    with pytest.raises(StoredJudgeError, match="evidence ref must be relative"):
+        judge_agent_commit_run(run_path)
+
+
+def test_stored_judge_rejects_unregistered_harness_version(tmp_path: Path) -> None:
+    run_path = _finalized_run(
+        tmp_path,
+        trail_evidence=True,
+        harness_version="0.0.0-not-reviewed",
+    )
+
+    with pytest.raises(StoredJudgeError, match="registered Claude harness"):
+        judge_agent_commit_run(run_path)
+
+
+def test_stored_judge_rejects_missing_capture_source_evidence(tmp_path: Path) -> None:
+    run_path = _finalized_run(
+        tmp_path,
+        trail_evidence=True,
+        omit_capture_source="telemetry",
+    )
+
+    with pytest.raises(StoredJudgeError, match="capture source evidence is missing"):
+        judge_agent_commit_run(run_path)
+
+
+@pytest.mark.parametrize("agent_attempt_state", ["absent", "incomplete"])
+def test_stored_judge_requires_complete_stored_agent_attempt(
+    tmp_path: Path,
+    agent_attempt_state: str,
+) -> None:
+    run_path = _finalized_run(
+        tmp_path,
+        trail_evidence=True,
+        agent_attempt_state=agent_attempt_state,
+    )
+
+    with pytest.raises(StoredJudgeError, match="agent attempt"):
         judge_agent_commit_run(run_path)
