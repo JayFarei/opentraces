@@ -124,7 +124,20 @@ def _scan_sensitive_tree(
                 continue
             descriptor = -1
             try:
-                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                if not stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="special node not frozen",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
                 descriptor = os.open(entry.path, flags)
                 if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                     findings.append(
