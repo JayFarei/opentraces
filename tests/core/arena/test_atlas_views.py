@@ -102,6 +102,30 @@ def test_agent_summary_answers_what_failed_and_where_from_summary_alone() -> Non
     }
 
 
+def test_agent_summary_keeps_machinery_errors_and_surface_drift_failures_once() -> None:
+    atlas = _atlas()
+    machinery_error = atlas["rows"][1]
+    machinery_error["verdict"] = None
+    atlas["rows"].append(
+        {
+            **machinery_error,
+            "id": "publish-surface-drift",
+            "state": "surface-drift",
+            "verdict": "fail",
+            "latest_run_id": "run-publish-drift-red",
+            "evidence_ref": "runs/v1/run-publish-drift-red/result.json",
+        }
+    )
+
+    failures = build_agent_summary(atlas)["failures"]
+
+    assert [row["id"] for row in failures] == ["publish", "publish-surface-drift"]
+    assert [row["evidence_ref"] for row in failures] == [
+        "runs/v1/run-publish-red/result.json",
+        "runs/v1/run-publish-drift-red/result.json",
+    ]
+
+
 def test_machine_query_filters_without_changing_row_truth() -> None:
     atlas = _atlas()
 
