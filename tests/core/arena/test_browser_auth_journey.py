@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import threading
 from pathlib import Path
@@ -8,6 +9,7 @@ import pytest
 
 from opentraces.core.arena.box import BoxCommandResult
 from opentraces.core.arena.engine import Bench
+from opentraces.core.arena.retrieval import reverify_stored_run
 from opentraces.core.arena.run_store import RunStore
 from tests.arena.scenarios import test_browser_auth_reaches_hf as scenario
 from tests.core.arena.test_browser_drive import PublicBrowserSession
@@ -141,3 +143,26 @@ def test_recorder_only_failure_cannot_rewrite_successful_browser_auth_verdict(
     assert channels["terminal"]["complete"] is True
     assert channels["playwright_trace"]["complete"] is True
     assert channels["browser_screenshots"]["complete"] is True
+
+    verifier = result["verifiers"][0]
+    runtime.lease = lambda: pytest.fail("stored reverify attempted a box lease")
+    runtime.exec_product = lambda *_args, **_kwargs: pytest.fail(
+        "stored reverify attempted a product action"
+    )
+    reverification = reverify_stored_run(
+        bench.store,
+        result["run_id"],
+        verifier_name=verifier["name"],
+        verifier_digest=verifier["source_ref"]["digest"],
+        verifier=scenario.cli_reports_authenticated,
+    )
+    assert reverification["status"] == "pass"
+    assert reverification["evidence_refs"] == verifier["evidence_refs"]
+
+
+def test_browser_auth_source_requires_only_public_auth_cli_capabilities() -> None:
+    source = inspect.getsource(scenario.test_browser_authorization_authenticates_the_cli)
+
+    assert 'run.emulate("huggingface")' in source
+    assert 'run.require_capabilities("cli:auth.login", "cli:auth.whoami")' in source
+    assert "emulator:huggingface" not in source

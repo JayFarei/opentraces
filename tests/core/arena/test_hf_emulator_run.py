@@ -21,6 +21,7 @@ from opentraces.core.arena.emulate.huggingface.runtime import (
 )
 from opentraces.core.arena.engine import Bench, ScenarioSource
 from opentraces.core.arena.page import render_evidence_page
+from opentraces.core.arena.retrieval import reverify_stored_run
 from opentraces.core.arena.run_store import RunStore
 from tests.arena.scenarios import test_publish_reaches_hf_remote as scenario_2
 
@@ -332,6 +333,7 @@ def test_scenario_2_source_freezes_the_claim_public_journey_and_down_control() -
     source = inspect.getsource(function)
     for public_call in (
         'run.emulate("huggingface")',
+        'run.require_capabilities("cli:dataset.publish", "emulator:huggingface")',
         '"dataset",\n            "new"',
         '"dataset",\n            "review",\n            "approve"',
         '"dataset",\n            "remote",\n            "create"',
@@ -758,6 +760,20 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     assert result["reason"]["code"] == "assertion_failed"
     assert "0x" not in result["reason"]["message"]
     assert result_exit_code(result) == 1
+
+    verifier = result["verifiers"][0]
+    runtime.lease = lambda: pytest.fail("stored reverify attempted a box lease")
+    runtime.exec_product = lambda *_args, **_kwargs: pytest.fail(
+        "stored reverify attempted a product action"
+    )
+    reverification = reverify_stored_run(
+        bench.store,
+        result["run_id"],
+        verifier_name=verifier["name"],
+        verifier_digest=verifier["source_ref"]["digest"],
+        verifier=scenario_2.publish_commit_is_witnessed,
+    )
+    assert reverification["status"] == "fail"
     assert not any(row.get("operation_id") == "commit" for row in ledger_rows)
     assert result["verifiers"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert result["evidence"]["requirements"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
