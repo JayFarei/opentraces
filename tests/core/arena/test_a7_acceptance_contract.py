@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 from opentraces.core.arena.atlas import build_atlas, guarantees_source_digest
@@ -96,6 +97,74 @@ def test_future_hole_verifiers_adjudicate_concrete_stored_proofs(tmp_path: Path)
 
     assert verify_remote_rented_glibc_emulator(evidence) == {"evidence_refs": [remote_ref]}
     assert verify_linux_x86_64_hf_emulator(evidence) == {"evidence_refs": [x64_ref]}
+
+
+def test_public_reverification_transcript_disables_box_processes_and_network(
+    tmp_path: Path,
+) -> None:
+    from tests.manual.reverify_a7_without_box import run_public_reverification
+
+    observed: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        observed.append((command, environment))
+        run_id = command[command.index("reverify") + 1]
+        status = "pass" if run_id == "run_browser" else "fail"
+        return subprocess.CompletedProcess(
+            command,
+            0 if status == "pass" else 1,
+            stdout=json.dumps(
+                {
+                    "schema_version": "opentraces.bench.reverification.v0",
+                    "run_id": run_id,
+                    "status": status,
+                    "verifier": {
+                        "name": command[command.index("--verifier-name") + 1],
+                        "digest": command[command.index("--verifier-digest") + 1],
+                    },
+                    "evidence_refs": ["ledgers/huggingface.jsonl"],
+                    "reason": None,
+                }
+            ),
+            stderr="",
+        )
+
+    transcript = run_public_reverification(
+        store_root=tmp_path / "runs/v1",
+        guarantees_path=GUARANTEES_PATH,
+        run_ids={"browser-auth": "run_browser", "publish-down": "run_publish"},
+        repository=REPOSITORY,
+        runner=fake_runner,
+    )
+
+    assert [attempt["status"] for attempt in transcript["attempts"]] == ["pass", "fail"]
+    assert [attempt["exit_code"] for attempt in transcript["attempts"]] == [0, 1]
+    assert transcript["runtime_constraints"] == {
+        "box_runtime": "unavailable",
+        "external_process_path": "empty",
+        "network": "closed-loop-proxy",
+    }
+    assert len(observed) == 2
+    for command, environment in observed:
+        assert command[1:4] == ["-m", "opentraces", "bench"]
+        assert "reverify" in command and "--json" in command
+        assert environment["PATH"] == ""
+        assert environment["HOME"].startswith(str(tmp_path))
+        assert environment["HTTPS_PROXY"] == "http://127.0.0.1:9"
+        assert set(environment) <= {
+            "ALL_PROXY",
+            "HOME",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "LANG",
+            "LC_ALL",
+            "NO_PROXY",
+            "PATH",
+            "PYTHONPATH",
+            "TMPDIR",
+        }
 
 
 def _finalize_run(
@@ -269,6 +338,34 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
         ),
         encoding="utf-8",
     )
+    reverify_path = tmp_path / "reverify-without-box.json"
+    reverify_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "opentraces.bench.reverify-without-box.v0",
+                "runtime_constraints": {
+                    "box_runtime": "unavailable",
+                    "external_process_path": "empty",
+                    "network": "closed-loop-proxy",
+                },
+                "attempts": [
+                    {
+                        "guarantee_id": "browser-auth",
+                        "run_id": browser["run_id"],
+                        "exit_code": 0,
+                        "status": "pass",
+                    },
+                    {
+                        "guarantee_id": "publish-down",
+                        "run_id": publish["run_id"],
+                        "exit_code": 1,
+                        "status": "fail",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     observed = verify_a7_acceptance(
         store_root=store.root,
@@ -276,6 +373,7 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
         atlas_path=atlas_path,
         guarantees_path=GUARANTEES_PATH,
         capabilities_path=capabilities_path,
+        reverify_path=reverify_path,
     )
 
     assert observed["works"] is True
@@ -283,6 +381,7 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
     assert observed["lease_ids"] == ["lease-browser", "lease-publish"]
     assert observed["emulator_nonces"] == ["nonce-browser", "nonce-publish"]
     assert observed["observed_max_lease_concurrency"] == 2
+    assert observed["reverify_without_box"] == {"browser-auth": "pass", "publish-down": "fail"}
     assert observed["atlas_states"] == {
         "browser-auth": "proven",
         "linux-x86_64-hf-emulator": "unbound",
