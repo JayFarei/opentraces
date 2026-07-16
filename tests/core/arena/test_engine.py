@@ -19,6 +19,7 @@ from opentraces.core.arena.labels import read_labels
 from opentraces.core.arena.origin import attach_explicit_bench_labels
 from opentraces.core.arena.page import render_evidence_page
 from opentraces.core.arena.run_store import RunStore
+from opentraces.core.arena.verifier_identity import callable_identity
 from tests.core.arena.fixtures.verifier_helper import assert_healthy_payload
 from tests.core.arena.test_origin_join import PROJECT_SLUG, _origin_record, _write_trace
 
@@ -320,6 +321,17 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
     assert not any(token in external_source.lower() for token in ("/users/", "/home/", "jayfarei"))
     assert (run.final_path / "actions" / "0001" / "stdout").read_text() == '{"healthy":true}\n'
     assert runtime.released is True
+
+
+def test_verifier_identity_prefers_the_full_package_over_a_nested_sys_path_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(repository / "tests"))
+
+    name, _digest = callable_identity(verify_doctor_is_healthy)
+
+    assert name == "tests.core.arena.test_engine.verify_doctor_is_healthy"
 
 
 def test_local_verifier_is_rejected_before_invocation_and_cannot_finalize_pass(
