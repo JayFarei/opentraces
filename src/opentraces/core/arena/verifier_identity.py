@@ -1,11 +1,18 @@
-"""Canonical, importable identity for stored bench verifiers."""
+"""Canonical, importable identity for stored bench verifiers.
+
+Candidates rank by deepest contiguous real-package ancestry, then dotted-path
+length.  Different-depth names for the same source therefore prefer the deeper
+package, while equal-specificity aliases are ambiguous.  The selected name must
+also resolve to only that source across filesystem ``sys.path`` roots; an
+earlier shadow or any distinct origin fails closed.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import importlib
-import importlib.util
 import inspect
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,45 +35,143 @@ class ResolvedVerifier:
     digest: str
 
 
+def _sys_path_roots() -> list[Path]:
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    for raw_root in sys.path:
+        root = Path(raw_root or Path.cwd()).absolute()
+        if root in seen:
+            continue
+        seen.add(root)
+        roots.append(root)
+    return roots
+
+
+def _candidate_from_relative(
+    root: Path,
+    relative: Path,
+    source: Path,
+) -> tuple[str, tuple[int, int]] | None:
+    if relative.suffix != ".py":
+        return None
+    parts = list(relative.with_suffix("").parts)
+    is_package = parts[-1] == "__init__"
+    if is_package:
+        parts.pop()
+    if not parts or any(not part.isidentifier() for part in parts):
+        return None
+    try:
+        if (root / relative).resolve() != source:
+            return None
+    except OSError:
+        return None
+
+    package_depth = 0
+    package_path = root
+    package_parts = parts if is_package else parts[:-1]
+    if not package_parts or not (root / package_parts[0] / "__init__.py").is_file():
+        return None
+    for part in package_parts:
+        package_path /= part
+        if not (package_path / "__init__.py").is_file():
+            break
+        package_depth += 1
+    return ".".join(parts), (package_depth, len(parts))
+
+
+def _source_candidates_for_root(
+    root: Path,
+    source: Path,
+) -> list[tuple[str, tuple[int, int]]]:
+    candidates: list[tuple[str, tuple[int, int]]] = []
+    direct_first: str | None = None
+    try:
+        relative = source.relative_to(root.resolve())
+    except (OSError, ValueError):
+        relative = None
+    if relative is not None:
+        direct_first = relative.parts[0]
+        candidate = _candidate_from_relative(root, relative, source)
+        if candidate is not None:
+            candidates.append(candidate)
+
+    # Preserve first-level symlink spellings instead of deriving names only from
+    # the real path.  Non-symlink entries cannot add an alias beyond the direct
+    # first component, so they are skipped to keep site-packages scans cheap.
+    try:
+        entries = os.scandir(root)
+    except OSError:
+        return candidates
+    with entries:
+        for entry in entries:
+            if entry.name != direct_first and not entry.is_symlink():
+                continue
+            if not entry.name.isidentifier():
+                continue
+            package_path = Path(entry.path)
+            if not (package_path / "__init__.py").is_file():
+                continue
+            try:
+                alias_relative = source.relative_to(package_path.resolve())
+            except (OSError, ValueError):
+                continue
+            candidate = _candidate_from_relative(
+                root,
+                Path(entry.name) / alias_relative,
+                source,
+            )
+            if candidate is not None:
+                candidates.append(candidate)
+    return candidates
+
+
+def _coordinate_origins(candidate: str) -> list[Path]:
+    """Inventory real-file origins for a dotted coordinate without importing."""
+
+    parts = candidate.split(".")
+    origins: list[Path] = []
+    for root in _sys_path_roots():
+        package_path = root
+        for index, part in enumerate(parts[:-1]):
+            package_path /= part
+            if not package_path.is_dir() or (
+                index == 0 and not (package_path / "__init__.py").is_file()
+            ):
+                break
+        else:
+            leaf = parts[-1]
+            # FileFinder checks a regular package before a same-named module.
+            possible_origins = (
+                package_path / leaf / "__init__.py",
+                package_path / f"{leaf}.py",
+            )
+            for possible_origin in possible_origins:
+                if not possible_origin.is_file():
+                    continue
+                try:
+                    origins.append(possible_origin.resolve())
+                except OSError:
+                    continue
+    return origins
+
+
+def _require_unambiguous_coordinate(candidate: str, source: Path) -> None:
+    origins = _coordinate_origins(candidate)
+    distinct_origins = set(origins)
+    if not origins or origins[0] != source or distinct_origins != {source}:
+        raise VerifierIdentityError(
+            "verifier module coordinate is shadowed by a distinct source"
+        )
+
+
 def _canonical_module_from_source(source: Path) -> str | None:
     candidates: dict[str, tuple[int, int]] = {}
-    for raw_root in sys.path:
-        root = Path(raw_root or Path.cwd()).resolve()
-        try:
-            relative = source.relative_to(root)
-        except ValueError:
-            continue
-        if relative.suffix != ".py":
-            continue
-        parts = list(relative.with_suffix("").parts)
-        is_package = parts[-1] == "__init__"
-        if is_package:
-            parts.pop()
-        if not parts or any(not part.isidentifier() for part in parts):
-            continue
-        if not (root / parts[0] / "__init__.py").is_file():
-            continue
-        candidate = ".".join(parts)
-        try:
-            spec = importlib.util.find_spec(candidate)
-        except (ImportError, ModuleNotFoundError, ValueError):
-            continue
-        if spec is None or spec.origin is None:
-            continue
-        try:
-            origin = Path(spec.origin).resolve()
-        except OSError:
-            continue
-        if origin == source:
-            package_depth = 0
-            package_path = root
-            for part in parts if is_package else parts[:-1]:
-                package_path /= part
-                if not (package_path / "__init__.py").is_file():
-                    break
-                package_depth += 1
-            specificity = (package_depth, len(parts))
-            candidates[candidate] = max(candidates.get(candidate, specificity), specificity)
+    for root in _sys_path_roots():
+        for candidate, specificity in _source_candidates_for_root(root, source):
+            candidates[candidate] = max(
+                candidates.get(candidate, specificity),
+                specificity,
+            )
     if not candidates:
         return None
     highest_specificity = max(candidates.values())
@@ -77,7 +182,9 @@ def _canonical_module_from_source(source: Path) -> str | None:
     )
     if len(preferred) > 1:
         raise VerifierIdentityError("verifier source has multiple canonical import paths")
-    return preferred[0]
+    candidate = preferred[0]
+    _require_unambiguous_coordinate(candidate, source)
+    return candidate
 
 
 def resolve_verifier(verifier: Callable[..., Any]) -> ResolvedVerifier:
