@@ -64,6 +64,43 @@ class CompletingHarnessSession:
         return recording_path.is_file() and recording_path.stat().st_size > 0
 
 
+class EchoingCredentialHarnessSession(CompletingHarnessSession):
+    """Model a live harness that writes its process-only credential by mistake."""
+
+    def __init__(self, sentinel: str) -> None:
+        super().__init__()
+        self.sentinel = sentinel
+
+    def start(
+        self,
+        argv: list[str],
+        *,
+        recording_path: Path,
+        cols: int,
+        rows: int,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        super().start(
+            argv,
+            recording_path=recording_path,
+            cols=cols,
+            rows=rows,
+            env=env,
+        )
+        (recording_path.parent / "credential-link").symlink_to(self.sentinel)
+
+    def observe(self) -> AgentTerminalObservation:
+        return AgentTerminalObservation(
+            state="running",
+            screen=(
+                "OPENTRACES_HARNESS_VERSION=2.1.210\n"
+                f"{self.sentinel}\n"
+                "OPENTRACES_AGENT_ATTEMPT_COMPLETE"
+            ),
+            logs="",
+        )
+
+
 def _closed_mcp_config(argv: list[str]) -> dict[str, object]:
     remote = argv[argv.index("--") + 1 :]
     assert "--strict-mcp-config" in remote
@@ -788,6 +825,44 @@ def test_oauth_only_live_agent_reaches_harness_process(
 
     assert session.started_env == {"CLAUDE_CODE_OAUTH_TOKEN": sentinel}
     assert run.result["verdict"] == "pass"
+
+
+def test_oauth_leak_fails_without_persisting_secret_bytes_or_symlink_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "oauth-bench-leak-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = EchoingCredentialHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert run.result["verdict"] == "fail"
+    assert run.result["reason"] == {
+        "code": "live_key_stored",
+        "message": "the live inference key appeared in stored run evidence",
+    }
+    custody = json.loads(
+        (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
+    )
+    assert custody["absent"] is False
+    assert custody["matches"] == [
+        "actions/0001/transcript.txt",
+        "recordings/credential-link [symlink not frozen]",
+    ]
+    for stored_path in run.final_path.rglob("*"):
+        assert not stored_path.is_symlink(), stored_path
+        if stored_path.is_file():
+            assert sentinel.encode() not in stored_path.read_bytes(), stored_path
 
 
 def test_oauth_precedes_api_key_without_freezing_either_live_credential(
