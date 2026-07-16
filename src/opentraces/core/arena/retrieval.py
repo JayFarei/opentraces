@@ -17,7 +17,7 @@ from typing import Any
 from .diagnostics import sanitize_reason
 from .page import render_evidence_page
 from .run_store import RunIntegrityError, RunStore
-from .verifier_identity import callable_identity
+from .verifier_identity import ResolvedVerifier, resolve_verifier
 
 
 REVERIFICATION_SCHEMA_VERSION = "opentraces.bench.reverification.v0"
@@ -140,9 +140,9 @@ def rerender_stored_run(
     return render_evidence_page(run_path, output_path)
 
 
-def _callable_identity(verifier: Callable[[StoredEvidence], object]) -> tuple[str, str]:
+def _resolved_verifier(verifier: Callable[[StoredEvidence], object]) -> ResolvedVerifier:
     try:
-        return callable_identity(verifier)
+        return resolve_verifier(verifier)
     except (OSError, TypeError, ValueError) as exc:
         raise StoredVerifierMismatch("cannot resolve the requested verifier identity") from exc
 
@@ -200,10 +200,10 @@ def reverify_stored_run(
     result = _read_result(run_path)
     target = _canonical_verifier(verifier)
     _stored_verifier(result, name=verifier_name, digest=verifier_digest)
-    actual_name, actual_digest = _callable_identity(target)
-    if actual_name != verifier_name:
+    resolved = _resolved_verifier(target)
+    if resolved.name != verifier_name:
         raise StoredVerifierMismatch("requested verifier name differs from the callable identity")
-    if actual_digest != verifier_digest:
+    if resolved.digest != verifier_digest:
         raise StoredVerifierMismatch(
             "requested verifier source digest differs from the callable source"
         )
@@ -218,7 +218,7 @@ def reverify_stored_run(
         return [evidence.validate_ref(ref) for ref in raw_refs]
 
     try:
-        returned = target(evidence)
+        returned = resolved.target(evidence)
         if isinstance(returned, Mapping):
             evidence_refs = validated_refs(returned.get("evidence_refs", []))
         status = "pass"

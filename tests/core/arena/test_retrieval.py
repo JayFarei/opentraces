@@ -263,3 +263,30 @@ def test_reverify_rejects_a_forged_wrapper_before_invocation(tmp_path: Path) -> 
         )
 
     assert invoked is False
+
+
+def test_reverify_invokes_canonical_callable_not_a_borrowed_identity(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    finalized = _finalized(store, healthy=False)
+    invoked = False
+
+    def forged_verifier(_evidence):
+        nonlocal invoked
+        invoked = True
+        return {"evidence_refs": []}
+
+    assert forged_verifier.__code__.co_filename == stored_artifact_verifier.__code__.co_filename
+    forged_verifier.__module__ = stored_artifact_verifier.__module__
+    forged_verifier.__qualname__ = stored_artifact_verifier.__qualname__
+
+    result = reverify_stored_run(
+        store,
+        finalized.name,
+        verifier_name=_verifier_name(),
+        verifier_digest=_source_digest(),
+        verifier=forged_verifier,
+    )
+
+    assert invoked is False
+    assert result["status"] == "fail"
+    assert result["reason"]["code"] == "assertion_failed"

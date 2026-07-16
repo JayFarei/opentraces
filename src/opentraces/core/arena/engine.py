@@ -28,7 +28,7 @@ from .emulate.huggingface.runtime import (
     start_huggingface_emulator,
 )
 from .run_store import RunDraft, RunStore
-from .verifier_identity import callable_identity
+from .verifier_identity import resolve_verifier
 
 
 def _utc_now() -> str:
@@ -381,14 +381,14 @@ class BenchRun:
     def verify(self, verifier: Callable[..., Any], /, **inputs: Any) -> dict[str, Any]:
         if self.draft is None:
             raise RuntimeError("BenchRun is not active")
-        verifier_name, _verifier_digest = callable_identity(verifier)
+        resolved = resolve_verifier(verifier)
         started = time.monotonic()
-        source_refs = self._verifier_source_refs(verifier)
+        source_refs = self._verifier_source_refs(resolved.target)
         source_ref = source_refs[0]
         reason: dict[str, str] | None = None
         evidence_refs: list[str] = []
         try:
-            returned = verifier(self, **inputs)
+            returned = resolved.target(self, **inputs)
             if isinstance(returned, Mapping):
                 evidence_refs = [
                     self._persisted_evidence_ref(item) for item in returned.get("evidence_refs", [])
@@ -422,7 +422,7 @@ class BenchRun:
             status = "error"
             reason = sanitize_reason("verifier_error", f"{type(exc).__name__}: {exc}")
         record = {
-            "name": verifier_name,
+            "name": resolved.name,
             "source_ref": source_ref,
             "status": status,
             "duration_ms": max(0, int((time.monotonic() - started) * 1000)),

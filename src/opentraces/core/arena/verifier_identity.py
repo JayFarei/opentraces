@@ -8,6 +8,7 @@ import importlib.util
 import inspect
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,15 @@ class VerifierIdentityError(ValueError):
     """A verifier cannot be named and imported for stored-only replay."""
 
     code = "verifier_identity_invalid"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedVerifier:
+    """Canonical imported callable and the identity bound to its source bytes."""
+
+    target: Callable[..., Any]
+    name: str
+    digest: str
 
 
 def _canonical_module_from_source(source: Path) -> str | None:
@@ -53,8 +63,8 @@ def _canonical_module_from_source(source: Path) -> str | None:
     return next(iter(candidates), None)
 
 
-def callable_identity(verifier: Callable[..., Any]) -> tuple[str, str]:
-    """Return the stable import coordinate and exact source digest for a callable."""
+def resolve_verifier(verifier: Callable[..., Any]) -> ResolvedVerifier:
+    """Resolve untrusted callable metadata to the canonical imported callable."""
 
     source_value = inspect.getsourcefile(verifier)
     if source_value is None:
@@ -80,13 +90,22 @@ def callable_identity(verifier: Callable[..., Any]) -> tuple[str, str]:
             Path(target_source_value).resolve() if target_source_value is not None else None
         )
     except (AttributeError, ImportError, ModuleNotFoundError, OSError, TypeError) as exc:
-        raise VerifierIdentityError(
-            "verifier must be an importable module-level callable"
-        ) from exc
+        raise VerifierIdentityError("verifier must be an importable module-level callable") from exc
     if not callable(target) or target_source != source:
         raise VerifierIdentityError("verifier must be an importable module-level callable")
     try:
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
     except OSError as exc:
         raise VerifierIdentityError("cannot read verifier source") from exc
-    return f"{module_name}.{qualname}", f"sha256:{digest}"
+    return ResolvedVerifier(
+        target=target,
+        name=f"{module_name}.{qualname}",
+        digest=f"sha256:{digest}",
+    )
+
+
+def callable_identity(verifier: Callable[..., Any]) -> tuple[str, str]:
+    """Return the stable import coordinate and exact source digest for a callable."""
+
+    resolved = resolve_verifier(verifier)
+    return resolved.name, resolved.digest
