@@ -6,6 +6,7 @@ import json
 import hashlib
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -247,11 +248,22 @@ class AgentTerminalDrive:
                     f"127.0.0.1:{remote_port}:127.0.0.1:{local_port}",
                 ]
             )
+        if self.box.workspace is None:
+            raise ValueError("agent box has no validated materialized workspace")
+        self.box.bind_workspace(self.box.workspace)
+        remote_argv = [
+            "/bin/sh",
+            "-c",
+            'cd -- "$1" && shift && exec "$@"',
+            "opentraces-agent-workspace",
+            self.box.workspace,
+            *harness_argv,
+        ]
         return [
             *argv,
             f"{self.box.ssh_user}@{self.box.ssh_host}",
             "--",
-            *harness_argv,
+            shlex.join(remote_argv),
         ]
 
     @staticmethod

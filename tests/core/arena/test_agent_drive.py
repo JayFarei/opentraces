@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import shlex
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
 
 import pytest
 
-from opentraces.core.arena.box import Box
+from opentraces.core.arena.box import Box, CrabboxRefusal
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.drives.actions import RunActionSequence
 from opentraces.core.arena.drives.agent import (
@@ -69,6 +71,8 @@ def _box() -> Box:
         ssh_port="2222",
         ssh_key="/keys/bench_ed25519",
         image="ubuntu:24.04",
+        work_root="/work/crabbox",
+        workspace="/work/crabbox/cbx_a6/opentraces",
     )
 
 
@@ -77,6 +81,40 @@ def _draft(tmp_path: Path):
     draft = store.begin()
     actions = RunActionSequence(draft=draft, run_started_monotonic=time.monotonic())
     return store, draft, actions
+
+
+def test_agent_drive_refuses_missing_or_uncontained_workspace(tmp_path: Path) -> None:
+    _store, draft, actions = _draft(tmp_path)
+    for box, error in (
+        (replace(_box(), workspace=None), ValueError),
+        (
+            replace(_box(), workspace="/work/crabbox/cbx_a6/../escape"),
+            CrabboxRefusal,
+        ),
+    ):
+        drive = AgentTerminalDrive(box=box, draft=draft, actions=actions)
+        with pytest.raises(error):
+            drive._ssh_argv(["claude"], {}, ())
+
+
+def test_agent_drive_shell_quotes_every_remote_argument(tmp_path: Path) -> None:
+    _store, draft, actions = _draft(tmp_path)
+    drive = AgentTerminalDrive(box=_box(), draft=draft, actions=actions)
+
+    argv = drive._ssh_argv(["claude", "$(touch /tmp/forged)", "semi;colon", "space value"], {}, ())
+
+    remote = argv[argv.index("--") + 1]
+    assert shlex.split(remote) == [
+        "/bin/sh",
+        "-c",
+        'cd -- "$1" && shift && exec "$@"',
+        "opentraces-agent-workspace",
+        "/work/crabbox/cbx_a6/opentraces",
+        "claude",
+        "$(touch /tmp/forged)",
+        "semi;colon",
+        "space value",
+    ]
 
 
 def test_forced_agent_disconnect_is_one_bounded_named_failure_in_a_verifiable_run(
@@ -205,7 +243,11 @@ def test_agent_drive_uses_box_ssh_facts_and_only_local_polls(tmp_path: Path) -> 
     assert session.started_env == {"ANTHROPIC_API_KEY": "live-secret"}
     assert "SendEnv=ANTHROPIC_API_KEY" in session.started_argv
     remote = session.started_argv[session.started_argv.index("--") + 1 :]
-    assert remote == ["claude", "--permission-mode", "acceptEdits"]
+    assert remote == [
+        '/bin/sh -c \'cd -- "$1" && shift && exec "$@"\' '
+        "opentraces-agent-workspace /work/crabbox/cbx_a6/opentraces "
+        "claude --permission-mode acceptEdits"
+    ]
     assert session.observe_count == 2
     assert session.start_count == 1
     invocation = (draft.path / result.invocation_ref).read_text(encoding="utf-8")

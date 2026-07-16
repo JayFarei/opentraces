@@ -81,7 +81,11 @@ def _inspect() -> str:
             "sshUser": "crabbox",
             "sshPort": "32222",
             "sshKey": "/tmp/key",
-            "labels": {"image": PINNED_LOCAL_IMAGE},
+            "labels": {
+                "image": PINNED_LOCAL_IMAGE,
+                "lease": "cbx_abc123",
+                "work_root": "/work/crabbox",
+            },
         }
     )
 
@@ -122,6 +126,7 @@ def test_lease_pins_version_image_tmpdir_and_runs_both_preflights(tmp_path: Path
     assert box.sandbox_tier == "container"
     assert box.provider == "local-container"
     assert box.image == PINNED_LOCAL_IMAGE
+    assert box.work_root == "/work/crabbox"
 
 
 def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primary_failure(
@@ -167,6 +172,13 @@ def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primar
     [
         ({"provider": "firecracker"}, "lease_provider_mismatch"),
         ({"labels": {"image": "ubuntu:26.04"}}, "lease_image_mismatch"),
+        ({"labels": {"lease": "cbx_other"}}, "lease_identity_mismatch"),
+        ({"labels": {"work_root": None}}, "lease_inspect_incomplete"),
+        ({"labels": {"work_root": "relative"}}, "lease_workspace_invalid"),
+        (
+            {"labels": {"work_root": "/work/crabbox/../escape"}},
+            "lease_workspace_invalid",
+        ),
     ],
 )
 def test_lease_refuses_requested_vs_observed_provider_or_image_mismatch(
@@ -176,6 +188,8 @@ def test_lease_refuses_requested_vs_observed_provider_or_image_mismatch(
 ) -> None:
     facts = json.loads(_inspect())
     facts.update(patch)
+    if "labels" in patch:
+        facts["labels"] = {**json.loads(_inspect())["labels"], **patch["labels"]}
     runner = ScriptedRunner(
         [
             _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
@@ -418,6 +432,11 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
         if operation == "inspect":
             return _completed(list(argv), stdout=_inspect())
         if operation == "run":
+            if "OPENTRACES_WORKSPACE=" in " ".join(argv):
+                return _completed(
+                    list(argv),
+                    stdout="OPENTRACES_WORKSPACE=/work/crabbox/cbx_abc123/opentraces\n",
+                )
             return _completed(
                 list(argv),
                 stdout="/usr/bin/python3\n/usr/bin/git\n/usr/bin/curl\n/usr/bin/script\n",
@@ -490,6 +509,7 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
         ssh_user="crabbox",
         ssh_port="22",
         ssh_key="/tmp/key",
+        work_root="/work/crabbox",
     )
 
     monkeypatch.setattr(
@@ -509,6 +529,8 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
         commands.append(command)
         if "importlib.metadata" in command:
             stdout = json.dumps(EXPECTED_INSTALL_LOCK)
+        elif "OPENTRACES_WORKSPACE=" in command:
+            stdout = "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
         else:
             stdout = "/usr/bin/opentraces\n/usr/bin/script\n"
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
@@ -547,6 +569,7 @@ def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
         ssh_user="crabbox",
         ssh_port="22",
         ssh_key="/tmp/key",
+        work_root="/work/crabbox",
     )
     monkeypatch.setattr(
         runtime,
@@ -566,7 +589,11 @@ def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
         stdout = (
             json.dumps(EXPECTED_INSTALL_LOCK)
             if "importlib.metadata" in command
-            else "/usr/bin/opentraces\n/usr/bin/script\n"
+            else (
+                "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
+                if "OPENTRACES_WORKSPACE=" in command
+                else "/usr/bin/opentraces\n/usr/bin/script\n"
+            )
         )
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 

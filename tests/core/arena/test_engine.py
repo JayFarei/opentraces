@@ -39,6 +39,8 @@ class FakeBoxRuntime:
             ssh_port="22",
             ssh_key="/tmp/fake",
             image="ubuntu:24.04",
+            work_root="/work/crabbox",
+            workspace="/work/crabbox/fake-1/opentraces",
         )
 
     def materialize(self, box: Box, app_state: str, *, repository: Path) -> dict:

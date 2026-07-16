@@ -13,7 +13,7 @@ import subprocess
 import tarfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value, sanitize_reason
@@ -88,6 +88,39 @@ class Box:
     ssh_port: str
     ssh_key: str
     image: str | None = None
+    work_root: str | None = None
+    workspace: str | None = None
+
+    def bind_workspace(self, observed: str) -> None:
+        """Bind the one materialized workspace proven by this lease."""
+
+        if self.work_root is None:
+            raise CrabboxRefusal("workspace_coordinate_missing", "lease has no work root")
+        work_root = PurePosixPath(self.work_root)
+        if (
+            not work_root.is_absolute()
+            or self.work_root == "/"
+            or str(work_root) != self.work_root
+            or ".." in work_root.parts
+        ):
+            raise CrabboxRefusal("workspace_coordinate_invalid", "lease work root is not canonical")
+        workspace = PurePosixPath(observed)
+        expected_parent = work_root / self.id
+        if (
+            not workspace.is_absolute()
+            or str(workspace) != observed
+            or workspace.parent != expected_parent
+            or workspace.name in {"", ".", ".."}
+        ):
+            raise CrabboxRefusal(
+                "workspace_coordinate_invalid",
+                "materialized workspace is outside the inspected lease work root",
+            )
+        if self.workspace is not None and self.workspace != observed:
+            raise CrabboxRefusal(
+                "workspace_coordinate_changed", "materialized workspace changed during the lease"
+            )
+        object.__setattr__(self, "workspace", observed)
 
 
 @dataclass(frozen=True)
@@ -442,8 +475,28 @@ class CrabboxRuntime:
                     "lease_inspect_incomplete", "inspect omitted required lease facts"
                 )
             labels = facts.get("labels")
-            if not isinstance(labels, Mapping) or not labels.get("image"):
-                raise CrabboxRefusal("lease_inspect_incomplete", "inspect omitted labels.image")
+            if not isinstance(labels, Mapping) or any(
+                not labels.get(name) for name in ("image", "lease", "work_root")
+            ):
+                raise CrabboxRefusal(
+                    "lease_inspect_incomplete",
+                    "inspect omitted labels.image, labels.lease, or labels.work_root",
+                )
+            if str(facts["id"]) != lease_id or str(labels["lease"]) != lease_id:
+                raise CrabboxRefusal(
+                    "lease_identity_mismatch", "inspect identity does not match the warm lease"
+                )
+            work_root = str(labels["work_root"])
+            work_root_path = PurePosixPath(work_root)
+            if (
+                not work_root_path.is_absolute()
+                or work_root == "/"
+                or str(work_root_path) != work_root
+                or ".." in work_root_path.parts
+            ):
+                raise CrabboxRefusal(
+                    "lease_workspace_invalid", "inspect labels.work_root is not canonical"
+                )
             observed_provider = str(facts["provider"])
             observed_image = str(labels["image"])
             if observed_provider != self.provider:
@@ -466,6 +519,7 @@ class CrabboxRuntime:
                 ssh_port=str(facts["sshPort"]),
                 ssh_key=str(facts["sshKey"]),
                 image=observed_image,
+                work_root=work_root,
             )
             ssh_probe = self._call(
                 [
@@ -619,7 +673,8 @@ class CrabboxRuntime:
                 "sudo sshd -t; "
                 "if test -r /run/sshd.pid; then "
                 "sudo kill -HUP \"$(cat /run/sshd.pid)\"; "
-                "else sudo pkill -HUP -x sshd || true; fi",
+                "else sudo pkill -HUP -x sshd || true; fi; "
+                "printf 'OPENTRACES_WORKSPACE=%s\\n' \"$(pwd -P)\"",
             ],
             cwd=repository,
             timeout=30,
@@ -630,6 +685,17 @@ class CrabboxRuntime:
                 "product_identity_invalid",
                 "the dedicated product identity is missing, non-writable, or sudo-capable",
             )
+        workspace_lines = [
+            line.removeprefix("OPENTRACES_WORKSPACE=")
+            for line in prepared.stdout.splitlines()
+            if line.startswith("OPENTRACES_WORKSPACE=")
+        ]
+        if len(workspace_lines) != 1:
+            raise CrabboxRefusal(
+                "workspace_coordinate_missing",
+                "product identity preparation did not report one workspace",
+            )
+        box.bind_workspace(workspace_lines[0])
         return self._evidence_ref(timing)
 
     def open_port_forward(self, box: Box, remote_port: int) -> LocalPortForward:

@@ -118,7 +118,7 @@ def verify() -> None:
             if result.status != "pass":
                 raise AssertionError(
                     "the direct SSH/PTTY agent drive did not enter the materialized workspace: "
-                    f"{result.reason}"
+                    f"{result.reason}; transcript={transcript!r}"
                 )
 
             collected = runtime.collect(

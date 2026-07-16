@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shlex
 import socket
 import stat
 import threading
@@ -164,8 +165,22 @@ class SpecialNodeHarnessSession(CompletingHarnessSession):
         super().stop()
 
 
+def _harness_argv(argv: list[str]) -> list[str]:
+    serialized = argv[argv.index("--") + 1 :]
+    assert len(serialized) == 1
+    remote = shlex.split(serialized[0])
+    assert remote[:5] == [
+        "/bin/sh",
+        "-c",
+        'cd -- "$1" && shift && exec "$@"',
+        "opentraces-agent-workspace",
+        "/work/crabbox/fake-1/opentraces",
+    ]
+    return remote[5:]
+
+
 def _closed_mcp_config(argv: list[str]) -> dict[str, object]:
-    remote = argv[argv.index("--") + 1 :]
+    remote = _harness_argv(argv)
     assert "--strict-mcp-config" in remote
     assert "--mcp-config" in remote
     marker = remote.index("opentraces-agent")
@@ -319,9 +334,7 @@ class InterruptedCaptureRuntime(FakeBoxRuntime):
                             "status": "unavailable",
                             "completeness": "missing",
                             "evidence_refs": ["finalizers/git.report.json"],
-                            "limitations": [
-                                "source process exited after explicit interruption"
-                            ],
+                            "limitations": ["source process exited after explicit interruption"],
                             "duration_ms": 1,
                             "details": {},
                         }
@@ -526,7 +539,7 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
 
     assert session.start_count == 1
     assert session.started_argv is not None
-    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    remote = _harness_argv(session.started_argv)
     assert "/usr/bin/sudo" in remote
     sudo = remote.index("/usr/bin/sudo")
     assert remote[sudo : sudo + 7] == [
@@ -839,7 +852,7 @@ def test_live_key_reaches_agent_process_but_no_finalized_run_bytes(
     assert session.started_env == {"ANTHROPIC_API_KEY": sentinel}
     assert session.started_argv is not None
     assert "SendEnv=ANTHROPIC_API_KEY" in session.started_argv
-    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    remote = _harness_argv(session.started_argv)
     assert "--preserve-env=ANTHROPIC_API_KEY" in remote
     assert not any(sentinel in argument for argument in session.started_argv)
     custody = json.loads(
@@ -987,9 +1000,7 @@ def test_live_agent_special_evidence_node_is_classified_and_quarantined(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv(
-        "CLAUDE_CODE_OAUTH_TOKEN", "oauth-special-node-not-a-real-credential"
-    )
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-special-node-not-a-real-credential")
     session = SpecialNodeHarnessSession()
     bench = _bench(tmp_path, session)
 
@@ -1008,12 +1019,9 @@ def test_live_agent_special_evidence_node_is_classified_and_quarantined(
     custody = json.loads(
         (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
     )
-    assert custody["matches"] == [
-        "recordings/credential-socket [special node not frozen]"
-    ]
+    assert custody["matches"] == ["recordings/credential-socket [special node not frozen]"]
     assert not any(
-        stat.S_ISSOCK(stored_path.lstat().st_mode)
-        for stored_path in run.final_path.rglob("*")
+        stat.S_ISSOCK(stored_path.lstat().st_mode) for stored_path in run.final_path.rglob("*")
     )
 
 
@@ -1041,9 +1049,11 @@ def test_oauth_precedes_api_key_without_freezing_either_live_credential(
     assert session.started_argv is not None
     assert "SendEnv=CLAUDE_CODE_OAUTH_TOKEN" in session.started_argv
     assert "SendEnv=ANTHROPIC_API_KEY" not in session.started_argv
-    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    remote = _harness_argv(session.started_argv)
     assert "--preserve-env=CLAUDE_CODE_OAUTH_TOKEN" in remote
-    assert not any(value in argument for value in (oauth, api_key) for argument in session.started_argv)
+    assert not any(
+        value in argument for value in (oauth, api_key) for argument in session.started_argv
+    )
 
     custody = json.loads(
         (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
@@ -1079,9 +1089,7 @@ def test_missing_live_key_is_a_named_skip_before_agent_action(
     assert run.result["verdict"] == "skip"
     assert run.result["reason"] == {
         "code": "anthropic_credential_missing",
-        "message": (
-            "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY is required for agent_live"
-        ),
+        "message": ("CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY is required for agent_live"),
     }
     assert run.result["evidence"] == {
         "complete": False,
@@ -1149,7 +1157,7 @@ def test_required_capture_wraps_the_real_claude_child_with_exact_session_id(
         run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
 
     assert session.started_argv is not None
-    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    remote = _harness_argv(session.started_argv)
     sudo = remote.index("/usr/bin/sudo")
     product_command = remote[remote.index("--", sudo) + 1 :]
     assert attempt.capture_session_id is not None
@@ -1209,8 +1217,7 @@ def test_semantic_capture_requirements_grade_each_source_independently(
 
     assert run.result["verdict"] == "pass"
     requirements = {
-        requirement["name"]: requirement
-        for requirement in run.result["evidence"]["requirements"]
+        requirement["name"]: requirement for requirement in run.result["evidence"]["requirements"]
     }
     assert requirements["capture.trace"] == {
         "name": "capture.trace",
@@ -1226,7 +1233,7 @@ def test_semantic_capture_requirements_grade_each_source_independently(
         "evidence_refs": ["capture/capture_result.json"],
     }
     assert session.started_argv is not None
-    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    remote = _harness_argv(session.started_argv)
     assert "trace" not in remote
     assert "context" not in remote
     assert "trail" not in remote
@@ -1401,7 +1408,7 @@ def test_agent_receives_only_product_facing_emulator_environment(
         "HF_TOKEN": "product-credential",
     }
     assert not any("product-credential" in argument for argument in session.started_argv)
-    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    remote = _harness_argv(session.started_argv)
     assert remote[0] == "/usr/bin/sudo"
     assert "--preserve-env=ANTHROPIC_API_KEY,HF_ENDPOINT,HF_TOKEN" in remote
     invocation = (draft.path / "actions/0001/invocation.json").read_text(encoding="utf-8")

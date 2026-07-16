@@ -19,3 +19,4 @@ git add a6-direct-pty-proof.txt
 git commit -m 'Prove direct PTY workspace' >/dev/null
 test "$(git show HEAD:a6-direct-pty-proof.txt)" = 'agent edit'
 printf '%s\n' A6_DIRECT_PTY_WORKSPACE_OK
+sleep 2
