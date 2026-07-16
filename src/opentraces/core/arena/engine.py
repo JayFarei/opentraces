@@ -16,7 +16,7 @@ from types import TracebackType
 from typing import Any, Callable, Literal, Mapping
 
 from ... import __version__
-from .agent import AgentDrive, AgentPrerequisiteMissing
+from .agent import CAPTURE_REQUIREMENT_SOURCES, AgentDrive, AgentPrerequisiteMissing
 from .box import Box, CrabboxRuntime
 from .contract import build_result, validate_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
@@ -570,17 +570,27 @@ class BenchRun:
             if isinstance(source, Mapping) and source.get("name")
         }
         missing_capture: list[str] = []
-        for source_name in self.capture_required:
+        trace_refs = (
+            self._capture_result.get("trace_refs", [])
+            if isinstance(self._capture_result, dict)
+            else []
+        )
+        for requirement_name in self.capture_required:
+            source_name = CAPTURE_REQUIREMENT_SOURCES.get(
+                requirement_name, requirement_name
+            )
             source = capture_by_name.get(source_name)
             complete = bool(
                 source
                 and source.get("status") == "finalized"
                 and source.get("completeness") == "full"
             )
+            if requirement_name in {"trace", "storage"}:
+                complete = complete and bool(trace_refs)
             refs = source.get("evidence_refs", []) if source else []
             evidence_requirements.append(
                 {
-                    "name": f"capture.{source_name}",
+                    "name": f"capture.{requirement_name}",
                     "complete": complete,
                     "evidence_refs": (
                         [
@@ -596,7 +606,23 @@ class BenchRun:
                 }
             )
             if not complete:
-                missing_capture.append(source_name)
+                missing_capture.append(requirement_name)
+        if self.capture_required:
+            lifecycle_complete = bool(
+                isinstance(self._capture_result, dict)
+                and self._capture_result.get("completeness") == "complete"
+            )
+            evidence_requirements.append(
+                {
+                    "name": "capture.lifecycle",
+                    "complete": lifecycle_complete,
+                    "evidence_refs": (
+                        ["capture/capture_result.json"]
+                        if isinstance(self._capture_result, dict)
+                        else []
+                    ),
+                }
+            )
         if missing_capture and execution_status == "complete" and verdict == "pass":
             verdict = "fail"
             reason = {

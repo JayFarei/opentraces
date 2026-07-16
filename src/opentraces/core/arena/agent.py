@@ -43,6 +43,12 @@ _CONTROLLER_ENV = frozenset(
         "OT_BENCH_CAPTURE_INTERRUPT_SOURCE",
     }
 )
+CAPTURE_REQUIREMENT_SOURCES = {
+    "trace": "session_jsonl",
+    "context": "telemetry",
+    "trail": "git",
+    "storage": "bucket",
+}
 
 
 @dataclass(frozen=True)
@@ -121,6 +127,12 @@ class AgentDrive:
         self.replay_inference = replay_inference
         self.live_environment = live_environment or (lambda: os.environ)
         self.capture_required = tuple(capture_required)
+        self.capture_sources = tuple(
+            dict.fromkeys(
+                CAPTURE_REQUIREMENT_SOURCES.get(requirement, requirement)
+                for requirement in self.capture_required
+            )
+        )
         self.session_factory = session_factory
         self.poll_interval = poll_interval
         self._attempted = False
@@ -321,17 +333,18 @@ class AgentDrive:
         self._sensitive_environment = (
             dict(inference_environment) if self.execution_mode == "agent_live" else {}
         )
-        capture_session_id = str(uuid.uuid4()) if self.capture_required else None
+        capture_session_id = str(uuid.uuid4()) if self.capture_sources else None
         capture_glob = (
             f".opentraces/bench-capture/{capture_session_id}/**/*"
             if capture_session_id is not None
             else None
         )
         capture_interrupt_source = os.environ.get("OT_BENCH_CAPTURE_INTERRUPT_SOURCE")
-        if (
-            capture_interrupt_source is not None
-            and capture_interrupt_source not in self.capture_required
-        ):
+        if capture_interrupt_source is not None:
+            capture_interrupt_source = CAPTURE_REQUIREMENT_SOURCES.get(
+                capture_interrupt_source, capture_interrupt_source
+            )
+        if capture_interrupt_source is not None and capture_interrupt_source not in self.capture_sources:
             raise ValueError(
                 "OT_BENCH_CAPTURE_INTERRUPT_SOURCE must name a required capture source"
             )
@@ -351,7 +364,7 @@ class AgentDrive:
             grants,
             environment,
             mcp_config,
-            capture_required=self.capture_required,
+            capture_required=self.capture_sources,
             capture_session_id=capture_session_id,
             capture_interrupt_source=capture_interrupt_source,
         )
@@ -426,7 +439,7 @@ class AgentDrive:
             record["capture"] = {
                 "session_id": capture_session_id,
                 "artifact_glob": capture_glob,
-                "required_sources": list(self.capture_required),
+                "required_sources": list(self.capture_sources),
             }
         self.draft.write_json(ATTEMPT_ARTIFACT_REF, record)
         self._harness_pin = harness_pin
