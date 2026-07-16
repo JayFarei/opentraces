@@ -332,9 +332,6 @@ class AgentTerminalDrive:
                         state="disconnected", screen="", logs=latest
                     )
                 latest = self._combined_observation(observation)
-                if expected.search(latest):
-                    status = "pass"
-                    break
                 if observation.state == "disconnected":
                     reason = {
                         "code": "agent_drive_disconnected",
@@ -346,6 +343,9 @@ class AgentTerminalDrive:
                         "code": "agent_drive_exited_before_expectation",
                         "message": f"agent terminal exited before expectation during {action}",
                     }
+                    break
+                if expected.search(latest):
+                    status = "pass"
                     break
                 if time.monotonic() >= deadline:
                     reason = {
