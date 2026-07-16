@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from opentraces.core.arena.box import Box, BoxCommandResult
+from opentraces.core.capabilities import build_capabilities_manifest
 from opentraces.core.arena.contract import result_exit_code
 from opentraces.core.arena.emulate.huggingface.runtime import (
     EmulatorReadinessError,
@@ -50,6 +51,29 @@ _MANIFEST = {
         }
     ],
 }
+
+
+def _capabilities_payload() -> dict[str, object]:
+    paths = {
+        "auth.login",
+        "auth.whoami",
+        "capture-otlp.start",
+        "capture-otlp.status",
+        "capture-otlp.stop",
+        "dataset.publish",
+        "setup.capture-otlp",
+        "setup.claude-code",
+        "setup.codex-cli",
+        "setup.git",
+        "setup.pi",
+        "setup.watcher.install",
+    }
+    return build_capabilities_manifest(
+        verbs=({"path": path, "hidden": False} for path in sorted(paths)),
+        app_version="test",
+        trace_schema_version="test",
+        security_version="test",
+    )
 
 
 def _write_test_provenance(binary: Path) -> None:
@@ -253,6 +277,14 @@ class WorldRuntime:
     def exec_product(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         rendered = " ".join(map(str, argv))
         self.events.append("product-exec")
+        if list(argv) == ["opentraces", "capabilities", "--json"]:
+            return BoxCommandResult(
+                argv=list(map(str, argv)),
+                returncode=0,
+                stdout=json.dumps(_capabilities_payload()) + "\n",
+                stderr="",
+                timing={"schemaVersion": 1, "timing": {"exitCode": 0}},
+            )
         if "CUSTODY_PROBE" in rendered:
             self.events.append("product-custody-probe")
             return BoxCommandResult(
@@ -683,9 +715,7 @@ def test_harness_control_client_keeps_its_per_launch_bearer_out_of_product_env(
             "token": "hf_other",
             "type": "user",
         }
-        assert hf.seed(repos=[{"repo_id": "other/seeded"}]) == {
-            "repos_seeded": ["other/seeded"]
-        }
+        assert hf.seed(repos=[{"repo_id": "other/seeded"}]) == {"repos_seeded": ["other/seeded"]}
         assert hf.reset() == {"ok": True}
         assert set(hf.env) == {"HF_ENDPOINT", "HF_TOKEN"}
 
@@ -779,6 +809,6 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     assert result["evidence"]["requirements"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert runtime.events.count("start") == 1
     assert runtime.events.count("release") == 1
-    assert runtime.events.count("product-exec") == 6
+    assert runtime.events.count("product-exec") == 7
     assert runtime.stop_command is not None
     assert "kill -0" in runtime.stop_command
