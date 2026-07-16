@@ -618,7 +618,17 @@ def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
         "name": "claude",
         "executable": "/home/opentraces-product/.local/bin/claude",
         "version": "2.1.210",
+        "readiness": "claude-global-preferences-v1",
     }
+    readiness = next(
+        command
+        for command in product_commands
+        if "opentraces.core.arena.harness_readiness" in command
+    )
+    assert readiness == (
+        "python3 -m opentraces.core.arena.harness_readiness "
+        "--workspace /work/crabbox/box/repository --version 2.1.210"
+    )
 
 
 def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Path) -> None:

@@ -926,6 +926,7 @@ class CrabboxRuntime:
         identity_ref = self._prepare_product_identity(box, repository=repository)
         harness_install_ref: str | None = None
         harness_probe_ref: str | None = None
+        harness_readiness_ref: str | None = None
         harness_recipe: dict[str, str] | None = None
         if app_state == "agent-ready":
             harness_install_timing = self._timing_path(repository, "agent-harness-install")
@@ -962,13 +963,42 @@ class CrabboxRuntime:
                     f"expected Claude Code {CLAUDE_HARNESS_VERSION}, "
                     f"observed {observed_harness_version or 'unavailable'}",
                 )
+            if box.workspace is None:
+                raise CrabboxRefusal(
+                    "workspace_coordinate_missing",
+                    "agent-ready requires a validated materialized workspace",
+                )
+            harness_readiness_timing = self._timing_path(
+                repository, "agent-harness-readiness"
+            )
+            harness_readiness = self.exec_product(
+                box,
+                [
+                    "python3",
+                    "-m",
+                    "opentraces.core.arena.harness_readiness",
+                    "--workspace",
+                    box.workspace,
+                    "--version",
+                    CLAUDE_HARNESS_VERSION,
+                ],
+                timeout=30,
+                timing_path=harness_readiness_timing,
+            )
+            if harness_readiness.returncode != 0:
+                raise CrabboxRefusal(
+                    "agent_harness_preferences_invalid",
+                    "Claude Code readiness preferences could not be established",
+                )
             harness_recipe = {
                 "name": CLAUDE_HARNESS_NAME,
                 "executable": CLAUDE_HARNESS_EXECUTABLE,
                 "version": CLAUDE_HARNESS_VERSION,
+                "readiness": "claude-global-preferences-v1",
             }
             harness_install_ref = self._evidence_ref(harness_install_timing)
             harness_probe_ref = self._evidence_ref(harness_probe_timing)
+            harness_readiness_ref = self._evidence_ref(harness_readiness_timing)
         recipe = {
             "wheel_sha256": digests,
             "dependencies": expected_dependencies,
@@ -1000,6 +1030,7 @@ class CrabboxRuntime:
                 identity_ref,
                 harness_install_ref,
                 harness_probe_ref,
+                harness_readiness_ref,
             )
             if ref is not None
         ]
