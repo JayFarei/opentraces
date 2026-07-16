@@ -66,8 +66,10 @@ def verify_a7_acceptance(
     for row in raw_attempts:
         assert isinstance(row, Mapping)
         run_id = row.get("run_id")
-        run_path = Path(str(row.get("run_path") or "")).resolve(strict=True)
-        assert isinstance(run_id, str) and run_path == store.root.resolve() / run_id
+        assert isinstance(run_id, str)
+        assert row.get("run_ref") == f"runs/v1/{run_id}"
+        assert "run_path" not in row
+        run_path = (store.root / run_id).resolve(strict=True)
         attempt = FleetAttempt.from_run(run_path, store=store)
         assert attempt.run_id == run_id
         attempts.append(attempt)

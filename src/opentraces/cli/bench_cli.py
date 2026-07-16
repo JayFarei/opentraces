@@ -918,7 +918,7 @@ def bench_fleet(
         {
             "nodeid": attempt.nodeid,
             "run_id": attempt.run_id,
-            "run_path": str(attempt.run_path),
+            "run_ref": f"runs/v1/{attempt.run_id}",
             "verdict": attempt.verdict,
             "execution_status": attempt.execution_status,
             "provider": attempt.provider,
@@ -950,7 +950,7 @@ def bench_fleet(
             f"placement={fleet.placement.name}"
         )
         for row in attempts:
-            click.echo(f"{row['nodeid']} {row['verdict'] or 'error'} {row['run_path']}")
+            click.echo(f"{row['nodeid']} {row['verdict'] or 'error'} {row['run_ref']}")
     if summary["status"] == "error":
         raise click.exceptions.Exit(2)
     if summary["status"] == "failed":
