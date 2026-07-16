@@ -1008,10 +1008,20 @@ def test_missing_live_key_is_a_named_skip_before_agent_action(
     assert run.result["execution_status"] == "complete"
     assert run.result["verdict"] == "skip"
     assert run.result["reason"] == {
-        "code": "anthropic_api_key_missing",
+        "code": "anthropic_credential_missing",
         "message": (
             "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY is required for agent_live"
         ),
+    }
+    assert run.result["evidence"] == {
+        "complete": False,
+        "requirements": [
+            {
+                "name": "anthropic_credential_missing",
+                "complete": False,
+                "evidence_refs": [],
+            }
+        ],
     }
     assert session.start_count == 0
     assert not (run.final_path / "actions/0001").exists()
