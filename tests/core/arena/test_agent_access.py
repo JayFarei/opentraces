@@ -192,6 +192,55 @@ class StaleMarkerTerminalStateHarnessSession(CompletingHarnessSession):
         )
 
 
+class InterruptedCaptureRuntime(FakeBoxRuntime):
+    def collect(self, box, globs, *, destination, repository):
+        assert len(globs) == 1
+        capture_root = destination / "files" / ".opentraces" / "bench-capture"
+        capture_root.mkdir(parents=True)
+        report = capture_root / "finalizers" / "git.report.json"
+        report.parent.mkdir()
+        report.write_text('{"interrupted":true}\n', encoding="utf-8")
+        result_path = capture_root / "capture_result.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "opentraces.capture.result.v1",
+                    "module_version": "0.4.8",
+                    "placement": "leased",
+                    "completeness": "partial",
+                    "observer_version": "0.4.8",
+                    "product_under_test_version": "0.4.8",
+                    "sources": [
+                        {
+                            "name": "git",
+                            "view": "world_effects",
+                            "requested": True,
+                            "required": True,
+                            "status": "unavailable",
+                            "completeness": "missing",
+                            "evidence_refs": ["finalizers/git.report.json"],
+                            "limitations": [
+                                "source process exited after explicit interruption"
+                            ],
+                            "duration_ms": 1,
+                            "details": {},
+                        }
+                    ],
+                    "views": [],
+                    "limitations": ["git: source process exited after explicit interruption"],
+                    "trace_refs": [],
+                    "security": {},
+                    "result_path": ".opentraces/bench-capture/capture_result.json",
+                    "provenance": {},
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return {"capture_result.json": result_path, "git.report.json": report}
+
+
 def _bench(tmp_path: Path, session: CompletingHarnessSession) -> Bench:
     tmp_path.mkdir(parents=True, exist_ok=True)
     return Bench(
@@ -551,6 +600,51 @@ def test_stale_completion_marker_cannot_green_failed_agent_run(
         "complete": False,
         "evidence_refs": [attempt.artifact_ref],
     }
+
+
+def test_interrupted_required_capture_fails_even_when_agent_attempt_completes(
+    tmp_path: Path,
+) -> None:
+    session = CompletingHarnessSession()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "runs" / "v1"),
+        box_runtime=InterruptedCaptureRuntime(),
+        repository_path=tmp_path,
+        agent_session_factory=lambda _name: session,
+        agent_poll_interval=0,
+    )
+
+    with bench.run(
+        app_state="install-only",
+        execution_mode="agent_live",
+        capture_required=["git"],
+    ) as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make and commit the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert attempt.completed is True
+    assert run.result["execution_status"] == "complete"
+    assert run.result["verdict"] == "fail"
+    assert run.result["reason"] == {
+        "code": "required_capture_missing",
+        "message": "required capture evidence is unavailable: git",
+    }
+    assert run.result["capture"]["completeness"] == "partial"
+    assert run.result["capture"]["sources"][0]["limitations"] == [
+        "source process exited after explicit interruption"
+    ]
+    assert {
+        "name": "capture.git",
+        "complete": False,
+        "evidence_refs": ["capture/finalizers/git.report.json"],
+    } in run.result["evidence"]["requirements"]
+    assert (run.final_path / "capture/finalizers/git.report.json").is_file()
 
 
 def test_wrong_claude_version_is_a_named_failed_attempt(tmp_path: Path) -> None:
