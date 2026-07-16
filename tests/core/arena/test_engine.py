@@ -481,6 +481,45 @@ def test_release_failure_is_diagnostic_and_does_not_hide_a_passing_verdict(
     payload = json.loads((run.final_path / diagnostic["path"]).read_text())
     assert payload["events"][-1]["code"] == "release_failed"
     assert "release boom" in payload["events"][-1]["message"]
+    lease = json.loads((run.final_path / "artifacts/lease-lifecycle.json").read_text())
+    assert lease["id"] == "fake-1"
+    assert lease["provider"] == "local-container"
+    assert lease["acquired"]
+    assert lease["release_started"]
+    assert lease["released"] is None
+    assert lease["status"] == "release_failed"
+
+
+def test_successful_run_freezes_lease_lifecycle_before_finalization(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(lambda _run: {"evidence_refs": []})
+
+    artifact = next(
+        item for item in run.result["artifacts"] if item["kind"] == "lease_lifecycle"
+    )
+    assert artifact["path"] == "artifacts/lease-lifecycle.json"
+    lease = json.loads((run.final_path / artifact["path"]).read_text())
+    assert set(lease) == {
+        "schema_version",
+        "id",
+        "provider",
+        "acquired",
+        "release_started",
+        "released",
+        "status",
+    }
+    assert lease["schema_version"] == "opentraces.bench.lease-lifecycle.v0"
+    assert lease["id"] == "fake-1"
+    assert lease["provider"] == "local-container"
+    assert lease["acquired"] <= lease["release_started"] <= lease["released"]
+    assert lease["status"] == "released"
 
 
 @pytest.mark.parametrize(

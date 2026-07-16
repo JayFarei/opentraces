@@ -106,6 +106,7 @@ def test_public_fleet_command_runs_two_selected_nodes_with_private_recipes(
     summary = json.loads(invoked.output)
     assert [row["nodeid"] for row in summary["attempts"]] == list(selected)
     assert len(set(observed_recipe_roots)) == 2
+    assert summary["observed_max_lease_concurrency"] == 2
     assert wheel.read_bytes() == b"clean wheel"
     store = RunStore(store_root)
     for row in summary["attempts"]:

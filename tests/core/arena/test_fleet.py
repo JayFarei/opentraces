@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,7 @@ from opentraces.core.arena.fleet import (
     UnsupportedPlacement,
     collect_selected_nodeids,
     execute_fleet,
+    observed_max_lease_concurrency,
 )
 from opentraces.core.arena.run_store import RunStore
 
@@ -140,6 +142,8 @@ def test_two_attempts_overlap_without_crossing_run_or_recipe_state(tmp_path: Pat
     assert len({item.run_path for item in fleet.attempts}) == 2
     assert [item.nodeid for item in fleet.attempts] == ["scenario-a", "scenario-b"]
     assert all(item.provider == "local-container" for item in fleet.attempts)
+    assert len({item.lease_lifecycle["id"] for item in fleet.attempts}) == 2
+    assert fleet.observed_max_lease_concurrency == 2
     assert [hole.code for hole in fleet.coverage_holes] == [
         "remote_rented_glibc_lease_unproven",
         "x86_64_hf_emulator_unproven",
@@ -151,6 +155,27 @@ def test_two_attempts_overlap_without_crossing_run_or_recipe_state(tmp_path: Pat
     assert markers == {"scenario-a", "scenario-b"}
     assert recipe_file.read_bytes() == b"immutable wheel input"
     assert fleet.recipe.verify() is True
+
+
+def test_observed_concurrency_requires_strictly_overlapping_lease_intervals() -> None:
+    attempts = (
+        SimpleNamespace(
+            lease_lifecycle={
+                "acquired": "2026-07-16T10:00:00Z",
+                "released": "2026-07-16T10:00:01Z",
+                "status": "released",
+            }
+        ),
+        SimpleNamespace(
+            lease_lifecycle={
+                "acquired": "2026-07-16T10:00:01Z",
+                "released": "2026-07-16T10:00:02Z",
+                "status": "released",
+            }
+        ),
+    )
+
+    assert observed_max_lease_concurrency(attempts) == 1
 
 
 def test_recipe_cache_exposes_immutable_content_not_shared_writable_paths(
