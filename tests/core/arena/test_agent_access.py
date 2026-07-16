@@ -836,6 +836,7 @@ def test_missing_live_key_is_a_named_skip_before_agent_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     session = CompletingHarnessSession()
     bench = _bench(tmp_path, session)
 
