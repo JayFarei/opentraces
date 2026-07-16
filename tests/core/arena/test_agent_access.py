@@ -793,6 +793,38 @@ def test_missing_live_key_is_a_named_skip_before_agent_action(
     assert not (run.final_path / "actions/0001").exists()
 
 
+def test_dangling_symlink_cannot_escape_live_key_absence_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "sk-ant-bench-sentinel-broken-symlink"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", sentinel)
+    session = CompletingHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        assert run.draft is not None
+        (run.draft.path / "artifacts/leak-link").symlink_to(sentinel)
+
+    custody = json.loads(
+        (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
+    )
+    assert custody["absent"] is False
+    assert custody["matches"] == ["artifacts/leak-link [symlink not frozen]"]
+    assert run.result["verdict"] == "fail"
+    assert run.result["reason"] == {
+        "code": "live_key_stored",
+        "message": "the live inference key appeared in stored run evidence",
+    }
+
+
 def test_required_capture_wraps_the_real_claude_child_with_exact_session_id(
     tmp_path: Path,
 ) -> None:
