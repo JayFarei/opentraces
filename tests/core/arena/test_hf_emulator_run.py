@@ -809,6 +809,7 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
         verifier=scenario_2.publish_commit_is_witnessed,
     )
     assert reverification["status"] == "fail"
+    assert reverification["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert not any(row.get("operation_id") == "commit" for row in ledger_rows)
     assert result["verifiers"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert result["evidence"]["requirements"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
