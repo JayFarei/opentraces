@@ -16,6 +16,30 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _auth_mutations_from_ledger(rows):
+    observed = [
+        (
+            row["operation_id"],
+            row["method"],
+            row["path"],
+            row["response"]["status"],
+        )
+        for row in rows
+    ]
+    assert observed == [
+        ("manifest", "GET", "/_emulate/manifest", 200),
+        ("issueDeviceCode", "POST", "/oauth/device", 200),
+        ("viewDeviceAuthorization", "GET", "/oauth/authorize", 200),
+        ("authorizeDeviceCode", "POST", "/oauth/authorize", 200),
+        ("completeDeviceCode", "POST", "/oauth/token", 200),
+        ("whoami", "GET", "/api/whoami-v2", 200),
+        ("whoami", "GET", "/api/whoami-v2", 200),
+    ]
+    mutations = [row["operation_id"] for row in rows if row["method"] != "GET"]
+    assert mutations == ["issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"]
+    return mutations
+
+
 def cli_reports_authenticated(evidence, *, login=None, whoami=None, hf=None):
     """Use only the later public CLI observation as the verdict oracle."""
 
@@ -38,11 +62,9 @@ def cli_reports_authenticated(evidence, *, login=None, whoami=None, hf=None):
                 "HF_ENDPOINT",
                 "OPENTRACES_DISABLE_VERSION_CHECK",
             }
-        operations = [
-            row["operation_id"]
-            for row in map(json.loads, evidence.read_text(ledger_ref).splitlines())
-        ]
-        assert operations == ["issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"]
+        _auth_mutations_from_ledger(
+            list(map(json.loads, evidence.read_text(ledger_ref).splitlines()))
+        )
         return {"evidence_refs": [login_ref, whoami_ref, ledger_ref]}
 
     assert login is not None and whoami is not None and hf is not None
@@ -50,8 +72,7 @@ def cli_reports_authenticated(evidence, *, login=None, whoami=None, hf=None):
     assert whoami.returncode == 0, whoami.stderr
     payload = whoami.json
     assert payload["authenticated"] is True
-    operations = [row["operation_id"] for row in hf.ledger.rows()]
-    assert operations == ["issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"]
+    _auth_mutations_from_ledger(hf.ledger.rows())
     return {"evidence_refs": [login.result_ref, whoami.result_ref, hf.ledger.evidence_ref]}
 
 

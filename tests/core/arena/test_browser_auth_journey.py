@@ -4,6 +4,7 @@ import inspect
 import json
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +29,53 @@ def _result(argv: list[str], *, stdout: str = "", returncode: int = 0) -> BoxCom
         stderr="" if returncode == 0 else "command failed\n",
         timing={"schemaVersion": 1, "timing": {"exitCode": returncode}},
     )
+
+
+def _cold_ledger_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "method": "GET",
+            "path": "/_emulate/manifest",
+            "operation_id": "manifest",
+            "response": {"status": 200},
+        },
+        {
+            "method": "POST",
+            "path": "/oauth/device",
+            "operation_id": "issueDeviceCode",
+            "response": {"status": 200},
+        },
+        {
+            "method": "GET",
+            "path": "/oauth/authorize",
+            "operation_id": "viewDeviceAuthorization",
+            "response": {"status": 200},
+        },
+        {
+            "method": "POST",
+            "path": "/oauth/authorize",
+            "operation_id": "authorizeDeviceCode",
+            "response": {"status": 200},
+        },
+        {
+            "method": "POST",
+            "path": "/oauth/token",
+            "operation_id": "completeDeviceCode",
+            "response": {"status": 200},
+        },
+        {
+            "method": "GET",
+            "path": "/api/whoami-v2",
+            "operation_id": "whoami",
+            "response": {"status": 200},
+        },
+        {
+            "method": "GET",
+            "path": "/api/whoami-v2",
+            "operation_id": "whoami",
+            "response": {"status": 200},
+        },
+    ]
 
 
 class AuthJourneyRuntime(WorldRuntime):
@@ -90,53 +138,7 @@ class AuthorizingBrowser(PublicBrowserSession):
         observed = super().click(selector)
         if selector == "button:has-text('Authorize')":
             self.runtime.raw_ledger = (
-                "\n".join(
-                    json.dumps(row, separators=(",", ":"))
-                    for row in (
-                        {
-                            "method": "GET",
-                            "path": "/_emulate/manifest",
-                            "operation_id": "manifest",
-                            "response": {"status": 200},
-                        },
-                        {
-                            "method": "POST",
-                            "path": "/oauth/device",
-                            "operation_id": "issueDeviceCode",
-                            "response": {"status": 200},
-                        },
-                        {
-                            "method": "GET",
-                            "path": "/oauth/authorize",
-                            "operation_id": "viewDeviceAuthorization",
-                            "response": {"status": 200},
-                        },
-                        {
-                            "method": "POST",
-                            "path": "/oauth/authorize",
-                            "operation_id": "authorizeDeviceCode",
-                            "response": {"status": 200},
-                        },
-                        {
-                            "method": "POST",
-                            "path": "/oauth/token",
-                            "operation_id": "completeDeviceCode",
-                            "response": {"status": 200},
-                        },
-                        {
-                            "method": "GET",
-                            "path": "/api/whoami-v2",
-                            "operation_id": "whoami",
-                            "response": {"status": 200},
-                        },
-                        {
-                            "method": "GET",
-                            "path": "/api/whoami-v2",
-                            "operation_id": "whoami",
-                            "response": {"status": 200},
-                        },
-                    )
-                )
+                "\n".join(json.dumps(row, separators=(",", ":")) for row in _cold_ledger_rows())
                 + "\n"
             ).encode()
             self.runtime.authorization.set()
@@ -193,6 +195,58 @@ def test_recorder_only_failure_cannot_rewrite_successful_browser_auth_verdict(
     )
     assert reverification["status"] == "pass"
     assert reverification["evidence_refs"] == verifier["evidence_refs"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "extra-auth-mutation",
+        "missing-auth-mutation",
+        "reordered-auth-mutation",
+        "failed-auth-mutation",
+        "unknown-write",
+        "missing-whoami",
+        "failed-whoami",
+    ],
+)
+def test_browser_auth_verifier_rejects_non_claiming_ledger_exhaust(fault: str) -> None:
+    rows = _cold_ledger_rows()
+    if fault == "extra-auth-mutation":
+        rows.insert(2, dict(rows[1]))
+    elif fault == "missing-auth-mutation":
+        rows.pop(3)
+    elif fault == "reordered-auth-mutation":
+        rows[3], rows[4] = rows[4], rows[3]
+    elif fault == "failed-auth-mutation":
+        rows[3]["response"] = {"status": 500}
+    elif fault == "unknown-write":
+        rows.insert(
+            1,
+            {
+                "method": "POST",
+                "path": "/oauth/unknown",
+                "operation_id": "unknownAuthWrite",
+                "response": {"status": 200},
+            },
+        )
+    elif fault == "missing-whoami":
+        rows.pop()
+    elif fault == "failed-whoami":
+        rows[-1]["response"] = {"status": 401}
+
+    login = SimpleNamespace(returncode=0, stderr="", result_ref="actions/login/result.json")
+    whoami = SimpleNamespace(
+        returncode=0,
+        stderr="",
+        json={"authenticated": True},
+        result_ref="actions/whoami/result.json",
+    )
+    hf = SimpleNamespace(
+        ledger=SimpleNamespace(rows=lambda: rows, evidence_ref="world/huggingface/ledger.jsonl")
+    )
+
+    with pytest.raises(AssertionError):
+        scenario.cli_reports_authenticated(None, login=login, whoami=whoami, hf=hf)
 
 
 def test_browser_auth_source_requires_only_public_auth_cli_capabilities() -> None:
