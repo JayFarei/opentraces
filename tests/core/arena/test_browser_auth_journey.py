@@ -71,6 +71,12 @@ def _cold_ledger_rows() -> list[dict[str, object]]:
         },
         {
             "method": "GET",
+            "path": "/api/datasets/bench/unrelated",
+            "operation_id": "datasetInfo",
+            "response": {"status": 200},
+        },
+        {
+            "method": "GET",
             "path": "/api/whoami-v2",
             "operation_id": "whoami",
             "response": {"status": 200},
@@ -205,7 +211,6 @@ def test_recorder_only_failure_cannot_rewrite_successful_browser_auth_verdict(
         "reordered-auth-mutation",
         "failed-auth-mutation",
         "unknown-write",
-        "missing-whoami",
         "failed-whoami",
     ],
 )
@@ -229,10 +234,8 @@ def test_browser_auth_verifier_rejects_non_claiming_ledger_exhaust(fault: str) -
                 "response": {"status": 200},
             },
         )
-    elif fault == "missing-whoami":
-        rows.pop()
     elif fault == "failed-whoami":
-        rows[-1]["response"] = {"status": 401}
+        rows[-2]["response"] = {"status": 401}
 
     login = SimpleNamespace(returncode=0, stderr="", result_ref="actions/login/result.json")
     whoami = SimpleNamespace(
@@ -247,6 +250,36 @@ def test_browser_auth_verifier_rejects_non_claiming_ledger_exhaust(fault: str) -
 
     with pytest.raises(AssertionError):
         scenario.cli_reports_authenticated(None, login=login, whoami=whoami, hf=hf)
+
+
+@pytest.mark.parametrize("read_variation", ["missing-whoami", "reordered-reads"])
+def test_browser_auth_verifier_ignores_benign_read_exhaust_variation(
+    read_variation: str,
+) -> None:
+    rows = _cold_ledger_rows()
+    if read_variation == "missing-whoami":
+        rows.pop(5)
+    elif read_variation == "reordered-reads":
+        rows[0], rows[2] = rows[2], rows[0]
+
+    login = SimpleNamespace(returncode=0, stderr="", result_ref="actions/login/result.json")
+    whoami = SimpleNamespace(
+        returncode=0,
+        stderr="",
+        json={"authenticated": True},
+        result_ref="actions/whoami/result.json",
+    )
+    hf = SimpleNamespace(
+        ledger=SimpleNamespace(rows=lambda: rows, evidence_ref="world/huggingface/ledger.jsonl")
+    )
+
+    assert scenario.cli_reports_authenticated(None, login=login, whoami=whoami, hf=hf) == {
+        "evidence_refs": [
+            "actions/login/result.json",
+            "actions/whoami/result.json",
+            "world/huggingface/ledger.jsonl",
+        ]
+    }
 
 
 def test_browser_auth_source_requires_only_public_auth_cli_capabilities() -> None:
