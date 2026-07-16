@@ -196,12 +196,37 @@ def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primar
             b"still waiting for cbx_repeat123\n",
             ["cbx_repeat123"],
         ),
+        (
+            "unicode-left écbx_good123\n",
+            "still waiting for readiness\n",
+            [],
+        ),
+        (
+            "unicode-right cbx_good123é\n",
+            "still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"invalid-left \xffcbx_good123\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"invalid-right cbx_good123\xff\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"allocated cbx_first123 password=cbx_second456\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
     ],
 )
 def test_timed_out_warmup_releases_only_one_unique_boundary_safe_identity(
     tmp_path: Path,
-    partial_stdout: bytes,
-    partial_stderr: bytes,
+    partial_stdout: str | bytes,
+    partial_stderr: str | bytes,
     expected_stop_ids: list[str],
 ) -> None:
     timeout = subprocess.TimeoutExpired(
