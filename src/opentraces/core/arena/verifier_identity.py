@@ -29,7 +29,7 @@ class ResolvedVerifier:
 
 
 def _canonical_module_from_source(source: Path) -> str | None:
-    candidates: set[str] = set()
+    candidates: dict[str, tuple[int, int]] = {}
     for raw_root in sys.path:
         root = Path(raw_root or Path.cwd()).resolve()
         try:
@@ -39,7 +39,8 @@ def _canonical_module_from_source(source: Path) -> str | None:
         if relative.suffix != ".py":
             continue
         parts = list(relative.with_suffix("").parts)
-        if parts[-1] == "__init__":
+        is_package = parts[-1] == "__init__"
+        if is_package:
             parts.pop()
         if not parts or any(not part.isidentifier() for part in parts):
             continue
@@ -57,10 +58,26 @@ def _canonical_module_from_source(source: Path) -> str | None:
         except OSError:
             continue
         if origin == source:
-            candidates.add(candidate)
-    if len(candidates) > 1:
+            package_depth = 0
+            package_path = root
+            for part in parts if is_package else parts[:-1]:
+                package_path /= part
+                if not (package_path / "__init__.py").is_file():
+                    break
+                package_depth += 1
+            specificity = (package_depth, len(parts))
+            candidates[candidate] = max(candidates.get(candidate, specificity), specificity)
+    if not candidates:
+        return None
+    highest_specificity = max(candidates.values())
+    preferred = sorted(
+        candidate
+        for candidate, specificity in candidates.items()
+        if specificity == highest_specificity
+    )
+    if len(preferred) > 1:
         raise VerifierIdentityError("verifier source has multiple canonical import paths")
-    return next(iter(candidates), None)
+    return preferred[0]
 
 
 def resolve_verifier(verifier: Callable[..., Any]) -> ResolvedVerifier:
