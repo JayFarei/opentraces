@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import socket
+import stat
 import threading
 import time
 from pathlib import Path
@@ -127,6 +129,39 @@ class CredentialNamedPathHarnessSession(CompletingHarnessSession):
         (recording_path.parent / self.sentinel).write_text(
             "credential appeared in this path\n", encoding="utf-8"
         )
+
+
+class SpecialNodeHarnessSession(CompletingHarnessSession):
+    """Model a harness that leaves a non-regular node in the evidence tree."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bound_socket: socket.socket | None = None
+
+    def start(
+        self,
+        argv: list[str],
+        *,
+        recording_path: Path,
+        cols: int,
+        rows: int,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        super().start(
+            argv,
+            recording_path=recording_path,
+            cols=cols,
+            rows=rows,
+            env=env,
+        )
+        self.bound_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        bind_path = Path("/tmp") / f"ot-{os.getpid()}-{id(self):x}.sock"
+        self.bound_socket.bind(str(bind_path))
+        os.link(bind_path, recording_path.parent / "credential-socket")
+        bind_path.unlink()
+
+    def stop(self) -> None:
+        super().stop()
 
 
 def _closed_mcp_config(argv: list[str]) -> dict[str, object]:
@@ -945,6 +980,41 @@ def test_oauth_leak_in_filename_is_quarantined_without_repeating_the_name(
     for stored_path in run.final_path.rglob("*"):
         relative = stored_path.relative_to(run.final_path).as_posix().encode()
         assert sentinel.encode() not in relative, stored_path
+
+
+def test_live_agent_special_evidence_node_is_classified_and_quarantined(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv(
+        "CLAUDE_CODE_OAUTH_TOKEN", "oauth-special-node-not-a-real-credential"
+    )
+    session = SpecialNodeHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+    assert session.bound_socket is not None
+    session.bound_socket.close()
+
+    assert run.result["verdict"] == "fail"
+    custody = json.loads(
+        (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
+    )
+    assert custody["matches"] == [
+        "recordings/credential-socket [special node not frozen]"
+    ]
+    assert not any(
+        stat.S_ISSOCK(stored_path.lstat().st_mode)
+        for stored_path in run.final_path.rglob("*")
+    )
 
 
 def test_oauth_precedes_api_key_without_freezing_either_live_credential(
