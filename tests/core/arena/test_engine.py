@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import signal
@@ -19,7 +20,11 @@ from opentraces.core.arena.labels import read_labels
 from opentraces.core.arena.origin import attach_explicit_bench_labels
 from opentraces.core.arena.page import render_evidence_page
 from opentraces.core.arena.run_store import RunStore
-from opentraces.core.arena.verifier_identity import callable_identity
+from opentraces.core.arena.verifier_identity import (
+    VerifierIdentityError,
+    callable_identity,
+    resolve_verifier,
+)
 from tests.core.arena.fixtures.verifier_helper import assert_healthy_payload
 from tests.core.arena.test_origin_join import PROJECT_SLUG, _origin_record, _write_trace
 
@@ -332,6 +337,142 @@ def test_verifier_identity_prefers_the_full_package_over_a_nested_sys_path_root(
     name, _digest = callable_identity(verify_doctor_is_healthy)
 
     assert name == "tests.core.arena.test_engine.verify_doctor_is_healthy"
+
+
+def test_verifier_identity_rejects_a_cached_module_shadowed_by_a_distinct_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    for root, origin in ((root_a, "a"), (root_b, "b")):
+        package = root / "shadowpkg"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "checks.py").write_text(
+            f'def verify(_run):\n    return {{"origin": {origin!r}}}\n',
+            encoding="utf-8",
+        )
+
+    try:
+        monkeypatch.syspath_prepend(str(root_a))
+        importlib.invalidate_caches()
+        cached_checks = importlib.import_module("shadowpkg.checks")
+        assert cached_checks.verify(None) == {"origin": "a"}
+
+        monkeypatch.syspath_prepend(str(root_b))
+        importlib.invalidate_caches()
+
+        with pytest.raises(VerifierIdentityError):
+            resolve_verifier(cached_checks.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "shadowpkg" or module_name.startswith("shadowpkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_rejects_equally_specific_symlink_package_aliases_as_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    alpha = tmp_path / "alpha"
+    alpha.mkdir()
+    (alpha / "__init__.py").write_text("", encoding="utf-8")
+    (alpha / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    try:
+        os.symlink(alpha, tmp_path / "bravo", target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        alpha_checks = importlib.import_module("alpha.checks")
+        bravo_checks = importlib.import_module("bravo.checks")
+        assert Path(alpha_checks.__file__).resolve() == Path(bravo_checks.__file__).resolve()
+
+        with pytest.raises(
+            VerifierIdentityError,
+            match="multiple canonical import paths",
+        ):
+            resolve_verifier(alpha_checks.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"alpha", "bravo"} or module_name.startswith(
+                ("alpha.", "bravo.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_does_not_grant_a_namespace_package_coordinate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    namespace = tmp_path / "namespacepkg"
+    package = namespace / "realpkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        monkeypatch.syspath_prepend(str(namespace))
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        namespace_checks = importlib.import_module("namespacepkg.realpkg.checks")
+
+        resolved = resolve_verifier(namespace_checks.verify)
+
+        assert resolved.name == "realpkg.checks.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"namespacepkg", "realpkg"} or module_name.startswith(
+                ("namespacepkg.", "realpkg.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_precedence_prefers_deeper_real_package_ancestry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Precedence is (package_depth, len(parts)): real ancestry, then path specificity."""
+
+    repository = tmp_path / "repository"
+    outer = repository / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    (outer / "__init__.py").write_text("", encoding="utf-8")
+    (inner / "__init__.py").write_text("", encoding="utf-8")
+    (inner / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        monkeypatch.syspath_prepend(str(outer))
+        monkeypatch.syspath_prepend(str(repository))
+        importlib.invalidate_caches()
+        checks = importlib.import_module("outer.inner.checks")
+
+        name, _digest = callable_identity(checks.verify)
+
+        assert name == "outer.inner.checks.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"outer", "inner"} or module_name.startswith(
+                ("outer.", "inner.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
 
 
 def test_local_verifier_is_rejected_before_invocation_and_cannot_finalize_pass(
