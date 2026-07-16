@@ -101,6 +101,34 @@ class EchoingCredentialHarnessSession(CompletingHarnessSession):
         )
 
 
+class CredentialNamedPathHarnessSession(CompletingHarnessSession):
+    """Model a live harness that accidentally uses its credential as a filename."""
+
+    def __init__(self, sentinel: str) -> None:
+        super().__init__()
+        self.sentinel = sentinel
+
+    def start(
+        self,
+        argv: list[str],
+        *,
+        recording_path: Path,
+        cols: int,
+        rows: int,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        super().start(
+            argv,
+            recording_path=recording_path,
+            cols=cols,
+            rows=rows,
+            env=env,
+        )
+        (recording_path.parent / self.sentinel).write_text(
+            "credential appeared in this path\n", encoding="utf-8"
+        )
+
+
 def _closed_mcp_config(argv: list[str]) -> dict[str, object]:
     remote = argv[argv.index("--") + 1 :]
     assert "--strict-mcp-config" in remote
@@ -863,6 +891,39 @@ def test_oauth_leak_fails_without_persisting_secret_bytes_or_symlink_targets(
         assert not stored_path.is_symlink(), stored_path
         if stored_path.is_file():
             assert sentinel.encode() not in stored_path.read_bytes(), stored_path
+
+
+def test_oauth_leak_in_filename_is_quarantined_without_repeating_the_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "oauth-bench-filename-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = CredentialNamedPathHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert run.result["verdict"] == "fail"
+    custody_path = run.final_path / "artifacts/live-key-absence.json"
+    custody_bytes = custody_path.read_bytes()
+    assert sentinel.encode() not in custody_bytes
+    custody = json.loads(custody_bytes)
+    assert custody["matches"] == [
+        "sha256:b2f1a090fec75d21b3c0f533a3232537f46985e9559a8a3bc3dc5ec9e1202be1"
+        " [path contains live credential]"
+    ]
+    for stored_path in run.final_path.rglob("*"):
+        relative = stored_path.relative_to(run.final_path).as_posix().encode()
+        assert sentinel.encode() not in relative, stored_path
 
 
 def test_oauth_precedes_api_key_without_freezing_either_live_credential(
