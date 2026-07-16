@@ -70,14 +70,12 @@ class CrabboxRefusal(RuntimeError):
         code: str,
         message: str,
         *,
-        partial_stdout: str = "",
-        partial_stderr: str = "",
+        cleanup_lease_id: str | None = None,
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
-        self.partial_stdout = partial_stdout
-        self.partial_stderr = partial_stderr
+        self.cleanup_lease_id = cleanup_lease_id
 
 
 @dataclass(frozen=True)
@@ -184,13 +182,32 @@ def _partial_output_text(value: str | bytes | None) -> str:
     return str(value or "")
 
 
-def _unique_lease_identity(stdout: str, stderr: str) -> str | None:
-    candidates = set(
-        re.findall(
-            r"(?<![A-Za-z0-9_-])cbx_[A-Za-z0-9]+(?![A-Za-z0-9_-])",
-            f"{stdout}\n{stderr}",
-        )
-    )
+def _unsafe_lease_id_adjacency(value: str | int) -> bool:
+    if isinstance(value, int):
+        return value >= 128 or chr(value) in "_-" or chr(value).isalnum()
+    return not value.isascii() or value in "_-" or value.isalnum()
+
+
+def _lease_id_candidates(value: str | bytes | None) -> set[str]:
+    if isinstance(value, bytes):
+        pattern: re.Pattern[str] | re.Pattern[bytes] = re.compile(rb"cbx_[A-Za-z0-9]+")
+    elif isinstance(value, str):
+        pattern = re.compile(r"cbx_[A-Za-z0-9]+", flags=re.ASCII)
+    else:
+        return set()
+    candidates: set[str] = set()
+    for match in pattern.finditer(value):
+        if match.start() and _unsafe_lease_id_adjacency(value[match.start() - 1]):
+            continue
+        if match.end() < len(value) and _unsafe_lease_id_adjacency(value[match.end()]):
+            continue
+        candidate = match.group(0)
+        candidates.add(candidate.decode("ascii") if isinstance(candidate, bytes) else candidate)
+    return candidates
+
+
+def _unique_lease_identity(stdout: str | bytes | None, stderr: str | bytes | None) -> str | None:
+    candidates = _lease_id_candidates(stdout) | _lease_id_candidates(stderr)
     if len(candidates) != 1:
         return None
     return candidates.pop()
@@ -327,6 +344,7 @@ class CrabboxRuntime:
         try:
             completed = self.runner(list(argv), cwd=cwd, env=child_env, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            cleanup_lease_id = _unique_lease_identity(exc.stdout, exc.stderr)
             partial_stdout = sanitize_diagnostic_text(_partial_output_text(exc.stdout))
             partial_stderr = sanitize_diagnostic_text(_partial_output_text(exc.stderr))
             self._diagnostics.append(
@@ -342,8 +360,7 @@ class CrabboxRuntime:
             raise CrabboxRefusal(
                 "crabbox_timeout",
                 f"bounded command timed out: {argv[1]}",
-                partial_stdout=partial_stdout,
-                partial_stderr=partial_stderr,
+                cleanup_lease_id=cleanup_lease_id,
             ) from exc
         self._diagnostics.append(
             {
@@ -420,12 +437,10 @@ class CrabboxRuntime:
         try:
             warmup = self._call(warmup_argv, timeout=600)
         except CrabboxRefusal as primary:
-            if primary.code == "crabbox_timeout":
-                lease_id = _unique_lease_identity(
-                    primary.partial_stdout, primary.partial_stderr
+            if primary.code == "crabbox_timeout" and primary.cleanup_lease_id:
+                self._best_effort_release_after_refusal(
+                    primary.cleanup_lease_id, provider=self.provider
                 )
-                if lease_id:
-                    self._best_effort_release_after_refusal(lease_id, provider=self.provider)
             raise
         match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
         if warmup.returncode != 0:

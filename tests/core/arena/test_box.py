@@ -249,9 +249,7 @@ def test_timed_out_warmup_releases_only_one_unique_boundary_safe_identity(
 
     assert caught.value.code == "crabbox_timeout"
     assert [
-        call[0][call[0].index("--id") + 1]
-        for call in runner.calls
-        if call[0][1:2] == ["stop"]
+        call[0][call[0].index("--id") + 1] for call in runner.calls if call[0][1:2] == ["stop"]
     ] == expected_stop_ids
     timeout_diagnostic = runtime.diagnostic_records()[1]
     assert timeout_diagnostic["timed_out"] is True
