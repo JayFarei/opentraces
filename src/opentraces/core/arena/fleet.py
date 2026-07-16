@@ -10,8 +10,9 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .run_store import RunStore
 
@@ -140,6 +141,7 @@ class FleetAttempt:
     verdict: str | None
     execution_status: str
     provider: str | None
+    lease_lifecycle: Mapping[str, Any]
 
     @classmethod
     def from_run(cls, run_path: Path, *, store: RunStore) -> "FleetAttempt":
@@ -164,6 +166,24 @@ class FleetAttempt:
         provider = environment.get("provider") if isinstance(environment, dict) else None
         if provider is not None and not isinstance(provider, str):
             raise FleetError("stored fleet result has an invalid placement provider")
+        artifacts = result.get("artifacts")
+        lease_rows = [
+            row
+            for row in artifacts or []
+            if isinstance(row, Mapping) and row.get("kind") == "lease_lifecycle"
+        ]
+        if len(lease_rows) != 1:
+            raise FleetError("stored fleet result has no unique lease lifecycle artifact")
+        lease_ref = lease_rows[0].get("path")
+        if lease_ref != "artifacts/lease-lifecycle.json":
+            raise FleetError("stored fleet result has a noncanonical lease lifecycle artifact")
+        lease_lifecycle = json.loads((resolved / lease_ref).read_text(encoding="utf-8"))
+        if not isinstance(lease_lifecycle, Mapping):
+            raise FleetError("stored fleet lease lifecycle is not an object")
+        if lease_lifecycle.get("id") in {None, ""}:
+            raise FleetError("stored fleet lease lifecycle has no lease id")
+        if lease_lifecycle.get("provider") != provider:
+            raise FleetError("stored fleet lease lifecycle provider disagrees with its result")
         return cls(
             nodeid=nodeid,
             run_id=run_id,
@@ -171,6 +191,7 @@ class FleetAttempt:
             verdict=result.get("verdict"),
             execution_status=str(result.get("execution_status") or ""),
             provider=provider,
+            lease_lifecycle=dict(lease_lifecycle),
         )
 
 
@@ -181,7 +202,45 @@ class FleetResult:
     placement: FleetPlacement
     recipe: RecipeInputs
     attempts: tuple[FleetAttempt, ...]
+    observed_max_lease_concurrency: int
     coverage_holes: tuple[CoverageHole, ...]
+
+
+def _lease_time(value: object, *, field: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise FleetError(f"lease lifecycle has no {field} timestamp")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise FleetError(f"lease lifecycle has invalid {field} timestamp") from exc
+
+
+def observed_max_lease_concurrency(attempts: Iterable[FleetAttempt]) -> int:
+    """Derive strict lease overlap from immutable per-run lifecycle intervals."""
+
+    events: list[tuple[datetime, int]] = []
+    observed = tuple(attempts)
+    if not observed:
+        return 0
+    for attempt in observed:
+        lifecycle = attempt.lease_lifecycle
+        if lifecycle.get("status") != "released":
+            raise FleetError("lease concurrency is unproven for an unreleased attempt")
+        acquired = _lease_time(lifecycle.get("acquired"), field="acquired")
+        released = _lease_time(lifecycle.get("released"), field="released")
+        if acquired >= released:
+            raise FleetError("lease lifecycle has no positive observed interval")
+        events.extend(((acquired, 1), (released, -1)))
+    active = 0
+    maximum = 0
+    for _timestamp, delta in sorted(events, key=lambda event: (event[0], event[1])):
+        active += delta
+        if active < 0:
+            raise FleetError("lease lifecycle intervals are inconsistent")
+        maximum = max(maximum, active)
+    if active != 0:
+        raise FleetError("lease lifecycle intervals are incomplete")
+    return maximum
 
 
 def _resolve_placement(value: FleetPlacement | str) -> FleetPlacement:
@@ -244,12 +303,17 @@ def execute_fleet(
         raise FleetError("fleet attempts reused a run id")
     if len({attempt.run_path for attempt in attempts}) != len(attempts):
         raise FleetError("fleet attempts reused a writable run directory")
+    lease_ids = [str(attempt.lease_lifecycle.get("id") or "") for attempt in attempts]
+    if len(set(lease_ids)) != len(lease_ids):
+        raise FleetError("fleet attempts reused a lease id")
     if any(attempt.provider != resolved_placement.provider for attempt in attempts):
         raise FleetError("fleet result placement does not match the requested provider")
+    observed_concurrency = observed_max_lease_concurrency(attempts)
     return FleetResult(
         placement=resolved_placement,
         recipe=recipe,
         attempts=attempts,
+        observed_max_lease_concurrency=observed_concurrency,
         coverage_holes=LOCAL_CONTAINER_HOLES,
     )
 

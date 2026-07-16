@@ -935,6 +935,7 @@ def bench_fleet(
         ),
         "placement": fleet.placement.name,
         "concurrency": concurrency,
+        "observed_max_lease_concurrency": fleet.observed_max_lease_concurrency,
         "recipe_digest": fleet.recipe.digest,
         "attempts": attempts,
         "coverage_holes": [

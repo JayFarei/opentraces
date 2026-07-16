@@ -50,6 +50,19 @@ def test_public_fleet_command_runs_two_selected_nodes_with_private_recipes(
 
         store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
         draft = store.begin()
+        lease_ref = "artifacts/lease-lifecycle.json"
+        draft.write_json(
+            lease_ref,
+            {
+                "schema_version": "opentraces.bench.lease-lifecycle.v0",
+                "id": f"lease-{target}",
+                "provider": "local-container",
+                "acquired": "2026-07-15T12:00:00Z",
+                "release_started": "2026-07-15T12:00:01Z",
+                "released": "2026-07-15T12:00:02Z",
+                "status": "released",
+            },
+        )
         draft.stage_result(
             build_result(
                 run_id=draft.run_id,
@@ -65,7 +78,13 @@ def test_public_fleet_command_runs_two_selected_nodes_with_private_recipes(
                 verifiers=[],
                 evidence={"complete": True, "requirements": []},
                 recordings={"rewatchable": False, "channels": []},
-                artifacts=[],
+                artifacts=[
+                    {
+                        "path": lease_ref,
+                        "media_type": "application/json",
+                        "kind": "lease_lifecycle",
+                    }
+                ],
                 capture=None,
                 pins={
                     "environment": {

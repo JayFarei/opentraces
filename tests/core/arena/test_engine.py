@@ -501,9 +501,7 @@ def test_successful_run_freezes_lease_lifecycle_before_finalization(tmp_path: Pa
     with bench.run(app_state="install-only") as run:
         run.verify(lambda _run: {"evidence_refs": []})
 
-    artifact = next(
-        item for item in run.result["artifacts"] if item["kind"] == "lease_lifecycle"
-    )
+    artifact = next(item for item in run.result["artifacts"] if item["kind"] == "lease_lifecycle")
     assert artifact["path"] == "artifacts/lease-lifecycle.json"
     lease = json.loads((run.final_path / artifact["path"]).read_text())
     assert set(lease) == {

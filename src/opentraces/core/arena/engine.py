@@ -145,6 +145,7 @@ class BenchRun:
         self._emulators: dict[str, HuggingFaceEmulator] = {}
         self._capabilities_pin: dict[str, str] | None = None
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
+        self._lease_lifecycle: dict[str, Any] | None = None
         self.origin_evidence_ref: str | None = None
 
     def __enter__(self) -> "BenchRun":
@@ -179,6 +180,15 @@ class BenchRun:
             if callable(configure_evidence):
                 configure_evidence(self.draft.path)
             self.box = self.bench.box_runtime.lease()
+            self._lease_lifecycle = {
+                "schema_version": "opentraces.bench.lease-lifecycle.v0",
+                "id": self.box.id,
+                "provider": self.box.provider,
+                "acquired": _utc_now(),
+                "release_started": None,
+                "released": None,
+                "status": "acquired",
+            }
             self._app_state_pin = self.bench.box_runtime.materialize(
                 self.box, self.app_state, repository=self.bench.repository_path
             )
@@ -200,9 +210,8 @@ class BenchRun:
             )
         except Exception as exc:
             if self.box is not None:
-                try:
-                    self.bench.box_runtime.release(self.box)
-                except Exception as release_exc:
+                release_exc = self._release_box()
+                if release_exc is not None:
                     # The original setup failure remains primary; both the
                     # run result and Crabbox's failure bundle preserve it.
                     self._lifecycle_diagnostics.append(
@@ -522,6 +531,16 @@ class BenchRun:
                     "kind": "lifecycle_diagnostics",
                 }
             )
+        if self._lease_lifecycle is not None:
+            lease_ref = "artifacts/lease-lifecycle.json"
+            self.draft.write_json(lease_ref, self._lease_lifecycle)
+            artifacts.append(
+                {
+                    "path": lease_ref,
+                    "media_type": "application/json",
+                    "kind": "lease_lifecycle",
+                }
+            )
         if scenario_assertion_ref is not None:
             artifacts.append(
                 {
@@ -628,9 +647,7 @@ class BenchRun:
             result: dict[str, Any] = {
                 "rewatchable": timeline["complete"]
                 and all(summary["rewatchable"] for summary in summaries),
-                "channels": [
-                    channel for summary in summaries for channel in summary["channels"]
-                ],
+                "channels": [channel for summary in summaries for channel in summary["channels"]],
                 "timeline_ref": timeline["path"],
                 "timeline": timeline,
             }
@@ -657,6 +674,22 @@ class BenchRun:
             "timeline_ref": timeline["path"],
             "timeline": timeline,
         }
+
+    def _release_box(self) -> Exception | None:
+        if self.box is None:
+            return None
+        if self._lease_lifecycle is not None:
+            self._lease_lifecycle["release_started"] = _utc_now()
+        try:
+            self.bench.box_runtime.release(self.box)
+        except Exception as exc:
+            if self._lease_lifecycle is not None:
+                self._lease_lifecycle["status"] = "release_failed"
+            return exc
+        if self._lease_lifecycle is not None:
+            self._lease_lifecycle["released"] = _utc_now()
+            self._lease_lifecycle["status"] = "released"
+        return None
 
     def __exit__(
         self,
@@ -707,20 +740,13 @@ class BenchRun:
                     sanitize_reason("emulator_cleanup_failed", emulator_error)
                 )
 
-        release_error: Exception | None = None
-        if self.box is not None:
-            try:
-                self.bench.box_runtime.release(self.box)
-            except Exception as caught:
-                release_error = caught
+        release_error = self._release_box()
         if release_error is not None:
             self._lifecycle_diagnostics.append(
                 sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)
             )
         if hasattr(self, "terminal") and self.terminal.has_pending:
-            terminal_settlement_errors.extend(
-                self.terminal.settle_after_release(timeout=5.0)
-            )
+            terminal_settlement_errors.extend(self.terminal.settle_after_release(timeout=5.0))
         for settlement_error in terminal_settlement_errors:
             self._lifecycle_diagnostics.append(
                 sanitize_reason("terminal_settlement_failed", settlement_error)
