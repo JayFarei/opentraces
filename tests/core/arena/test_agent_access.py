@@ -241,6 +241,64 @@ class InterruptedCaptureRuntime(FakeBoxRuntime):
         return {"capture_result.json": result_path, "git.report.json": report}
 
 
+class CompleteCaptureRuntime(FakeBoxRuntime):
+    def collect(self, box, globs, *, destination, repository):
+        assert len(globs) == 1
+        capture_root = destination / "files" / ".opentraces" / "bench-capture"
+        finalizers = capture_root / "finalizers"
+        finalizers.mkdir(parents=True)
+        source_specs = [
+            ("session_jsonl", "harness"),
+            ("telemetry", "model_boundary"),
+            ("git", "world_effects"),
+            ("bucket", "storage"),
+        ]
+        sources = []
+        for source, view in source_specs:
+            reference = f"finalizers/{source}.report.json"
+            (capture_root / reference).write_text(
+                json.dumps({"source": source}) + "\n", encoding="utf-8"
+            )
+            sources.append(
+                {
+                    "name": source,
+                    "view": view,
+                    "requested": True,
+                    "required": True,
+                    "status": "finalized",
+                    "completeness": "full",
+                    "evidence_refs": [reference],
+                    "limitations": [],
+                    "duration_ms": 1,
+                    "details": {},
+                }
+            )
+        result_path = capture_root / "capture_result.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "opentraces.capture.result.v1",
+                    "module_version": "0.4.8",
+                    "placement": "leased",
+                    "completeness": "complete",
+                    "observer_version": "0.4.8",
+                    "product_under_test_version": "0.4.8",
+                    "sources": sources,
+                    "views": [],
+                    "limitations": [],
+                    "trace_refs": ["trace-scenario-4"],
+                    "security": {},
+                    "result_path": ".opentraces/bench-capture/capture_result.json",
+                    "provenance": {},
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return {path.name: path for path in capture_root.rglob("*") if path.is_file()}
+
+
 def _bench(tmp_path: Path, session: CompletingHarnessSession) -> Bench:
     tmp_path.mkdir(parents=True, exist_ok=True)
     return Bench(
@@ -785,6 +843,59 @@ def test_required_capture_wraps_the_real_claude_child_with_exact_session_id(
         "artifact_glob": f"{result_dir}/**/*",
         "required_sources": ["session_jsonl", "git"],
     }
+
+
+def test_semantic_capture_requirements_grade_each_source_independently(
+    tmp_path: Path,
+) -> None:
+    session = CompletingHarnessSession()
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "runs" / "v1"),
+        box_runtime=CompleteCaptureRuntime(),
+        repository_path=tmp_path,
+        agent_session_factory=lambda _name: session,
+        agent_poll_interval=0,
+    )
+
+    with bench.run(
+        app_state="agent-ready",
+        execution_mode="agent_live",
+        capture_required=["trace", "context", "trail", "storage"],
+    ) as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make and commit the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert run.result["verdict"] == "pass"
+    requirements = {
+        requirement["name"]: requirement
+        for requirement in run.result["evidence"]["requirements"]
+    }
+    assert requirements["capture.trace"] == {
+        "name": "capture.trace",
+        "complete": True,
+        "evidence_refs": ["capture/finalizers/session_jsonl.report.json"],
+    }
+    assert requirements["capture.context"]["complete"] is True
+    assert requirements["capture.trail"]["complete"] is True
+    assert requirements["capture.storage"]["complete"] is True
+    assert requirements["capture.lifecycle"] == {
+        "name": "capture.lifecycle",
+        "complete": True,
+        "evidence_refs": ["capture/capture_result.json"],
+    }
+    assert session.started_argv is not None
+    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    assert "trace" not in remote
+    assert "context" not in remote
+    assert "trail" not in remote
+    for source in ("session_jsonl", "telemetry", "git", "bucket"):
+        assert source in remote
 
 
 def test_wrong_claude_version_is_a_named_failed_attempt(tmp_path: Path) -> None:
