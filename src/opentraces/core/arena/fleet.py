@@ -177,7 +177,14 @@ class FleetAttempt:
         lease_ref = lease_rows[0].get("path")
         if lease_ref != "artifacts/lease-lifecycle.json":
             raise FleetError("stored fleet result has a noncanonical lease lifecycle artifact")
-        lease_lifecycle = json.loads((resolved / lease_ref).read_text(encoding="utf-8"))
+        lease_path = resolved / lease_ref
+        if lease_path.is_symlink():
+            raise FleetError("stored fleet lease lifecycle is a symlink")
+        try:
+            lease_path.resolve(strict=True).relative_to(resolved)
+        except (OSError, ValueError) as exc:
+            raise FleetError("stored fleet lease lifecycle escapes its run") from exc
+        lease_lifecycle = json.loads(lease_path.read_text(encoding="utf-8"))
         if not isinstance(lease_lifecycle, Mapping):
             raise FleetError("stored fleet lease lifecycle is not an object")
         if lease_lifecycle.get("id") in {None, ""}:

@@ -10,8 +10,10 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+from opentraces.core.arena.run_store import RunStore
 
 
 EXPECTED_STATUS = {"browser-auth": "pass", "publish-down": "fail"}
@@ -36,6 +38,7 @@ def run_public_reverification(
     run_ids: Mapping[str, str],
     repository: Path,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    integrity_by_run_id: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Invoke ``bench reverify`` twice with no box binary or usable network proxy."""
 
@@ -44,6 +47,13 @@ def run_public_reverification(
     guarantees = _guarantees(Path(guarantees_path))
     if set(run_ids) != set(EXPECTED_STATUS):
         raise AssertionError("run ids must bind exactly browser-auth and publish-down")
+    if integrity_by_run_id is None:
+        store = RunStore(store_root)
+        integrity_by_run_id = {
+            run_id: store.verified_integrity(store.root / run_id) for run_id in run_ids.values()
+        }
+    if set(integrity_by_run_id) != set(run_ids.values()):
+        raise AssertionError("storage integrity does not bind the exact reverified runs")
 
     temporary_parent = store_root.parent.parent
     temporary_parent.mkdir(parents=True, exist_ok=True)
@@ -104,12 +114,32 @@ def run_public_reverification(
                 raise AssertionError(f"{guarantee_id} reverify returned the wrong verdict or exit")
             if observed.get("verifier") != dict(verifier):
                 raise AssertionError(f"{guarantee_id} reverify returned the wrong verifier binding")
+            evidence_refs = observed.get("evidence_refs")
+            if not isinstance(evidence_refs, list) or not evidence_refs:
+                raise AssertionError(f"{guarantee_id} reverify returned no evidence refs")
+            for evidence_ref in evidence_refs:
+                path = PurePosixPath(str(evidence_ref))
+                if path.is_absolute() or ".." in path.parts or str(path) != evidence_ref:
+                    raise AssertionError(
+                        f"{guarantee_id} reverify returned an unstable evidence ref"
+                    )
+            storage_integrity = dict(integrity_by_run_id[run_id])
+            if (
+                storage_integrity.get("verified") is not True
+                or not str(storage_integrity.get("result_digest") or "").startswith("sha256:")
+                or not str(storage_integrity.get("integrity_digest") or "").startswith("sha256:")
+            ):
+                raise AssertionError(f"{guarantee_id} run has no verified storage binding")
             attempts.append(
                 {
                     "guarantee_id": guarantee_id,
                     "run_id": run_id,
+                    "run_ref": f"runs/v1/{run_id}/result.json",
+                    "storage_integrity": storage_integrity,
                     "exit_code": completed.returncode,
                     "status": expected_status,
+                    "verifier": dict(verifier),
+                    "evidence_refs": list(evidence_refs),
                 }
             )
 

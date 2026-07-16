@@ -374,21 +374,15 @@ def test_page_names_and_omits_every_cross_surface_ref_that_escapes_the_run(
         assert reference in rendered
 
 
-def test_page_names_and_omits_an_exhaust_symlink_that_escapes_the_run(tmp_path: Path) -> None:
+def test_store_rejects_an_exhaust_symlink_before_page_render(tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("outside the run\n", encoding="utf-8")
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
     (draft.path / "artifacts" / "outside.txt").symlink_to(outside)
     recordings = {"rewatchable": False, "channels": []}
-    finalized = draft.finalize(_result(draft.run_id, recordings=recordings))
-
-    assert store.verify(finalized) is True
-    html = render_evidence_page(finalized).read_text(encoding="utf-8")
-
-    assert "MISSING EXHAUST" in html
-    assert "artifacts/outside.txt" in html
-    assert ">artifacts/outside.txt</a>" not in html
+    with pytest.raises(RunIntegrityError, match="symlink"):
+        draft.finalize(_result(draft.run_id, recordings=recordings))
 
 
 def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:

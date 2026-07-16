@@ -82,13 +82,41 @@ def _latest(results: list[Mapping[str, Any]]) -> Mapping[str, Any]:
     )
 
 
-def _verifier_matches(result: Mapping[str, Any], *, name: str, digest: str) -> bool:
+def _matching_verifiers(
+    result: Mapping[str, Any], *, name: str, digest: str
+) -> list[Mapping[str, Any]]:
+    matches: list[Mapping[str, Any]] = []
     for verifier in result.get("verifiers") or []:
         row = _object(verifier)
         source_ref = _object(row.get("source_ref"))
         if row.get("name") == name and source_ref.get("digest") == digest:
-            return True
-    return False
+            matches.append(row)
+    return matches
+
+
+def _verifier_pass_is_complete(result: Mapping[str, Any], verifier: Mapping[str, Any]) -> bool:
+    if verifier.get("status") != "pass":
+        return False
+    refs = verifier.get("evidence_refs")
+    if (
+        not isinstance(refs, list)
+        or not refs
+        or any(not isinstance(ref, str) or not ref for ref in refs)
+    ):
+        return False
+    requirements = _object(result.get("evidence")).get("requirements")
+    if not isinstance(requirements, list):
+        return False
+    matching = [
+        _object(requirement)
+        for requirement in requirements
+        if _object(requirement).get("name") == verifier.get("name")
+    ]
+    return (
+        len(matching) == 1
+        and matching[0].get("complete") is True
+        and matching[0].get("evidence_refs") == refs
+    )
 
 
 def _run_facts(
@@ -157,7 +185,8 @@ def _row_state(
     evidence = _object(result.get("evidence"))
     if product.get("commit") != product_commit:
         return "stale-run"
-    if not _verifier_matches(result, name=verifier_name, digest=verifier_digest):
+    matching_verifiers = _matching_verifiers(result, name=verifier_name, digest=verifier_digest)
+    if len(matching_verifiers) != 1:
         return "stale-verifier"
     if capabilities.get("digest") != capabilities_digest:
         return "surface-drift"
@@ -165,6 +194,7 @@ def _row_state(
         result.get("execution_status") != "complete"
         or result.get("verdict") != "pass"
         or evidence.get("complete") is not True
+        or not _verifier_pass_is_complete(result, matching_verifiers[0])
     ):
         return "failing"
     return "proven"

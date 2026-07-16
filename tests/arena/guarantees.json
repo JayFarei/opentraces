@@ -26,7 +26,7 @@
       "nodeid": "tests/arena/scenarios/test_remote_rented_glibc.py::test_hf_emulator_runs_on_remote_rented_glibc",
       "verifier": {
         "name": "tests.arena.guarantees.verify_remote_rented_glibc_emulator",
-        "digest": "sha256:3901da57dccadc8b03dec6bbe56d81b4e5a3889531940cab09d604223cb62217"
+        "digest": "sha256:70df145e894b17afaff89183a12b0e3904641659a107c0a9b008ed05a5db0607"
       },
       "black_box_review": "unreviewed"
     },
@@ -36,7 +36,7 @@
       "nodeid": "tests/arena/scenarios/test_linux_x86_64_hf_emulator.py::test_hf_emulator_runs_on_linux_x86_64",
       "verifier": {
         "name": "tests.arena.guarantees.verify_linux_x86_64_hf_emulator",
-        "digest": "sha256:3901da57dccadc8b03dec6bbe56d81b4e5a3889531940cab09d604223cb62217"
+        "digest": "sha256:70df145e894b17afaff89183a12b0e3904641659a107c0a9b008ed05a5db0607"
       },
       "black_box_review": "unreviewed"
     }

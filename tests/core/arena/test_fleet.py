@@ -268,9 +268,7 @@ def test_fleet_attempt_rejects_a_finalized_external_lease_symlink(tmp_path: Path
     index_path = store.index_root / f"{draft.run_id}.json"
     index_path.chmod(0o600)
     index = json.loads(index_path.read_text())
-    index["integrity_digest"] = (
-        "sha256:" + hashlib.sha256(integrity_path.read_bytes()).hexdigest()
-    )
+    index["integrity_digest"] = "sha256:" + hashlib.sha256(integrity_path.read_bytes()).hexdigest()
     index_path.write_text(json.dumps(index) + "\n", encoding="utf-8")
 
     with pytest.raises((FleetError, RunIntegrityError), match="symlink|outside|escape"):

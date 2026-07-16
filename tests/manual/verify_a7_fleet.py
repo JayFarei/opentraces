@@ -94,6 +94,8 @@ def verify_a7_acceptance(
     capabilities_digest = _canonical_digest(capabilities)
     emulator_nonces: list[str] = []
     ledger_paths: list[Path] = []
+    ledger_digests: list[str] = []
+    ledger_operations: dict[str, list[str]] = {}
     for run_path, result in zip(run_paths, results, strict=True):
         pin = _nested(result, "pins", "capabilities")
         assert isinstance(pin, Mapping) and pin.get("digest") == capabilities_digest
@@ -104,24 +106,38 @@ def verify_a7_acceptance(
             name=f"capabilities {result['run_id']}",
         )
         assert _canonical_digest(observed_capabilities) == capabilities_digest
-        nonce = _nested(
-            result,
-            "pins",
-            "emulators",
-            "huggingface",
-            "setup",
-            "readiness",
-            "launch",
-            "nonce",
-        )
+        emulator_pin = _nested(result, "pins", "emulators", "huggingface")
+        assert isinstance(emulator_pin, Mapping)
+        nonce = _nested(emulator_pin, "setup", "readiness", "launch", "nonce")
         assert isinstance(nonce, str) and nonce
         emulator_nonces.append(nonce)
-        ledger = (run_path / "ledgers/huggingface.jsonl").resolve(strict=True)
+        world_ref = emulator_pin.get("evidence_ref")
+        assert world_ref == "world/huggingface.json"
+        world = _json_object(run_path / world_ref, name=f"world {result['run_id']}")
+        assert _nested(world, "readiness", "launch", "nonce") == nonce
+        assert _nested(world, "manifest", "launch", "nonce") == nonce
+        binding = emulator_pin.get("ledger_binding")
+        assert isinstance(binding, Mapping), "ledger binding is missing"
+        assert set(binding) == {"evidence_ref", "launch_nonce", "ledger_sha256"}
+        assert binding.get("launch_nonce") == nonce, "ledger binding has the wrong launch nonce"
+        ledger_ref = binding.get("evidence_ref")
+        assert ledger_ref == "ledgers/huggingface.jsonl"
+        ledger = (run_path / ledger_ref).resolve(strict=True)
         ledger.relative_to(run_path)
-        assert ledger.read_bytes(), "stored emulator ledger is empty"
+        ledger_source = ledger.read_bytes()
+        assert ledger_source, "stored emulator ledger is empty"
+        ledger_digest = f"sha256:{hashlib.sha256(ledger_source).hexdigest()}"
+        assert binding.get("ledger_sha256") == ledger_digest, "ledger digest disagrees with pin"
+        rows = [json.loads(line) for line in ledger_source.splitlines()]
+        assert rows and all(isinstance(row, Mapping) for row in rows)
+        operations = [row.get("operation_id") for row in rows]
+        assert all(isinstance(operation, str) and operation for operation in operations)
+        ledger_operations[str(result["run_id"])] = [str(operation) for operation in operations]
         ledger_paths.append(ledger)
+        ledger_digests.append(ledger_digest)
     assert len(set(emulator_nonces)) == len(emulator_nonces), "emulator nonce crossed runs"
     assert len(set(ledger_paths)) == len(ledger_paths), "emulator ledger crossed runs"
+    assert len(set(ledger_digests)) == len(ledger_digests), "ledger digest crossed runs"
 
     guarantees_source = Path(guarantees_path).read_bytes()
     guarantees_payload = json.loads(guarantees_source)
@@ -165,16 +181,57 @@ def verify_a7_acceptance(
     raw_reverify_attempts = reverify.get("attempts")
     assert isinstance(raw_reverify_attempts, list) and len(raw_reverify_attempts) == 2
     reverify_statuses: dict[str, str] = {}
+    guarantee_by_id = {str(guarantee["id"]): guarantee for guarantee in guarantees}
+    result_by_run_id = {str(result["run_id"]): result for result in results}
+    run_path_by_id = {
+        str(result["run_id"]): run_path for run_path, result in zip(run_paths, results, strict=True)
+    }
     for row in raw_reverify_attempts:
         assert isinstance(row, Mapping)
-        assert set(row) == {"exit_code", "guarantee_id", "run_id", "status"}
+        assert set(row) == {
+            "evidence_refs",
+            "exit_code",
+            "guarantee_id",
+            "run_id",
+            "run_ref",
+            "status",
+            "storage_integrity",
+            "verifier",
+        }, "reverify transcript has the wrong fields"
         guarantee_id = str(row["guarantee_id"])
         expected_status = "pass" if guarantee_id == "browser-auth" else "fail"
         expected_exit = 0 if guarantee_id == "browser-auth" else 1
         assert guarantee_id in {"browser-auth", "publish-down"}
-        assert row["run_id"] == bound[guarantee_id]["latest_run_id"]
+        run_id = str(row["run_id"])
+        assert run_id == bound[guarantee_id]["latest_run_id"], "reverify run is not atlas-bound"
+        assert row["run_ref"] == f"runs/v1/{run_id}/result.json", "reverify run ref is unstable"
+        assert row["storage_integrity"] == storage[run_id], "reverify integrity binding differs"
         assert row["status"] == expected_status
         assert row["exit_code"] == expected_exit
+        guarantee = guarantee_by_id[guarantee_id]
+        assert row["verifier"] == guarantee["verifier"], "reverify verifier binding differs"
+        result = result_by_run_id[run_id]
+        matching_verifiers = [
+            verifier
+            for verifier in result.get("verifiers") or []
+            if isinstance(verifier, Mapping)
+            and verifier.get("name") == guarantee["verifier"]["name"]
+            and _nested(verifier, "source_ref", "digest") == guarantee["verifier"]["digest"]
+        ]
+        assert len(matching_verifiers) == 1, "reverify stored verifier is not unique"
+        stored_verifier = matching_verifiers[0]
+        assert stored_verifier.get("status") == expected_status
+        evidence_refs = row["evidence_refs"]
+        assert (
+            isinstance(evidence_refs, list)
+            and evidence_refs
+            and evidence_refs == stored_verifier.get("evidence_refs")
+        ), "reverify evidence refs differ from stored verifier"
+        for evidence_ref in evidence_refs:
+            assert isinstance(evidence_ref, str)
+            target = (run_path_by_id[run_id] / evidence_ref).resolve(strict=True)
+            target.relative_to(run_path_by_id[run_id])
+            assert target.is_file()
         reverify_statuses[guarantee_id] = expected_status
     assert set(reverify_statuses) == {"browser-auth", "publish-down"}
 
@@ -186,6 +243,8 @@ def verify_a7_acceptance(
         "ledger_refs": [
             {"run_id": attempt.run_id, "ref": "ledgers/huggingface.jsonl"} for attempt in attempts
         ],
+        "ledger_digests": ledger_digests,
+        "ledger_operations": ledger_operations,
         "capabilities_digest": capabilities_digest,
         "observed_max_lease_concurrency": observed_concurrency,
         "atlas_states": atlas_states,

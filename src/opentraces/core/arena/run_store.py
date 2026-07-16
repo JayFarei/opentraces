@@ -56,6 +56,25 @@ def _sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def _validated_tree(root: Path) -> list[Path]:
+    """Return the contained tree while rejecting every symbolic link."""
+
+    try:
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise RunIntegrityError("run root cannot be resolved") from exc
+    paths = sorted(root.rglob("*"))
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise RunIntegrityError(f"finalized run contains a symlink: {relative}")
+        try:
+            path.resolve(strict=True).relative_to(resolved_root)
+        except (OSError, ValueError) as exc:
+            raise RunIntegrityError(f"finalized file escapes the run: {relative}") from exc
+    return paths
+
+
 def _json_digest(payload: dict[str, Any]) -> str:
     serialized = _canonical_json(payload, pretty=True).encode("utf-8")
     return f"sha256:{hashlib.sha256(serialized).hexdigest()}"
@@ -105,6 +124,16 @@ class RunStore:
         index_path = self.index_root / f"{run_path.name}.json"
         if not result_path.is_file() or not integrity_path.is_file() or not index_path.is_file():
             raise RunIntegrityError("finalized run is missing result, integrity manifest, or index")
+        if run_path.is_symlink():
+            raise RunIntegrityError("finalized run path is a symlink")
+        try:
+            resolved_run = run_path.resolve(strict=True)
+            resolved_store = self.root.resolve(strict=True)
+        except OSError as exc:
+            raise RunIntegrityError("finalized run cannot be resolved") from exc
+        if resolved_run.parent != resolved_store:
+            raise RunIntegrityError("finalized run is outside its RunStore")
+        tree = _validated_tree(run_path)
 
         index = json.loads(index_path.read_text(encoding="utf-8"))
         if _sha256(result_path) != index.get("result_digest"):
@@ -124,7 +153,7 @@ class RunStore:
                 raise RunIntegrityError(f"finalized file changed: {relative}")
         actual = {
             path.relative_to(run_path).as_posix()
-            for path in run_path.rglob("*")
+            for path in tree
             if path.is_file()
             and path.relative_to(run_path).as_posix() not in {"result.json", ".integrity.json"}
         }
@@ -268,9 +297,10 @@ class RunDraft:
         return record
 
     def _manifest(self) -> dict[str, Any]:
+        paths = _validated_tree(self.path)
         files = {
             path.relative_to(self.path).as_posix(): _sha256(path)
-            for path in sorted(self.path.rglob("*"))
+            for path in paths
             if path.is_file()
             and path.relative_to(self.path).as_posix() not in {"result.json", ".integrity.json"}
         }
@@ -320,6 +350,7 @@ class RunDraft:
         validate_result(result)
         if result["run_id"] != self.run_id:
             raise ValueError("result run_id does not match the draft")
+        _validated_tree(self.path)
 
         intent_path = self.store.transaction_root / f"{self.run_id}.json"
         try:
