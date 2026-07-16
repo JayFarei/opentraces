@@ -53,6 +53,7 @@ def verify_a7_acceptance(
     atlas_path: Path,
     guarantees_path: Path,
     capabilities_path: Path,
+    reverify_path: Path,
 ) -> dict[str, Any]:
     """Return the independently cross-checked A7 acceptance facts or fail closed."""
 
@@ -154,6 +155,29 @@ def verify_a7_acceptance(
                 == result_by_nodeid[guarantee["nodeid"]]["run_id"]
             )
 
+    reverify = _json_object(reverify_path, name="reverify-without-box transcript")
+    assert reverify.get("schema_version") == "opentraces.bench.reverify-without-box.v0"
+    assert reverify.get("runtime_constraints") == {
+        "box_runtime": "unavailable",
+        "external_process_path": "empty",
+        "network": "closed-loop-proxy",
+    }
+    raw_reverify_attempts = reverify.get("attempts")
+    assert isinstance(raw_reverify_attempts, list) and len(raw_reverify_attempts) == 2
+    reverify_statuses: dict[str, str] = {}
+    for row in raw_reverify_attempts:
+        assert isinstance(row, Mapping)
+        assert set(row) == {"exit_code", "guarantee_id", "run_id", "status"}
+        guarantee_id = str(row["guarantee_id"])
+        expected_status = "pass" if guarantee_id == "browser-auth" else "fail"
+        expected_exit = 0 if guarantee_id == "browser-auth" else 1
+        assert guarantee_id in {"browser-auth", "publish-down"}
+        assert row["run_id"] == bound[guarantee_id]["latest_run_id"]
+        assert row["status"] == expected_status
+        assert row["exit_code"] == expected_exit
+        reverify_statuses[guarantee_id] = expected_status
+    assert set(reverify_statuses) == {"browser-auth", "publish-down"}
+
     return {
         "works": True,
         "run_ids": [attempt.run_id for attempt in attempts],
@@ -165,6 +189,7 @@ def verify_a7_acceptance(
         "capabilities_digest": capabilities_digest,
         "observed_max_lease_concurrency": observed_concurrency,
         "atlas_states": atlas_states,
+        "reverify_without_box": reverify_statuses,
     }
 
 
@@ -175,6 +200,7 @@ def main() -> int:
     parser.add_argument("--atlas", required=True, type=Path)
     parser.add_argument("--guarantees", required=True, type=Path)
     parser.add_argument("--capabilities", required=True, type=Path)
+    parser.add_argument("--reverify-without-box", required=True, type=Path)
     args = parser.parse_args()
     observed = verify_a7_acceptance(
         store_root=args.store_root,
@@ -182,6 +208,7 @@ def main() -> int:
         atlas_path=args.atlas,
         guarantees_path=args.guarantees,
         capabilities_path=args.capabilities,
+        reverify_path=args.reverify_without_box,
     )
     print(json.dumps(observed, sort_keys=True))
     return 0
