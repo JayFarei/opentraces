@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import Mapping
 
+import pytest
+
 from opentraces.core.arena.box import Box
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.drives.actions import RunActionSequence
@@ -238,3 +240,56 @@ def test_agent_harness_exit_before_match_is_not_reported_as_ssh_disconnect(
         "code": "agent_drive_exited_before_expectation",
         "message": "agent terminal exited before expectation during actions/0001",
     }
+
+
+@pytest.mark.parametrize(
+    ("terminal_state", "reason_code", "reason_message"),
+    [
+        (
+            "disconnected",
+            "agent_drive_disconnected",
+            "agent terminal disconnected during actions/0001",
+        ),
+        (
+            "exited",
+            "agent_drive_exited_before_expectation",
+            "agent terminal exited before expectation during actions/0001",
+        ),
+    ],
+)
+def test_terminal_failure_precedes_stale_agent_completion_marker(
+    tmp_path: Path,
+    terminal_state: str,
+    reason_code: str,
+    reason_message: str,
+) -> None:
+    _store, draft, actions = _draft(tmp_path)
+    session = ScriptedTerminalControlSession(
+        [
+            AgentTerminalObservation(
+                state=terminal_state,
+                screen=("OPENTRACES_HARNESS_VERSION=2.1.210\nOPENTRACES_AGENT_ATTEMPT_COMPLETE"),
+                logs="",
+            )
+        ]
+    )
+    drive = AgentTerminalDrive(
+        box=_box(),
+        draft=draft,
+        actions=actions,
+        session_factory=lambda _name: session,
+        poll_interval=0,
+    )
+
+    result = drive.run(
+        harness_argv=["claude"],
+        prompt="Complete the task.",
+        expect_regex=r"(?m)^OPENTRACES_AGENT_ATTEMPT_COMPLETE$",
+        timeout=5,
+    )
+
+    assert result.status == "fail"
+    assert result.reason == {"code": reason_code, "message": reason_message}
+    stored_result = json.loads((draft.path / result.result_ref).read_text(encoding="utf-8"))
+    assert stored_result["status"] == "fail"
+    assert stored_result["reason"] == result.reason

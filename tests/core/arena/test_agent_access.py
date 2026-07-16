@@ -179,6 +179,19 @@ class WrongVersionHarnessSession(CompletingHarnessSession):
         )
 
 
+class StaleMarkerTerminalStateHarnessSession(CompletingHarnessSession):
+    def __init__(self, state: str) -> None:
+        super().__init__()
+        self.state = state
+
+    def observe(self) -> AgentTerminalObservation:
+        return AgentTerminalObservation(
+            state=self.state,
+            screen=("OPENTRACES_HARNESS_VERSION=2.1.210\nOPENTRACES_AGENT_ATTEMPT_COMPLETE"),
+            logs="",
+        )
+
+
 def _bench(tmp_path: Path, session: CompletingHarnessSession) -> Bench:
     tmp_path.mkdir(parents=True, exist_ok=True)
     return Bench(
@@ -485,6 +498,55 @@ def test_failed_agent_attempt_overrides_passing_verifier_and_incompletes_evidenc
         if requirement["name"] == "agent.attempt"
     )
     assert agent_requirement == {
+        "name": "agent.attempt",
+        "complete": False,
+        "evidence_refs": [attempt.artifact_ref],
+    }
+
+
+@pytest.mark.parametrize(
+    ("terminal_state", "reason_code", "reason_message"),
+    [
+        (
+            "disconnected",
+            "agent_drive_disconnected",
+            "agent terminal disconnected during actions/0001",
+        ),
+        (
+            "exited",
+            "agent_drive_exited_before_expectation",
+            "agent terminal exited before expectation during actions/0001",
+        ),
+    ],
+)
+def test_stale_completion_marker_cannot_green_failed_agent_run(
+    tmp_path: Path,
+    terminal_state: str,
+    reason_code: str,
+    reason_message: str,
+) -> None:
+    session = StaleMarkerTerminalStateHarnessSession(terminal_state)
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Inspect the terminal.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert attempt.completed is False
+    assert attempt.failure == {"code": reason_code, "message": reason_message}
+    assert run.result["verdict"] == "fail"
+    assert run.result["reason"] == attempt.failure
+    assert run.result["evidence"]["complete"] is False
+    assert next(
+        requirement
+        for requirement in run.result["evidence"]["requirements"]
+        if requirement["name"] == "agent.attempt"
+    ) == {
         "name": "agent.attempt",
         "complete": False,
         "evidence_refs": [attempt.artifact_ref],
