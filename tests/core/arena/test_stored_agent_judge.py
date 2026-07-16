@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -157,8 +160,19 @@ def _finalized_run(tmp_path: Path, *, trail_evidence: bool) -> Path:
     )
 
 
-def test_stored_judge_reobserves_scenario_4_without_execution(tmp_path: Path) -> None:
+def test_stored_judge_reobserves_scenario_4_without_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run_path = _finalized_run(tmp_path, trail_evidence=True)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("stored-only judge attempted a live seam")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(os, "system", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
 
     verdict = judge_agent_commit_run(run_path)
 
@@ -166,6 +180,14 @@ def test_stored_judge_reobserves_scenario_4_without_execution(tmp_path: Path) ->
     assert verdict["commit"] == COMMIT
     assert verdict["trace_id"] == TRACE_ID
     assert verdict["evidence_refs"]
+    for reference in verdict["evidence_refs"]:
+        stored_ref = Path(reference)
+        assert not stored_ref.is_absolute()
+        assert "runs/v1" not in stored_ref.as_posix()
+        assert str(run_path) not in reference
+        resolved = (run_path / stored_ref).resolve()
+        assert resolved.is_relative_to(run_path)
+        assert resolved.is_file()
 
 
 def test_stored_judge_rejects_green_result_without_public_trail_evidence(
