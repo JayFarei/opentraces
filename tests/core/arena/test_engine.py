@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import os
 import signal
@@ -546,6 +547,67 @@ def test_verifier_identity_rejects_a_nested_symlink_package_alias_as_ambiguous(
     finally:
         for module_name in list(sys.modules):
             if module_name == "pkg" or module_name.startswith("pkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_hardlink_second_name_is_a_known_v0_limitation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """KNOWN v0 LIMITATION (founder-accepted, reviewer case C9): a hardlink giving
+    one source inode two directory-entry names in different packages is not
+    enumerated, so the "multiple canonical import paths" refusal is skipped.  This
+    pins the accepted state: the resolver resolves to the CORRECT source inode
+    (same_inode True) and does NOT fail closed.  It cannot cause a wrong-source
+    verdict because the source is digest-pinned and re-verified at reverify.  See
+    the module docstring's Known limitations note; enumeration is tracked as a
+    nonblocking follow-up.
+    """
+
+    package_a = tmp_path / "pkga"
+    package_b = tmp_path / "pkgb"
+    package_a.mkdir()
+    package_b.mkdir()
+    (package_a / "__init__.py").write_text("", encoding="utf-8")
+    (package_b / "__init__.py").write_text("", encoding="utf-8")
+    source = package_a / "checks.py"
+    source.write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    alias = package_b / "checks.py"
+    try:
+        os.link(source, alias)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"hardlinks are unavailable: {exc}")
+
+    # The hardlink is a genuine same-inode alias: two import names reach it.
+    source_stat = source.stat()
+    alias_stat = alias.stat()
+    same_inode = (
+        (source_stat.st_dev, source_stat.st_ino)
+        == (alias_stat.st_dev, alias_stat.st_ino)
+    )
+    if not same_inode:
+        pytest.skip("filesystem did not share the inode across the hardlink")
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        pkga_checks = importlib.import_module("pkga.checks")
+
+        # Accepted behavior: resolves to the correct source rather than refusing.
+        resolved = resolve_verifier(pkga_checks.verify)
+
+        assert resolved.name == "pkga.checks.verify"
+        resolved_source = Path(inspect.getsourcefile(resolved.target)).resolve()
+        assert resolved_source.stat().st_ino == source_stat.st_ino
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"pkga", "pkgb"} or module_name.startswith(
+                ("pkga.", "pkgb.")
+            ):
                 sys.modules.pop(module_name, None)
         importlib.invalidate_caches()
 

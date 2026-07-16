@@ -4,6 +4,20 @@ Candidates prefer deepest contiguous real-package ancestry, with equally
 specific aliases refused.  Origins are compared by inode, and coordinate scans
 follow Python's package-before-module precedence.  Both canonical names and the
 ``__module__`` fallback must resolve unambiguously to the callable's source.
+
+Known limitations (v0, accepted).  What is guaranteed: the recorded identity
+imports to exactly this source file by inode identity ``(st_dev, st_ino)``; all
+realistic ambiguity (same-name shadows, first-level and nested-within-ancestor
+symlink aliases, case-fold ``sys.path`` spellings, package-over-module
+precedence, stale-cache shadows) fails closed; and the source is digest-pinned
+and re-verified at reverify.  What is not guaranteed: a second canonical import
+name that reaches the *same* source is not always enumerated when the alias is
+created by a cross-tree symlink bridge (the ``sys.path`` root or an intermediate
+wrapper directory is not itself a source ancestor) or by a hardlink (one source
+inode with directory entries in two packages).  In those same-source cases the
+"multiple canonical import paths" refusal may be skipped.  This cannot cause a
+wrong-source verdict: the resolver still resolves to the correct source inode,
+and the digest is re-checked at reverify.
 """
 
 from __future__ import annotations
