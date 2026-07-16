@@ -216,17 +216,28 @@ def reverify_stored_run(
     evidence = StoredEvidence(run_path)
     evidence_refs: list[str] = []
     reason: dict[str, str] | None = None
+
+    def validated_refs(raw_refs: object) -> list[str]:
+        if not isinstance(raw_refs, list) or not all(isinstance(ref, str) for ref in raw_refs):
+            raise RunIntegrityError("reverifier evidence_refs must be a list of stored paths")
+        return [evidence.validate_ref(ref) for ref in raw_refs]
+
     try:
         returned = target(evidence)
         if isinstance(returned, Mapping):
-            raw_refs = returned.get("evidence_refs", [])
-            if not isinstance(raw_refs, list) or not all(isinstance(ref, str) for ref in raw_refs):
-                raise RunIntegrityError("reverifier evidence_refs must be a list of stored paths")
-            evidence_refs = [evidence.validate_ref(ref) for ref in raw_refs]
+            evidence_refs = validated_refs(returned.get("evidence_refs", []))
         status = "pass"
     except AssertionError as exc:
-        status = "fail"
-        reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
+        try:
+            evidence_refs = validated_refs(getattr(exc, "evidence_refs", []))
+        except Exception as evidence_exc:
+            status = "error"
+            reason = sanitize_reason(
+                "verifier_error", f"{type(evidence_exc).__name__}: {evidence_exc}"
+            )
+        else:
+            status = "fail"
+            reason = sanitize_reason("assertion_failed", str(exc) or "assertion failed")
     except Exception as exc:
         status = "error"
         reason = sanitize_reason("verifier_error", f"{type(exc).__name__}: {exc}")
