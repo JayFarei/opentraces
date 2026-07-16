@@ -294,6 +294,49 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         if reason
         else ""
     )
+    capture = result.get("capture")
+    capture_facts_html = ""
+    if isinstance(capture, dict):
+        sources = capture.get("sources") or []
+        source_by_name = {
+            str(source.get("name")): source
+            for source in sources
+            if isinstance(source, dict) and source.get("name")
+        }
+        capture_cards: list[str] = []
+        for label, source_name in (
+            ("TRACE", "session_jsonl"),
+            ("CONTEXT", "telemetry"),
+            ("TRAIL", "git"),
+            ("STORAGE", "bucket"),
+        ):
+            source = source_by_name.get(source_name) or {}
+            completeness = str(source.get("completeness") or "missing")
+            status = str(source.get("status") or "unavailable")
+            links: list[str] = []
+            for reference in source.get("evidence_refs") or []:
+                stored_reference = f"capture/{reference}"
+                target = _resolve_run_ref(run_path, stored_reference)
+                if target is not None:
+                    links.append(
+                        f'<a href="{_h(_href(page_dir, target))}">{_h(stored_reference)}</a>'
+                    )
+            capture_cards.append(
+                '<div class="fact capture-fact">'
+                f'<div class="eyebrow">{label}</div><strong>{_h(completeness)}</strong>'
+                f'<div>{_h(status)}</div><nav>{"".join(links)}</nav>'
+                "</div>"
+            )
+        capture_cards.append(
+            '<div class="fact capture-fact">'
+            '<div class="eyebrow">LIFECYCLE</div>'
+            f'<strong>{_h(capture.get("completeness") or "partial")}</strong>'
+            "</div>"
+        )
+        capture_facts_html = (
+            '<h2>Capture</h2><section class="facts capture-facts">'
+            f'{"".join(capture_cards)}</section>'
+        )
     world_cards: list[str] = []
     for name, pin in sorted((result.get("pins", {}).get("emulators") or {}).items()):
         ledger_ref = f"ledgers/{name}.jsonl"
@@ -361,6 +404,7 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>
 {reason_html}
 {world_html}
+{capture_facts_html}
 {timeline_html}
 <h2>Recording</h2><section class="stack">{"".join(players)}</section>
 <h2>Actions and raw output</h2><section class="stack">{"".join(action_cards)}</section>
