@@ -65,7 +65,9 @@ def build_agent_summary(atlas: Mapping[str, Any]) -> dict[str, Any]:
     rows = _rows(atlas)
     counts = Counter(str(row.get("state")) for row in rows)
     failures = [
-        _signal_row(row, include_verdict=True) for row in rows if row.get("verdict") == "fail"
+        _signal_row(row, include_verdict=True)
+        for row in rows
+        if row.get("state") == "failing" or row.get("verdict") == "fail"
     ]
     holes = [
         _signal_row(row, include_verdict=False)
