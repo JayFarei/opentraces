@@ -1,10 +1,9 @@
 """Canonical, importable identity for stored bench verifiers.
 
-Candidates rank by deepest contiguous real-package ancestry, then dotted-path
-length.  Different-depth names for the same source therefore prefer the deeper
-package, while equal-specificity aliases are ambiguous.  The selected name must
-also resolve to only that source across filesystem ``sys.path`` roots; an
-earlier shadow or any distinct origin fails closed.
+Candidates prefer deepest contiguous real-package ancestry, with equally
+specific aliases refused.  Origins are compared by inode, and coordinate scans
+follow Python's package-before-module precedence.  Both canonical names and the
+``__module__`` fallback must resolve unambiguously to the callable's source.
 """
 
 from __future__ import annotations
@@ -35,6 +34,28 @@ class ResolvedVerifier:
     digest: str
 
 
+def _origin_key(path: Path) -> tuple[int, int] | None:
+    """Return the filesystem identity of an origin, following symlinks."""
+
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
+def _relative_source_path(directory: Path, source: Path) -> Path | None:
+    """Return source relative to a directory spelling with the same inode."""
+
+    directory_key = _origin_key(directory)
+    if directory_key is None:
+        return None
+    for parent in source.parents:
+        if _origin_key(parent) == directory_key:
+            return source.relative_to(parent)
+    return None
+
+
 def _sys_path_roots() -> list[Path]:
     roots: list[Path] = []
     seen: set[Path] = set()
@@ -60,10 +81,8 @@ def _candidate_from_relative(
         parts.pop()
     if not parts or any(not part.isidentifier() for part in parts):
         return None
-    try:
-        if (root / relative).resolve() != source:
-            return None
-    except OSError:
+    source_key = _origin_key(source)
+    if source_key is None or _origin_key(root / relative) != source_key:
         return None
 
     package_depth = 0
@@ -84,44 +103,61 @@ def _source_candidates_for_root(
     source: Path,
 ) -> list[tuple[str, tuple[int, int]]]:
     candidates: list[tuple[str, tuple[int, int]]] = []
-    direct_first: str | None = None
-    try:
-        relative = source.relative_to(root.resolve())
-    except (OSError, ValueError):
-        relative = None
+    relative = _relative_source_path(root, source)
     if relative is not None:
-        direct_first = relative.parts[0]
         candidate = _candidate_from_relative(root, relative, source)
         if candidate is not None:
             candidates.append(candidate)
 
-    # Preserve first-level symlink spellings instead of deriving names only from
-    # the real path.  Non-symlink entries cannot add an alias beyond the direct
-    # first component, so they are skipped to keep site-packages scans cheap.
-    try:
-        entries = os.scandir(root)
-    except OSError:
+    source_ancestor_keys = {
+        key for parent in source.parents if (key := _origin_key(parent)) is not None
+    }
+    root_key = _origin_key(root)
+    if root_key is None or root_key not in source_ancestor_keys:
         return candidates
-    with entries:
-        for entry in entries:
-            if entry.name != direct_first and not entry.is_symlink():
-                continue
-            if not entry.name.isidentifier():
-                continue
-            package_path = Path(entry.path)
-            if not (package_path / "__init__.py").is_file():
-                continue
-            try:
-                alias_relative = source.relative_to(package_path.resolve())
-            except (OSError, ValueError):
-                continue
-            candidate = _candidate_from_relative(
-                root,
-                Path(entry.name) / alias_relative,
-                source,
-            )
-            if candidate is not None:
-                candidates.append(candidate)
+
+    def walk_package_spellings(
+        directory: Path,
+        parts: tuple[str, ...],
+        ancestor_keys: frozenset[tuple[int, int]],
+    ) -> None:
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            return
+        with entries:
+            for entry in entries:
+                if not entry.name.isidentifier() or not entry.is_dir(
+                    follow_symlinks=True
+                ):
+                    continue
+                package_path = Path(entry.path)
+                package_key = _origin_key(package_path)
+                if (
+                    package_key is None
+                    or package_key not in source_ancestor_keys
+                    or package_key in ancestor_keys
+                ):
+                    continue
+                package_parts = (*parts, entry.name)
+                if not parts and not (package_path / "__init__.py").is_file():
+                    continue
+                alias_relative = _relative_source_path(package_path, source)
+                if alias_relative is not None:
+                    candidate = _candidate_from_relative(
+                        root,
+                        Path(*package_parts) / alias_relative,
+                        source,
+                    )
+                    if candidate is not None:
+                        candidates.append(candidate)
+                walk_package_spellings(
+                    package_path,
+                    package_parts,
+                    ancestor_keys | {package_key},
+                )
+
+    walk_package_spellings(root, (), frozenset({root_key}))
     return candidates
 
 
@@ -134,9 +170,7 @@ def _coordinate_origins(candidate: str) -> list[Path]:
         package_path = root
         for index, part in enumerate(parts[:-1]):
             package_path /= part
-            if not package_path.is_dir() or (
-                index == 0 and not (package_path / "__init__.py").is_file()
-            ):
+            if not package_path.is_dir():
                 break
         else:
             leaf = parts[-1]
@@ -148,17 +182,22 @@ def _coordinate_origins(candidate: str) -> list[Path]:
             for possible_origin in possible_origins:
                 if not possible_origin.is_file():
                     continue
-                try:
-                    origins.append(possible_origin.resolve())
-                except OSError:
-                    continue
+                origins.append(possible_origin)
+                break
     return origins
 
 
 def _require_unambiguous_coordinate(candidate: str, source: Path) -> None:
     origins = _coordinate_origins(candidate)
-    distinct_origins = set(origins)
-    if not origins or origins[0] != source or distinct_origins != {source}:
+    source_key = _origin_key(source)
+    origin_keys = [_origin_key(origin) for origin in origins]
+    if (
+        source_key is None
+        or not origin_keys
+        or any(key is None for key in origin_keys)
+        or origin_keys[0] != source_key
+        or set(origin_keys) != {source_key}
+    ):
         raise VerifierIdentityError(
             "verifier module coordinate is shadowed by a distinct source"
         )
@@ -202,9 +241,14 @@ def resolve_verifier(verifier: Callable[..., Any]) -> ResolvedVerifier:
         or any(not part.isidentifier() for part in qualname.split("."))
     ):
         raise VerifierIdentityError("verifier must be an importable module-level callable")
-    module_name = _canonical_module_from_source(source) or verifier.__module__
+    module_name = _canonical_module_from_source(source)
+    used_fallback = module_name is None
+    if used_fallback:
+        module_name = verifier.__module__
     if not isinstance(module_name, str) or not module_name:
         raise VerifierIdentityError("verifier has no module identity")
+    if used_fallback:
+        _require_unambiguous_coordinate(module_name, source)
     try:
         target: object = importlib.import_module(module_name)
         for attribute in qualname.split("."):
@@ -215,7 +259,11 @@ def resolve_verifier(verifier: Callable[..., Any]) -> ResolvedVerifier:
         )
     except (AttributeError, ImportError, ModuleNotFoundError, OSError, TypeError) as exc:
         raise VerifierIdentityError("verifier must be an importable module-level callable") from exc
-    if not callable(target) or target_source != source:
+    source_key = _origin_key(source)
+    target_source_key = (
+        _origin_key(target_source) if target_source is not None else None
+    )
+    if not callable(target) or source_key is None or target_source_key != source_key:
         raise VerifierIdentityError("verifier must be an importable module-level callable")
     try:
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
