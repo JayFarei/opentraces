@@ -153,6 +153,7 @@ class BenchRun:
         self._app_state_pin: dict[str, Any] = {}
         self._emulators: dict[str, HuggingFaceEmulator | AnthropicReplayEmulator] = {}
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
+        self._capture_result: dict[str, Any] | None = None
         self.origin_evidence_ref: str | None = None
 
     def __enter__(self) -> "BenchRun":
@@ -555,6 +556,43 @@ class BenchRun:
                     "evidence_refs": [attempt.artifact_ref],
                 }
             )
+        capture_sources = (
+            self._capture_result.get("sources", [])
+            if isinstance(self._capture_result, dict)
+            else []
+        )
+        capture_by_name = {
+            str(source.get("name")): source
+            for source in capture_sources
+            if isinstance(source, Mapping) and source.get("name")
+        }
+        missing_capture: list[str] = []
+        for source_name in self.capture_required:
+            source = capture_by_name.get(source_name)
+            complete = bool(
+                source
+                and source.get("status") == "finalized"
+                and source.get("completeness") == "full"
+            )
+            refs = source.get("evidence_refs", []) if source else []
+            evidence_requirements.append(
+                {
+                    "name": f"capture.{source_name}",
+                    "complete": complete,
+                    "evidence_refs": list(refs) if isinstance(refs, list) else [],
+                }
+            )
+            if not complete:
+                missing_capture.append(source_name)
+        if missing_capture and execution_status == "complete" and verdict == "pass":
+            verdict = "fail"
+            reason = {
+                "code": "required_capture_missing",
+                "message": (
+                    "required capture evidence is unavailable: "
+                    + ", ".join(missing_capture)
+                ),
+            }
         if scenario_assertion:
             evidence_requirements.append(
                 {
@@ -610,7 +648,7 @@ class BenchRun:
             evidence={"complete": evidence_complete, "requirements": evidence_requirements},
             recordings=self._recording_summary(),
             artifacts=artifacts,
-            capture=None,
+            capture=self._capture_result,
             pins={
                 "product": {
                     "commit": self.bench.source.commit,
