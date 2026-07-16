@@ -349,6 +349,35 @@ def test_local_verifier_is_rejected_before_invocation_and_cannot_finalize_pass(
     assert result["reason"]["code"] == "verifier_identity_invalid"
 
 
+def test_same_file_callable_cannot_borrow_a_canonical_identity_to_forge_pass(
+    tmp_path: Path,
+) -> None:
+    forged_invoked = False
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def forged_verifier(_run, **_inputs):
+        nonlocal forged_invoked
+        forged_invoked = True
+        return {"evidence_refs": []}
+
+    assert forged_verifier.__code__.co_filename == verify_raises.__code__.co_filename
+    forged_verifier.__module__ = verify_raises.__module__
+    forged_verifier.__qualname__ = verify_raises.__qualname__
+
+    with bench.run(app_state="install-only") as run:
+        record = run.verify(forged_verifier, message="canonical verifier body ran")
+
+    assert forged_invoked is False
+    assert record["status"] == "error"
+    assert run.result["execution_status"] == "error"
+    assert run.result["verdict"] is None
+
+
 def test_slice_origin_is_staged_before_verification_and_only_the_verifier_can_name_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
