@@ -77,19 +77,19 @@ def run(argv: Sequence[str]) -> int:
     )
     child_environment = dict(os.environ)
     child_environment.update(capture.bindings.env)
-    child = subprocess.Popen(child_argv, env=child_environment)
-
     forwarded = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
     previous_handlers: dict[signal.Signals, signal.Handlers] = {}
+    child: subprocess.Popen[bytes] | None = None
 
     def _forward(signum: int, _frame: FrameType | None) -> None:
-        if child.poll() is None:
+        if child is not None and child.poll() is None:
             child.send_signal(signum)
 
-    for signum in forwarded:
-        previous_handlers[signum] = signal.getsignal(signum)
-        signal.signal(signum, _forward)
     try:
+        child = subprocess.Popen(child_argv, env=child_environment)
+        for signum in forwarded:
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, _forward)
         return child.wait()
     finally:
         for signum, handler in previous_handlers.items():
