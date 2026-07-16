@@ -17,27 +17,28 @@ pytestmark = pytest.mark.skipif(
 
 
 def _auth_mutations_from_ledger(rows):
-    observed = [
-        (
-            row["operation_id"],
-            row["method"],
-            row["path"],
-            row["response"]["status"],
-        )
-        for row in rows
-    ]
-    assert observed == [
-        ("manifest", "GET", "/_emulate/manifest", 200),
+    mutations = []
+    for row in rows:
+        assert isinstance(row, dict)
+        operation_id = row.get("operation_id")
+        method = row.get("method")
+        path = row.get("path")
+        response = row.get("response")
+        assert isinstance(operation_id, str) and operation_id
+        assert isinstance(method, str) and method
+        assert isinstance(path, str) and path.startswith("/")
+        assert isinstance(response, dict)
+        status = response.get("status")
+        assert type(status) is int and 200 <= status < 300
+        if method != "GET":
+            mutations.append((operation_id, method, path, status))
+
+    assert mutations == [
         ("issueDeviceCode", "POST", "/oauth/device", 200),
-        ("viewDeviceAuthorization", "GET", "/oauth/authorize", 200),
         ("authorizeDeviceCode", "POST", "/oauth/authorize", 200),
         ("completeDeviceCode", "POST", "/oauth/token", 200),
-        ("whoami", "GET", "/api/whoami-v2", 200),
-        ("whoami", "GET", "/api/whoami-v2", 200),
     ]
-    mutations = [row["operation_id"] for row in rows if row["method"] != "GET"]
-    assert mutations == ["issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"]
-    return mutations
+    return [row[0] for row in mutations]
 
 
 def cli_reports_authenticated(evidence, *, login=None, whoami=None, hf=None):

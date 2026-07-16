@@ -212,6 +212,7 @@ def test_recorder_only_failure_cannot_rewrite_successful_browser_auth_verdict(
         "failed-auth-mutation",
         "unknown-write",
         "failed-whoami",
+        "malformed-row",
     ],
 )
 def test_browser_auth_verifier_rejects_non_claiming_ledger_exhaust(fault: str) -> None:
@@ -236,6 +237,14 @@ def test_browser_auth_verifier_rejects_non_claiming_ledger_exhaust(fault: str) -
         )
     elif fault == "failed-whoami":
         rows[-2]["response"] = {"status": 401}
+    elif fault == "malformed-row":
+        rows.append(
+            {
+                "method": "GET",
+                "path": "/api/datasets/bench/malformed",
+                "operation_id": "datasetInfo",
+            }
+        )
 
     login = SimpleNamespace(returncode=0, stderr="", result_ref="actions/login/result.json")
     whoami = SimpleNamespace(

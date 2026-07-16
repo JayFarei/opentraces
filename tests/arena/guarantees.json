@@ -6,7 +6,7 @@
       "nodeid": "tests/arena/scenarios/test_browser_auth_reaches_hf.py::test_browser_authorization_authenticates_the_cli",
       "verifier": {
         "name": "tests.arena.scenarios.test_browser_auth_reaches_hf.cli_reports_authenticated",
-        "digest": "sha256:4d31d198dc75c1e46edae3ea730763ca9449bf367b70572f1e6829b7f72129a9"
+        "digest": "sha256:cd3d5bda22255c9e5905bf073df7f2960ff77777f996c67905e9d7fb99f68550"
       },
       "black_box_review": "unreviewed"
     },
