@@ -7,7 +7,6 @@ verifier a narrow view of bytes that are already inside that record.
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 from collections.abc import Callable, Mapping
@@ -18,6 +17,7 @@ from typing import Any
 from .diagnostics import sanitize_reason
 from .page import render_evidence_page
 from .run_store import RunIntegrityError, RunStore
+from .verifier_identity import callable_identity
 
 
 REVERIFICATION_SCHEMA_VERSION = "opentraces.bench.reverification.v0"
@@ -141,15 +141,10 @@ def rerender_stored_run(
 
 
 def _callable_identity(verifier: Callable[[StoredEvidence], object]) -> tuple[str, str]:
-    name = f"{verifier.__module__}.{verifier.__qualname__}"
-    source_value = inspect.getsourcefile(verifier)
-    if source_value is None:
-        raise StoredVerifierMismatch("cannot locate the requested verifier source")
     try:
-        digest = hashlib.sha256(Path(source_value).resolve().read_bytes()).hexdigest()
-    except OSError as exc:
-        raise StoredVerifierMismatch("cannot read the requested verifier source") from exc
-    return name, f"sha256:{digest}"
+        return callable_identity(verifier)
+    except (OSError, TypeError, ValueError) as exc:
+        raise StoredVerifierMismatch("cannot resolve the requested verifier identity") from exc
 
 
 def _canonical_verifier(

@@ -28,6 +28,7 @@ from .emulate.huggingface.runtime import (
     start_huggingface_emulator,
 )
 from .run_store import RunDraft, RunStore
+from .verifier_identity import callable_identity
 
 
 def _utc_now() -> str:
@@ -419,8 +420,9 @@ class BenchRun:
         except Exception as exc:
             status = "error"
             reason = sanitize_reason("verifier_error", f"{type(exc).__name__}: {exc}")
+        verifier_name, _verifier_digest = callable_identity(verifier)
         record = {
-            "name": f"{verifier.__module__}.{verifier.__qualname__}",
+            "name": verifier_name,
             "source_ref": source_ref,
             "status": status,
             "duration_ms": max(0, int((time.monotonic() - started) * 1000)),

@@ -4,27 +4,37 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+from opentraces.core.arena.verifier_identity import callable_identity
 
 
 DEFAULT_REPOSITORY = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = DEFAULT_REPOSITORY / "tests/arena/guarantees.json"
 
 
-def _digest(path: Path) -> str:
-    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-
-
 def canonical_guarantees(*, repository: Path) -> dict[str, Any]:
     """Build the manifest after all verifier sources are final."""
 
     repository = Path(repository).resolve()
-    browser_source = repository / "tests/arena/scenarios/test_browser_auth_reaches_hf.py"
-    publish_source = repository / "tests/arena/scenarios/test_publish_reaches_hf_remote.py"
-    future_source = repository / "tests/arena/guarantees.py"
+    if str(repository) not in sys.path:
+        sys.path.insert(0, str(repository))
+    from tests.arena.guarantees import (
+        verify_linux_x86_64_hf_emulator,
+        verify_remote_rented_glibc_emulator,
+    )
+    from tests.arena.scenarios.test_browser_auth_reaches_hf import cli_reports_authenticated
+    from tests.arena.scenarios.test_publish_reaches_hf_remote import (
+        publish_commit_is_witnessed,
+    )
+
+    browser_identity = callable_identity(cli_reports_authenticated)
+    publish_identity = callable_identity(publish_commit_is_witnessed)
+    remote_identity = callable_identity(verify_remote_rented_glibc_emulator)
+    x64_identity = callable_identity(verify_linux_x86_64_hf_emulator)
     return {
         "guarantees": [
             {
@@ -34,13 +44,7 @@ def canonical_guarantees(*, repository: Path) -> dict[str, Any]:
                     "tests/arena/scenarios/test_browser_auth_reaches_hf.py::"
                     "test_browser_authorization_authenticates_the_cli"
                 ),
-                "verifier": {
-                    "name": (
-                        "tests.arena.scenarios.test_browser_auth_reaches_hf."
-                        "cli_reports_authenticated"
-                    ),
-                    "digest": _digest(browser_source),
-                },
+                "verifier": {"name": browser_identity[0], "digest": browser_identity[1]},
                 "black_box_review": "unreviewed",
             },
             {
@@ -50,13 +54,7 @@ def canonical_guarantees(*, repository: Path) -> dict[str, Any]:
                     "tests/arena/scenarios/test_publish_reaches_hf_remote.py::"
                     "test_publish_reaches_hf_remote"
                 ),
-                "verifier": {
-                    "name": (
-                        "tests.arena.scenarios.test_publish_reaches_hf_remote."
-                        "publish_commit_is_witnessed"
-                    ),
-                    "digest": _digest(publish_source),
-                },
+                "verifier": {"name": publish_identity[0], "digest": publish_identity[1]},
                 "black_box_review": "unreviewed",
             },
             {
@@ -66,10 +64,7 @@ def canonical_guarantees(*, repository: Path) -> dict[str, Any]:
                     "tests/arena/scenarios/test_remote_rented_glibc.py::"
                     "test_hf_emulator_runs_on_remote_rented_glibc"
                 ),
-                "verifier": {
-                    "name": "tests.arena.guarantees.verify_remote_rented_glibc_emulator",
-                    "digest": _digest(future_source),
-                },
+                "verifier": {"name": remote_identity[0], "digest": remote_identity[1]},
                 "black_box_review": "unreviewed",
             },
             {
@@ -79,10 +74,7 @@ def canonical_guarantees(*, repository: Path) -> dict[str, Any]:
                     "tests/arena/scenarios/test_linux_x86_64_hf_emulator.py::"
                     "test_hf_emulator_runs_on_linux_x86_64"
                 ),
-                "verifier": {
-                    "name": "tests.arena.guarantees.verify_linux_x86_64_hf_emulator",
-                    "digest": _digest(future_source),
-                },
+                "verifier": {"name": x64_identity[0], "digest": x64_identity[1]},
                 "black_box_review": "unreviewed",
             },
         ]

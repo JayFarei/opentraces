@@ -158,7 +158,22 @@ def pytest_collection_finish(session) -> None:
                 login_ref = "actions/login/result.json"
                 whoami_ref = "actions/whoami/result.json"
                 run.draft.write_json(login_ref, {"returncode": 0})
-                run.draft.write_json(whoami_ref, {"returncode": 0})
+                whoami_stdout_ref = "actions/whoami/stdout.txt"
+                run.draft.write_text(whoami_stdout_ref, json.dumps({"authenticated": True}) + "\n")
+                run.draft.write_json(
+                    whoami_ref,
+                    {"returncode": 0, "stdout_ref": whoami_stdout_ref},
+                )
+                for action_ref in (login_ref, whoami_ref):
+                    run.draft.write_json(
+                        action_ref.replace("result.json", "invocation.json"),
+                        {
+                            "env_pins": {
+                                "HF_ENDPOINT": "http://127.0.0.1:14318",
+                                "OPENTRACES_DISABLE_VERSION_CHECK": "1",
+                            }
+                        },
+                    )
                 run.verify(
                     verifier,
                     login=SimpleNamespace(returncode=0, stderr="", result_ref=login_ref),

@@ -15,6 +15,7 @@ from opentraces.core.arena.retrieval import (
     reverify_stored_run,
 )
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
+from opentraces.core.arena.verifier_identity import callable_identity
 
 
 def _source_digest() -> str:
@@ -25,6 +26,10 @@ def stored_artifact_verifier(evidence) -> dict[str, list[str]]:
     observation = evidence.read_json("artifacts/observation.json")
     assert observation["healthy"] is True
     return {"evidence_refs": ["artifacts/observation.json"]}
+
+
+def _verifier_name() -> str:
+    return callable_identity(stored_artifact_verifier)[0]
 
 
 def _result(run_id: str) -> dict:
@@ -41,7 +46,7 @@ def _result(run_id: str) -> dict:
         reason=None,
         verifiers=[
             {
-                "name": f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}",
+                "name": _verifier_name(),
                 "source_ref": {
                     "path": "tests/core/arena/test_retrieval.py",
                     "digest": _source_digest(),
@@ -171,9 +176,7 @@ def test_read_projections_fail_closed_when_an_indexed_byte_changes(
             reverify_stored_run(
                 store,
                 finalized.name,
-                verifier_name=(
-                    f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}"
-                ),
+                verifier_name=(_verifier_name()),
                 verifier_digest=_source_digest(),
                 verifier=stored_artifact_verifier,
             )
@@ -194,9 +197,7 @@ def test_reverify_uses_stored_evidence_only(tmp_path: Path, monkeypatch) -> None
     result = reverify_stored_run(
         store,
         finalized.name,
-        verifier_name=(
-            f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}"
-        ),
+        verifier_name=(_verifier_name()),
         verifier_digest=_source_digest(),
         verifier=stored_artifact_verifier,
     )
@@ -205,7 +206,7 @@ def test_reverify_uses_stored_evidence_only(tmp_path: Path, monkeypatch) -> None
         "schema_version": "opentraces.bench.reverification.v0",
         "run_id": finalized.name,
         "verifier": {
-            "name": f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}",
+            "name": _verifier_name(),
             "digest": _source_digest(),
         },
         "status": "pass",
@@ -232,9 +233,7 @@ def test_reverify_rejects_a_name_or_digest_not_bound_to_the_run(tmp_path: Path) 
         reverify_stored_run(
             store,
             finalized.name,
-            verifier_name=(
-                f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}"
-            ),
+            verifier_name=(_verifier_name()),
             verifier_digest="sha256:" + "0" * 64,
             verifier=stored_artifact_verifier,
         )
@@ -258,9 +257,7 @@ def test_reverify_rejects_a_forged_wrapper_before_invocation(tmp_path: Path) -> 
         reverify_stored_run(
             store,
             finalized.name,
-            verifier_name=(
-                f"{stored_artifact_verifier.__module__}.{stored_artifact_verifier.__qualname__}"
-            ),
+            verifier_name=(_verifier_name()),
             verifier_digest=_source_digest(),
             verifier=forged_wrapper,
         )
