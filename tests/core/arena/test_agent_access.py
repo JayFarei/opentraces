@@ -371,12 +371,13 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
     remote = session.started_argv[session.started_argv.index("--") + 1 :]
     assert "/usr/bin/sudo" in remote
     sudo = remote.index("/usr/bin/sudo")
-    assert remote[sudo : sudo + 6] == [
+    assert remote[sudo : sudo + 7] == [
         "/usr/bin/sudo",
         "-H",
         "-n",
         "-u",
         "opentraces-product",
+        "--preserve-env=ANTHROPIC_API_KEY",
         "--",
     ]
     assert "--allowedTools" in remote
@@ -728,7 +729,8 @@ def test_required_capture_wraps_the_real_claude_child_with_exact_session_id(
 
     assert session.started_argv is not None
     remote = session.started_argv[session.started_argv.index("--") + 1 :]
-    product_command = remote[remote.index("/usr/bin/sudo") + 6 :]
+    sudo = remote.index("/usr/bin/sudo")
+    product_command = remote[remote.index("--", sudo) + 1 :]
     assert attempt.capture_session_id is not None
     result_dir = f".opentraces/bench-capture/{attempt.capture_session_id}"
     assert product_command[:10] == [
@@ -920,13 +922,14 @@ def test_agent_receives_only_product_facing_emulator_environment(
     assert attempt.completed is True
     assert session.started_argv is not None
     assert session.started_env == {
+        "ANTHROPIC_API_KEY": "unit-live-key-not-a-real-credential",
         "HF_ENDPOINT": "http://127.0.0.1:8765",
         "HF_TOKEN": "product-credential",
     }
     assert not any("product-credential" in argument for argument in session.started_argv)
     remote = session.started_argv[session.started_argv.index("--") + 1 :]
     assert remote[0] == "/usr/bin/sudo"
-    assert "--preserve-env=HF_ENDPOINT,HF_TOKEN" in remote
+    assert "--preserve-env=ANTHROPIC_API_KEY,HF_ENDPOINT,HF_TOKEN" in remote
     invocation = (draft.path / "actions/0001/invocation.json").read_text(encoding="utf-8")
     artifact = (draft.path / attempt.artifact_ref).read_text(encoding="utf-8")
     assert "product-credential" not in invocation

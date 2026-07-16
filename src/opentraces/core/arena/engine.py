@@ -16,7 +16,7 @@ from types import TracebackType
 from typing import Any, Callable, Literal, Mapping
 
 from ... import __version__
-from .agent import AgentDrive
+from .agent import AgentDrive, AgentPrerequisiteMissing
 from .box import Box, CrabboxRuntime
 from .contract import build_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
@@ -777,7 +777,7 @@ class BenchRun:
         scenario_assertion_ref: str | None = None
         if exc is None:
             execution_status, verdict, reason = self._outcome_from_verifiers()
-        elif isinstance(exc, BenchSkip):
+        elif isinstance(exc, (BenchSkip, AgentPrerequisiteMissing)):
             execution_status, verdict = "complete", "skip"
             reason = sanitize_reason(exc.code, exc)
             suppressed = True

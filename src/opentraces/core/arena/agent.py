@@ -84,6 +84,14 @@ ProductEnvironment = Callable[[], Mapping[str, str]]
 ReplayInference = Callable[[], object | None]
 
 
+class AgentPrerequisiteMissing(RuntimeError):
+    """A live-agent prerequisite was absent before any action began."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class AgentDrive:
     """Grant run-owned surfaces to one registered real harness attempt."""
 
@@ -98,6 +106,7 @@ class AgentDrive:
         execution_mode: str,
         product_environment: ProductEnvironment,
         replay_inference: ReplayInference = lambda: None,
+        live_environment: ProductEnvironment | None = None,
         capture_required: Sequence[str] = (),
         session_factory: AgentTerminalSessionFactory = TermctrlAgentSession,
         poll_interval: float = 0.3,
@@ -110,6 +119,7 @@ class AgentDrive:
         self.execution_mode = execution_mode
         self.product_environment = product_environment
         self.replay_inference = replay_inference
+        self.live_environment = live_environment or (lambda: os.environ)
         self.capture_required = tuple(capture_required)
         self.session_factory = session_factory
         self.poll_interval = poll_interval
@@ -158,7 +168,14 @@ class AgentDrive:
         if self.execution_mode == "agent_live":
             if inference != "live":
                 raise ValueError("agent_live requires inference='live'")
-            return {"mode": "live"}, {}
+            live_environment = self.live_environment()
+            api_key = live_environment.get("ANTHROPIC_API_KEY")
+            if not isinstance(api_key, str) or not api_key:
+                raise AgentPrerequisiteMissing(
+                    "anthropic_api_key_missing",
+                    "ANTHROPIC_API_KEY is required for agent_live",
+                )
+            return {"mode": "live"}, {"ANTHROPIC_API_KEY": api_key}
         if self.execution_mode != "agent_replay":
             raise ValueError("run.agent requires agent_live or agent_replay execution mode")
         if inference == "live" or isinstance(inference, str):
