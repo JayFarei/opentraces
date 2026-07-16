@@ -44,6 +44,24 @@ def verify() -> None:
         os.chdir(repository)
         try:
             box = runtime.lease()
+            seeded = runtime.exec(
+                box,
+                [
+                    "sh",
+                    "-c",
+                    "set -eu; "
+                    "git init --initial-branch=main >/dev/null; "
+                    "git config user.name 'A6 transport setup'; "
+                    "git config user.email 'a6-transport@example.invalid'; "
+                    "printf '%s\\n' seed > seed.txt; "
+                    "git add seed.txt; "
+                    "git commit -m 'Seed remote workspace' >/dev/null",
+                ],
+                timeout=30,
+                timing_path=evidence / "remote-seed-timing.json",
+            )
+            if seeded.returncode != 0:
+                raise AssertionError("the transport could not seed the remote Git workspace")
             runtime.materialize(box, "base-only", repository=repository)
 
             product = runtime.exec_product(
@@ -90,7 +108,9 @@ def verify() -> None:
                 [
                     "sh",
                     "-c",
-                    'test "$(id -un)" = crabbox && test "$(stat -c %U "$HOME")" = crabbox',
+                    'test "$(id -un)" = crabbox && '
+                    'test "$(stat -c %U "$HOME")" = crabbox && '
+                    "test -w .",
                 ],
                 timeout=30,
                 timing_path=evidence / "transport-home-timing.json",

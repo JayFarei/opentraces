@@ -606,6 +606,10 @@ class CrabboxRuntime:
                 f"--shell /bin/sh {PRODUCT_USER}; fi; "
                 f'test "$(id -u {PRODUCT_USER})" -ne 0; '
                 f"sudo -u {PRODUCT_USER} test -w /home/{PRODUCT_USER}; "
+                "transport_group=$(id -gn); "
+                f'sudo chown -R -h {PRODUCT_USER}:"$transport_group" "$PWD"; '
+                'sudo chmod -R g+rwX "$PWD"; '
+                f'sudo -u {PRODUCT_USER} test -w "$PWD"; '
                 f"sudo install -d -m 0755 -o {PRODUCT_USER} -g {PRODUCT_USER} "
                 '"$PWD/bench-recordings"; '
                 f"if sudo -u {PRODUCT_USER} sudo -n true >/dev/null 2>&1; then exit 1; fi; "
