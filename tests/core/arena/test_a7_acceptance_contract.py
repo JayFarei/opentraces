@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
-from opentraces.core.arena.atlas import build_atlas, guarantees_source_digest
+from opentraces.cli import main
+from opentraces.core.arena.atlas import (
+    build_atlas,
+    cross_check_atlas,
+    guarantees_source_digest,
+)
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.retrieval import StoredEvidence
 from opentraces.core.arena.run_store import RunStore
@@ -62,6 +70,105 @@ def test_canonical_guarantees_bind_four_exact_importable_verifiers() -> None:
         name, source = expected[row["id"]]
         assert row["verifier"] == {"name": name, "digest": _digest(source)}
         assert row["black_box_review"] == "unreviewed"
+
+
+def test_real_pytest_loaded_verifiers_bind_public_reverify_and_atlas(
+    tmp_path: Path,
+) -> None:
+    guarantees_source = GUARANTEES_PATH.read_bytes()
+    guarantees = json.loads(guarantees_source)["guarantees"]
+    selected = [row for row in guarantees if row["id"] in {"browser-auth", "publish-down"}]
+    store_root = tmp_path / "runs" / "v1"
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "OT_VERIFIER_IDENTITY_PROBE_STORE": str(store_root),
+            "OT_VERIFIER_IDENTITY_PROBE_REPOSITORY": str(REPOSITORY),
+            "OT_VERIFIER_IDENTITY_PROBE_GUARANTEES": str(GUARANTEES_PATH),
+        }
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--collect-only",
+            "-p",
+            "tests.core.arena.fixtures.pytest_verifier_identity_probe",
+            *(row["nodeid"] for row in selected),
+        ],
+        cwd=REPOSITORY,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+    store = RunStore(store_root)
+    run_paths = sorted(store_root.glob("run_*"))
+    assert len(run_paths) == 2
+    results = [json.loads((path / "result.json").read_text(encoding="utf-8")) for path in run_paths]
+    results_by_nodeid = {result["scenario"]["nodeid"]: result for result in results}
+    guarantees_by_nodeid = {row["nodeid"]: row for row in selected}
+    for nodeid, result in results_by_nodeid.items():
+        guarantee = guarantees_by_nodeid[nodeid]
+        assert result["verifiers"][0]["name"] == guarantee["verifier"]["name"]
+        assert result["verifiers"][0]["source_ref"]["digest"] == guarantee["verifier"]["digest"]
+
+    runner = CliRunner()
+    expected_status = {"browser-auth": (0, "pass"), "publish-down": (1, "fail")}
+    run_ids: dict[str, str] = {}
+    for guarantee in selected:
+        result = results_by_nodeid[guarantee["nodeid"]]
+        run_ids[guarantee["id"]] = result["run_id"]
+        expected_exit, status = expected_status[guarantee["id"]]
+        invoked = runner.invoke(
+            main,
+            [
+                "bench",
+                "reverify",
+                result["run_id"],
+                "--store-root",
+                str(store_root),
+                "--verifier-name",
+                guarantee["verifier"]["name"],
+                "--verifier-digest",
+                guarantee["verifier"]["digest"],
+                "--json",
+            ],
+        )
+        assert invoked.exit_code == expected_exit, invoked.output
+        assert json.loads(invoked.output)["status"] == status
+
+    storage = {path.name: store.verified_integrity(path) for path in run_paths}
+    product_commit = "a" * 40
+    capabilities_digest = results[0]["pins"]["capabilities"]["digest"]
+    atlas = build_atlas(
+        guarantees=guarantees,
+        guarantees_digest=guarantees_source_digest(guarantees_source),
+        results=results,
+        storage_integrity_by_run_id=storage,
+        product_commit=product_commit,
+        capabilities_digest=capabilities_digest,
+    )
+    rows_by_id = {row["id"]: row for row in atlas["rows"]}
+    assert (rows_by_id["browser-auth"]["state"], rows_by_id["browser-auth"]["latest_run_id"]) == (
+        "proven",
+        run_ids["browser-auth"],
+    )
+    assert (rows_by_id["publish-down"]["state"], rows_by_id["publish-down"]["latest_run_id"]) == (
+        "failing",
+        run_ids["publish-down"],
+    )
+    assert cross_check_atlas(
+        atlas,
+        guarantees=guarantees,
+        guarantees_digest=guarantees_source_digest(guarantees_source),
+        results=results,
+        storage_integrity_by_run_id=storage,
+    )
 
 
 def test_future_hole_verifiers_reject_unbound_self_report_json(tmp_path: Path) -> None:
