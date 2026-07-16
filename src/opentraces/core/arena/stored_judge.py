@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from .harnesses import CLAUDE_HARNESS_NAME, CLAUDE_HARNESS_VERSION
 from .run_store import RunStore
 
 
@@ -25,7 +26,12 @@ def _require(condition: bool, message: str) -> None:
 
 def _stored_path(run_path: Path, reference: object) -> Path:
     _require(isinstance(reference, str) and bool(reference), "evidence ref is missing")
-    target = (run_path / str(reference)).resolve()
+    stored_ref = Path(str(reference))
+    _require(
+        not stored_ref.is_absolute() and ".." not in stored_ref.parts,
+        "evidence ref must be relative and may not traverse parents",
+    )
+    target = (run_path / stored_ref).resolve()
     _require(target.is_relative_to(run_path), "evidence ref escapes the stored run")
     _require(target.is_file(), f"stored evidence is missing: {reference}")
     return target
@@ -102,8 +108,11 @@ def judge_agent_commit_run(run_path: Path) -> dict[str, Any]:
 
     pins = result.get("pins") or {}
     harness = pins.get("harness") or {}
-    _require(harness.get("name") == "claude", "stored harness is not Claude")
-    _require(bool(harness.get("version")), "stored harness version is missing")
+    _require(
+        harness.get("name") == CLAUDE_HARNESS_NAME
+        and harness.get("version") == CLAUDE_HARNESS_VERSION,
+        "stored pin does not match the registered Claude harness",
+    )
     _require((pins.get("model_wire") or {}).get("mode") == "live", "model wire is not live")
     _require(bool((pins.get("product") or {}).get("commit")), "product commit pin is missing")
 
@@ -118,12 +127,37 @@ def judge_agent_commit_run(run_path: Path) -> dict[str, Any]:
         "capture.trail",
         "capture.storage",
         "capture.lifecycle",
+        "agent.attempt",
         "agent.live_key_absence",
     ):
         _require(
             (requirements.get(name) or {}).get("complete") is True,
             f"stored requirement is incomplete: {name}",
         )
+
+    attempt_refs = requirements["agent.attempt"].get("evidence_refs") or []
+    _require(len(attempt_refs) == 1, "agent attempt must name one stored artifact")
+    try:
+        attempt_path = _stored_path(run_path, attempt_refs[0])
+    except StoredJudgeError as exc:
+        raise StoredJudgeError("agent attempt artifact is missing") from exc
+    attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+    _require(attempt.get("completed") is True, "agent attempt is incomplete")
+    _require(bool(attempt.get("task")), "agent attempt task is missing")
+    _require(
+        attempt.get("harness") == harness,
+        "agent attempt harness differs from the result pin",
+    )
+    _require(
+        attempt.get("inference") == pins.get("model_wire"),
+        "agent attempt inference differs from the result pin",
+    )
+    expected_capture_sources = ["session_jsonl", "telemetry", "git", "bucket"]
+    _require(
+        (attempt.get("capture") or {}).get("required_sources")
+        == expected_capture_sources,
+        "agent attempt capture sources differ from scenario 4",
+    )
 
     custody_ref = requirements["agent.live_key_absence"]["evidence_refs"][0]
     custody = json.loads(_stored_path(run_path, custody_ref).read_text(encoding="utf-8"))
@@ -135,6 +169,15 @@ def judge_agent_commit_run(run_path: Path) -> dict[str, Any]:
     )
 
     capture = result.get("capture") or {}
+    lifecycle_refs = requirements["capture.lifecycle"].get("evidence_refs") or []
+    _require(len(lifecycle_refs) == 1, "capture lifecycle must name one result")
+    collected_capture = json.loads(
+        _stored_path(run_path, lifecycle_refs[0]).read_text(encoding="utf-8")
+    )
+    _require(
+        collected_capture == capture,
+        "stored capture result differs from result.capture",
+    )
     _require(capture.get("completeness") == "complete", "capture lifecycle is partial")
     trace_refs = capture.get("trace_refs") or []
     _require(len(trace_refs) == 1, "capture must name exactly one trace")
@@ -150,6 +193,15 @@ def judge_agent_commit_run(run_path: Path) -> dict[str, Any]:
             source.get("status") == "finalized" and source.get("completeness") == "full",
             f"capture source is incomplete: {source_name}",
         )
+        source_refs = source.get("evidence_refs") or []
+        _require(bool(source_refs), f"capture source has no evidence: {source_name}")
+        for source_ref in source_refs:
+            try:
+                _stored_path(run_path, f"capture/{source_ref}")
+            except StoredJudgeError as exc:
+                raise StoredJudgeError(
+                    f"capture source evidence is missing: {source_name}"
+                ) from exc
 
     world_verifier = next(
         (
