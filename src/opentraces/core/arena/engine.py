@@ -613,7 +613,11 @@ class BenchRun:
         )
         if sensitive_environment:
             sensitive_values = [value.encode() for value in sensitive_environment.values()]
-            stored_paths = sorted(path for path in self.draft.path.rglob("*") if path.is_file())
+            stored_paths = sorted(
+                path
+                for path in self.draft.path.rglob("*")
+                if path.is_file() or path.is_symlink()
+            )
             matches: list[str] = []
             bytes_checked = 0
             capture_files_checked = 0
