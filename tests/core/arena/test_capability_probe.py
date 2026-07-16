@@ -93,6 +93,10 @@ def _manifest() -> dict[str, object]:
     }
 
 
+def verify_condition_holds(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
 def test_bad_probe_or_schema_is_a_named_machinery_error() -> None:
     with pytest.raises(CapabilityProbeError, match="exit 9") as nonzero:
         parse_capabilities_probe(returncode=9, stdout="{}", stderr="broken")
@@ -418,6 +422,6 @@ def test_declared_seam_environment_is_exported_to_later_product_actions(
     with bench.run(app_state="install-only") as run:
         run.require_capabilities("cli:dataset.publish")
         run.terminal.exec("opentraces", "dataset", "list")
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_condition_holds)
 
     assert runtime.product_envs[-1] == {"OPENTRACES_DISABLE_VERSION_CHECK": "1"}

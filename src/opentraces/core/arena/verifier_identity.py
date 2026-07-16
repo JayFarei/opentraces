@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.util
 import inspect
 import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+
+class VerifierIdentityError(ValueError):
+    """A verifier cannot be named and imported for stored-only replay."""
+
+    code = "verifier_identity_invalid"
 
 
 def _canonical_module_from_source(source: Path) -> str | None:
@@ -42,7 +49,7 @@ def _canonical_module_from_source(source: Path) -> str | None:
         if origin == source:
             candidates.add(candidate)
     if len(candidates) > 1:
-        raise ValueError("verifier source has multiple canonical import paths")
+        raise VerifierIdentityError("verifier source has multiple canonical import paths")
     return next(iter(candidates), None)
 
 
@@ -51,17 +58,35 @@ def callable_identity(verifier: Callable[..., Any]) -> tuple[str, str]:
 
     source_value = inspect.getsourcefile(verifier)
     if source_value is None:
-        raise ValueError("cannot locate verifier source")
+        raise VerifierIdentityError("cannot locate verifier source")
     source = Path(source_value).resolve()
     qualname = verifier.__qualname__
-    if not isinstance(qualname, str) or not qualname or "<locals>" in qualname:
-        module_name = verifier.__module__
-    else:
-        module_name = _canonical_module_from_source(source) or verifier.__module__
+    if (
+        not isinstance(qualname, str)
+        or not qualname
+        or "<locals>" in qualname
+        or any(not part.isidentifier() for part in qualname.split("."))
+    ):
+        raise VerifierIdentityError("verifier must be an importable module-level callable")
+    module_name = _canonical_module_from_source(source) or verifier.__module__
     if not isinstance(module_name, str) or not module_name:
-        raise ValueError("verifier has no module identity")
+        raise VerifierIdentityError("verifier has no module identity")
+    try:
+        target: object = importlib.import_module(module_name)
+        for attribute in qualname.split("."):
+            target = getattr(target, attribute)
+        target_source_value = inspect.getsourcefile(target)
+        target_source = (
+            Path(target_source_value).resolve() if target_source_value is not None else None
+        )
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, TypeError) as exc:
+        raise VerifierIdentityError(
+            "verifier must be an importable module-level callable"
+        ) from exc
+    if not callable(target) or target_source != source:
+        raise VerifierIdentityError("verifier must be an importable module-level callable")
     try:
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
     except OSError as exc:
-        raise ValueError("cannot read verifier source") from exc
+        raise VerifierIdentityError("cannot read verifier source") from exc
     return f"{module_name}.{qualname}", f"sha256:{digest}"

@@ -357,6 +357,10 @@ def _bench(tmp_path: Path, runtime: WorldRuntime) -> Bench:
     )
 
 
+def verify_condition_holds(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
 def test_scenario_2_source_freezes_the_claim_public_journey_and_down_control() -> None:
     function = scenario_2.test_publish_reaches_hf_remote
     assert inspect.getdoc(function).split("\n\n", 1)[0] == (
@@ -697,7 +701,7 @@ def test_terminal_drive_cannot_escalate_into_independent_ledger_custody(
         ]
         assert all(run.terminal.exec(*attack).returncode != 0 for attack in attacks)
         assert run.terminal.exec("opentraces", "doctor", "--json").returncode == 0
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_condition_holds)
 
     assert runtime.events.count("product-ledger-escalation-refused") == 4
 

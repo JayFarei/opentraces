@@ -235,6 +235,56 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
     )
 
 
+def verify_doctor_is_healthy(run) -> dict[str, list[str]]:
+    observed = run.terminal.exec("opentraces", "doctor", "--json")
+    assert observed.json["healthy"] is True
+    return {"evidence_refs": [observed.result_ref]}
+
+
+def verify_selected_origin_slice(run) -> dict[str, list[str]]:
+    assert run.origin_evidence_ref is not None
+    assert (run.draft.path / run.origin_evidence_ref).is_file()
+    return {"evidence_refs": [run.origin_evidence_ref]}
+
+
+def verify_command(
+    run,
+    *,
+    argv: tuple[str, ...],
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    expected_stdout: str | None = None,
+) -> dict[str, list[str]]:
+    observed = run.terminal.exec(*argv, cwd=cwd, env=env)
+    assert observed.returncode == 0
+    if expected_stdout is not None:
+        assert observed.stdout.strip() == expected_stdout
+    return {"evidence_refs": []}
+
+
+def verify_passes(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
+def verify_raises(_run, *, message: str) -> None:
+    raise RuntimeError(message)
+
+
+def verify_doctor_with_imported_helper(run) -> dict[str, list[str]]:
+    observed = run.terminal.exec("opentraces", "doctor", "--json")
+    assert_healthy_payload(observed.json)
+    return {"evidence_refs": [observed.result_ref]}
+
+
+def verify_writes_absolute_evidence(run) -> dict[str, list[str]]:
+    run.draft.write_text("artifacts/proof.txt", "persisted proof\n")
+    return {"evidence_refs": [str(run.draft.path / "artifacts/proof.txt")]}
+
+
+def verify_returns_evidence_ref(_run, *, evidence_ref: str) -> dict[str, list[str]]:
+    return {"evidence_refs": [evidence_ref]}
+
+
 def test_extract_claim_preserves_the_first_docstring_paragraph_byte_for_byte() -> None:
     def scenario():
         """A user's exact claim — punctuation included.
@@ -254,13 +304,8 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
         repository_path=tmp_path,
     )
 
-    def doctor_is_healthy(run):
-        observed = run.terminal.exec("opentraces", "doctor", "--json")
-        assert observed.json["healthy"] is True
-        return {"evidence_refs": [observed.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(doctor_is_healthy)
+        run.verify(verify_doctor_is_healthy)
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["scenario"]["claim"] == "Install is healthy on a fresh box."
@@ -301,7 +346,7 @@ def test_local_verifier_is_rejected_before_invocation_and_cannot_finalize_pass(
     result = json.loads(next(bench.store.root.glob("run_*/result.json")).read_text())
     assert result["execution_status"] == "error"
     assert result["verdict"] is None
-    assert result["reason"]["code"] == "ValueError"
+    assert result["reason"]["code"] == "verifier_identity_invalid"
 
 
 def test_slice_origin_is_staged_before_verification_and_only_the_verifier_can_name_it(
@@ -318,14 +363,9 @@ def test_slice_origin_is_staged_before_verification_and_only_the_verifier_can_na
         repository_path=tmp_path,
     )
 
-    def selected_slice_is_the_graded_evidence(run):
-        assert run.origin_evidence_ref is not None
-        assert (run.draft.path / run.origin_evidence_ref).is_file()
-        return {"evidence_refs": [run.origin_evidence_ref]}
-
     with bench.run(app_state="install-only") as run:
         assert run.origin_evidence_ref is not None
-        run.verify(selected_slice_is_the_graded_evidence)
+        run.verify(verify_selected_origin_slice)
 
     assert run.result["verifiers"][0]["evidence_refs"] == [run.origin_evidence_ref]
     integrity = json.loads((run.final_path / ".integrity.json").read_text(encoding="utf-8"))
@@ -351,12 +391,8 @@ def test_terminal_action_honors_the_remote_cwd_that_it_records(tmp_path: Path) -
         repository_path=tmp_path,
     )
 
-    def command_runs_in_requested_directory(run):
-        observed = run.terminal.exec("pwd", cwd="/tmp")
-        assert observed.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(command_runs_in_requested_directory)
+        run.verify(verify_command, argv=("pwd",), cwd="/tmp")
 
     invocation = json.loads((run.final_path / "actions/0001/invocation.json").read_text())
     assert invocation["cwd"] == "/tmp"
@@ -468,16 +504,14 @@ cat "$typescript"
         repository_path=tmp_path,
     )
 
-    def command_runs_in_requested_directory(run):
-        observed = run.terminal.exec(
-            "pwd",
+    with bench.run(app_state="install-only") as run:
+        run.verify(
+            verify_command,
+            argv=("pwd",),
             cwd=str(remote_cwd),
             env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+            expected_stdout=str(remote_cwd),
         )
-        assert observed.stdout.strip() == str(remote_cwd)
-
-    with bench.run(app_state="install-only") as run:
-        run.verify(command_runs_in_requested_directory)
 
     assert run.result["recordings"]["rewatchable"] is True
     assert (run.final_path / "recordings/terminal-0001.cast").is_file()
@@ -494,11 +528,8 @@ def test_release_failure_is_diagnostic_and_does_not_hide_a_passing_verdict(
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_passes)
 
     assert run.result["execution_status"] == "complete"
     assert run.result["verdict"] == "pass"
@@ -526,7 +557,7 @@ def test_successful_run_freezes_lease_lifecycle_before_finalization(tmp_path: Pa
     )
 
     with bench.run(app_state="install-only") as run:
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     artifact = next(item for item in run.result["artifacts"] if item["kind"] == "lease_lifecycle")
     assert artifact["path"] == "artifacts/lease-lifecycle.json"
@@ -605,11 +636,8 @@ def test_result_pins_observer_crabbox_image_and_product_state(tmp_path: Path) ->
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_passes)
 
     assert run.result["pins"]["observer"] == {
         "package": "opentraces",
@@ -633,11 +661,8 @@ def test_box_lifecycle_diagnostics_are_part_of_the_finalized_exhaust(tmp_path: P
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_passes)
 
     artifact = next(
         item for item in run.result["artifacts"] if item["kind"] == "lifecycle_diagnostics"
@@ -685,11 +710,11 @@ def test_verifier_and_release_diagnostics_share_secret_and_path_sanitization(
         repository_path=tmp_path,
     )
 
-    def verifier_crashes(run):
-        raise RuntimeError("verifier secret=verifier-secret at /tmp/private/verifier.json")
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier_crashes)
+        run.verify(
+            verify_raises,
+            message="verifier secret=verifier-secret at /tmp/private/verifier.json",
+        )
 
     result_text = (run.final_path / "result.json").read_text(encoding="utf-8")
     artifact_text = "\n".join(
@@ -718,11 +743,8 @@ def test_sensitive_assignment_shapes_are_redacted_without_erasing_ordinary_words
         repository_path=tmp_path,
     )
 
-    def verifier_crashes(run):
-        raise RuntimeError(_CREDENTIAL_SHAPES)
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier_crashes)
+        run.verify(verify_raises, message=_CREDENTIAL_SHAPES)
 
     result_text = (run.final_path / "result.json").read_text(encoding="utf-8")
     diagnostic = next(
@@ -760,13 +782,8 @@ def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Pat
         repository_path=repository,
     )
 
-    def doctor_is_healthy(run):
-        observed = run.terminal.exec("opentraces", "doctor", "--json")
-        assert_healthy_payload(observed.json)
-        return {"evidence_refs": [observed.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(doctor_is_healthy)
+        run.verify(verify_doctor_with_imported_helper)
 
     manifest = json.loads((run.final_path / "source" / "verifiers.json").read_text())
     sources = {item["path"]: item["digest"] for item in manifest["sources"]}
@@ -789,12 +806,8 @@ def test_absolute_evidence_ref_inside_run_is_stored_as_a_persisted_relative_ref(
         repository_path=tmp_path,
     )
 
-    def verifier(run):
-        run.draft.write_text("artifacts/proof.txt", "persisted proof\n")
-        return {"evidence_refs": [str(run.draft.path / "artifacts/proof.txt")]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier)
+        run.verify(verify_writes_absolute_evidence)
 
     assert run.result["verdict"] == "pass"
     assert run.result["verifiers"][0]["evidence_refs"] == ["artifacts/proof.txt"]
@@ -812,11 +825,8 @@ def test_evidence_ref_outside_run_is_rejected_without_leaking_host_path(tmp_path
         repository_path=tmp_path,
     )
 
-    def verifier(run):
-        return {"evidence_refs": [str(host_file)]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier)
+        run.verify(verify_returns_evidence_ref, evidence_ref=str(host_file))
 
     serialized = json.dumps(run.result)
     assert run.result["execution_status"] == "error"
@@ -929,12 +939,8 @@ def test_missing_cast_is_not_rewatchable_and_does_not_rewrite_pass(tmp_path: Pat
         repository_path=tmp_path,
     )
 
-    def command_succeeds(run):
-        observed = run.terminal.exec("true")
-        assert observed.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(command_succeeds)
+        run.verify(verify_command, argv=("true",))
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["verdict"] == "pass"
@@ -951,12 +957,8 @@ def test_each_terminal_action_produces_an_asciicast_playlist_marker(tmp_path: Pa
         repository_path=tmp_path,
     )
 
-    def command_succeeds(run):
-        observed = run.terminal.exec("printf", "ok")
-        assert observed.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(command_succeeds)
+        run.verify(verify_command, argv=("printf", "ok"))
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["verdict"] == "pass"
@@ -986,7 +988,7 @@ def test_context_exit_harvests_a_completed_terminal_action_that_was_not_waited(
         while action.running and time.monotonic() < deadline:
             time.sleep(0.001)
         assert action.running is False
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     action_result = json.loads(
         (run.final_path / "actions/0001/result.json").read_text(encoding="utf-8")
@@ -1013,7 +1015,7 @@ def test_context_exit_stops_and_harvests_an_unwaited_terminal_process_tree(
         deadline = time.monotonic() + 2
         while not (tmp_path / "child.pid").is_file() and time.monotonic() < deadline:
             time.sleep(0.001)
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     action_result = json.loads(
         (run.final_path / "actions/0001/result.json").read_text(encoding="utf-8")

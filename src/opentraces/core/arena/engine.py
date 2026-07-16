@@ -381,6 +381,7 @@ class BenchRun:
     def verify(self, verifier: Callable[..., Any], /, **inputs: Any) -> dict[str, Any]:
         if self.draft is None:
             raise RuntimeError("BenchRun is not active")
+        verifier_name, _verifier_digest = callable_identity(verifier)
         started = time.monotonic()
         source_refs = self._verifier_source_refs(verifier)
         source_ref = source_refs[0]
@@ -420,7 +421,6 @@ class BenchRun:
         except Exception as exc:
             status = "error"
             reason = sanitize_reason("verifier_error", f"{type(exc).__name__}: {exc}")
-        verifier_name, _verifier_digest = callable_identity(verifier)
         record = {
             "name": verifier_name,
             "source_ref": source_ref,

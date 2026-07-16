@@ -92,6 +92,10 @@ def _inspect() -> str:
     )
 
 
+def verify_condition_holds(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
 def test_lease_pins_version_image_tmpdir_and_runs_both_preflights(tmp_path: Path) -> None:
     runner = ScriptedRunner(
         [
@@ -541,11 +545,8 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="base-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_condition_holds)
 
     timing_artifacts = [
         item for item in run.result["artifacts"] if item["kind"] == "crabbox_timing"

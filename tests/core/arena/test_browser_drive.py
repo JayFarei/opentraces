@@ -96,6 +96,44 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
     )
 
 
+def verify_authorize_through_public_page(run) -> dict[str, list[str]]:
+    navigated = run.browser.navigate("http://127.0.0.1:8080/authorize")
+    located = run.browser.locate("label=Account")
+    filled = run.browser.fill("label=Account", "bench-user")
+    clicked = run.browser.click("button:has-text('Authorize')")
+    waited = run.browser.wait("text=Authorized", state="visible", timeout_ms=5_000)
+    inspected = run.browser.inspect("main")
+    screenshot = run.browser.screenshot("authorized", full_page=True)
+
+    assert navigated.state == {
+        "url": "http://127.0.0.1:8080/authorize",
+        "title": "Authorize OpenTraces",
+    }
+    assert located.state == {"selector": "label=Account", "count": 1, "visible": True}
+    assert filled.state == {"selector": "label=Account"}
+    assert clicked.state["url"] == "http://127.0.0.1:8080/authorize"
+    assert waited.state["state"] == "visible"
+    assert inspected.state["text"] == "Authorized"
+    assert screenshot.state["path"] == "recordings/browser/screenshots/authorized.png"
+    return {"evidence_refs": [inspected.result_ref, screenshot.state["path"]]}
+
+
+def verify_inspect_public_page(run) -> dict[str, list[str]]:
+    inspected = run.browser.inspect("main")
+    assert inspected.state["text"] == "Pending"
+    return {"evidence_refs": [inspected.result_ref]}
+
+
+def verify_cross_surface_journey(run) -> dict[str, list[str]]:
+    first = run.terminal.exec("printf", "before")
+    browser = run.browser.inspect("main")
+    last = run.terminal.exec("printf", "after")
+    assert first.returncode == 0
+    assert browser.state["text"] == "Pending"
+    assert last.returncode == 0
+    return {"evidence_refs": [first.result_ref, browser.result_ref, last.result_ref]}
+
+
 def test_browser_only_attempt_freezes_public_state_and_all_recording_channels(
     tmp_path: Path,
 ) -> None:
@@ -107,29 +145,8 @@ def test_browser_only_attempt_freezes_public_state_and_all_recording_channels(
         browser_factory=PublicBrowserSession,
     )
 
-    def authorize_through_public_page(run):
-        navigated = run.browser.navigate("http://127.0.0.1:8080/authorize")
-        located = run.browser.locate("label=Account")
-        filled = run.browser.fill("label=Account", "bench-user")
-        clicked = run.browser.click("button:has-text('Authorize')")
-        waited = run.browser.wait("text=Authorized", state="visible", timeout_ms=5_000)
-        inspected = run.browser.inspect("main")
-        screenshot = run.browser.screenshot("authorized", full_page=True)
-
-        assert navigated.state == {
-            "url": "http://127.0.0.1:8080/authorize",
-            "title": "Authorize OpenTraces",
-        }
-        assert located.state == {"selector": "label=Account", "count": 1, "visible": True}
-        assert filled.state == {"selector": "label=Account"}
-        assert clicked.state["url"] == "http://127.0.0.1:8080/authorize"
-        assert waited.state["state"] == "visible"
-        assert inspected.state["text"] == "Authorized"
-        assert screenshot.state["path"] == "recordings/browser/screenshots/authorized.png"
-        return {"evidence_refs": [inspected.result_ref, screenshot.state["path"]]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(authorize_through_public_page)
+        run.verify(verify_authorize_through_public_page)
 
     result = json.loads((run.final_path / "result.json").read_text(encoding="utf-8"))
     assert bench.store.verify(run.final_path) is True
@@ -189,13 +206,8 @@ def _run_inspection(
         browser_factory=browser_factory,
     )
 
-    def inspect_public_page(run):
-        inspected = run.browser.inspect("main")
-        assert inspected.state["text"] == "Pending"
-        return {"evidence_refs": [inspected.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(inspect_public_page)
+        run.verify(verify_inspect_public_page)
     return run.result, run.final_path
 
 
@@ -345,17 +357,8 @@ def test_terminal_and_browser_share_one_run_action_domain(tmp_path: Path) -> Non
         browser_factory=PublicBrowserSession,
     )
 
-    def cross_surface_journey(run):
-        first = run.terminal.exec("printf", "before")
-        browser = run.browser.inspect("main")
-        last = run.terminal.exec("printf", "after")
-        assert first.returncode == 0
-        assert browser.state["text"] == "Pending"
-        assert last.returncode == 0
-        return {"evidence_refs": [first.result_ref, browser.result_ref, last.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(cross_surface_journey)
+        run.verify(verify_cross_surface_journey)
 
     invocations = [
         json.loads((run.final_path / f"actions/{ordinal:04d}/invocation.json").read_text())
