@@ -5,9 +5,10 @@ Run from the repository root with::
     .venv/bin/python tests/manual/verify_a6_product_workspace.py
 
 The control intentionally uses a real Crabbox local-container lease.  It proves
-the synchronized Git workspace, relative capture output, SSH transport, and
-sudo identity boundary together; a scripted subprocess runner cannot establish
-that ownership contract.
+the synchronized Git workspace, relative capture output, Crabbox-run transport,
+and sudo identity boundary together; a scripted subprocess runner cannot
+establish that ownership contract.  The separate direct-PTY control covers the
+host-side AgentTerminalDrive SSH path.
 """
 
 from __future__ import annotations
