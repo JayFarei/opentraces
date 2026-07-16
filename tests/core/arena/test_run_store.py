@@ -264,7 +264,7 @@ def test_killed_finalization_is_reconciled_without_losing_the_outcome(
     tmp_path: Path, phase: str
 ) -> None:
     root = tmp_path / "runs" / "v1"
-    script = r"""
+    script = r'''
 import os
 import sys
 from pathlib import Path
@@ -315,7 +315,7 @@ elif phase == "index":
 else:
     draft._write_result = lambda path, payload: os._exit(86)
 draft.finalize(result)
-"""
+'''
     killed = subprocess.run(
         [sys.executable, "-c", script, str(root), phase],
         check=False,

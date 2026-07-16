@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,7 +10,10 @@ import pytest
 
 from opentraces.core.arena.box import Box
 from opentraces.core.arena.engine import Bench, ScenarioSource
+from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.fleet import (
+    FleetAttempt,
+    FleetError,
     LOCAL_CONTAINER,
     RecipeInputs,
     UnsupportedPlacement,
@@ -16,7 +21,7 @@ from opentraces.core.arena.fleet import (
     execute_fleet,
     observed_max_lease_concurrency,
 )
-from opentraces.core.arena.run_store import RunStore
+from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 
 
 def _source(nodeid: str) -> ScenarioSource:
@@ -209,6 +214,67 @@ def test_fleet_reloads_every_attempt_from_the_finalized_store(tmp_path: Path) ->
             prepare_recipe=RecipeInputs.empty,
             run_attempt=lambda _nodeid, _recipe: tmp_path / "not-a-stored-run",
         )
+
+
+def test_fleet_attempt_rejects_a_finalized_external_lease_symlink(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    lease_ref = "artifacts/lease-lifecycle.json"
+    lifecycle = {
+        "schema_version": "opentraces.bench.lease-lifecycle.v0",
+        "id": "external-lease",
+        "provider": "local-container",
+        "acquired": "2026-07-16T10:00:00Z",
+        "release_started": "2026-07-16T10:00:01Z",
+        "released": "2026-07-16T10:00:02Z",
+        "status": "released",
+    }
+    draft.write_json(lease_ref, lifecycle)
+    result = build_result(
+        run_id=draft.run_id,
+        claim="A lease lifecycle stays inside its finalized run.",
+        nodeid="tests/arena/test_symlink.py::test_symlink",
+        source_ref="source/scenario.py",
+        execution_mode="direct",
+        started_at="2026-07-16T10:00:00Z",
+        duration_ms=1,
+        execution_status="complete",
+        verdict="pass",
+        reason=None,
+        verifiers=[],
+        evidence={"complete": True, "requirements": []},
+        recordings={"rewatchable": False, "channels": []},
+        artifacts=[
+            {"path": lease_ref, "media_type": "application/json", "kind": "lease_lifecycle"}
+        ],
+        capture=None,
+        pins={"environment": {"provider": "local-container"}},
+    )
+    finalized = draft.finalize(result)
+
+    external = tmp_path / "external-lease.json"
+    external.write_text(json.dumps(lifecycle) + "\n", encoding="utf-8")
+    artifacts = finalized / "artifacts"
+    lifecycle_path = finalized / lease_ref
+    artifacts.chmod(0o755)
+    lifecycle_path.chmod(0o600)
+    lifecycle_path.unlink()
+    lifecycle_path.symlink_to(external)
+    integrity_path = finalized / ".integrity.json"
+    integrity_path.chmod(0o600)
+    integrity = json.loads(integrity_path.read_text())
+    integrity["files"][lease_ref] = "sha256:" + hashlib.sha256(external.read_bytes()).hexdigest()
+    integrity_path.write_text(json.dumps(integrity) + "\n", encoding="utf-8")
+    index_path = store.index_root / f"{draft.run_id}.json"
+    index_path.chmod(0o600)
+    index = json.loads(index_path.read_text())
+    index["integrity_digest"] = (
+        "sha256:" + hashlib.sha256(integrity_path.read_bytes()).hexdigest()
+    )
+    index_path.write_text(json.dumps(index) + "\n", encoding="utf-8")
+
+    with pytest.raises((FleetError, RunIntegrityError), match="symlink|outside|escape"):
+        FleetAttempt.from_run(finalized, store=store)
 
 
 def test_selection_is_pytest_node_path_and_marker_selection(tmp_path: Path) -> None:
