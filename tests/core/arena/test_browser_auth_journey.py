@@ -94,9 +94,21 @@ class AuthorizingBrowser(PublicBrowserSession):
                     json.dumps(row, separators=(",", ":"))
                     for row in (
                         {
+                            "method": "GET",
+                            "path": "/_emulate/manifest",
+                            "operation_id": "manifest",
+                            "response": {"status": 200},
+                        },
+                        {
                             "method": "POST",
                             "path": "/oauth/device",
                             "operation_id": "issueDeviceCode",
+                            "response": {"status": 200},
+                        },
+                        {
+                            "method": "GET",
+                            "path": "/oauth/authorize",
+                            "operation_id": "viewDeviceAuthorization",
                             "response": {"status": 200},
                         },
                         {
@@ -109,6 +121,18 @@ class AuthorizingBrowser(PublicBrowserSession):
                             "method": "POST",
                             "path": "/oauth/token",
                             "operation_id": "completeDeviceCode",
+                            "response": {"status": 200},
+                        },
+                        {
+                            "method": "GET",
+                            "path": "/api/whoami-v2",
+                            "operation_id": "whoami",
+                            "response": {"status": 200},
+                        },
+                        {
+                            "method": "GET",
+                            "path": "/api/whoami-v2",
+                            "operation_id": "whoami",
                             "response": {"status": 200},
                         },
                     )
