@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
@@ -73,6 +74,8 @@ class AgentAttempt:
     action_refs: tuple[str, ...]
     recording_refs: tuple[str, ...]
     recording_complete: bool
+    capture_glob: str | None = None
+    capture_session_id: str | None = None
 
 
 ProductEnvironment = Callable[[], Mapping[str, str]]
@@ -93,6 +96,7 @@ class AgentDrive:
         execution_mode: str,
         product_environment: ProductEnvironment,
         replay_inference: ReplayInference = lambda: None,
+        capture_required: Sequence[str] = (),
         session_factory: AgentTerminalSessionFactory = TermctrlAgentSession,
         poll_interval: float = 0.3,
     ) -> None:
@@ -104,6 +108,7 @@ class AgentDrive:
         self.execution_mode = execution_mode
         self.product_environment = product_environment
         self.replay_inference = replay_inference
+        self.capture_required = tuple(capture_required)
         self.session_factory = session_factory
         self.poll_interval = poll_interval
         self._attempted = False
@@ -268,6 +273,12 @@ class AgentDrive:
         inference_pin, inference_environment = self._inference(inference)
         environment = self._environment(self.product_environment(), inference_environment)
         self._attempted = True
+        capture_session_id = str(uuid.uuid4()) if self.capture_required else None
+        capture_glob = (
+            f".opentraces/bench-capture/{capture_session_id}/**/*"
+            if capture_session_id is not None
+            else None
+        )
 
         browser_bridge: BrowserMcpBridge | None = None
         reverse_forwards: tuple[tuple[int, int], ...] = ()
@@ -346,6 +357,12 @@ class AgentDrive:
             "completed": completed,
             "failure": failure,
         }
+        if capture_session_id is not None:
+            record["capture"] = {
+                "session_id": capture_session_id,
+                "artifact_glob": capture_glob,
+                "required_sources": list(self.capture_required),
+            }
         self.draft.write_json(ATTEMPT_ARTIFACT_REF, record)
         self._harness_pin = harness_pin
         self._inference_pin = inference_pin
@@ -356,6 +373,8 @@ class AgentDrive:
             action_refs=tuple(record["action_refs"]),
             recording_refs=tuple(record["recording_refs"]),
             recording_complete=observed.recording_complete,
+            capture_glob=capture_glob,
+            capture_session_id=capture_session_id,
         )
         return self._attempt
 

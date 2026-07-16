@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import os
+import tempfile
 import time
 import traceback as traceback_module
 from dataclasses import dataclass
@@ -216,6 +218,7 @@ class BenchRun:
                 execution_mode=self.execution_mode,
                 product_environment=self._agent_product_environment,
                 replay_inference=lambda: self._emulators.get("anthropic"),
+                capture_required=self.capture_required,
                 session_factory=self.bench.agent_session_factory,
                 poll_interval=self.bench.agent_poll_interval,
             )
@@ -579,7 +582,17 @@ class BenchRun:
                 {
                     "name": f"capture.{source_name}",
                     "complete": complete,
-                    "evidence_refs": list(refs) if isinstance(refs, list) else [],
+                    "evidence_refs": (
+                        [
+                            f"capture/{ref}"
+                            for ref in refs
+                            if isinstance(ref, str)
+                            and not Path(ref).is_absolute()
+                            and ".." not in Path(ref).parts
+                        ]
+                        if isinstance(refs, list)
+                        else []
+                    ),
                 }
             )
             if not complete:
@@ -670,6 +683,48 @@ class BenchRun:
             self.final_path = self.draft.finalize(result)
         self.result = result
 
+    def _collect_agent_capture(self) -> None:
+        """Freeze the in-box A3 result tree before the lease is released."""
+
+        if self.draft is None or self.box is None or not hasattr(self, "agent"):
+            return
+        attempt = self.agent.attempt_result
+        if attempt is None or attempt.capture_glob is None:
+            return
+        collect = getattr(self.bench.box_runtime, "collect", None)
+        if not callable(collect):
+            self._lifecycle_diagnostics.append(
+                {
+                    "code": "capture_collection_unavailable",
+                    "message": "box runtime does not expose capture collection",
+                }
+            )
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="opentraces-bench-capture-") as directory:
+                destination = Path(directory)
+                collect(
+                    self.box,
+                    [attempt.capture_glob],
+                    destination=destination,
+                    repository=self.bench.repository_path,
+                )
+                result_paths = sorted((destination / "files").rglob("capture_result.json"))
+                if len(result_paths) != 1:
+                    raise RuntimeError(
+                        "capture collection must contain exactly one capture_result.json"
+                    )
+                capture_root = result_paths[0].parent
+                for source_path in sorted(capture_root.rglob("*")):
+                    if source_path.is_file():
+                        relative = source_path.relative_to(capture_root)
+                        self.draft.write_bytes(Path("capture") / relative, source_path.read_bytes())
+                self._capture_result = json.loads(result_paths[0].read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._lifecycle_diagnostics.append(
+                sanitize_reason("capture_collection_failed", exc)
+            )
+
     def _recording_summary(self) -> dict[str, Any]:
         summaries: list[dict[str, Any]] = []
         if hasattr(self, "terminal") and self.terminal.has_actions:
@@ -750,6 +805,9 @@ class BenchRun:
         terminal_settlement_errors: list[Exception] = []
         if hasattr(self, "terminal"):
             terminal_settlement_errors.extend(self.terminal.settle_completed())
+
+        if self.capture_required:
+            self._collect_agent_capture()
 
         for emulator in self._emulators.values():
             try:
