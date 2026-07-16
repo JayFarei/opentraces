@@ -65,10 +65,19 @@ SSH_REMEDY = (
 class CrabboxRefusal(RuntimeError):
     """A named precondition refusal, never an unbounded Crabbox hang."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        partial_stdout: str = "",
+        partial_stderr: str = "",
+    ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.partial_stdout = partial_stdout
+        self.partial_stderr = partial_stderr
 
 
 @dataclass(frozen=True)
@@ -167,6 +176,12 @@ def _operation_name(argv: Sequence[str]) -> str:
     if len(argv) > 1 and argv[0] == "crabbox":
         return str(argv[1]).lstrip("-") or "version"
     return Path(str(argv[0])).name
+
+
+def _partial_output_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
 
 
 def _hf_client_lock() -> tuple[dict[str, str], str]:
@@ -300,18 +315,23 @@ class CrabboxRuntime:
         try:
             completed = self.runner(list(argv), cwd=cwd, env=child_env, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            partial_stdout = sanitize_diagnostic_text(_partial_output_text(exc.stdout))
+            partial_stderr = sanitize_diagnostic_text(_partial_output_text(exc.stderr))
             self._diagnostics.append(
                 {
                     "operation": _operation_name(argv),
                     "returncode": None,
-                    "stdout": sanitize_diagnostic_text(str(exc.stdout or "")),
-                    "stderr": sanitize_diagnostic_text(str(exc.stderr or "")),
+                    "stdout": partial_stdout,
+                    "stderr": partial_stderr,
                     "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                     "timed_out": True,
                 }
             )
             raise CrabboxRefusal(
-                "crabbox_timeout", f"bounded command timed out: {argv[1]}"
+                "crabbox_timeout",
+                f"bounded command timed out: {argv[1]}",
+                partial_stdout=partial_stdout,
+                partial_stderr=partial_stderr,
             ) from exc
         self._diagnostics.append(
             {
@@ -385,7 +405,19 @@ class CrabboxRuntime:
             "--local-container-image",
             self.image,
         ]
-        warmup = self._call(warmup_argv, timeout=600)
+        try:
+            warmup = self._call(warmup_argv, timeout=600)
+        except CrabboxRefusal as primary:
+            if primary.code == "crabbox_timeout":
+                match = re.search(
+                    r"\bcbx_[A-Za-z0-9]+\b",
+                    f"{primary.partial_stdout}\n{primary.partial_stderr}",
+                )
+                if match:
+                    self._best_effort_release_after_refusal(
+                        match.group(0), provider=self.provider
+                    )
+            raise
         match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
         if warmup.returncode != 0:
             primary = CrabboxRefusal(
