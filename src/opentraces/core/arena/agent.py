@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ _CONTROLLER_ENV = frozenset(
         "OPENTRACES_HF_CONTROL_PAYLOAD",
         "OPENTRACES_HF_CONTROL_TOKEN",
         "OPENTRACES_HF_CONTROL_URL",
+        "OT_BENCH_CAPTURE_INTERRUPT_SOURCE",
     }
 )
 
@@ -206,6 +208,10 @@ class AgentDrive:
         grants: Sequence[str],
         environment: Mapping[str, str],
         mcp_config: Mapping[str, Any],
+        *,
+        capture_required: Sequence[str] = (),
+        capture_session_id: str | None = None,
+        capture_interrupt_source: str | None = None,
     ) -> list[str]:
         allowed = [tool for grant in grants for tool in spec.surface_tools[grant]]
         denied = [
@@ -231,8 +237,7 @@ class AgentDrive:
             'observed=${version%% *}; test "$observed" = "$expected"; '
             '"$executable" "$@"'
         )
-        argv = [
-            *sudo,
+        child_argv = [
             "/bin/sh",
             "-c",
             wrapper,
@@ -248,9 +253,26 @@ class AgentDrive:
             *allowed,
         ]
         if denied:
-            argv.extend(["--disallowedTools", *denied])
-        argv.extend(["--permission-mode", "bypassPermissions"])
-        return argv
+            child_argv.extend(["--disallowedTools", *denied])
+        child_argv.extend(["--permission-mode", "bypassPermissions"])
+        if capture_session_id is None:
+            return [*sudo, *child_argv]
+        child_argv.extend(["--session-id", capture_session_id])
+        result_dir = f".opentraces/bench-capture/{capture_session_id}"
+        capture_argv = [
+            "/usr/bin/python3",
+            "-m",
+            "opentraces.capture._agent_harness",
+            "--session-id",
+            capture_session_id,
+            "--result-dir",
+            result_dir,
+        ]
+        for source in capture_required:
+            capture_argv.extend(["--required-source", source])
+        if capture_interrupt_source is not None:
+            capture_argv.extend(["--interrupt-source", capture_interrupt_source])
+        return [*sudo, *capture_argv, "--", *child_argv]
 
     def attempt(
         self,
@@ -272,13 +294,21 @@ class AgentDrive:
         grants = self._grants(access)
         inference_pin, inference_environment = self._inference(inference)
         environment = self._environment(self.product_environment(), inference_environment)
-        self._attempted = True
         capture_session_id = str(uuid.uuid4()) if self.capture_required else None
         capture_glob = (
             f".opentraces/bench-capture/{capture_session_id}/**/*"
             if capture_session_id is not None
             else None
         )
+        capture_interrupt_source = os.environ.get("OT_BENCH_CAPTURE_INTERRUPT_SOURCE")
+        if (
+            capture_interrupt_source is not None
+            and capture_interrupt_source not in self.capture_required
+        ):
+            raise ValueError(
+                "OT_BENCH_CAPTURE_INTERRUPT_SOURCE must name a required capture source"
+            )
+        self._attempted = True
 
         browser_bridge: BrowserMcpBridge | None = None
         reverse_forwards: tuple[tuple[int, int], ...] = ()
@@ -289,7 +319,15 @@ class AgentDrive:
             reverse_forwards = ((browser_bridge.remote_port, browser_bridge.local_port),)
         else:
             mcp_config = {"mcpServers": {}}
-        argv = self._harness_argv(spec, grants, environment, mcp_config)
+        argv = self._harness_argv(
+            spec,
+            grants,
+            environment,
+            mcp_config,
+            capture_required=self.capture_required,
+            capture_session_id=capture_session_id,
+            capture_interrupt_source=capture_interrupt_source,
+        )
 
         low_level = AgentTerminalDrive(
             box=self.box,
