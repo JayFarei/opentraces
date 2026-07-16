@@ -767,6 +767,29 @@ def test_live_key_reaches_agent_process_but_no_finalized_run_bytes(
             assert sentinel.encode() not in stored_path.read_bytes(), stored_path
 
 
+def test_oauth_only_live_agent_reaches_harness_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "oauth-bench-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = CompletingHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert session.started_env == {"CLAUDE_CODE_OAUTH_TOKEN": sentinel}
+    assert run.result["verdict"] == "pass"
+
+
 def test_missing_live_key_is_a_named_skip_before_agent_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
