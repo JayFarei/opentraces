@@ -647,6 +647,57 @@ def test_interrupted_required_capture_fails_even_when_agent_attempt_completes(
     assert (run.final_path / "capture/finalizers/git.report.json").is_file()
 
 
+def test_required_capture_wraps_the_real_claude_child_with_exact_session_id(
+    tmp_path: Path,
+) -> None:
+    session = CompletingHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(
+        app_state="install-only",
+        execution_mode="agent_live",
+        capture_required=["session_jsonl", "git"],
+    ) as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make and commit the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert session.started_argv is not None
+    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    product_command = remote[remote.index("/usr/bin/sudo") + 6 :]
+    assert attempt.capture_session_id is not None
+    result_dir = f".opentraces/bench-capture/{attempt.capture_session_id}"
+    assert product_command[:10] == [
+        "/usr/bin/python3",
+        "-m",
+        "opentraces.capture._agent_harness",
+        "--session-id",
+        attempt.capture_session_id,
+        "--result-dir",
+        result_dir,
+        "--required-source",
+        "session_jsonl",
+        "--required-source",
+    ]
+    assert product_command[10:12] == ["git", "--"]
+    claude_command = product_command[12:]
+    assert claude_command[:2] == ["/bin/sh", "-c"]
+    assert claude_command[-2:] == ["--session-id", attempt.capture_session_id]
+
+    attempt_record = json.loads(
+        (run.final_path / "artifacts/agent-attempt.json").read_text(encoding="utf-8")
+    )
+    assert attempt_record["capture"] == {
+        "session_id": attempt.capture_session_id,
+        "artifact_glob": f"{result_dir}/**/*",
+        "required_sources": ["session_jsonl", "git"],
+    }
+
+
 def test_wrong_claude_version_is_a_named_failed_attempt(tmp_path: Path) -> None:
     session = WrongVersionHarnessSession()
     draft = RunStore(tmp_path / "runs" / "v1").begin()
