@@ -25,7 +25,10 @@ def _digest(path: Path) -> str:
 
 
 def test_canonical_guarantees_bind_four_exact_importable_verifiers() -> None:
+    from tests.manual.generate_a7_guarantees import canonical_guarantees
+
     payload = json.loads(GUARANTEES_PATH.read_text(encoding="utf-8"))
+    assert payload == canonical_guarantees(repository=REPOSITORY)
     rows = payload["guarantees"]
 
     assert [row["id"] for row in rows] == [
