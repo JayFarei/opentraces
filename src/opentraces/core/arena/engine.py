@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import os
+import stat
+import tempfile
 import time
 import traceback as traceback_module
 from dataclasses import dataclass
@@ -14,12 +17,18 @@ from types import TracebackType
 from typing import Any, Callable, Literal, Mapping
 
 from ... import __version__
+from .agent import CAPTURE_REQUIREMENT_SOURCES, AgentDrive, AgentPrerequisiteMissing
 from .box import Box, CrabboxRuntime
-from .contract import build_result
+from .contract import build_result, validate_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.actions import RunActionSequence
+from .drives.agent import AgentTerminalSessionFactory, TermctrlAgentSession
 from .drives.browser import BrowserDrive, BrowserFactory, open_playwright_session
 from .drives.terminal import TerminalDrive
+from .emulate.anthropic.runtime import (
+    AnthropicReplayEmulator,
+    start_anthropic_replay_emulator,
+)
 from .emulate.huggingface.runtime import (
     HuggingFaceEmulator,
     app_state_pin as app_state_with_hf,
@@ -30,6 +39,158 @@ from .run_store import RunDraft, RunStore
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _safe_sensitive_path_finding(
+    relative: str,
+    *,
+    kind: str,
+    sensitive_values: tuple[bytes, ...],
+) -> str:
+    relative_bytes = os.fsencode(relative)
+    if any(secret in relative_bytes for secret in sensitive_values):
+        digest = hashlib.sha256(relative_bytes).hexdigest()
+        return f"sha256:{digest} [path contains live credential]"
+    return f"{relative} [{kind}]" if kind else relative
+
+
+def _scan_sensitive_tree(
+    root: Path,
+    sensitive_values: tuple[bytes, ...],
+) -> tuple[list[str], int, int, int]:
+    """Scan names and regular-file bytes without following stored links."""
+
+    findings: list[str] = []
+    files_checked = 0
+    bytes_checked = 0
+    capture_files_checked = 0
+
+    def walk(directory: Path) -> None:
+        nonlocal files_checked, bytes_checked, capture_files_checked
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: os.fsencode(entry.name))
+        except OSError:
+            relative = directory.relative_to(root).as_posix()
+            findings.append(
+                _safe_sensitive_path_finding(
+                    relative,
+                    kind="unreadable directory not frozen",
+                    sensitive_values=sensitive_values,
+                )
+            )
+            return
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(root).as_posix()
+            relative_bytes = os.fsencode(relative)
+            path_contains_secret = any(secret in relative_bytes for secret in sensitive_values)
+            if entry.is_symlink():
+                files_checked += 1
+                if relative.startswith("capture/"):
+                    capture_files_checked += 1
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="symlink not frozen",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                if path_contains_secret:
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                walk(path)
+                continue
+
+            files_checked += 1
+            if relative.startswith("capture/"):
+                capture_files_checked += 1
+            if path_contains_secret:
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            descriptor = -1
+            try:
+                if not stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="special node not frozen",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                descriptor = os.open(entry.path, flags)
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="special node not frozen",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                    payload = handle.read()
+                bytes_checked += len(payload)
+            except OSError:
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="unreadable file not frozen",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+            if any(secret in payload for secret in sensitive_values):
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+
+    walk(root)
+    return sorted(set(findings)), files_checked, bytes_checked, capture_files_checked
+
+
+def _redact_sensitive_value(value: Any, sensitive_values: tuple[str, ...]) -> Any:
+    if isinstance(value, str):
+        for secret in sensitive_values:
+            value = value.replace(secret, "[live credential redacted]")
+        return value
+    if isinstance(value, list):
+        return [_redact_sensitive_value(item, sensitive_values) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(_redact_sensitive_value(key, sensitive_values)): _redact_sensitive_value(
+                item, sensitive_values
+            )
+            for key, item in value.items()
+        }
+    return value
 
 
 def extract_claim(callable_: Callable[..., Any]) -> str:
@@ -88,6 +249,8 @@ class Bench:
         box_runtime: CrabboxRuntime | None = None,
         repository_path: Path | None = None,
         browser_factory: BrowserFactory | None = None,
+        agent_session_factory: AgentTerminalSessionFactory = TermctrlAgentSession,
+        agent_poll_interval: float = 0.3,
     ) -> None:
         self.source = source
         self.store = store or RunStore()
@@ -97,6 +260,8 @@ class Bench:
         )
         self.repository_path = Path(repository_path or Path.cwd())
         self.browser_factory = browser_factory or open_playwright_session
+        self.agent_session_factory = agent_session_factory
+        self.agent_poll_interval = agent_poll_interval
 
     def run(
         self,
@@ -132,6 +297,7 @@ class BenchRun:
         self.box: Box | None = None
         self.terminal: TerminalDrive
         self.browser: BrowserDrive
+        self.agent: AgentDrive
         self.actions: RunActionSequence
         self.verifiers: list[dict[str, Any]] = []
         self.verifier_sources: list[dict[str, str]] = []
@@ -140,8 +306,9 @@ class BenchRun:
         self._started_at = ""
         self._started = 0.0
         self._app_state_pin: dict[str, Any] = {}
-        self._emulators: dict[str, HuggingFaceEmulator] = {}
+        self._emulators: dict[str, HuggingFaceEmulator | AnthropicReplayEmulator] = {}
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
+        self._capture_result: dict[str, Any] | None = None
         self.origin_evidence_ref: str | None = None
 
     def __enter__(self) -> "BenchRun":
@@ -195,6 +362,19 @@ class BenchRun:
                 actions=self.actions,
                 factory=self.bench.browser_factory,
             )
+            self.agent = AgentDrive(
+                box=self.box,
+                draft=self.draft,
+                actions=self.actions,
+                terminal=self.terminal,
+                browser=self.browser,
+                execution_mode=self.execution_mode,
+                product_environment=self._agent_product_environment,
+                replay_inference=lambda: self._emulators.get("anthropic"),
+                capture_required=self.capture_required,
+                session_factory=self.bench.agent_session_factory,
+                poll_interval=self.bench.agent_poll_interval,
+            )
         except Exception as exc:
             if self.box is not None:
                 try:
@@ -216,33 +396,66 @@ class BenchRun:
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
 
-    def emulate(self, name: str) -> HuggingFaceEmulator:
-        """Start the one concrete bench.v0 provider world."""
+    def emulate(
+        self,
+        name: str,
+        **options: Any,
+    ) -> HuggingFaceEmulator | AnthropicReplayEmulator:
+        """Start one registered per-run provider or model-wire sidecar."""
 
-        if name != "huggingface":
-            raise ValueError(f"unknown emulator {name!r}; expected 'huggingface'")
+        if name not in {"huggingface", "anthropic"}:
+            raise ValueError(f"unknown emulator {name!r}; expected 'huggingface' or 'anthropic'")
         if self.draft is None or self.box is None:
             raise RuntimeError("BenchRun is not active")
         existing = self._emulators.get(name)
         if existing is not None:
+            if options:
+                raise ValueError(f"emulator {name!r} is already running")
             return existing
-        emulator = start_huggingface_emulator(
-            runtime=self.bench.box_runtime,
-            box=self.box,
-            repository=self.bench.repository_path,
-            run_path=self.draft.path,
-        )
+        if name == "huggingface":
+            if options:
+                raise ValueError("Hugging Face emulator accepts no options")
+            emulator: HuggingFaceEmulator | AnthropicReplayEmulator
+            emulator = start_huggingface_emulator(
+                runtime=self.bench.box_runtime,
+                box=self.box,
+                repository=self.bench.repository_path,
+                run_path=self.draft.path,
+            )
+        else:
+            unknown = sorted(set(options).difference({"script"}))
+            if unknown:
+                raise ValueError(f"unknown Anthropic replay option: {unknown[0]}")
+            if "script" not in options:
+                raise ValueError("Anthropic replay emulator requires script")
+            emulator = start_anthropic_replay_emulator(
+                runtime=self.bench.box_runtime,
+                box=self.box,
+                repository=self.bench.repository_path,
+                run_path=self.draft.path,
+                script=options["script"],
+            )
         self._emulators[name] = emulator
-        self._app_state_pin = app_state_with_hf(
-            name=str(self._app_state_pin.get("name") or self.app_state),
-            recipe=self._app_state_pin,
-            provides=[
-                *list(self._app_state_pin.get("provides") or []),
-                "hf-emulator",
-            ],
-            hf_emulator=emulator.binary_pin,
-        )
+        if isinstance(emulator, HuggingFaceEmulator):
+            self._app_state_pin = app_state_with_hf(
+                name=str(self._app_state_pin.get("name") or self.app_state),
+                recipe=self._app_state_pin,
+                provides=[
+                    *list(self._app_state_pin.get("provides") or []),
+                    "hf-emulator",
+                ],
+                hf_emulator=emulator.binary_pin,
+            )
         return emulator
+
+    def _agent_product_environment(self) -> dict[str, str]:
+        environment: dict[str, str] = {}
+        for emulator in self._emulators.values():
+            for key, value in emulator.env.items():
+                if key in environment and environment[key] != value:
+                    raise ValueError(f"agent product environment disagrees on {key}")
+                environment[key] = value
+        return environment
 
     def _source_ref(self, source_object: object) -> dict[str, str]:
         path_value = inspect.getsourcefile(source_object)
@@ -364,6 +577,10 @@ class BenchRun:
         return record
 
     def _outcome_from_verifiers(self) -> tuple[str, str | None, dict[str, str] | None]:
+        if hasattr(self, "agent"):
+            attempt = self.agent.attempt_result
+            if attempt is not None and not attempt.completed:
+                return "complete", "fail", attempt.failure
         if not self.verifiers:
             return (
                 "error",
@@ -468,6 +685,15 @@ class BenchRun:
                     "kind": "assertion_failure",
                 }
             )
+        agent_attempt = self.draft.path / "artifacts" / "agent-attempt.json"
+        if agent_attempt.is_file():
+            artifacts.append(
+                {
+                    "path": "artifacts/agent-attempt.json",
+                    "media_type": "application/json",
+                    "kind": "agent_attempt",
+                }
+            )
         duration_ms = max(0, int((time.monotonic() - self._started) * 1000))
         evidence_requirements = [
             {
@@ -477,6 +703,135 @@ class BenchRun:
             }
             for verifier in self.verifiers
         ]
+        if hasattr(self, "agent") and self.agent.attempt_result is not None:
+            attempt = self.agent.attempt_result
+            evidence_requirements.append(
+                {
+                    "name": "agent.attempt",
+                    "complete": attempt.completed and attempt.recording_complete,
+                    "evidence_refs": [attempt.artifact_ref],
+                }
+            )
+        capture_sources = (
+            self._capture_result.get("sources", [])
+            if isinstance(self._capture_result, dict)
+            else []
+        )
+        capture_by_name = {
+            str(source.get("name")): source
+            for source in capture_sources
+            if isinstance(source, Mapping) and source.get("name")
+        }
+        missing_capture: list[str] = []
+        trace_refs = (
+            self._capture_result.get("trace_refs", [])
+            if isinstance(self._capture_result, dict)
+            else []
+        )
+        for requirement_name in self.capture_required:
+            source_name = CAPTURE_REQUIREMENT_SOURCES.get(
+                requirement_name, requirement_name
+            )
+            source = capture_by_name.get(source_name)
+            complete = bool(
+                source
+                and source.get("status") == "finalized"
+                and source.get("completeness") == "full"
+            )
+            if requirement_name in {"trace", "storage"}:
+                complete = complete and bool(trace_refs)
+            refs = source.get("evidence_refs", []) if source else []
+            evidence_requirements.append(
+                {
+                    "name": f"capture.{requirement_name}",
+                    "complete": complete,
+                    "evidence_refs": (
+                        [
+                            f"capture/{ref}"
+                            for ref in refs
+                            if isinstance(ref, str)
+                            and not Path(ref).is_absolute()
+                            and ".." not in Path(ref).parts
+                        ]
+                        if isinstance(refs, list)
+                        else []
+                    ),
+                }
+            )
+            if not complete:
+                missing_capture.append(requirement_name)
+        if self.capture_required:
+            lifecycle_complete = bool(
+                isinstance(self._capture_result, dict)
+                and self._capture_result.get("completeness") == "complete"
+            )
+            evidence_requirements.append(
+                {
+                    "name": "capture.lifecycle",
+                    "complete": lifecycle_complete,
+                    "evidence_refs": (
+                        ["capture/capture_result.json"]
+                        if isinstance(self._capture_result, dict)
+                        else []
+                    ),
+                }
+            )
+        if missing_capture and execution_status == "complete" and verdict == "pass":
+            verdict = "fail"
+            reason = {
+                "code": "required_capture_missing",
+                "message": (
+                    "required capture evidence is unavailable: "
+                    + ", ".join(missing_capture)
+                ),
+            }
+        custody_report: dict[str, Any] | None = None
+        custody_requirement: dict[str, Any] | None = None
+        sensitive_environment = (
+            self.agent.sensitive_environment if hasattr(self, "agent") else {}
+        )
+        if sensitive_environment:
+            sensitive_text = tuple(sorted(set(sensitive_environment.values())))
+            sensitive_values = tuple(value.encode() for value in sensitive_text)
+            (
+                matches,
+                files_checked,
+                bytes_checked,
+                capture_files_checked,
+            ) = _scan_sensitive_tree(
+                self.draft.path,
+                sensitive_values,
+            )
+            custody_report = {
+                "schema_version": "opentraces.bench.secret-absence.v0",
+                "secret_names": sorted(sensitive_environment),
+                "files_checked": files_checked,
+                "bytes_checked": bytes_checked,
+                "capture_files_checked": capture_files_checked,
+                "candidate_result_checked": True,
+                "matches": matches,
+                "absent": not matches,
+            }
+            custody_ref = "artifacts/live-key-absence.json"
+            artifacts.append(
+                {
+                    "path": custody_ref,
+                    "media_type": "application/json",
+                    "kind": "secret_absence",
+                }
+            )
+            custody_requirement = {
+                "name": "agent.live_key_absence",
+                "complete": not matches,
+                "evidence_refs": [custody_ref],
+            }
+            evidence_requirements.append(custody_requirement)
+            if matches and execution_status == "complete" and verdict == "pass":
+                verdict = "fail"
+                reason = {
+                    "code": "live_key_stored",
+                    "message": "the live inference key appeared in stored run evidence",
+                }
         if scenario_assertion:
             evidence_requirements.append(
                 {
@@ -532,7 +887,7 @@ class BenchRun:
             evidence={"complete": evidence_complete, "requirements": evidence_requirements},
             recordings=self._recording_summary(),
             artifacts=artifacts,
-            capture=None,
+            capture=self._capture_result,
             pins={
                 "product": {
                     "commit": self.bench.source.commit,
@@ -541,12 +896,95 @@ class BenchRun:
                 },
                 "observer": {"package": "opentraces", "version": __version__},
                 "environment": box_pin,
-                "harness": None,
-                "model_wire": None,
+                "harness": self.agent.harness_pin if hasattr(self, "agent") else None,
+                "model_wire": (self.agent.inference_pin if hasattr(self, "agent") else None),
                 "emulators": {name: emulator.pin for name, emulator in self._emulators.items()},
                 "app_state": self._app_state_pin,
             },
         )
+        if custody_report is not None and custody_requirement is not None:
+            candidate_result = json.dumps(
+                result, sort_keys=True, separators=(",", ":")
+            ).encode()
+            custody_report["bytes_checked"] += len(candidate_result)
+            if any(secret in candidate_result for secret in sensitive_values):
+                custody_report["matches"].append("result.json")
+                custody_report["absent"] = False
+                custody_requirement["complete"] = False
+                result["evidence"]["complete"] = False
+                if result["execution_status"] == "complete" and result["verdict"] == "pass":
+                    result["verdict"] = "fail"
+                    result["reason"] = {
+                        "code": "live_key_stored",
+                        "message": "the live inference key appeared in stored run evidence",
+                    }
+                validate_result(result)
+            if custody_report["matches"]:
+                safe_scenario = _redact_sensitive_value(result["scenario"], sensitive_text)
+                safe_pins = _redact_sensitive_value(result["pins"], sensitive_text)
+                self.draft.rebuild_empty()
+                self.draft.write_text(
+                    "source/scenario.py",
+                    "# Original scenario source discarded after live credential contamination.\n",
+                )
+                self.draft.write_json(
+                    "source/source.json",
+                    {
+                        "nodeid": safe_scenario["nodeid"],
+                        "claim": safe_scenario["claim"],
+                        "scenario_path": "[discarded after live credential contamination]",
+                        "repository": "[discarded after live credential contamination]",
+                        "commit": safe_pins.get("product", {}).get("commit"),
+                        "dirty_diff_digest": None,
+                        "copied_source_path": "source/scenario.py",
+                    },
+                )
+                self.draft.write_json("source/verifiers.json", {"sources": []})
+                result = build_result(
+                    run_id=self.draft.run_id,
+                    claim=safe_scenario["claim"],
+                    nodeid=safe_scenario["nodeid"],
+                    source_ref="source/scenario.py",
+                    execution_mode=self.execution_mode,
+                    started_at=self._started_at,
+                    duration_ms=duration_ms,
+                    execution_status="complete",
+                    verdict="fail",
+                    reason={
+                        "code": "live_key_stored",
+                        "message": ("the live inference key appeared in stored run evidence"),
+                    },
+                    verifiers=[],
+                    evidence={
+                        "complete": False,
+                        "requirements": [custody_requirement],
+                    },
+                    recordings={"rewatchable": False, "channels": []},
+                    artifacts=[
+                        {
+                            "path": "artifacts/live-key-absence.json",
+                            "media_type": "application/json",
+                            "kind": "secret_absence",
+                        }
+                    ],
+                    capture=None,
+                    pins=safe_pins,
+                )
+                candidate_result = json.dumps(
+                    result, sort_keys=True, separators=(",", ":")
+                ).encode()
+                if any(secret in candidate_result for secret in sensitive_values):
+                    self.draft.rebuild_empty()
+                    raise RuntimeError("sanitized live-key failure result retained sensitive bytes")
+                self.draft.write_json("artifacts/live-key-absence.json", custody_report)
+                rebuilt_matches, _, _, _ = _scan_sensitive_tree(self.draft.path, sensitive_values)
+                if rebuilt_matches:
+                    self.draft.rebuild_empty()
+                    raise RuntimeError(
+                        "sanitized live-key failure draft retained sensitive evidence"
+                    )
+            else:
+                self.draft.write_json("artifacts/live-key-absence.json", custody_report)
         if os.environ.get("OT_BENCH_DEFER_FINALIZE") == "1":
             self.draft.stage_result(result)
             self.final_path = self.draft.path
@@ -554,20 +992,62 @@ class BenchRun:
             self.final_path = self.draft.finalize(result)
         self.result = result
 
+    def _collect_agent_capture(self) -> None:
+        """Freeze the in-box A3 result tree before the lease is released."""
+
+        if self.draft is None or self.box is None or not hasattr(self, "agent"):
+            return
+        attempt = self.agent.attempt_result
+        if attempt is None or attempt.capture_glob is None:
+            return
+        collect = getattr(self.bench.box_runtime, "collect", None)
+        if not callable(collect):
+            self._lifecycle_diagnostics.append(
+                {
+                    "code": "capture_collection_unavailable",
+                    "message": "box runtime does not expose capture collection",
+                }
+            )
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="opentraces-bench-capture-") as directory:
+                destination = Path(directory)
+                collect(
+                    self.box,
+                    [attempt.capture_glob],
+                    destination=destination,
+                    repository=self.bench.repository_path,
+                )
+                result_paths = sorted((destination / "files").rglob("capture_result.json"))
+                if len(result_paths) != 1:
+                    raise RuntimeError(
+                        "capture collection must contain exactly one capture_result.json"
+                    )
+                capture_root = result_paths[0].parent
+                for source_path in sorted(capture_root.rglob("*")):
+                    if source_path.is_file():
+                        relative = source_path.relative_to(capture_root)
+                        self.draft.write_bytes(Path("capture") / relative, source_path.read_bytes())
+                self._capture_result = json.loads(result_paths[0].read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._lifecycle_diagnostics.append(
+                sanitize_reason("capture_collection_failed", exc)
+            )
+
     def _recording_summary(self) -> dict[str, Any]:
         summaries: list[dict[str, Any]] = []
         if hasattr(self, "terminal") and self.terminal.has_actions:
             summaries.append(self.terminal.recording_summary())
         if hasattr(self, "browser") and self.browser.has_actions:
             summaries.append(self.browser.recording_summary())
+        if hasattr(self, "agent") and self.agent.has_actions:
+            summaries.append(self.agent.recording_summary())
         if summaries:
             timeline = self.actions.timeline_status()
             result: dict[str, Any] = {
                 "rewatchable": timeline["complete"]
                 and all(summary["rewatchable"] for summary in summaries),
-                "channels": [
-                    channel for summary in summaries for channel in summary["channels"]
-                ],
+                "channels": [channel for summary in summaries for channel in summary["channels"]],
                 "timeline_ref": timeline["path"],
                 "timeline": timeline,
             }
@@ -606,7 +1086,7 @@ class BenchRun:
         scenario_assertion_ref: str | None = None
         if exc is None:
             execution_status, verdict, reason = self._outcome_from_verifiers()
-        elif isinstance(exc, BenchSkip):
+        elif isinstance(exc, (BenchSkip, AgentPrerequisiteMissing)):
             execution_status, verdict = "complete", "skip"
             reason = sanitize_reason(exc.code, exc)
             suppressed = True
@@ -635,6 +1115,9 @@ class BenchRun:
         if hasattr(self, "terminal"):
             terminal_settlement_errors.extend(self.terminal.settle_completed())
 
+        if self.capture_required:
+            self._collect_agent_capture()
+
         for emulator in self._emulators.values():
             try:
                 emulator.stop()
@@ -655,9 +1138,7 @@ class BenchRun:
                 sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)
             )
         if hasattr(self, "terminal") and self.terminal.has_pending:
-            terminal_settlement_errors.extend(
-                self.terminal.settle_after_release(timeout=5.0)
-            )
+            terminal_settlement_errors.extend(self.terminal.settle_after_release(timeout=5.0))
         for settlement_error in terminal_settlement_errors:
             self._lifecycle_diagnostics.append(
                 sanitize_reason("terminal_settlement_failed", settlement_error)

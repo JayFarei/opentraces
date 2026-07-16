@@ -206,6 +206,20 @@ class RunDraft:
         _atomic_write_json(target, payload)
         return target
 
+    def rebuild_empty(self) -> None:
+        """Discard an unfinalized draft and recreate its standard empty layout."""
+
+        if self._finalized or (self.path / "result.json").exists():
+            raise FinalizedRunError(f"run {self.run_id} is finalized")
+        if self.path.parent != self.store.staging_root:
+            raise FinalizedRunError(
+                f"run {self.run_id} is outside the staging namespace"
+            )
+        shutil.rmtree(self.path)
+        self.path.mkdir()
+        for name in RUN_SUBDIRECTORIES:
+            (self.path / name).mkdir()
+
     def append_jsonl(self, relative: str | Path, payload: dict[str, Any]) -> Path:
         """Append one durable canonical row while the run is still mutable."""
 
