@@ -5,6 +5,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from opentraces.core.arena.atlas import build_atlas, guarantees_source_digest
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.retrieval import StoredEvidence
@@ -62,7 +64,7 @@ def test_canonical_guarantees_bind_four_exact_importable_verifiers() -> None:
         assert row["black_box_review"] == "unreviewed"
 
 
-def test_future_hole_verifiers_adjudicate_concrete_stored_proofs(tmp_path: Path) -> None:
+def test_future_hole_verifiers_reject_unbound_self_report_json(tmp_path: Path) -> None:
     run_path = tmp_path / "run_future"
     (run_path / "artifacts").mkdir(parents=True)
     (run_path / "result.json").write_text("{}\n", encoding="utf-8")
@@ -95,8 +97,10 @@ def test_future_hole_verifiers_adjudicate_concrete_stored_proofs(tmp_path: Path)
     )
     evidence = StoredEvidence(run_path)
 
-    assert verify_remote_rented_glibc_emulator(evidence) == {"evidence_refs": [remote_ref]}
-    assert verify_linux_x86_64_hf_emulator(evidence) == {"evidence_refs": [x64_ref]}
+    with pytest.raises(AssertionError, match="unbound"):
+        verify_remote_rented_glibc_emulator(evidence)
+    with pytest.raises(AssertionError, match="unbound"):
+        verify_linux_x86_64_hf_emulator(evidence)
 
 
 def test_public_reverification_transcript_disables_box_processes_and_network(
@@ -137,10 +141,32 @@ def test_public_reverification_transcript_disables_box_processes_and_network(
         run_ids={"browser-auth": "run_browser", "publish-down": "run_publish"},
         repository=REPOSITORY,
         runner=fake_runner,
+        integrity_by_run_id={
+            "run_browser": {
+                "verified": True,
+                "result_digest": "sha256:" + "1" * 64,
+                "integrity_digest": "sha256:" + "2" * 64,
+            },
+            "run_publish": {
+                "verified": True,
+                "result_digest": "sha256:" + "3" * 64,
+                "integrity_digest": "sha256:" + "4" * 64,
+            },
+        },
     )
 
     assert [attempt["status"] for attempt in transcript["attempts"]] == ["pass", "fail"]
     assert [attempt["exit_code"] for attempt in transcript["attempts"]] == [0, 1]
+    for attempt in transcript["attempts"]:
+        guarantee = next(
+            row
+            for row in json.loads(GUARANTEES_PATH.read_text())["guarantees"]
+            if row["id"] == attempt["guarantee_id"]
+        )
+        assert attempt["run_ref"] == f"runs/v1/{attempt['run_id']}/result.json"
+        assert attempt["verifier"] == guarantee["verifier"]
+        assert attempt["evidence_refs"] == ["ledgers/huggingface.jsonl"]
+        assert attempt["storage_integrity"]["verified"] is True
     assert transcript["runtime_constraints"] == {
         "box_runtime": "unavailable",
         "external_process_path": "empty",
@@ -177,6 +203,7 @@ def _finalize_run(
     acquired: str,
     released: str,
     capabilities: dict,
+    ledger_operations: tuple[str, ...],
 ) -> tuple[Path, dict]:
     draft = store.begin()
     capability_ref = "artifacts/capabilities.json"
@@ -195,7 +222,31 @@ def _finalize_run(
             "status": "released",
         },
     )
-    draft.write_text(ledger_ref, json.dumps({"nonce": nonce}) + "\n")
+    ledger_source = "".join(
+        json.dumps(
+            {
+                "request_id": f"req_{index}",
+                "observed_at": f"2026-07-16T10:00:0{index}Z",
+                "method": "GET",
+                "path": f"/fixture/{operation}",
+                "operation_id": operation,
+                "request": None,
+                "response": {"status": 200},
+            }
+        )
+        + "\n"
+        for index, operation in enumerate(ledger_operations, start=1)
+    )
+    draft.write_text(ledger_ref, ledger_source)
+    world_ref = "world/huggingface.json"
+    draft.write_json(
+        world_ref,
+        {
+            "schema_version": "opentraces.bench.world.huggingface.v1",
+            "readiness": {"launch": {"nonce": nonce}},
+            "manifest": {"launch": {"nonce": nonce}},
+        },
+    )
     capability_digest = (
         "sha256:"
         + hashlib.sha256(
@@ -265,7 +316,14 @@ def _finalize_run(
             "emulators": {
                 "huggingface": {
                     "setup": {"readiness": {"launch": {"nonce": nonce}}},
-                    "evidence_ref": "world/huggingface.json",
+                    "evidence_ref": world_ref,
+                    "ledger_binding": {
+                        "launch_nonce": nonce,
+                        "ledger_sha256": (
+                            "sha256:" + hashlib.sha256(ledger_source.encode()).hexdigest()
+                        ),
+                        "evidence_ref": ledger_ref,
+                    },
                 }
             },
         },
@@ -273,8 +331,54 @@ def _finalize_run(
     return draft.finalize(result), result
 
 
+@pytest.mark.parametrize(
+    ("ledger_operations", "transcript_fault", "error_match"),
+    [
+        (
+            (
+                ("issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"),
+                ("createRepo", "datasetInfo", "listRepoTree"),
+            ),
+            None,
+            None,
+        ),
+        (
+            (
+                ("issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"),
+                ("issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"),
+            ),
+            None,
+            "ledger",
+        ),
+        (
+            (
+                ("issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"),
+                ("createRepo", "datasetInfo", "listRepoTree"),
+            ),
+            "wrong-verifier-digest",
+            "reverify",
+        ),
+        (
+            (
+                ("issueDeviceCode", "authorizeDeviceCode", "completeDeviceCode"),
+                ("createRepo", "datasetInfo", "listRepoTree"),
+            ),
+            "missing-evidence-ref",
+            "reverify",
+        ),
+    ],
+    ids=(
+        "independent-ledgers",
+        "shared-ledger-state",
+        "wrong-reverify-digest",
+        "missing-reverify-evidence",
+    ),
+)
 def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
     tmp_path: Path,
+    ledger_operations: tuple[tuple[str, ...], tuple[str, ...]],
+    transcript_fault: str | None,
+    error_match: str | None,
 ) -> None:
     guarantees_source = GUARANTEES_PATH.read_bytes()
     guarantees = json.loads(guarantees_source)["guarantees"]
@@ -292,6 +396,7 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
         acquired="2026-07-16T10:00:00Z",
         released="2026-07-16T10:00:03Z",
         capabilities=capabilities,
+        ledger_operations=ledger_operations[0],
     )
     publish_path, publish = _finalize_run(
         store,
@@ -302,6 +407,7 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
         acquired="2026-07-16T10:00:01Z",
         released="2026-07-16T10:00:02Z",
         capabilities=capabilities,
+        ledger_operations=ledger_operations[1],
     )
     results = [browser, publish]
     storage = {
@@ -338,6 +444,35 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
         ),
         encoding="utf-8",
     )
+    reverify_attempts = [
+        {
+            "guarantee_id": "browser-auth",
+            "run_id": browser["run_id"],
+            "run_ref": f"runs/v1/{browser['run_id']}/result.json",
+            "storage_integrity": storage[browser["run_id"]],
+            "exit_code": 0,
+            "status": "pass",
+            "verifier": by_id["browser-auth"]["verifier"],
+            "evidence_refs": browser["verifiers"][0]["evidence_refs"],
+        },
+        {
+            "guarantee_id": "publish-down",
+            "run_id": publish["run_id"],
+            "run_ref": f"runs/v1/{publish['run_id']}/result.json",
+            "storage_integrity": storage[publish["run_id"]],
+            "exit_code": 1,
+            "status": "fail",
+            "verifier": by_id["publish-down"]["verifier"],
+            "evidence_refs": publish["verifiers"][0]["evidence_refs"],
+        },
+    ]
+    if transcript_fault == "wrong-verifier-digest":
+        reverify_attempts[0]["verifier"] = {
+            **reverify_attempts[0]["verifier"],
+            "digest": "sha256:" + "0" * 64,
+        }
+    elif transcript_fault == "missing-evidence-ref":
+        reverify_attempts[0]["evidence_refs"] = []
     reverify_path = tmp_path / "reverify-without-box.json"
     reverify_path.write_text(
         json.dumps(
@@ -348,33 +483,26 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
                     "external_process_path": "empty",
                     "network": "closed-loop-proxy",
                 },
-                "attempts": [
-                    {
-                        "guarantee_id": "browser-auth",
-                        "run_id": browser["run_id"],
-                        "exit_code": 0,
-                        "status": "pass",
-                    },
-                    {
-                        "guarantee_id": "publish-down",
-                        "run_id": publish["run_id"],
-                        "exit_code": 1,
-                        "status": "fail",
-                    },
-                ],
+                "attempts": reverify_attempts,
             }
         ),
         encoding="utf-8",
     )
 
-    observed = verify_a7_acceptance(
-        store_root=store.root,
-        fleet_path=fleet_path,
-        atlas_path=atlas_path,
-        guarantees_path=GUARANTEES_PATH,
-        capabilities_path=capabilities_path,
-        reverify_path=reverify_path,
-    )
+    arguments = {
+        "store_root": store.root,
+        "fleet_path": fleet_path,
+        "atlas_path": atlas_path,
+        "guarantees_path": GUARANTEES_PATH,
+        "capabilities_path": capabilities_path,
+        "reverify_path": reverify_path,
+    }
+    if error_match is not None:
+        with pytest.raises(AssertionError, match=error_match):
+            verify_a7_acceptance(**arguments)
+        return
+
+    observed = verify_a7_acceptance(**arguments)
 
     assert observed["works"] is True
     assert observed["run_ids"] == [browser["run_id"], publish["run_id"]]

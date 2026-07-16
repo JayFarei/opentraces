@@ -421,6 +421,11 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
         "type": "user",
     }
     assert emulator_pin["setup"]["ledger_custody"]["product_writable"] is False
+    assert emulator_pin["ledger_binding"] == {
+        "launch_nonce": emulator_pin["setup"]["readiness"]["launch"]["nonce"],
+        "ledger_sha256": "sha256:" + hashlib.sha256(runtime.raw_ledger).hexdigest(),
+        "evidence_ref": "ledgers/huggingface.jsonl",
+    }
     assert result["pins"]["app_state"] == {
         "name": "install-only",
         "digest": app_state_digest(

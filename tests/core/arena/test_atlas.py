@@ -23,14 +23,25 @@ def _result(
     product_commit: str = PRODUCT_COMMIT,
     capabilities_digest: str = CAPABILITIES_DIGEST,
     verifier_digest: str = "sha256:verifier-v1",
+    verifier_status: str | None = None,
 ) -> dict[str, object]:
+    evidence_refs = ["artifacts/proof.json"]
     return {
         "run_id": run_id,
         "started_at": "2026-07-15T12:00:00Z",
         "scenario": {"nodeid": nodeid, "claim": f"claim for {nodeid}"},
         "verdict": verdict,
         "execution_status": "complete",
-        "evidence": {"complete": evidence_complete},
+        "evidence": {
+            "complete": evidence_complete,
+            "requirements": [
+                {
+                    "name": "verify_world",
+                    "complete": evidence_complete,
+                    "evidence_refs": evidence_refs,
+                }
+            ],
+        },
         "recordings": {"rewatchable": False},
         "pins": {
             "product": {"commit": product_commit},
@@ -40,7 +51,8 @@ def _result(
             {
                 "name": "verify_world",
                 "source_ref": {"digest": verifier_digest},
-                "status": verdict,
+                "status": verifier_status or verdict,
+                "evidence_refs": evidence_refs,
             }
         ],
     }
@@ -192,6 +204,33 @@ def test_proven_row_is_pinned_to_the_exact_stored_result() -> None:
             guarantees_digest=GUARANTEES_DIGEST,
             results=[result],
         )
+
+
+def test_matching_failed_verifier_cannot_be_projected_as_proven() -> None:
+    result = _result(
+        run_id="run-lying-green",
+        nodeid="scenario::lying-green",
+        verdict="pass",
+        evidence_complete=True,
+        verifier_status="fail",
+    )
+    guarantees = [_guarantee("lying-green", "scenario::lying-green")]
+
+    atlas = build_atlas(
+        guarantees=guarantees,
+        guarantees_digest=GUARANTEES_DIGEST,
+        results=[result],
+        product_commit=PRODUCT_COMMIT,
+        capabilities_digest=CAPABILITIES_DIGEST,
+    )
+
+    assert atlas["rows"][0]["state"] == "failing"
+    assert cross_check_atlas(
+        atlas,
+        guarantees=guarantees,
+        guarantees_digest=GUARANTEES_DIGEST,
+        results=[result],
+    )
 
 
 @pytest.mark.parametrize(
