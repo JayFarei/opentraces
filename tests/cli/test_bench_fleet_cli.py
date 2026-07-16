@@ -129,8 +129,9 @@ def test_public_fleet_command_runs_two_selected_nodes_with_private_recipes(
     assert wheel.read_bytes() == b"clean wheel"
     store = RunStore(store_root)
     for row in summary["attempts"]:
-        run_path = Path(row["run_path"])
-        assert run_path.parent == store_root
+        assert "run_path" not in row
+        assert row["run_ref"] == f"runs/v1/{row['run_id']}"
+        run_path = store_root / row["run_id"]
         assert store.verify(run_path) is True
     assert [row["code"] for row in summary["coverage_holes"]] == [
         "remote_rented_glibc_lease_unproven",

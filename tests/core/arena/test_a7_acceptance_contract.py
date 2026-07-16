@@ -252,8 +252,14 @@ def test_manual_acceptance_cross_checks_fleet_atlas_and_capability_truth(
         json.dumps(
             {
                 "attempts": [
-                    {"run_id": browser["run_id"], "run_path": str(browser_path)},
-                    {"run_id": publish["run_id"], "run_path": str(publish_path)},
+                    {
+                        "run_id": browser["run_id"],
+                        "run_ref": f"runs/v1/{browser['run_id']}",
+                    },
+                    {
+                        "run_id": publish["run_id"],
+                        "run_ref": f"runs/v1/{publish['run_id']}",
+                    },
                 ],
                 "observed_max_lease_concurrency": 2,
             }
