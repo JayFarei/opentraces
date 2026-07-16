@@ -790,6 +790,47 @@ def test_oauth_only_live_agent_reaches_harness_process(
     assert run.result["verdict"] == "pass"
 
 
+def test_oauth_precedes_api_key_without_freezing_either_live_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oauth = "oauth-bench-selected-sentinel-not-a-real-credential"
+    api_key = "sk-ant-bench-unselected-sentinel-not-a-real-credential"
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", oauth)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", api_key)
+    session = CompletingHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert session.started_env == {"CLAUDE_CODE_OAUTH_TOKEN": oauth}
+    assert session.started_argv is not None
+    assert "SendEnv=CLAUDE_CODE_OAUTH_TOKEN" in session.started_argv
+    assert "SendEnv=ANTHROPIC_API_KEY" not in session.started_argv
+    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    assert "--preserve-env=CLAUDE_CODE_OAUTH_TOKEN" in remote
+    assert not any(value in argument for value in (oauth, api_key) for argument in session.started_argv)
+
+    custody = json.loads(
+        (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
+    )
+    assert custody["secret_names"] == ["CLAUDE_CODE_OAUTH_TOKEN"]
+    assert custody["matches"] == []
+    assert custody["absent"] is True
+    for stored_path in run.final_path.rglob("*"):
+        if stored_path.is_file():
+            frozen = stored_path.read_bytes()
+            assert oauth.encode() not in frozen, stored_path
+            assert api_key.encode() not in frozen, stored_path
+
+
 def test_missing_live_key_is_a_named_skip_before_agent_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
