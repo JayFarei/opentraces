@@ -56,13 +56,19 @@ EXPECTED_INSTALL_LOCK = {
 
 
 class ScriptedRunner:
-    def __init__(self, responses: list[subprocess.CompletedProcess[str]]) -> None:
+    def __init__(
+        self,
+        responses: list[subprocess.CompletedProcess[str] | subprocess.TimeoutExpired],
+    ) -> None:
         self.responses = responses
         self.calls: list[tuple[list[str], Path | None, dict[str, str], float]] = []
 
     def __call__(self, argv, *, cwd=None, env, timeout):
         self.calls.append((list(argv), cwd, env, timeout))
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, subprocess.TimeoutExpired):
+            raise response
+        return response
 
 
 def _completed(argv: list[str], rc: int = 0, stdout: str = "", stderr: str = ""):
@@ -160,6 +166,51 @@ def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primar
         "code": "release_failed",
         "message": "release_failed: cleanup also failed",
     }
+
+
+@pytest.mark.parametrize(
+    ("partial_stdout", "expected_stop_ids"),
+    [
+        (
+            b"allocated lease cbx_abc123\npassword=do-not-retain\n",
+            ["cbx_abc123"],
+        ),
+        (b"warmup did not report an identity\n", []),
+    ],
+)
+def test_timed_out_warmup_releases_only_an_identity_reported_in_partial_output(
+    tmp_path: Path,
+    partial_stdout: bytes,
+    expected_stop_ids: list[str],
+) -> None:
+    timeout = subprocess.TimeoutExpired(
+        ["crabbox", "warmup"],
+        600,
+        output=partial_stdout,
+        stderr=b"still waiting for readiness\n",
+    )
+    responses: list[subprocess.CompletedProcess[str] | subprocess.TimeoutExpired] = [
+        _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+        timeout,
+    ]
+    if expected_stop_ids:
+        responses.append(_completed(["crabbox", "stop"]))
+    runner = ScriptedRunner(responses)
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="crabbox_timeout") as caught:
+        runtime.lease()
+
+    assert caught.value.code == "crabbox_timeout"
+    assert [
+        call[0][call[0].index("--id") + 1]
+        for call in runner.calls
+        if call[0][1:2] == ["stop"]
+    ] == expected_stop_ids
+    timeout_diagnostic = runtime.diagnostic_records()[1]
+    assert timeout_diagnostic["timed_out"] is True
+    assert "do-not-retain" not in timeout_diagnostic["stdout"]
+    assert ("cbx_abc123" in timeout_diagnostic["stdout"]) is bool(expected_stop_ids)
 
 
 @pytest.mark.parametrize(
