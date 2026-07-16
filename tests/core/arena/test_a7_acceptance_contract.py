@@ -91,9 +91,7 @@ def test_future_hole_verifiers_adjudicate_concrete_stored_proofs(tmp_path: Path)
     )
     evidence = StoredEvidence(run_path)
 
-    assert verify_remote_rented_glibc_emulator(evidence) == {
-        "evidence_refs": [remote_ref]
-    }
+    assert verify_remote_rented_glibc_emulator(evidence) == {"evidence_refs": [remote_ref]}
     assert verify_linux_x86_64_hf_emulator(evidence) == {"evidence_refs": [x64_ref]}
 
 
@@ -126,9 +124,12 @@ def _finalize_run(
         },
     )
     draft.write_text(ledger_ref, json.dumps({"nonce": nonce}) + "\n")
-    capability_digest = "sha256:" + hashlib.sha256(
-        json.dumps(capabilities, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    capability_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(capabilities, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     result = build_result(
         run_id=draft.run_id,
         claim=guarantee["claim"],
