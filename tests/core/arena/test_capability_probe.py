@@ -49,9 +49,19 @@ def _manifest() -> dict[str, object]:
             "entrypoint": "opentraces",
             "json_flag": "--json",
             "pure_json_under_flag": True,
-            "verbs": [{"path": "dataset.publish", "hidden": False}],
+            "verbs": [
+                {"path": "dataset.publish", "hidden": False},
+                {"path": "setup.claude-code", "hidden": False},
+            ],
         },
-        "integration_seams": [],
+        "integration_seams": [
+            {
+                "id": "claude-code-hooks",
+                "kind": "agent-hook",
+                "direction": "inbound",
+                "installed_by": "setup.claude-code",
+            }
+        ],
         "emulation_seams": [
             {
                 "dependency": "huggingface",
@@ -123,6 +133,43 @@ def test_malformed_integration_seam_is_machinery_error_not_capability_skip() -> 
         )
 
     assert malformed.value.code == "capability_probe_invalid"
+
+
+@pytest.mark.parametrize(
+    ("path", "invalid", "message"),
+    [
+        (("interfaces", 0, "kind"), "wormhole", "interface kind"),
+        (("integration_seams", 0, "kind"), "wormhole", "integration seam kind"),
+        (("integration_seams", 0, "direction"), "sideways", "integration seam direction"),
+        (
+            ("interfaces", 1, "lifecycle", "start"),
+            "setup.missing",
+            "lifecycle.*CLI verb",
+        ),
+        (
+            ("integration_seams", 0, "installed_by"),
+            "setup.missing",
+            "installed_by.*CLI verb",
+        ),
+    ],
+)
+def test_closed_enums_and_cli_cross_references_fail_the_manifest_probe(
+    path: tuple[str | int, ...], invalid: str, message: str
+) -> None:
+    manifest: Any = _manifest()
+    target = manifest
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = invalid
+
+    with pytest.raises(CapabilityProbeError, match=message) as error:
+        parse_capabilities_probe(
+            returncode=0,
+            stdout=json.dumps(manifest),
+            stderr="",
+        )
+
+    assert error.value.code == "capability_probe_invalid"
 
 
 @pytest.mark.parametrize(
@@ -223,6 +270,28 @@ def test_satisfied_emulator_exports_only_declared_product_vars_and_disables() ->
         "OPENTRACES_DISABLE_VERSION_CHECK": "1",
     }
     assert "OPENTRACES_HF_CONTROL_TOKEN" not in outcome.environment
+
+
+def test_emulator_requires_one_declared_product_auth_value() -> None:
+    outcome = evaluate_capabilities(
+        _manifest(),
+        requirements=["emulator:huggingface"],
+        runner_drives={"cli"},
+        runner_harnesses=set(),
+        runner_emulators={"huggingface"},
+        seam_values={"HF_ENDPOINT": "http://127.0.0.1:14318"},
+    )
+
+    assert outcome.status == "skip"
+    assert outcome.reason == {
+        "code": "capability_unsatisfied",
+        "message": (
+            "runner: no value for any declared product-auth seam "
+            "HF_TOKEN, HUGGINGFACE_TOKEN"
+        ),
+        "capability": "emulator:huggingface",
+    }
+    assert outcome.environment == {}
 
 
 def test_runner_harness_is_checked_separately_from_installed_agent_support() -> None:

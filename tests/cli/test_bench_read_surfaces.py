@@ -25,6 +25,8 @@ def _finalize_run(
     verifier_digest: str | None = None,
     product_commit: str | None = None,
     capabilities_digest: str | None = None,
+    evidence_complete: bool = True,
+    rewatchable: bool = False,
 ) -> Path:
     draft = store.begin()
     draft.write_text("source/scenario.py", "def scenario(): pass\n")
@@ -67,8 +69,21 @@ def _finalize_run(
             verdict=verdict,
             reason=None if verdict == "pass" else {"code": "assertion_failed", "message": "red"},
             verifiers=verifiers,
-            evidence={"complete": True, "requirements": []},
-            recordings={"rewatchable": False, "channels": []},
+            evidence={
+                "complete": evidence_complete,
+                "requirements": (
+                    []
+                    if evidence_complete
+                    else [
+                        {
+                            "name": "publish.remote_acknowledgement",
+                            "complete": False,
+                            "evidence_refs": [],
+                        }
+                    ]
+                ),
+            },
+            recordings={"rewatchable": rewatchable, "channels": []},
             artifacts=["artifacts/observation.json"],
             capture=None,
             pins=pins,
@@ -237,7 +252,8 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
         verifier_name=verifier_name,
         verifier_digest=verifier_digest,
         product_commit=product_commit,
-        capabilities_digest=capabilities_digest,
+        capabilities_digest="sha256:" + "d" * 64,
+        evidence_complete=False,
     )
     guarantees_path = tmp_path / "guarantees.json"
     guarantees_path.write_text(
@@ -328,7 +344,7 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "--store-root",
             str(store.root),
             "--state",
-            "failing",
+            "surface-drift",
             "--json",
         ],
     )
@@ -360,15 +376,32 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
     atlas = json.loads(atlas_path.read_text(encoding="utf-8"))
     assert atlas["guarantees_digest"] == guarantees_source_digest(guarantees_path.read_bytes())
     assert [(row["id"], row["state"]) for row in atlas["rows"]] == [
-        ("publish", "failing"),
+        ("publish", "surface-drift"),
         ("remote-rented-glibc", "unbound"),
     ]
-    assert atlas["rows"][0]["latest_run_id"] == latest_red.name
-    assert atlas["rows"][0]["latest_run_id"] != older_green.name
+    publish_row = atlas["rows"][0]
+    assert publish_row["latest_run_id"] == latest_red.name
+    assert publish_row["latest_run_id"] != older_green.name
+    index = json.loads(
+        (store.index_root / f"{latest_red.name}.json").read_text(encoding="utf-8")
+    )
+    assert publish_row["started_at"] == "2026-07-15T01:00:00Z"
+    assert publish_row["evidence_complete"] is False
+    assert publish_row["rewatchable"] is False
+    assert publish_row["storage_integrity"] == {
+        "verified": True,
+        "result_digest": index["result_digest"],
+        "integrity_digest": index["integrity_digest"],
+    }
 
     assert rendered.exit_code == 0, rendered.output
     assert json.loads(rendered.output) == {"output": str(page_path), "status": "ok"}
-    assert "FAILING" in page_path.read_text(encoding="utf-8")
+    page = page_path.read_text(encoding="utf-8")
+    assert "SURFACE-DRIFT" in page
+    assert "2026-07-15T01:00:00Z" in page
+    assert "EVIDENCE INCOMPLETE" in page
+    assert "NOT REWATCHABLE" in page
+    assert "STORAGE VERIFIED" in page
 
     assert summarized.exit_code == 0, summarized.output
     summary = json.loads(summarized.output)
@@ -378,16 +411,31 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
             "evidence_ref": f"runs/v1/{latest_red.name}/result.json",
             "id": "publish",
             "run_id": latest_red.name,
-            "state": "failing",
+            "state": "surface-drift",
+            "started_at": "2026-07-15T01:00:00Z",
+            "evidence_complete": False,
+            "rewatchable": False,
+            "storage_integrity": {
+                "verified": True,
+                "result_digest": index["result_digest"],
+                "integrity_digest": index["integrity_digest"],
+            },
             "verdict": "fail",
         }
     ]
-    assert summary["holes"][0]["id"] == "remote-rented-glibc"
+    assert [row["id"] for row in summary["holes"]] == [
+        "publish",
+        "remote-rented-glibc",
+    ]
 
     assert queried.exit_code == 0, queried.output
     query = json.loads(queried.output)
     assert query["count"] == 1
     assert query["rows"][0]["id"] == "publish"
+    assert query["rows"][0]["started_at"] == "2026-07-15T01:00:00Z"
+    assert query["rows"][0]["evidence_complete"] is False
+    assert query["rows"][0]["rewatchable"] is False
+    assert query["rows"][0]["storage_integrity"] == publish_row["storage_integrity"]
     assert linked.exit_code == 0, linked.output
     assert json.loads(linked.output) == {
         "evidence_ref": f"runs/v1/{latest_red.name}/result.json",
@@ -485,6 +533,88 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
 
     assert summarized.exit_code != 0
     assert "state" in summarized.output
+    assert "disagrees" in summarized.output
+
+
+def test_atlas_consumer_rejects_edited_storage_integrity(tmp_path: Path) -> None:
+    product_commit = "a" * 40
+    capabilities_digest = "sha256:" + "b" * 64
+    verifier_digest = "sha256:" + "c" * 64
+    verifier_name = "arena_guarantees.verify_publish"
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    finalized = _finalize_run(
+        store,
+        claim="Dataset publication reaches the remote.",
+        nodeid="arena::publish",
+        verifier_name=verifier_name,
+        verifier_digest=verifier_digest,
+        product_commit=product_commit,
+        capabilities_digest=capabilities_digest,
+    )
+    guarantees_path = tmp_path / "guarantees.json"
+    guarantees_path.write_text(
+        json.dumps(
+            {
+                "guarantees": [
+                    {
+                        "id": "publish",
+                        "claim": "Dataset publication reaches the remote.",
+                        "nodeid": "arena::publish",
+                        "verifier": {"name": verifier_name, "digest": verifier_digest},
+                        "black_box_review": "unreviewed",
+                    }
+                ]
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    atlas_path = tmp_path / "atlas.json"
+    built = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "atlas",
+            "build",
+            str(guarantees_path),
+            "--store-root",
+            str(store.root),
+            "--product-commit",
+            product_commit,
+            "--capabilities-digest",
+            capabilities_digest,
+            "--output",
+            str(atlas_path),
+            "--json",
+        ],
+    )
+    assert built.exit_code == 0, built.output
+    atlas = json.loads(atlas_path.read_text(encoding="utf-8"))
+    assert atlas["rows"][0]["latest_run_id"] == finalized.name
+    atlas["rows"][0]["storage_integrity"] = {
+        "verified": True,
+        "result_digest": "sha256:" + "0" * 64,
+        "integrity_digest": "sha256:" + "0" * 64,
+    }
+    atlas_path.write_text(json.dumps(atlas, sort_keys=True), encoding="utf-8")
+
+    summarized = CliRunner().invoke(
+        main,
+        [
+            "bench",
+            "atlas",
+            "summary",
+            str(atlas_path),
+            "--guarantees",
+            str(guarantees_path),
+            "--store-root",
+            str(store.root),
+            "--json",
+        ],
+    )
+
+    assert summarized.exit_code != 0
+    assert "storage_integrity" in summarized.output
     assert "disagrees" in summarized.output
 
 
