@@ -382,9 +382,7 @@ def test_bench_atlas_build_render_summary_query_and_pr_link_share_stored_truth(
     publish_row = atlas["rows"][0]
     assert publish_row["latest_run_id"] == latest_red.name
     assert publish_row["latest_run_id"] != older_green.name
-    index = json.loads(
-        (store.index_root / f"{latest_red.name}.json").read_text(encoding="utf-8")
-    )
+    index = json.loads((store.index_root / f"{latest_red.name}.json").read_text(encoding="utf-8"))
     assert publish_row["started_at"] == "2026-07-15T01:00:00Z"
     assert publish_row["evidence_complete"] is False
     assert publish_row["rewatchable"] is False
@@ -467,6 +465,9 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
         product_commit=product_commit,
         capabilities_digest=capabilities_digest,
     )
+    failed_index = json.loads(
+        (store.index_root / f"{failed.name}.json").read_text(encoding="utf-8")
+    )
     atlas_path = tmp_path / "atlas.json"
     guarantees_path = tmp_path / "guarantees.json"
     guarantees_path.write_text(
@@ -507,6 +508,14 @@ def test_atlas_consumer_rechecks_mutable_projection_against_run_store(
                         "latest_run_id": failed.name,
                         "verdict": "fail",
                         "evidence_ref": f"runs/v1/{failed.name}/result.json",
+                        "started_at": "2026-07-15T12:00:00Z",
+                        "evidence_complete": True,
+                        "rewatchable": False,
+                        "storage_integrity": {
+                            "verified": True,
+                            "result_digest": failed_index["result_digest"],
+                            "integrity_digest": failed_index["integrity_digest"],
+                        },
                         "black_box_review": "unreviewed",
                     }
                 ],

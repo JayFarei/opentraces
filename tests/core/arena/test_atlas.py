@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from opentraces.core.arena.atlas import AtlasIntegrityError, build_atlas, cross_check_atlas
+from opentraces.core.arena.atlas import (
+    AtlasIntegrityError,
+    build_atlas as _build_atlas,
+    cross_check_atlas as _cross_check_atlas,
+)
 
 
 CAPABILITIES_DIGEST = "sha256:current-surface"
@@ -22,10 +26,12 @@ def _result(
 ) -> dict[str, object]:
     return {
         "run_id": run_id,
+        "started_at": "2026-07-15T12:00:00Z",
         "scenario": {"nodeid": nodeid, "claim": f"claim for {nodeid}"},
         "verdict": verdict,
         "execution_status": "complete",
         "evidence": {"complete": evidence_complete},
+        "recordings": {"rewatchable": False},
         "pins": {
             "product": {"commit": product_commit},
             "capabilities": {"digest": capabilities_digest},
@@ -38,6 +44,34 @@ def _result(
             }
         ],
     }
+
+
+def _storage_integrity(results: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    return {
+        str(result["run_id"]): {
+            "verified": True,
+            "result_digest": "sha256:" + "1" * 64,
+            "integrity_digest": "sha256:" + "2" * 64,
+        }
+        for result in results
+    }
+
+
+def build_atlas(**kwargs):
+    results = list(kwargs["results"])
+    return _build_atlas(
+        **{**kwargs, "results": results},
+        storage_integrity_by_run_id=_storage_integrity(results),
+    )
+
+
+def cross_check_atlas(atlas, **kwargs):
+    results = list(kwargs["results"])
+    return _cross_check_atlas(
+        atlas,
+        **{**kwargs, "results": results},
+        storage_integrity_by_run_id=_storage_integrity(results),
+    )
 
 
 def _guarantee(guarantee_id: str, nodeid: str) -> dict[str, object]:
@@ -72,6 +106,10 @@ def test_unbound_guarantee_is_a_hole_and_never_green() -> None:
             "latest_run_id": None,
             "verdict": None,
             "evidence_ref": None,
+            "started_at": None,
+            "evidence_complete": None,
+            "rewatchable": None,
+            "storage_integrity": None,
             "black_box_review": "unreviewed",
         }
     ]

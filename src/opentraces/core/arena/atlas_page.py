@@ -44,6 +44,26 @@ def _row_card(row: Mapping[str, Any]) -> str:
         evidence_html = '<p class="missing">No stored run is bound to this claim.</p>'
     else:
         evidence_html = f'<p class="evidence"><span>evidence</span> <code>{_h(evidence)}</code></p>'
+    facts_html = ""
+    if state != "unbound":
+        evidence_state = (
+            "EVIDENCE COMPLETE" if row.get("evidence_complete") is True else "EVIDENCE INCOMPLETE"
+        )
+        recording_state = "REWATCHABLE" if row.get("rewatchable") is True else "NOT REWATCHABLE"
+        storage = row.get("storage_integrity")
+        storage_state = (
+            "STORAGE VERIFIED"
+            if isinstance(storage, Mapping) and storage.get("verified") is True
+            else "STORAGE UNVERIFIED"
+        )
+        facts_html = (
+            '<p class="run-facts">'
+            f"<span>{_h(row.get('started_at') or '')}</span>"
+            f"<span>{evidence_state}</span>"
+            f"<span>{recording_state}</span>"
+            f"<span>{storage_state}</span>"
+            "</p>"
+        )
     return f"""
       <article class="row state-{_h(state)}">
         <div class="row-head">
@@ -53,6 +73,7 @@ def _row_card(row: Mapping[str, Any]) -> str:
         <h2>{_h(row.get("claim") or "")}</h2>
         <p class="identity"><code>{_h(row.get("id") or "")}</code></p>
         <p class="node"><code>{_h(row.get("nodeid") or "")}</code></p>
+        {facts_html}
         {evidence_html}
       </article>"""
 
@@ -98,6 +119,7 @@ def render_atlas_page(atlas: Mapping[str, Any], output_path: Path) -> Path:
     .state-surface-drift .state {{ color: #d8a84e; }}
     .review {{ color: #8b949e; }} .row h2 {{ margin: 18px 0 10px; font-size: 22px; }}
     .identity, .node, .evidence, .missing {{ margin: 8px 0 0; color: #aeb6c0; overflow-wrap: anywhere; }}
+    .run-facts {{ display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 14px 0 0; color: #8b949e; font-size: 11px; letter-spacing: .06em; }}
     .evidence span {{ color: #8b949e; }} .missing {{ color: #d8a84e; }}
     code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }}
     footer {{ margin-top: 38px; color: #7d8590; font-size: 12px; }}

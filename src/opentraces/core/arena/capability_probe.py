@@ -10,6 +10,11 @@ from typing import Any
 from ..capabilities import CAPABILITIES_SCHEMA_VERSION
 
 
+INTERFACE_KINDS = frozenset({"cli", "agent", "http", "mcp", "web", "desktop"})
+INTEGRATION_KINDS = frozenset({"agent-hook", "vcs-hook", "daemon", "settings-patch"})
+INTEGRATION_DIRECTIONS = frozenset({"inbound", "outbound"})
+
+
 @dataclass(frozen=True)
 class CapabilityOutcome:
     status: str
@@ -56,11 +61,14 @@ def _validate_manifest(payload: Mapping[str, Any]) -> None:
         raise _invalid("capabilities interfaces must be an array of objects")
     interface_ids: set[str] = set()
     interface_kinds: set[str] = set()
+    lifecycle_commands: list[str] = []
     for row in interfaces:
         for field in ("id", "kind", "drive", "maturity"):
             _string(row.get(field), field=f"interface {field}")
         interface_id = str(row["id"])
         kind = str(row["kind"])
+        if kind not in INTERFACE_KINDS:
+            raise _invalid(f"capabilities interface kind is invalid: {kind}")
         if interface_id in interface_ids:
             raise _invalid(f"capabilities interfaces has duplicate id {interface_id}")
         if kind in interface_kinds:
@@ -76,7 +84,8 @@ def _validate_manifest(payload: Mapping[str, Any]) -> None:
         if "skill" in row:
             _string(row["skill"], field="interface skill")
         if "lifecycle" in row:
-            _string_mapping(row["lifecycle"], field="interface lifecycle")
+            lifecycle = _string_mapping(row["lifecycle"], field="interface lifecycle")
+            lifecycle_commands.extend(lifecycle.values())
 
     cli = payload.get("cli")
     if not isinstance(cli, Mapping):
@@ -130,14 +139,32 @@ def _validate_manifest(payload: Mapping[str, Any]) -> None:
     ):
         raise _invalid("capabilities integration_seams must be an array of objects")
     integration_ids: set[str] = set()
+    installed_by_commands: list[str] = []
     for row in integration_seams:
         for field in ("id", "kind", "direction", "installed_by"):
             if not isinstance(row.get(field), str) or not row.get(field):
                 raise _invalid(f"capabilities integration seam {field} must be a string")
         seam_id = str(row["id"])
+        if row["kind"] not in INTEGRATION_KINDS:
+            raise _invalid(f"capabilities integration seam kind is invalid: {row['kind']}")
+        if row["direction"] not in INTEGRATION_DIRECTIONS:
+            raise _invalid(
+                f"capabilities integration seam direction is invalid: {row['direction']}"
+            )
         if seam_id in integration_ids:
             raise _invalid(f"capabilities integration_seams has duplicate id {seam_id}")
         integration_ids.add(seam_id)
+        installed_by_commands.append(str(row["installed_by"]))
+    for command in lifecycle_commands:
+        if command not in verb_paths:
+            raise _invalid(
+                f"capabilities interface lifecycle references missing CLI verb {command}"
+            )
+    for command in installed_by_commands:
+        if command not in verb_paths:
+            raise _invalid(
+                f"capabilities integration seam installed_by references missing CLI verb {command}"
+            )
     introspection = payload.get("introspection")
     if not isinstance(introspection, Mapping):
         raise _invalid("capabilities introspection must be an object with command")
@@ -272,8 +299,9 @@ def evaluate_capabilities(
     for seam in selected_redirects:
         declared = [*list(seam.get("env") or []), *list(seam.get("auth_env") or [])]
         for name in map(str, declared):
-            if name in seam_values:
-                environment[name] = str(seam_values[name])
+            value = seam_values.get(name)
+            if isinstance(value, str) and value:
+                environment[name] = value
         redirect_vars = list(map(str, seam.get("env") or []))
         missing_redirects = [name for name in redirect_vars if name not in environment]
         if missing_redirects:
@@ -281,6 +309,13 @@ def evaluate_capabilities(
             return _skip(
                 f"emulator:{dependency}",
                 f"runner: no value for declared seam {missing_redirects[0]}",
+            )
+        auth_vars = list(map(str, seam.get("auth_env") or []))
+        if auth_vars and not any(name in environment for name in auth_vars):
+            dependency = str(seam.get("dependency"))
+            return _skip(
+                f"emulator:{dependency}",
+                "runner: no value for any declared product-auth seam " + ", ".join(auth_vars),
             )
     for seam in seams:
         if seam.get("kind") != "disable":

@@ -461,20 +461,24 @@ def _load_guarantees_source(
     return guarantees, guarantees_source_digest(source)
 
 
-def _verified_results(store: RunStore) -> list[Mapping[str, Any]]:
+def _verified_results(
+    store: RunStore,
+) -> tuple[list[Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
     """Read result bytes only after their run has passed external-index verification."""
 
     records = list_stored_runs(store)
     results: list[Mapping[str, Any]] = []
+    storage_integrity: dict[str, Mapping[str, Any]] = {}
     for record in records:
         run_path = store.root / record.run_id
         store.verify(run_path)
         payload = json.loads((run_path / "result.json").read_text(encoding="utf-8"))
-        store.verify(run_path)
         if not isinstance(payload, Mapping):
             raise RunIntegrityError(f"stored run {record.run_id} result is not an object")
+        validate_result(payload)
+        storage_integrity[record.run_id] = store.verified_integrity(run_path)
         results.append(payload)
-    return results
+    return results, storage_integrity
 
 
 def _verified_atlas(
@@ -485,12 +489,13 @@ def _verified_atlas(
 ) -> Mapping[str, Any]:
     atlas = _load_json_object(atlas_path, name="atlas")
     guarantees, guarantees_digest = _load_guarantees_source(guarantees_path)
-    results = _verified_results(_run_store(store_root))
+    results, storage_integrity = _verified_results(_run_store(store_root))
     cross_check_atlas(
         atlas,
         guarantees=guarantees,
         guarantees_digest=guarantees_digest,
         results=results,
+        storage_integrity_by_run_id=storage_integrity,
     )
     return atlas
 
@@ -538,11 +543,12 @@ def bench_atlas_build(
 
     try:
         guarantees, guarantees_digest = _load_guarantees_source(guarantees_path)
-        results = _verified_results(_run_store(store_root))
+        results, storage_integrity = _verified_results(_run_store(store_root))
         atlas = build_atlas(
             guarantees=guarantees,
             guarantees_digest=guarantees_digest,
             results=results,
+            storage_integrity_by_run_id=storage_integrity,
             product_commit=product_commit,
             capabilities_digest=capabilities_digest,
         )
@@ -551,6 +557,7 @@ def bench_atlas_build(
             guarantees=guarantees,
             guarantees_digest=guarantees_digest,
             results=results,
+            storage_integrity_by_run_id=storage_integrity,
         )
         destination = _write_json(output, atlas)
     except (AtlasIntegrityError, RunIntegrityError, OSError, ValueError) as exc:

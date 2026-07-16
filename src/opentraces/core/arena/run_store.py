@@ -133,6 +133,30 @@ class RunStore:
             raise RunIntegrityError(f"unexpected finalized file: {sorted(unexpected)[0]}")
         return True
 
+    def verified_integrity(self, run_path: Path | str) -> dict[str, Any]:
+        """Return index-backed storage facts after a complete run verification."""
+
+        resolved = Path(run_path)
+        self.verify(resolved)
+        index_path = self.index_root / f"{resolved.name}.json"
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        if index.get("schema_version") != "opentraces.bench.run-index.v0":
+            raise RunIntegrityError("finalized run index has an unsupported schema_version")
+        if index.get("run_id") != resolved.name:
+            raise RunIntegrityError("finalized run index has the wrong run_id")
+        facts = {
+            "verified": True,
+            "result_digest": index.get("result_digest"),
+            "integrity_digest": index.get("integrity_digest"),
+        }
+        if any(
+            not isinstance(facts[field], str) or not str(facts[field]).startswith("sha256:")
+            for field in ("result_digest", "integrity_digest")
+        ):
+            raise RunIntegrityError("finalized run index has invalid integrity digests")
+        self.verify(resolved)
+        return facts
+
     def reconcile(self) -> list[Path]:
         """Complete final publications left behind by an interrupted process."""
 

@@ -46,15 +46,15 @@ def _signal_row(row: Mapping[str, Any], *, include_verdict: bool) -> dict[str, A
         "state": row.get("state"),
         "run_id": row.get("latest_run_id"),
         "evidence_ref": row.get("evidence_ref"),
+        "started_at": row.get("started_at"),
+        "evidence_complete": row.get("evidence_complete"),
+        "rewatchable": row.get("rewatchable"),
+        "storage_integrity": row.get("storage_integrity"),
     }
     if include_verdict:
         signal = {
-            "id": signal["id"],
-            "claim": signal["claim"],
-            "state": signal["state"],
+            **signal,
             "verdict": row.get("verdict"),
-            "run_id": signal["run_id"],
-            "evidence_ref": signal["evidence_ref"],
         }
     return signal
 
@@ -65,9 +65,7 @@ def build_agent_summary(atlas: Mapping[str, Any]) -> dict[str, Any]:
     rows = _rows(atlas)
     counts = Counter(str(row.get("state")) for row in rows)
     failures = [
-        _signal_row(row, include_verdict=True)
-        for row in rows
-        if row.get("state") == "failing"
+        _signal_row(row, include_verdict=True) for row in rows if row.get("verdict") == "fail"
     ]
     holes = [
         _signal_row(row, include_verdict=False)

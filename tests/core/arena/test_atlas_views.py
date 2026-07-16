@@ -18,6 +18,14 @@ def _atlas() -> dict[str, object]:
                 "latest_run_id": "run-auth-green",
                 "verdict": "pass",
                 "evidence_ref": "runs/v1/run-auth-green/result.json",
+                "started_at": "2026-07-15T11:00:00Z",
+                "evidence_complete": True,
+                "rewatchable": True,
+                "storage_integrity": {
+                    "verified": True,
+                    "result_digest": "sha256:" + "1" * 64,
+                    "integrity_digest": "sha256:" + "2" * 64,
+                },
                 "black_box_review": "confirmed",
             },
             {
@@ -27,6 +35,14 @@ def _atlas() -> dict[str, object]:
                 "latest_run_id": "run-publish-red",
                 "verdict": "fail",
                 "evidence_ref": "runs/v1/run-publish-red/result.json",
+                "started_at": "2026-07-15T12:00:00Z",
+                "evidence_complete": False,
+                "rewatchable": False,
+                "storage_integrity": {
+                    "verified": True,
+                    "result_digest": "sha256:" + "3" * 64,
+                    "integrity_digest": "sha256:" + "4" * 64,
+                },
                 "black_box_review": "unreviewed",
             },
             {
@@ -36,6 +52,10 @@ def _atlas() -> dict[str, object]:
                 "latest_run_id": None,
                 "verdict": None,
                 "evidence_ref": None,
+                "started_at": None,
+                "evidence_complete": None,
+                "rewatchable": None,
+                "storage_integrity": None,
                 "black_box_review": "unreviewed",
             },
         ],
@@ -56,6 +76,14 @@ def test_agent_summary_answers_what_failed_and_where_from_summary_alone() -> Non
                 "verdict": "fail",
                 "run_id": "run-publish-red",
                 "evidence_ref": "runs/v1/run-publish-red/result.json",
+                "started_at": "2026-07-15T12:00:00Z",
+                "evidence_complete": False,
+                "rewatchable": False,
+                "storage_integrity": {
+                    "verified": True,
+                    "result_digest": "sha256:" + "3" * 64,
+                    "integrity_digest": "sha256:" + "4" * 64,
+                },
             }
         ],
         "holes": [
@@ -65,6 +93,10 @@ def test_agent_summary_answers_what_failed_and_where_from_summary_alone() -> Non
                 "state": "unbound",
                 "run_id": None,
                 "evidence_ref": None,
+                "started_at": None,
+                "evidence_complete": None,
+                "rewatchable": None,
+                "storage_integrity": None,
             }
         ],
     }

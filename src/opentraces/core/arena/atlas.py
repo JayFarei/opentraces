@@ -91,6 +91,58 @@ def _verifier_matches(result: Mapping[str, Any], *, name: str, digest: str) -> b
     return False
 
 
+def _run_facts(
+    result: Mapping[str, Any],
+    *,
+    storage_integrity: Mapping[str, Any],
+) -> dict[str, Any]:
+    started_at = result.get("started_at")
+    evidence_complete = _object(result.get("evidence")).get("complete")
+    rewatchable = _object(result.get("recordings")).get("rewatchable")
+    if not isinstance(started_at, str) or not started_at:
+        raise AtlasIntegrityError("stored result has no started_at")
+    if not isinstance(evidence_complete, bool):
+        raise AtlasIntegrityError("stored result has no typed evidence completeness")
+    if not isinstance(rewatchable, bool):
+        raise AtlasIntegrityError("stored result has no typed recording rewatchability")
+    if (
+        set(storage_integrity) != {"verified", "result_digest", "integrity_digest"}
+        or storage_integrity.get("verified") is not True
+        or not all(
+            isinstance(storage_integrity.get(field), str)
+            and str(storage_integrity[field]).startswith("sha256:")
+            for field in ("result_digest", "integrity_digest")
+        )
+    ):
+        raise AtlasIntegrityError("stored result has no verified storage integrity")
+    return {
+        "started_at": started_at,
+        "evidence_complete": evidence_complete,
+        "rewatchable": rewatchable,
+        "storage_integrity": dict(storage_integrity),
+    }
+
+
+def _storage_by_result(
+    results: Iterable[Mapping[str, Any]],
+    storage_integrity_by_run_id: Mapping[str, Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], dict[str, dict[str, Any]]]:
+    result_rows = list(results)
+    run_ids = {str(result.get("run_id") or "") for result in result_rows}
+    if "" in run_ids or len(run_ids) != len(result_rows):
+        raise AtlasIntegrityError("stored results have missing or duplicate run ids")
+    if set(storage_integrity_by_run_id) != run_ids:
+        raise AtlasIntegrityError("storage integrity does not cover the exact stored results")
+    storage = {
+        run_id: _run_facts(
+            next(result for result in result_rows if result.get("run_id") == run_id),
+            storage_integrity=storage_integrity_by_run_id[run_id],
+        )["storage_integrity"]
+        for run_id in sorted(run_ids)
+    }
+    return result_rows, storage
+
+
 def _row_state(
     result: Mapping[str, Any],
     *,
@@ -123,6 +175,7 @@ def build_atlas(
     guarantees: Iterable[Mapping[str, Any]],
     guarantees_digest: str,
     results: Iterable[Mapping[str, Any]],
+    storage_integrity_by_run_id: Mapping[str, Mapping[str, Any]],
     product_commit: str,
     capabilities_digest: str,
 ) -> dict[str, Any]:
@@ -131,7 +184,7 @@ def build_atlas(
     trusted_guarantees = _validated_guarantees(guarantees)
     trusted_digest = _require_guarantees_digest(guarantees_digest)
     results_by_nodeid: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-    result_rows = list(results)
+    result_rows, storage_by_run_id = _storage_by_result(results, storage_integrity_by_run_id)
     for result in result_rows:
         scenario = _object(result.get("scenario"))
         nodeid = scenario.get("nodeid")
@@ -167,6 +220,10 @@ def build_atlas(
                     "latest_run_id": None,
                     "verdict": None,
                     "evidence_ref": None,
+                    "started_at": None,
+                    "evidence_complete": None,
+                    "rewatchable": None,
+                    "storage_integrity": None,
                     "black_box_review": review,
                 }
             )
@@ -179,6 +236,7 @@ def build_atlas(
                 f"guarantee {guarantee_id} claim differs from its stored result"
             )
         run_id = str(latest["run_id"])
+        facts = _run_facts(latest, storage_integrity=storage_by_run_id[run_id])
         rows.append(
             {
                 "id": guarantee_id,
@@ -198,6 +256,7 @@ def build_atlas(
                 "latest_run_id": run_id,
                 "verdict": latest.get("verdict"),
                 "evidence_ref": f"runs/v1/{run_id}/result.json",
+                **facts,
                 "black_box_review": review,
             }
         )
@@ -218,6 +277,7 @@ def cross_check_atlas(
     guarantees: Iterable[Mapping[str, Any]],
     guarantees_digest: str,
     results: Iterable[Mapping[str, Any]],
+    storage_integrity_by_run_id: Mapping[str, Mapping[str, Any]],
 ) -> bool:
     """Fail closed unless every bound row resolves to its exact result."""
 
@@ -234,7 +294,7 @@ def cross_check_atlas(
         raise AtlasIntegrityError("atlas product_commit is missing")
     if not isinstance(capabilities_digest, str) or not capabilities_digest:
         raise AtlasIntegrityError("atlas capabilities_digest is missing")
-    result_rows = list(results)
+    result_rows, storage_by_run_id = _storage_by_result(results, storage_integrity_by_run_id)
     results_by_id = {str(result.get("run_id")): result for result in result_rows}
     if len(results_by_id) != len(result_rows):
         raise AtlasIntegrityError("stored results contain duplicate run ids")
@@ -285,6 +345,14 @@ def cross_check_atlas(
                 raise AtlasIntegrityError("unbound row carries stored-run evidence")
             if row.get("verdict") is not None:
                 raise AtlasIntegrityError(f"atlas row {row_id} verdict disagrees with unbound")
+            for field in (
+                "started_at",
+                "evidence_complete",
+                "rewatchable",
+                "storage_integrity",
+            ):
+                if row.get(field) is not None:
+                    raise AtlasIntegrityError(f"atlas row {row_id} {field} disagrees with unbound")
             continue
         if not candidates:
             raise AtlasIntegrityError(f"atlas row {row_id} state disagrees with stored results")
@@ -307,6 +375,15 @@ def cross_check_atlas(
             raise AtlasIntegrityError(f"atlas row {row_id} has a false evidence ref")
         if row.get("verdict") != result.get("verdict"):
             raise AtlasIntegrityError(f"atlas row {row_id} verdict disagrees with stored result")
+        expected_facts = _run_facts(
+            result,
+            storage_integrity=storage_by_run_id[run_id],
+        )
+        for field, expected in expected_facts.items():
+            if row.get(field) != expected:
+                raise AtlasIntegrityError(
+                    f"atlas row {row_id} {field} disagrees with stored result"
+                )
         expected_state = _row_state(
             result,
             verifier_name=str(verifier_name),
