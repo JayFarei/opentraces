@@ -159,6 +159,7 @@ def _result(
     recordings: dict,
     execution_mode: str = "direct",
     capture: dict | None = None,
+    pins: dict | None = None,
 ) -> dict:
     return build_result(
         run_id=run_id,
@@ -176,7 +177,7 @@ def _result(
         recordings=recordings,
         artifacts=[],
         capture=capture,
-        pins={},
+        pins=pins or {},
     )
 
 
@@ -413,18 +414,70 @@ def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
     assert '<div class="eyebrow">MODE</div>agent_replay' in html
 
 
+def test_page_renders_stored_agent_task_harness_and_inference_pins(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    task = "Make and commit the exact scenario-4 world-state change."
+    draft.write_json(
+        "artifacts/agent-attempt.json",
+        {
+            "schema_version": "opentraces.bench.agent-attempt.v0",
+            "task": task,
+            "harness": {
+                "name": "claude",
+                "executable": "claude",
+                "version": "2.1.210",
+            },
+            "inference": {"mode": "live"},
+        },
+    )
+    finalized = draft.finalize(
+        _result(
+            draft.run_id,
+            recordings={"rewatchable": False, "channels": []},
+            execution_mode="agent_live",
+            pins={
+                "harness": {
+                    "name": "claude",
+                    "executable": "claude",
+                    "version": "2.1.210",
+                },
+                "model_wire": {"mode": "live"},
+            },
+        )
+    )
+
+    rendered = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    assert '<div class="eyebrow">TASK</div>' in rendered
+    assert task in rendered
+    assert '<div class="eyebrow">HARNESS PIN</div>' in rendered
+    assert "claude · 2.1.210" in rendered
+    assert '<div class="eyebrow">INFERENCE PIN</div>' in rendered
+    assert ">live</" in rendered
+    assert "artifacts/agent-attempt.json" in rendered
+
+
 def test_page_renders_separate_capture_facts_from_stored_source_results(
     tmp_path: Path,
 ) -> None:
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
     source_results = [
-        ("session_jsonl", "full", "finalized", "finalizers/session.report.json"),
-        ("telemetry", "partial", "partial", "finalizers/telemetry.report.json"),
-        ("git", "missing", "unavailable", "finalizers/git.report.json"),
-        ("bucket", "full", "finalized", "finalizers/bucket.report.json"),
+        ("session_jsonl", "full", "finalized", "finalizers/session.report.json", []),
+        (
+            "telemetry",
+            "partial",
+            "partial",
+            "finalizers/telemetry.report.json",
+            ["telemetry source exited after explicit interruption"],
+        ),
+        ("git", "missing", "unavailable", "finalizers/git.report.json", ["git missing"]),
+        ("bucket", "full", "finalized", "finalizers/bucket.report.json", []),
     ]
-    for _name, _completeness, _status, reference in source_results:
+    for _name, _completeness, _status, reference, _limitations in source_results:
         draft.write_json(Path("capture") / reference, {"source": _name})
     capture = {
         "schema_version": "opentraces.capture.result.v1",
@@ -435,8 +488,9 @@ def test_page_renders_separate_capture_facts_from_stored_source_results(
                 "completeness": completeness,
                 "status": status,
                 "evidence_refs": [reference],
+                "limitations": limitations,
             }
-            for name, completeness, status, reference in source_results
+            for name, completeness, status, reference, limitations in source_results
         ],
     }
     finalized = draft.finalize(
@@ -458,8 +512,10 @@ def test_page_renders_separate_capture_facts_from_stored_source_results(
     }
     for fact, value in expected.items():
         assert f'<div class="eyebrow">{fact}</div><strong>{value}</strong>' in rendered
-    for _name, _completeness, _status, reference in source_results:
+    for _name, _completeness, _status, reference, _limitations in source_results:
         assert f">capture/{reference}</a>" in rendered
+    assert "telemetry source exited after explicit interruption" in rendered
+    assert "git missing" in rendered
 
 
 def test_page_renders_each_recording_kind_against_the_stored_focus_timeline(
