@@ -11,6 +11,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
+PREFERENCES_INVALID_SENTINEL = "opentraces-harness-preferences-invalid"
+
+
 class HarnessPreferencesInvalid(ValueError):
     """The existing harness preference file cannot be safely amended."""
 
@@ -121,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         action = validate_claude_readiness if args.check else ensure_claude_readiness
         action(path=Path.home() / ".claude.json", workspace=args.workspace, version=args.version)
     except HarnessPreferencesInvalid:
+        print(PREFERENCES_INVALID_SENTINEL)
         return 2
     return 0
 

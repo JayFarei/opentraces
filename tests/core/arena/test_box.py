@@ -12,6 +12,7 @@ import pytest
 from opentraces.core.arena.box import (
     PINNED_CRABBOX_VERSION,
     PINNED_LOCAL_IMAGE,
+    PREFERENCES_INVALID_SENTINEL,
     Box,
     CrabboxRefusal,
     CrabboxRuntime,
@@ -692,7 +693,11 @@ def test_agent_ready_refuses_invalid_existing_preferences_before_installer_runs(
         command = " ".join(argv)
         product_commands.append(command)
         if "harness_readiness" in command and "--check" in command:
-            return SimpleNamespace(returncode=2, stdout="", stderr="")
+            return SimpleNamespace(
+                returncode=2,
+                stdout=PREFERENCES_INVALID_SENTINEL + "\n",
+                stderr="",
+            )
         stdout = "2.1.210 (Claude Code)\n" if "--version" in command else ""
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 

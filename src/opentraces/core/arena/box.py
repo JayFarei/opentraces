@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value, sanitize_reason
+from .harness_readiness import PREFERENCES_INVALID_SENTINEL
 from .harnesses import (
     CLAUDE_HARNESS_EXECUTABLE,
     CLAUDE_HARNESS_NAME,
@@ -954,9 +955,22 @@ class CrabboxRuntime:
                 timing_path=harness_preflight_timing,
             )
             if harness_preflight.returncode != 0:
+                if (
+                    harness_preflight.returncode == 2
+                    and PREFERENCES_INVALID_SENTINEL in harness_preflight.stdout
+                ):
+                    raise CrabboxRefusal(
+                        "agent_harness_preferences_invalid",
+                        "existing Claude Code preferences are invalid and cannot be safely amended",
+                    )
+                diagnostic = sanitize_diagnostic_text(harness_preflight.stderr.strip())
                 raise CrabboxRefusal(
-                    "agent_harness_preferences_invalid",
-                    "existing Claude Code preferences are invalid and cannot be safely amended",
+                    "agent_harness_preflight_failed",
+                    diagnostic
+                    or (
+                        "the Claude Code harness readiness preflight failed with exit code "
+                        f"{harness_preflight.returncode}"
+                    ),
                 )
             harness_install_timing = self._timing_path(repository, "agent-harness-install")
             harness_install = self.exec_product(
