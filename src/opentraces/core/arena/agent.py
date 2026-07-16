@@ -199,7 +199,10 @@ class AgentDrive:
             if credential is None:
                 raise AgentPrerequisiteMissing(
                     "anthropic_api_key_missing",
-                    "ANTHROPIC_API_KEY is required for agent_live",
+                    (
+                        "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY "
+                        "is required for agent_live"
+                    ),
                 )
             credential_name, credential_value = credential
             return {"mode": "live"}, {credential_name: credential_value}
