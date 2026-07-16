@@ -879,6 +879,27 @@ def test_oauth_leak_fails_without_persisting_secret_bytes_or_symlink_targets(
         "code": "live_key_stored",
         "message": "the live inference key appeared in stored run evidence",
     }
+    assert run.result["verifiers"] == []
+    assert run.result["capture"] is None
+    assert run.result["recordings"] == {"rewatchable": False, "channels": []}
+    assert run.result["artifacts"] == [
+        {
+            "path": "artifacts/live-key-absence.json",
+            "media_type": "application/json",
+            "kind": "secret_absence",
+        }
+    ]
+    assert run.result["evidence"] == {
+        "complete": False,
+        "requirements": [
+            {
+                "name": "agent.live_key_absence",
+                "complete": False,
+                "evidence_refs": ["artifacts/live-key-absence.json"],
+            }
+        ],
+    }
+    assert bench.store.verify(run.final_path) is True
     custody = json.loads(
         (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
     )

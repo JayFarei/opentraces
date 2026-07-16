@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import os
+import stat
 import tempfile
 import time
 import traceback as traceback_module
@@ -38,6 +39,145 @@ from .run_store import RunDraft, RunStore
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _safe_sensitive_path_finding(
+    relative: str,
+    *,
+    kind: str,
+    sensitive_values: tuple[bytes, ...],
+) -> str:
+    relative_bytes = os.fsencode(relative)
+    if any(secret in relative_bytes for secret in sensitive_values):
+        digest = hashlib.sha256(relative_bytes).hexdigest()
+        return f"sha256:{digest} [path contains live credential]"
+    return f"{relative} [{kind}]" if kind else relative
+
+
+def _scan_sensitive_tree(
+    root: Path,
+    sensitive_values: tuple[bytes, ...],
+) -> tuple[list[str], int, int, int]:
+    """Scan names and regular-file bytes without following stored links."""
+
+    findings: list[str] = []
+    files_checked = 0
+    bytes_checked = 0
+    capture_files_checked = 0
+
+    def walk(directory: Path) -> None:
+        nonlocal files_checked, bytes_checked, capture_files_checked
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: os.fsencode(entry.name))
+        except OSError:
+            relative = directory.relative_to(root).as_posix()
+            findings.append(
+                _safe_sensitive_path_finding(
+                    relative,
+                    kind="unreadable directory not frozen",
+                    sensitive_values=sensitive_values,
+                )
+            )
+            return
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(root).as_posix()
+            relative_bytes = os.fsencode(relative)
+            path_contains_secret = any(secret in relative_bytes for secret in sensitive_values)
+            if entry.is_symlink():
+                files_checked += 1
+                if relative.startswith("capture/"):
+                    capture_files_checked += 1
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="symlink not frozen",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                if path_contains_secret:
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                walk(path)
+                continue
+
+            files_checked += 1
+            if relative.startswith("capture/"):
+                capture_files_checked += 1
+            if path_contains_secret:
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            descriptor = -1
+            try:
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                descriptor = os.open(entry.path, flags)
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="special node not frozen",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                    payload = handle.read()
+                bytes_checked += len(payload)
+            except OSError:
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="unreadable file not frozen",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+            if any(secret in payload for secret in sensitive_values):
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+
+    walk(root)
+    return sorted(set(findings)), files_checked, bytes_checked, capture_files_checked
+
+
+def _redact_sensitive_value(value: Any, sensitive_values: tuple[str, ...]) -> Any:
+    if isinstance(value, str):
+        for secret in sensitive_values:
+            value = value.replace(secret, "[live credential redacted]")
+        return value
+    if isinstance(value, list):
+        return [_redact_sensitive_value(item, sensitive_values) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(_redact_sensitive_value(key, sensitive_values)): _redact_sensitive_value(
+                item, sensitive_values
+            )
+            for key, item in value.items()
+        }
+    return value
 
 
 def extract_claim(callable_: Callable[..., Any]) -> str:
@@ -638,30 +778,21 @@ class BenchRun:
             self.agent.sensitive_environment if hasattr(self, "agent") else {}
         )
         if sensitive_environment:
-            sensitive_values = [value.encode() for value in sensitive_environment.values()]
-            stored_paths = sorted(
-                path
-                for path in self.draft.path.rglob("*")
-                if path.is_file() or path.is_symlink()
+            sensitive_text = tuple(sorted(set(sensitive_environment.values())))
+            sensitive_values = tuple(value.encode() for value in sensitive_text)
+            (
+                matches,
+                files_checked,
+                bytes_checked,
+                capture_files_checked,
+            ) = _scan_sensitive_tree(
+                self.draft.path,
+                sensitive_values,
             )
-            matches: list[str] = []
-            bytes_checked = 0
-            capture_files_checked = 0
-            for stored_path in stored_paths:
-                relative = stored_path.relative_to(self.draft.path).as_posix()
-                if relative.startswith("capture/"):
-                    capture_files_checked += 1
-                if stored_path.is_symlink():
-                    matches.append(f"{relative} [symlink not frozen]")
-                    continue
-                payload = stored_path.read_bytes()
-                bytes_checked += len(payload)
-                if any(secret in payload for secret in sensitive_values):
-                    matches.append(relative)
             custody_report = {
                 "schema_version": "opentraces.bench.secret-absence.v0",
                 "secret_names": sorted(sensitive_environment),
-                "files_checked": len(stored_paths),
+                "files_checked": files_checked,
                 "bytes_checked": bytes_checked,
                 "capture_files_checked": capture_files_checked,
                 "candidate_result_checked": True,
@@ -763,7 +894,6 @@ class BenchRun:
                 result, sort_keys=True, separators=(",", ":")
             ).encode()
             custody_report["bytes_checked"] += len(candidate_result)
-            sensitive_values = [value.encode() for value in sensitive_environment.values()]
             if any(secret in candidate_result for secret in sensitive_values):
                 custody_report["matches"].append("result.json")
                 custody_report["absent"] = False
@@ -776,7 +906,72 @@ class BenchRun:
                         "message": "the live inference key appeared in stored run evidence",
                     }
                 validate_result(result)
-            self.draft.write_json("artifacts/live-key-absence.json", custody_report)
+            if custody_report["matches"]:
+                safe_scenario = _redact_sensitive_value(result["scenario"], sensitive_text)
+                safe_pins = _redact_sensitive_value(result["pins"], sensitive_text)
+                self.draft.rebuild_empty()
+                self.draft.write_text(
+                    "source/scenario.py",
+                    "# Original scenario source discarded after live credential contamination.\n",
+                )
+                self.draft.write_json(
+                    "source/source.json",
+                    {
+                        "nodeid": safe_scenario["nodeid"],
+                        "claim": safe_scenario["claim"],
+                        "scenario_path": "[discarded after live credential contamination]",
+                        "repository": "[discarded after live credential contamination]",
+                        "commit": safe_pins.get("product", {}).get("commit"),
+                        "dirty_diff_digest": None,
+                        "copied_source_path": "source/scenario.py",
+                    },
+                )
+                self.draft.write_json("source/verifiers.json", {"sources": []})
+                result = build_result(
+                    run_id=self.draft.run_id,
+                    claim=safe_scenario["claim"],
+                    nodeid=safe_scenario["nodeid"],
+                    source_ref="source/scenario.py",
+                    execution_mode=self.execution_mode,
+                    started_at=self._started_at,
+                    duration_ms=duration_ms,
+                    execution_status="complete",
+                    verdict="fail",
+                    reason={
+                        "code": "live_key_stored",
+                        "message": ("the live inference key appeared in stored run evidence"),
+                    },
+                    verifiers=[],
+                    evidence={
+                        "complete": False,
+                        "requirements": [custody_requirement],
+                    },
+                    recordings={"rewatchable": False, "channels": []},
+                    artifacts=[
+                        {
+                            "path": "artifacts/live-key-absence.json",
+                            "media_type": "application/json",
+                            "kind": "secret_absence",
+                        }
+                    ],
+                    capture=None,
+                    pins=safe_pins,
+                )
+                candidate_result = json.dumps(
+                    result, sort_keys=True, separators=(",", ":")
+                ).encode()
+                if any(secret in candidate_result for secret in sensitive_values):
+                    self.draft.rebuild_empty()
+                    raise RuntimeError("sanitized live-key failure result retained sensitive bytes")
+                self.draft.write_json("artifacts/live-key-absence.json", custody_report)
+                rebuilt_matches, _, _, _ = _scan_sensitive_tree(self.draft.path, sensitive_values)
+                if rebuilt_matches:
+                    self.draft.rebuild_empty()
+                    raise RuntimeError(
+                        "sanitized live-key failure draft retained sensitive evidence"
+                    )
+            else:
+                self.draft.write_json("artifacts/live-key-absence.json", custody_report)
         if os.environ.get("OT_BENCH_DEFER_FINALIZE") == "1":
             self.draft.stage_result(result)
             self.final_path = self.draft.path
