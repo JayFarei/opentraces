@@ -651,6 +651,13 @@ def test_interrupted_required_capture_fails_even_when_agent_attempt_completes(
         "evidence_refs": ["capture/finalizers/git.report.json"],
     } in run.result["evidence"]["requirements"]
     assert (run.final_path / "capture/finalizers/git.report.json").is_file()
+    custody = json.loads(
+        (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
+    )
+    assert custody["secret_names"] == ["ANTHROPIC_API_KEY"]
+    assert custody["capture_files_checked"] == 2
+    assert custody["matches"] == []
+    assert custody["absent"] is True
 
 
 def test_live_key_reaches_agent_process_but_no_finalized_run_bytes(
@@ -677,6 +684,26 @@ def test_live_key_reaches_agent_process_but_no_finalized_run_bytes(
     remote = session.started_argv[session.started_argv.index("--") + 1 :]
     assert "--preserve-env=ANTHROPIC_API_KEY" in remote
     assert not any(sentinel in argument for argument in session.started_argv)
+    custody = json.loads(
+        (run.final_path / "artifacts/live-key-absence.json").read_text(encoding="utf-8")
+    )
+    assert custody == {
+        "schema_version": "opentraces.bench.secret-absence.v0",
+        "secret_names": ["ANTHROPIC_API_KEY"],
+        "files_checked": custody["files_checked"],
+        "bytes_checked": custody["bytes_checked"],
+        "capture_files_checked": 0,
+        "candidate_result_checked": True,
+        "matches": [],
+        "absent": True,
+    }
+    assert custody["files_checked"] > 0
+    assert custody["bytes_checked"] > 0
+    assert {
+        "name": "agent.live_key_absence",
+        "complete": True,
+        "evidence_refs": ["artifacts/live-key-absence.json"],
+    } in run.result["evidence"]["requirements"]
     for stored_path in run.final_path.rglob("*"):
         if stored_path.is_file():
             assert sentinel.encode() not in stored_path.read_bytes(), stored_path
