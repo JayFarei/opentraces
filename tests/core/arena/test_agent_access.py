@@ -852,7 +852,9 @@ def test_missing_live_key_is_a_named_skip_before_agent_action(
     assert run.result["verdict"] == "skip"
     assert run.result["reason"] == {
         "code": "anthropic_api_key_missing",
-        "message": "ANTHROPIC_API_KEY is required for agent_live",
+        "message": (
+            "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY is required for agent_live"
+        ),
     }
     assert session.start_count == 0
     assert not (run.final_path / "actions/0001").exists()
