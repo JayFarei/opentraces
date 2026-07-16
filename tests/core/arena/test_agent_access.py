@@ -253,6 +253,11 @@ def _bench(tmp_path: Path, session: CompletingHarnessSession) -> Bench:
     )
 
 
+@pytest.fixture(autouse=True)
+def _dedicated_live_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unit-live-key-not-a-real-credential")
+
+
 @pytest.mark.parametrize(
     ("access", "message"),
     [
@@ -645,6 +650,61 @@ def test_interrupted_required_capture_fails_even_when_agent_attempt_completes(
         "evidence_refs": ["capture/finalizers/git.report.json"],
     } in run.result["evidence"]["requirements"]
     assert (run.final_path / "capture/finalizers/git.report.json").is_file()
+
+
+def test_live_key_reaches_agent_process_but_no_finalized_run_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "sk-ant-bench-sentinel-9ac22d0f"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", sentinel)
+    session = CompletingHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        attempt = run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+
+    assert session.started_env == {"ANTHROPIC_API_KEY": sentinel}
+    assert session.started_argv is not None
+    assert "SendEnv=ANTHROPIC_API_KEY" in session.started_argv
+    remote = session.started_argv[session.started_argv.index("--") + 1 :]
+    assert "--preserve-env=ANTHROPIC_API_KEY" in remote
+    assert not any(sentinel in argument for argument in session.started_argv)
+    for stored_path in run.final_path.rglob("*"):
+        if stored_path.is_file():
+            assert sentinel.encode() not in stored_path.read_bytes(), stored_path
+
+
+def test_missing_live_key_is_a_named_skip_before_agent_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    session = CompletingHarnessSession()
+    bench = _bench(tmp_path, session)
+
+    with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+        run.agent.attempt(
+            harness="claude",
+            task="Make the requested world-state change.",
+            access=[run.terminal],
+            inference="live",
+        )
+
+    assert run.result["execution_status"] == "complete"
+    assert run.result["verdict"] == "skip"
+    assert run.result["reason"] == {
+        "code": "anthropic_api_key_missing",
+        "message": "ANTHROPIC_API_KEY is required for agent_live",
+    }
+    assert session.start_count == 0
+    assert not (run.final_path / "actions/0001").exists()
 
 
 def test_required_capture_wraps_the_real_claude_child_with_exact_session_id(
