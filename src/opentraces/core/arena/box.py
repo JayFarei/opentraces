@@ -924,11 +924,40 @@ class CrabboxRuntime:
                 f"expected {expected_dependencies}, observed {dependencies}",
             )
         identity_ref = self._prepare_product_identity(box, repository=repository)
+        harness_preflight_ref: str | None = None
         harness_install_ref: str | None = None
         harness_probe_ref: str | None = None
         harness_readiness_ref: str | None = None
         harness_recipe: dict[str, str] | None = None
         if app_state == "agent-ready":
+            if box.workspace is None:
+                raise CrabboxRefusal(
+                    "workspace_coordinate_missing",
+                    "agent-ready requires a validated materialized workspace",
+                )
+            harness_preflight_timing = self._timing_path(
+                repository, "agent-harness-preflight"
+            )
+            harness_preflight = self.exec_product(
+                box,
+                [
+                    "python3",
+                    "-m",
+                    "opentraces.core.arena.harness_readiness",
+                    "--check",
+                    "--workspace",
+                    box.workspace,
+                    "--version",
+                    CLAUDE_HARNESS_VERSION,
+                ],
+                timeout=30,
+                timing_path=harness_preflight_timing,
+            )
+            if harness_preflight.returncode != 0:
+                raise CrabboxRefusal(
+                    "agent_harness_preferences_invalid",
+                    "existing Claude Code preferences are invalid and cannot be safely amended",
+                )
             harness_install_timing = self._timing_path(repository, "agent-harness-install")
             harness_install = self.exec_product(
                 box,
@@ -963,11 +992,6 @@ class CrabboxRuntime:
                     f"expected Claude Code {CLAUDE_HARNESS_VERSION}, "
                     f"observed {observed_harness_version or 'unavailable'}",
                 )
-            if box.workspace is None:
-                raise CrabboxRefusal(
-                    "workspace_coordinate_missing",
-                    "agent-ready requires a validated materialized workspace",
-                )
             harness_readiness_timing = self._timing_path(
                 repository, "agent-harness-readiness"
             )
@@ -996,6 +1020,7 @@ class CrabboxRuntime:
                 "version": CLAUDE_HARNESS_VERSION,
                 "readiness": "claude-global-preferences-v1",
             }
+            harness_preflight_ref = self._evidence_ref(harness_preflight_timing)
             harness_install_ref = self._evidence_ref(harness_install_timing)
             harness_probe_ref = self._evidence_ref(harness_probe_timing)
             harness_readiness_ref = self._evidence_ref(harness_readiness_timing)
@@ -1028,6 +1053,7 @@ class CrabboxRuntime:
                 self._evidence_ref(provides_timing),
                 self._evidence_ref(dependency_timing),
                 identity_ref,
+                harness_preflight_ref,
                 harness_install_ref,
                 harness_probe_ref,
                 harness_readiness_ref,

@@ -53,9 +53,7 @@ def _atomic_write(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def ensure_claude_readiness(*, path: Path, workspace: str, version: str) -> bool:
-    """Merge only non-secret readiness facts into Claude's global preferences."""
-
+def _validated_preferences(*, path: Path, workspace: str, version: str) -> dict[str, Any]:
     coordinate = PurePosixPath(workspace)
     if not coordinate.is_absolute() or str(coordinate) != workspace or ".." in coordinate.parts:
         raise HarnessPreferencesInvalid("workspace is not an absolute canonical coordinate")
@@ -68,11 +66,26 @@ def ensure_claude_readiness(*, path: Path, workspace: str, version: str) -> bool
     _compatible(preferences, "theme", str)
     _compatible(preferences, "bypassPermissionsModeAccepted", bool)
     _compatible(preferences, "projects", dict)
-    projects = preferences.setdefault("projects", {})
-    project = projects.setdefault(workspace, {})
+    projects = preferences.get("projects", {})
+    project = projects.get(workspace, {})
     if not isinstance(project, dict):
         raise HarnessPreferencesInvalid("workspace preferences are not an object")
     _compatible(project, "hasTrustDialogAccepted", bool)
+    return preferences
+
+
+def validate_claude_readiness(*, path: Path, workspace: str, version: str) -> None:
+    """Validate existing Claude preferences without materializing readiness."""
+
+    _validated_preferences(path=path, workspace=workspace, version=version)
+
+
+def ensure_claude_readiness(*, path: Path, workspace: str, version: str) -> bool:
+    """Merge only non-secret readiness facts into Claude's global preferences."""
+
+    preferences = _validated_preferences(path=path, workspace=workspace, version=version)
+    projects = preferences.setdefault("projects", {})
+    project = projects.setdefault(workspace, {})
 
     preferences.update(
         {
@@ -100,15 +113,13 @@ def ensure_claude_readiness(*, path: Path, workspace: str, version: str) -> bool
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true")
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--version", required=True)
     args = parser.parse_args(argv)
     try:
-        ensure_claude_readiness(
-            path=Path.home() / ".claude.json",
-            workspace=args.workspace,
-            version=args.version,
-        )
+        action = validate_claude_readiness if args.check else ensure_claude_readiness
+        action(path=Path.home() / ".claude.json", workspace=args.workspace, version=args.version)
     except HarnessPreferencesInvalid:
         return 2
     return 0

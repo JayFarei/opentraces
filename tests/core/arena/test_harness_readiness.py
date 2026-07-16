@@ -10,6 +10,7 @@ import pytest
 from opentraces.core.arena.harness_readiness import (
     HarnessPreferencesInvalid,
     ensure_claude_readiness,
+    main,
 )
 
 
@@ -79,3 +80,32 @@ def test_existing_ready_file_permission_is_repaired_without_rewrite(tmp_path: Pa
 
     assert path.read_bytes() == content
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_check_rejects_corrupt_preferences_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / ".claude.json"
+    payload = b'{"projects": []}'
+    path.write_bytes(payload)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    assert main(["--check", "--workspace", WORKSPACE, "--version", VERSION]) == 2
+    assert path.read_bytes() == payload
+
+
+def test_check_accepts_absent_and_valid_preferences_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / ".claude.json"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    assert main(["--check", "--workspace", WORKSPACE, "--version", VERSION]) == 0
+    assert not path.exists()
+
+    payload = b'{"oauthAccount":{"opaque":"preserve-me"}}'
+    path.write_bytes(payload)
+    before_mtime = path.stat().st_mtime_ns
+    assert main(["--check", "--workspace", WORKSPACE, "--version", VERSION]) == 0
+    assert path.read_bytes() == payload
+    assert path.stat().st_mtime_ns == before_mtime

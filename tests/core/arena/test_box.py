@@ -611,7 +611,11 @@ def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
     install = next(command for command in product_commands if "claude.ai/install.sh" in command)
     assert "bash -s -- 2.1.210" in install
     assert "latest" not in install and "stable" not in install
-    probe = next(command for command in product_commands if "--version" in command)
+    probe = next(
+        command
+        for command in product_commands
+        if "claude --version" in command
+    )
     assert probe == "/home/opentraces-product/.local/bin/claude --version"
     assert "agent:claude" in pin["provides"]
     assert pin["recipe"]["harness"] == {
@@ -624,10 +628,18 @@ def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
         command
         for command in product_commands
         if "opentraces.core.arena.harness_readiness" in command
+        and "--check" not in command
     )
     assert readiness == (
         "python3 -m opentraces.core.arena.harness_readiness "
         "--workspace /work/crabbox/box/repository --version 2.1.210"
+    )
+    assert any(
+        command == (
+            "python3 -m opentraces.core.arena.harness_readiness --check "
+            "--workspace /work/crabbox/box/repository --version 2.1.210"
+        )
+        for command in product_commands
     )
 
 
