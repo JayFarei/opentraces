@@ -188,13 +188,21 @@ class AgentDrive:
             if inference != "live":
                 raise ValueError("agent_live requires inference='live'")
             live_environment = self.live_environment()
-            api_key = live_environment.get("ANTHROPIC_API_KEY")
-            if not isinstance(api_key, str) or not api_key:
+            credential = next(
+                (
+                    (name, value)
+                    for name in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+                    if isinstance((value := live_environment.get(name)), str) and value
+                ),
+                None,
+            )
+            if credential is None:
                 raise AgentPrerequisiteMissing(
                     "anthropic_api_key_missing",
                     "ANTHROPIC_API_KEY is required for agent_live",
                 )
-            return {"mode": "live"}, {"ANTHROPIC_API_KEY": api_key}
+            credential_name, credential_value = credential
+            return {"mode": "live"}, {credential_name: credential_value}
         if self.execution_mode != "agent_replay":
             raise ValueError("run.agent requires agent_live or agent_replay execution mode")
         if inference == "live" or isinstance(inference, str):
