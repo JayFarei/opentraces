@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import shlex
@@ -15,6 +16,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from opentraces.core.arena import engine as arena_engine
 from opentraces.core.arena.agent import AgentDrive
 from opentraces.core.arena.drives.actions import RunActionSequence
 from opentraces.core.arena.drives.agent import AgentTerminalObservation
@@ -137,6 +139,53 @@ class CredentialNamedPathHarnessSession(CompletingHarnessSession):
         )
         (recording_path.parent / self.sentinel).write_text(
             "credential appeared in this path\n", encoding="utf-8"
+        )
+
+
+class UndeletableCredentialHarnessSession(CompletingHarnessSession):
+    """Leak a credential into a directory whose first deletion is denied."""
+
+    def __init__(self, sentinel: str) -> None:
+        super().__init__()
+        self.sentinel = sentinel
+        self.locked_dir: Path | None = None
+
+    def start(
+        self,
+        argv: list[str],
+        *,
+        recording_path: Path,
+        cols: int,
+        rows: int,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        super().start(
+            argv,
+            recording_path=recording_path,
+            cols=cols,
+            rows=rows,
+            env=env,
+        )
+        locked = recording_path.parent / "locked"
+        locked.mkdir(parents=True, exist_ok=True)
+        (locked / "leaked.txt").write_text(
+            f"{self.sentinel}\n", encoding="utf-8"
+        )
+        # Deny write on the directory so its entry cannot be unlinked: the first
+        # rmtree of the contaminated staging tree fails until permissions are
+        # repaired.
+        os.chmod(locked, 0o500)
+        self.locked_dir = locked
+
+    def observe(self) -> AgentTerminalObservation:
+        return AgentTerminalObservation(
+            state="running",
+            screen=(
+                "OPENTRACES_HARNESS_VERSION=2.1.210\n"
+                f"{self.sentinel}\n"
+                "OPENTRACES_AGENT_ATTEMPT_COMPLETE"
+            ),
+            logs="",
         )
 
 
@@ -1444,3 +1493,368 @@ def test_unknown_harness_is_refused_by_the_closed_registry_before_spawn(
         run.verify(verify_passes)
 
     assert session.start_count == 0
+
+
+def test_scan_reads_evidence_in_bounded_chunks_not_one_whole_file_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Peak scan read size must be bounded independently of file size (#334)."""
+
+    root = tmp_path / "run"
+    (root / "artifacts").mkdir(parents=True)
+    size = (1 << 20) * 2 + 4096  # ~2 MiB regular evidence file
+    (root / "artifacts" / "large-capture.bin").write_bytes(b"\x00" * size)
+
+    max_single_read = {"n": 0}
+    real_fdopen = arena_engine.os.fdopen
+
+    class _ReadSizeSpy:
+        def __init__(self, handle: object) -> None:
+            self._handle = handle
+
+        def read(self, amount: int = -1) -> bytes:
+            data = self._handle.read(amount)
+            max_single_read["n"] = max(max_single_read["n"], len(data))
+            return data
+
+        def __enter__(self) -> "_ReadSizeSpy":
+            return self
+
+        def __exit__(self, *exc: object) -> object:
+            return self._handle.__exit__(*exc)
+
+    monkeypatch.setattr(
+        arena_engine.os,
+        "fdopen",
+        lambda *args, **kwargs: _ReadSizeSpy(real_fdopen(*args, **kwargs)),
+    )
+
+    matches, files_checked, bytes_checked, _ = arena_engine._scan_sensitive_tree(
+        root, (b"absent-live-credential-not-a-real-secret",)
+    )
+
+    assert matches == []
+    assert files_checked == 1
+    assert bytes_checked == size
+    # Whole-file read returns the entire 2 MiB in one call; the bounded scanner
+    # never reads more than one chunk (1 MiB) at a time.
+    assert max_single_read["n"] <= 1 << 20
+
+
+_STRADDLE_SECRET = b"straddle-live-credential-not-a-real-secret"
+
+
+@pytest.mark.parametrize(
+    "bytes_in_previous_chunk",
+    [
+        # One byte before the boundary (rest of the secret in the next chunk).
+        1,
+        # Mid split.
+        10,
+        # All but ONE byte before the boundary: only a full credential_length-1
+        # overlap retains the secret's first byte in the carry, so this exact
+        # split kills the off-by-one (L-1 -> L-2) overlap mutant.
+        len(_STRADDLE_SECRET) - 1,
+    ],
+    ids=["one-byte-before", "mid-split", "one-byte-after"],
+)
+def test_scan_detects_credential_straddling_a_chunk_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bytes_in_previous_chunk: int,
+) -> None:
+    """A credential split across two scan chunks must still be caught (#334)."""
+
+    root = tmp_path / "run"
+    (root / "artifacts").mkdir(parents=True)
+    secret = _STRADDLE_SECRET
+    monkeypatch.setattr(arena_engine, "_SCAN_CHUNK_SIZE", 64, raising=False)
+    boundary = 64
+    prefix = b"A" * (boundary - bytes_in_previous_chunk)
+    body = prefix + secret + b"B" * 200
+    (root / "artifacts" / "evidence.bin").write_bytes(body)
+
+    matches, files_checked, bytes_checked, _ = arena_engine._scan_sensitive_tree(
+        root, (secret,)
+    )
+
+    assert matches == ["artifacts/evidence.bin"]
+    assert files_checked == 1
+    assert bytes_checked == len(body)
+
+
+def test_contaminated_staging_is_purged_when_first_deletion_is_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recoverable first-deletion failure must still purge the leaked bytes (#335)."""
+
+    sentinel = "purge-retry-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = UndeletableCredentialHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+    runs_root = tmp_path / "runs"
+
+    try:
+        with contextlib.suppress(Exception):
+            with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+                attempt = run.agent.attempt(
+                    harness="claude",
+                    task="Make the requested world-state change.",
+                    access=[run.terminal],
+                    inference="live",
+                )
+                run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
+
+        remaining = []
+        for path in runs_root.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if sentinel.encode() in path.read_bytes():
+                    remaining.append(path.relative_to(runs_root).as_posix())
+            except OSError:
+                continue
+        assert remaining == []
+    finally:
+        # Restore traversal so pytest can tear the tmp tree down regardless of outcome.
+        if session.locked_dir is not None and session.locked_dir.exists():
+            os.chmod(session.locked_dir, 0o700)
+
+
+def test_unpurgeable_contaminated_staging_is_named_without_publishing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrecoverable purge is named for an operator, never published (#335)."""
+
+    sentinel = "unpurgeable-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = EchoingCredentialHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+    runs_root = tmp_path / "runs" / "v1"
+
+    def _always_fail(_self: object) -> None:
+        raise OSError("injected: staging deletion denied")
+
+    monkeypatch.setattr(arena_engine.RunDraft, "rebuild_empty", _always_fail)
+
+    with pytest.raises(OSError, match="injected"):
+        with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+            attempt = run.agent.attempt(
+                harness="claude",
+                task="Make the requested world-state change.",
+                access=[run.terminal],
+                inference="live",
+            )
+            run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
+
+    markers = list((runs_root / ".cleanup-required").glob("*.json"))
+    assert len(markers) == 1
+    marker_bytes = markers[0].read_bytes()
+    assert sentinel.encode() not in marker_bytes
+    marker = json.loads(marker_bytes)
+    assert marker["reason"] == "contaminated_staging_purge_failed"
+    assert marker["run_id"] in marker["contaminated_staging_path"]
+    assert ".staging" in marker["contaminated_staging_path"]
+    # The contaminated draft is never finalized or transaction-indexed.
+    assert not list(runs_root.glob("run_*/result.json"))
+    assert not list((runs_root / ".index").glob("*.json"))
+    assert not list((runs_root / ".transactions").glob("*"))
+
+
+def test_permission_repair_never_chmods_through_a_swapped_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding 2 (#335): the repair fallback must never follow a symlink.
+
+    A generic OSError from the no-follow chmod must not route into a plain
+    (link-following) chmod: if the entry was swapped for a symlink after the
+    lstat, the fallback would chmod the link TARGET.
+    """
+
+    victim = tmp_path / "victim"
+    victim.write_text("outside the repair tree\n", encoding="utf-8")
+    os.chmod(victim, 0o400)
+    root = tmp_path / "repair-root"
+    root.mkdir()
+    entry = root / "entry"
+    entry.write_text("swap me\n", encoding="utf-8")
+    os.chmod(entry, 0o644)
+
+    real_chmod = os.chmod
+
+    def swapping_chmod(path, mode, *args, **kwargs):
+        if kwargs.get("follow_symlinks", True) is False and Path(path) == entry:
+            # Simulate the entry being swapped for a symlink after the lstat,
+            # with the no-follow chmod denied by a generic OSError.
+            entry.unlink()
+            entry.symlink_to(victim)
+            raise OSError("injected: no-follow chmod denied")
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(arena_engine.os, "chmod", swapping_chmod)
+
+    arena_engine._repair_tree_permissions_no_follow(root)
+
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o400, (
+        "permission repair chmod-ed through a swapped symlink"
+    )
+
+
+def test_permission_repair_enqueue_is_bounded_by_the_entry_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding 3 (#335): one scandir loop must not enqueue past the budget."""
+
+    monkeypatch.setattr(arena_engine, "_MAX_PURGE_REPAIR_ENTRIES", 2)
+    root = tmp_path / "repair-root"
+    root.mkdir()
+    for index in range(50):
+        (root / f"child-{index:03d}").write_text("x\n", encoding="utf-8")
+
+    consumed = {"n": 0}
+    real_scandir = os.scandir
+
+    class _CountingScandir:
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def __enter__(self) -> "_CountingScandir":
+            self._iterator = self._inner.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> object:
+            return self._inner.__exit__(*exc)
+
+        def __iter__(self):
+            for item in self._iterator:
+                consumed["n"] += 1
+                yield item
+
+    monkeypatch.setattr(
+        arena_engine.os,
+        "scandir",
+        lambda path: _CountingScandir(real_scandir(path)),
+    )
+
+    arena_engine._repair_tree_permissions_no_follow(root)
+
+    # With a budget of 2, the walk may enqueue at most up to the budget (plus the
+    # one entry that observes the exhausted budget); it must not consume all 50.
+    assert consumed["n"] <= 3, f"unbounded enqueue: consumed {consumed['n']} entries"
+
+
+def test_cleanup_marker_is_credential_free_even_when_store_path_carries_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding 4 (#335): the marker must be unconditionally credential-free."""
+
+    sentinel = "marker-path-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = EchoingCredentialHarnessSession(sentinel)
+    store_root = tmp_path / f"team-{sentinel}" / "runs" / "v1"
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(store_root),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+        agent_session_factory=lambda _name: session,
+        agent_poll_interval=0,
+    )
+
+    def _always_fail(_self: object) -> None:
+        raise OSError("injected: staging deletion denied")
+
+    monkeypatch.setattr(arena_engine.RunDraft, "rebuild_empty", _always_fail)
+
+    with pytest.raises(OSError, match="injected"):
+        with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+            attempt = run.agent.attempt(
+                harness="claude",
+                task="Make the requested world-state change.",
+                access=[run.terminal],
+                inference="live",
+            )
+            run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
+
+    markers = list((store_root / ".cleanup-required").glob("*.json"))
+    assert len(markers) == 1
+    marker_bytes = markers[0].read_bytes()
+    assert sentinel.encode() not in marker_bytes, (
+        "cleanup-required marker carried live credential bytes"
+    )
+    marker = json.loads(marker_bytes)
+    assert marker["reason"] == "contaminated_staging_purge_failed"
+
+
+def test_purge_reraises_the_original_deletion_error_not_the_final_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding 5 (#335): the FIRST deletion exception is the primary error."""
+
+    sentinel = "original-error-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = EchoingCredentialHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+
+    calls = {"n": 0}
+
+    def _fail_distinct(_self: object) -> None:
+        calls["n"] += 1
+        raise OSError(f"denial-{calls['n']}")
+
+    monkeypatch.setattr(arena_engine.RunDraft, "rebuild_empty", _fail_distinct)
+
+    with pytest.raises(OSError, match="denial-1"):
+        with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+            attempt = run.agent.attempt(
+                harness="claude",
+                task="Make the requested world-state change.",
+                access=[run.terminal],
+                inference="live",
+            )
+            run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
+
+    assert calls["n"] >= 2, "the purge did not retry the deletion"
+
+
+def test_marker_write_failure_never_masks_the_primary_purge_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding 5 (#335): marker IO failure must not replace the purge error."""
+
+    sentinel = "marker-masking-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = EchoingCredentialHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+    runs_root = tmp_path / "runs" / "v1"
+    runs_root.mkdir(parents=True, exist_ok=True)
+    # Occupy the marker directory path with a FILE so the marker write fails.
+    (runs_root / ".cleanup-required").write_text("occupied\n", encoding="utf-8")
+
+    def _always_fail(_self: object) -> None:
+        raise OSError("primary-denial")
+
+    monkeypatch.setattr(arena_engine.RunDraft, "rebuild_empty", _always_fail)
+
+    with pytest.raises(OSError, match="primary-denial"):
+        with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+            attempt = run.agent.attempt(
+                harness="claude",
+                task="Make the requested world-state change.",
+                access=[run.terminal],
+                inference="live",
+            )
+            run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)

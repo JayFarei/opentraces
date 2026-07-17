@@ -267,6 +267,102 @@ def test_timed_out_warmup_releases_only_one_unique_boundary_safe_identity(
 
 
 @pytest.mark.parametrize(
+    ("warmup_stdout", "warmup_stderr"),
+    [
+        # Hyphen-attached lookalike: the permissive first-match regex truncates
+        # cbx_good123-extra to cbx_good123 and guesses an inspect/stop identity.
+        ("ready lease=cbx_good123-extra\n", "warming up\n"),
+        # Multiple distinct identifiers: first-match silently picks cbx_first123.
+        ("ready lease=cbx_first123\n", "also saw cbx_second456\n"),
+    ],
+)
+def test_completed_warmup_refuses_ambiguous_or_lookalike_identity_without_guessing(
+    tmp_path: Path,
+    warmup_stdout: str,
+    warmup_stderr: str,
+) -> None:
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout=warmup_stdout, stderr=warmup_stderr),
+            # These must never be reached: a completed warmup that reports no
+            # single unique boundary-safe identity must refuse before inspect.
+            _completed(["crabbox", "inspect"], stdout=_inspect()),
+            _completed(["crabbox", "stop"]),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="lease_identity_missing") as caught:
+        runtime.lease()
+
+    assert caught.value.code == "lease_identity_missing"
+    # No inspect and no stop may be attempted on a guessed identity.
+    assert not any(call[0][1:2] == ["inspect"] for call in runner.calls)
+    assert not any(call[0][1:2] == ["stop"] for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    ("warmup_stdout",),
+    [
+        # Em dash fused to a clean id.
+        ("ready lease=cbx_good123—note\n",),
+        # No-break space fused to a clean id.
+        ("ready lease=cbx_good123 note\n",),
+    ],
+)
+def test_completed_warmup_refuses_non_ascii_fused_separator_by_design(
+    tmp_path: Path,
+    warmup_stdout: str,
+) -> None:
+    """Pin the deliberate ASCII-only narrowing of the shared identity parser.
+
+    The old permissive first-match regex accepted a single clean id fused to a
+    non-ASCII separator (em dash, NBSP); the shared boundary-safe selector
+    refuses it by design — fail closed, never guess an inspect/stop identity.
+    This is INTENDED behavior, not a regression (see #337 review repair).
+    """
+
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout=warmup_stdout),
+            _completed(["crabbox", "inspect"], stdout=_inspect()),
+            _completed(["crabbox", "stop"]),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="lease_identity_missing"):
+        runtime.lease()
+
+    assert not any(call[0][1:2] == ["inspect"] for call in runner.calls)
+    assert not any(call[0][1:2] == ["stop"] for call in runner.calls)
+
+
+def test_completed_warmup_accepts_exact_repeated_identity(tmp_path: Path) -> None:
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(
+                ["crabbox", "warmup"],
+                stdout="ready lease=cbx_abc123\n",
+                stderr="confirmed cbx_abc123\n",
+            ),
+            _completed(["crabbox", "inspect"], stdout=_inspect()),
+            _completed(["ssh"], stdout=""),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    box = runtime.lease()
+
+    assert box.provider == "local-container"
+    inspect = runner.calls[2][0]
+    assert inspect[inspect.index("--id") + 1] == "cbx_abc123"
+
+
+@pytest.mark.parametrize(
     ("patch", "refusal_code"),
     [
         ({"provider": "firecracker"}, "lease_provider_mismatch"),
