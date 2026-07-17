@@ -502,3 +502,68 @@ def test_large_action_output_is_previewed_without_reading_the_whole_file(
     assert sum(returned_len for _, returned_len in text_reads) <= (
         trace_return_module._OUTPUT_LIMIT_CHARS + 1
     )
+
+
+_LIMIT = trace_return_module._OUTPUT_LIMIT_CHARS
+
+
+@pytest.mark.parametrize(
+    ("name", "payload"),
+    [
+        # Exact preview-bound boundary: 4096 chars fit untruncated ...
+        ("exactly_at_limit_ascii", b"a" * _LIMIT),
+        # ... and 4097 chars is the first truncating length.
+        ("one_char_past_limit_ascii", b"a" * (_LIMIT + 1)),
+        ("far_past_limit_ascii", b"a" * 200_000),
+        # A 4-byte character sits exactly astride the preview boundary: it is
+        # the (limit+1)-th character the bounded reader fetches to detect
+        # overflow, so its bytes straddle the read window.
+        (
+            "multibyte_char_straddles_preview_boundary",
+            ("a" * _LIMIT + "\U0001f389" + "b" * 100).encode("utf-8"),
+        ),
+        # Multibyte characters throughout: internal buffer chunks split
+        # 2-byte sequences at arbitrary byte offsets.
+        ("multibyte_throughout", ("é" * (_LIMIT + 500)).encode("utf-8")),
+        # Malformed bytes early in an oversized file: errors="replace" parity
+        # with the old whole-file decode.
+        ("malformed_bytes_early", b"ok \xff\xfe bytes" + b"x" * (_LIMIT * 2)),
+        # A truncated multibyte sequence right at the preview boundary.
+        ("malformed_truncated_sequence_at_boundary", b"a" * _LIMIT + b"\xf0\x9f" + b"c" * 500),
+        # A truncated multibyte sequence at EOF in an under-limit file: the
+        # incremental decoder's final flush must match the whole-read decode.
+        ("malformed_truncated_sequence_at_eof", b"tail\xf0\x9f"),
+        # Universal-newline translation parity: \r\n and lone \r both decode
+        # to \n exactly as Path.read_text did, before the char count.
+        ("crlf_newlines_past_limit", b"line\r\n" * 1200),
+        ("bare_cr_newlines_past_limit", b"line\r" * 1200),
+        ("empty_file", b""),
+    ],
+)
+def test_bounded_preview_is_byte_identical_to_whole_read_then_slice(
+    tmp_path: Path,
+    name: str,
+    payload: bytes,
+) -> None:
+    # Review-strengthening for #320 (PR #352): the bounded reader must produce
+    # BYTE-IDENTICAL previews to the old implementation (whole-file
+    # Path.read_text(errors="replace") then slice), across the exact preview
+    # boundary, multibyte straddles, malformed bytes, and newline translation.
+    path = tmp_path / name
+    path.write_bytes(payload)
+
+    # The old implementation, verbatim: whole-file decode, then truncate.
+    whole = path.read_text(encoding="utf-8", errors="replace")
+    if len(whole) <= _LIMIT:
+        expected, expected_remaining = whole, _LIMIT - len(whole)
+    else:
+        marker = "\n[output truncated; full bytes remain in the stored run]\n"
+        keep = max(0, _LIMIT - len(marker))
+        expected = whole[:keep] + marker[: _LIMIT - keep]
+        expected_remaining = 0
+
+    got, got_remaining = trace_return_module._bounded_text(path, _LIMIT)
+
+    assert got == expected
+    assert got_remaining == expected_remaining
+    assert len(got) <= _LIMIT
