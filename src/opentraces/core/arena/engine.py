@@ -56,6 +56,41 @@ def _safe_sensitive_path_finding(
     return f"{relative} [{kind}]" if kind else relative
 
 
+# Bounded read window for regular-file credential scanning. Peak scan memory is
+# this window plus a per-scan (max credential length - 1) byte overlap, never the
+# whole file, so it does not scale with the largest recording or capture artifact.
+_SCAN_CHUNK_SIZE = 1 << 20
+
+
+def _handle_contains_sensitive_bytes(
+    handle: Any,
+    sensitive_values: tuple[bytes, ...],
+) -> tuple[bool, int]:
+    """Scan an open regular-file handle for any credential in bounded chunks.
+
+    Reads at most ``_SCAN_CHUNK_SIZE`` bytes at a time and retains an overlap of
+    ``credential_length - 1`` bytes (the longest selected credential) between
+    consecutive chunks, so a credential straddling a chunk boundary is still
+    detected. Returns ``(found, bytes_read)``; ``bytes_read`` counts every byte
+    read so the exact-byte accounting is unchanged from the whole-file read.
+    """
+
+    overlap = max((len(secret) for secret in sensitive_values), default=1) - 1
+    carry = b""
+    bytes_read = 0
+    found = False
+    while True:
+        chunk = handle.read(_SCAN_CHUNK_SIZE)
+        if not chunk:
+            break
+        bytes_read += len(chunk)
+        window = carry + chunk if carry else chunk
+        if not found and any(secret in window for secret in sensitive_values):
+            found = True
+        carry = window[-overlap:] if overlap else b""
+    return found, bytes_read
+
+
 def _scan_sensitive_tree(
     root: Path,
     sensitive_values: tuple[bytes, ...],
@@ -151,8 +186,10 @@ def _scan_sensitive_tree(
                     )
                     continue
                 with os.fdopen(descriptor, "rb", closefd=False) as handle:
-                    payload = handle.read()
-                bytes_checked += len(payload)
+                    file_has_secret, file_bytes = _handle_contains_sensitive_bytes(
+                        handle, sensitive_values
+                    )
+                bytes_checked += file_bytes
             except OSError:
                 findings.append(
                     _safe_sensitive_path_finding(
@@ -165,7 +202,7 @@ def _scan_sensitive_tree(
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)
-            if any(secret in payload for secret in sensitive_values):
+            if file_has_secret:
                 findings.append(
                     _safe_sensitive_path_finding(
                         relative,

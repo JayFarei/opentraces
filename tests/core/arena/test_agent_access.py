@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from opentraces.core.arena import engine as arena_engine
 from opentraces.core.arena.agent import AgentDrive
 from opentraces.core.arena.drives.actions import RunActionSequence
 from opentraces.core.arena.drives.agent import AgentTerminalObservation
@@ -1444,3 +1445,74 @@ def test_unknown_harness_is_refused_by_the_closed_registry_before_spawn(
         run.verify(verify_passes)
 
     assert session.start_count == 0
+
+
+def test_scan_reads_evidence_in_bounded_chunks_not_one_whole_file_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Peak scan read size must be bounded independently of file size (#334)."""
+
+    root = tmp_path / "run"
+    (root / "artifacts").mkdir(parents=True)
+    size = (1 << 20) * 2 + 4096  # ~2 MiB regular evidence file
+    (root / "artifacts" / "large-capture.bin").write_bytes(b"\x00" * size)
+
+    max_single_read = {"n": 0}
+    real_fdopen = arena_engine.os.fdopen
+
+    class _ReadSizeSpy:
+        def __init__(self, handle: object) -> None:
+            self._handle = handle
+
+        def read(self, amount: int = -1) -> bytes:
+            data = self._handle.read(amount)
+            max_single_read["n"] = max(max_single_read["n"], len(data))
+            return data
+
+        def __enter__(self) -> "_ReadSizeSpy":
+            return self
+
+        def __exit__(self, *exc: object) -> object:
+            return self._handle.__exit__(*exc)
+
+    monkeypatch.setattr(
+        arena_engine.os,
+        "fdopen",
+        lambda *args, **kwargs: _ReadSizeSpy(real_fdopen(*args, **kwargs)),
+    )
+
+    matches, files_checked, bytes_checked, _ = arena_engine._scan_sensitive_tree(
+        root, (b"absent-live-credential-not-a-real-secret",)
+    )
+
+    assert matches == []
+    assert files_checked == 1
+    assert bytes_checked == size
+    # Whole-file read returns the entire 2 MiB in one call; the bounded scanner
+    # never reads more than one chunk (1 MiB) at a time.
+    assert max_single_read["n"] <= 1 << 20
+
+
+def test_scan_detects_credential_straddling_a_chunk_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credential split across two scan chunks must still be caught (#334)."""
+
+    root = tmp_path / "run"
+    (root / "artifacts").mkdir(parents=True)
+    secret = b"straddle-live-credential-not-a-real-secret"
+    monkeypatch.setattr(arena_engine, "_SCAN_CHUNK_SIZE", 64, raising=False)
+    boundary = 64
+    prefix = b"A" * (boundary - 10)  # secret starts 10 bytes before the boundary
+    body = prefix + secret + b"B" * 200
+    (root / "artifacts" / "evidence.bin").write_bytes(body)
+
+    matches, files_checked, bytes_checked, _ = arena_engine._scan_sensitive_tree(
+        root, (secret,)
+    )
+
+    assert matches == ["artifacts/evidence.bin"]
+    assert files_checked == 1
+    assert bytes_checked == len(body)
