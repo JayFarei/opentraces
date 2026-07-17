@@ -1466,7 +1466,8 @@ def publish_dataset(
         except Exception as exc:
             if _is_remote_transport_error(exc):
                 raise DatasetRemoteUnavailableError(
-                    f"dataset remote unavailable: {repo_id}"
+                    f"dataset remote unavailable: {repo_id}",
+                    resolved_repo=repo_id,
                 ) from exc
             raise
         _check_remote_schema_not_ahead(dataset, repo_id, token)
@@ -1577,7 +1578,8 @@ def publish_dataset(
         except Exception as exc:
             if _is_remote_transport_error(exc):
                 raise DatasetRemoteUnavailableError(
-                    f"dataset remote unavailable: {repo_id}"
+                    f"dataset remote unavailable: {repo_id}",
+                    resolved_repo=repo_id,
                 ) from exc
             raise
         _mark_rows_uploaded(
@@ -1787,12 +1789,23 @@ class DatasetRemoteUnavailableError(RuntimeError):
     classification = "remote_unavailable"
     exit_code = 3
 
+    def __init__(self, message: str, *, resolved_repo: str | None = None) -> None:
+        super().__init__(message)
+        # #319: the already-resolved remote repository, so a refusal payload can
+        # name it even when publication used the implicit active remote.
+        self.resolved_repo = resolved_repo
+
 
 class DatasetRemoteAcknowledgmentError(RuntimeError):
     """The upload returned without a new remote commit acknowledgment."""
 
     classification = "remote_ack_missing"
     exit_code = 3
+
+    def __init__(self, message: str, *, resolved_repo: str | None = None) -> None:
+        super().__init__(message)
+        # #319: carry the resolved repository into the structured refusal.
+        self.resolved_repo = resolved_repo
 
 
 class DatasetRemoteSchemaAheadError(RuntimeError):
@@ -2097,11 +2110,13 @@ def _upload_public_surface(
         r"[0-9a-f]{40}", acknowledged_oid
     ):
         raise DatasetRemoteAcknowledgmentError(
-            f"remote did not acknowledge a commit for {repo_id}"
+            f"remote did not acknowledge a commit for {repo_id}",
+            resolved_repo=repo_id,
         )
     if parent_commit is not None and acknowledged_oid == parent_commit:
         raise DatasetRemoteAcknowledgmentError(
-            f"remote did not acknowledge a new commit for {repo_id}"
+            f"remote did not acknowledge a new commit for {repo_id}",
+            resolved_repo=repo_id,
         )
     return acknowledged_oid
 

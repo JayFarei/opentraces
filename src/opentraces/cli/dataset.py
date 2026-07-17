@@ -1630,7 +1630,10 @@ def dataset_publish(
                         },
                         "publish": {
                             "dataset": name,
-                            "remote": remote,
+                            # #319: report the already-resolved remote repository
+                            # so an implicit (no --to) refusal is inspectable;
+                            # fall back to the raw option if unresolved.
+                            "remote": getattr(exc, "resolved_repo", None) or remote,
                         },
                     }
                 )
