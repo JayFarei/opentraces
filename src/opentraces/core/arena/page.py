@@ -63,10 +63,13 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         observed = json.loads(action_result_path.read_text(encoding="utf-8"))
         links = []
         for name in ("invocation.json", "result.json", "stdout", "stderr", "timing.json"):
-            target = action / name
-            if target.is_file():
-                relative_label = target.relative_to(run_path).as_posix()
-                links.append(f'<a href="{_h(_href(page_dir, target))}">{_h(relative_label)}</a>')
+            entry = action / name
+            reference = entry.relative_to(run_path).as_posix()
+            if _resolve_run_ref(run_path, reference) is not None:
+                links.append(f'<a href="{_h(_href(page_dir, entry))}">{_h(reference)}</a>')
+            elif entry.is_symlink():
+                # Present but escapes the run root (or dangles); name it, never link it.
+                links.append(f"<span><strong>MISSING</strong> · {_h(reference)}</span>")
         action_cards.append(
             f'<article class="card action" id="action-{_h(action.name)}" '
             f'data-action-ref="actions/{_h(action.name)}">'

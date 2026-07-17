@@ -258,6 +258,47 @@ def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> No
     assert not output.exists()
 
 
+def test_page_names_and_omits_an_action_file_symlink_that_escapes_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Action-file links must be contained under the run root (issue #314).
+
+    Cast and exhaust references already route through the run-root containment
+    helper; action-file links previously used ``_href`` directly, so an action
+    artifact that dereferences outside the run root would be published as a live
+    link. ``RunStore.verify()``/``_validated_tree`` reject a real finalized
+    symlink and stay the primary defense; here we bypass that guard to isolate
+    the page-renderer's own containment behavior, proving the page layer does
+    not itself emit an out-of-run action link.
+    """
+
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    draft.write_json("actions/0001/invocation.json", {"ordinal": 1, "argv": ["echo", "hi"]})
+    draft.write_json("actions/0001/result.json", {"returncode": 0})
+    draft.write_text("actions/0001/stdout", "in-run stdout\n")
+    finalized = draft.finalize(
+        _result(draft.run_id, recordings={"rewatchable": False, "channels": []})
+    )
+
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("secret outside the run\n", encoding="utf-8")
+    action_dir = finalized / "actions" / "0001"
+    action_dir.chmod(0o755)
+    (action_dir / "stderr").symlink_to(outside)
+
+    # Isolate the page layer: the run-store symlink guard is proven separately by
+    # test_store_rejects_an_exhaust_symlink_before_page_render.
+    monkeypatch.setattr(RunStore, "verify", lambda self, run_path: True)
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    # The contained in-run action file stays linked.
+    assert ">actions/0001/stdout</a>" in html
+    # The escaping symlink is named as evidence but never linked.
+    assert "actions/0001/stderr" in html
+    assert ">actions/0001/stderr</a>" not in html
+
+
 def test_page_names_and_omits_a_recording_ref_that_escapes_the_run(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
