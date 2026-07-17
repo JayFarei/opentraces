@@ -158,7 +158,7 @@ def _request_json(
     method: str = "POST",
     payload: object | None = None,
     token: str | None = None,
-    control_token: str | None = CONTROL_TOKEN,
+    control_token: str | None = None,
 ) -> dict:
     headers = {"Content-Type": "application/json"}
     if token is not None:
@@ -341,10 +341,12 @@ def test_product_identity_cannot_mutate_control_plane_and_rejections_are_ledgere
     with running_emulator(tmp_path) as (endpoint, ledger_path):
         assert _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={"repos": [{"repo_id": "bench/protected"}]},
         ) == {"repos_seeded": ["bench/protected"]}
         ally = _request_json(
             f"{endpoint}/_emulate/credentials",
+            control_token=CONTROL_TOKEN,
             payload={"name": "ally"},
         )
 
@@ -388,14 +390,18 @@ def test_product_identity_cannot_mutate_control_plane_and_rejections_are_ledgere
 
         harness_credential = _request_json(
             f"{endpoint}/_emulate/credentials",
+            control_token=CONTROL_TOKEN,
             payload={"name": "harness"},
         )
         assert harness_credential["name"] == "harness"
         assert _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={"repos": [{"repo_id": "harness/allowed"}]},
         ) == {"repos_seeded": ["harness/allowed"]}
-        assert _request_json(f"{endpoint}/_emulate/reset") == {"ok": True}
+        assert _request_json(
+            f"{endpoint}/_emulate/reset", control_token=CONTROL_TOKEN
+        ) == {"ok": True}
 
         rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
 
@@ -419,6 +425,46 @@ def test_product_identity_cannot_mutate_control_plane_and_rejections_are_ledgere
         for row in rows
         if row["response"]["status"] == 200
     } >= {"mintCredential", "seed", "reset"}
+
+
+def test_ordinary_helper_call_never_carries_control_authority_implicitly() -> None:
+    """An ordinary `_request_json` call must not smuggle the control header.
+
+    Issue #324: the helper previously defaulted `control_token=CONTROL_TOKEN`,
+    so any plain data-plane call silently carried harness authority. Privilege
+    must be visible at the call site: only an explicit `control_token=` adds the
+    `X-Bench-Control-Token` header; a default call adds none.
+    """
+
+    captured: list[dict[str, str]] = []
+
+    class _FakeResponse:
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return b"{}"
+
+    def _fake_urlopen(request: urllib.request.Request, *args: object, **kwargs: object):
+        captured.append({key.lower(): value for key, value in request.header_items()})
+        return _FakeResponse()
+
+    original = urllib.request.urlopen
+    urllib.request.urlopen = _fake_urlopen  # type: ignore[assignment]
+    try:
+        _request_json("http://127.0.0.1:1/api/whoami-v2", method="GET")
+        assert "x-bench-control-token" not in captured[-1]
+
+        _request_json(
+            "http://127.0.0.1:1/_emulate/seed",
+            control_token=CONTROL_TOKEN,
+        )
+        assert captured[-1].get("x-bench-control-token") == CONTROL_TOKEN
+    finally:
+        urllib.request.urlopen = original  # type: ignore[assignment]
 
 
 def test_real_hf_client_creates_and_reads_dataset_through_hf_endpoint(
@@ -469,10 +515,14 @@ print(json.dumps({
 def test_real_hf_client_auth_settings_listing_and_delete(tmp_path: Path) -> None:
     with running_emulator(tmp_path) as (endpoint, ledger_path):
         first_credential = _request_json(
-            f"{endpoint}/_emulate/credentials", payload={"name": "bench"}
+            f"{endpoint}/_emulate/credentials",
+            payload={"name": "bench"},
+            control_token=CONTROL_TOKEN,
         )
         second_credential = _request_json(
-            f"{endpoint}/_emulate/credentials", payload={"name": "bench"}
+            f"{endpoint}/_emulate/credentials",
+            payload={"name": "bench"},
+            control_token=CONTROL_TOKEN,
         )
         assert (
             first_credential
@@ -485,6 +535,7 @@ def test_real_hf_client_auth_settings_listing_and_delete(tmp_path: Path) -> None
         )
         assert _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={"repos": [{"repo_id": "bench/seeded", "private": True}]},
         ) == {"repos_seeded": ["bench/seeded"]}
 
@@ -499,7 +550,9 @@ print(json.dumps({"id": info.id, "private": info.private}))
         )
         assert seeded.returncode == 0, seeded.stderr
         assert json.loads(seeded.stdout) == {"id": "bench/seeded", "private": True}
-        assert _request_json(f"{endpoint}/_emulate/reset") == {"ok": True}
+        assert _request_json(
+            f"{endpoint}/_emulate/reset", control_token=CONTROL_TOKEN
+        ) == {"ok": True}
 
         _assert_invalid_token(
             f"{endpoint}/api/repos/create",
@@ -740,6 +793,7 @@ def test_real_hf_client_listing_is_scoped_to_authenticated_owner(
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={
                 "repos": [
                     {"repo_id": "bench/public"},
@@ -795,6 +849,7 @@ def test_raw_listing_rejects_invalid_bearer_and_honors_owner_author_filter(
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={
                 "repos": [
                     {"repo_id": "bench/public"},
@@ -838,6 +893,7 @@ def test_cross_owner_token_cannot_read_or_mutate_bench_repositories(
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={
                 "repos": [
                     {"repo_id": "bench/public"},
@@ -848,6 +904,7 @@ def test_cross_owner_token_cannot_read_or_mutate_bench_repositories(
         )
         other_token = _request_json(
             f"{endpoint}/_emulate/credentials",
+            control_token=CONTROL_TOKEN,
             payload={"name": "other"},
         )["token"]
         result = _run_hf_client(
@@ -1016,6 +1073,7 @@ def test_real_hf_client_dataset_info_enforces_repo_read_access(tmp_path: Path) -
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={
                 "repos": [
                     {"repo_id": "bench/public", "private": False},
@@ -1084,6 +1142,7 @@ def test_real_hf_client_tree_enforces_repo_read_access(tmp_path: Path) -> None:
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={
                 "repos": [
                     {"repo_id": "bench/public", "private": False},
@@ -1140,6 +1199,7 @@ def test_real_hf_client_resolve_enforces_repo_read_access(tmp_path: Path) -> Non
     with running_emulator(tmp_path) as (endpoint, _ledger_path):
         _request_json(
             f"{endpoint}/_emulate/seed",
+            control_token=CONTROL_TOKEN,
             payload={
                 "repos": [
                     {"repo_id": "bench/public", "private": False},
