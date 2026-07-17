@@ -3199,7 +3199,22 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#268: compare against the pre-extraction persistent canonical chain."""
+    """#268: compare against the pre-extraction persistent canonical chain.
+
+    A3 two-proof split (#310). This half proves literal real-fixture
+    compatibility: the committed real-session fixture reproduces the pre-
+    extraction persistent canonical chain byte-for-byte (literal legacy bytes).
+    Because the committed fixture's Git trees are unreachable in a fresh
+    repository, it honestly exercises the unreachable-tree / ``unproven`` Trail
+    branch (see the ``trail_substantive is False`` assertions below).
+
+    The complementary half — substantive ``trail_matches`` parity — is proven
+    separately by
+    ``test_placement_acceptance_exercises_every_capture_view_and_preserves_asymmetry``,
+    which constructs a real ``write_worktree_tree`` relationship in the harness so
+    the Trail comparison reaches ``trail_substantive is True``. Neither test
+    subsumes the other; they are the two required halves of the A3 proof.
+    """
     from opentraces.core import config as config_module
     from opentraces.core import paths as capture_paths
     from opentraces.core.bucket_store import (
