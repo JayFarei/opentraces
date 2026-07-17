@@ -51,7 +51,7 @@ from ..core.arena.retrieval import (
     reverify_stored_run,
     verified_stored_result,
 )
-from ..core.arena.run_store import RunIntegrityError, RunStore
+from ..core.arena.run_store import RunIntegrityError, RunStore, StorageFinalizeError
 
 
 def _playwright_browser_cache(home: Path, *, platform: str | None = None) -> Path:
@@ -814,6 +814,19 @@ def bench_run(
         run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
     except OriginJoinError as exc:
         raise click.ClickException(str(exc)) from exc
+    except StorageFinalizeError as exc:
+        # F6 (#302): the verdict is already safe in recovery; name the
+        # provisional recovery path instead of aborting mute.
+        click.echo(f"provisional result retained at {exc.recovery_path}", err=True)
+        raise click.exceptions.Exit(1) from exc
+    # F6 (#302): static AST discovery and runtime extraction agree by
+    # construction only — cross-assert them so a divergence is a machinery error.
+    reconciled_claim = result.get("scenario", {}).get("claim")
+    if reconciled_claim != claim:
+        raise click.ClickException(
+            "reconciled scenario claim does not match static discovery: "
+            f"discovered {claim!r} but the run recorded {reconciled_claim!r}"
+        )
     exit_code = result_exit_code(result)
     if origin_address is not None:
         try:

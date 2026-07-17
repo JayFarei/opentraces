@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,34 @@ def _result(run_id: str, *, verdict: str = "pass") -> dict:
         capture=None,
         pins={},
     )
+
+
+def test_atomic_writes_fsync_the_temp_file_and_the_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # F6 (#302): atomic writes must fsync the temp file content before replace
+    # and the containing directory after, closing the power-loss window where a
+    # renamed-but-unflushed file (or an unflushed directory entry) is lost.
+    import opentraces.core._bucket_io as bucket_io
+
+    fsynced: list[int] = []
+    real_fsync = os.fsync
+
+    def spy_fsync(fd: int) -> None:
+        fsynced.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(bucket_io.os, "fsync", spy_fsync)
+
+    draft = RunStore(tmp_path / "runs" / "v1").begin()
+    fsynced.clear()
+    draft.write_json("artifacts/durable.json", {"k": "v"})
+    # At least one fsync for the temp file and one for the parent directory.
+    assert len(fsynced) >= 2
+
+    fsynced.clear()
+    draft.write_bytes("artifacts/durable.bin", b"payload")
+    assert len(fsynced) >= 2
 
 
 def test_begin_creates_the_canonical_complete_exhaust_layout(tmp_path: Path) -> None:
