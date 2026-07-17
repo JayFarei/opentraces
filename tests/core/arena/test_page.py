@@ -437,6 +437,48 @@ def test_store_rejects_an_exhaust_symlink_before_page_render(tmp_path: Path) -> 
         draft.finalize(_result(draft.run_id, recordings=recordings))
 
 
+def _style_block(html: str) -> str:
+    start = html.index("<style>") + len("<style>")
+    return html[start : html.index("</style>", start)]
+
+
+def test_fact_strip_wraps_long_values_within_their_own_cell(tmp_path: Path) -> None:
+    """Long fact values must stay inside their own cell (issue #330).
+
+    At a 1920x1080 viewport the full product pin / execution digest previously
+    overflowed the fixed fact-strip cells and overlapped neighbouring MODE /
+    EXECUTION / EVIDENCE cells. A real-browser layout probe is impractical for a
+    committed unit test, so this is the rendered-DOM/CSS containment control: the
+    stylesheet must let each fact cell shrink and wrap its full value, keeping the
+    value recoverable without overlap. The full 64-hex commit stays present so the
+    full value remains recoverable.
+    """
+
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    long_commit = "a" * 64
+    finalized = draft.finalize(
+        _result(
+            draft.run_id,
+            recordings={"rewatchable": False, "channels": []},
+            pins={"product": {"commit": long_commit, "worktree": "clean"}},
+        )
+    )
+
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+    style = _style_block(html)
+
+    # The full value is rendered (recoverable), inside the PRODUCT PIN fact cell.
+    assert long_commit in html
+    # Grid fact cells must be allowed to shrink instead of overflowing their track.
+    assert ".fact{" in style
+    fact_rule = style[style.index(".fact{") : style.index("}", style.index(".fact{"))]
+    assert "min-width:0" in fact_rule
+    # Long fact values must wrap rather than run past the cell edge.
+    assert "overflow-wrap" in fact_rule or "word-break" in fact_rule
+    assert ".fact code" in style
+
+
 def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()

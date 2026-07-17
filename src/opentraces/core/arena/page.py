@@ -423,7 +423,8 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
 :root{{--ink:#11100e;--paper:#f3efe6;--line:#c9c0ad;--green:#17643d;--red:#9b2c2c;--muted:#6f685c}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}}
 main{{width:min(960px,calc(100% - 32px));margin:48px auto 96px}} h1{{font:700 clamp(30px,6vw,64px)/1.04 system-ui,sans-serif;letter-spacing:-.04em;max-width:16ch}}
-.facts{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));border:1px solid var(--line);margin:32px 0}} .fact{{padding:16px;border-right:1px solid var(--line)}}
+.facts{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));border:1px solid var(--line);margin:32px 0}} .fact{{padding:16px;border-right:1px solid var(--line);min-width:0;overflow-wrap:anywhere;word-break:break-word}}
+.fact code{{display:block;overflow-wrap:anywhere;word-break:break-all}} .fact strong{{overflow-wrap:anywhere;word-break:break-word}}
 .eyebrow{{font-size:12px;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}} .verdict{{color:{"var(--green)" if verdict == "pass" else "var(--red)"};font-weight:800;font-size:24px}}
 h2{{font:700 22px system-ui,sans-serif;margin-top:48px}} .stack{{display:grid;gap:12px}} .card{{min-width:0;border:1px solid var(--line);background:#fffaf0;padding:16px;overflow-wrap:anywhere}}
 .action code{{display:block;margin-bottom:10px}} .rc{{display:inline-block;border:1px solid var(--line);padding:2px 7px}} nav{{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}} a{{color:#254d80}}
