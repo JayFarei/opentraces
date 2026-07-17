@@ -67,8 +67,12 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
         stderr=subprocess.PIPE,
         text=True,
     )
+    # Cold shared CI runners may still be compiling/booting the Bun sidecar
+    # well past 5s (issue #343); use a cold-runner-honest bound. The fail-fast
+    # branch below still short-circuits the moment the process exits.
+    readiness_timeout_s = 30
     try:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + readiness_timeout_s
         while True:
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
@@ -82,7 +86,9 @@ def running_emulator(tmp_path: Path) -> Iterator[tuple[str, Path]]:
             except OSError:
                 pass
             if time.monotonic() >= deadline:
-                raise AssertionError("emulator did not become ready within 5 seconds")
+                raise AssertionError(
+                    f"emulator did not become ready within {readiness_timeout_s} seconds"
+                )
             time.sleep(0.02)
         yield endpoint, ledger
     finally:
