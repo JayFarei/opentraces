@@ -482,17 +482,16 @@ class CrabboxRuntime:
                     primary.cleanup_lease_id, provider=self.provider
                 )
             raise
-        match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
+        lease_id = _unique_lease_identity(warmup.stdout, warmup.stderr)
         if warmup.returncode != 0:
             primary = CrabboxRefusal(
                 "lease_failed", (warmup.stderr or warmup.stdout or "crabbox warmup failed").strip()
             )
-            if match:
-                self._best_effort_release_after_refusal(match.group(0), provider=self.provider)
+            if lease_id is not None:
+                self._best_effort_release_after_refusal(lease_id, provider=self.provider)
             raise primary
-        if not match:
+        if lease_id is None:
             raise CrabboxRefusal("lease_identity_missing", "warmup did not report a cbx_ lease id")
-        lease_id = match.group(0)
         try:
             inspected = self._call(
                 [
