@@ -20,6 +20,8 @@ import pytest
 from opentraces.capture import Capture, CapturePlan
 from opentraces.capture.parity import compare_placements, write_parity_report
 
+from tests.helpers.release_capture import verify_release_asset_provenance
+
 
 def _git_project(root: Path) -> Path:
     root.mkdir()
@@ -3233,12 +3235,9 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
         Path(__file__).parents[1] / "fixtures" / "claude" / "claude-linear-edit-real-session.jsonl"
     )
     assert fixture.is_file()
-    provenance = json.loads(fixture.with_suffix(".provenance.json").read_text())
-    assert provenance["source_release"] == "otbox-captures-v1"
-    assert provenance["source_snapshot_sha256"] == (
-        "54466705324a1f44d510160fb3fa31213ef8584704afc6b443487441ca1bf03b"
-    )
-    assert hashlib.sha256(fixture.read_bytes()).hexdigest() == provenance["derived_fixture_sha256"]
+    # #298: the release-asset provenance chain is verified by the one shared
+    # helper both A3 (here) and A4 (tests/test_slicing.py) delegate to.
+    provenance = verify_release_asset_provenance(fixture=fixture)
     project = _git_project(tmp_path / "project")
     (project / "src").mkdir()
     (project / "src" / "app.py").write_text(
