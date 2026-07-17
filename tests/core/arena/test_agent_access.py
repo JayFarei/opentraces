@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import shlex
@@ -138,6 +139,53 @@ class CredentialNamedPathHarnessSession(CompletingHarnessSession):
         )
         (recording_path.parent / self.sentinel).write_text(
             "credential appeared in this path\n", encoding="utf-8"
+        )
+
+
+class UndeletableCredentialHarnessSession(CompletingHarnessSession):
+    """Leak a credential into a directory whose first deletion is denied."""
+
+    def __init__(self, sentinel: str) -> None:
+        super().__init__()
+        self.sentinel = sentinel
+        self.locked_dir: Path | None = None
+
+    def start(
+        self,
+        argv: list[str],
+        *,
+        recording_path: Path,
+        cols: int,
+        rows: int,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        super().start(
+            argv,
+            recording_path=recording_path,
+            cols=cols,
+            rows=rows,
+            env=env,
+        )
+        locked = recording_path.parent / "locked"
+        locked.mkdir(parents=True, exist_ok=True)
+        (locked / "leaked.txt").write_text(
+            f"{self.sentinel}\n", encoding="utf-8"
+        )
+        # Deny write on the directory so its entry cannot be unlinked: the first
+        # rmtree of the contaminated staging tree fails until permissions are
+        # repaired.
+        os.chmod(locked, 0o500)
+        self.locked_dir = locked
+
+    def observe(self) -> AgentTerminalObservation:
+        return AgentTerminalObservation(
+            state="running",
+            screen=(
+                "OPENTRACES_HARNESS_VERSION=2.1.210\n"
+                f"{self.sentinel}\n"
+                "OPENTRACES_AGENT_ATTEMPT_COMPLETE"
+            ),
+            logs="",
         )
 
 
@@ -1516,3 +1564,85 @@ def test_scan_detects_credential_straddling_a_chunk_boundary(
     assert matches == ["artifacts/evidence.bin"]
     assert files_checked == 1
     assert bytes_checked == len(body)
+
+
+def test_contaminated_staging_is_purged_when_first_deletion_is_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recoverable first-deletion failure must still purge the leaked bytes (#335)."""
+
+    sentinel = "purge-retry-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = UndeletableCredentialHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+    runs_root = tmp_path / "runs"
+
+    try:
+        with contextlib.suppress(Exception):
+            with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+                attempt = run.agent.attempt(
+                    harness="claude",
+                    task="Make the requested world-state change.",
+                    access=[run.terminal],
+                    inference="live",
+                )
+                run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
+
+        remaining = []
+        for path in runs_root.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if sentinel.encode() in path.read_bytes():
+                    remaining.append(path.relative_to(runs_root).as_posix())
+            except OSError:
+                continue
+        assert remaining == []
+    finally:
+        # Restore traversal so pytest can tear the tmp tree down regardless of outcome.
+        if session.locked_dir is not None and session.locked_dir.exists():
+            os.chmod(session.locked_dir, 0o700)
+
+
+def test_unpurgeable_contaminated_staging_is_named_without_publishing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrecoverable purge is named for an operator, never published (#335)."""
+
+    sentinel = "unpurgeable-sentinel-not-a-real-credential"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", sentinel)
+    session = EchoingCredentialHarnessSession(sentinel)
+    bench = _bench(tmp_path, session)
+    runs_root = tmp_path / "runs" / "v1"
+
+    def _always_fail(_self: object) -> None:
+        raise OSError("injected: staging deletion denied")
+
+    monkeypatch.setattr(arena_engine.RunDraft, "rebuild_empty", _always_fail)
+
+    with pytest.raises(OSError, match="injected"):
+        with bench.run(app_state="install-only", execution_mode="agent_live") as run:
+            attempt = run.agent.attempt(
+                harness="claude",
+                task="Make the requested world-state change.",
+                access=[run.terminal],
+                inference="live",
+            )
+            run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
+
+    markers = list((runs_root / ".cleanup-required").glob("*.json"))
+    assert len(markers) == 1
+    marker_bytes = markers[0].read_bytes()
+    assert sentinel.encode() not in marker_bytes
+    marker = json.loads(marker_bytes)
+    assert marker["reason"] == "contaminated_staging_purge_failed"
+    assert marker["run_id"] in marker["contaminated_staging_path"]
+    assert ".staging" in marker["contaminated_staging_path"]
+    # The contaminated draft is never finalized or transaction-indexed.
+    assert not list(runs_root.glob("run_*/result.json"))
+    assert not list((runs_root / ".index").glob("*.json"))
+    assert not list((runs_root / ".transactions").glob("*"))
