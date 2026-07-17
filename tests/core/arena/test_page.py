@@ -67,6 +67,11 @@ def verify_health(run) -> dict[str, list[str]]:
     return {"evidence_refs": [observation.result_ref]}
 
 
+def verify_assertion_only(run) -> dict[str, list[str]]:
+    assert True
+    return {"evidence_refs": []}
+
+
 def verify_cross_surface(run) -> dict[str, list[str]]:
     before = run.terminal.exec("printf", "before")
     browser = run.browser.inspect("main")
@@ -234,6 +239,28 @@ def test_page_is_a_read_only_projection_with_claim_verifier_and_raw_links(tmp_pa
     for private_path in ("/Users/", "/home/", repository_path.as_posix(), "jayfarei"):
         assert private_path.lower() not in result_before.decode("utf-8").lower()
         assert private_path.lower() not in html.lower()
+
+
+def test_page_renders_assertion_only_label_for_a_zero_evidence_pass(
+    tmp_path: Path,
+) -> None:
+    # F6 (#302): a zero-evidence passing verifier is stamped observed:
+    # assertion-only; the evidence page must render that label so the pass is
+    # visibly distinguishable from an evidence-backed one.
+    repository_path = Path(__file__).resolve().parents[3]
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=repository_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verify_assertion_only)
+
+    html = render_evidence_page(run.final_path).read_text(encoding="utf-8")
+    assert run.result["verifiers"][0]["observed"] == "assertion-only"
+    assert "ASSERTION-ONLY" in html
 
 
 def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> None:

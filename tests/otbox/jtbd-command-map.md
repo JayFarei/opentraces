@@ -277,7 +277,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 
 | Command | JTBD one-liner | Action trajectory (n/N) | Owning journey | Persona |
 |---|---|---|---|---|
-| `bench run` | Developer or agent runs one acceptance scenario in a disposable box and retains a grounded result plus evidence page | verify-product-claim (1/4) | `bench-command-smoke` | both |
+| `bench run` | Developer or agent runs one acceptance scenario in a disposable box and retains a grounded result plus evidence page; the owning journey is a help-surface smoke only — end-to-end behavioral coverage lives in `tests/core/arena` + `tests/cli/test_bench_cli.py` | verify-product-claim (1/4) | `bench-command-smoke` | both |
 | `bench fleet` | Developer or agent runs many acceptance scenarios concurrently, each in its own isolated box, and retains per-scenario grounded evidence | verify-product-claim (2/4) | `bench-command-smoke` | both |
 | `bench list` | Developer or agent lists retained bench runs to find prior evidence before re-rendering or reverifying | verify-product-claim (3/4) | `bench-command-smoke` | both |
 | `bench render` | Developer or agent re-renders one retained run's evidence page from stored artifacts without re-running the box | verify-product-claim (3/4) | `bench-command-smoke` | both |

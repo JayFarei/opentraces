@@ -83,12 +83,20 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     verifier_cards = []
     for verifier in result.get("verifiers", []):
         source = verifier.get("source_ref") or {}
+        # F6 (#302): make a zero-evidence pass visible on the page rather than
+        # indistinguishable from an evidence-backed one.
+        observed_badge = (
+            '<div class="observed">OBSERVED · ASSERTION-ONLY</div>'
+            if verifier.get("observed") == "assertion-only"
+            else ""
+        )
         verifier_cards.append(
             '<article class="card verifier">'
             f'<div class="eyebrow">VERIFIER · {_h(verifier.get("status", "unknown").upper())}</div>'
             f"<strong>{_h(verifier.get('name'))}</strong>"
             f'<div class="source">{_h(source.get("path"))}</div>'
             f"<code>{_h(source.get('digest'))}</code>"
+            f"{observed_badge}"
             f"<p>{_h((verifier.get('reason') or {}).get('message', 'Observed condition held.'))}</p>"
             "</article>"
         )

@@ -751,6 +751,15 @@ class BenchRun:
             "status": status,
             "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
             "evidence_refs": evidence_refs,
+            # Keep the verifier algebra (a zero-evidence pass still completes),
+            # but stamp what was actually observed so an assertion-only pass is
+            # visible rather than indistinguishable from an evidence-backed one
+            # (issue #302 F6).
+            "observed": (
+                ("evidence-backed" if evidence_refs else "assertion-only")
+                if status == "pass"
+                else None
+            ),
             "reason": reason,
         }
         self.verifiers.append(record)

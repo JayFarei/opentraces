@@ -1187,6 +1187,44 @@ def test_sensitive_assignment_shapes_are_redacted_without_erasing_ordinary_words
         assert "credential policy loaded" in persisted
 
 
+def test_zero_evidence_pass_is_stamped_assertion_only(tmp_path: Path) -> None:
+    # F6 (#302): a passing verifier with empty evidence_refs still yields
+    # complete=true by the algebra. Keep the algebra, but stamp the record so a
+    # zero-evidence pass is visible rather than indistinguishable from an
+    # evidence-backed one.
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verify_passes)
+
+    verifier = run.result["verifiers"][0]
+    assert verifier["status"] == "pass"
+    assert verifier["evidence_refs"] == []
+    assert verifier["observed"] == "assertion-only"
+
+
+def test_evidence_backed_pass_is_not_labelled_assertion_only(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verify_writes_absolute_evidence)
+
+    verifier = run.result["verifiers"][0]
+    assert verifier["status"] == "pass"
+    assert verifier["evidence_refs"] == ["artifacts/proof.txt"]
+    assert verifier["observed"] == "evidence-backed"
+
+
 def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Path) -> None:
     runtime = FakeBoxRuntime()
     repository = Path(__file__).resolve().parents[3]
