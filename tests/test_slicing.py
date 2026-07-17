@@ -20,9 +20,7 @@ Covers:
 
 from __future__ import annotations
 
-import hashlib
 import json
-from pathlib import Path
 
 import pytest
 from opentraces_schema import (
@@ -44,6 +42,14 @@ from opentraces.core.trace_slices import (
     slice_by_steps,
 )
 from opentraces.core.trails.lineage import parse_trail_ref
+
+from tests.helpers.release_capture import (
+    REAL_CAPTURE_FIXTURE as _REAL_CAPTURE_FIXTURE,
+    REAL_CAPTURE_PROVENANCE as _REAL_CAPTURE_PROVENANCE,
+    context_stamped_capture_record,
+    sha256_path as _sha256,
+    verify_release_asset_provenance,
+)
 
 
 # --------------------------------------------------------------------------
@@ -253,42 +259,20 @@ def test_s2_pinned_boundaries():
     assert spans == [(0, 0), (1, 2), (3, 5), (6, 7), (8, 8)], spans
 
 
-_REAL_CAPTURE_FIXTURE = (
-    Path(__file__).parent / "fixtures/claude/claude-linear-edit-real-session.jsonl"
-)
-_REAL_CAPTURE_PROVENANCE = _REAL_CAPTURE_FIXTURE.with_suffix(".provenance.json")
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _real_capture_record() -> TraceRecord:
     record = ClaudeCodeParser().parse_session(_REAL_CAPTURE_FIXTURE)
     assert record is not None
     return record
 
 
-# TODO(#265,#270): after A3 and A4 merge, replace these duplicated release-
-# fixture checks with one shared verifier owned by the capture-test substrate.
 def test_coordinate_fixture_requires_a3_verified_release_chain():
-    """#270 consumes A3's independently verified real-agent release asset."""
+    """#270 consumes A3's independently verified real-agent release asset.
 
-    provenance = json.loads(_REAL_CAPTURE_PROVENANCE.read_text())
+    The release-asset provenance chain is verified by the one shared helper
+    (#298) both A3 (portable capture) and A4 (slicing) now delegate to.
+    """
 
-    assert provenance.get("source_release") == "otbox-captures-v1"
-    assert provenance.get("source_snapshot") == "claude-linear-edit.snapshot.tar.gz"
-    assert provenance.get("source_snapshot_size_bytes") == 68_916_309
-    assert provenance.get("source_snapshot_sha256") == (
-        "54466705324a1f44d510160fb3fa31213ef8584704afc6b443487441ca1bf03b"
-    )
-    assert provenance.get("source_session_sha256") == (
-        "a745ceee16159433d93e8b8cc54c2e2c101c657630644bb1b10902c95b42cde0"
-    )
-    assert provenance.get("source_metadata_sha256") == (
-        "2287ae5f223f5b135d33d3b0baad645449d0713d9801a7e0500eec07b3b3a120"
-    )
-    assert provenance.get("derived_fixture_sha256") == _sha256(_REAL_CAPTURE_FIXTURE)
+    verify_release_asset_provenance()
 
 
 def test_release_session_independently_proves_position_address_mismatch():
@@ -464,6 +448,59 @@ def test_frozen_slicing_envelope_tiles_same_real_capture_steps_when_materialized
         ]
     ]
     assert materialized_steps == [step.step_index for step in record.steps]
+
+
+def test_non_null_context_join_survives_slicing_to_step_address_materialization():
+    """#298: a non-null Context join survives slicing-position -> step-address
+    materialization, alongside the existing Trail patch/anchor and map-node joins.
+
+    The record is *derived* from the same ``otbox-captures-v1`` real session by
+    the genuine Context Tree capture path (not a hand-authored synthetic), so
+    every ``context_node_id`` is an authentic content-addressed node id. The
+    committed real coordinate regression above stays on the null-context session;
+    this test adds the missing non-null-Context mutation sensitivity.
+    """
+
+    record = context_stamped_capture_record()
+    source_join = {step.step_index: step.context_node_id for step in record.steps}
+
+    # Precondition the existing null-context fixture cannot give us: at least one
+    # authentic non-null Context key exists to join through materialization.
+    non_null_steps = {k for k, v in source_join.items() if v is not None}
+    assert non_null_steps, source_join
+
+    ref = TraceMaterializationRef.from_record(record)
+
+    # Tile the whole trace, materialize every trajectory to step-address
+    # coordinates, and prove the Context join key rides along unchanged.
+    rc, envelope = slicing.partition_trace(
+        trace_id=record.trace_id,
+        slicer_name="s1",
+        steps=record.steps,
+        judge="deterministic",
+    )
+    assert rc == 0
+    materialized_join: dict[int, str | None] = {}
+    for trajectory in envelope["trajectories"]:
+        for step in materialize_trajectory(ref, trajectory)["steps"]:
+            materialized_join[step["step_index"]] = step.get("context_node_id")
+
+    # If materialization dropped the Context join, the non-null keys would come
+    # back None and this equality would fail (RED control verified locally).
+    assert materialized_join == source_join
+    assert {k: materialized_join[k] for k in non_null_steps} == {
+        k: source_join[k] for k in non_null_steps
+    }
+
+    # The same non-null Context join survives a partial slicing span materialized
+    # at the exact step-address coordinates the #270 tests already check.
+    partial = materialize_trajectory(
+        ref, Trajectory(start=0, end=2, kind="user_turn", label="context join span")
+    )
+    assert [step["step_index"] for step in partial["steps"]] == [1, 2, 3]
+    for step in partial["steps"]:
+        assert step.get("context_node_id") == source_join[step["step_index"]]
+    assert any(step.get("context_node_id") is not None for step in partial["steps"])
 
 
 @pytest.mark.parametrize(
