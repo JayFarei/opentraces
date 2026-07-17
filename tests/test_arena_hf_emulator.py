@@ -274,6 +274,25 @@ def _prepare_publishable_dataset(
         assert result.returncode == 0, result.stderr
 
 
+def test_control_bearer_comparison_routes_through_a_constant_time_primitive() -> None:
+    """The control bearer must be compared in constant time, not with `===`.
+
+    Issue #328: an ordinary-equality (`presented === CONTROL_TOKEN`) compare
+    leaks a timing signal on the loopback control plane. The comparison must
+    route through a length-safe constant-time primitive while keeping the
+    fail-closed guards for an absent or empty configured token.
+    """
+
+    source = SERVER_SOURCE.read_text(encoding="utf-8")
+    # Never short-circuit-compare the secret with ordinary string equality.
+    assert "presented === CONTROL_TOKEN" not in source
+    # The comparison routes through Node/Bun's constant-time primitive.
+    assert "timingSafeEqual" in source
+    # Fail-closed guards for an absent or empty configured token are preserved.
+    assert "CONTROL_TOKEN !== undefined" in source
+    assert "CONTROL_TOKEN.length > 0" in source
+
+
 def test_manifest_declares_exact_honest_huggingface_surface(tmp_path: Path) -> None:
     assert version("huggingface-hub") == "1.10.2"
     assert version("hf-xet") == "1.4.3"

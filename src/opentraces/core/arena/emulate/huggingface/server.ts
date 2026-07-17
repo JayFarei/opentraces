@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.PORT ?? "14318", 10);
@@ -220,12 +220,31 @@ function requireAuthentication(request: Request, operationId: string): Response 
   return errorResponse("InvalidToken", "invalid access token", 401);
 }
 
+function constantTimeEquals(presented: string, expected: string): boolean {
+  // Length-safe constant-time compare: equal-length tokens are compared with
+  // Node/Bun's `timingSafeEqual`; a length mismatch still runs one compare of
+  // the expected value against itself before rejecting, so control does not
+  // short-circuit on the first differing byte.
+  const presentedBytes = Buffer.from(presented, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  if (presentedBytes.length !== expectedBytes.length) {
+    timingSafeEqual(expectedBytes, expectedBytes);
+    return false;
+  }
+  return timingSafeEqual(presentedBytes, expectedBytes);
+}
+
 function requireControlAuthorization(
   request: Request,
   operationId: string,
 ): Response | undefined {
   const presented = request.headers.get("x-bench-control-token");
-  if (CONTROL_TOKEN !== undefined && CONTROL_TOKEN.length > 0 && presented === CONTROL_TOKEN) {
+  if (
+    CONTROL_TOKEN !== undefined &&
+    CONTROL_TOKEN.length > 0 &&
+    presented !== null &&
+    constantTimeEquals(presented, CONTROL_TOKEN)
+  ) {
     return undefined;
   }
   appendLedger(request, operationId, 401);
