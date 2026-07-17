@@ -1010,6 +1010,13 @@ def _normalize(
         for raw, replacement in sorted(
             replacements.items(), key=lambda item: len(item[0]), reverse=True
         ):
+            # #309: normalization is deliberate, BOUNDED substitution of the
+            # resolved placement roots declared in ``replacements`` — never
+            # general path-shaped-string rewriting. Only an absolute *declared*
+            # root is substituted; a non-root absolute path embedded in prose is
+            # left byte-identical, so semantically distinct prose survives. The
+            # adversarial proof of this boundary is
+            # tests/capture/test_parity_bounded_normalization_309.py.
             if Path(raw).is_absolute() and (domain != "query" or _query_result_path_slot(path)):
                 normalized = normalized.replace(raw, replacement)
             elif replacement == "<trace-id>":
