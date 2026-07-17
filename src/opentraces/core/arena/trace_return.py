@@ -55,14 +55,21 @@ def _bounded_text(path: Path, remaining: int) -> tuple[str, int]:
     if remaining <= 0:
         return "", remaining
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            # Read only the prefix the bounded preview can hold, plus one extra
+            # character to detect that the file exceeds the bound. Text-mode
+            # ``read`` decodes exactly enough bytes to yield these characters,
+            # so UTF-8 replacement behavior and the visible output are identical
+            # to decoding the whole file, without loading an oversized stored
+            # output into memory. RunStore.verify() still hashes the full bytes.
+            prefix = handle.read(remaining + 1)
     except OSError as exc:
         raise TraceReturnError(f"action output cannot be read: {path.name}") from exc
-    if len(text) <= remaining:
-        return text, remaining - len(text)
+    if len(prefix) <= remaining:
+        return prefix, remaining - len(prefix)
     marker = "\n[output truncated; full bytes remain in the stored run]\n"
     keep = max(0, remaining - len(marker))
-    return text[:keep] + marker[: remaining - keep], 0
+    return prefix[:keep] + marker[: remaining - keep], 0
 
 
 def _action_output_path(

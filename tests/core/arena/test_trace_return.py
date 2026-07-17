@@ -11,6 +11,7 @@ from opentraces.cli import main
 from opentraces.core import bucket_store, ingest
 from opentraces.core.arena.contract import build_result
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
+import opentraces.core.arena.trace_return as trace_return_module
 from opentraces.core.arena.trace_return import TraceReturnError, return_run_as_trace
 from opentraces.core.bucket_trace_records import read_bucket_record_for_trace
 from opentraces.core.config import Config
@@ -429,3 +430,75 @@ def test_existing_bucket_writer_callers_keep_the_canonical_source_layer(
     )
 
     assert seen == ["canonical"]
+
+
+class _TrackingTextHandle:
+    """Wraps a text handle and records the size of every ``read`` call."""
+
+    def __init__(self, handle, log: list[tuple[int | None, int]]):
+        self._handle = handle
+        self._log = log
+
+    def read(self, size: int | None = -1) -> str:
+        data = self._handle.read(size)
+        self._log.append((size, len(data)))
+        return data
+
+    def __enter__(self):
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._handle.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+
+def test_large_action_output_is_previewed_without_reading_the_whole_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # RED control for #320: a valid but oversized stored stdout must not be read
+    # in full by the trace-return reader, even though the returned trace stores
+    # only a bounded preview. RunStore.verify still hashes the whole file in
+    # BINARY mode; only the text-mode trace-return read is bounded here.
+    marker = "\n[output truncated; full bytes remain in the stored run]\n"
+    big_stdout = "a" * 200_000
+    store, run_path = _finalized_run(tmp_path, monkeypatch, first_stdout=big_stdout)
+    project = _project(tmp_path)
+
+    target = (run_path / "actions" / "0001" / "stdout").resolve()
+    assert target.stat().st_size > trace_return_module._OUTPUT_LIMIT_CHARS
+    text_reads: list[tuple[int | None, int]] = []
+    real_open = Path.open
+
+    def _tracking_open(self, mode="r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if self.resolve() == target and "b" not in mode:
+            return _TrackingTextHandle(handle, text_reads)
+        return handle
+
+    monkeypatch.setattr(Path, "open", _tracking_open)
+
+    returned = return_run_as_trace(
+        run_path,
+        project_dir=project,
+        store=store,
+        cfg=Config(),
+    )
+
+    content = returned.steps[1].observations[0].content
+    assert content is not None
+    # The visible preview is unchanged: bounded to the limit and terminated by
+    # the canonical truncation marker with the leading bytes preserved.
+    assert len(content) == trace_return_module._OUTPUT_LIMIT_CHARS
+    assert content.endswith(marker)
+    assert content.startswith("a" * 100)
+    # The trace-return reader touched the file in text mode ...
+    assert text_reads, "the oversized stdout was never read in text mode"
+    # ... but never issued an unbounded read and never consumed the whole file.
+    assert all(size not in (-1, None) for size, _ in text_reads)
+    assert sum(returned_len for _, returned_len in text_reads) <= (
+        trace_return_module._OUTPUT_LIMIT_CHARS + 1
+    )
