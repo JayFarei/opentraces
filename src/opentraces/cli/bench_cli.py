@@ -229,9 +229,34 @@ def _finalize_after_pytest(
     store: RunStore,
     run_id: str,
     outcome: PytestOutcome,
+    *,
+    expected_claim: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     draft = store.open_pending(run_id)
     result = draft.take_staged_result()
+    if expected_claim is not None:
+        # #302 review repair A3: cross-assert the reconciled runtime claim
+        # against static discovery BEFORE publication. Static AST discovery and
+        # runtime extraction agree by construction only; on divergence the
+        # stored result is demoted to the machinery-error state so no consumable
+        # finalized pass ever persists — the run is retained as evidence, not
+        # as a verdict.
+        reconciled_claim = result.get("scenario", {}).get("claim")
+        if reconciled_claim != expected_claim:
+            result["execution_status"] = "error"
+            result["verdict"] = None
+            result["reason"] = {
+                "code": "claim_reconciliation_mismatch",
+                "message": (
+                    "reconciled scenario claim does not match static discovery: "
+                    f"discovered {expected_claim!r} but the run recorded "
+                    f"{reconciled_claim!r}"
+                ),
+            }
+            result["evidence"]["complete"] = False
+            result["evidence"]["requirements"].append(
+                {"name": "scenario.claim", "complete": False, "evidence_refs": []}
+            )
     stdout_ref = "artifacts/pytest/stdout.txt"
     stderr_ref = "artifacts/pytest/stderr.txt"
     phase_ref = "artifacts/pytest/phases.json"
@@ -811,7 +836,9 @@ def bench_run(
     if len(created) != 1:
         raise click.ClickException(f"expected one finalized run, observed {len(created)}")
     try:
-        run_path, result = _finalize_after_pytest(store, created[0], pytest_outcome)
+        run_path, result = _finalize_after_pytest(
+            store, created[0], pytest_outcome, expected_claim=claim
+        )
     except OriginJoinError as exc:
         raise click.ClickException(str(exc)) from exc
     except StorageFinalizeError as exc:
@@ -819,14 +846,12 @@ def bench_run(
         # provisional recovery path instead of aborting mute.
         click.echo(f"provisional result retained at {exc.recovery_path}", err=True)
         raise click.exceptions.Exit(1) from exc
-    # F6 (#302): static AST discovery and runtime extraction agree by
-    # construction only — cross-assert them so a divergence is a machinery error.
-    reconciled_claim = result.get("scenario", {}).get("claim")
-    if reconciled_claim != claim:
-        raise click.ClickException(
-            "reconciled scenario claim does not match static discovery: "
-            f"discovered {claim!r} but the run recorded {reconciled_claim!r}"
-        )
+    # F6 (#302, review repair A3): the claim cross-assert already bound BEFORE
+    # publication inside _finalize_after_pytest — the stored result is the
+    # machinery-error state, never a consumable pass. Surface it loudly here.
+    reason = result.get("reason") or {}
+    if reason.get("code") == "claim_reconciliation_mismatch":
+        raise click.ClickException(str(reason.get("message")))
     exit_code = result_exit_code(result)
     if origin_address is not None:
         try:

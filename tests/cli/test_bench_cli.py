@@ -180,6 +180,10 @@ def test_bench_run_refuses_when_reconciled_claim_diverges_from_static_discovery(
     # F6 (#302): static AST discovery and runtime extraction agree by
     # construction only; cross-assert them so a divergence is surfaced as a
     # machinery error (exit 1) rather than silently trusting the reconciled row.
+    # Review repair A3: the cross-assert must bind BEFORE publication — a
+    # divergent run must not persist as a consumable finalized pass; the stored
+    # result is demoted to the machinery-error state (execution_status=error,
+    # verdict=null) so the store itself carries the refusal.
     from opentraces.cli import bench_cli
 
     scenario = _scenario(tmp_path)
@@ -219,6 +223,18 @@ def test_bench_run_refuses_when_reconciled_claim_diverges_from_static_discovery(
 
     assert invoked.exit_code == 1
     assert "claim" in invoked.output.lower()
+    # STORAGE state, not just exit code: no consumable finalized pass may
+    # persist anywhere in the store after a claim divergence.
+    stored = [
+        json.loads((child / "result.json").read_text(encoding="utf-8"))
+        for child in store_root.iterdir()
+        if child.is_dir() and (child / "result.json").is_file()
+    ]
+    assert stored, "the divergent run must still be retained as evidence"
+    for result in stored:
+        assert result["verdict"] is None
+        assert result["execution_status"] == "error"
+        assert result["reason"]["code"] == "claim_reconciliation_mismatch"
 
 
 def test_bench_run_reports_provisional_recovery_path_on_storage_failure(
@@ -260,7 +276,7 @@ def test_bench_run_reports_provisional_recovery_path_on_storage_failure(
 
     monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
 
-    def explode(store, run_id, outcome):
+    def explode(store, run_id, outcome, **kwargs):
         raise StorageFinalizeError("disk gone", recovery_path=recovery)
 
     monkeypatch.setattr(bench_cli, "_finalize_after_pytest", explode)
