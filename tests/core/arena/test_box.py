@@ -12,6 +12,7 @@ import pytest
 from opentraces.core.arena.box import (
     PINNED_CRABBOX_VERSION,
     PINNED_LOCAL_IMAGE,
+    PREFERENCES_INVALID_SENTINEL,
     Box,
     CrabboxRefusal,
     CrabboxRuntime,
@@ -87,7 +88,11 @@ def _inspect() -> str:
             "sshUser": "crabbox",
             "sshPort": "32222",
             "sshKey": "/tmp/key",
-            "labels": {"image": PINNED_LOCAL_IMAGE},
+            "labels": {
+                "image": PINNED_LOCAL_IMAGE,
+                "lease": "cbx_abc123",
+                "work_root": "/work/crabbox",
+            },
         }
     )
 
@@ -132,6 +137,7 @@ def test_lease_pins_version_image_tmpdir_and_runs_both_preflights(tmp_path: Path
     assert box.sandbox_tier == "container"
     assert box.provider == "local-container"
     assert box.image == PINNED_LOCAL_IMAGE
+    assert box.work_root == "/work/crabbox"
 
 
 def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primary_failure(
@@ -265,6 +271,13 @@ def test_timed_out_warmup_releases_only_one_unique_boundary_safe_identity(
     [
         ({"provider": "firecracker"}, "lease_provider_mismatch"),
         ({"labels": {"image": "ubuntu:26.04"}}, "lease_image_mismatch"),
+        ({"labels": {"lease": "cbx_other"}}, "lease_identity_mismatch"),
+        ({"labels": {"work_root": None}}, "lease_inspect_incomplete"),
+        ({"labels": {"work_root": "relative"}}, "lease_workspace_invalid"),
+        (
+            {"labels": {"work_root": "/work/crabbox/../escape"}},
+            "lease_workspace_invalid",
+        ),
     ],
 )
 def test_lease_refuses_requested_vs_observed_provider_or_image_mismatch(
@@ -274,6 +287,8 @@ def test_lease_refuses_requested_vs_observed_provider_or_image_mismatch(
 ) -> None:
     facts = json.loads(_inspect())
     facts.update(patch)
+    if "labels" in patch:
+        facts["labels"] = {**json.loads(_inspect())["labels"], **patch["labels"]}
     runner = ScriptedRunner(
         [
             _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
@@ -516,6 +531,11 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
         if operation == "inspect":
             return _completed(list(argv), stdout=_inspect())
         if operation == "run":
+            if "OPENTRACES_WORKSPACE=" in " ".join(argv):
+                return _completed(
+                    list(argv),
+                    stdout="OPENTRACES_WORKSPACE=/work/crabbox/cbx_abc123/opentraces\n",
+                )
             return _completed(
                 list(argv),
                 stdout="/usr/bin/python3\n/usr/bin/git\n/usr/bin/curl\n/usr/bin/script\n",
@@ -585,6 +605,7 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
         ssh_user="crabbox",
         ssh_port="22",
         ssh_key="/tmp/key",
+        work_root="/work/crabbox",
     )
 
     monkeypatch.setattr(
@@ -604,6 +625,8 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
         commands.append(command)
         if "importlib.metadata" in command:
             stdout = json.dumps(EXPECTED_INSTALL_LOCK)
+        elif "OPENTRACES_WORKSPACE=" in command:
+            stdout = "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
         else:
             stdout = "/usr/bin/opentraces\n/usr/bin/script\n"
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
@@ -621,6 +644,313 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
     assert pin["recipe"]["dependencies"] == pin["dependencies"]
     assert pin["recipe"]["dependency_lock_sha256"].startswith("sha256:")
     assert pin["recipe"]["wheel_sha256"]
+
+
+def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    (dist / "opentraces-0.0.0-py3-none-any.whl").write_bytes(b"local wheel bytes")
+    controller_commands: list[str] = []
+    product_commands: list[str] = []
+    runtime = CrabboxRuntime(runner=lambda *args, **kwargs: _completed([]), home=tmp_path)
+    box = Box(
+        id="box",
+        slug="box",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+        work_root="/work/crabbox",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        controller_commands.append(command)
+        stdout = (
+            json.dumps(EXPECTED_INSTALL_LOCK)
+            if "importlib.metadata" in command
+            else (
+                "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
+                if "OPENTRACES_WORKSPACE=" in command
+                else "/usr/bin/opentraces\n/usr/bin/script\n"
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def fake_exec_product(_box, argv, **kwargs):
+        command = " ".join(argv)
+        product_commands.append(command)
+        stdout = "2.1.210 (Claude Code)\n" if "--version" in command else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+    monkeypatch.setattr(runtime, "exec_product", fake_exec_product)
+
+    pin = runtime.materialize(box, "agent-ready", repository=repository)
+
+    install = next(command for command in product_commands if "claude.ai/install.sh" in command)
+    assert "bash -s -- 2.1.210" in install
+    assert "latest" not in install and "stable" not in install
+    probe = next(
+        command
+        for command in product_commands
+        if "claude --version" in command
+    )
+    assert probe == "/home/opentraces-product/.local/bin/claude --version"
+    assert "agent:claude" in pin["provides"]
+    assert pin["recipe"]["harness"] == {
+        "name": "claude",
+        "executable": "/home/opentraces-product/.local/bin/claude",
+        "version": "2.1.210",
+        "readiness": "claude-global-preferences-v1",
+    }
+    readiness = next(
+        command
+        for command in product_commands
+        if "opentraces.core.arena.harness_readiness" in command
+        and "--check" not in command
+    )
+    assert readiness == (
+        "python3 -m opentraces.core.arena.harness_readiness "
+        "--workspace /work/crabbox/box/repository --version 2.1.210"
+    )
+    assert any(
+        command == (
+            "python3 -m opentraces.core.arena.harness_readiness --check "
+            "--workspace /work/crabbox/box/repository --version 2.1.210"
+        )
+        for command in product_commands
+    )
+
+
+def test_agent_ready_refuses_invalid_existing_preferences_before_installer_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    (dist / "opentraces-0.0.0-py3-none-any.whl").write_bytes(b"local wheel bytes")
+    product_commands: list[str] = []
+    runtime = CrabboxRuntime(runner=lambda *args, **kwargs: _completed([]), home=tmp_path)
+    box = Box(
+        id="box",
+        slug="box",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+        work_root="/work/crabbox",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        stdout = (
+            json.dumps(EXPECTED_INSTALL_LOCK)
+            if "importlib.metadata" in command
+            else (
+                "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
+                if "OPENTRACES_WORKSPACE=" in command
+                else "/usr/bin/opentraces\n/usr/bin/script\n"
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def fake_exec_product(_box, argv, **kwargs):
+        command = " ".join(argv)
+        product_commands.append(command)
+        if "harness_readiness" in command and "--check" in command:
+            return SimpleNamespace(
+                returncode=2,
+                stdout=PREFERENCES_INVALID_SENTINEL + "\n",
+                stderr="",
+            )
+        stdout = "2.1.210 (Claude Code)\n" if "--version" in command else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+    monkeypatch.setattr(runtime, "exec_product", fake_exec_product)
+
+    with pytest.raises(CrabboxRefusal) as caught:
+        runtime.materialize(box, "agent-ready", repository=repository)
+
+    assert caught.value.code == "agent_harness_preferences_invalid"
+    assert any(
+        "harness_readiness" in command and "--check" in command
+        for command in product_commands
+    )
+    assert not any("claude.ai/install.sh" in command for command in product_commands)
+
+
+def test_agent_ready_preflight_infrastructure_crash_is_not_mislabeled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    (dist / "opentraces-0.0.0-py3-none-any.whl").write_bytes(b"local wheel bytes")
+    product_commands: list[str] = []
+    runtime = CrabboxRuntime(runner=lambda *args, **kwargs: _completed([]), home=tmp_path)
+    box = Box(
+        id="box",
+        slug="box",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+        work_root="/work/crabbox",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        stdout = (
+            json.dumps(EXPECTED_INSTALL_LOCK)
+            if "importlib.metadata" in command
+            else (
+                "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
+                if "OPENTRACES_WORKSPACE=" in command
+                else "/usr/bin/opentraces\n/usr/bin/script\n"
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def fake_exec_product(_box, argv, **kwargs):
+        command = " ".join(argv)
+        product_commands.append(command)
+        if "harness_readiness" in command and "--check" in command:
+            return SimpleNamespace(
+                returncode=70,
+                stdout="",
+                stderr="A6_SIMULATED_INTERPRETER_BOOTSTRAP_CRASH",
+            )
+        stdout = "2.1.210 (Claude Code)\n" if "--version" in command else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+    monkeypatch.setattr(runtime, "exec_product", fake_exec_product)
+
+    with pytest.raises(CrabboxRefusal) as caught:
+        runtime.materialize(box, "agent-ready", repository=repository)
+
+    assert caught.value.code == "agent_harness_preflight_failed"
+    assert "A6_SIMULATED_INTERPRETER_BOOTSTRAP_CRASH" in caught.value.message
+    assert any(
+        "harness_readiness" in command and "--check" in command
+        for command in product_commands
+    )
+    assert not any("claude.ai/install.sh" in command for command in product_commands)
+
+
+def test_agent_ready_preflight_argparse_error_is_not_mislabeled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    (dist / "opentraces-0.0.0-py3-none-any.whl").write_bytes(b"local wheel bytes")
+    product_commands: list[str] = []
+    runtime = CrabboxRuntime(runner=lambda *args, **kwargs: _completed([]), home=tmp_path)
+    box = Box(
+        id="box",
+        slug="box",
+        provider="local-container",
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+        work_root="/work/crabbox",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        stdout = (
+            json.dumps(EXPECTED_INSTALL_LOCK)
+            if "importlib.metadata" in command
+            else (
+                "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
+                if "OPENTRACES_WORKSPACE=" in command
+                else "/usr/bin/opentraces\n/usr/bin/script\n"
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def fake_exec_product(_box, argv, **kwargs):
+        command = " ".join(argv)
+        product_commands.append(command)
+        if "harness_readiness" in command and "--check" in command:
+            return SimpleNamespace(
+                returncode=2,
+                stdout="",
+                stderr=(
+                    "usage: harness_readiness [-h] [--check] --workspace WORKSPACE "
+                    "--version VERSION\n"
+                    "harness_readiness: error: unrecognized arguments: --check"
+                ),
+            )
+        stdout = "2.1.210 (Claude Code)\n" if "--version" in command else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+    monkeypatch.setattr(runtime, "exec_product", fake_exec_product)
+
+    with pytest.raises(CrabboxRefusal) as caught:
+        runtime.materialize(box, "agent-ready", repository=repository)
+
+    assert caught.value.code == "agent_harness_preflight_failed"
+    assert not any("claude.ai/install.sh" in command for command in product_commands)
 
 
 def test_exec_uses_pinned_lease_flags_and_propagates_remote_result(tmp_path: Path) -> None:

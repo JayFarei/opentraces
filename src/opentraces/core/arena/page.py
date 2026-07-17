@@ -285,6 +285,31 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     product_pin = result.get("pins", {}).get("product") or {}
     product_commit = product_pin.get("commit") or "unavailable"
     product_worktree = product_pin.get("worktree") or "unavailable"
+    harness_pin = result.get("pins", {}).get("harness") or {}
+    inference_pin = result.get("pins", {}).get("model_wire") or {}
+    agent_attempt_ref = "artifacts/agent-attempt.json"
+    agent_attempt_path = _resolve_run_ref(run_path, agent_attempt_ref)
+    agent_facts_html = ""
+    if agent_attempt_path is not None:
+        try:
+            agent_attempt = json.loads(agent_attempt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            agent_attempt = {}
+        task = agent_attempt.get("task") or "unavailable"
+        harness_name = harness_pin.get("name") or "unavailable"
+        harness_version = harness_pin.get("version") or "unavailable"
+        inference_mode = inference_pin.get("mode") or "unavailable"
+        agent_facts_html = (
+            '<h2>Agent attempt</h2><section class="facts agent-facts">'
+            '<div class="fact"><div class="eyebrow">TASK</div>'
+            f'<strong>{_h(task)}</strong><nav><a href="{_h(_href(page_dir, agent_attempt_path))}">'
+            f'{_h(agent_attempt_ref)}</a></nav></div>'
+            '<div class="fact"><div class="eyebrow">HARNESS PIN</div>'
+            f'<strong>{_h(harness_name)} · {_h(harness_version)}</strong></div>'
+            '<div class="fact"><div class="eyebrow">INFERENCE PIN</div>'
+            f'<strong>{_h(inference_mode)}</strong></div>'
+            "</section>"
+        )
     reason = result.get("reason") or {}
     reason_html = (
         '<section class="card outcome">'
@@ -294,6 +319,58 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         if reason
         else ""
     )
+    capture = result.get("capture")
+    capture_facts_html = ""
+    if isinstance(capture, dict):
+        sources = capture.get("sources") or []
+        source_by_name = {
+            str(source.get("name")): source
+            for source in sources
+            if isinstance(source, dict) and source.get("name")
+        }
+        capture_cards: list[str] = []
+        for label, source_name in (
+            ("TRACE", "session_jsonl"),
+            ("CONTEXT", "telemetry"),
+            ("TRAIL", "git"),
+            ("STORAGE", "bucket"),
+        ):
+            source = source_by_name.get(source_name) or {}
+            completeness = str(source.get("completeness") or "missing")
+            status = str(source.get("status") or "unavailable")
+            limitations = [
+                str(limitation) for limitation in source.get("limitations") or []
+            ]
+            links: list[str] = []
+            for reference in source.get("evidence_refs") or []:
+                stored_reference = f"capture/{reference}"
+                target = _resolve_run_ref(run_path, stored_reference)
+                if target is not None:
+                    links.append(
+                        f'<a href="{_h(_href(page_dir, target))}">{_h(stored_reference)}</a>'
+                    )
+            capture_cards.append(
+                '<div class="fact capture-fact">'
+                f'<div class="eyebrow">{label}</div><strong>{_h(completeness)}</strong>'
+                f'<div>{_h(status)}</div>'
+                f'<div>{_h("; ".join(limitations) or "no named limitations")}</div>'
+                f'<nav>{"".join(links)}</nav>'
+                "</div>"
+            )
+        lifecycle_limitations = [
+            str(limitation) for limitation in capture.get("limitations") or []
+        ]
+        capture_cards.append(
+            '<div class="fact capture-fact">'
+            '<div class="eyebrow">LIFECYCLE</div>'
+            f'<strong>{_h(capture.get("completeness") or "partial")}</strong>'
+            f'<div>{_h("; ".join(lifecycle_limitations) or "no named limitations")}</div>'
+            "</div>"
+        )
+        capture_facts_html = (
+            '<h2>Capture</h2><section class="facts capture-facts">'
+            f'{"".join(capture_cards)}</section>'
+        )
     world_cards: list[str] = []
     for name, pin in sorted((result.get("pins", {}).get("emulators") or {}).items()):
         ledger_ref = f"ledgers/{name}.jsonl"
@@ -359,8 +436,10 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result["execution_status"])}</div>
 <div class="fact"><div class="eyebrow">EVIDENCE</div>{"complete" if result["evidence"]["complete"] else "incomplete"}</div>
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>
+{agent_facts_html}
 {reason_html}
 {world_html}
+{capture_facts_html}
 {timeline_html}
 <h2>Recording</h2><section class="stack">{"".join(players)}</section>
 <h2>Actions and raw output</h2><section class="stack">{"".join(action_cards)}</section>

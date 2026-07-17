@@ -46,6 +46,8 @@ class FakeBoxRuntime:
             ssh_port="22",
             ssh_key="/tmp/fake",
             image="ubuntu:24.04",
+            work_root="/work/crabbox",
+            workspace="/work/crabbox/fake-1/opentraces",
         )
 
     def materialize(self, box: Box, app_state: str, *, repository: Path) -> dict:
@@ -734,6 +736,32 @@ def test_same_file_callable_cannot_borrow_a_canonical_identity_to_forge_pass(
     assert record["status"] == "error"
     assert run.result["execution_status"] == "error"
     assert run.result["verdict"] is None
+
+
+def test_required_capture_cannot_pass_when_no_capture_result_exists(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only", capture_required=["git"]) as run:
+        run.verify(verify_passes)
+
+    assert run.result["execution_status"] == "complete"
+    assert run.result["verdict"] == "fail"
+    assert run.result["reason"] == {
+        "code": "required_capture_missing",
+        "message": "required capture evidence is unavailable: git",
+    }
+    assert run.result["capture"] is None
+    assert {
+        "name": "capture.git",
+        "complete": False,
+        "evidence_refs": [],
+    } in run.result["evidence"]["requirements"]
+    assert run.result["evidence"]["complete"] is False
 
 
 def test_slice_origin_is_staged_before_verification_and_only_the_verifier_can_name_it(
