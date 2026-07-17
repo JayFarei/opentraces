@@ -742,14 +742,17 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
     assert pin["recipe"]["wheel_sha256"]
 
 
-def _install_only_pin(
+def _materialized_pin(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     provider: str,
     image: str,
+    app_state: str = "install-only",
 ) -> dict:
-    """Materialize install-only once with a fixed provider/image, same wheels."""
+    """Materialize one app_state with a fixed provider/image, same wheels."""
+
+    from opentraces.core.arena.harnesses import CLAUDE_HARNESS_VERSION
 
     repository = tmp_path / "repository"
     dist = repository / "dist"
@@ -772,6 +775,7 @@ def _install_only_pin(
         ssh_key="/tmp/key",
         image=image,
         work_root="/work/crabbox",
+        workspace="/work/crabbox/box/repository",
     )
     monkeypatch.setattr(
         runtime,
@@ -795,8 +799,26 @@ def _install_only_pin(
             stdout = "/usr/bin/opentraces\n/usr/bin/script\n"
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
+    def fake_exec_product(_box, argv, **kwargs):
+        command = " ".join(argv)
+        stdout = (
+            f"{CLAUDE_HARNESS_VERSION} (Claude Code)\n" if "--version" in command else ""
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
     monkeypatch.setattr(runtime, "exec", fake_exec)
-    return runtime.materialize(box, "install-only", repository=repository)
+    monkeypatch.setattr(runtime, "exec_product", fake_exec_product)
+    return runtime.materialize(box, app_state, repository=repository)
+
+
+def _install_only_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    provider: str,
+    image: str,
+) -> dict:
+    return _materialized_pin(tmp_path, monkeypatch, provider=provider, image=image)
 
 
 def test_install_only_digest_binds_the_observed_image(
@@ -828,6 +850,46 @@ def test_install_only_digest_binds_the_observed_provider(
     assert first["digest"] != second["digest"]
     assert first["recipe"]["provider"] == "local-container"
     assert second["recipe"]["provider"] == "modal"
+
+
+def test_agent_ready_digest_binds_the_observed_provider_and_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #302 review repair A4: install-only and agent-ready share recipe
+    # construction, so the F5 provider/image binding changes BOTH digests. That
+    # is semantically correct (provider and image shape the agent-ready world
+    # too) and deliberately kept — this twin test pins the agent-ready seam so
+    # the shared behavior can never regress silently on either side.
+    base = _materialized_pin(
+        tmp_path / "a",
+        monkeypatch,
+        provider="local-container",
+        image=PINNED_LOCAL_IMAGE,
+        app_state="agent-ready",
+    )
+    other_image = _materialized_pin(
+        tmp_path / "b",
+        monkeypatch,
+        provider="local-container",
+        image="ubuntu:22.04",
+        app_state="agent-ready",
+    )
+    other_provider = _materialized_pin(
+        tmp_path / "c",
+        monkeypatch,
+        provider="modal",
+        image=PINNED_LOCAL_IMAGE,
+        app_state="agent-ready",
+    )
+    assert base["digest"] != other_image["digest"]
+    assert base["digest"] != other_provider["digest"]
+    assert base["recipe"]["provider"] == "local-container"
+    assert base["recipe"]["image"] == PINNED_LOCAL_IMAGE
+    assert other_image["recipe"]["image"] == "ubuntu:22.04"
+    assert other_provider["recipe"]["provider"] == "modal"
+    # Still an agent-ready pin, not an install-only lookalike.
+    assert base["name"] == "agent-ready"
+    assert "harness" in base["recipe"]
 
 
 def test_crabbox_runtime_is_single_use_and_refuses_a_second_run(
