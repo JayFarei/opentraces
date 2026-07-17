@@ -7,6 +7,42 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from ...security.secrets import scan_text
+
+
+# Reuse the known credential/token shapes from ``security/secrets`` rather than
+# inventing a second divergent regex vocabulary (issue #302 F4). Restricted to
+# credential-shaped patterns plus the conservative single-token high-entropy
+# catch — PII/network shapes (email, ipv4/ipv6, phone, ssn, credit_card,
+# database_url) are deliberately excluded so ordinary diagnostic prose (region
+# ids, timestamps, hostnames) is never mangled inside a reason string.
+_REASON_SECRET_PATTERNS = frozenset(
+    {
+        "jwt_token",
+        "anthropic_api_key",
+        "openai_project_key",
+        "openai_api_key",
+        "huggingface_token",
+        "github_token",
+        "github_pat",
+        "pypi_token",
+        "npm_token",
+        "aws_access_key",
+        "aws_sts_key",
+        "groq_api_key",
+        "xai_api_key",
+        "google_ai_key",
+        "cerebras_api_key",
+        "openrouter_api_key",
+        "vercel_token",
+        "slack_token",
+        "stripe_secret_key",
+        "stripe_restricted_key",
+        "private_key",
+        "high_entropy_string",
+    }
+)
+
 
 _SENSITIVE_KEY_SEGMENTS = {
     "apikey",
@@ -66,6 +102,28 @@ def _redact_assignments(text: str) -> str:
     return text
 
 
+def _redact_secret_tokens(text: str) -> str:
+    """Redact bare secret-shaped tokens that are not ``key=value`` assignments.
+
+    Assignments and bearer tokens are handled upstream; this closes the gap
+    where a lone credential in an assertion reason (``assert resp ==
+    "sk-live-…"``) survives into ``result.json`` and the rendered outcome
+    reason (issue #302 F4). Shapes and the high-entropy heuristic are reused
+    verbatim from ``security/secrets`` — no new regex vocabulary.
+    """
+
+    matches = [
+        match
+        for match in scan_text(text, include_entropy=True)
+        if match.pattern_name in _REASON_SECRET_PATTERNS
+    ]
+    if not matches:
+        return text
+    for match in sorted(matches, key=lambda match: match.start, reverse=True):
+        text = f"{text[: match.start]}[redacted]{text[match.end :]}"
+    return text
+
+
 def sanitize_diagnostic_text(text: str) -> str:
     """Remove credential values and host paths while keeping diagnostic shape."""
 
@@ -76,7 +134,8 @@ def sanitize_diagnostic_text(text: str) -> str:
     except json.JSONDecodeError:
         sanitized = _redact_assignments(text)
         sanitized = _BEARER_RE.sub(r"\1[redacted]", sanitized)
-        return _HOST_PATH_RE.sub("[host-path]", sanitized)
+        sanitized = _HOST_PATH_RE.sub("[host-path]", sanitized)
+        return _redact_secret_tokens(sanitized)
     return json.dumps(sanitize_diagnostic_value(payload), sort_keys=True)
 
 
