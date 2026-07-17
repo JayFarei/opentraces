@@ -38,6 +38,7 @@ from ..trails.lineage import parse_trail_ref
 from ..trails.slices import trace_slice_id_for
 from .contract import VERDICTS, validate_result
 from .run_store import RunDraft, RunIntegrityError, RunStore
+from .trace_materialization import authoritative_trace_materialization_ref
 
 
 ARENA_LABEL_SCHEMA_VERSION = "opentraces.arena.label.v0"
@@ -817,40 +818,6 @@ def _canonical_subject_trace(trace_id: str) -> tuple[str, TraceRecord]:
     return next(iter(candidates.values()))
 
 
-def authoritative_trace_materialization_ref(
-    project_slug: str,
-    record: TraceRecord,
-) -> TraceMaterializationRef:
-    """Rebuild the current materialization map from registered Trail state.
-
-    A canonical project registration makes its source repository authoritative.
-    Record-only materialization is retained only for traces whose project has no
-    registration, never as a fallback for a broken registered source.
-    """
-
-    from .. import paths
-
-    identity_path = paths.PROJECTS_DIR / project_slug / "project.json"
-    if not identity_path.exists():
-        return TraceMaterializationRef.from_record(record)
-    identity = _read_object(identity_path, name="canonical project identity")
-    source_path = identity.get("path") or identity.get("project_dir")
-    if not isinstance(source_path, str) or not source_path:
-        raise LabelIntegrityError("canonical project identity has no source repository")
-    source_repo = Path(source_path).expanduser().resolve()
-    if not source_repo.is_dir():
-        raise LabelIntegrityError("canonical project source repository is unavailable")
-    try:
-        from ..trails import build_trail_query_projection_for_trace
-
-        projection = build_trail_query_projection_for_trace(source_repo, record.trace_id)
-        return TraceMaterializationRef.from_record(record, trail_projection=projection)
-    except Exception as exc:
-        raise LabelIntegrityError(
-            "authoritative current Trace Map could not be rebuilt from Trail world-state"
-        ) from exc
-
-
 def _trace_ref_for_label(row: Mapping[str, Any]) -> TraceMaterializationRef:
     pin = row["slice_pin"]
     project_slug, record = _canonical_subject_trace(pin["trace_id"])
@@ -1073,6 +1040,7 @@ __all__ = [
     "LabelContractError",
     "LabelIntegrityError",
     "attach_labels",
+    "authoritative_trace_materialization_ref",
     "complete_run_digest",
     "label_summary_for_trace",
     "mint_labels_for_run",

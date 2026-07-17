@@ -164,6 +164,45 @@ def write_project_identity(
     tmp.replace(pj)
 
 
+class ProjectRegistrationError(ValueError):
+    """A project's stored ``project.json`` cannot yield a usable source repo."""
+
+
+def registered_source_repo(
+    slug: str, *, projects_root: Path | None = None
+) -> Path | None:
+    """Resolve the source repository a project ``slug`` is registered against.
+
+    This is the single interpreter of the ``~/.opentraces/projects/<slug>/
+    project.json`` registration for source-repository resolution. Returns
+    ``None`` when the project has no registration file — an unregistered
+    project keeps record-only materialization. Raises
+    :class:`ProjectRegistrationError` when a registration exists but is
+    unreadable, names no usable source repository, or names one that is not an
+    available directory. Callers map that fail-closed signal onto their own
+    domain error without re-parsing the file.
+    """
+    root = projects_root if projects_root is not None else _paths.PROJECTS_DIR
+    identity_path = root / slug / "project.json"
+    if not identity_path.exists():
+        return None
+    try:
+        data = json.loads(identity_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProjectRegistrationError(
+            "canonical project identity is missing or invalid JSON"
+        ) from exc
+    if not isinstance(data, dict):
+        raise ProjectRegistrationError("canonical project identity must be a JSON object")
+    source_path = data.get("path") or data.get("project_dir")
+    if not isinstance(source_path, str) or not source_path:
+        raise ProjectRegistrationError("canonical project identity has no source repository")
+    source_repo = Path(source_path).expanduser().resolve()
+    if not source_repo.is_dir():
+        raise ProjectRegistrationError("canonical project source repository is unavailable")
+    return source_repo
+
+
 # --------------------------------------------------------------------------- #
 # Claude JSONL corpus discovery
 # --------------------------------------------------------------------------- #
