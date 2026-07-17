@@ -3339,6 +3339,14 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
         "material did not materialize substantive Trace, Ctx, and Trail reads",
     )
 
+    # #311: the compatibility proof must emit an inspectable report artifact
+    # under the pytest base, round-tripping exactly to to_dict().
+    compat_report_path = tmp_path / "compatibility-report.json"
+    assert compat_report_path.exists(), "compatibility-report.json must be emitted"
+    assert (
+        json.loads(compat_report_path.read_text(encoding="utf-8")) == report.to_dict()
+    )
+
     # Killed control: the comparator must detect captured behavior/material
     # drifting even though the direct legacy baseline is left untouched.
     captured_trace = Path(captured.source("bucket").details["trace_path"])
