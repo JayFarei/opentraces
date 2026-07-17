@@ -258,6 +258,47 @@ def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> No
     assert not output.exists()
 
 
+def test_page_names_and_omits_an_action_file_symlink_that_escapes_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Action-file links must be contained under the run root (issue #314).
+
+    Cast and exhaust references already route through the run-root containment
+    helper; action-file links previously used ``_href`` directly, so an action
+    artifact that dereferences outside the run root would be published as a live
+    link. ``RunStore.verify()``/``_validated_tree`` reject a real finalized
+    symlink and stay the primary defense; here we bypass that guard to isolate
+    the page-renderer's own containment behavior, proving the page layer does
+    not itself emit an out-of-run action link.
+    """
+
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    draft.write_json("actions/0001/invocation.json", {"ordinal": 1, "argv": ["echo", "hi"]})
+    draft.write_json("actions/0001/result.json", {"returncode": 0})
+    draft.write_text("actions/0001/stdout", "in-run stdout\n")
+    finalized = draft.finalize(
+        _result(draft.run_id, recordings={"rewatchable": False, "channels": []})
+    )
+
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("secret outside the run\n", encoding="utf-8")
+    action_dir = finalized / "actions" / "0001"
+    action_dir.chmod(0o755)
+    (action_dir / "stderr").symlink_to(outside)
+
+    # Isolate the page layer: the run-store symlink guard is proven separately by
+    # test_store_rejects_an_exhaust_symlink_before_page_render.
+    monkeypatch.setattr(RunStore, "verify", lambda self, run_path: True)
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    # The contained in-run action file stays linked.
+    assert ">actions/0001/stdout</a>" in html
+    # The escaping symlink is named as evidence but never linked.
+    assert "actions/0001/stderr" in html
+    assert ">actions/0001/stderr</a>" not in html
+
+
 def test_page_names_and_omits_a_recording_ref_that_escapes_the_run(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
@@ -394,6 +435,48 @@ def test_store_rejects_an_exhaust_symlink_before_page_render(tmp_path: Path) -> 
     recordings = {"rewatchable": False, "channels": []}
     with pytest.raises(RunIntegrityError, match="symlink"):
         draft.finalize(_result(draft.run_id, recordings=recordings))
+
+
+def _style_block(html: str) -> str:
+    start = html.index("<style>") + len("<style>")
+    return html[start : html.index("</style>", start)]
+
+
+def test_fact_strip_wraps_long_values_within_their_own_cell(tmp_path: Path) -> None:
+    """Long fact values must stay inside their own cell (issue #330).
+
+    At a 1920x1080 viewport the full product pin / execution digest previously
+    overflowed the fixed fact-strip cells and overlapped neighbouring MODE /
+    EXECUTION / EVIDENCE cells. A real-browser layout probe is impractical for a
+    committed unit test, so this is the rendered-DOM/CSS containment control: the
+    stylesheet must let each fact cell shrink and wrap its full value, keeping the
+    value recoverable without overlap. The full 64-hex commit stays present so the
+    full value remains recoverable.
+    """
+
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    long_commit = "a" * 64
+    finalized = draft.finalize(
+        _result(
+            draft.run_id,
+            recordings={"rewatchable": False, "channels": []},
+            pins={"product": {"commit": long_commit, "worktree": "clean"}},
+        )
+    )
+
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+    style = _style_block(html)
+
+    # The full value is rendered (recoverable), inside the PRODUCT PIN fact cell.
+    assert long_commit in html
+    # Grid fact cells must be allowed to shrink instead of overflowing their track.
+    assert ".fact{" in style
+    fact_rule = style[style.index(".fact{") : style.index("}", style.index(".fact{"))]
+    assert "min-width:0" in fact_rule
+    # Long fact values must wrap rather than run past the cell edge.
+    assert "overflow-wrap" in fact_rule or "word-break" in fact_rule
+    assert ".fact code" in style
 
 
 def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
