@@ -357,6 +357,7 @@ class CrabboxRuntime:
         self.command = command
         self._diagnostics: list[dict[str, Any]] = []
         self._run_evidence_root: Path | None = None
+        self._run_configured = False
         self.child_env = dict(os.environ)
         tmpdir = self.home / "crabbox-tmp"
         tmpdir.mkdir(parents=True, exist_ok=True)
@@ -366,8 +367,22 @@ class CrabboxRuntime:
             self.child_env["DOCKER_HOST"] = f"unix://{colima_socket}"
 
     def configure_run_evidence(self, run_root: Path) -> None:
-        """Route Crabbox timing records into the pending run's custody."""
+        """Route Crabbox timing records into the pending run's custody.
 
+        A CrabboxRuntime accumulates per-run ``_diagnostics`` /
+        ``_run_evidence_root`` instance state. It is safe today only because the
+        CLI mints one runtime per run; enforce that contract as single-use so a
+        reused runtime is explicitly refused rather than silently
+        cross-contaminating a second run's evidence (issue #302 F5). This is the
+        per-run hook ``BenchRun.__enter__`` already calls exactly once.
+        """
+
+        if self._run_configured:
+            raise CrabboxRefusal(
+                "runtime_reused",
+                "CrabboxRuntime is single-use; mint a fresh runtime per bench run",
+            )
+        self._run_configured = True
         self._run_evidence_root = Path(run_root)
 
     def _timing_path(self, repository: Path, name: str) -> Path:
@@ -1110,6 +1125,12 @@ class CrabboxRuntime:
             harness_probe_ref = self._evidence_ref(harness_probe_timing)
             harness_readiness_ref = self._evidence_ref(harness_readiness_timing)
         recipe = {
+            # Bind provider + image into the install-only digest material so two
+            # runs on different images/providers cannot collide on one digest —
+            # base-only already binds them (issue #302 F5). This intentionally
+            # changes install-only digests versus the pre-#302 wheel-only shape.
+            "provider": box.provider,
+            "image": self.image,
             "wheel_sha256": digests,
             "dependencies": expected_dependencies,
             "dependency_lock_sha256": dependency_lock_sha256,

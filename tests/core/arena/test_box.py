@@ -742,6 +742,110 @@ def test_install_only_materialization_pins_and_observes_hf_client_dependencies(
     assert pin["recipe"]["wheel_sha256"]
 
 
+def _install_only_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    provider: str,
+    image: str,
+) -> dict:
+    """Materialize install-only once with a fixed provider/image, same wheels."""
+
+    repository = tmp_path / "repository"
+    dist = repository / "dist"
+    dist.mkdir(parents=True)
+    (dist / "opentraces-0.0.0-py3-none-any.whl").write_bytes(b"local wheel bytes")
+    runtime = CrabboxRuntime(
+        runner=lambda *args, **kwargs: _completed([]),
+        home=tmp_path,
+        provider=provider,
+        image=image,
+    )
+    box = Box(
+        id="box",
+        slug="box",
+        provider=provider,
+        sandbox_tier="container",
+        ssh_host="127.0.0.1",
+        ssh_user="crabbox",
+        ssh_port="22",
+        ssh_key="/tmp/key",
+        image=image,
+        work_root="/work/crabbox",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "copy_into_box",
+        lambda _box, source, destination, timeout=120: destination,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_timing_path",
+        lambda _repository, operation: tmp_path / f"{operation}.json",
+    )
+    monkeypatch.setattr(runtime, "_evidence_ref", lambda path: None)
+
+    def fake_exec(_box, argv, **kwargs):
+        command = " ".join(argv)
+        if "importlib.metadata" in command:
+            stdout = json.dumps(EXPECTED_INSTALL_LOCK)
+        elif "OPENTRACES_WORKSPACE=" in command:
+            stdout = "OPENTRACES_WORKSPACE=/work/crabbox/box/repository\n"
+        else:
+            stdout = "/usr/bin/opentraces\n/usr/bin/script\n"
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+    return runtime.materialize(box, "install-only", repository=repository)
+
+
+def test_install_only_digest_binds_the_observed_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # F5 (#302): install-only app_state digest must bind provider/image so two
+    # runs on different images cannot collide on one digest (base-only already
+    # binds them). Same wheels, differing image => distinct digests.
+    first = _install_only_pin(
+        tmp_path / "a", monkeypatch, provider="local-container", image=PINNED_LOCAL_IMAGE
+    )
+    second = _install_only_pin(
+        tmp_path / "b", monkeypatch, provider="local-container", image="ubuntu:22.04"
+    )
+    assert first["digest"] != second["digest"]
+    assert first["recipe"]["image"] == PINNED_LOCAL_IMAGE
+    assert second["recipe"]["image"] == "ubuntu:22.04"
+
+
+def test_install_only_digest_binds_the_observed_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _install_only_pin(
+        tmp_path / "a", monkeypatch, provider="local-container", image=PINNED_LOCAL_IMAGE
+    )
+    second = _install_only_pin(
+        tmp_path / "b", monkeypatch, provider="modal", image=PINNED_LOCAL_IMAGE
+    )
+    assert first["digest"] != second["digest"]
+    assert first["recipe"]["provider"] == "local-container"
+    assert second["recipe"]["provider"] == "modal"
+
+
+def test_crabbox_runtime_is_single_use_and_refuses_a_second_run(
+    tmp_path: Path,
+) -> None:
+    # F5 (#302): CrabboxRuntime carries per-run _diagnostics/_run_evidence_root
+    # instance state. It is safe today only because the CLI creates one runtime
+    # per run; enforce that contract so a reused runtime is explicitly refused
+    # rather than silently cross-contaminating a second run's evidence.
+    runtime = CrabboxRuntime(
+        runner=lambda *args, **kwargs: _completed([]), home=tmp_path
+    )
+    runtime.configure_run_evidence(tmp_path / "run-a")
+    with pytest.raises(CrabboxRefusal) as excinfo:
+        runtime.configure_run_evidence(tmp_path / "run-b")
+    assert excinfo.value.code == "runtime_reused"
+
+
 def test_agent_ready_materialization_provisions_and_pins_exact_claude_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
