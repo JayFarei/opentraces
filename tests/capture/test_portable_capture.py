@@ -3318,7 +3318,10 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
         )
     ).finish(deadline=time.monotonic() + 15.0)
 
-    from opentraces.capture.parity import compare_persistent_compatibility
+    from opentraces.capture.parity import (
+        compare_persistent_compatibility,
+        write_compatibility_report,
+    )
 
     report = compare_persistent_compatibility(
         legacy_trace_path=baseline_trace_path,
@@ -3327,6 +3330,7 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
         legacy_roots=(project, session.parent),
         captured_roots=(project, session.parent),
     )
+    write_compatibility_report(report, tmp_path / "compatibility-report.json")
     assert report.matches is False
     assert report.serialized_artifact_bytes_match is True
     assert report.semantic_material_match is True

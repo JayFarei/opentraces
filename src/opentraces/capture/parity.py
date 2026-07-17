@@ -426,6 +426,23 @@ def write_parity_report(report: PlacementParityReport, path: Path) -> Path:
     return path
 
 
+def write_compatibility_report(
+    report: PersistentCompatibilityReport, path: Path
+) -> Path:
+    """Persist the persistent-compatibility report atomically (#311).
+
+    The RE-OBSERVE evidence names a compatibility report alongside the
+    capture-result and parity-report artifacts; emit it through the same atomic
+    ``to_dict()`` writer so the artifact is inspectable, not only asserted.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+    return path
+
+
 def _trace_path(result: CaptureResult) -> Path:
     if not result.trace_refs:
         raise ValueError("capture result has no trace reference")
