@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import opentraces.core.arena.labels as labels_module
@@ -23,6 +24,7 @@ from opentraces.core.arena.labels import (
 )
 from opentraces.core.arena.run_store import RunIntegrityError, RunStore
 from opentraces.core.bucket_layout import trace_v1_json_path, trace_v1_labels_path
+from opentraces.core.bucket_trace_records import write_trace_record
 from opentraces_schema import Agent, Outcome, TraceRecord
 
 
@@ -142,6 +144,11 @@ def _finalized_run(
 def _set_bucket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bucket = tmp_path / "bucket"
     monkeypatch.setattr(paths, "bucket_dir", lambda: bucket)
+    # The canonical corpus resolver (trace_corpus) also scans the project and
+    # staging JSONL layers; point them at the sandbox so summary ownership
+    # resolution never touches the real ~/.opentraces state.
+    monkeypatch.setattr(paths, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(paths, "STAGING_DIR", tmp_path / "staging")
     return bucket
 
 
@@ -477,6 +484,105 @@ def test_normal_trace_summary_is_bounded_and_reads_the_companion(
     )
 
 
+def test_summary_follows_the_canonical_corpus_owner_not_a_stale_trace_json_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review-repair RED control for #323 (PR #352): a trace_record_only=True
+    # ingest writes the fresh canonical v2 record + labels companion but SKIPS
+    # the traces/v1 trace.json projection. Ownership inferred from trace.json
+    # presence therefore selects the STALE project and silently omits the
+    # fresher project's current labels. Ownership must route through the same
+    # canonical corpus/freshness resolution normal reads use.
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    fresh_slug = "project-labels-fresh"
+    record = TraceRecord(
+        trace_id=TRACE_ID,
+        session_id=f"session-label-subject-{TRACE_ID}",
+        agent=Agent(name="test-agent"),
+        task={"description": "Publishing reaches the configured remote."},
+        steps=[],
+        outcome=Outcome(success=None),
+    )
+
+    # Project A (stale): older canonical record + legacy trace.json projection
+    # + a labels companion holding only the first minted row.
+    _write_subject_trace()
+    stale_object = write_trace_record(
+        record, project_slug=PROJECT_SLUG, source_layer="canonical"
+    ).path
+    rows = mint_labels_for_run(
+        run_path,
+        subject={"kind": "trace", "address": TRACE_ID},
+        store=store,
+    )
+    attach_labels(
+        project_slug=PROJECT_SLUG,
+        trace_id=TRACE_ID,
+        labels=[rows[0]],
+        store=store,
+    )
+
+    # Project B (fresh): canonical v2 record only — NO trace.json, exactly the
+    # trace_record_only ingest shape — plus the full current labels companion.
+    fresh_object = write_trace_record(
+        record, project_slug=fresh_slug, source_layer="canonical"
+    ).path
+    attach_labels(
+        project_slug=fresh_slug,
+        trace_id=TRACE_ID,
+        labels=rows,
+        store=store,
+    )
+    assert not trace_v1_json_path(fresh_slug, TRACE_ID).exists()
+    older, newer = 1_600_000_000, 1_700_000_000
+    os.utime(stale_object, (older, older))
+    os.utime(fresh_object, (newer, newer))
+
+    from opentraces.core.trace_corpus import resolve
+
+    assert resolve(TRACE_ID).project_slug == fresh_slug
+
+    summary = label_summary_for_trace(TRACE_ID)
+
+    # The summary must reflect the fresher canonical owner's current labels
+    # (both rows), not the stale trace.json owner's single row.
+    assert summary["count"] == 2
+    assert {item["label_id"] for item in summary["items"]} == {
+        row["label_id"] for row in rows
+    }
+
+
+def test_summary_fails_closed_when_no_canonical_owner_binds_the_companions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review-repair companion control for #323 (PR #352): multiple cross-project
+    # companions with NO canonical corpus resolution is genuine ambiguity — the
+    # summary must fail closed, never silently pick a project or union rows.
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    _write_subject_trace()
+    rows = mint_labels_for_run(
+        run_path,
+        subject={"kind": "trace", "address": TRACE_ID},
+        store=store,
+    )
+    canonical = attach_labels(
+        project_slug=PROJECT_SLUG,
+        trace_id=TRACE_ID,
+        labels=rows,
+        store=store,
+    )
+    other = trace_v1_labels_path("project-other", TRACE_ID)
+    other.parent.mkdir(parents=True)
+    other.write_bytes(canonical.read_bytes())
+
+    with pytest.raises(LabelIntegrityError, match="ambiguous"):
+        label_summary_for_trace(TRACE_ID)
+
+
 def test_limit_one_summary_reads_only_the_owning_companion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -488,6 +594,21 @@ def test_limit_one_summary_reads_only_the_owning_companion(
     _set_bucket(tmp_path, monkeypatch)
     store, run_path = _finalized_run(tmp_path, monkeypatch)
     _write_subject_trace()
+    # Bind the canonical corpus owner: ownership resolution routes through the
+    # same freshness resolver normal reads use, and only PROJECT_SLUG holds a
+    # canonical record — the 63 planted copies below are companion-only.
+    write_trace_record(
+        TraceRecord(
+            trace_id=TRACE_ID,
+            session_id=f"session-label-subject-{TRACE_ID}",
+            agent=Agent(name="test-agent"),
+            task={"description": "Publishing reaches the configured remote."},
+            steps=[],
+            outcome=Outcome(success=None),
+        ),
+        project_slug=PROJECT_SLUG,
+        source_layer="canonical",
+    )
     rows = mint_labels_for_run(
         run_path,
         subject={"kind": "trace", "address": TRACE_ID},

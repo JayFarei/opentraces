@@ -978,30 +978,28 @@ def _authoritative_label_companion(
     The address is a bare trace, and a trace is owned by exactly one project, so
     a bounded read decodes only that project's companion instead of every
     matching companion in the corpus (#323). Directory listing is cheap; the
-    per-companion gzip decode is the cost this avoids. A companion set that
-    cannot be bound to one canonical owning project fails closed rather than
-    silently unioning across projects.
+    per-companion gzip decode is the cost this avoids.
+
+    Ownership is bound through the same canonical corpus/freshness resolution
+    every normal trace read uses (``trace_corpus.resolve``), never inferred from
+    ``traces/v1`` ``trace.json`` presence: a ``trace_record_only`` ingest writes
+    the fresh canonical v2 record + labels companion but skips the ``trace.json``
+    projection, so an older project can legitimately be the only one holding a
+    ``trace.json`` while a fresher project holds the current labels. When the
+    corpus cannot bind exactly one owning companion the read fails closed rather
+    than silently picking a project or unioning rows across projects.
     """
 
     if len(companions) == 1:
         return companions[0]
-    root = traces_v1_root()
-    pattern = f"*/{_path_part(trace_id)}/trace.json"
-    owning_dirs: set[Path] = set()
-    for owner in sorted(root.glob(pattern)):
-        try:
-            record = TraceRecord.model_validate_json(owner.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, ValueError, ValidationError) as exc:
-            raise LabelIntegrityError("label subject trace is not a valid TraceRecord") from exc
-        if record.trace_id != trace_id:
-            raise LabelIntegrityError("label subject trace path contains a different trace")
-        owning_dirs.add(owner.parent)
-    if len(owning_dirs) != 1:
-        raise LabelIntegrityError("label companion owning project is ambiguous")
-    companion = next(iter(owning_dirs)) / "labels.jsonl.gz"
-    if companion not in set(companions):
-        raise LabelIntegrityError("owning project has no label companion for the trace")
-    return companion
+    from ..trace_corpus import resolve
+
+    source = resolve(trace_id)
+    if source is not None:
+        owner = trace_v1_labels_path(source.project_slug, trace_id)
+        if owner in set(companions):
+            return owner
+    raise LabelIntegrityError("label companion owning project is ambiguous")
 
 
 def label_summary_for_trace(trace_id: str, *, limit: int = 8) -> dict[str, Any]:
