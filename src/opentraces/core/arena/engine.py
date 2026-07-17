@@ -19,6 +19,7 @@ from typing import Any, Callable, Literal, Mapping
 from ... import __version__
 from .agent import CAPTURE_REQUIREMENT_SOURCES, AgentDrive, AgentPrerequisiteMissing
 from .box import Box, CrabboxRuntime
+from .capability_probe import evaluate_capabilities, parse_capabilities_probe
 from .contract import build_result, validate_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.actions import RunActionSequence
@@ -35,6 +36,7 @@ from .emulate.huggingface.runtime import (
     start_huggingface_emulator,
 )
 from .run_store import RunDraft, RunStore
+from .verifier_identity import resolve_verifier
 
 
 def _utc_now() -> str:
@@ -307,7 +309,9 @@ class BenchRun:
         self._started = 0.0
         self._app_state_pin: dict[str, Any] = {}
         self._emulators: dict[str, HuggingFaceEmulator | AnthropicReplayEmulator] = {}
+        self._capabilities_pin: dict[str, str] | None = None
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
+        self._lease_lifecycle: dict[str, Any] | None = None
         self._capture_result: dict[str, Any] | None = None
         self.origin_evidence_ref: str | None = None
 
@@ -343,6 +347,15 @@ class BenchRun:
             if callable(configure_evidence):
                 configure_evidence(self.draft.path)
             self.box = self.bench.box_runtime.lease()
+            self._lease_lifecycle = {
+                "schema_version": "opentraces.bench.lease-lifecycle.v0",
+                "id": self.box.id,
+                "provider": self.box.provider,
+                "acquired": _utc_now(),
+                "release_started": None,
+                "released": None,
+                "status": "acquired",
+            }
             self._app_state_pin = self.bench.box_runtime.materialize(
                 self.box, self.app_state, repository=self.bench.repository_path
             )
@@ -377,9 +390,8 @@ class BenchRun:
             )
         except Exception as exc:
             if self.box is not None:
-                try:
-                    self.bench.box_runtime.release(self.box)
-                except Exception as release_exc:
+                release_exc = self._release_box()
+                if release_exc is not None:
                     # The original setup failure remains primary; both the
                     # run result and Crabbox's failure bundle preserve it.
                     self._lifecycle_diagnostics.append(
@@ -395,6 +407,65 @@ class BenchRun:
 
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
+
+    def require_capabilities(self, *requirements: str) -> None:
+        """Probe the installed product and bind only runner-supported seams."""
+
+        if self.draft is None or self.box is None:
+            raise RuntimeError("BenchRun is not active")
+        if self.actions.has_actions:
+            raise RuntimeError("capabilities must be required before scenario actions")
+        if self._capabilities_pin is not None:
+            raise RuntimeError("capabilities are already bound for this run")
+
+        timing_path = self.draft.path / "artifacts" / "crabbox-timing" / "capabilities.json"
+        observed = self.bench.box_runtime.exec_product(
+            self.box,
+            ["opentraces", "capabilities", "--json"],
+            cwd=self.bench.repository_path,
+            env={},
+            timeout=30,
+            timing_path=timing_path,
+        )
+        self.draft.write_text("artifacts/capabilities.stdout", observed.stdout)
+        self.draft.write_text("artifacts/capabilities.stderr", observed.stderr)
+        manifest = parse_capabilities_probe(
+            returncode=observed.returncode,
+            stdout=observed.stdout,
+            stderr=observed.stderr,
+        )
+        manifest_payload = dict(manifest)
+        evidence_ref = "artifacts/capabilities.json"
+        self.draft.write_json(evidence_ref, manifest_payload)
+        canonical = json.dumps(
+            manifest_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self._capabilities_pin = {
+            "digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+            "evidence_ref": evidence_ref,
+        }
+
+        seam_values: dict[str, str] = {}
+        for emulator in self._emulators.values():
+            seam_values.update(emulator.env)
+        outcome = evaluate_capabilities(
+            manifest,
+            requirements=requirements,
+            runner_drives={"cli", "browser"},
+            runner_harnesses=set(),
+            runner_emulators=set(self._emulators),
+            seam_values=seam_values,
+        )
+        if outcome.status == "skip":
+            reason = outcome.reason or {
+                "code": "capability_unsatisfied",
+                "message": "required capability is unavailable",
+            }
+            raise BenchSkip(str(reason["code"]), str(reason["message"]))
+        self.terminal.set_base_environment(outcome.environment)
 
     def emulate(
         self,
@@ -522,13 +593,14 @@ class BenchRun:
     def verify(self, verifier: Callable[..., Any], /, **inputs: Any) -> dict[str, Any]:
         if self.draft is None:
             raise RuntimeError("BenchRun is not active")
+        resolved = resolve_verifier(verifier)
         started = time.monotonic()
-        source_refs = self._verifier_source_refs(verifier)
+        source_refs = self._verifier_source_refs(resolved.target)
         source_ref = source_refs[0]
         reason: dict[str, str] | None = None
         evidence_refs: list[str] = []
         try:
-            returned = verifier(self, **inputs)
+            returned = resolved.target(self, **inputs)
             if isinstance(returned, Mapping):
                 evidence_refs = [
                     self._persisted_evidence_ref(item) for item in returned.get("evidence_refs", [])
@@ -562,7 +634,7 @@ class BenchRun:
             status = "error"
             reason = sanitize_reason("verifier_error", f"{type(exc).__name__}: {exc}")
         record = {
-            "name": f"{verifier.__module__}.{verifier.__qualname__}",
+            "name": resolved.name,
             "source_ref": source_ref,
             "status": status,
             "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
@@ -675,6 +747,16 @@ class BenchRun:
                     "path": diagnostic_ref,
                     "media_type": "application/json",
                     "kind": "lifecycle_diagnostics",
+                }
+            )
+        if self._lease_lifecycle is not None:
+            lease_ref = "artifacts/lease-lifecycle.json"
+            self.draft.write_json(lease_ref, self._lease_lifecycle)
+            artifacts.append(
+                {
+                    "path": lease_ref,
+                    "media_type": "application/json",
+                    "kind": "lease_lifecycle",
                 }
             )
         if scenario_assertion_ref is not None:
@@ -898,6 +980,7 @@ class BenchRun:
                 "environment": box_pin,
                 "harness": self.agent.harness_pin if hasattr(self, "agent") else None,
                 "model_wire": (self.agent.inference_pin if hasattr(self, "agent") else None),
+                "capabilities": self._capabilities_pin,
                 "emulators": {name: emulator.pin for name, emulator in self._emulators.items()},
                 "app_state": self._app_state_pin,
             },
@@ -1075,6 +1158,22 @@ class BenchRun:
             "timeline": timeline,
         }
 
+    def _release_box(self) -> Exception | None:
+        if self.box is None:
+            return None
+        if self._lease_lifecycle is not None:
+            self._lease_lifecycle["release_started"] = _utc_now()
+        try:
+            self.bench.box_runtime.release(self.box)
+        except Exception as exc:
+            if self._lease_lifecycle is not None:
+                self._lease_lifecycle["status"] = "release_failed"
+            return exc
+        if self._lease_lifecycle is not None:
+            self._lease_lifecycle["released"] = _utc_now()
+            self._lease_lifecycle["status"] = "released"
+        return None
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -1127,12 +1226,7 @@ class BenchRun:
                     sanitize_reason("emulator_cleanup_failed", emulator_error)
                 )
 
-        release_error: Exception | None = None
-        if self.box is not None:
-            try:
-                self.bench.box_runtime.release(self.box)
-            except Exception as caught:
-                release_error = caught
+        release_error = self._release_box()
         if release_error is not None:
             self._lifecycle_diagnostics.append(
                 sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)

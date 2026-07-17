@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
 import os
 import signal
@@ -19,6 +21,11 @@ from opentraces.core.arena.labels import read_labels
 from opentraces.core.arena.origin import attach_explicit_bench_labels
 from opentraces.core.arena.page import render_evidence_page
 from opentraces.core.arena.run_store import RunStore
+from opentraces.core.arena.verifier_identity import (
+    VerifierIdentityError,
+    callable_identity,
+    resolve_verifier,
+)
 from tests.core.arena.fixtures.verifier_helper import assert_healthy_payload
 from tests.core.arena.test_origin_join import PROJECT_SLUG, _origin_record, _write_trace
 
@@ -237,6 +244,56 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
     )
 
 
+def verify_doctor_is_healthy(run) -> dict[str, list[str]]:
+    observed = run.terminal.exec("opentraces", "doctor", "--json")
+    assert observed.json["healthy"] is True
+    return {"evidence_refs": [observed.result_ref]}
+
+
+def verify_selected_origin_slice(run) -> dict[str, list[str]]:
+    assert run.origin_evidence_ref is not None
+    assert (run.draft.path / run.origin_evidence_ref).is_file()
+    return {"evidence_refs": [run.origin_evidence_ref]}
+
+
+def verify_command(
+    run,
+    *,
+    argv: tuple[str, ...],
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    expected_stdout: str | None = None,
+) -> dict[str, list[str]]:
+    observed = run.terminal.exec(*argv, cwd=cwd, env=env)
+    assert observed.returncode == 0
+    if expected_stdout is not None:
+        assert observed.stdout.strip() == expected_stdout
+    return {"evidence_refs": []}
+
+
+def verify_passes(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
+def verify_raises(_run, *, message: str) -> None:
+    raise RuntimeError(message)
+
+
+def verify_doctor_with_imported_helper(run) -> dict[str, list[str]]:
+    observed = run.terminal.exec("opentraces", "doctor", "--json")
+    assert_healthy_payload(observed.json)
+    return {"evidence_refs": [observed.result_ref]}
+
+
+def verify_writes_absolute_evidence(run) -> dict[str, list[str]]:
+    run.draft.write_text("artifacts/proof.txt", "persisted proof\n")
+    return {"evidence_refs": [str(run.draft.path / "artifacts/proof.txt")]}
+
+
+def verify_returns_evidence_ref(_run, *, evidence_ref: str) -> dict[str, list[str]]:
+    return {"evidence_refs": [evidence_ref]}
+
+
 def test_extract_claim_preserves_the_first_docstring_paragraph_byte_for_byte() -> None:
     def scenario():
         """A user's exact claim — punctuation included.
@@ -256,13 +313,8 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
         repository_path=tmp_path,
     )
 
-    def doctor_is_healthy(run):
-        observed = run.terminal.exec("opentraces", "doctor", "--json")
-        assert observed.json["healthy"] is True
-        return {"evidence_refs": [observed.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(doctor_is_healthy)
+        run.verify(verify_doctor_is_healthy)
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["scenario"]["claim"] == "Install is healthy on a fresh box."
@@ -279,6 +331,413 @@ def test_complete_attempt_drives_cli_verifies_and_finalizes(tmp_path: Path) -> N
     assert runtime.released is True
 
 
+def test_verifier_identity_prefers_the_full_package_over_a_nested_sys_path_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(repository / "tests"))
+
+    name, _digest = callable_identity(verify_doctor_is_healthy)
+
+    assert name == "tests.core.arena.test_engine.verify_doctor_is_healthy"
+
+
+def test_verifier_identity_rejects_a_cached_module_shadowed_by_a_distinct_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    for root, origin in ((root_a, "a"), (root_b, "b")):
+        package = root / "shadowpkg"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "checks.py").write_text(
+            f'def verify(_run):\n    return {{"origin": {origin!r}}}\n',
+            encoding="utf-8",
+        )
+
+    try:
+        monkeypatch.syspath_prepend(str(root_a))
+        importlib.invalidate_caches()
+        cached_checks = importlib.import_module("shadowpkg.checks")
+        assert cached_checks.verify(None) == {"origin": "a"}
+
+        monkeypatch.syspath_prepend(str(root_b))
+        importlib.invalidate_caches()
+
+        with pytest.raises(VerifierIdentityError):
+            resolve_verifier(cached_checks.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "shadowpkg" or module_name.startswith("shadowpkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_rejects_equally_specific_symlink_package_aliases_as_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    alpha = tmp_path / "alpha"
+    alpha.mkdir()
+    (alpha / "__init__.py").write_text("", encoding="utf-8")
+    (alpha / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    try:
+        os.symlink(alpha, tmp_path / "bravo", target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        alpha_checks = importlib.import_module("alpha.checks")
+        bravo_checks = importlib.import_module("bravo.checks")
+        assert Path(alpha_checks.__file__).resolve() == Path(bravo_checks.__file__).resolve()
+
+        with pytest.raises(
+            VerifierIdentityError,
+            match="multiple canonical import paths",
+        ):
+            resolve_verifier(alpha_checks.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"alpha", "bravo"} or module_name.startswith(
+                ("alpha.", "bravo.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_does_not_grant_a_namespace_package_coordinate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    namespace = tmp_path / "namespacepkg"
+    package = namespace / "realpkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        monkeypatch.syspath_prepend(str(namespace))
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        namespace_checks = importlib.import_module("namespacepkg.realpkg.checks")
+
+        resolved = resolve_verifier(namespace_checks.verify)
+
+        assert resolved.name == "realpkg.checks.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"namespacepkg", "realpkg"} or module_name.startswith(
+                ("namespacepkg.", "realpkg.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_precedence_prefers_deeper_real_package_ancestry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Precedence is (package_depth, len(parts)): real ancestry, then path specificity."""
+
+    repository = tmp_path / "repository"
+    outer = repository / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    (outer / "__init__.py").write_text("", encoding="utf-8")
+    (inner / "__init__.py").write_text("", encoding="utf-8")
+    (inner / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        monkeypatch.syspath_prepend(str(outer))
+        monkeypatch.syspath_prepend(str(repository))
+        importlib.invalidate_caches()
+        checks = importlib.import_module("outer.inner.checks")
+
+        name, _digest = callable_identity(checks.verify)
+
+        assert name == "outer.inner.checks.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"outer", "inner"} or module_name.startswith(
+                ("outer.", "inner.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_fails_closed_when_source_yields_no_canonical_name_but_coordinate_is_shadowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    for root, origin in ((root_a, "a"), (root_b, "b")):
+        package = root / "fallbackpkg"
+        package.mkdir(parents=True)
+        (package / "checks.py").write_text(
+            f'def verify(_run):\n    return {{"origin": {origin!r}}}\n',
+            encoding="utf-8",
+        )
+
+    try:
+        monkeypatch.syspath_prepend(str(root_a))
+        importlib.invalidate_caches()
+        cached = importlib.import_module("fallbackpkg.checks")
+        assert cached.verify(None) == {"origin": "a"}
+
+        monkeypatch.syspath_prepend(str(root_b))
+        importlib.invalidate_caches()
+
+        with pytest.raises(VerifierIdentityError):
+            resolve_verifier(cached.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "fallbackpkg" or module_name.startswith("fallbackpkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_rejects_a_nested_symlink_package_alias_as_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "pkg"
+    real_subpackage = package / "realsub"
+    real_subpackage.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (real_subpackage / "__init__.py").write_text("", encoding="utf-8")
+    (real_subpackage / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    try:
+        os.symlink(
+            real_subpackage,
+            package / "aliassub",
+            target_is_directory=True,
+        )
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        realsub_checks = importlib.import_module("pkg.realsub.checks")
+        aliassub_checks = importlib.import_module("pkg.aliassub.checks")
+        assert Path(realsub_checks.__file__).resolve() == Path(
+            aliassub_checks.__file__
+        ).resolve()
+
+        with pytest.raises(
+            VerifierIdentityError,
+            match="multiple canonical import paths",
+        ):
+            resolve_verifier(realsub_checks.verify)
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "pkg" or module_name.startswith("pkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_hardlink_second_name_is_a_known_v0_limitation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """KNOWN v0 LIMITATION (founder-accepted, reviewer case C9): a hardlink giving
+    one source inode two directory-entry names in different packages is not
+    enumerated, so the "multiple canonical import paths" refusal is skipped.  This
+    pins the accepted state: the resolver resolves to the CORRECT source inode
+    (same_inode True) and does NOT fail closed.  It cannot cause a wrong-source
+    verdict because the source is digest-pinned and re-verified at reverify.  See
+    the module docstring's Known limitations note; enumeration is tracked as a
+    nonblocking follow-up.
+    """
+
+    package_a = tmp_path / "pkga"
+    package_b = tmp_path / "pkgb"
+    package_a.mkdir()
+    package_b.mkdir()
+    (package_a / "__init__.py").write_text("", encoding="utf-8")
+    (package_b / "__init__.py").write_text("", encoding="utf-8")
+    source = package_a / "checks.py"
+    source.write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    alias = package_b / "checks.py"
+    try:
+        os.link(source, alias)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"hardlinks are unavailable: {exc}")
+
+    # The hardlink is a genuine same-inode alias: two import names reach it.
+    source_stat = source.stat()
+    alias_stat = alias.stat()
+    same_inode = (
+        (source_stat.st_dev, source_stat.st_ino)
+        == (alias_stat.st_dev, alias_stat.st_ino)
+    )
+    if not same_inode:
+        pytest.skip("filesystem did not share the inode across the hardlink")
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        pkga_checks = importlib.import_module("pkga.checks")
+
+        # Accepted behavior: resolves to the correct source rather than refusing.
+        resolved = resolve_verifier(pkga_checks.verify)
+
+        assert resolved.name == "pkga.checks.verify"
+        resolved_source = Path(inspect.getsourcefile(resolved.target)).resolve()
+        assert resolved_source.stat().st_ino == source_stat.st_ino
+    finally:
+        for module_name in list(sys.modules):
+            if module_name in {"pkga", "pkgb"} or module_name.startswith(
+                ("pkga.", "pkgb.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_accepts_a_case_variant_sys_path_spelling_of_one_real_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    package = root / "pkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "checks.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    variant = tmp_path / "ROOT"
+    if not (variant.exists() and os.path.samefile(root, variant)):
+        pytest.skip("filesystem is case-sensitive")
+
+    try:
+        monkeypatch.syspath_prepend(str(root))
+        monkeypatch.syspath_prepend(str(variant))
+        importlib.invalidate_caches()
+        mod = importlib.import_module("pkg.checks")
+
+        name, _digest = callable_identity(mod.verify)
+
+        assert name == "pkg.checks.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if module_name == "pkg" or module_name.startswith("pkg."):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_verifier_identity_accepts_a_package_that_shadows_a_same_named_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "parent"
+    package = parent / "dupe"
+    package.mkdir(parents=True)
+    (parent / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text(
+        'def verify(_run):\n    return {"healthy": True}\n',
+        encoding="utf-8",
+    )
+    (parent / "dupe.py").write_text(
+        'def verify(_run):\n    return {"healthy": False}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+        mod = importlib.import_module("parent.dupe")
+        assert mod.verify(None) == {"healthy": True}
+
+        name, _digest = callable_identity(mod.verify)
+
+        assert name == "parent.dupe.verify"
+    finally:
+        for module_name in list(sys.modules):
+            if (
+                module_name in {"parent", "dupe"}
+                or module_name.startswith("parent.")
+            ):
+                sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+def test_local_verifier_is_rejected_before_invocation_and_cannot_finalize_pass(
+    tmp_path: Path,
+) -> None:
+    invoked = False
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def local_verifier(_run):
+        nonlocal invoked
+        invoked = True
+        return {"evidence_refs": []}
+
+    with pytest.raises(ValueError, match="importable module-level callable"):
+        with bench.run(app_state="install-only") as run:
+            run.verify(local_verifier)
+
+    assert invoked is False
+    result = json.loads(next(bench.store.root.glob("run_*/result.json")).read_text())
+    assert result["execution_status"] == "error"
+    assert result["verdict"] is None
+    assert result["reason"]["code"] == "verifier_identity_invalid"
+
+
+def test_same_file_callable_cannot_borrow_a_canonical_identity_to_forge_pass(
+    tmp_path: Path,
+) -> None:
+    forged_invoked = False
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    def forged_verifier(_run, **_inputs):
+        nonlocal forged_invoked
+        forged_invoked = True
+        return {"evidence_refs": []}
+
+    assert forged_verifier.__code__.co_filename == verify_raises.__code__.co_filename
+    forged_verifier.__module__ = verify_raises.__module__
+    forged_verifier.__qualname__ = verify_raises.__qualname__
+
+    with bench.run(app_state="install-only") as run:
+        record = run.verify(forged_verifier, message="canonical verifier body ran")
+
+    assert forged_invoked is False
+    assert record["status"] == "error"
+    assert run.result["execution_status"] == "error"
+    assert run.result["verdict"] is None
+
+
 def test_required_capture_cannot_pass_when_no_capture_result_exists(tmp_path: Path) -> None:
     bench = Bench(
         source=_scenario(tmp_path),
@@ -288,7 +747,7 @@ def test_required_capture_cannot_pass_when_no_capture_result_exists(tmp_path: Pa
     )
 
     with bench.run(app_state="install-only", capture_required=["git"]) as run:
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     assert run.result["execution_status"] == "complete"
     assert run.result["verdict"] == "fail"
@@ -319,14 +778,9 @@ def test_slice_origin_is_staged_before_verification_and_only_the_verifier_can_na
         repository_path=tmp_path,
     )
 
-    def selected_slice_is_the_graded_evidence(run):
-        assert run.origin_evidence_ref is not None
-        assert (run.draft.path / run.origin_evidence_ref).is_file()
-        return {"evidence_refs": [run.origin_evidence_ref]}
-
     with bench.run(app_state="install-only") as run:
         assert run.origin_evidence_ref is not None
-        run.verify(selected_slice_is_the_graded_evidence)
+        run.verify(verify_selected_origin_slice)
 
     assert run.result["verifiers"][0]["evidence_refs"] == [run.origin_evidence_ref]
     integrity = json.loads((run.final_path / ".integrity.json").read_text(encoding="utf-8"))
@@ -352,12 +806,8 @@ def test_terminal_action_honors_the_remote_cwd_that_it_records(tmp_path: Path) -
         repository_path=tmp_path,
     )
 
-    def command_runs_in_requested_directory(run):
-        observed = run.terminal.exec("pwd", cwd="/tmp")
-        assert observed.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(command_runs_in_requested_directory)
+        run.verify(verify_command, argv=("pwd",), cwd="/tmp")
 
     invocation = json.loads((run.final_path / "actions/0001/invocation.json").read_text())
     assert invocation["cwd"] == "/tmp"
@@ -469,16 +919,14 @@ cat "$typescript"
         repository_path=tmp_path,
     )
 
-    def command_runs_in_requested_directory(run):
-        observed = run.terminal.exec(
-            "pwd",
+    with bench.run(app_state="install-only") as run:
+        run.verify(
+            verify_command,
+            argv=("pwd",),
             cwd=str(remote_cwd),
             env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+            expected_stdout=str(remote_cwd),
         )
-        assert observed.stdout.strip() == str(remote_cwd)
-
-    with bench.run(app_state="install-only") as run:
-        run.verify(command_runs_in_requested_directory)
 
     assert run.result["recordings"]["rewatchable"] is True
     assert (run.final_path / "recordings/terminal-0001.cast").is_file()
@@ -495,11 +943,8 @@ def test_release_failure_is_diagnostic_and_does_not_hide_a_passing_verdict(
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_passes)
 
     assert run.result["execution_status"] == "complete"
     assert run.result["verdict"] == "pass"
@@ -509,6 +954,43 @@ def test_release_failure_is_diagnostic_and_does_not_hide_a_passing_verdict(
     payload = json.loads((run.final_path / diagnostic["path"]).read_text())
     assert payload["events"][-1]["code"] == "release_failed"
     assert "release boom" in payload["events"][-1]["message"]
+    lease = json.loads((run.final_path / "artifacts/lease-lifecycle.json").read_text())
+    assert lease["id"] == "fake-1"
+    assert lease["provider"] == "local-container"
+    assert lease["acquired"]
+    assert lease["release_started"]
+    assert lease["released"] is None
+    assert lease["status"] == "release_failed"
+
+
+def test_successful_run_freezes_lease_lifecycle_before_finalization(tmp_path: Path) -> None:
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=tmp_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verify_passes)
+
+    artifact = next(item for item in run.result["artifacts"] if item["kind"] == "lease_lifecycle")
+    assert artifact["path"] == "artifacts/lease-lifecycle.json"
+    lease = json.loads((run.final_path / artifact["path"]).read_text())
+    assert set(lease) == {
+        "schema_version",
+        "id",
+        "provider",
+        "acquired",
+        "release_started",
+        "released",
+        "status",
+    }
+    assert lease["schema_version"] == "opentraces.bench.lease-lifecycle.v0"
+    assert lease["id"] == "fake-1"
+    assert lease["provider"] == "local-container"
+    assert lease["acquired"] <= lease["release_started"] <= lease["released"]
+    assert lease["status"] == "released"
 
 
 @pytest.mark.parametrize(
@@ -569,11 +1051,8 @@ def test_result_pins_observer_crabbox_image_and_product_state(tmp_path: Path) ->
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_passes)
 
     assert run.result["pins"]["observer"] == {
         "package": "opentraces",
@@ -597,11 +1076,8 @@ def test_box_lifecycle_diagnostics_are_part_of_the_finalized_exhaust(tmp_path: P
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_passes)
 
     artifact = next(
         item for item in run.result["artifacts"] if item["kind"] == "lifecycle_diagnostics"
@@ -649,11 +1125,11 @@ def test_verifier_and_release_diagnostics_share_secret_and_path_sanitization(
         repository_path=tmp_path,
     )
 
-    def verifier_crashes(run):
-        raise RuntimeError("verifier secret=verifier-secret at /tmp/private/verifier.json")
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier_crashes)
+        run.verify(
+            verify_raises,
+            message="verifier secret=verifier-secret at /tmp/private/verifier.json",
+        )
 
     result_text = (run.final_path / "result.json").read_text(encoding="utf-8")
     artifact_text = "\n".join(
@@ -682,11 +1158,8 @@ def test_sensitive_assignment_shapes_are_redacted_without_erasing_ordinary_words
         repository_path=tmp_path,
     )
 
-    def verifier_crashes(run):
-        raise RuntimeError(_CREDENTIAL_SHAPES)
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier_crashes)
+        run.verify(verify_raises, message=_CREDENTIAL_SHAPES)
 
     result_text = (run.final_path / "result.json").read_text(encoding="utf-8")
     diagnostic = next(
@@ -724,13 +1197,8 @@ def test_verifier_source_manifest_records_a_direct_imported_helper(tmp_path: Pat
         repository_path=repository,
     )
 
-    def doctor_is_healthy(run):
-        observed = run.terminal.exec("opentraces", "doctor", "--json")
-        assert_healthy_payload(observed.json)
-        return {"evidence_refs": [observed.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(doctor_is_healthy)
+        run.verify(verify_doctor_with_imported_helper)
 
     manifest = json.loads((run.final_path / "source" / "verifiers.json").read_text())
     sources = {item["path"]: item["digest"] for item in manifest["sources"]}
@@ -753,12 +1221,8 @@ def test_absolute_evidence_ref_inside_run_is_stored_as_a_persisted_relative_ref(
         repository_path=tmp_path,
     )
 
-    def verifier(run):
-        run.draft.write_text("artifacts/proof.txt", "persisted proof\n")
-        return {"evidence_refs": [str(run.draft.path / "artifacts/proof.txt")]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier)
+        run.verify(verify_writes_absolute_evidence)
 
     assert run.result["verdict"] == "pass"
     assert run.result["verifiers"][0]["evidence_refs"] == ["artifacts/proof.txt"]
@@ -776,11 +1240,8 @@ def test_evidence_ref_outside_run_is_rejected_without_leaking_host_path(tmp_path
         repository_path=tmp_path,
     )
 
-    def verifier(run):
-        return {"evidence_refs": [str(host_file)]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(verifier)
+        run.verify(verify_returns_evidence_ref, evidence_ref=str(host_file))
 
     serialized = json.dumps(run.result)
     assert run.result["execution_status"] == "error"
@@ -893,12 +1354,8 @@ def test_missing_cast_is_not_rewatchable_and_does_not_rewrite_pass(tmp_path: Pat
         repository_path=tmp_path,
     )
 
-    def command_succeeds(run):
-        observed = run.terminal.exec("true")
-        assert observed.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(command_succeeds)
+        run.verify(verify_command, argv=("true",))
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["verdict"] == "pass"
@@ -915,12 +1372,8 @@ def test_each_terminal_action_produces_an_asciicast_playlist_marker(tmp_path: Pa
         repository_path=tmp_path,
     )
 
-    def command_succeeds(run):
-        observed = run.terminal.exec("printf", "ok")
-        assert observed.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(command_succeeds)
+        run.verify(verify_command, argv=("printf", "ok"))
 
     result = json.loads((run.final_path / "result.json").read_text())
     assert result["verdict"] == "pass"
@@ -950,7 +1403,7 @@ def test_context_exit_harvests_a_completed_terminal_action_that_was_not_waited(
         while action.running and time.monotonic() < deadline:
             time.sleep(0.001)
         assert action.running is False
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     action_result = json.loads(
         (run.final_path / "actions/0001/result.json").read_text(encoding="utf-8")
@@ -977,7 +1430,7 @@ def test_context_exit_stops_and_harvests_an_unwaited_terminal_process_tree(
         deadline = time.monotonic() + 2
         while not (tmp_path / "child.pid").is_file() and time.monotonic() < deadline:
             time.sleep(0.001)
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     action_result = json.loads(
         (run.final_path / "actions/0001/result.json").read_text(encoding="utf-8")

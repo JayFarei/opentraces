@@ -85,6 +85,17 @@ def test_external_post_finalize_mutation_is_detected(tmp_path: Path) -> None:
         store.verify(finalized)
 
 
+def test_finalization_rejects_a_symlink_to_evidence_outside_the_run(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    draft = store.begin()
+    external = tmp_path / "external-lease.json"
+    external.write_text('{"id":"outside"}\n', encoding="utf-8")
+    (draft.path / "artifacts" / "lease-lifecycle.json").symlink_to(external)
+
+    with pytest.raises(RunIntegrityError, match="symlink"):
+        draft.finalize(_result(draft.run_id))
+
+
 def test_only_root_final_markers_are_excluded_from_integrity(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "runs" / "v1")
     draft = store.begin()

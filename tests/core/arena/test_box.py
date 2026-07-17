@@ -57,13 +57,19 @@ EXPECTED_INSTALL_LOCK = {
 
 
 class ScriptedRunner:
-    def __init__(self, responses: list[subprocess.CompletedProcess[str]]) -> None:
+    def __init__(
+        self,
+        responses: list[subprocess.CompletedProcess[str] | subprocess.TimeoutExpired],
+    ) -> None:
         self.responses = responses
         self.calls: list[tuple[list[str], Path | None, dict[str, str], float]] = []
 
     def __call__(self, argv, *, cwd=None, env, timeout):
         self.calls.append((list(argv), cwd, env, timeout))
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, subprocess.TimeoutExpired):
+            raise response
+        return response
 
 
 def _completed(argv: list[str], rc: int = 0, stdout: str = "", stderr: str = ""):
@@ -89,6 +95,10 @@ def _inspect() -> str:
             },
         }
     )
+
+
+def verify_condition_holds(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
 
 
 def test_lease_pins_version_image_tmpdir_and_runs_both_preflights(tmp_path: Path) -> None:
@@ -166,6 +176,94 @@ def test_failed_warmup_with_reported_lease_is_stopped_once_without_hiding_primar
         "code": "release_failed",
         "message": "release_failed: cleanup also failed",
     }
+
+
+@pytest.mark.parametrize(
+    ("partial_stdout", "partial_stderr", "expected_stop_ids"),
+    [
+        (
+            b"allocated lease cbx_abc123\npassword=do-not-retain\n",
+            b"still waiting for readiness\n",
+            ["cbx_abc123"],
+        ),
+        (
+            b"warmup did not report an identity\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"untrusted label cbx_good123-extra\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"allocated lease cbx_first123\n",
+            b"also reported cbx_second456\n",
+            [],
+        ),
+        (
+            b"allocated lease cbx_repeat123\n",
+            b"still waiting for cbx_repeat123\n",
+            ["cbx_repeat123"],
+        ),
+        (
+            "unicode-left écbx_good123\n",
+            "still waiting for readiness\n",
+            [],
+        ),
+        (
+            "unicode-right cbx_good123é\n",
+            "still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"invalid-left \xffcbx_good123\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"invalid-right cbx_good123\xff\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+        (
+            b"allocated cbx_first123 password=cbx_second456\n",
+            b"still waiting for readiness\n",
+            [],
+        ),
+    ],
+)
+def test_timed_out_warmup_releases_only_one_unique_boundary_safe_identity(
+    tmp_path: Path,
+    partial_stdout: str | bytes,
+    partial_stderr: str | bytes,
+    expected_stop_ids: list[str],
+) -> None:
+    timeout = subprocess.TimeoutExpired(
+        ["crabbox", "warmup"],
+        600,
+        output=partial_stdout,
+        stderr=partial_stderr,
+    )
+    responses: list[subprocess.CompletedProcess[str] | subprocess.TimeoutExpired] = [
+        _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+        timeout,
+    ]
+    if expected_stop_ids:
+        responses.append(_completed(["crabbox", "stop"]))
+    runner = ScriptedRunner(responses)
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="crabbox_timeout") as caught:
+        runtime.lease()
+
+    assert caught.value.code == "crabbox_timeout"
+    assert [
+        call[0][call[0].index("--id") + 1] for call in runner.calls if call[0][1:2] == ["stop"]
+    ] == expected_stop_ids
+    timeout_diagnostic = runtime.diagnostic_records()[1]
+    assert timeout_diagnostic["timed_out"] is True
+    assert "do-not-retain" not in timeout_diagnostic["stdout"]
 
 
 @pytest.mark.parametrize(
@@ -467,11 +565,8 @@ def test_materialize_timing_is_sanitized_linked_and_kept_inside_run(tmp_path: Pa
         repository_path=tmp_path,
     )
 
-    def condition_holds(run):
-        return {"evidence_refs": []}
-
     with bench.run(app_state="base-only") as run:
-        run.verify(condition_holds)
+        run.verify(verify_condition_holds)
 
     timing_artifacts = [
         item for item in run.result["artifacts"] if item["kind"] == "crabbox_timing"

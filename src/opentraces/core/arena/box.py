@@ -72,10 +72,17 @@ SSH_REMEDY = (
 class CrabboxRefusal(RuntimeError):
     """A named precondition refusal, never an unbounded Crabbox hang."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        cleanup_lease_id: str | None = None,
+    ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.cleanup_lease_id = cleanup_lease_id
 
 
 @dataclass(frozen=True)
@@ -209,6 +216,43 @@ def _operation_name(argv: Sequence[str]) -> str:
     return Path(str(argv[0])).name
 
 
+def _partial_output_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
+
+
+def _unsafe_lease_id_adjacency(value: str | int) -> bool:
+    if isinstance(value, int):
+        return value >= 128 or chr(value) in "_-" or chr(value).isalnum()
+    return not value.isascii() or value in "_-" or value.isalnum()
+
+
+def _lease_id_candidates(value: str | bytes | None) -> set[str]:
+    if isinstance(value, bytes):
+        pattern: re.Pattern[str] | re.Pattern[bytes] = re.compile(rb"cbx_[A-Za-z0-9]+")
+    elif isinstance(value, str):
+        pattern = re.compile(r"cbx_[A-Za-z0-9]+", flags=re.ASCII)
+    else:
+        return set()
+    candidates: set[str] = set()
+    for match in pattern.finditer(value):
+        if match.start() and _unsafe_lease_id_adjacency(value[match.start() - 1]):
+            continue
+        if match.end() < len(value) and _unsafe_lease_id_adjacency(value[match.end()]):
+            continue
+        candidate = match.group(0)
+        candidates.add(candidate.decode("ascii") if isinstance(candidate, bytes) else candidate)
+    return candidates
+
+
+def _unique_lease_identity(stdout: str | bytes | None, stderr: str | bytes | None) -> str | None:
+    candidates = _lease_id_candidates(stdout) | _lease_id_candidates(stderr)
+    if len(candidates) != 1:
+        return None
+    return candidates.pop()
+
+
 def _hf_client_lock() -> tuple[dict[str, str], str]:
     try:
         encoded = HF_CLIENT_LOCK_PATH.read_bytes()
@@ -340,18 +384,23 @@ class CrabboxRuntime:
         try:
             completed = self.runner(list(argv), cwd=cwd, env=child_env, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            cleanup_lease_id = _unique_lease_identity(exc.stdout, exc.stderr)
+            partial_stdout = sanitize_diagnostic_text(_partial_output_text(exc.stdout))
+            partial_stderr = sanitize_diagnostic_text(_partial_output_text(exc.stderr))
             self._diagnostics.append(
                 {
                     "operation": _operation_name(argv),
                     "returncode": None,
-                    "stdout": sanitize_diagnostic_text(str(exc.stdout or "")),
-                    "stderr": sanitize_diagnostic_text(str(exc.stderr or "")),
+                    "stdout": partial_stdout,
+                    "stderr": partial_stderr,
                     "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                     "timed_out": True,
                 }
             )
             raise CrabboxRefusal(
-                "crabbox_timeout", f"bounded command timed out: {argv[1]}"
+                "crabbox_timeout",
+                f"bounded command timed out: {argv[1]}",
+                cleanup_lease_id=cleanup_lease_id,
             ) from exc
         self._diagnostics.append(
             {
@@ -425,7 +474,14 @@ class CrabboxRuntime:
             "--local-container-image",
             self.image,
         ]
-        warmup = self._call(warmup_argv, timeout=600)
+        try:
+            warmup = self._call(warmup_argv, timeout=600)
+        except CrabboxRefusal as primary:
+            if primary.code == "crabbox_timeout" and primary.cleanup_lease_id:
+                self._best_effort_release_after_refusal(
+                    primary.cleanup_lease_id, provider=self.provider
+                )
+            raise
         match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
         if warmup.returncode != 0:
             primary = CrabboxRefusal(
@@ -851,7 +907,9 @@ class CrabboxRuntime:
             return pin
         if app_state not in {"install-only", "agent-ready"}:
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
-        wheels = sorted((repository / "dist").glob("*.whl"))
+        recipe_root = os.environ.get("OT_BENCH_RECIPE_ROOT")
+        wheel_root = Path(recipe_root) if recipe_root else repository / "dist"
+        wheels = sorted(wheel_root.glob("*.whl"))
         if not wheels:
             raise CrabboxRefusal(
                 "app_state_wheel_missing",

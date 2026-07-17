@@ -4084,45 +4084,41 @@ def _migrate_trace_ids_cmd(dry_run: bool) -> None:
 @main.command(hidden=True)
 @click.option("--json", "as_json", is_flag=True, default=True)
 def capabilities(as_json: bool) -> None:
-    """Show machine-discoverable feature list."""
+    """Show the deterministic installed-product capability contract."""
     from opentraces_schema import SCHEMA_VERSION
 
-    from ..capture import get_parsers
+    from ..core.capabilities import build_capabilities_manifest
+    from ..security import SECURITY_VERSION
 
-    caps = {
-        "name": "opentraces",
-        "version": __version__,
-        "schema_version": SCHEMA_VERSION,
-        "agents": sorted(get_parsers()),
-        "modes": ["auto", "review"],
-        "features": [
-            "passive_capture",
-            "claude_code_capture",
-            "codex_cli_capture",
-            "pi_capture",
-            "git_post_commit_correlation",
-            "private_bucket",
-            "bucket_remote_sync",
-            "trace_index",
-            "trace_query",
-            "trace_map",
-            "trace_slice",
-            "trace_teleport",
-            "trace_trails",
-            "context_tree",
-            "otlp_receiver",
-            "workflow_templates",
-            "dataset_workflows",
-            "dataset_review_cli",
-            "dataset_sharded_publish",
-            "security_tool_registry",
-            "post_processors",
-        ],
-        "env_vars": {
-            "HF_TOKEN": "HuggingFace access token (highest priority over saved credentials)",
-        },
-    }
-    click.echo(json.dumps(caps, indent=2))
+    def leaf_verbs(
+        group: click.Group,
+        *,
+        prefix: str = "",
+        inherited_hidden: bool = False,
+    ) -> list[dict[str, object]]:
+        ctx = click.Context(group, info_name=prefix or "opentraces")
+        rows: list[dict[str, object]] = []
+        for name in group.list_commands(ctx):
+            command = group.get_command(ctx, name)
+            if command is None:
+                continue
+            path = f"{prefix}.{name}" if prefix else name
+            hidden = inherited_hidden or bool(command.hidden)
+            if isinstance(command, click.Group):
+                rows.extend(
+                    leaf_verbs(command, prefix=path, inherited_hidden=hidden)
+                )
+            else:
+                rows.append({"path": path, "hidden": hidden})
+        return rows
+
+    manifest = build_capabilities_manifest(
+        verbs=leaf_verbs(main),
+        app_version=__version__,
+        trace_schema_version=SCHEMA_VERSION,
+        security_version=SECURITY_VERSION,
+    )
+    click.echo(json.dumps(manifest, indent=2, sort_keys=True))
 
 
 def _drop_command(name: str) -> None:

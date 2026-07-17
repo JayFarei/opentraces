@@ -577,11 +577,25 @@ class HuggingFaceEmulator:
 
     @property
     def pin(self) -> dict[str, Any]:
-        return {
+        pin = {
             **self.binary_pin.to_dict(),
             "setup": self.world_setup,
             "evidence_ref": WORLD_EVIDENCE_REF,
         }
+        if self._ledger_finalized:
+            ledger_path = self.run_path / LEDGER_EVIDENCE_REF
+            if self._ledger_path != ledger_path or not ledger_path.is_file():
+                raise RuntimeError("final Hugging Face ledger path is not canonical")
+            launch = self.world_setup.get("readiness", {}).get("launch", {})
+            launch_nonce = launch.get("nonce") if isinstance(launch, Mapping) else None
+            if not isinstance(launch_nonce, str) or not launch_nonce:
+                raise RuntimeError("Hugging Face world has no launch nonce")
+            pin["ledger_binding"] = {
+                "launch_nonce": launch_nonce,
+                "ledger_sha256": f"sha256:{hashlib.sha256(ledger_path.read_bytes()).hexdigest()}",
+                "evidence_ref": LEDGER_EVIDENCE_REF,
+            }
+        return pin
 
     @property
     def browser_endpoint(self) -> str:

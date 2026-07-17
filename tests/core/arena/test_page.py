@@ -61,6 +61,19 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
     )
 
 
+def verify_health(run) -> dict[str, list[str]]:
+    observation = run.terminal.exec("opentraces", "doctor", "--json")
+    assert observation.returncode == 0
+    return {"evidence_refs": [observation.result_ref]}
+
+
+def verify_cross_surface(run) -> dict[str, list[str]]:
+    before = run.terminal.exec("printf", "before")
+    browser = run.browser.inspect("main")
+    after = run.terminal.exec("printf", "after")
+    return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
+
+
 def _git(repository: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -190,13 +203,8 @@ def test_page_is_a_read_only_projection_with_claim_verifier_and_raw_links(tmp_pa
         repository_path=repository_path,
     )
 
-    def health(run):
-        observation = run.terminal.exec("opentraces", "doctor", "--json")
-        assert observation.returncode == 0
-        return {"evidence_refs": [observation.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(health)
+        run.verify(verify_health)
 
     result_before = (run.final_path / "result.json").read_bytes()
     page = render_evidence_page(run.final_path)
@@ -236,12 +244,8 @@ def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> No
         repository_path=tmp_path,
     )
 
-    def health(run):
-        observation = run.terminal.exec("opentraces", "doctor", "--json")
-        assert observation.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(health)
+        run.verify(verify_health)
 
     stdout = run.final_path / "actions" / "0001" / "stdout"
     stdout.chmod(0o600)
@@ -381,21 +385,15 @@ def test_page_names_and_omits_every_cross_surface_ref_that_escapes_the_run(
         assert reference in rendered
 
 
-def test_page_names_and_omits_an_exhaust_symlink_that_escapes_the_run(tmp_path: Path) -> None:
+def test_store_rejects_an_exhaust_symlink_before_page_render(tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("outside the run\n", encoding="utf-8")
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
     (draft.path / "artifacts" / "outside.txt").symlink_to(outside)
     recordings = {"rewatchable": False, "channels": []}
-    finalized = draft.finalize(_result(draft.run_id, recordings=recordings))
-
-    assert store.verify(finalized) is True
-    html = render_evidence_page(finalized).read_text(encoding="utf-8")
-
-    assert "MISSING EXHAUST" in html
-    assert "artifacts/outside.txt" in html
-    assert ">artifacts/outside.txt</a>" not in html
+    with pytest.raises(RunIntegrityError, match="symlink"):
+        draft.finalize(_result(draft.run_id, recordings=recordings))
 
 
 def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
@@ -529,14 +527,8 @@ def test_page_renders_each_recording_kind_against_the_stored_focus_timeline(
         browser_factory=PublicBrowserSession,
     )
 
-    def cross_surface(run):
-        before = run.terminal.exec("printf", "before")
-        browser = run.browser.inspect("main")
-        after = run.terminal.exec("printf", "after")
-        return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(cross_surface)
+        run.verify(verify_cross_surface)
 
     result_before = (run.final_path / "result.json").read_bytes()
     timeline_before = (run.final_path / "recordings/timeline.jsonl").read_bytes()

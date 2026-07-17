@@ -14,7 +14,97 @@ type = "cli"
 id = "bench-run-help"
 argv = ["bench", "run", "--help"]
 
+[[steps]]
+type = "cli"
+id = "bench-fleet-help"
+argv = ["bench", "fleet", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-list-help"
+argv = ["bench", "list", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-render-help"
+argv = ["bench", "render", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-reverify-help"
+argv = ["bench", "reverify", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-atlas-build-help"
+argv = ["bench", "atlas", "build", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-atlas-render-help"
+argv = ["bench", "atlas", "render", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-atlas-summary-help"
+argv = ["bench", "atlas", "summary", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-atlas-query-help"
+argv = ["bench", "atlas", "query", "--help"]
+
+[[steps]]
+type = "cli"
+id = "bench-atlas-pr-link-help"
+argv = ["bench", "atlas", "pr-link", "--help"]
+
 [[assertions]]
 kind = "returncode"
 step = "bench-run-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-fleet-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-list-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-render-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-reverify-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-atlas-build-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-atlas-render-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-atlas-summary-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-atlas-query-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bench-atlas-pr-link-help"
 equals = 0

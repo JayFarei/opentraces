@@ -25,6 +25,14 @@ from tests.core.arena.test_engine import FakeBoxRuntime, _scenario
 from tests.core.arena.test_browser_drive import PublicBrowserSession
 
 
+def verify_passes(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
+def verify_returns_evidence_ref(_run, *, evidence_ref: str) -> dict[str, list[str]]:
+    return {"evidence_refs": [evidence_ref]}
+
+
 class CompletingHarnessSession:
     """One real-session boundary double with a retained recording."""
 
@@ -453,7 +461,7 @@ def test_agent_access_refuses_non_capabilities_before_harness_spawn(
                 inference="live",
             )
         assert not (run.draft.path / "actions").exists()
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     assert session.start_count == 0
 
@@ -478,8 +486,8 @@ def test_agent_access_rejects_foreign_and_duplicate_drive_objects_before_spawn(
                         access=access,
                         inference="live",
                     )
-            first_run.verify(lambda _run: {"evidence_refs": []})
-            second_run.verify(lambda _run: {"evidence_refs": []})
+            first_run.verify(verify_passes)
+            second_run.verify(verify_passes)
 
     assert session.start_count == 0
 
@@ -508,7 +516,7 @@ def test_agent_refuses_mode_inference_mismatch_before_spawn(
                 access=[run.terminal],
                 inference=inference,
             )
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     assert session.start_count == 0
 
@@ -535,7 +543,7 @@ def test_terminal_only_agent_attempt_is_one_product_user_action_with_stored_gran
                 access=[run.terminal],
                 inference="live",
             )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert session.start_count == 1
     assert session.started_argv is not None
@@ -607,7 +615,7 @@ def test_terminal_only_agent_browser_attempt_is_refused_by_closed_mcp_config(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert attempt.completed is True
     assert session.browser_refused is True
@@ -640,7 +648,7 @@ def test_browser_grant_routes_mcp_call_into_exact_run_drive_and_shared_timeline(
             access=[run.terminal, run.browser],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert attempt.completed is True
     assert session.started_argv is not None
@@ -677,7 +685,7 @@ def test_unfinalized_agent_recording_is_not_reported_rewatchable(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert attempt.completed is False
     agent_channel = next(
@@ -709,7 +717,7 @@ def test_failed_agent_attempt_overrides_passing_verifier_and_incompletes_evidenc
             inference="live",
         )
         assert attempt.completed is False
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert run.result["execution_status"] == "complete"
     assert run.result["verdict"] == "fail"
@@ -761,7 +769,7 @@ def test_stale_completion_marker_cannot_green_failed_agent_run(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert attempt.completed is False
     assert attempt.failure == {"code": reason_code, "message": reason_message}
@@ -803,7 +811,7 @@ def test_interrupted_required_capture_fails_even_when_agent_attempt_completes(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert attempt.completed is True
     assert run.result["execution_status"] == "complete"
@@ -847,7 +855,7 @@ def test_live_key_reaches_agent_process_but_no_finalized_run_bytes(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert session.started_env == {"ANTHROPIC_API_KEY": sentinel}
     assert session.started_argv is not None
@@ -897,7 +905,7 @@ def test_oauth_only_live_agent_reaches_harness_process(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert session.started_env == {"CLAUDE_CODE_OAUTH_TOKEN": sentinel}
     assert run.result["verdict"] == "pass"
@@ -920,7 +928,7 @@ def test_oauth_leak_fails_without_persisting_secret_bytes_or_symlink_targets(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert run.result["verdict"] == "fail"
     assert run.result["reason"] == {
@@ -979,7 +987,7 @@ def test_oauth_leak_in_filename_is_quarantined_without_repeating_the_name(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert run.result["verdict"] == "fail"
     custody_path = run.final_path / "artifacts/live-key-absence.json"
@@ -1011,7 +1019,7 @@ def test_live_agent_special_evidence_node_is_classified_and_quarantined(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
     assert session.bound_socket is not None
     session.bound_socket.close()
 
@@ -1043,7 +1051,7 @@ def test_oauth_precedes_api_key_without_freezing_either_live_credential(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert session.started_env == {"CLAUDE_CODE_OAUTH_TOKEN": oauth}
     assert session.started_argv is not None
@@ -1121,7 +1129,7 @@ def test_dangling_symlink_cannot_escape_live_key_absence_scan(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
         assert run.draft is not None
         (run.draft.path / "artifacts/leak-link").symlink_to(sentinel)
 
@@ -1154,7 +1162,7 @@ def test_required_capture_wraps_the_real_claude_child_with_exact_session_id(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert session.started_argv is not None
     remote = _harness_argv(session.started_argv)
@@ -1213,7 +1221,7 @@ def test_semantic_capture_requirements_grade_each_source_independently(
             access=[run.terminal],
             inference="live",
         )
-        run.verify(lambda _run: {"evidence_refs": [attempt.artifact_ref]})
+        run.verify(verify_returns_evidence_ref, evidence_ref=attempt.artifact_ref)
 
     assert run.result["verdict"] == "pass"
     requirements = {
@@ -1433,6 +1441,6 @@ def test_unknown_harness_is_refused_by_the_closed_registry_before_spawn(
                 access=[run.terminal],
                 inference="live",
             )
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_passes)
 
     assert session.start_count == 0
