@@ -489,17 +489,29 @@ def _append_event_batch(
             # chokepoint — O(K) in the K just-appended events, best-effort, and
             # never able to fail the append. The new commit's own tree carries
             # exactly the K new event blobs, so the index needs no whole-log walk.
+            #
+            # #326: run this maintenance on the deadline-bearing path too, so a
+            # bounded (deadline-bearing) maturation append cannot advance the
+            # canonical ref while leaving the accelerator apparently fresh for
+            # the OLD head. The one Git read it needs (``_event_blob_entries`` on
+            # the new commit's own tree) is passed the SAME absolute deadline, so
+            # it stays bounded and cannot let post-deadline work survive; if the
+            # deadline is already blown the read aborts and the whole block bails
+            # via the except, leaving the index for the next read to rebuild.
+            # Index maintenance stays strictly best-effort: it may never fail,
+            # relabel, or roll back the canonical append that already committed.
             try:
                 from . import event_index
 
-                if deadline is None:
-                    event_index.extend_after_append(
-                        cwd,
-                        previous_head=head,
-                        new_head=commit_sha,
-                        new_entries=_event_blob_entries(cwd, [commit_sha]),
-                        events=events,
-                    )
+                event_index.extend_after_append(
+                    cwd,
+                    previous_head=head,
+                    new_head=commit_sha,
+                    new_entries=_event_blob_entries(
+                        cwd, [commit_sha], deadline=deadline
+                    ),
+                    events=events,
+                )
             except Exception:  # noqa: BLE001 — index is an accelerator, not a gate
                 pass
             return events
