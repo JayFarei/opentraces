@@ -38,7 +38,12 @@ def _fsync_directory(directory: Path) -> None:
     except OSError:
         pass
     finally:
-        os.close(dir_fd)
+        try:
+            os.close(dir_fd)
+        except OSError:
+            # The rename already committed; a failing close on the directory
+            # fd must never surface as a write failure (#302 review B).
+            pass
 
 
 def _atomic_write_text(path: Path, text: str) -> None:

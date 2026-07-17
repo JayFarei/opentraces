@@ -73,6 +73,84 @@ def test_atomic_writes_fsync_the_temp_file_and_the_directory(
     assert len(fsynced) >= 2
 
 
+# --- #302 review repair B: pin the atomic-write failure semantics ---
+
+
+def test_atomic_write_fsyncs_the_temp_content_before_the_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ordering is the durability property: content fsync must land BEFORE the
+    # rename commits the new directory entry.
+    import pathlib
+
+    import opentraces.core._bucket_io as bucket_io
+
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = pathlib.Path.replace
+
+    def spy_fsync(fd: int) -> None:
+        events.append("fsync")
+        real_fsync(fd)
+
+    def spy_replace(self: pathlib.Path, target):
+        events.append("replace")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(bucket_io.os, "fsync", spy_fsync)
+    monkeypatch.setattr(pathlib.Path, "replace", spy_replace)
+
+    target = tmp_path / "payload.bin"
+    bucket_io._atomic_write_bytes(target, b"payload")
+
+    assert "replace" in events
+    assert "fsync" in events
+    assert events.index("fsync") < events.index("replace")
+
+
+def test_file_fsync_failure_propagates_and_preserves_the_old_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A durability primitive must not pretend a failed fsync succeeded: the
+    # error propagates, the previous target bytes survive, and no temp file
+    # is left behind.
+    import opentraces.core._bucket_io as bucket_io
+
+    target = tmp_path / "payload.bin"
+    target.write_bytes(b"old")
+
+    def failing_fsync(fd: int) -> None:
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(bucket_io.os, "fsync", failing_fsync)
+
+    with pytest.raises(OSError):
+        bucket_io._atomic_write_bytes(target, b"new")
+
+    assert target.read_bytes() == b"old"
+    assert [p.name for p in tmp_path.iterdir() if p.name != "payload.bin"] == []
+
+
+def test_directory_close_failure_after_the_rename_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Once the rename committed, a failing os.close on the directory fd must
+    # not escape to the caller — the write already succeeded.
+    import opentraces.core._bucket_io as bucket_io
+
+    def failing_close(fd: int) -> None:
+        raise OSError("simulated close failure")
+
+    # The only os.close reached through the module namespace is the directory
+    # fd in _fsync_directory (file handles close through os.fdopen objects).
+    monkeypatch.setattr(bucket_io.os, "close", failing_close)
+
+    target = tmp_path / "payload.bin"
+    bucket_io._atomic_write_bytes(target, b"payload")
+
+    assert target.read_bytes() == b"payload"
+
+
 def test_begin_creates_the_canonical_complete_exhaust_layout(tmp_path: Path) -> None:
     draft = RunStore(tmp_path / "runs" / "v1").begin()
 
