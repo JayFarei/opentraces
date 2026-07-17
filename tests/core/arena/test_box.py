@@ -302,6 +302,44 @@ def test_completed_warmup_refuses_ambiguous_or_lookalike_identity_without_guessi
     assert not any(call[0][1:2] == ["stop"] for call in runner.calls)
 
 
+@pytest.mark.parametrize(
+    ("warmup_stdout",),
+    [
+        # Em dash fused to a clean id.
+        ("ready lease=cbx_good123—note\n",),
+        # No-break space fused to a clean id.
+        ("ready lease=cbx_good123 note\n",),
+    ],
+)
+def test_completed_warmup_refuses_non_ascii_fused_separator_by_design(
+    tmp_path: Path,
+    warmup_stdout: str,
+) -> None:
+    """Pin the deliberate ASCII-only narrowing of the shared identity parser.
+
+    The old permissive first-match regex accepted a single clean id fused to a
+    non-ASCII separator (em dash, NBSP); the shared boundary-safe selector
+    refuses it by design — fail closed, never guess an inspect/stop identity.
+    This is INTENDED behavior, not a regression (see #337 review repair).
+    """
+
+    runner = ScriptedRunner(
+        [
+            _completed(["crabbox", "--version"], stdout=f"crabbox {PINNED_CRABBOX_VERSION}\n"),
+            _completed(["crabbox", "warmup"], stdout=warmup_stdout),
+            _completed(["crabbox", "inspect"], stdout=_inspect()),
+            _completed(["crabbox", "stop"]),
+        ]
+    )
+    runtime = CrabboxRuntime(runner=runner, home=tmp_path, ssh_config=tmp_path / "missing")
+
+    with pytest.raises(CrabboxRefusal, match="lease_identity_missing"):
+        runtime.lease()
+
+    assert not any(call[0][1:2] == ["inspect"] for call in runner.calls)
+    assert not any(call[0][1:2] == ["stop"] for call in runner.calls)
+
+
 def test_completed_warmup_accepts_exact_repeated_identity(tmp_path: Path) -> None:
     runner = ScriptedRunner(
         [

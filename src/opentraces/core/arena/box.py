@@ -223,6 +223,20 @@ def _partial_output_text(value: str | bytes | None) -> str:
 
 
 def _unsafe_lease_id_adjacency(value: str | int) -> bool:
+    r"""True when the rune adjacent to a candidate lease id is untrustworthy.
+
+    Deliberately fail-closed and ASCII-only: real Crabbox output delimits the
+    lease id with ASCII whitespace/punctuation, so ANY non-ASCII rune fused
+    directly to a candidate (em dash, NBSP, emoji, replacement bytes) marks it
+    a lookalike and the candidate is discarded rather than guessed. This is a
+    known, intended narrowing versus the older permissive ``\b``-boundary
+    regex, which would accept a clean id fused to a non-ASCII separator; the
+    timed-out warmup path has pinned this refusal since A7, and issue #337
+    extended the same rule to completed warmups. Refusing costs one clean
+    lease at worst; guessing an identity risks inspecting or stopping the
+    wrong box.
+    """
+
     if isinstance(value, int):
         return value >= 128 or chr(value) in "_-" or chr(value).isalnum()
     return not value.isascii() or value in "_-" or value.isalnum()
