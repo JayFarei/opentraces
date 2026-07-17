@@ -743,12 +743,18 @@ def bench_atlas_pr_link(
 @click.option(
     "--store-root",
     type=click.Path(path_type=Path),
-    help="Override bucket/runs/v1 (primarily for isolated execution).",
+    help=(
+        "Override bucket/runs/v1 (primarily for isolated execution). "
+        "May diverge from the canonical store only when --origin is omitted."
+    ),
 )
 @click.option(
     "--origin",
     "origin_address",
-    help="Attach verified labels to an existing trace, point, or span address.",
+    help=(
+        "Attach verified labels to an existing trace, point, or span address. "
+        "Requires the default/canonical run store (do not pass a divergent --store-root)."
+    ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit only a machine-readable summary.")
 def bench_run(
@@ -757,7 +763,18 @@ def bench_run(
     origin_address: str | None,
     as_json: bool,
 ) -> None:
-    """Run one pytest scenario target (PATH::TEST) on a disposable box."""
+    """Run one pytest scenario target (PATH::TEST) on a disposable box.
+
+    Store constraint (honesty contract, PR #331 / #332): ``--origin`` attaches
+    durable verified labels to a trace address, so it requires the
+    default/canonical run store (``bucket/runs/v1``). ``--store-root`` may
+    diverge from that canonical store only when ``--origin`` is omitted;
+    combining ``--origin`` with a genuinely divergent ``--store-root`` is
+    rejected fail-closed (Click exit 2, before any side effect). Rationale: a
+    raw machine-local store path is not a portable durable label address, so
+    labels minted into a divergent store could not round-trip through ordinary
+    trace reads.
+    """
 
     canonical_store_root = paths.bucket_dir() / "runs" / "v1"
     if (

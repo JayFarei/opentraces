@@ -10,6 +10,7 @@ This module collapses the former top-level `agents/`, `parsers/`, and `installer
 - `tool_boundary.py` — adapter-facing Trace Trails worktree observation at tool lifecycle boundaries. Agent hooks call this interface; `fs_watcher/` owns only path/blob observation.
 - `portable.py` — the placement-neutral `Capture.open(plan)` lifecycle used by persistent installations and leased workspaces. It owns bounded source finalization and emits a frozen, source-honest `CaptureResult`.
 - `parity.py` — verification-only raw-material comparison across persistent and leased placement; its normalization is deliberately outside the capture path.
+  - Parity proof split (A3, #310): real-fixture compatibility is proven in two separate halves — `tests/capture/test_portable_capture.py::test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fixture` proves literal legacy bytes and honestly exercises the unreachable-tree / `unproven` Trail branch, while `tests/capture/test_portable_capture.py::test_placement_acceptance_exercises_every_capture_view_and_preserves_asymmetry` proves substantive `write_worktree_tree`-backed Trail parity.
 - `claude_code/` — Claude Code adapter.
   - `parse.py` — `ClaudeCodeParser` (live session parser).
   - `hooks/` — `on_stop`, `on_compact`, `on_tool_use`. Copied to `~/.claude/hooks/` by `opentraces setup claude-code`.
