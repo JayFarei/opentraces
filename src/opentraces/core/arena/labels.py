@@ -1002,23 +1002,54 @@ def attach_labels(
     return path
 
 
+def _authoritative_label_companion(
+    trace_id: str,
+    companions: list[Path],
+) -> Path:
+    """Resolve the single owning companion without decoding the rest.
+
+    The address is a bare trace, and a trace is owned by exactly one project, so
+    a bounded read decodes only that project's companion instead of every
+    matching companion in the corpus (#323). Directory listing is cheap; the
+    per-companion gzip decode is the cost this avoids. A companion set that
+    cannot be bound to one canonical owning project fails closed rather than
+    silently unioning across projects.
+    """
+
+    if len(companions) == 1:
+        return companions[0]
+    root = traces_v1_root()
+    pattern = f"*/{_path_part(trace_id)}/trace.json"
+    owning_dirs: set[Path] = set()
+    for owner in sorted(root.glob(pattern)):
+        try:
+            record = TraceRecord.model_validate_json(owner.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError, ValidationError) as exc:
+            raise LabelIntegrityError("label subject trace is not a valid TraceRecord") from exc
+        if record.trace_id != trace_id:
+            raise LabelIntegrityError("label subject trace path contains a different trace")
+        owning_dirs.add(owner.parent)
+    if len(owning_dirs) != 1:
+        raise LabelIntegrityError("label companion owning project is ambiguous")
+    companion = next(iter(owning_dirs)) / "labels.jsonl.gz"
+    if companion not in set(companions):
+        raise LabelIntegrityError("owning project has no label companion for the trace")
+    return companion
+
+
 def label_summary_for_trace(trace_id: str, *, limit: int = 8) -> dict[str, Any]:
-    """Return a bounded summary from sibling companions for a normal read."""
+    """Return a bounded summary from the owning companion for a normal read."""
 
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ValueError("label summary limit must be a non-negative integer")
     _validate_subject({"kind": "trace", "address": trace_id})
     root = traces_v1_root()
-    rows_by_id: dict[str, dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
     if root.is_dir():
-        pattern = f"*/{_path_part(trace_id)}/labels.jsonl.gz"
-        for path in sorted(root.glob(pattern)):
-            for row in _decode_rows(path, expected_trace_id=trace_id):
-                existing = rows_by_id.get(row["label_id"])
-                if existing is not None and _canonical_json(existing) != _canonical_json(row):
-                    raise LabelIntegrityError("cross-project label_id collision")
-                rows_by_id[row["label_id"]] = row
-    rows = [rows_by_id[label_id] for label_id in sorted(rows_by_id)]
+        companions = sorted(root.glob(f"*/{_path_part(trace_id)}/labels.jsonl.gz"))
+        if companions:
+            companion = _authoritative_label_companion(trace_id, companions)
+            rows = _decode_rows(companion, expected_trace_id=trace_id)
     verify_labels(rows, store=RunStore())
     return {
         "count": len(rows),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import opentraces.core.arena.labels as labels_module
 import opentraces.core.arena.run_store as run_store_module
 import pytest
 from opentraces.cli.trace import _trace_overview
@@ -474,6 +475,54 @@ def test_normal_trace_summary_is_bounded_and_reads_the_companion(
     assert _trace_overview(record, include_labels=True)["labels"] == (
         label_summary_for_trace(TRACE_ID)
     )
+
+
+def test_limit_one_summary_reads_only_the_owning_companion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # RED control for #323: a bounded (limit=1) summary must not decode every
+    # matching label companion across the corpus. Plant identical companions in
+    # many unrelated projects and prove only the trace's owning companion is
+    # decoded, while the bounded envelope and fail-closed reproduction hold.
+    _set_bucket(tmp_path, monkeypatch)
+    store, run_path = _finalized_run(tmp_path, monkeypatch)
+    _write_subject_trace()
+    rows = mint_labels_for_run(
+        run_path,
+        subject={"kind": "trace", "address": TRACE_ID},
+        store=store,
+    )
+    canonical = attach_labels(
+        project_slug=PROJECT_SLUG,
+        trace_id=TRACE_ID,
+        labels=rows,
+        store=store,
+    )
+    companion_bytes = canonical.read_bytes()
+    for index in range(63):
+        planted = trace_v1_labels_path(f"planted-{index:02d}", TRACE_ID)
+        planted.parent.mkdir(parents=True)
+        planted.write_bytes(companion_bytes)
+
+    decode_calls: list[Path] = []
+    original_decode = labels_module._decode_rows
+
+    def _counting_decode(path: Path, **kwargs: object) -> list[dict]:
+        decode_calls.append(path)
+        return original_decode(path, **kwargs)
+
+    monkeypatch.setattr(labels_module, "_decode_rows", _counting_decode)
+
+    summary = label_summary_for_trace(TRACE_ID, limit=1)
+
+    assert summary["count"] == 2
+    assert summary["truncated"] is True
+    assert len(summary["items"]) == 1
+    # Today's code globs and decodes all 64 planted companions; the bounded read
+    # must decode only the trace's owning companion.
+    assert len(decode_calls) == 1
+    assert decode_calls[0].parent.parent.name == PROJECT_SLUG
 
 
 def test_normal_trace_read_refuses_a_self_consistent_forged_verdict(
