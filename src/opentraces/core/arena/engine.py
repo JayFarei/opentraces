@@ -245,21 +245,49 @@ def _repair_tree_permissions_no_follow(root: Path) -> None:
         grant = 0o700 if is_dir else 0o600
         try:
             os.chmod(current, info.st_mode | grant, follow_symlinks=False)
-        except (NotImplementedError, OSError):
-            # follow_symlinks=False is unsupported for non-symlinks on some
-            # platforms; `current` was confirmed a non-symlink by the lstat
-            # above, so a plain chmod targets it directly (never a link target).
+        except NotImplementedError:
+            # ONLY a genuinely-unsupported no-follow chmod (no lchmod on this
+            # platform) may fall back to a plain chmod, and only after
+            # re-verifying at use time that the node is still not a symlink —
+            # a generic OSError (denied, swapped, gone) never routes here, so
+            # the no-follow property holds unconditionally.
             try:
-                os.chmod(current, info.st_mode | grant)
+                if not stat.S_ISLNK(os.lstat(current).st_mode):
+                    os.chmod(current, info.st_mode | grant)
             except OSError:
                 pass
+        except OSError:
+            pass
         if is_dir:
             try:
                 with os.scandir(current) as iterator:
                     for entry in iterator:
+                        if seen + len(stack) >= _MAX_PURGE_REPAIR_ENTRIES:
+                            # Enforce the budget INSIDE the enumeration so one
+                            # wide directory cannot enqueue past it; an
+                            # under-repaired tree simply routes to the
+                            # unrecoverable marker path on the retry.
+                            break
                         stack.append(Path(entry.path))
             except OSError:
                 continue
+
+
+def _credential_free_marker_value(
+    value: str, sensitive_values: tuple[bytes, ...]
+) -> str:
+    """Hash-replace a marker field that carries live credential bytes.
+
+    Same posture as ``_safe_sensitive_path_finding``: the marker names things
+    for an operator but must be unconditionally credential-free, even when a
+    configurable component (for example the RunStore root) contains the value.
+    """
+
+    encoded = os.fsencode(value)
+    if any(secret in encoded for secret in sensitive_values):
+        digest = hashlib.sha256(encoded).hexdigest()
+        return f"sha256:{digest} [value contains live credential]"
+    return value
 
 
 def _redact_sensitive_value(value: Any, sensitive_values: tuple[str, ...]) -> Any:
@@ -798,13 +826,18 @@ class BenchRun:
         return artifact_ref
 
     def _write_cleanup_required_marker(
-        self, draft_path: Path, primary: BaseException
+        self,
+        draft_path: Path,
+        primary: BaseException,
+        sensitive_values: tuple[bytes, ...] = (),
     ) -> Path:
         """Name an unpurgeable contaminated tree for an operator, without secrets.
 
         The marker lands OUTSIDE the contaminated tree and carries only the
-        operator path (a generated run id, never a credential) and a reason
-        code — never a credential byte and never a copy or index of the draft.
+        operator path and a reason code. Every field is passed through the
+        sensitive-byte check and hash-replaced on a match, so the marker is
+        unconditionally credential-free even when a configurable path component
+        (for example the store root) contains the credential bytes.
         """
 
         store = self.draft.store
@@ -823,37 +856,59 @@ class BenchRun:
                 "indexed, or finalized"
             ),
         }
+        payload = {
+            key: _credential_free_marker_value(value, sensitive_values)
+            for key, value in payload.items()
+        }
         marker_path.write_text(
             json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
         return marker_path
 
-    def _purge_contaminated_draft(self, primary: BaseException | None = None) -> None:
+    def _purge_contaminated_draft(
+        self,
+        primary: BaseException | None = None,
+        *,
+        sensitive_values: tuple[bytes, ...] = (),
+    ) -> None:
         """Discard the contaminated draft, repairing permissions and retrying.
 
         Recoverable deletion failures (for example a denied directory) are
         repaired without ever following symlinks and retried a bounded number of
         times. If the tree still cannot be purged, a sanitized cleanup-required
-        marker is written outside it and the original error is preserved as the
-        primary failure — the contaminated draft is never finalized or indexed.
-        When ``primary`` is set, it is re-raised after a successful purge so the
-        caller's fail-closed contract is unchanged.
+        marker is written outside it and the ORIGINAL deletion exception (the
+        first, never a later retry's) is preserved as the primary failure — a
+        failure to write the marker itself is recorded but never masks it. The
+        contaminated draft is never finalized or indexed. When ``primary`` is
+        set, it is re-raised after a successful purge so the caller's
+        fail-closed contract is unchanged.
         """
 
         draft_path = self.draft.path
-        purge_error: OSError | None = None
+        original_error: OSError | None = None
+        purged = False
         for attempt in range(_MAX_PURGE_ATTEMPTS):
             try:
                 self.draft.rebuild_empty()
-                purge_error = None
+                purged = True
                 break
             except OSError as error:
-                purge_error = error
+                if original_error is None:
+                    original_error = error
                 if attempt + 1 < _MAX_PURGE_ATTEMPTS:
                     _repair_tree_permissions_no_follow(draft_path)
-        if purge_error is not None:
-            self._write_cleanup_required_marker(draft_path, primary or purge_error)
-            raise primary if primary is not None else purge_error
+        if not purged and original_error is not None:
+            try:
+                self._write_cleanup_required_marker(
+                    draft_path, primary or original_error, sensitive_values
+                )
+            except Exception as marker_error:
+                # Best-effort only: the marker names the tree for an operator,
+                # but its own IO failure must never replace the primary error.
+                self._lifecycle_diagnostics.append(
+                    sanitize_reason("cleanup_marker_write_failed", marker_error)
+                )
+            raise primary if primary is not None else original_error
         if primary is not None:
             raise primary
 
@@ -1149,7 +1204,7 @@ class BenchRun:
             if custody_report["matches"]:
                 safe_scenario = _redact_sensitive_value(result["scenario"], sensitive_text)
                 safe_pins = _redact_sensitive_value(result["pins"], sensitive_text)
-                self._purge_contaminated_draft()
+                self._purge_contaminated_draft(sensitive_values=sensitive_values)
                 self.draft.write_text(
                     "source/scenario.py",
                     "# Original scenario source discarded after live credential contamination.\n",
@@ -1204,7 +1259,8 @@ class BenchRun:
                     self._purge_contaminated_draft(
                         RuntimeError(
                             "sanitized live-key failure result retained sensitive bytes"
-                        )
+                        ),
+                        sensitive_values=sensitive_values,
                     )
                 self.draft.write_json("artifacts/live-key-absence.json", custody_report)
                 rebuilt_matches, _, _, _ = _scan_sensitive_tree(self.draft.path, sensitive_values)
@@ -1212,7 +1268,8 @@ class BenchRun:
                     self._purge_contaminated_draft(
                         RuntimeError(
                             "sanitized live-key failure draft retained sensitive evidence"
-                        )
+                        ),
+                        sensitive_values=sensitive_values,
                     )
             else:
                 self.draft.write_json("artifacts/live-key-absence.json", custody_report)
