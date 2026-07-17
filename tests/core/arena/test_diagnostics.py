@@ -58,6 +58,56 @@ def test_short_and_low_entropy_tokens_are_not_over_redacted() -> None:
     assert "successfully" in sanitized
 
 
+# --- #302 review repair A1: operator evidence must survive the entropy catch ---
+
+
+def test_base64_sha256_digest_value_survives_as_operator_evidence() -> None:
+    # Codex probe: a base64 sha256 value was redacted to "sha256:[redacted]".
+    text = "artifact digest sha256:Zx9QpLm4Vt7Kd2Rf8Yw1Hn5Jc3Bg6Xs0Aq9Ee2Uu4="
+    assert sanitize_diagnostic_text(text) == text
+
+
+def test_long_hex_digest_survives_as_operator_evidence() -> None:
+    text = "pin sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    assert sanitize_diagnostic_text(text) == text
+
+
+def test_nix_store_path_component_survives_as_operator_evidence() -> None:
+    # Codex probe: a Nix-store path became "installed from [redacted].4.10".
+    text = "installed from /nix/store/8xq3zmVbK9pLwR2tYc4dNf7gJh5sAe6u-opentraces-0.4.10"
+    assert sanitize_diagnostic_text(text) == text
+
+
+def test_high_entropy_generic_path_component_survives_as_operator_evidence() -> None:
+    text = "wheel cached at /opt/cache/Zx9QpLm4Vt7Kd2Rf8Yw1Hn5Jc3Bg6Xs0/pkg.whl"
+    assert sanitize_diagnostic_text(text) == text
+
+
+def test_high_entropy_token_with_credential_context_is_still_redacted() -> None:
+    # The bounded heuristic keeps its teeth: a bare high-entropy token in a
+    # credential-like context (no known prefix, no assignment) is redacted.
+    secret = "Zx9QpLm4Vt7Kd2Rf8Yw1Hn5Jc3Bg6Xs0Aq9"
+    text = f"the auth token {secret} was rejected upstream"
+    sanitized = sanitize_diagnostic_text(text)
+    assert secret not in sanitized
+    assert "[redacted]" in sanitized
+    assert "was rejected upstream" in sanitized
+
+
+# --- #302 review repair A2: a leading decorator must not mask a credential ---
+
+
+def test_decorator_prefixed_reason_does_not_mask_a_bare_credential() -> None:
+    # Codex probe: text beginning with a recognized decorator passed a bare
+    # sk-live token through unchanged (shared scanner's decorator early-return).
+    secret = "sk-live-" + "abcdefghij0123456789ABCD"
+    text = f"@pytest.mark.parametrize failed with {secret} leaking"
+    sanitized = sanitize_diagnostic_text(text)
+    assert secret not in sanitized
+    assert "[redacted]" in sanitized
+    assert "@pytest.mark.parametrize" in sanitized
+
+
 def test_bare_secret_inside_structured_json_reason_is_redacted() -> None:
     secret = "sk-live-" + "abcdefghij0123456789ABCD"
     payload = f'{{"detail":"observed {secret} in response"}}'
