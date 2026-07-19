@@ -46,6 +46,10 @@ def _bench(tmp_path: Path) -> Bench:
     )
 
 
+def verify_succeeds(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
 @pytest.mark.parametrize(
     ("outcome", "execution_status", "verdict", "reason_code", "page_word"),
     [
@@ -65,13 +69,10 @@ def test_four_honesty_outcomes_are_distinguishable_on_disk_and_page(
 ) -> None:
     bench = _bench(tmp_path)
 
-    def verifier_succeeds(run):
-        return {"evidence_refs": []}
-
     def execute():
         with bench.run(app_state="base-only") as run:
             if outcome == "pass":
-                run.verify(verifier_succeeds)
+                run.verify(verify_succeeds)
             if outcome == "fail":
                 assert False, "forced functional red"
             if outcome == "skip":

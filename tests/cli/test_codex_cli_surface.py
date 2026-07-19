@@ -7,30 +7,14 @@ from click.testing import CliRunner
 from opentraces.cli import main
 
 
-def test_capabilities_json_reports_agents_from_registry():
+def test_capabilities_json_reports_agent_interface_from_registry():
     result = CliRunner().invoke(main, ["capabilities", "--json"])
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert "claude-code" in payload["agents"]
-    assert "codex-cli" in payload["agents"]
-    assert "pi" in payload["agents"]
-    assert set(payload["features"]) >= {
-        "private_bucket",
-        "bucket_remote_sync",
-        "trace_index",
-        "trace_query",
-        "trace_map",
-        "trace_slice",
-        "trace_teleport",
-        "trace_trails",
-        "context_tree",
-        "otlp_receiver",
-        "codex_cli_capture",
-        "pi_capture",
-        "workflow_templates",
-        "security_tool_registry",
-    }
+    assert payload["schema_version"] == "opentraces.capabilities.v0"
+    agent = next(row for row in payload["interfaces"] if row["id"] == "agent")
+    assert agent["harnesses"] == ["claude-code", "codex-cli", "pi"]
 
 
 def test_introspect_commands_follow_click_tree():

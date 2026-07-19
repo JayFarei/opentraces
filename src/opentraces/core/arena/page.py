@@ -63,10 +63,13 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         observed = json.loads(action_result_path.read_text(encoding="utf-8"))
         links = []
         for name in ("invocation.json", "result.json", "stdout", "stderr", "timing.json"):
-            target = action / name
-            if target.is_file():
-                relative_label = target.relative_to(run_path).as_posix()
-                links.append(f'<a href="{_h(_href(page_dir, target))}">{_h(relative_label)}</a>')
+            entry = action / name
+            reference = entry.relative_to(run_path).as_posix()
+            if _resolve_run_ref(run_path, reference) is not None:
+                links.append(f'<a href="{_h(_href(page_dir, entry))}">{_h(reference)}</a>')
+            elif entry.is_symlink():
+                # Present but escapes the run root (or dangles); name it, never link it.
+                links.append(f"<span><strong>MISSING</strong> · {_h(reference)}</span>")
         action_cards.append(
             f'<article class="card action" id="action-{_h(action.name)}" '
             f'data-action-ref="actions/{_h(action.name)}">'
@@ -80,12 +83,20 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     verifier_cards = []
     for verifier in result.get("verifiers", []):
         source = verifier.get("source_ref") or {}
+        # F6 (#302): make a zero-evidence pass visible on the page rather than
+        # indistinguishable from an evidence-backed one.
+        observed_badge = (
+            '<div class="observed">OBSERVED · ASSERTION-ONLY</div>'
+            if verifier.get("observed") == "assertion-only"
+            else ""
+        )
         verifier_cards.append(
             '<article class="card verifier">'
             f'<div class="eyebrow">VERIFIER · {_h(verifier.get("status", "unknown").upper())}</div>'
             f"<strong>{_h(verifier.get('name'))}</strong>"
             f'<div class="source">{_h(source.get("path"))}</div>'
             f"<code>{_h(source.get('digest'))}</code>"
+            f"{observed_badge}"
             f"<p>{_h((verifier.get('reason') or {}).get('message', 'Observed condition held.'))}</p>"
             "</article>"
         )
@@ -285,6 +296,31 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
     product_pin = result.get("pins", {}).get("product") or {}
     product_commit = product_pin.get("commit") or "unavailable"
     product_worktree = product_pin.get("worktree") or "unavailable"
+    harness_pin = result.get("pins", {}).get("harness") or {}
+    inference_pin = result.get("pins", {}).get("model_wire") or {}
+    agent_attempt_ref = "artifacts/agent-attempt.json"
+    agent_attempt_path = _resolve_run_ref(run_path, agent_attempt_ref)
+    agent_facts_html = ""
+    if agent_attempt_path is not None:
+        try:
+            agent_attempt = json.loads(agent_attempt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            agent_attempt = {}
+        task = agent_attempt.get("task") or "unavailable"
+        harness_name = harness_pin.get("name") or "unavailable"
+        harness_version = harness_pin.get("version") or "unavailable"
+        inference_mode = inference_pin.get("mode") or "unavailable"
+        agent_facts_html = (
+            '<h2>Agent attempt</h2><section class="facts agent-facts">'
+            '<div class="fact"><div class="eyebrow">TASK</div>'
+            f'<strong>{_h(task)}</strong><nav><a href="{_h(_href(page_dir, agent_attempt_path))}">'
+            f'{_h(agent_attempt_ref)}</a></nav></div>'
+            '<div class="fact"><div class="eyebrow">HARNESS PIN</div>'
+            f'<strong>{_h(harness_name)} · {_h(harness_version)}</strong></div>'
+            '<div class="fact"><div class="eyebrow">INFERENCE PIN</div>'
+            f'<strong>{_h(inference_mode)}</strong></div>'
+            "</section>"
+        )
     reason = result.get("reason") or {}
     reason_html = (
         '<section class="card outcome">'
@@ -294,6 +330,58 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
         if reason
         else ""
     )
+    capture = result.get("capture")
+    capture_facts_html = ""
+    if isinstance(capture, dict):
+        sources = capture.get("sources") or []
+        source_by_name = {
+            str(source.get("name")): source
+            for source in sources
+            if isinstance(source, dict) and source.get("name")
+        }
+        capture_cards: list[str] = []
+        for label, source_name in (
+            ("TRACE", "session_jsonl"),
+            ("CONTEXT", "telemetry"),
+            ("TRAIL", "git"),
+            ("STORAGE", "bucket"),
+        ):
+            source = source_by_name.get(source_name) or {}
+            completeness = str(source.get("completeness") or "missing")
+            status = str(source.get("status") or "unavailable")
+            limitations = [
+                str(limitation) for limitation in source.get("limitations") or []
+            ]
+            links: list[str] = []
+            for reference in source.get("evidence_refs") or []:
+                stored_reference = f"capture/{reference}"
+                target = _resolve_run_ref(run_path, stored_reference)
+                if target is not None:
+                    links.append(
+                        f'<a href="{_h(_href(page_dir, target))}">{_h(stored_reference)}</a>'
+                    )
+            capture_cards.append(
+                '<div class="fact capture-fact">'
+                f'<div class="eyebrow">{label}</div><strong>{_h(completeness)}</strong>'
+                f'<div>{_h(status)}</div>'
+                f'<div>{_h("; ".join(limitations) or "no named limitations")}</div>'
+                f'<nav>{"".join(links)}</nav>'
+                "</div>"
+            )
+        lifecycle_limitations = [
+            str(limitation) for limitation in capture.get("limitations") or []
+        ]
+        capture_cards.append(
+            '<div class="fact capture-fact">'
+            '<div class="eyebrow">LIFECYCLE</div>'
+            f'<strong>{_h(capture.get("completeness") or "partial")}</strong>'
+            f'<div>{_h("; ".join(lifecycle_limitations) or "no named limitations")}</div>'
+            "</div>"
+        )
+        capture_facts_html = (
+            '<h2>Capture</h2><section class="facts capture-facts">'
+            f'{"".join(capture_cards)}</section>'
+        )
     world_cards: list[str] = []
     for name, pin in sorted((result.get("pins", {}).get("emulators") or {}).items()):
         ledger_ref = f"ledgers/{name}.jsonl"
@@ -343,7 +431,8 @@ def render_evidence_page(run_path: Path, output_path: Path | None = None) -> Pat
 :root{{--ink:#11100e;--paper:#f3efe6;--line:#c9c0ad;--green:#17643d;--red:#9b2c2c;--muted:#6f685c}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}}
 main{{width:min(960px,calc(100% - 32px));margin:48px auto 96px}} h1{{font:700 clamp(30px,6vw,64px)/1.04 system-ui,sans-serif;letter-spacing:-.04em;max-width:16ch}}
-.facts{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));border:1px solid var(--line);margin:32px 0}} .fact{{padding:16px;border-right:1px solid var(--line)}}
+.facts{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));border:1px solid var(--line);margin:32px 0}} .fact{{padding:16px;border-right:1px solid var(--line);min-width:0;overflow-wrap:anywhere;word-break:break-word}}
+.fact code{{display:block;overflow-wrap:anywhere;word-break:break-all}} .fact strong{{overflow-wrap:anywhere;word-break:break-word}}
 .eyebrow{{font-size:12px;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}} .verdict{{color:{"var(--green)" if verdict == "pass" else "var(--red)"};font-weight:800;font-size:24px}}
 h2{{font:700 22px system-ui,sans-serif;margin-top:48px}} .stack{{display:grid;gap:12px}} .card{{min-width:0;border:1px solid var(--line);background:#fffaf0;padding:16px;overflow-wrap:anywhere}}
 .action code{{display:block;margin-bottom:10px}} .rc{{display:inline-block;border:1px solid var(--line);padding:2px 7px}} nav{{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}} a{{color:#254d80}}
@@ -359,8 +448,10 @@ button{{font:inherit;background:var(--ink);color:white;border:0;padding:10px 14p
 <div class="fact"><div class="eyebrow">EXECUTION</div>{_h(result["execution_status"])}</div>
 <div class="fact"><div class="eyebrow">EVIDENCE</div>{"complete" if result["evidence"]["complete"] else "incomplete"}</div>
 <div class="fact"><div class="eyebrow">REWATCHABLE</div>{str(result["recordings"]["rewatchable"]).lower()}</div></section>
+{agent_facts_html}
 {reason_html}
 {world_html}
+{capture_facts_html}
 {timeline_html}
 <h2>Recording</h2><section class="stack">{"".join(players)}</section>
 <h2>Actions and raw output</h2><section class="stack">{"".join(action_cards)}</section>

@@ -43,7 +43,7 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 | **onboard-integrations** | 1 → N | 1 (Setup) | The bare `setup` wizard walks every integration step |
 | **offboard-repo** | 1/1 | 1 | A developer unenrolls + wipes local state |
 | **verify-install** | 1/1 | 1 | `doctor` reports pipeline health after any setup step |
-| **verify-product-claim** | 1/1 | 6 | Run one acceptance scenario in a disposable box and retain its result and evidence page |
+| **verify-product-claim** | 1 → 4 | 6 | Run acceptance scenarios in disposable boxes (single run or concurrent fleet), retain grounded results plus evidence pages, retrieve/re-render/reverify retained runs, and project verified evidence into the atlas |
 | **connect-hf-identity** | 1 → 3 | 1 | `auth login` / `whoami` / `logout` lifecycle |
 | **configure-settings** | 1 → 3 | 1 | `config set` + `config show` + `config get` |
 | **configure-tracking-mode** | 1/1 | 1 | `config tracking-mode` |
@@ -277,7 +277,16 @@ deduped and reconciled. Cross-bucket trajectories are marked **★**.
 
 | Command | JTBD one-liner | Action trajectory (n/N) | Owning journey | Persona |
 |---|---|---|---|---|
-| `bench run` | Developer or agent runs one acceptance scenario in a disposable box and retains a grounded result plus evidence page | verify-product-claim (1/1) | `bench-command-smoke` | both |
+| `bench run` | Developer or agent runs one acceptance scenario in a disposable box and retains a grounded result plus evidence page; the owning journey is a help-surface smoke only — end-to-end behavioral coverage lives in `tests/core/arena` + `tests/cli/test_bench_cli.py` | verify-product-claim (1/4) | `bench-command-smoke` | both |
+| `bench fleet` | Developer or agent runs many acceptance scenarios concurrently, each in its own isolated box, and retains per-scenario grounded evidence | verify-product-claim (2/4) | `bench-command-smoke` | both |
+| `bench list` | Developer or agent lists retained bench runs to find prior evidence before re-rendering or reverifying | verify-product-claim (3/4) | `bench-command-smoke` | both |
+| `bench render` | Developer or agent re-renders one retained run's evidence page from stored artifacts without re-running the box | verify-product-claim (3/4) | `bench-command-smoke` | both |
+| `bench reverify` | Developer or agent re-runs the independent verifiers boxlessly against a retained run's evidence to re-check the verdict | verify-product-claim (3/4) | `bench-command-smoke` | both |
+| `bench atlas build` | Developer or agent builds the deterministic atlas projection from verified results and the guarantees source | verify-product-claim (4/4) | `bench-command-smoke` | both |
+| `bench atlas render` | Developer or agent renders the atlas page from a built atlas artifact | verify-product-claim (4/4) | `bench-command-smoke` | both |
+| `bench atlas summary` | Agent prints the atlas summary projection for machine consumption | verify-product-claim (4/4) | `bench-command-smoke` | agent |
+| `bench atlas query` | Agent queries atlas claims and their verification state | verify-product-claim (4/4) | `bench-command-smoke` | agent |
+| `bench atlas pr-link` | Developer or agent links atlas evidence into a PR body for reviewer consumption | verify-product-claim (4/4) | `bench-command-smoke` | both |
 | `dataset list` | Curator lists all local HF-shaped datasets to know what exists before running or publishing | survey-local-datasets (1/1) | unowned | both |
 | `dataset new` | Curator creates a workflow-driven (or ad-hoc) dataset shell so workflow output can land in a typed structure | build-publishable-dataset (3/6) ★ | `cli-publish-happy-path`, `tier1-cold-publish` | both |
 | `dataset security` | Curator inspects or edits one dataset's resolved security policy (seeded from the workflow contract): enabling optional tools or recording an unsafe override for a required tool. Owned by the dataset manifest, never a global config toggle | build-publishable-dataset (3/6) ★ | `dataset-security-workflow-seeding` | both |

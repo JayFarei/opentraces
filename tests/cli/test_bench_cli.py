@@ -174,6 +174,125 @@ def test_bench_run_returns_one_for_a_functional_failure(tmp_path: Path, monkeypa
     assert "verdict: fail" in result.output
 
 
+def test_bench_run_refuses_when_reconciled_claim_diverges_from_static_discovery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # F6 (#302): static AST discovery and runtime extraction agree by
+    # construction only; cross-assert them so a divergence is surfaced as a
+    # machinery error (exit 1) rather than silently trusting the reconciled row.
+    # Review repair A3: the cross-assert must bind BEFORE publication — a
+    # divergent run must not persist as a consumable finalized pass; the stored
+    # result is demoted to the machinery-error state (execution_status=error,
+    # verdict=null) so the store itself carries the refusal.
+    from opentraces.cli import bench_cli
+
+    scenario = _scenario(tmp_path)
+    store_root = tmp_path / "runs" / "v1"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]) -> int:
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        result = build_result(
+            run_id=draft.run_id,
+            claim="A completely different claim than the docstring.",
+            nodeid=target,
+            source_ref="source/scenario.py",
+            execution_mode="direct",
+            started_at="2026-07-13T12:00:00Z",
+            duration_ms=1,
+            execution_status="complete",
+            verdict="pass",
+            reason=None,
+            verifiers=[],
+            evidence={"complete": True, "requirements": []},
+            recordings={"rewatchable": False, "channels": []},
+            artifacts=[],
+            capture=None,
+            pins={},
+        )
+        draft.stage_result(result)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    invoked = CliRunner().invoke(
+        main,
+        ["bench", "run", f"{scenario}::test_install", "--store-root", str(store_root)],
+    )
+
+    assert invoked.exit_code == 1
+    assert "claim" in invoked.output.lower()
+    # STORAGE state, not just exit code: no consumable finalized pass may
+    # persist anywhere in the store after a claim divergence.
+    stored = [
+        json.loads((child / "result.json").read_text(encoding="utf-8"))
+        for child in store_root.iterdir()
+        if child.is_dir() and (child / "result.json").is_file()
+    ]
+    assert stored, "the divergent run must still be retained as evidence"
+    for result in stored:
+        assert result["verdict"] is None
+        assert result["execution_status"] == "error"
+        assert result["reason"]["code"] == "claim_reconciliation_mismatch"
+
+
+def test_bench_run_reports_provisional_recovery_path_on_storage_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # F6 (#302): the verdict is already safe in recovery on StorageFinalizeError;
+    # the abort must name the provisional recovery path instead of crashing mute.
+    from opentraces.cli import bench_cli
+    from opentraces.core.arena.run_store import StorageFinalizeError
+
+    scenario = _scenario(tmp_path)
+    store_root = tmp_path / "runs" / "v1"
+    recovery = tmp_path / "recovery" / "run_stub"
+    monkeypatch.setattr(bench_cli, "build_local_wheels", lambda repository: [])
+
+    def fake_pytest(target: str, *, repository: Path, env: dict[str, str]) -> int:
+        store = RunStore(Path(env["OT_BENCH_RUN_ROOT"]))
+        draft = store.begin()
+        result = build_result(
+            run_id=draft.run_id,
+            claim="Install is healthy on a fresh box.",
+            nodeid=target,
+            source_ref="source/scenario.py",
+            execution_mode="direct",
+            started_at="2026-07-13T12:00:00Z",
+            duration_ms=1,
+            execution_status="complete",
+            verdict="pass",
+            reason=None,
+            verifiers=[],
+            evidence={"complete": True, "requirements": []},
+            recordings={"rewatchable": False, "channels": []},
+            artifacts=[],
+            capture=None,
+            pins={},
+        )
+        draft.stage_result(result)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench_cli, "run_pytest", fake_pytest)
+
+    def explode(store, run_id, outcome, **kwargs):
+        raise StorageFinalizeError("disk gone", recovery_path=recovery)
+
+    monkeypatch.setattr(bench_cli, "_finalize_after_pytest", explode)
+
+    invoked = CliRunner().invoke(
+        main,
+        ["bench", "run", f"{scenario}::test_install", "--store-root", str(store_root)],
+    )
+
+    assert invoked.exit_code == 1
+    # A clean Click Exit(1), not an unhandled StorageFinalizeError crash.
+    assert not isinstance(invoked.exception, StorageFinalizeError), invoked.output
+    assert "provisional result retained at" in invoked.output
+    assert str(recovery) in invoked.output
+
+
 def test_bench_run_origin_attaches_after_finalization(tmp_path: Path, monkeypatch) -> None:
     from opentraces.cli import bench_cli
 

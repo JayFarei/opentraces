@@ -20,6 +20,7 @@ RED before its fix:
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 from opentraces.core.trails import event_index
@@ -170,3 +171,64 @@ def test_lagging_index_is_caught_up_not_stale(tmp_path: Path) -> None:
     )
     # And the original trace still resolves identically (no regression).
     assert len(read_events_for_trace(tmp_path, trace)) == 2
+
+
+def test_deadline_bound_finalization_keeps_index_current(tmp_path: Path) -> None:
+    """#326 RED control: stale-index-after-deadline-bound-finalization.
+
+    A deadline-bearing finalizer append must NOT leave the rebuildable #137
+    event-index accelerator keyed to the previous event-log head. Before the
+    fix, ``_append_event_batch`` ran ``extend_after_append`` only when
+    ``deadline is None``, so a bounded (deadline-bearing) maturation append
+    advanced the canonical ref to a new head while the persisted index stayed
+    at the old head — an apparently fresh index for a stale head.
+    """
+    sha, trace = _seed_with_algoless_search(tmp_path)
+    head1 = _ref_head(tmp_path)
+
+    # Start from a FRESH #137 index, current at head1.
+    event_index.rebuild_event_index(tmp_path, head1)
+    event_index.invalidate_event_index_memo(tmp_path)
+    base = event_index._load_persisted(tmp_path)
+    assert base is not None and base.head == head1
+
+    # Append through the deadline-bearing finalizer path. The deadline is
+    # generous so the canonical append itself always completes; only the
+    # post-append index-maintenance skip is under test.
+    append_event_batch(
+        tmp_path,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="t-deadline",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:deadlinepatch",
+                    "file_path": "real.py",
+                    "affected_range": {"start_line": 1, "end_line": 2},
+                    "authored_text": "alpha\nbody\n",
+                    "raw_authored_hash": sha256_text("alpha\nbody\n"),
+                    "git_clean_hash": sha256_text("alpha\nbody"),
+                    "limitations": [],
+                },
+            )
+        ],
+        writer="test-fixture",
+        deadline=time.monotonic() + 30.0,
+    )
+    head2 = _ref_head(tmp_path)
+    assert head2 != head1, "the deadline-bearing append did not advance the ref"
+
+    # The canonical append succeeded; the accelerator must not be left stale at
+    # the pre-append head.
+    persisted = event_index._load_persisted(tmp_path)
+    assert persisted is not None and persisted.head == head2, (
+        "a successful deadline-bearing maturation append left the #137 index "
+        "apparently fresh for the OLD head — post-append index maintenance "
+        "must be deadline-aware and bounded, not skipped"
+    )
+
+    # The new event resolves through the index-backed read at the new head.
+    event_index.invalidate_event_index_memo(tmp_path)
+    assert len(read_events_for_trace(tmp_path, "t-deadline")) == 1

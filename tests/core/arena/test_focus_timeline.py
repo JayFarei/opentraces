@@ -12,6 +12,27 @@ from tests.core.arena.test_browser_drive import PublicBrowserSession, _scenario
 from tests.core.arena.test_engine import RecordingBoxRuntime
 
 
+def verify_cross_surface_journey(run) -> dict[str, list[str]]:
+    before = run.terminal.exec("printf", "before")
+    browser = run.browser.inspect("main")
+    after = run.terminal.exec("printf", "after")
+    assert before.returncode == 0
+    assert browser.state["text"] == "Pending"
+    assert after.returncode == 0
+    return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
+
+
+def verify_terminal_and_browser(run) -> dict[str, list[str]]:
+    terminal = run.terminal.exec("printf", "before")
+    browser = run.browser.inspect("main")
+    return {"evidence_refs": [terminal.result_ref, browser.result_ref]}
+
+
+def verify_terminal(run) -> dict[str, list[str]]:
+    terminal = run.terminal.exec("printf", "before")
+    return {"evidence_refs": [terminal.result_ref]}
+
+
 def test_execution_timeline_survives_conflicting_directory_and_mtime_order(
     tmp_path: Path,
 ) -> None:
@@ -23,17 +44,8 @@ def test_execution_timeline_survives_conflicting_directory_and_mtime_order(
         browser_factory=PublicBrowserSession,
     )
 
-    def cross_surface_journey(run):
-        before = run.terminal.exec("printf", "before")
-        browser = run.browser.inspect("main")
-        after = run.terminal.exec("printf", "after")
-        assert before.returncode == 0
-        assert browser.state["text"] == "Pending"
-        assert after.returncode == 0
-        return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(cross_surface_journey)
+        run.verify(verify_cross_surface_journey)
         assert run.draft is not None
         actions = run.draft.path / "actions"
         # A post-hoc reader now sees two contradictory plausible orders:
@@ -103,13 +115,8 @@ def test_timeline_damage_only_removes_rewatchability(
         browser_factory=PublicBrowserSession,
     )
 
-    def journey(run):
-        terminal = run.terminal.exec("printf", "before")
-        browser = run.browser.inspect("main")
-        return {"evidence_refs": [terminal.result_ref, browser.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(journey)
+        run.verify(verify_terminal_and_browser)
         assert run.draft is not None
         timeline_path = run.draft.path / "recordings/timeline.jsonl"
         if damage == "missing":
@@ -162,13 +169,8 @@ def test_timeline_requires_exact_stored_action_facts_without_rewriting_truth(
         browser_factory=PublicBrowserSession,
     )
 
-    def journey(run):
-        terminal = run.terminal.exec("printf", "before")
-        browser = run.browser.inspect("main")
-        return {"evidence_refs": [terminal.result_ref, browser.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(journey)
+        run.verify(verify_terminal_and_browser)
         assert run.draft is not None
         timeline_path = run.draft.path / "recordings/timeline.jsonl"
         rows = [
@@ -230,12 +232,8 @@ def test_timeline_rejects_completion_timestamp_inconsistent_with_stored_duration
         browser_factory=PublicBrowserSession,
     )
 
-    def journey(run):
-        terminal = run.terminal.exec("printf", "before")
-        return {"evidence_refs": [terminal.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(journey)
+        run.verify(verify_terminal)
         assert run.draft is not None
         timeline_path = run.draft.path / "recordings/timeline.jsonl"
         rows = [
@@ -269,12 +267,8 @@ def test_timeline_classifies_timezone_less_completion_as_corrupt(
         browser_factory=PublicBrowserSession,
     )
 
-    def journey(run):
-        terminal = run.terminal.exec("printf", "before")
-        return {"evidence_refs": [terminal.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(journey)
+        run.verify(verify_terminal)
         assert run.draft is not None
         timeline_path = run.draft.path / "recordings/timeline.jsonl"
         rows = [

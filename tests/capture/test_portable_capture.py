@@ -20,6 +20,8 @@ import pytest
 from opentraces.capture import Capture, CapturePlan
 from opentraces.capture.parity import compare_placements, write_parity_report
 
+from tests.helpers.release_capture import verify_release_asset_provenance
+
 
 def _git_project(root: Path) -> Path:
     root.mkdir()
@@ -3199,7 +3201,22 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#268: compare against the pre-extraction persistent canonical chain."""
+    """#268: compare against the pre-extraction persistent canonical chain.
+
+    A3 two-proof split (#310). This half proves literal real-fixture
+    compatibility: the committed real-session fixture reproduces the pre-
+    extraction persistent canonical chain byte-for-byte (literal legacy bytes).
+    Because the committed fixture's Git trees are unreachable in a fresh
+    repository, it honestly exercises the unreachable-tree / ``unproven`` Trail
+    branch (see the ``trail_substantive is False`` assertions below).
+
+    The complementary half — substantive ``trail_matches`` parity — is proven
+    separately by
+    ``test_placement_acceptance_exercises_every_capture_view_and_preserves_asymmetry``,
+    which constructs a real ``write_worktree_tree`` relationship in the harness so
+    the Trail comparison reaches ``trail_substantive is True``. Neither test
+    subsumes the other; they are the two required halves of the A3 proof.
+    """
     from opentraces.core import config as config_module
     from opentraces.core import paths as capture_paths
     from opentraces.core.bucket_store import (
@@ -3218,12 +3235,9 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
         Path(__file__).parents[1] / "fixtures" / "claude" / "claude-linear-edit-real-session.jsonl"
     )
     assert fixture.is_file()
-    provenance = json.loads(fixture.with_suffix(".provenance.json").read_text())
-    assert provenance["source_release"] == "otbox-captures-v1"
-    assert provenance["source_snapshot_sha256"] == (
-        "54466705324a1f44d510160fb3fa31213ef8584704afc6b443487441ca1bf03b"
-    )
-    assert hashlib.sha256(fixture.read_bytes()).hexdigest() == provenance["derived_fixture_sha256"]
+    # #298: the release-asset provenance chain is verified by the one shared
+    # helper both A3 (here) and A4 (tests/test_slicing.py) delegate to.
+    provenance = verify_release_asset_provenance(fixture=fixture)
     project = _git_project(tmp_path / "project")
     (project / "src").mkdir()
     (project / "src" / "app.py").write_text(
@@ -3303,7 +3317,10 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
         )
     ).finish(deadline=time.monotonic() + 15.0)
 
-    from opentraces.capture.parity import compare_persistent_compatibility
+    from opentraces.capture.parity import (
+        compare_persistent_compatibility,
+        write_compatibility_report,
+    )
 
     report = compare_persistent_compatibility(
         legacy_trace_path=baseline_trace_path,
@@ -3312,6 +3329,7 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
         legacy_roots=(project, session.parent),
         captured_roots=(project, session.parent),
     )
+    write_compatibility_report(report, tmp_path / "compatibility-report.json")
     assert report.matches is False
     assert report.serialized_artifact_bytes_match is True
     assert report.semantic_material_match is True
@@ -3322,6 +3340,14 @@ def test_persistent_capture_preserves_literal_legacy_bytes_on_committed_real_fix
     assert report.limitations == (
         "persistent query compatibility is unproven because the supplied source "
         "material did not materialize substantive Trace, Ctx, and Trail reads",
+    )
+
+    # #311: the compatibility proof must emit an inspectable report artifact
+    # under the pytest base, round-tripping exactly to to_dict().
+    compat_report_path = tmp_path / "compatibility-report.json"
+    assert compat_report_path.exists(), "compatibility-report.json must be emitted"
+    assert (
+        json.loads(compat_report_path.read_text(encoding="utf-8")) == report.to_dict()
     )
 
     # Killed control: the comparator must detect captured behavior/material

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,112 @@ def _result(run_id: str, *, verdict: str = "pass") -> dict:
     )
 
 
+def test_atomic_writes_fsync_the_temp_file_and_the_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # F6 (#302): atomic writes must fsync the temp file content before replace
+    # and the containing directory after, closing the power-loss window where a
+    # renamed-but-unflushed file (or an unflushed directory entry) is lost.
+    import opentraces.core._bucket_io as bucket_io
+
+    fsynced: list[int] = []
+    real_fsync = os.fsync
+
+    def spy_fsync(fd: int) -> None:
+        fsynced.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(bucket_io.os, "fsync", spy_fsync)
+
+    draft = RunStore(tmp_path / "runs" / "v1").begin()
+    fsynced.clear()
+    draft.write_json("artifacts/durable.json", {"k": "v"})
+    # At least one fsync for the temp file and one for the parent directory.
+    assert len(fsynced) >= 2
+
+    fsynced.clear()
+    draft.write_bytes("artifacts/durable.bin", b"payload")
+    assert len(fsynced) >= 2
+
+
+# --- #302 review repair B: pin the atomic-write failure semantics ---
+
+
+def test_atomic_write_fsyncs_the_temp_content_before_the_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ordering is the durability property: content fsync must land BEFORE the
+    # rename commits the new directory entry.
+    import pathlib
+
+    import opentraces.core._bucket_io as bucket_io
+
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = pathlib.Path.replace
+
+    def spy_fsync(fd: int) -> None:
+        events.append("fsync")
+        real_fsync(fd)
+
+    def spy_replace(self: pathlib.Path, target):
+        events.append("replace")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(bucket_io.os, "fsync", spy_fsync)
+    monkeypatch.setattr(pathlib.Path, "replace", spy_replace)
+
+    target = tmp_path / "payload.bin"
+    bucket_io._atomic_write_bytes(target, b"payload")
+
+    assert "replace" in events
+    assert "fsync" in events
+    assert events.index("fsync") < events.index("replace")
+
+
+def test_file_fsync_failure_propagates_and_preserves_the_old_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A durability primitive must not pretend a failed fsync succeeded: the
+    # error propagates, the previous target bytes survive, and no temp file
+    # is left behind.
+    import opentraces.core._bucket_io as bucket_io
+
+    target = tmp_path / "payload.bin"
+    target.write_bytes(b"old")
+
+    def failing_fsync(fd: int) -> None:
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(bucket_io.os, "fsync", failing_fsync)
+
+    with pytest.raises(OSError):
+        bucket_io._atomic_write_bytes(target, b"new")
+
+    assert target.read_bytes() == b"old"
+    assert [p.name for p in tmp_path.iterdir() if p.name != "payload.bin"] == []
+
+
+def test_directory_close_failure_after_the_rename_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Once the rename committed, a failing os.close on the directory fd must
+    # not escape to the caller — the write already succeeded.
+    import opentraces.core._bucket_io as bucket_io
+
+    def failing_close(fd: int) -> None:
+        raise OSError("simulated close failure")
+
+    # The only os.close reached through the module namespace is the directory
+    # fd in _fsync_directory (file handles close through os.fdopen objects).
+    monkeypatch.setattr(bucket_io.os, "close", failing_close)
+
+    target = tmp_path / "payload.bin"
+    bucket_io._atomic_write_bytes(target, b"payload")
+
+    assert target.read_bytes() == b"payload"
+
+
 def test_begin_creates_the_canonical_complete_exhaust_layout(tmp_path: Path) -> None:
     draft = RunStore(tmp_path / "runs" / "v1").begin()
 
@@ -83,6 +190,17 @@ def test_external_post_finalize_mutation_is_detected(tmp_path: Path) -> None:
 
     with pytest.raises(RunIntegrityError, match="actions/0001/stdout"):
         store.verify(finalized)
+
+
+def test_finalization_rejects_a_symlink_to_evidence_outside_the_run(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs" / "v1")
+    draft = store.begin()
+    external = tmp_path / "external-lease.json"
+    external.write_text('{"id":"outside"}\n', encoding="utf-8")
+    (draft.path / "artifacts" / "lease-lifecycle.json").symlink_to(external)
+
+    with pytest.raises(RunIntegrityError, match="symlink"):
+        draft.finalize(_result(draft.run_id))
 
 
 def test_only_root_final_markers_are_excluded_from_integrity(tmp_path: Path) -> None:

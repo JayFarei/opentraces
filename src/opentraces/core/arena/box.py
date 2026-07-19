@@ -13,10 +13,17 @@ import subprocess
 import tarfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 from .diagnostics import sanitize_diagnostic_text, sanitize_diagnostic_value, sanitize_reason
+from .harness_readiness import PREFERENCES_INVALID_SENTINEL
+from .harnesses import (
+    CLAUDE_HARNESS_EXECUTABLE,
+    CLAUDE_HARNESS_NAME,
+    CLAUDE_HARNESS_VERSION,
+    CLAUDE_INSTALL_URL,
+)
 
 
 PINNED_CRABBOX_VERSION = "0.38.0"
@@ -65,10 +72,17 @@ SSH_REMEDY = (
 class CrabboxRefusal(RuntimeError):
     """A named precondition refusal, never an unbounded Crabbox hang."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        cleanup_lease_id: str | None = None,
+    ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.cleanup_lease_id = cleanup_lease_id
 
 
 @dataclass(frozen=True)
@@ -82,6 +96,39 @@ class Box:
     ssh_port: str
     ssh_key: str
     image: str | None = None
+    work_root: str | None = None
+    workspace: str | None = None
+
+    def bind_workspace(self, observed: str) -> None:
+        """Bind the one materialized workspace proven by this lease."""
+
+        if self.work_root is None:
+            raise CrabboxRefusal("workspace_coordinate_missing", "lease has no work root")
+        work_root = PurePosixPath(self.work_root)
+        if (
+            not work_root.is_absolute()
+            or self.work_root == "/"
+            or str(work_root) != self.work_root
+            or ".." in work_root.parts
+        ):
+            raise CrabboxRefusal("workspace_coordinate_invalid", "lease work root is not canonical")
+        workspace = PurePosixPath(observed)
+        expected_parent = work_root / self.id
+        if (
+            not workspace.is_absolute()
+            or str(workspace) != observed
+            or workspace.parent != expected_parent
+            or workspace.name in {"", ".", ".."}
+        ):
+            raise CrabboxRefusal(
+                "workspace_coordinate_invalid",
+                "materialized workspace is outside the inspected lease work root",
+            )
+        if self.workspace is not None and self.workspace != observed:
+            raise CrabboxRefusal(
+                "workspace_coordinate_changed", "materialized workspace changed during the lease"
+            )
+        object.__setattr__(self, "workspace", observed)
 
 
 @dataclass(frozen=True)
@@ -167,6 +214,57 @@ def _operation_name(argv: Sequence[str]) -> str:
     if len(argv) > 1 and argv[0] == "crabbox":
         return str(argv[1]).lstrip("-") or "version"
     return Path(str(argv[0])).name
+
+
+def _partial_output_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
+
+
+def _unsafe_lease_id_adjacency(value: str | int) -> bool:
+    r"""True when the rune adjacent to a candidate lease id is untrustworthy.
+
+    Deliberately fail-closed and ASCII-only: real Crabbox output delimits the
+    lease id with ASCII whitespace/punctuation, so ANY non-ASCII rune fused
+    directly to a candidate (em dash, NBSP, emoji, replacement bytes) marks it
+    a lookalike and the candidate is discarded rather than guessed. This is a
+    known, intended narrowing versus the older permissive ``\b``-boundary
+    regex, which would accept a clean id fused to a non-ASCII separator; the
+    timed-out warmup path has pinned this refusal since A7, and issue #337
+    extended the same rule to completed warmups. Refusing costs one clean
+    lease at worst; guessing an identity risks inspecting or stopping the
+    wrong box.
+    """
+
+    if isinstance(value, int):
+        return value >= 128 or chr(value) in "_-" or chr(value).isalnum()
+    return not value.isascii() or value in "_-" or value.isalnum()
+
+
+def _lease_id_candidates(value: str | bytes | None) -> set[str]:
+    if isinstance(value, bytes):
+        pattern: re.Pattern[str] | re.Pattern[bytes] = re.compile(rb"cbx_[A-Za-z0-9]+")
+    elif isinstance(value, str):
+        pattern = re.compile(r"cbx_[A-Za-z0-9]+", flags=re.ASCII)
+    else:
+        return set()
+    candidates: set[str] = set()
+    for match in pattern.finditer(value):
+        if match.start() and _unsafe_lease_id_adjacency(value[match.start() - 1]):
+            continue
+        if match.end() < len(value) and _unsafe_lease_id_adjacency(value[match.end()]):
+            continue
+        candidate = match.group(0)
+        candidates.add(candidate.decode("ascii") if isinstance(candidate, bytes) else candidate)
+    return candidates
+
+
+def _unique_lease_identity(stdout: str | bytes | None, stderr: str | bytes | None) -> str | None:
+    candidates = _lease_id_candidates(stdout) | _lease_id_candidates(stderr)
+    if len(candidates) != 1:
+        return None
+    return candidates.pop()
 
 
 def _hf_client_lock() -> tuple[dict[str, str], str]:
@@ -259,6 +357,7 @@ class CrabboxRuntime:
         self.command = command
         self._diagnostics: list[dict[str, Any]] = []
         self._run_evidence_root: Path | None = None
+        self._run_configured = False
         self.child_env = dict(os.environ)
         tmpdir = self.home / "crabbox-tmp"
         tmpdir.mkdir(parents=True, exist_ok=True)
@@ -268,8 +367,22 @@ class CrabboxRuntime:
             self.child_env["DOCKER_HOST"] = f"unix://{colima_socket}"
 
     def configure_run_evidence(self, run_root: Path) -> None:
-        """Route Crabbox timing records into the pending run's custody."""
+        """Route Crabbox timing records into the pending run's custody.
 
+        A CrabboxRuntime accumulates per-run ``_diagnostics`` /
+        ``_run_evidence_root`` instance state. It is safe today only because the
+        CLI mints one runtime per run; enforce that contract as single-use so a
+        reused runtime is explicitly refused rather than silently
+        cross-contaminating a second run's evidence (issue #302 F5). This is the
+        per-run hook ``BenchRun.__enter__`` already calls exactly once.
+        """
+
+        if self._run_configured:
+            raise CrabboxRefusal(
+                "runtime_reused",
+                "CrabboxRuntime is single-use; mint a fresh runtime per bench run",
+            )
+        self._run_configured = True
         self._run_evidence_root = Path(run_root)
 
     def _timing_path(self, repository: Path, name: str) -> Path:
@@ -300,18 +413,23 @@ class CrabboxRuntime:
         try:
             completed = self.runner(list(argv), cwd=cwd, env=child_env, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            cleanup_lease_id = _unique_lease_identity(exc.stdout, exc.stderr)
+            partial_stdout = sanitize_diagnostic_text(_partial_output_text(exc.stdout))
+            partial_stderr = sanitize_diagnostic_text(_partial_output_text(exc.stderr))
             self._diagnostics.append(
                 {
                     "operation": _operation_name(argv),
                     "returncode": None,
-                    "stdout": sanitize_diagnostic_text(str(exc.stdout or "")),
-                    "stderr": sanitize_diagnostic_text(str(exc.stderr or "")),
+                    "stdout": partial_stdout,
+                    "stderr": partial_stderr,
                     "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                     "timed_out": True,
                 }
             )
             raise CrabboxRefusal(
-                "crabbox_timeout", f"bounded command timed out: {argv[1]}"
+                "crabbox_timeout",
+                f"bounded command timed out: {argv[1]}",
+                cleanup_lease_id=cleanup_lease_id,
             ) from exc
         self._diagnostics.append(
             {
@@ -385,18 +503,24 @@ class CrabboxRuntime:
             "--local-container-image",
             self.image,
         ]
-        warmup = self._call(warmup_argv, timeout=600)
-        match = re.search(r"\bcbx_[A-Za-z0-9]+\b", f"{warmup.stdout}\n{warmup.stderr}")
+        try:
+            warmup = self._call(warmup_argv, timeout=600)
+        except CrabboxRefusal as primary:
+            if primary.code == "crabbox_timeout" and primary.cleanup_lease_id:
+                self._best_effort_release_after_refusal(
+                    primary.cleanup_lease_id, provider=self.provider
+                )
+            raise
+        lease_id = _unique_lease_identity(warmup.stdout, warmup.stderr)
         if warmup.returncode != 0:
             primary = CrabboxRefusal(
                 "lease_failed", (warmup.stderr or warmup.stdout or "crabbox warmup failed").strip()
             )
-            if match:
-                self._best_effort_release_after_refusal(match.group(0), provider=self.provider)
+            if lease_id is not None:
+                self._best_effort_release_after_refusal(lease_id, provider=self.provider)
             raise primary
-        if not match:
+        if lease_id is None:
             raise CrabboxRefusal("lease_identity_missing", "warmup did not report a cbx_ lease id")
-        lease_id = match.group(0)
         try:
             inspected = self._call(
                 [
@@ -436,8 +560,28 @@ class CrabboxRuntime:
                     "lease_inspect_incomplete", "inspect omitted required lease facts"
                 )
             labels = facts.get("labels")
-            if not isinstance(labels, Mapping) or not labels.get("image"):
-                raise CrabboxRefusal("lease_inspect_incomplete", "inspect omitted labels.image")
+            if not isinstance(labels, Mapping) or any(
+                not labels.get(name) for name in ("image", "lease", "work_root")
+            ):
+                raise CrabboxRefusal(
+                    "lease_inspect_incomplete",
+                    "inspect omitted labels.image, labels.lease, or labels.work_root",
+                )
+            if str(facts["id"]) != lease_id or str(labels["lease"]) != lease_id:
+                raise CrabboxRefusal(
+                    "lease_identity_mismatch", "inspect identity does not match the warm lease"
+                )
+            work_root = str(labels["work_root"])
+            work_root_path = PurePosixPath(work_root)
+            if (
+                not work_root_path.is_absolute()
+                or work_root == "/"
+                or str(work_root_path) != work_root
+                or ".." in work_root_path.parts
+            ):
+                raise CrabboxRefusal(
+                    "lease_workspace_invalid", "inspect labels.work_root is not canonical"
+                )
             observed_provider = str(facts["provider"])
             observed_image = str(labels["image"])
             if observed_provider != self.provider:
@@ -460,6 +604,7 @@ class CrabboxRuntime:
                 ssh_port=str(facts["sshPort"]),
                 ssh_key=str(facts["sshKey"]),
                 image=observed_image,
+                work_root=work_root,
             )
             ssh_probe = self._call(
                 [
@@ -600,9 +745,21 @@ class CrabboxRuntime:
                 f"--shell /bin/sh {PRODUCT_USER}; fi; "
                 f'test "$(id -u {PRODUCT_USER})" -ne 0; '
                 f"sudo -u {PRODUCT_USER} test -w /home/{PRODUCT_USER}; "
+                "transport_group=$(id -gn); "
+                f'sudo chown -R -h {PRODUCT_USER}:"$transport_group" "$PWD"; '
+                'sudo chmod -R g+rwX "$PWD"; '
+                f'sudo -u {PRODUCT_USER} test -w "$PWD"; '
                 f"sudo install -d -m 0755 -o {PRODUCT_USER} -g {PRODUCT_USER} "
                 '"$PWD/bench-recordings"; '
-                f"if sudo -u {PRODUCT_USER} sudo -n true >/dev/null 2>&1; then exit 1; fi",
+                f"if sudo -u {PRODUCT_USER} sudo -n true >/dev/null 2>&1; then exit 1; fi; "
+                "sudo install -d -m 0755 /etc/ssh/sshd_config.d; "
+                "printf '%s\n' 'AcceptEnv *' | "
+                "sudo tee /etc/ssh/sshd_config.d/opentraces-agent-env.conf >/dev/null; "
+                "sudo sshd -t; "
+                "if test -r /run/sshd.pid; then "
+                "sudo kill -HUP \"$(cat /run/sshd.pid)\"; "
+                "else sudo pkill -HUP -x sshd || true; fi; "
+                "printf 'OPENTRACES_WORKSPACE=%s\\n' \"$(pwd -P)\"",
             ],
             cwd=repository,
             timeout=30,
@@ -613,6 +770,17 @@ class CrabboxRuntime:
                 "product_identity_invalid",
                 "the dedicated product identity is missing, non-writable, or sudo-capable",
             )
+        workspace_lines = [
+            line.removeprefix("OPENTRACES_WORKSPACE=")
+            for line in prepared.stdout.splitlines()
+            if line.startswith("OPENTRACES_WORKSPACE=")
+        ]
+        if len(workspace_lines) != 1:
+            raise CrabboxRefusal(
+                "workspace_coordinate_missing",
+                "product identity preparation did not report one workspace",
+            )
+        box.bind_workspace(workspace_lines[0])
         return self._evidence_ref(timing)
 
     def open_port_forward(self, box: Box, remote_port: int) -> LocalPortForward:
@@ -765,9 +933,11 @@ class CrabboxRuntime:
             if observation_refs:
                 pin["observation_refs"] = observation_refs
             return pin
-        if app_state != "install-only":
+        if app_state not in {"install-only", "agent-ready"}:
             raise CrabboxRefusal("unknown_app_state", f"no recipe named {app_state!r}")
-        wheels = sorted((repository / "dist").glob("*.whl"))
+        recipe_root = os.environ.get("OT_BENCH_RECIPE_ROOT")
+        wheel_root = Path(recipe_root) if recipe_root else repository / "dist"
+        wheels = sorted(wheel_root.glob("*.whl"))
         if not wheels:
             raise CrabboxRefusal(
                 "app_state_wheel_missing",
@@ -841,19 +1011,144 @@ class CrabboxRuntime:
                 f"expected {expected_dependencies}, observed {dependencies}",
             )
         identity_ref = self._prepare_product_identity(box, repository=repository)
+        harness_preflight_ref: str | None = None
+        harness_install_ref: str | None = None
+        harness_probe_ref: str | None = None
+        harness_readiness_ref: str | None = None
+        harness_recipe: dict[str, str] | None = None
+        if app_state == "agent-ready":
+            if box.workspace is None:
+                raise CrabboxRefusal(
+                    "workspace_coordinate_missing",
+                    "agent-ready requires a validated materialized workspace",
+                )
+            harness_preflight_timing = self._timing_path(
+                repository, "agent-harness-preflight"
+            )
+            harness_preflight = self.exec_product(
+                box,
+                [
+                    "python3",
+                    "-m",
+                    "opentraces.core.arena.harness_readiness",
+                    "--check",
+                    "--workspace",
+                    box.workspace,
+                    "--version",
+                    CLAUDE_HARNESS_VERSION,
+                ],
+                timeout=30,
+                timing_path=harness_preflight_timing,
+            )
+            if harness_preflight.returncode != 0:
+                if (
+                    harness_preflight.returncode == 2
+                    and PREFERENCES_INVALID_SENTINEL in harness_preflight.stdout
+                ):
+                    raise CrabboxRefusal(
+                        "agent_harness_preferences_invalid",
+                        "existing Claude Code preferences are invalid and cannot be safely amended",
+                    )
+                diagnostic = sanitize_diagnostic_text(harness_preflight.stderr.strip())
+                raise CrabboxRefusal(
+                    "agent_harness_preflight_failed",
+                    diagnostic
+                    or (
+                        "the Claude Code harness readiness preflight failed with exit code "
+                        f"{harness_preflight.returncode}"
+                    ),
+                )
+            harness_install_timing = self._timing_path(repository, "agent-harness-install")
+            harness_install = self.exec_product(
+                box,
+                [
+                    "sh",
+                    "-c",
+                    f"curl -fsSL {CLAUDE_INSTALL_URL} | "
+                    f"bash -s -- {CLAUDE_HARNESS_VERSION}",
+                ],
+                timeout=600,
+                timing_path=harness_install_timing,
+            )
+            if harness_install.returncode != 0:
+                raise CrabboxRefusal(
+                    "agent_harness_install_failed",
+                    "the exact supported Claude Code harness could not be installed",
+                )
+            harness_probe_timing = self._timing_path(repository, "agent-harness-probe")
+            harness_probe = self.exec_product(
+                box,
+                [CLAUDE_HARNESS_EXECUTABLE, "--version"],
+                timeout=30,
+                timing_path=harness_probe_timing,
+            )
+            observed_harness_version = harness_probe.stdout.strip().split(maxsplit=1)[0]
+            if (
+                harness_probe.returncode != 0
+                or observed_harness_version != CLAUDE_HARNESS_VERSION
+            ):
+                raise CrabboxRefusal(
+                    "agent_harness_version_mismatch",
+                    f"expected Claude Code {CLAUDE_HARNESS_VERSION}, "
+                    f"observed {observed_harness_version or 'unavailable'}",
+                )
+            harness_readiness_timing = self._timing_path(
+                repository, "agent-harness-readiness"
+            )
+            harness_readiness = self.exec_product(
+                box,
+                [
+                    "python3",
+                    "-m",
+                    "opentraces.core.arena.harness_readiness",
+                    "--workspace",
+                    box.workspace,
+                    "--version",
+                    CLAUDE_HARNESS_VERSION,
+                ],
+                timeout=30,
+                timing_path=harness_readiness_timing,
+            )
+            if harness_readiness.returncode != 0:
+                raise CrabboxRefusal(
+                    "agent_harness_preferences_invalid",
+                    "Claude Code readiness preferences could not be established",
+                )
+            harness_recipe = {
+                "name": CLAUDE_HARNESS_NAME,
+                "executable": CLAUDE_HARNESS_EXECUTABLE,
+                "version": CLAUDE_HARNESS_VERSION,
+                "readiness": "claude-global-preferences-v1",
+            }
+            harness_preflight_ref = self._evidence_ref(harness_preflight_timing)
+            harness_install_ref = self._evidence_ref(harness_install_timing)
+            harness_probe_ref = self._evidence_ref(harness_probe_timing)
+            harness_readiness_ref = self._evidence_ref(harness_readiness_timing)
         recipe = {
+            # Bind provider + image into the install-only digest material so two
+            # runs on different images/providers cannot collide on one digest —
+            # base-only already binds them (issue #302 F5). This intentionally
+            # changes install-only digests versus the pre-#302 wheel-only shape.
+            "provider": box.provider,
+            "image": self.image,
             "wheel_sha256": digests,
             "dependencies": expected_dependencies,
             "dependency_lock_sha256": dependency_lock_sha256,
             "execution_identity": {"user": PRODUCT_USER, "sudo": False},
         }
+        if harness_recipe is not None:
+            recipe["harness"] = harness_recipe
         app_digest = hashlib.sha256(
             json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         pin = {
             "name": app_state,
             "digest": f"sha256:{app_digest}",
-            "provides": ["cli", "script"],
+            "provides": [
+                "cli",
+                "script",
+                *([f"agent:{CLAUDE_HARNESS_NAME}"] if harness_recipe is not None else []),
+            ],
             "dependencies": expected_dependencies,
             "recipe": recipe,
         }
@@ -864,6 +1159,10 @@ class CrabboxRuntime:
                 self._evidence_ref(provides_timing),
                 self._evidence_ref(dependency_timing),
                 identity_ref,
+                harness_preflight_ref,
+                harness_install_ref,
+                harness_probe_ref,
+                harness_readiness_ref,
             )
             if ref is not None
         ]

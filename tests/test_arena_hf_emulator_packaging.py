@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -265,6 +266,145 @@ def test_compile_has_a_finite_deadline_and_failed_build_cannot_replace_last_good
     assert isinstance(observed_timeout, (int, float)) and 0 < observed_timeout <= 120
     assert output.read_bytes() == b"last-good-binary"
     assert provenance.read_text(encoding="utf-8") == '{"last":"good"}\n'
+
+
+def test_interrupted_publication_never_exposes_a_torn_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1 (#305): binary + provenance publish as one crash-consistent generation.
+
+    RED intent: with the pre-fix two-rename publish, a crash after the binary
+    rename and before the provenance rename leaves ``output`` pointing at new
+    bytes whose provenance sidecar is stale/absent -- a torn pair that a second
+    process cannot verify. With the single-pointer generation swap the binary
+    only becomes visible together with its provenance, so the pair verifies.
+    """
+
+    from opentraces.core.arena.emulate.huggingface import runtime as hf_runtime
+
+    output = tmp_path / "hf-emulator"
+
+    real_replace = os.replace
+    injected: dict[str, bool] = {"crashed": False}
+    published = os.path.abspath(output)
+
+    def crash_when_output_is_published(src, dst, *args, **kwargs):
+        real_replace(src, dst, *args, **kwargs)
+        # Compare lexically: after the swap ``output`` resolves through the new
+        # symlink, so resolving it would miss the publication boundary.
+        if not injected["crashed"] and os.path.abspath(dst) == published:
+            # Simulate a process crash at the first moment ``output`` is swapped.
+            injected["crashed"] = True
+            raise KeyboardInterrupt("injected crash at publication boundary")
+
+    monkeypatch.setattr(hf_runtime.os, "replace", crash_when_output_is_published)
+
+    with pytest.raises(KeyboardInterrupt):
+        hf_runtime.build_hf_emulator_binary(output)
+
+    assert injected["crashed"] is True
+    # A second process recovers a single verified Bun 1.3.6 executable/provenance
+    # pair from the interrupted publication -- no torn generation survives.
+    pin = hf_runtime.verified_emulator_binary_pin(output)
+    assert pin.provenance == "verified"
+    assert pin.bun_version == "1.3.6"
+    assert output.read_bytes()[:4] == b"\x7fELF"
+
+
+def test_two_processes_share_one_cold_cache_materialization(
+    tmp_path: Path,
+) -> None:
+    """F2 (#305): the cross-process materialization lock, exercised for real.
+
+    Two independent OS processes race a cold Bun toolchain cache with only a
+    controlled ``npx`` materializer on PATH. Both must return the identical
+    verified executable while the materializer runs exactly once.
+    """
+
+    toolchain_root = tmp_path / "cold-bun-toolchain"
+    counter = tmp_path / "materializations.log"
+    fake_bun = tmp_path / "fake-bun" / "bun"
+    fake_bun.parent.mkdir(parents=True, exist_ok=True)
+    fake_bun.write_text("#!/bin/sh\necho 1.3.6\n", encoding="utf-8")
+    fake_bun.chmod(0o755)
+
+    bin_dir = tmp_path / "cold-path-bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    npx = bin_dir / "npx"
+    npx.write_text(
+        "#!/bin/sh\n"
+        f'printf "x" >> "{counter}"\n'
+        "# emulate: npx --yes --package bun@1.3.6 which bun\n"
+        "sleep 0.2\n"
+        f'printf "%s\\n" "{fake_bun}"\n',
+        encoding="utf-8",
+    )
+    npx.chmod(0o755)
+
+    driver = tmp_path / "materialize.py"
+    driver.write_text(
+        "import hashlib, json, sys\n"
+        "from pathlib import Path\n"
+        "from opentraces.core.arena.emulate.huggingface import runtime as hf\n"
+        "hf.BUN_TOOLCHAIN_ROOT = Path(sys.argv[1])\n"
+        'command = hf.pinned_bun_command("--version")\n'
+        "exe = command[0]\n"
+        'sha = hashlib.sha256(Path(exe).read_bytes()).hexdigest()\n'
+        'print(json.dumps({"exe": exe, "sha": sha}))\n',
+        encoding="utf-8",
+    )
+
+    child_env = {
+        **os.environ,
+        "PATH": str(bin_dir),
+        "PYTHONPATH": str(ROOT / "src")
+        + os.pathsep
+        + str(ROOT / "packages/opentraces-schema/src"),
+    }
+
+    processes = [
+        subprocess.Popen(
+            [sys.executable, str(driver), str(toolchain_root)],
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    results = []
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=60)
+        assert process.returncode == 0, stderr
+        results.append(json.loads(stdout.strip().splitlines()[-1]))
+
+    assert results[0] == results[1]
+    assert Path(results[0]["exe"]).is_file()
+    materializations = counter.read_bytes() if counter.is_file() else b""
+    assert len(materializations) == 1, (
+        f"materializer ran {len(materializations)} times; the cross-process "
+        "lock must serialize both workers onto one materialization"
+    )
+
+
+def test_retained_a2_transcript_marks_the_remote_blocker_as_historical() -> None:
+    """F3 (#305): the retained transcript cannot read as the current A2 gate."""
+
+    transcript = (
+        ROOT / "tests/manual/a2_hf_emulator_real_box_transcript.txt"
+    ).read_text(encoding="utf-8")
+
+    # The original remote-only blocker prose is preserved for the record...
+    assert "REMOTE-ONLY BLOCKER" in transcript
+    # ...but it is explicitly marked historical and linked to the amended
+    # ruling plus the A7 follow-up, so it cannot be read as the operative gate.
+    assert "HISTORICAL" in transcript
+    assert "amended" in transcript.lower() and "#264" in transcript
+    assert "#281" in transcript
+
+    # The honest false remote-real-lease stamp is never relabeled upward.
+    proof = json.loads((ROOT / "tests/manual/a2_hf_emulator_real_box.json").read_text())
+    assert proof["proof_scope"]["satisfies_remote_real_lease_gate"] is False
 
 
 def test_shared_binary_cache_serializes_concurrent_builders(

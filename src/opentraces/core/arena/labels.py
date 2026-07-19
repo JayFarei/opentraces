@@ -38,6 +38,7 @@ from ..trails.lineage import parse_trail_ref
 from ..trails.slices import trace_slice_id_for
 from .contract import VERDICTS, validate_result
 from .run_store import RunDraft, RunIntegrityError, RunStore
+from .trace_materialization import authoritative_trace_materialization_ref
 
 
 ARENA_LABEL_SCHEMA_VERSION = "opentraces.arena.label.v0"
@@ -817,40 +818,6 @@ def _canonical_subject_trace(trace_id: str) -> tuple[str, TraceRecord]:
     return next(iter(candidates.values()))
 
 
-def authoritative_trace_materialization_ref(
-    project_slug: str,
-    record: TraceRecord,
-) -> TraceMaterializationRef:
-    """Rebuild the current materialization map from registered Trail state.
-
-    A canonical project registration makes its source repository authoritative.
-    Record-only materialization is retained only for traces whose project has no
-    registration, never as a fallback for a broken registered source.
-    """
-
-    from .. import paths
-
-    identity_path = paths.PROJECTS_DIR / project_slug / "project.json"
-    if not identity_path.exists():
-        return TraceMaterializationRef.from_record(record)
-    identity = _read_object(identity_path, name="canonical project identity")
-    source_path = identity.get("path") or identity.get("project_dir")
-    if not isinstance(source_path, str) or not source_path:
-        raise LabelIntegrityError("canonical project identity has no source repository")
-    source_repo = Path(source_path).expanduser().resolve()
-    if not source_repo.is_dir():
-        raise LabelIntegrityError("canonical project source repository is unavailable")
-    try:
-        from ..trails import build_trail_query_projection_for_trace
-
-        projection = build_trail_query_projection_for_trace(source_repo, record.trace_id)
-        return TraceMaterializationRef.from_record(record, trail_projection=projection)
-    except Exception as exc:
-        raise LabelIntegrityError(
-            "authoritative current Trace Map could not be rebuilt from Trail world-state"
-        ) from exc
-
-
 def _trace_ref_for_label(row: Mapping[str, Any]) -> TraceMaterializationRef:
     pin = row["slice_pin"]
     project_slug, record = _canonical_subject_trace(pin["trace_id"])
@@ -1002,23 +969,52 @@ def attach_labels(
     return path
 
 
+def _authoritative_label_companion(
+    trace_id: str,
+    companions: list[Path],
+) -> Path:
+    """Resolve the single owning companion without decoding the rest.
+
+    The address is a bare trace, and a trace is owned by exactly one project, so
+    a bounded read decodes only that project's companion instead of every
+    matching companion in the corpus (#323). Directory listing is cheap; the
+    per-companion gzip decode is the cost this avoids.
+
+    Ownership is bound through the same canonical corpus/freshness resolution
+    every normal trace read uses (``trace_corpus.resolve``), never inferred from
+    ``traces/v1`` ``trace.json`` presence: a ``trace_record_only`` ingest writes
+    the fresh canonical v2 record + labels companion but skips the ``trace.json``
+    projection, so an older project can legitimately be the only one holding a
+    ``trace.json`` while a fresher project holds the current labels. When the
+    corpus cannot bind exactly one owning companion the read fails closed rather
+    than silently picking a project or unioning rows across projects.
+    """
+
+    if len(companions) == 1:
+        return companions[0]
+    from ..trace_corpus import resolve
+
+    source = resolve(trace_id)
+    if source is not None:
+        owner = trace_v1_labels_path(source.project_slug, trace_id)
+        if owner in set(companions):
+            return owner
+    raise LabelIntegrityError("label companion owning project is ambiguous")
+
+
 def label_summary_for_trace(trace_id: str, *, limit: int = 8) -> dict[str, Any]:
-    """Return a bounded summary from sibling companions for a normal read."""
+    """Return a bounded summary from the owning companion for a normal read."""
 
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ValueError("label summary limit must be a non-negative integer")
     _validate_subject({"kind": "trace", "address": trace_id})
     root = traces_v1_root()
-    rows_by_id: dict[str, dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
     if root.is_dir():
-        pattern = f"*/{_path_part(trace_id)}/labels.jsonl.gz"
-        for path in sorted(root.glob(pattern)):
-            for row in _decode_rows(path, expected_trace_id=trace_id):
-                existing = rows_by_id.get(row["label_id"])
-                if existing is not None and _canonical_json(existing) != _canonical_json(row):
-                    raise LabelIntegrityError("cross-project label_id collision")
-                rows_by_id[row["label_id"]] = row
-    rows = [rows_by_id[label_id] for label_id in sorted(rows_by_id)]
+        companions = sorted(root.glob(f"*/{_path_part(trace_id)}/labels.jsonl.gz"))
+        if companions:
+            companion = _authoritative_label_companion(trace_id, companions)
+            rows = _decode_rows(companion, expected_trace_id=trace_id)
     verify_labels(rows, store=RunStore())
     return {
         "count": len(rows),
@@ -1042,6 +1038,7 @@ __all__ = [
     "LabelContractError",
     "LabelIntegrityError",
     "attach_labels",
+    "authoritative_trace_materialization_ref",
     "complete_run_digest",
     "label_summary_for_trace",
     "mint_labels_for_run",

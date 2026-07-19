@@ -100,6 +100,14 @@ returncode=4
 local-container lease not found: cbx_5646ec84299e
 container_absent=true
 
-REMOTE-ONLY BLOCKER
+HISTORICAL REMOTE-ONLY BLOCKER (recorded at observation time; superseded)
 Issue #264 still requires this proof on a genuine remote provider lease.
 No remote provider was invoked, and this LOCAL diagnostic makes no remote claim.
+
+AMENDED #264 RULING (operative)
+The amended issue #264 ruling accepts this local Ubuntu 24.04 container proof
+and deliberately retains the honest satisfies_remote_real_lease_gate=false stamp
+in the paired proof (tests/manual/a2_hf_emulator_real_box.json). The genuine
+remote/rented and Linux x86_64 real-lease proofs moved to A7 (issue #281).
+The HISTORICAL REMOTE-ONLY BLOCKER text above is retained for the record and
+must not be read as the current, operative A2 gate.

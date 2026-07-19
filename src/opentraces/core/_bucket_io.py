@@ -22,6 +22,30 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     _atomic_write_text(path, text)
 
 
+def _fsync_directory(directory: Path) -> None:
+    """fsync a directory so a rename into it survives power loss (best-effort).
+
+    Directory fsync is not supported on every platform/filesystem; a failure to
+    open or sync the directory must not defeat the write itself.
+    """
+
+    try:
+        dir_fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            # The rename already committed; a failing close on the directory
+            # fd must never surface as a write failure (#302 review B).
+            pass
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     current = path.read_text(encoding="utf-8") if path.exists() else None
@@ -31,7 +55,12 @@ def _atomic_write_text(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            # fsync the temp content before the rename so a crash cannot leave a
+            # renamed-but-empty file (issue #302 F6).
+            handle.flush()
+            os.fsync(handle.fileno())
         Path(tmp_name).replace(path)
+        _fsync_directory(path.parent)
     finally:
         tmp_path = Path(tmp_name)
         if tmp_path.exists():
@@ -46,7 +75,10 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
         Path(tmp_name).replace(path)
+        _fsync_directory(path.parent)
     finally:
         tmp_path = Path(tmp_name)
         if tmp_path.exists():

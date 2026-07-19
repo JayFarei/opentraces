@@ -84,7 +84,16 @@ def _build_inputs_sha256() -> str:
 
 
 def emulator_provenance_path(binary: Path) -> Path:
-    return binary.with_name(f"{binary.name}.provenance.json")
+    """Return the provenance sidecar beside the *real* binary bytes.
+
+    ``binary`` may be a single-pointer symlink into a published generation
+    directory (see ``_publish_generation``); resolving it here keeps the
+    binary and its provenance record in the same crash-consistent generation
+    so the pair is always read together.
+    """
+
+    real = Path(os.path.realpath(binary))
+    return real.with_name(f"{real.name}.provenance.json")
 
 
 def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
@@ -194,6 +203,76 @@ def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
         temporary.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
         temporary_path = Path(temporary.name)
     os.replace(temporary_path, path)
+
+
+def _fsync_path(path: Path) -> None:
+    """Best-effort fsync of a file or directory so its bytes are durable."""
+
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _publish_generation(output: Path, binary_source: Path, provenance_source: Path) -> None:
+    """Publish the binary + provenance as one crash-consistent generation.
+
+    Both files are staged inside a fresh generation directory that is made
+    visible through a single atomic symlink swap of ``output``. Because the
+    swap is the one and only publication step, a crash can leave *either* the
+    prior generation intact *or* a fully-populated new generation, never a torn
+    binary/provenance pair. ``emulator_provenance_path`` follows the symlink, so
+    a reader always pairs the binary with the provenance from the same
+    generation.
+    """
+
+    output = Path(output)
+    generations_root = output.parent / f".{output.name}.generations"
+    generations_root.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".gen-", dir=generations_root))
+    generation_binary = staging / output.name
+    generation_provenance = generation_binary.with_name(
+        f"{generation_binary.name}.provenance.json"
+    )
+    generation_binary.write_bytes(binary_source.read_bytes())
+    generation_binary.chmod(0o755)
+    generation_provenance.write_bytes(provenance_source.read_bytes())
+    # Durably land the whole generation before it can be pointed at.
+    _fsync_path(generation_binary)
+    _fsync_path(generation_provenance)
+    _fsync_path(staging)
+    # Single-pointer commit: one atomic rename swaps the entire generation.
+    link_name = (
+        output.parent / f".{output.name}.link.{os.getpid()}.{secrets.token_hex(4)}"
+    )
+    link_name.unlink(missing_ok=True)
+    os.symlink(os.path.relpath(generation_binary, output.parent), link_name)
+    os.replace(link_name, output)
+    _fsync_path(output.parent)
+    _prune_stale_generations(generations_root, keep=staging)
+
+
+def _prune_stale_generations(generations_root: Path, *, keep: Path) -> None:
+    """Best-effort removal of superseded generations under the build lock."""
+
+    keep = Path(keep).resolve()
+    try:
+        entries = list(generations_root.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.resolve() == keep or not entry.is_dir():
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            continue
 
 
 def _provenance_for_binary(path: Path) -> dict[str, Any]:
@@ -315,19 +394,7 @@ def build_hf_emulator_binary(
         _write_json_atomic(candidate_provenance, provenance)
         if not update_trusted_manifest:
             verified_emulator_binary_pin(candidate)
-        with tempfile.NamedTemporaryFile(
-            dir=output.parent,
-            prefix=f".{output.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary_binary:
-            temporary_binary.write(candidate.read_bytes())
-            temporary_binary_path = Path(temporary_binary.name)
-        temporary_binary_path.chmod(0o755)
-        temporary_provenance = output.parent / f".{output.name}.provenance.tmp"
-        temporary_provenance.write_bytes(candidate_provenance.read_bytes())
-        os.replace(temporary_binary_path, output)
-        os.replace(temporary_provenance, emulator_provenance_path(output))
+        _publish_generation(output, candidate, candidate_provenance)
     if update_trusted_manifest:
         provenance = _read_json_object(emulator_provenance_path(output), label="binary provenance")
         _write_json_atomic(
@@ -577,11 +644,25 @@ class HuggingFaceEmulator:
 
     @property
     def pin(self) -> dict[str, Any]:
-        return {
+        pin = {
             **self.binary_pin.to_dict(),
             "setup": self.world_setup,
             "evidence_ref": WORLD_EVIDENCE_REF,
         }
+        if self._ledger_finalized:
+            ledger_path = self.run_path / LEDGER_EVIDENCE_REF
+            if self._ledger_path != ledger_path or not ledger_path.is_file():
+                raise RuntimeError("final Hugging Face ledger path is not canonical")
+            launch = self.world_setup.get("readiness", {}).get("launch", {})
+            launch_nonce = launch.get("nonce") if isinstance(launch, Mapping) else None
+            if not isinstance(launch_nonce, str) or not launch_nonce:
+                raise RuntimeError("Hugging Face world has no launch nonce")
+            pin["ledger_binding"] = {
+                "launch_nonce": launch_nonce,
+                "ledger_sha256": f"sha256:{hashlib.sha256(ledger_path.read_bytes()).hexdigest()}",
+                "evidence_ref": LEDGER_EVIDENCE_REF,
+            }
+        return pin
 
     @property
     def browser_endpoint(self) -> str:

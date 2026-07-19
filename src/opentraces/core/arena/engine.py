@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import os
+import stat
+import tempfile
 import time
 import traceback as traceback_module
 from dataclasses import dataclass
@@ -14,22 +17,294 @@ from types import TracebackType
 from typing import Any, Callable, Literal, Mapping
 
 from ... import __version__
+from .agent import CAPTURE_REQUIREMENT_SOURCES, AgentDrive, AgentPrerequisiteMissing
 from .box import Box, CrabboxRuntime
-from .contract import build_result
+from .capability_probe import evaluate_capabilities, parse_capabilities_probe
+from .contract import build_result, validate_result
 from .diagnostics import sanitize_diagnostic_value, sanitize_reason
 from .drives.actions import RunActionSequence
+from .drives.agent import AgentTerminalSessionFactory, TermctrlAgentSession
 from .drives.browser import BrowserDrive, BrowserFactory, open_playwright_session
 from .drives.terminal import TerminalDrive
+from .emulate.anthropic.runtime import (
+    AnthropicReplayEmulator,
+    start_anthropic_replay_emulator,
+)
 from .emulate.huggingface.runtime import (
     HuggingFaceEmulator,
     app_state_pin as app_state_with_hf,
     start_huggingface_emulator,
 )
 from .run_store import RunDraft, RunStore
+from .verifier_identity import resolve_verifier
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _safe_sensitive_path_finding(
+    relative: str,
+    *,
+    kind: str,
+    sensitive_values: tuple[bytes, ...],
+) -> str:
+    relative_bytes = os.fsencode(relative)
+    if any(secret in relative_bytes for secret in sensitive_values):
+        digest = hashlib.sha256(relative_bytes).hexdigest()
+        return f"sha256:{digest} [path contains live credential]"
+    return f"{relative} [{kind}]" if kind else relative
+
+
+# Bounded read window for regular-file credential scanning. Peak scan memory is
+# this window plus a per-scan (max credential length - 1) byte overlap, never the
+# whole file, so it does not scale with the largest recording or capture artifact.
+_SCAN_CHUNK_SIZE = 1 << 20
+
+
+def _handle_contains_sensitive_bytes(
+    handle: Any,
+    sensitive_values: tuple[bytes, ...],
+) -> tuple[bool, int]:
+    """Scan an open regular-file handle for any credential in bounded chunks.
+
+    Reads at most ``_SCAN_CHUNK_SIZE`` bytes at a time and retains an overlap of
+    ``credential_length - 1`` bytes (the longest selected credential) between
+    consecutive chunks, so a credential straddling a chunk boundary is still
+    detected. Returns ``(found, bytes_read)``; ``bytes_read`` counts every byte
+    read so the exact-byte accounting is unchanged from the whole-file read.
+    """
+
+    overlap = max((len(secret) for secret in sensitive_values), default=1) - 1
+    carry = b""
+    bytes_read = 0
+    found = False
+    while True:
+        chunk = handle.read(_SCAN_CHUNK_SIZE)
+        if not chunk:
+            break
+        bytes_read += len(chunk)
+        window = carry + chunk if carry else chunk
+        if not found and any(secret in window for secret in sensitive_values):
+            found = True
+        carry = window[-overlap:] if overlap else b""
+    return found, bytes_read
+
+
+def _scan_sensitive_tree(
+    root: Path,
+    sensitive_values: tuple[bytes, ...],
+) -> tuple[list[str], int, int, int]:
+    """Scan names and regular-file bytes without following stored links."""
+
+    findings: list[str] = []
+    files_checked = 0
+    bytes_checked = 0
+    capture_files_checked = 0
+
+    def walk(directory: Path) -> None:
+        nonlocal files_checked, bytes_checked, capture_files_checked
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: os.fsencode(entry.name))
+        except OSError:
+            relative = directory.relative_to(root).as_posix()
+            findings.append(
+                _safe_sensitive_path_finding(
+                    relative,
+                    kind="unreadable directory not frozen",
+                    sensitive_values=sensitive_values,
+                )
+            )
+            return
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(root).as_posix()
+            relative_bytes = os.fsencode(relative)
+            path_contains_secret = any(secret in relative_bytes for secret in sensitive_values)
+            if entry.is_symlink():
+                files_checked += 1
+                if relative.startswith("capture/"):
+                    capture_files_checked += 1
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="symlink not frozen",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                if path_contains_secret:
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                walk(path)
+                continue
+
+            files_checked += 1
+            if relative.startswith("capture/"):
+                capture_files_checked += 1
+            if path_contains_secret:
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            descriptor = -1
+            try:
+                if not stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="special node not frozen",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                descriptor = os.open(entry.path, flags)
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    findings.append(
+                        _safe_sensitive_path_finding(
+                            relative,
+                            kind="special node not frozen",
+                            sensitive_values=sensitive_values,
+                        )
+                    )
+                    continue
+                with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                    file_has_secret, file_bytes = _handle_contains_sensitive_bytes(
+                        handle, sensitive_values
+                    )
+                bytes_checked += file_bytes
+            except OSError:
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="unreadable file not frozen",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+                continue
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+            if file_has_secret:
+                findings.append(
+                    _safe_sensitive_path_finding(
+                        relative,
+                        kind="",
+                        sensitive_values=sensitive_values,
+                    )
+                )
+
+    walk(root)
+    return sorted(set(findings)), files_checked, bytes_checked, capture_files_checked
+
+
+# Bounded work for the contaminated-staging purge recovery (issue #335): a small
+# fixed number of repair+retry attempts over a bounded number of tree entries, so
+# a denied deletion cannot spin unboundedly.
+_MAX_PURGE_ATTEMPTS = 3
+_MAX_PURGE_REPAIR_ENTRIES = 100_000
+
+
+def _repair_tree_permissions_no_follow(root: Path) -> None:
+    """Best-effort grant owner traverse/write bits so a retry deletion can complete.
+
+    Never follows symbolic links: a symlink entry is left untouched (its target is
+    never chmod-ed) and is never descended into. Bounded by
+    ``_MAX_PURGE_REPAIR_ENTRIES`` so a pathological tree cannot spin.
+    """
+
+    stack: list[Path] = [root]
+    seen = 0
+    while stack and seen < _MAX_PURGE_REPAIR_ENTRIES:
+        current = stack.pop()
+        seen += 1
+        try:
+            info = os.lstat(current)
+        except OSError:
+            continue
+        if stat.S_ISLNK(info.st_mode):
+            continue
+        is_dir = stat.S_ISDIR(info.st_mode)
+        grant = 0o700 if is_dir else 0o600
+        try:
+            os.chmod(current, info.st_mode | grant, follow_symlinks=False)
+        except NotImplementedError:
+            # ONLY a genuinely-unsupported no-follow chmod (no lchmod on this
+            # platform) may fall back to a plain chmod, and only after
+            # re-verifying at use time that the node is still not a symlink —
+            # a generic OSError (denied, swapped, gone) never routes here, so
+            # the no-follow property holds unconditionally.
+            try:
+                if not stat.S_ISLNK(os.lstat(current).st_mode):
+                    os.chmod(current, info.st_mode | grant)
+            except OSError:
+                pass
+        except OSError:
+            pass
+        if is_dir:
+            try:
+                with os.scandir(current) as iterator:
+                    for entry in iterator:
+                        if seen + len(stack) >= _MAX_PURGE_REPAIR_ENTRIES:
+                            # Enforce the budget INSIDE the enumeration so one
+                            # wide directory cannot enqueue past it; an
+                            # under-repaired tree simply routes to the
+                            # unrecoverable marker path on the retry.
+                            break
+                        stack.append(Path(entry.path))
+            except OSError:
+                continue
+
+
+def _credential_free_marker_value(
+    value: str, sensitive_values: tuple[bytes, ...]
+) -> str:
+    """Hash-replace a marker field that carries live credential bytes.
+
+    Same posture as ``_safe_sensitive_path_finding``: the marker names things
+    for an operator but must be unconditionally credential-free, even when a
+    configurable component (for example the RunStore root) contains the value.
+    """
+
+    encoded = os.fsencode(value)
+    if any(secret in encoded for secret in sensitive_values):
+        digest = hashlib.sha256(encoded).hexdigest()
+        return f"sha256:{digest} [value contains live credential]"
+    return value
+
+
+def _redact_sensitive_value(value: Any, sensitive_values: tuple[str, ...]) -> Any:
+    if isinstance(value, str):
+        for secret in sensitive_values:
+            value = value.replace(secret, "[live credential redacted]")
+        return value
+    if isinstance(value, list):
+        return [_redact_sensitive_value(item, sensitive_values) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(_redact_sensitive_value(key, sensitive_values)): _redact_sensitive_value(
+                item, sensitive_values
+            )
+            for key, item in value.items()
+        }
+    return value
 
 
 def extract_claim(callable_: Callable[..., Any]) -> str:
@@ -88,6 +363,8 @@ class Bench:
         box_runtime: CrabboxRuntime | None = None,
         repository_path: Path | None = None,
         browser_factory: BrowserFactory | None = None,
+        agent_session_factory: AgentTerminalSessionFactory = TermctrlAgentSession,
+        agent_poll_interval: float = 0.3,
     ) -> None:
         self.source = source
         self.store = store or RunStore()
@@ -97,6 +374,8 @@ class Bench:
         )
         self.repository_path = Path(repository_path or Path.cwd())
         self.browser_factory = browser_factory or open_playwright_session
+        self.agent_session_factory = agent_session_factory
+        self.agent_poll_interval = agent_poll_interval
 
     def run(
         self,
@@ -132,6 +411,7 @@ class BenchRun:
         self.box: Box | None = None
         self.terminal: TerminalDrive
         self.browser: BrowserDrive
+        self.agent: AgentDrive
         self.actions: RunActionSequence
         self.verifiers: list[dict[str, Any]] = []
         self.verifier_sources: list[dict[str, str]] = []
@@ -140,8 +420,11 @@ class BenchRun:
         self._started_at = ""
         self._started = 0.0
         self._app_state_pin: dict[str, Any] = {}
-        self._emulators: dict[str, HuggingFaceEmulator] = {}
+        self._emulators: dict[str, HuggingFaceEmulator | AnthropicReplayEmulator] = {}
+        self._capabilities_pin: dict[str, str] | None = None
         self._lifecycle_diagnostics: list[dict[str, Any]] = []
+        self._lease_lifecycle: dict[str, Any] | None = None
+        self._capture_result: dict[str, Any] | None = None
         self.origin_evidence_ref: str | None = None
 
     def __enter__(self) -> "BenchRun":
@@ -176,6 +459,15 @@ class BenchRun:
             if callable(configure_evidence):
                 configure_evidence(self.draft.path)
             self.box = self.bench.box_runtime.lease()
+            self._lease_lifecycle = {
+                "schema_version": "opentraces.bench.lease-lifecycle.v0",
+                "id": self.box.id,
+                "provider": self.box.provider,
+                "acquired": _utc_now(),
+                "release_started": None,
+                "released": None,
+                "status": "acquired",
+            }
             self._app_state_pin = self.bench.box_runtime.materialize(
                 self.box, self.app_state, repository=self.bench.repository_path
             )
@@ -195,11 +487,23 @@ class BenchRun:
                 actions=self.actions,
                 factory=self.bench.browser_factory,
             )
+            self.agent = AgentDrive(
+                box=self.box,
+                draft=self.draft,
+                actions=self.actions,
+                terminal=self.terminal,
+                browser=self.browser,
+                execution_mode=self.execution_mode,
+                product_environment=self._agent_product_environment,
+                replay_inference=lambda: self._emulators.get("anthropic"),
+                capture_required=self.capture_required,
+                session_factory=self.bench.agent_session_factory,
+                poll_interval=self.bench.agent_poll_interval,
+            )
         except Exception as exc:
             if self.box is not None:
-                try:
-                    self.bench.box_runtime.release(self.box)
-                except Exception as release_exc:
+                release_exc = self._release_box()
+                if release_exc is not None:
                     # The original setup failure remains primary; both the
                     # run result and Crabbox's failure bundle preserve it.
                     self._lifecycle_diagnostics.append(
@@ -216,33 +520,125 @@ class BenchRun:
     def skip(self, code: str, message: str) -> None:
         raise BenchSkip(code, message)
 
-    def emulate(self, name: str) -> HuggingFaceEmulator:
-        """Start the one concrete bench.v0 provider world."""
+    def require_capabilities(self, *requirements: str) -> None:
+        """Probe the installed product and bind only runner-supported seams."""
 
-        if name != "huggingface":
-            raise ValueError(f"unknown emulator {name!r}; expected 'huggingface'")
+        if self.draft is None or self.box is None:
+            raise RuntimeError("BenchRun is not active")
+        if self.actions.has_actions:
+            raise RuntimeError("capabilities must be required before scenario actions")
+        if self._capabilities_pin is not None:
+            raise RuntimeError("capabilities are already bound for this run")
+
+        timing_path = self.draft.path / "artifacts" / "crabbox-timing" / "capabilities.json"
+        observed = self.bench.box_runtime.exec_product(
+            self.box,
+            ["opentraces", "capabilities", "--json"],
+            cwd=self.bench.repository_path,
+            env={},
+            timeout=30,
+            timing_path=timing_path,
+        )
+        self.draft.write_text("artifacts/capabilities.stdout", observed.stdout)
+        self.draft.write_text("artifacts/capabilities.stderr", observed.stderr)
+        manifest = parse_capabilities_probe(
+            returncode=observed.returncode,
+            stdout=observed.stdout,
+            stderr=observed.stderr,
+        )
+        manifest_payload = dict(manifest)
+        evidence_ref = "artifacts/capabilities.json"
+        self.draft.write_json(evidence_ref, manifest_payload)
+        canonical = json.dumps(
+            manifest_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self._capabilities_pin = {
+            "digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+            "evidence_ref": evidence_ref,
+        }
+
+        seam_values: dict[str, str] = {}
+        for emulator in self._emulators.values():
+            seam_values.update(emulator.env)
+        outcome = evaluate_capabilities(
+            manifest,
+            requirements=requirements,
+            runner_drives={"cli", "browser"},
+            runner_harnesses=set(),
+            runner_emulators=set(self._emulators),
+            seam_values=seam_values,
+        )
+        if outcome.status == "skip":
+            reason = outcome.reason or {
+                "code": "capability_unsatisfied",
+                "message": "required capability is unavailable",
+            }
+            raise BenchSkip(str(reason["code"]), str(reason["message"]))
+        self.terminal.set_base_environment(outcome.environment)
+
+    def emulate(
+        self,
+        name: str,
+        **options: Any,
+    ) -> HuggingFaceEmulator | AnthropicReplayEmulator:
+        """Start one registered per-run provider or model-wire sidecar."""
+
+        if name not in {"huggingface", "anthropic"}:
+            raise ValueError(f"unknown emulator {name!r}; expected 'huggingface' or 'anthropic'")
         if self.draft is None or self.box is None:
             raise RuntimeError("BenchRun is not active")
         existing = self._emulators.get(name)
         if existing is not None:
+            if options:
+                raise ValueError(f"emulator {name!r} is already running")
             return existing
-        emulator = start_huggingface_emulator(
-            runtime=self.bench.box_runtime,
-            box=self.box,
-            repository=self.bench.repository_path,
-            run_path=self.draft.path,
-        )
+        if name == "huggingface":
+            if options:
+                raise ValueError("Hugging Face emulator accepts no options")
+            emulator: HuggingFaceEmulator | AnthropicReplayEmulator
+            emulator = start_huggingface_emulator(
+                runtime=self.bench.box_runtime,
+                box=self.box,
+                repository=self.bench.repository_path,
+                run_path=self.draft.path,
+            )
+        else:
+            unknown = sorted(set(options).difference({"script"}))
+            if unknown:
+                raise ValueError(f"unknown Anthropic replay option: {unknown[0]}")
+            if "script" not in options:
+                raise ValueError("Anthropic replay emulator requires script")
+            emulator = start_anthropic_replay_emulator(
+                runtime=self.bench.box_runtime,
+                box=self.box,
+                repository=self.bench.repository_path,
+                run_path=self.draft.path,
+                script=options["script"],
+            )
         self._emulators[name] = emulator
-        self._app_state_pin = app_state_with_hf(
-            name=str(self._app_state_pin.get("name") or self.app_state),
-            recipe=self._app_state_pin,
-            provides=[
-                *list(self._app_state_pin.get("provides") or []),
-                "hf-emulator",
-            ],
-            hf_emulator=emulator.binary_pin,
-        )
+        if isinstance(emulator, HuggingFaceEmulator):
+            self._app_state_pin = app_state_with_hf(
+                name=str(self._app_state_pin.get("name") or self.app_state),
+                recipe=self._app_state_pin,
+                provides=[
+                    *list(self._app_state_pin.get("provides") or []),
+                    "hf-emulator",
+                ],
+                hf_emulator=emulator.binary_pin,
+            )
         return emulator
+
+    def _agent_product_environment(self) -> dict[str, str]:
+        environment: dict[str, str] = {}
+        for emulator in self._emulators.values():
+            for key, value in emulator.env.items():
+                if key in environment and environment[key] != value:
+                    raise ValueError(f"agent product environment disagrees on {key}")
+                environment[key] = value
+        return environment
 
     def _source_ref(self, source_object: object) -> dict[str, str]:
         path_value = inspect.getsourcefile(source_object)
@@ -309,13 +705,14 @@ class BenchRun:
     def verify(self, verifier: Callable[..., Any], /, **inputs: Any) -> dict[str, Any]:
         if self.draft is None:
             raise RuntimeError("BenchRun is not active")
+        resolved = resolve_verifier(verifier)
         started = time.monotonic()
-        source_refs = self._verifier_source_refs(verifier)
+        source_refs = self._verifier_source_refs(resolved.target)
         source_ref = source_refs[0]
         reason: dict[str, str] | None = None
         evidence_refs: list[str] = []
         try:
-            returned = verifier(self, **inputs)
+            returned = resolved.target(self, **inputs)
             if isinstance(returned, Mapping):
                 evidence_refs = [
                     self._persisted_evidence_ref(item) for item in returned.get("evidence_refs", [])
@@ -349,11 +746,20 @@ class BenchRun:
             status = "error"
             reason = sanitize_reason("verifier_error", f"{type(exc).__name__}: {exc}")
         record = {
-            "name": f"{verifier.__module__}.{verifier.__qualname__}",
+            "name": resolved.name,
             "source_ref": source_ref,
             "status": status,
             "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
             "evidence_refs": evidence_refs,
+            # Keep the verifier algebra (a zero-evidence pass still completes),
+            # but stamp what was actually observed so an assertion-only pass is
+            # visible rather than indistinguishable from an evidence-backed one
+            # (issue #302 F6).
+            "observed": (
+                ("evidence-backed" if evidence_refs else "assertion-only")
+                if status == "pass"
+                else None
+            ),
             "reason": reason,
         }
         self.verifiers.append(record)
@@ -364,6 +770,10 @@ class BenchRun:
         return record
 
     def _outcome_from_verifiers(self) -> tuple[str, str | None, dict[str, str] | None]:
+        if hasattr(self, "agent"):
+            attempt = self.agent.attempt_result
+            if attempt is not None and not attempt.completed:
+                return "complete", "fail", attempt.failure
         if not self.verifiers:
             return (
                 "error",
@@ -424,6 +834,93 @@ class BenchRun:
         )
         return artifact_ref
 
+    def _write_cleanup_required_marker(
+        self,
+        draft_path: Path,
+        primary: BaseException,
+        sensitive_values: tuple[bytes, ...] = (),
+    ) -> Path:
+        """Name an unpurgeable contaminated tree for an operator, without secrets.
+
+        The marker lands OUTSIDE the contaminated tree and carries only the
+        operator path and a reason code. Every field is passed through the
+        sensitive-byte check and hash-replaced on a match, so the marker is
+        unconditionally credential-free even when a configurable path component
+        (for example the store root) contains the credential bytes.
+        """
+
+        store = self.draft.store
+        marker_dir = store.root / ".cleanup-required"
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        marker_path = marker_dir / f"{self.draft.run_id}.json"
+        payload = {
+            "schema_version": "opentraces.bench.cleanup-required.v0",
+            "run_id": self.draft.run_id,
+            "contaminated_staging_path": str(draft_path),
+            "reason": "contaminated_staging_purge_failed",
+            "error_type": type(primary).__name__,
+            "operator_action": (
+                "manually remove the named staging path: it may still hold "
+                "unpurged live-credential bytes and must never be copied, "
+                "indexed, or finalized"
+            ),
+        }
+        payload = {
+            key: _credential_free_marker_value(value, sensitive_values)
+            for key, value in payload.items()
+        }
+        marker_path.write_text(
+            json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        return marker_path
+
+    def _purge_contaminated_draft(
+        self,
+        primary: BaseException | None = None,
+        *,
+        sensitive_values: tuple[bytes, ...] = (),
+    ) -> None:
+        """Discard the contaminated draft, repairing permissions and retrying.
+
+        Recoverable deletion failures (for example a denied directory) are
+        repaired without ever following symlinks and retried a bounded number of
+        times. If the tree still cannot be purged, a sanitized cleanup-required
+        marker is written outside it and the ORIGINAL deletion exception (the
+        first, never a later retry's) is preserved as the primary failure — a
+        failure to write the marker itself is recorded but never masks it. The
+        contaminated draft is never finalized or indexed. When ``primary`` is
+        set, it is re-raised after a successful purge so the caller's
+        fail-closed contract is unchanged.
+        """
+
+        draft_path = self.draft.path
+        original_error: OSError | None = None
+        purged = False
+        for attempt in range(_MAX_PURGE_ATTEMPTS):
+            try:
+                self.draft.rebuild_empty()
+                purged = True
+                break
+            except OSError as error:
+                if original_error is None:
+                    original_error = error
+                if attempt + 1 < _MAX_PURGE_ATTEMPTS:
+                    _repair_tree_permissions_no_follow(draft_path)
+        if not purged and original_error is not None:
+            try:
+                self._write_cleanup_required_marker(
+                    draft_path, primary or original_error, sensitive_values
+                )
+            except Exception as marker_error:
+                # Best-effort only: the marker names the tree for an operator,
+                # but its own IO failure must never replace the primary error.
+                self._lifecycle_diagnostics.append(
+                    sanitize_reason("cleanup_marker_write_failed", marker_error)
+                )
+            raise primary if primary is not None else original_error
+        if primary is not None:
+            raise primary
+
     def _finalize(
         self,
         *,
@@ -460,12 +957,31 @@ class BenchRun:
                     "kind": "lifecycle_diagnostics",
                 }
             )
+        if self._lease_lifecycle is not None:
+            lease_ref = "artifacts/lease-lifecycle.json"
+            self.draft.write_json(lease_ref, self._lease_lifecycle)
+            artifacts.append(
+                {
+                    "path": lease_ref,
+                    "media_type": "application/json",
+                    "kind": "lease_lifecycle",
+                }
+            )
         if scenario_assertion_ref is not None:
             artifacts.append(
                 {
                     "path": scenario_assertion_ref,
                     "media_type": "application/json",
                     "kind": "assertion_failure",
+                }
+            )
+        agent_attempt = self.draft.path / "artifacts" / "agent-attempt.json"
+        if agent_attempt.is_file():
+            artifacts.append(
+                {
+                    "path": "artifacts/agent-attempt.json",
+                    "media_type": "application/json",
+                    "kind": "agent_attempt",
                 }
             )
         duration_ms = max(0, int((time.monotonic() - self._started) * 1000))
@@ -477,6 +993,135 @@ class BenchRun:
             }
             for verifier in self.verifiers
         ]
+        if hasattr(self, "agent") and self.agent.attempt_result is not None:
+            attempt = self.agent.attempt_result
+            evidence_requirements.append(
+                {
+                    "name": "agent.attempt",
+                    "complete": attempt.completed and attempt.recording_complete,
+                    "evidence_refs": [attempt.artifact_ref],
+                }
+            )
+        capture_sources = (
+            self._capture_result.get("sources", [])
+            if isinstance(self._capture_result, dict)
+            else []
+        )
+        capture_by_name = {
+            str(source.get("name")): source
+            for source in capture_sources
+            if isinstance(source, Mapping) and source.get("name")
+        }
+        missing_capture: list[str] = []
+        trace_refs = (
+            self._capture_result.get("trace_refs", [])
+            if isinstance(self._capture_result, dict)
+            else []
+        )
+        for requirement_name in self.capture_required:
+            source_name = CAPTURE_REQUIREMENT_SOURCES.get(
+                requirement_name, requirement_name
+            )
+            source = capture_by_name.get(source_name)
+            complete = bool(
+                source
+                and source.get("status") == "finalized"
+                and source.get("completeness") == "full"
+            )
+            if requirement_name in {"trace", "storage"}:
+                complete = complete and bool(trace_refs)
+            refs = source.get("evidence_refs", []) if source else []
+            evidence_requirements.append(
+                {
+                    "name": f"capture.{requirement_name}",
+                    "complete": complete,
+                    "evidence_refs": (
+                        [
+                            f"capture/{ref}"
+                            for ref in refs
+                            if isinstance(ref, str)
+                            and not Path(ref).is_absolute()
+                            and ".." not in Path(ref).parts
+                        ]
+                        if isinstance(refs, list)
+                        else []
+                    ),
+                }
+            )
+            if not complete:
+                missing_capture.append(requirement_name)
+        if self.capture_required:
+            lifecycle_complete = bool(
+                isinstance(self._capture_result, dict)
+                and self._capture_result.get("completeness") == "complete"
+            )
+            evidence_requirements.append(
+                {
+                    "name": "capture.lifecycle",
+                    "complete": lifecycle_complete,
+                    "evidence_refs": (
+                        ["capture/capture_result.json"]
+                        if isinstance(self._capture_result, dict)
+                        else []
+                    ),
+                }
+            )
+        if missing_capture and execution_status == "complete" and verdict == "pass":
+            verdict = "fail"
+            reason = {
+                "code": "required_capture_missing",
+                "message": (
+                    "required capture evidence is unavailable: "
+                    + ", ".join(missing_capture)
+                ),
+            }
+        custody_report: dict[str, Any] | None = None
+        custody_requirement: dict[str, Any] | None = None
+        sensitive_environment = (
+            self.agent.sensitive_environment if hasattr(self, "agent") else {}
+        )
+        if sensitive_environment:
+            sensitive_text = tuple(sorted(set(sensitive_environment.values())))
+            sensitive_values = tuple(value.encode() for value in sensitive_text)
+            (
+                matches,
+                files_checked,
+                bytes_checked,
+                capture_files_checked,
+            ) = _scan_sensitive_tree(
+                self.draft.path,
+                sensitive_values,
+            )
+            custody_report = {
+                "schema_version": "opentraces.bench.secret-absence.v0",
+                "secret_names": sorted(sensitive_environment),
+                "files_checked": files_checked,
+                "bytes_checked": bytes_checked,
+                "capture_files_checked": capture_files_checked,
+                "candidate_result_checked": True,
+                "matches": matches,
+                "absent": not matches,
+            }
+            custody_ref = "artifacts/live-key-absence.json"
+            artifacts.append(
+                {
+                    "path": custody_ref,
+                    "media_type": "application/json",
+                    "kind": "secret_absence",
+                }
+            )
+            custody_requirement = {
+                "name": "agent.live_key_absence",
+                "complete": not matches,
+                "evidence_refs": [custody_ref],
+            }
+            evidence_requirements.append(custody_requirement)
+            if matches and execution_status == "complete" and verdict == "pass":
+                verdict = "fail"
+                reason = {
+                    "code": "live_key_stored",
+                    "message": "the live inference key appeared in stored run evidence",
+                }
         if scenario_assertion:
             evidence_requirements.append(
                 {
@@ -532,7 +1177,7 @@ class BenchRun:
             evidence={"complete": evidence_complete, "requirements": evidence_requirements},
             recordings=self._recording_summary(),
             artifacts=artifacts,
-            capture=None,
+            capture=self._capture_result,
             pins={
                 "product": {
                     "commit": self.bench.source.commit,
@@ -541,12 +1186,102 @@ class BenchRun:
                 },
                 "observer": {"package": "opentraces", "version": __version__},
                 "environment": box_pin,
-                "harness": None,
-                "model_wire": None,
+                "harness": self.agent.harness_pin if hasattr(self, "agent") else None,
+                "model_wire": (self.agent.inference_pin if hasattr(self, "agent") else None),
+                "capabilities": self._capabilities_pin,
                 "emulators": {name: emulator.pin for name, emulator in self._emulators.items()},
                 "app_state": self._app_state_pin,
             },
         )
+        if custody_report is not None and custody_requirement is not None:
+            candidate_result = json.dumps(
+                result, sort_keys=True, separators=(",", ":")
+            ).encode()
+            custody_report["bytes_checked"] += len(candidate_result)
+            if any(secret in candidate_result for secret in sensitive_values):
+                custody_report["matches"].append("result.json")
+                custody_report["absent"] = False
+                custody_requirement["complete"] = False
+                result["evidence"]["complete"] = False
+                if result["execution_status"] == "complete" and result["verdict"] == "pass":
+                    result["verdict"] = "fail"
+                    result["reason"] = {
+                        "code": "live_key_stored",
+                        "message": "the live inference key appeared in stored run evidence",
+                    }
+                validate_result(result)
+            if custody_report["matches"]:
+                safe_scenario = _redact_sensitive_value(result["scenario"], sensitive_text)
+                safe_pins = _redact_sensitive_value(result["pins"], sensitive_text)
+                self._purge_contaminated_draft(sensitive_values=sensitive_values)
+                self.draft.write_text(
+                    "source/scenario.py",
+                    "# Original scenario source discarded after live credential contamination.\n",
+                )
+                self.draft.write_json(
+                    "source/source.json",
+                    {
+                        "nodeid": safe_scenario["nodeid"],
+                        "claim": safe_scenario["claim"],
+                        "scenario_path": "[discarded after live credential contamination]",
+                        "repository": "[discarded after live credential contamination]",
+                        "commit": safe_pins.get("product", {}).get("commit"),
+                        "dirty_diff_digest": None,
+                        "copied_source_path": "source/scenario.py",
+                    },
+                )
+                self.draft.write_json("source/verifiers.json", {"sources": []})
+                result = build_result(
+                    run_id=self.draft.run_id,
+                    claim=safe_scenario["claim"],
+                    nodeid=safe_scenario["nodeid"],
+                    source_ref="source/scenario.py",
+                    execution_mode=self.execution_mode,
+                    started_at=self._started_at,
+                    duration_ms=duration_ms,
+                    execution_status="complete",
+                    verdict="fail",
+                    reason={
+                        "code": "live_key_stored",
+                        "message": ("the live inference key appeared in stored run evidence"),
+                    },
+                    verifiers=[],
+                    evidence={
+                        "complete": False,
+                        "requirements": [custody_requirement],
+                    },
+                    recordings={"rewatchable": False, "channels": []},
+                    artifacts=[
+                        {
+                            "path": "artifacts/live-key-absence.json",
+                            "media_type": "application/json",
+                            "kind": "secret_absence",
+                        }
+                    ],
+                    capture=None,
+                    pins=safe_pins,
+                )
+                candidate_result = json.dumps(
+                    result, sort_keys=True, separators=(",", ":")
+                ).encode()
+                if any(secret in candidate_result for secret in sensitive_values):
+                    self._purge_contaminated_draft(
+                        RuntimeError(
+                            "sanitized live-key failure result retained sensitive bytes"
+                        ),
+                        sensitive_values=sensitive_values,
+                    )
+                self.draft.write_json("artifacts/live-key-absence.json", custody_report)
+                rebuilt_matches, _, _, _ = _scan_sensitive_tree(self.draft.path, sensitive_values)
+                if rebuilt_matches:
+                    self._purge_contaminated_draft(
+                        RuntimeError(
+                            "sanitized live-key failure draft retained sensitive evidence"
+                        ),
+                        sensitive_values=sensitive_values,
+                    )
+            else:
+                self.draft.write_json("artifacts/live-key-absence.json", custody_report)
         if os.environ.get("OT_BENCH_DEFER_FINALIZE") == "1":
             self.draft.stage_result(result)
             self.final_path = self.draft.path
@@ -554,20 +1289,62 @@ class BenchRun:
             self.final_path = self.draft.finalize(result)
         self.result = result
 
+    def _collect_agent_capture(self) -> None:
+        """Freeze the in-box A3 result tree before the lease is released."""
+
+        if self.draft is None or self.box is None or not hasattr(self, "agent"):
+            return
+        attempt = self.agent.attempt_result
+        if attempt is None or attempt.capture_glob is None:
+            return
+        collect = getattr(self.bench.box_runtime, "collect", None)
+        if not callable(collect):
+            self._lifecycle_diagnostics.append(
+                {
+                    "code": "capture_collection_unavailable",
+                    "message": "box runtime does not expose capture collection",
+                }
+            )
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="opentraces-bench-capture-") as directory:
+                destination = Path(directory)
+                collect(
+                    self.box,
+                    [attempt.capture_glob],
+                    destination=destination,
+                    repository=self.bench.repository_path,
+                )
+                result_paths = sorted((destination / "files").rglob("capture_result.json"))
+                if len(result_paths) != 1:
+                    raise RuntimeError(
+                        "capture collection must contain exactly one capture_result.json"
+                    )
+                capture_root = result_paths[0].parent
+                for source_path in sorted(capture_root.rglob("*")):
+                    if source_path.is_file():
+                        relative = source_path.relative_to(capture_root)
+                        self.draft.write_bytes(Path("capture") / relative, source_path.read_bytes())
+                self._capture_result = json.loads(result_paths[0].read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._lifecycle_diagnostics.append(
+                sanitize_reason("capture_collection_failed", exc)
+            )
+
     def _recording_summary(self) -> dict[str, Any]:
         summaries: list[dict[str, Any]] = []
         if hasattr(self, "terminal") and self.terminal.has_actions:
             summaries.append(self.terminal.recording_summary())
         if hasattr(self, "browser") and self.browser.has_actions:
             summaries.append(self.browser.recording_summary())
+        if hasattr(self, "agent") and self.agent.has_actions:
+            summaries.append(self.agent.recording_summary())
         if summaries:
             timeline = self.actions.timeline_status()
             result: dict[str, Any] = {
                 "rewatchable": timeline["complete"]
                 and all(summary["rewatchable"] for summary in summaries),
-                "channels": [
-                    channel for summary in summaries for channel in summary["channels"]
-                ],
+                "channels": [channel for summary in summaries for channel in summary["channels"]],
                 "timeline_ref": timeline["path"],
                 "timeline": timeline,
             }
@@ -595,6 +1372,22 @@ class BenchRun:
             "timeline": timeline,
         }
 
+    def _release_box(self) -> Exception | None:
+        if self.box is None:
+            return None
+        if self._lease_lifecycle is not None:
+            self._lease_lifecycle["release_started"] = _utc_now()
+        try:
+            self.bench.box_runtime.release(self.box)
+        except Exception as exc:
+            if self._lease_lifecycle is not None:
+                self._lease_lifecycle["status"] = "release_failed"
+            return exc
+        if self._lease_lifecycle is not None:
+            self._lease_lifecycle["released"] = _utc_now()
+            self._lease_lifecycle["status"] = "released"
+        return None
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -606,7 +1399,7 @@ class BenchRun:
         scenario_assertion_ref: str | None = None
         if exc is None:
             execution_status, verdict, reason = self._outcome_from_verifiers()
-        elif isinstance(exc, BenchSkip):
+        elif isinstance(exc, (BenchSkip, AgentPrerequisiteMissing)):
             execution_status, verdict = "complete", "skip"
             reason = sanitize_reason(exc.code, exc)
             suppressed = True
@@ -635,6 +1428,9 @@ class BenchRun:
         if hasattr(self, "terminal"):
             terminal_settlement_errors.extend(self.terminal.settle_completed())
 
+        if self.capture_required:
+            self._collect_agent_capture()
+
         for emulator in self._emulators.values():
             try:
                 emulator.stop()
@@ -644,20 +1440,13 @@ class BenchRun:
                     sanitize_reason("emulator_cleanup_failed", emulator_error)
                 )
 
-        release_error: Exception | None = None
-        if self.box is not None:
-            try:
-                self.bench.box_runtime.release(self.box)
-            except Exception as caught:
-                release_error = caught
+        release_error = self._release_box()
         if release_error is not None:
             self._lifecycle_diagnostics.append(
                 sanitize_reason(getattr(release_error, "code", "release_failed"), release_error)
             )
         if hasattr(self, "terminal") and self.terminal.has_pending:
-            terminal_settlement_errors.extend(
-                self.terminal.settle_after_release(timeout=5.0)
-            )
+            terminal_settlement_errors.extend(self.terminal.settle_after_release(timeout=5.0))
         for settlement_error in terminal_settlement_errors:
             self._lifecycle_diagnostics.append(
                 sanitize_reason("terminal_settlement_failed", settlement_error)

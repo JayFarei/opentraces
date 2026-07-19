@@ -58,6 +58,20 @@ def _terminate_recorded_processes(pid_path: Path) -> None:
             pass
 
 
+def _pid_alive(pid: int) -> bool:
+    """True iff a process with ``pid`` still exists (a zombie counts as alive
+    until reaped). ``signal 0`` performs the existence/permission check without
+    delivering a signal."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # It exists but is owned by another uid — still a survivor.
+        return True
+    return True
+
+
 def _recorded_processes(pid_path: Path) -> dict[str, int]:
     return {
         key: int(value)
@@ -261,7 +275,17 @@ def test_finish_bounds_transitive_scoped_event_git_probe(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """A scoped event-log Git hang must become a named partial, not outer timeout."""
+    """A scoped event-log Git hang must become a named partial AND leave no
+    survivor: the blocked ``cat-file --batch`` process, and a descendant it
+    forks into the same group, must both be gone once ``finish`` returns.
+
+    #316: the pre-strengthening control proved only the named partial result;
+    it did not assert its own recorded PID was actually reaped. This records
+    the scoped shim's PID + process group and a delayed-descendant marker, then
+    asserts the exact recorded PID is gone (primary oracle, no sleep) and that
+    the descendant could not survive to write its marker — a child-only kill
+    escape would flip either assertion RED.
+    """
     project = _git_project(tmp_path / "project")
     _seed_event_log(project)
     capture = Capture.open(
@@ -279,14 +303,32 @@ def test_finish_bounds_transitive_scoped_event_git_probe(
     assert real_git is not None
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
-    pid_path = tmp_path / "cat-file-pid"
+    pid_path = tmp_path / "cat-file-pids"
+    child_info_path = tmp_path / "cat-file-child-info"
+    marker_path = tmp_path / "cat-file-descendant-survived"
     shim = shim_dir / "git"
+    # The shim IS the process the deadline runner launches for
+    # ``cat-file --batch``. It forks a delayed descendant into its own process
+    # group (which SIGKILL of the group must also reap) that would write a
+    # survival marker if it escaped the kill, records parent+child PID/PGID,
+    # then blocks on the descendant so the real cat-file read genuinely hangs.
     shim.write_text(
         "#!/bin/sh\n"
         'if [ "$1" = "cat-file" ] && [ "$2" = "--batch" ] '
         '&& [ -n "$OT_OPENTRACES_DIR" ]; then\n'
-        '  printf "%s\\n" "$$" > "$OT_GIT_SHIM_CAT_FILE_PID"\n'
-        "  exec sleep 30\n"
+        f'  "{sys.executable}" -c \'import os, pathlib, time; '
+        'pathlib.Path(os.environ["OT_CAT_FILE_CHILD_INFO"]).write_text('
+        'f"child_pid={os.getpid()}\\nchild_pgid={os.getpgid(0)}\\n"); '
+        'time.sleep(3.5); '
+        'pathlib.Path(os.environ["OT_CAT_FILE_MARKER"]).write_text("survived"); '
+        "time.sleep(30)' &\n"
+        "  child_pid=$!\n"
+        '  parent_pgid=$(ps -o pgid= -p "$$" | tr -d " ")\n'
+        '  printf "parent_pid=%s\\nparent_pgid=%s\\nchild_pid=%s\\n" '
+        '"$$" "$parent_pgid" "$child_pid" > "$OT_GIT_SHIM_CAT_FILE_PID"\n'
+        '  while [ ! -s "$OT_CAT_FILE_CHILD_INFO" ]; do sleep 0.01; done\n'
+        '  cat "$OT_CAT_FILE_CHILD_INFO" >> "$OT_GIT_SHIM_CAT_FILE_PID"\n'
+        '  wait "$child_pid"\n'
         "fi\n"
         f'exec "{real_git}" "$@"\n',
         encoding="utf-8",
@@ -294,6 +336,8 @@ def test_finish_bounds_transitive_scoped_event_git_probe(
     shim.chmod(0o755)
     monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("OT_GIT_SHIM_CAT_FILE_PID", str(pid_path))
+    monkeypatch.setenv("OT_CAT_FILE_CHILD_INFO", str(child_info_path))
+    monkeypatch.setenv("OT_CAT_FILE_MARKER", str(marker_path))
 
     started = time.monotonic()
     try:
@@ -308,13 +352,43 @@ def test_finish_bounds_transitive_scoped_event_git_probe(
             "cat-file --batch" in limitation and "timed out" in limitation
             for limitation in source.limitations
         )
+
+        # The control observed entry into the real blocked cat-file --batch.
         assert pid_path.is_file(), "scoped event-reader control was not exercised"
+        processes = _recorded_processes(pid_path)
+        assert processes.keys() == {
+            "parent_pid",
+            "parent_pgid",
+            "child_pid",
+            "child_pgid",
+        }
+        assert processes["parent_pid"] != processes["child_pid"]
+        # The descendant shares the scoped process group, so the same
+        # group-scoped kill must reap it.
+        assert processes["parent_pgid"] == processes["child_pgid"]
+
+        # Primary oracle (no sleep): the exact recorded cat-file PID is gone the
+        # instant finish returns — the deadline runner reaped it before return.
+        assert not _pid_alive(processes["parent_pid"]), (
+            "the scoped cat-file --batch PID survived Capture.finish's deadline"
+        )
+
+        # Child-only-kill detection: the descendant must also be gone. Its
+        # survival marker fires 3.5s after fork; wait past that and assert it
+        # never wrote it (a group leader killed without its descendants would
+        # leave the marker), and that its exact PID has no survivor either.
+        deadline = time.monotonic() + 4.0
+        while _pid_alive(processes["child_pid"]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _pid_alive(processes["child_pid"]), (
+            "a descendant of the timed-out cat-file --batch survived the kill"
+        )
+        assert not marker_path.exists(), (
+            "the timed-out cat-file --batch descendant survived to write its "
+            "marker — the scoped kill did not reach the child"
+        )
     finally:
-        if pid_path.is_file():
-            try:
-                os.kill(int(pid_path.read_text(encoding="utf-8")), signal.SIGTERM)
-            except (ProcessLookupError, ValueError):
-                pass
+        _terminate_recorded_processes(pid_path)
 
 
 def test_finish_bounds_anchor_reconciliation_git_show(

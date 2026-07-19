@@ -8,6 +8,7 @@ import os
 import pytest
 
 from opentraces.core.arena.engine import VerificationFailed
+from opentraces.core.arena.retrieval import StoredEvidence
 
 
 pytestmark = pytest.mark.skipif(
@@ -16,18 +17,35 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def publish_commit_is_witnessed(run, *, hf):
-    witnessed = hf.ledger.contains(
-        method="POST",
-        path_prefix="/api/datasets/bench/scenario-2/commit/",
-        operation_id="commit",
-    )
+def publish_commit_is_witnessed(evidence, *, hf=None):
+    if isinstance(evidence, StoredEvidence):
+        result = evidence.read_json("result.json")
+        verifier_name = (
+            f"{publish_commit_is_witnessed.__module__}.{publish_commit_is_witnessed.__qualname__}"
+        )
+        verifier = next(row for row in result["verifiers"] if row["name"] == verifier_name)
+        ledger_ref = verifier["evidence_refs"][0]
+        rows = [json.loads(line) for line in evidence.read_text(ledger_ref).splitlines()]
+        witnessed = any(
+            row.get("method") == "POST"
+            and str(row.get("path") or "").startswith("/api/datasets/bench/scenario-2/commit/")
+            and row.get("operation_id") == "commit"
+            for row in rows
+        )
+    else:
+        assert hf is not None
+        ledger_ref = hf.ledger.evidence_ref
+        witnessed = hf.ledger.contains(
+            method="POST",
+            path_prefix="/api/datasets/bench/scenario-2/commit/",
+            operation_id="commit",
+        )
     if not witnessed:
         raise VerificationFailed(
             "independent Hugging Face ledger has no successful dataset commit",
-            evidence_refs=[hf.ledger.evidence_ref],
+            evidence_refs=[ledger_ref],
         )
-    return {"evidence_refs": [hf.ledger.evidence_ref]}
+    return {"evidence_refs": [ledger_ref]}
 
 
 def test_publish_reaches_hf_remote(bench):
@@ -39,6 +57,7 @@ def test_publish_reaches_hf_remote(bench):
 
     with bench.run(app_state="install-only") as run:
         hf = run.emulate("huggingface")
+        run.require_capabilities("cli:dataset.publish", "emulator:huggingface")
         files = run.terminal.exec(
             "python3",
             "-c",

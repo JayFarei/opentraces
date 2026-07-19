@@ -13,6 +13,7 @@ from ..run_store import RunDraft
 
 TIMELINE_REF = "recordings/timeline.jsonl"
 TIMELINE_TIMESTAMP_TOLERANCE_MS = 250
+ACTION_SURFACES = frozenset({"terminal", "browser", "agent"})
 
 
 def _utc_now() -> str:
@@ -42,6 +43,12 @@ class RunActionSequence:
         self._previous_action_ref: str | None = None
         self.draft.write_text(TIMELINE_REF, "")
 
+    @property
+    def has_actions(self) -> bool:
+        """Whether any public scenario action has been allocated."""
+
+        return self._ordinal > 0
+
     def _offset_ms(self, observed: float) -> int:
         return max(0, int((observed - self.run_started_monotonic) * 1000))
 
@@ -70,7 +77,7 @@ class RunActionSequence:
         )
 
     def allocate(self, surface: str) -> ActionAllocation:
-        if surface not in {"terminal", "browser"}:
+        if surface not in ACTION_SURFACES:
             raise ValueError(f"unknown action surface: {surface}")
         self._ordinal += 1
         observed = time.monotonic()
@@ -149,7 +156,7 @@ class RunActionSequence:
                 if not isinstance(offset, int) or isinstance(offset, bool) or offset < previous_offset:
                     raise ValueError("timeline offsets are not monotonic integers")
                 previous_offset = offset
-                if row.get("surface") not in {"terminal", "browser"}:
+                if row.get("surface") not in ACTION_SURFACES:
                     raise ValueError("timeline surface is invalid")
                 if row.get("event") not in {
                     "focus_changed",
@@ -208,7 +215,16 @@ class RunActionSequence:
                     raise ValueError("timeline action facts are invalid")
                 start = starts[action_ref]
                 completion = completions[action_ref]
-                surface = "terminal" if isinstance(invocation.get("argv"), list) else "browser"
+                declared_surface = invocation.get("surface")
+                surface = (
+                    str(declared_surface)
+                    if declared_surface in ACTION_SURFACES
+                    else (
+                        "terminal"
+                        if isinstance(invocation.get("argv"), list)
+                        else "browser"
+                    )
+                )
                 if start["surface"] != surface or completion["surface"] != surface:
                     raise ValueError("timeline surface disagrees with stored action")
                 if start["recorded_at"] != invocation.get("started_at"):

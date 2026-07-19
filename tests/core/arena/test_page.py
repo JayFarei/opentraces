@@ -61,6 +61,24 @@ def _scenario(tmp_path: Path) -> ScenarioSource:
     )
 
 
+def verify_health(run) -> dict[str, list[str]]:
+    observation = run.terminal.exec("opentraces", "doctor", "--json")
+    assert observation.returncode == 0
+    return {"evidence_refs": [observation.result_ref]}
+
+
+def verify_assertion_only(run) -> dict[str, list[str]]:
+    assert True
+    return {"evidence_refs": []}
+
+
+def verify_cross_surface(run) -> dict[str, list[str]]:
+    before = run.terminal.exec("printf", "before")
+    browser = run.browser.inspect("main")
+    after = run.terminal.exec("printf", "after")
+    return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
+
+
 def _git(repository: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -153,7 +171,14 @@ def test_product_worktree_state_round_trips_through_result_page_and_store(
     assert store.verify(run.final_path) is True
 
 
-def _result(run_id: str, *, recordings: dict, execution_mode: str = "direct") -> dict:
+def _result(
+    run_id: str,
+    *,
+    recordings: dict,
+    execution_mode: str = "direct",
+    capture: dict | None = None,
+    pins: dict | None = None,
+) -> dict:
     return build_result(
         run_id=run_id,
         claim="Stored evidence remains inside its finalized run.",
@@ -169,8 +194,8 @@ def _result(run_id: str, *, recordings: dict, execution_mode: str = "direct") ->
         evidence={"complete": True, "requirements": []},
         recordings=recordings,
         artifacts=[],
-        capture=None,
-        pins={},
+        capture=capture,
+        pins=pins or {},
     )
 
 
@@ -183,13 +208,8 @@ def test_page_is_a_read_only_projection_with_claim_verifier_and_raw_links(tmp_pa
         repository_path=repository_path,
     )
 
-    def health(run):
-        observation = run.terminal.exec("opentraces", "doctor", "--json")
-        assert observation.returncode == 0
-        return {"evidence_refs": [observation.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(health)
+        run.verify(verify_health)
 
     result_before = (run.final_path / "result.json").read_bytes()
     page = render_evidence_page(run.final_path)
@@ -221,6 +241,28 @@ def test_page_is_a_read_only_projection_with_claim_verifier_and_raw_links(tmp_pa
         assert private_path.lower() not in html.lower()
 
 
+def test_page_renders_assertion_only_label_for_a_zero_evidence_pass(
+    tmp_path: Path,
+) -> None:
+    # F6 (#302): a zero-evidence passing verifier is stamped observed:
+    # assertion-only; the evidence page must render that label so the pass is
+    # visibly distinguishable from an evidence-backed one.
+    repository_path = Path(__file__).resolve().parents[3]
+    bench = Bench(
+        source=_scenario(tmp_path),
+        store=RunStore(tmp_path / "bucket" / "runs" / "v1"),
+        box_runtime=FakeBoxRuntime(),
+        repository_path=repository_path,
+    )
+
+    with bench.run(app_state="install-only") as run:
+        run.verify(verify_assertion_only)
+
+    html = render_evidence_page(run.final_path).read_text(encoding="utf-8")
+    assert run.result["verifiers"][0]["observed"] == "assertion-only"
+    assert "ASSERTION-ONLY" in html
+
+
 def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> None:
     bench = Bench(
         source=_scenario(tmp_path),
@@ -229,12 +271,8 @@ def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> No
         repository_path=tmp_path,
     )
 
-    def health(run):
-        observation = run.terminal.exec("opentraces", "doctor", "--json")
-        assert observation.returncode == 0
-
     with bench.run(app_state="install-only") as run:
-        run.verify(health)
+        run.verify(verify_health)
 
     stdout = run.final_path / "actions" / "0001" / "stdout"
     stdout.chmod(0o600)
@@ -245,6 +283,47 @@ def test_page_refuses_to_render_a_run_with_tampered_stdout(tmp_path: Path) -> No
         render_evidence_page(run.final_path, output)
 
     assert not output.exists()
+
+
+def test_page_names_and_omits_an_action_file_symlink_that_escapes_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Action-file links must be contained under the run root (issue #314).
+
+    Cast and exhaust references already route through the run-root containment
+    helper; action-file links previously used ``_href`` directly, so an action
+    artifact that dereferences outside the run root would be published as a live
+    link. ``RunStore.verify()``/``_validated_tree`` reject a real finalized
+    symlink and stay the primary defense; here we bypass that guard to isolate
+    the page-renderer's own containment behavior, proving the page layer does
+    not itself emit an out-of-run action link.
+    """
+
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    draft.write_json("actions/0001/invocation.json", {"ordinal": 1, "argv": ["echo", "hi"]})
+    draft.write_json("actions/0001/result.json", {"returncode": 0})
+    draft.write_text("actions/0001/stdout", "in-run stdout\n")
+    finalized = draft.finalize(
+        _result(draft.run_id, recordings={"rewatchable": False, "channels": []})
+    )
+
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("secret outside the run\n", encoding="utf-8")
+    action_dir = finalized / "actions" / "0001"
+    action_dir.chmod(0o755)
+    (action_dir / "stderr").symlink_to(outside)
+
+    # Isolate the page layer: the run-store symlink guard is proven separately by
+    # test_store_rejects_an_exhaust_symlink_before_page_render.
+    monkeypatch.setattr(RunStore, "verify", lambda self, run_path: True)
+    html = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    # The contained in-run action file stays linked.
+    assert ">actions/0001/stdout</a>" in html
+    # The escaping symlink is named as evidence but never linked.
+    assert "actions/0001/stderr" in html
+    assert ">actions/0001/stderr</a>" not in html
 
 
 def test_page_names_and_omits_a_recording_ref_that_escapes_the_run(tmp_path: Path) -> None:
@@ -374,21 +453,57 @@ def test_page_names_and_omits_every_cross_surface_ref_that_escapes_the_run(
         assert reference in rendered
 
 
-def test_page_names_and_omits_an_exhaust_symlink_that_escapes_the_run(tmp_path: Path) -> None:
+def test_store_rejects_an_exhaust_symlink_before_page_render(tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("outside the run\n", encoding="utf-8")
     store = RunStore(tmp_path / "bucket" / "runs" / "v1")
     draft = store.begin()
     (draft.path / "artifacts" / "outside.txt").symlink_to(outside)
     recordings = {"rewatchable": False, "channels": []}
-    finalized = draft.finalize(_result(draft.run_id, recordings=recordings))
+    with pytest.raises(RunIntegrityError, match="symlink"):
+        draft.finalize(_result(draft.run_id, recordings=recordings))
 
-    assert store.verify(finalized) is True
+
+def _style_block(html: str) -> str:
+    start = html.index("<style>") + len("<style>")
+    return html[start : html.index("</style>", start)]
+
+
+def test_fact_strip_wraps_long_values_within_their_own_cell(tmp_path: Path) -> None:
+    """Long fact values must stay inside their own cell (issue #330).
+
+    At a 1920x1080 viewport the full product pin / execution digest previously
+    overflowed the fixed fact-strip cells and overlapped neighbouring MODE /
+    EXECUTION / EVIDENCE cells. A real-browser layout probe is impractical for a
+    committed unit test, so this is the rendered-DOM/CSS containment control: the
+    stylesheet must let each fact cell shrink and wrap its full value, keeping the
+    value recoverable without overlap. The full 64-hex commit stays present so the
+    full value remains recoverable.
+    """
+
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    long_commit = "a" * 64
+    finalized = draft.finalize(
+        _result(
+            draft.run_id,
+            recordings={"rewatchable": False, "channels": []},
+            pins={"product": {"commit": long_commit, "worktree": "clean"}},
+        )
+    )
+
     html = render_evidence_page(finalized).read_text(encoding="utf-8")
+    style = _style_block(html)
 
-    assert "MISSING EXHAUST" in html
-    assert "artifacts/outside.txt" in html
-    assert ">artifacts/outside.txt</a>" not in html
+    # The full value is rendered (recoverable), inside the PRODUCT PIN fact cell.
+    assert long_commit in html
+    # Grid fact cells must be allowed to shrink instead of overflowing their track.
+    assert ".fact{" in style
+    fact_rule = style[style.index(".fact{") : style.index("}", style.index(".fact{"))]
+    assert "min-width:0" in fact_rule
+    # Long fact values must wrap rather than run past the cell edge.
+    assert "overflow-wrap" in fact_rule or "word-break" in fact_rule
+    assert ".fact code" in style
 
 
 def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
@@ -407,6 +522,110 @@ def test_page_renders_execution_mode_as_a_fact(tmp_path: Path) -> None:
     assert '<div class="eyebrow">MODE</div>agent_replay' in html
 
 
+def test_page_renders_stored_agent_task_harness_and_inference_pins(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    task = "Make and commit the exact scenario-4 world-state change."
+    draft.write_json(
+        "artifacts/agent-attempt.json",
+        {
+            "schema_version": "opentraces.bench.agent-attempt.v0",
+            "task": task,
+            "harness": {
+                "name": "claude",
+                "executable": "claude",
+                "version": "2.1.210",
+            },
+            "inference": {"mode": "live"},
+        },
+    )
+    finalized = draft.finalize(
+        _result(
+            draft.run_id,
+            recordings={"rewatchable": False, "channels": []},
+            execution_mode="agent_live",
+            pins={
+                "harness": {
+                    "name": "claude",
+                    "executable": "claude",
+                    "version": "2.1.210",
+                },
+                "model_wire": {"mode": "live"},
+            },
+        )
+    )
+
+    rendered = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    assert '<div class="eyebrow">TASK</div>' in rendered
+    assert task in rendered
+    assert '<div class="eyebrow">HARNESS PIN</div>' in rendered
+    assert "claude · 2.1.210" in rendered
+    assert '<div class="eyebrow">INFERENCE PIN</div>' in rendered
+    assert ">live</" in rendered
+    assert "artifacts/agent-attempt.json" in rendered
+
+
+def test_page_renders_separate_capture_facts_from_stored_source_results(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "bucket" / "runs" / "v1")
+    draft = store.begin()
+    source_results = [
+        ("session_jsonl", "full", "finalized", "finalizers/session.report.json", []),
+        (
+            "telemetry",
+            "partial",
+            "partial",
+            "finalizers/telemetry.report.json",
+            ["telemetry source exited after explicit interruption"],
+        ),
+        ("git", "missing", "unavailable", "finalizers/git.report.json", ["git missing"]),
+        ("bucket", "full", "finalized", "finalizers/bucket.report.json", []),
+    ]
+    for _name, _completeness, _status, reference, _limitations in source_results:
+        draft.write_json(Path("capture") / reference, {"source": _name})
+    capture = {
+        "schema_version": "opentraces.capture.result.v1",
+        "completeness": "partial",
+        "sources": [
+            {
+                "name": name,
+                "completeness": completeness,
+                "status": status,
+                "evidence_refs": [reference],
+                "limitations": limitations,
+            }
+            for name, completeness, status, reference, limitations in source_results
+        ],
+    }
+    finalized = draft.finalize(
+        _result(
+            draft.run_id,
+            recordings={"rewatchable": False, "channels": []},
+            capture=capture,
+        )
+    )
+
+    rendered = render_evidence_page(finalized).read_text(encoding="utf-8")
+
+    expected = {
+        "TRACE": "full",
+        "CONTEXT": "partial",
+        "TRAIL": "missing",
+        "STORAGE": "full",
+        "LIFECYCLE": "partial",
+    }
+    for fact, value in expected.items():
+        assert f'<div class="eyebrow">{fact}</div><strong>{value}</strong>' in rendered
+    for _name, _completeness, _status, reference, _limitations in source_results:
+        assert f">capture/{reference}</a>" in rendered
+    assert "telemetry source exited after explicit interruption" in rendered
+    assert "git missing" in rendered
+
+
 def test_page_renders_each_recording_kind_against_the_stored_focus_timeline(
     tmp_path: Path,
 ) -> None:
@@ -418,14 +637,8 @@ def test_page_renders_each_recording_kind_against_the_stored_focus_timeline(
         browser_factory=PublicBrowserSession,
     )
 
-    def cross_surface(run):
-        before = run.terminal.exec("printf", "before")
-        browser = run.browser.inspect("main")
-        after = run.terminal.exec("printf", "after")
-        return {"evidence_refs": [before.result_ref, browser.result_ref, after.result_ref]}
-
     with bench.run(app_state="install-only") as run:
-        run.verify(cross_surface)
+        run.verify(verify_cross_surface)
 
     result_before = (run.final_path / "result.json").read_bytes()
     timeline_before = (run.final_path / "recordings/timeline.jsonl").read_bytes()

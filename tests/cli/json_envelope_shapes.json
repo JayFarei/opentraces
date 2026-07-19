@@ -7,6 +7,13 @@
    "status"
   ]
  },
+ "bench list": {
+  "schema_version": null,
+  "top_level_keys": [
+   "count",
+   "runs"
+  ]
+ },
  "bucket list": {
   "schema_version": "opentraces.bucket.list.v1",
   "top_level_keys": [

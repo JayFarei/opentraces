@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from opentraces.core.arena.box import Box, BoxCommandResult
+from opentraces.core.capabilities import build_capabilities_manifest
 from opentraces.core.arena.contract import result_exit_code
 from opentraces.core.arena.emulate.huggingface.runtime import (
     EmulatorReadinessError,
@@ -21,6 +22,7 @@ from opentraces.core.arena.emulate.huggingface.runtime import (
 )
 from opentraces.core.arena.engine import Bench, ScenarioSource
 from opentraces.core.arena.page import render_evidence_page
+from opentraces.core.arena.retrieval import reverify_stored_run
 from opentraces.core.arena.run_store import RunStore
 from tests.arena.scenarios import test_publish_reaches_hf_remote as scenario_2
 
@@ -49,6 +51,29 @@ _MANIFEST = {
         }
     ],
 }
+
+
+def _capabilities_payload() -> dict[str, object]:
+    paths = {
+        "auth.login",
+        "auth.whoami",
+        "capture-otlp.start",
+        "capture-otlp.status",
+        "capture-otlp.stop",
+        "dataset.publish",
+        "setup.capture-otlp",
+        "setup.claude-code",
+        "setup.codex-cli",
+        "setup.git",
+        "setup.pi",
+        "setup.watcher.install",
+    }
+    return build_capabilities_manifest(
+        verbs=({"path": path, "hidden": False} for path in sorted(paths)),
+        app_version="test",
+        trace_schema_version="test",
+        security_version="test",
+    )
 
 
 def _write_test_provenance(binary: Path) -> None:
@@ -252,6 +277,14 @@ class WorldRuntime:
     def exec_product(self, box: Box, argv, *, cwd=None, env=None, timeout=60, timing_path):
         rendered = " ".join(map(str, argv))
         self.events.append("product-exec")
+        if list(argv) == ["opentraces", "capabilities", "--json"]:
+            return BoxCommandResult(
+                argv=list(map(str, argv)),
+                returncode=0,
+                stdout=json.dumps(_capabilities_payload()) + "\n",
+                stderr="",
+                timing={"schemaVersion": 1, "timing": {"exitCode": 0}},
+            )
         if "CUSTODY_PROBE" in rendered:
             self.events.append("product-custody-probe")
             return BoxCommandResult(
@@ -324,6 +357,10 @@ def _bench(tmp_path: Path, runtime: WorldRuntime) -> Bench:
     )
 
 
+def verify_condition_holds(_run) -> dict[str, list[str]]:
+    return {"evidence_refs": []}
+
+
 def test_scenario_2_source_freezes_the_claim_public_journey_and_down_control() -> None:
     function = scenario_2.test_publish_reaches_hf_remote
     assert inspect.getdoc(function).split("\n\n", 1)[0] == (
@@ -332,6 +369,7 @@ def test_scenario_2_source_freezes_the_claim_public_journey_and_down_control() -
     source = inspect.getsource(function)
     for public_call in (
         'run.emulate("huggingface")',
+        'run.require_capabilities("cli:dataset.publish", "emulator:huggingface")',
         '"dataset",\n            "new"',
         '"dataset",\n            "review",\n            "approve"',
         '"dataset",\n            "remote",\n            "create"',
@@ -387,6 +425,11 @@ def test_run_emulate_pins_collects_and_projects_the_huggingface_world(
         "type": "user",
     }
     assert emulator_pin["setup"]["ledger_custody"]["product_writable"] is False
+    assert emulator_pin["ledger_binding"] == {
+        "launch_nonce": emulator_pin["setup"]["readiness"]["launch"]["nonce"],
+        "ledger_sha256": "sha256:" + hashlib.sha256(runtime.raw_ledger).hexdigest(),
+        "evidence_ref": "ledgers/huggingface.jsonl",
+    }
     assert result["pins"]["app_state"] == {
         "name": "install-only",
         "digest": app_state_digest(
@@ -658,7 +701,7 @@ def test_terminal_drive_cannot_escalate_into_independent_ledger_custody(
         ]
         assert all(run.terminal.exec(*attack).returncode != 0 for attack in attacks)
         assert run.terminal.exec("opentraces", "doctor", "--json").returncode == 0
-        run.verify(lambda _run: {"evidence_refs": []})
+        run.verify(verify_condition_holds)
 
     assert runtime.events.count("product-ledger-escalation-refused") == 4
 
@@ -681,9 +724,7 @@ def test_harness_control_client_keeps_its_per_launch_bearer_out_of_product_env(
             "token": "hf_other",
             "type": "user",
         }
-        assert hf.seed(repos=[{"repo_id": "other/seeded"}]) == {
-            "repos_seeded": ["other/seeded"]
-        }
+        assert hf.seed(repos=[{"repo_id": "other/seeded"}]) == {"repos_seeded": ["other/seeded"]}
         assert hf.reset() == {"ok": True}
         assert set(hf.env) == {"HF_ENDPOINT", "HF_TOKEN"}
 
@@ -758,11 +799,26 @@ def test_scenario_2_down_control_uses_the_same_source_and_cannot_pass_vacuously(
     assert result["reason"]["code"] == "assertion_failed"
     assert "0x" not in result["reason"]["message"]
     assert result_exit_code(result) == 1
+
+    verifier = result["verifiers"][0]
+    runtime.lease = lambda: pytest.fail("stored reverify attempted a box lease")
+    runtime.exec_product = lambda *_args, **_kwargs: pytest.fail(
+        "stored reverify attempted a product action"
+    )
+    reverification = reverify_stored_run(
+        bench.store,
+        result["run_id"],
+        verifier_name=verifier["name"],
+        verifier_digest=verifier["source_ref"]["digest"],
+        verifier=scenario_2.publish_commit_is_witnessed,
+    )
+    assert reverification["status"] == "fail"
+    assert reverification["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert not any(row.get("operation_id") == "commit" for row in ledger_rows)
     assert result["verifiers"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert result["evidence"]["requirements"][0]["evidence_refs"] == ["ledgers/huggingface.jsonl"]
     assert runtime.events.count("start") == 1
     assert runtime.events.count("release") == 1
-    assert runtime.events.count("product-exec") == 6
+    assert runtime.events.count("product-exec") == 7
     assert runtime.stop_command is not None
     assert "kill -0" in runtime.stop_command
