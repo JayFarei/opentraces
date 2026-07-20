@@ -38,7 +38,10 @@ from opentraces.core.trails import (
 )
 import opentraces.core.trails.anchors as anchors_mod
 import opentraces.core.trails.event_log as event_log
-from opentraces.core.trails.contract import ANCHOR_SEARCH_SCHEMA_VERSION
+from opentraces.core.trails.contract import (
+    ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION,
+    ANCHOR_SEARCH_SCHEMA_VERSION,
+)
 from opentraces.core.trails.models import ATTRIBUTION_VERSION, TrailEvent
 from opentraces.core.trails.search_records import (
     build_anchor_search_summary_payload,
@@ -138,7 +141,12 @@ def test_write_path_drops_unknown_dicts_and_carries_coverage(tmp_path):
     assert len(created) == 2
 
     payload = _search_summaries(repo)[0].payload
-    assert payload["schema_version"] == ANCHOR_SEARCH_SCHEMA_VERSION
+    assert payload["schema_version"] == ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION, (
+        "the coverage-bearing write path is a SEPARATE constant from "
+        "ANCHOR_SEARCH_SCHEMA_VERSION (v2) -- maturation.py and "
+        "search_compaction.py still build the v2 shape through the shared "
+        "constant, so it must not be repointed at v3"
+    )
     assert payload["searched"] == n
     assert payload["anchored"] == 2
     assert payload["unknown"] == n - 2
@@ -395,7 +403,7 @@ def test_iter_search_records_v3_compact_yields_full_and_minimal_records():
     })
     v3_compact = _summary_event("3", {
         "summary": True,
-        "schema_version": ANCHOR_SEARCH_SCHEMA_VERSION,
+        "schema_version": ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION,
         "search_head": {"algo": "sha1", "hex": "f" * 40},
         "algorithms_attempted": ["exact_range_hash"],
         "searched": 2, "anchored": 1, "unknown": 1,
@@ -415,7 +423,7 @@ def test_iter_search_records_v3_compact_yields_full_and_minimal_records():
 def test_iter_search_records_v3_coverage_yields_anchored_only_no_claim_records():
     v3 = _summary_event("4", {
         "summary": True,
-        "schema_version": ANCHOR_SEARCH_SCHEMA_VERSION,
+        "schema_version": ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION,
         "search_head": {"algo": "sha1", "hex": "e" * 40},
         "algorithms_attempted": ["exact_range_hash"],
         "searched": 3, "anchored": 1, "unknown": 2,
@@ -484,4 +492,143 @@ def test_v3_summary_search_touches_trace_is_anchored_only(tmp_path):
     assert summary_search_touches_trace(event, "tr-unknown") is False, (
         "v3 keeps results[] anchored-only, so fan-out never touches a trace "
         "whose only patch in this summary was unknown"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 6. Adversarial-review repairs: a caller that stays on the v2 shape must
+#    keep the v2 label, a scoped run must be able to resolve an unscoped
+#    claim's boundary, and a duplicate trace_patch_id in the log must not
+#    livelock the claim boundary.
+# --------------------------------------------------------------------------- #
+
+def test_v2_shaped_payload_keeps_v2_label_not_the_coverage_constant():
+    """maturation.py's periodic flush and search_compaction.py's rollup both
+    call ``build_anchor_search_summary_payload`` WITHOUT ``coverage`` and
+    import ``ANCHOR_SEARCH_SCHEMA_VERSION`` unchanged (out of scope for this
+    stage) -- so that shared constant must keep identifying the v2, full-mixed
+    ``results[]`` shape those two callers still emit. Only anchors.py's live
+    coverage-bearing write path may use ``ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION``.
+    A v2-shaped payload stamped with the coverage constant would be a v2 SHAPE
+    mislabeled v3 -- contract.py's own law ("a schema_version identifies a
+    SHAPE") violated, and the planned compaction pass ("v3 events pass through
+    unchanged") would then skip it forever instead of compacting it."""
+    payload = build_anchor_search_summary_payload(
+        schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
+        search_head={"algo": "sha1", "hex": "d" * 40},
+        algorithms_attempted=["exact_range_hash"],
+        results=[
+            {"trace_patch_id": "a", "trace_id": "t1", "step_index": 0,
+             "generation_index": 0, "result": "anchored", "created_anchor_ids": ["g"]},
+            {"trace_patch_id": "b", "trace_id": "t2", "step_index": 0,
+             "generation_index": 0, "result": "unknown", "created_anchor_ids": []},
+        ],
+    )
+    assert payload["schema_version"] == "opentraces.trail.anchor_search.v2"
+    assert payload["schema_version"] != ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
+    assert ANCHOR_SEARCH_SCHEMA_VERSION != ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
+
+
+def test_maturation_reflush_of_claim_covered_unknowns_keeps_v2_label(tmp_path, monkeypatch):
+    """A hook-reconciled commit's unknown patches are claim-covered (no exact
+    key), so maturation's #65 pre-extracted path -- which does not consume
+    coverage claims (out of scope for this stage, disclosed) -- re-searches
+    them on its next sweep and appends a SECOND summary event. That re-search
+    is a known, disclosed limitation of this stage (unchanged, not fixed
+    here); what this pins is that the re-emitted event is NOT mislabeled v3
+    -- it is byte-shape v2 (full mixed results[], no coverage) and must carry
+    the v2 label, exactly as maturation produced before #358, so a future
+    compaction pass still recognizes and compacts it."""
+    from opentraces.core.trails import mature_trails
+    from opentraces.core.trails.contract import ANCHOR_SEARCH_SCHEMA_VERSION as V2_LABEL
+
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    n = 4
+    for i in range(n):
+        _emit_patch(repo, trace_id=f"tr{i}", trace_patch_id=f"tp-{i}",
+                    file_path=f"m{i}.py", authored=f"UNIQUE_{i}\n")
+    head = _commit_files(repo, {"m0.py": "UNIQUE_0\n"}, "land one")  # tp-1..3 unknown
+
+    reconcile_commit_anchors(repo, head)  # hot-hook path -> slim v3 + coverage
+    event_log.invalidate_read_events_cache(repo)
+    before = _search_summaries(repo)
+    assert len(before) == 1
+    assert before[0].payload["schema_version"] == ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
+
+    mature_trails(repo, commit_refs=[head])
+    event_log.invalidate_read_events_cache(repo)
+    after = _search_summaries(repo)
+
+    new_events = after[len(before):]
+    assert new_events, (
+        "sanity: the #65 path does not consume coverage claims yet, so the "
+        "sweep is expected to re-search and append -- if this is empty the "
+        "disclosed limitation was fixed elsewhere and this test should be "
+        "revisited, not silently left passing for the wrong reason"
+    )
+    for event in new_events:
+        assert event.payload["schema_version"] == V2_LABEL, (
+            "a caller that still emits the full-mixed v2 shape (no coverage) "
+            "must never stamp the v3 coverage label on it"
+        )
+        assert event.payload["schema_version"] != ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
+
+
+def test_scoped_attach_resolves_unscoped_claim_across_traces(tmp_path, monkeypatch):
+    """R5: an UNSCOPED reconcile's coverage claim may point through a patch
+    belonging to a DIFFERENT trace than a later trace-scoped ``trail attach``
+    run searches. The claim boundary must resolve against the full, un-scoped
+    patch ordering -- not an index into the trace-scoped patch list -- or the
+    scoped run cannot see past its own trace's patches and wrongly re-searches
+    an already-covered patch."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _emit_patch(repo, trace_id="tr-x", trace_patch_id="tp-x", file_path="x.py", authored="X=1\n")
+    _emit_patch(repo, trace_id="tr-y", trace_patch_id="tp-y", file_path="y.py", authored="Y=2\n")
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")  # both unknown
+
+    first = reconcile_commit_anchors(repo, head)  # unscoped, claim through tp-y
+    assert first == []
+    event_log.invalidate_read_events_cache(repo)
+    assert len(_search_summaries(repo)) == 1
+
+    from opentraces.core.trails.attach import attach_trace_to_commit
+
+    calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
+    attach_trace_to_commit(repo, "tr-x", head)
+    event_log.invalidate_read_events_cache(repo)
+    assert calls["n"] == 0, (
+        "tp-x sits BEFORE the unscoped claim's boundary (tp-y) in canonical "
+        "order -- a scoped run must resolve that boundary against the FULL "
+        "patch ordering to see it covered, not re-search it"
+    )
+    assert len(_search_summaries(repo)) == 1, (
+        "an already-covered key must not be re-emitted as a new summary event"
+    )
+
+
+def test_duplicate_trace_patch_id_does_not_livelock_reconcile(tmp_path):
+    """A re-ingested session or hook retry can emit the SAME trace_patch_id
+    twice. The claim boundary must resolve to the id's LAST occurrence in
+    canonical order (content-derived ids search identically regardless of
+    which occurrence produced the claim), or a distinct patch sitting BETWEEN
+    the two occurrences falls outside the boundary and gets re-searched --
+    and re-emitted as a new summary event -- on every subsequent run."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _emit_patch(repo, trace_id="tr-dup", trace_patch_id="tp-dup", file_path="d.py", authored="D\n", step_index=1)
+    _emit_patch(repo, trace_id="tr-a", trace_patch_id="tp-a", file_path="a.py", authored="A\n", step_index=1)
+    _emit_patch(repo, trace_id="tr-dup2", trace_patch_id="tp-dup", file_path="d.py", authored="D\n", step_index=2)
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")  # all 3 unknown
+
+    for _ in range(4):
+        reconcile_commit_anchors(repo, head)
+        event_log.invalidate_read_events_cache(repo)
+
+    summaries = _search_summaries(repo)
+    assert len(summaries) == 1, (
+        f"got {len(summaries)} summary events across 4 runs -- a wrong claim "
+        "boundary (first-occurrence position instead of last) leaves tp-a "
+        "permanently uncovered and re-emits a new event every run"
     )
