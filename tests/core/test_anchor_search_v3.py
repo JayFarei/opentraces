@@ -251,16 +251,19 @@ def test_attribution_version_bump_forces_re_search(tmp_path, monkeypatch):
     for i in range(3):
         _emit_patch(repo, trace_id=f"tr{i}", trace_patch_id=f"tp-{i}",
                     file_path=f"m{i}.py", authored=f"V{i}\n")
-    head = _commit_files(repo, {"m0.py": "V0\n"}, "land one")
+    # No patch lands -> all 3 stay unknown, so the ONLY thing that could
+    # suppress a re-search is the coverage claim (an anchor, unaffected by
+    # ATTRIBUTION_VERSION, would confound this from the actual claim check).
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")
 
     first = reconcile_commit_anchors(repo, head, attribution_version="0.1.0")
-    assert len(first) == 1
+    assert first == []
     event_log.invalidate_read_events_cache(repo)
 
     calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
     second = reconcile_commit_anchors(repo, head, attribution_version="0.2.0")
     assert calls["n"] == 3, "a bumped ATTRIBUTION_VERSION must re-search every patch"
-    assert len(second) == 1
+    assert second == []
 
 
 def test_trace_scoped_coverage_claim_does_not_leak_to_other_trace(tmp_path, monkeypatch):

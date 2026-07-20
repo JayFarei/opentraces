@@ -22,6 +22,7 @@ from .ids import (
 from .models import ATTRIBUTION_VERSION, GitObjectID, TrailEvent, TrailEventDraft
 from .search_records import (
     build_anchor_search_summary_payload,
+    iter_coverage_claims,
     iter_search_records,
 )
 
@@ -238,9 +239,13 @@ def reconcile_commit_anchors(
     # path is unchanged).
     if patch_events is not None and anchor_keys is not None and search_keys is not None:
         # #65 pre-extracted path: keys arrive ready-made; the patch list may
-        # still need the trace filter the legacy path applies below.
+        # still need the trace filter the legacy path applies below. No
+        # coverage claims here — the caller's SQLite key cache (post_commit.py,
+        # maturation.py) does not index v3 coverage claims yet, so this path
+        # dedups on exact keys only, exactly as before #358.
         existing_anchor_keys = anchor_keys
         existing_search_keys = search_keys
+        claims: list[dict[str, Any]] = []
         patch_events = [
             event
             for event in patch_events
@@ -298,12 +303,60 @@ def reconcile_commit_anchors(
             if event.event_type == "git_anchor_search_completed"
             for record in iter_search_records(event)
         }
+        # #358: v3 events may carry a coverage through-pointer INSTEAD of a
+        # per-patch key for every unknown outcome. ``events`` is already
+        # scoped to this commit's search_head (above), so only the
+        # attribution_version needs filtering here — a claim from a stale
+        # ATTRIBUTION_VERSION must not suppress a re-search under a newer one.
+        claims = [
+            claim
+            for event in events
+            if event.event_type == "git_anchor_search_completed"
+            for claim in iter_coverage_claims(event)
+            if claim["attribution_version"] == effective_attribution_version
+        ]
         patch_events = [
             event
             for event in events
             if event.event_type == "trace_patch_created"
             and (trace_id is None or event.trace_id == trace_id)
         ]
+
+    # #358: the loop below walks patch_events in canonical event_sequence
+    # order — both the deadline-break resume semantics (unaffected) and the
+    # coverage through-pointer semantics (new) depend on that order. Sort
+    # explicitly rather than trusting the read path (the #65 pre-extracted
+    # path and a caller-provided ``events`` list are not guaranteed sorted).
+    patch_events = sorted(patch_events, key=lambda event: event.event_sequence)
+
+    # #358: resolve each coverage claim's through_trace_patch_id to its INDEX
+    # in the CURRENT (sequence-sorted, already trace_id-filtered) patch list —
+    # never to a raw event_sequence number, which a compaction rewrite can
+    # renumber. trace_patch_created events are never reordered or dropped by
+    # compaction, so this index is stable across a rewrite. A claim whose
+    # through-id is not found here covers NOTHING: fail open to re-search,
+    # never fail closed (e.g. a scoped run's patch_events excludes every other
+    # trace's patches, so a claim from a different scope simply can't resolve
+    # and is harmlessly ignored this run).
+    patch_position: dict[str, int] = {}
+    for position, patch_event in enumerate(patch_events):
+        pid = id_from_payload(patch_event.payload, "trace_patch")
+        if pid and pid not in patch_position:
+            patch_position[pid] = position
+    resolved_claims: list[tuple[int, str | None]] = [
+        (patch_position[claim["through_trace_patch_id"]], claim["scope_trace_id"])
+        for claim in claims
+        if claim["through_trace_patch_id"] in patch_position
+    ]
+
+    def _covered_by_claim(position: int, patch_trace_id: str | None) -> bool:
+        # scope_trace_id None covers every trace up to the boundary; a scoped
+        # claim (R5, ``trail attach``) covers ONLY its own trace's patches —
+        # never leak coverage to a trace the claiming run never searched.
+        return any(
+            position <= boundary and (scope is None or scope == patch_trace_id)
+            for boundary, scope in resolved_claims
+        )
 
     # plan 090: collect every patch's search outcome into ONE per-commit
     # summary event (search_results) rather than appending one
@@ -336,18 +389,36 @@ def reconcile_commit_anchors(
     budget_exhausted = False
     patches_searched = 0
     patches_total = len(patch_events)
-    for patch_event in patch_events:
+    # #358: the id of the LAST patch_event this run visited-and-processed
+    # (searched, or skipped as already-anchored/already-searched/claim-covered)
+    # WITHOUT hitting the deadline break — i.e. every ``continue`` below and the
+    # full search path update it, the ``break`` does not. Becomes this run's
+    # emitted coverage claim; stays None (no claim emitted) if every processed
+    # patch lacked an id, which can only happen if NO patch was ever searched
+    # either (id-less patches can never reach the search step), so the
+    # ``if search_results:`` emission gate already excludes that case.
+    last_processed_trace_patch_id: str | None = None
+    for position, patch_event in enumerate(patch_events):
         patch = patch_event.payload
         trace_patch_id = id_from_payload(patch, "trace_patch")
         if not trace_patch_id:
             continue
         if (trace_patch_id, commit) in existing_anchor_keys:
+            last_processed_trace_patch_id = trace_patch_id
             continue
-        if (trace_patch_id, commit, effective_attribution_version) in existing_search_keys:
+        already_searched = (
+            trace_patch_id,
+            commit,
+            effective_attribution_version,
+        ) in existing_search_keys
+        if already_searched or _covered_by_claim(position, patch_event.trace_id):
             # A prior search for this (patch, commit) already recorded a
-            # result under the same attribution version; don't re-record a
-            # duplicate. Newer attribution versions are allowed to append a new
-            # search so periodic re-search remains possible.
+            # result under the same attribution version — via an exact key
+            # (legacy/v2, or a v3 anchored entry) or a v3 coverage claim
+            # (unknown outcomes never get an exact key under v3) — don't
+            # re-record a duplicate. Newer attribution versions are allowed to
+            # append a new search so periodic re-search remains possible.
+            last_processed_trace_patch_id = trace_patch_id
             continue
         # #65: gate the wall-clock budget AFTER the cheap dedup-skips above, never
         # before. An already-searched/anchored prefix must not consume the
@@ -357,6 +428,7 @@ def reconcile_commit_anchors(
         if deadline is not None and time.monotonic() >= deadline:
             budget_exhausted = True
             break
+        last_processed_trace_patch_id = trace_patch_id
         patches_searched += 1
         match = _find_exact_anchor(patch, hunks)
         evidence_tier = "exact_range_hash"
@@ -458,6 +530,16 @@ def reconcile_commit_anchors(
     drafts: list[TrailEventDraft] = []
     if append_events:
         if search_results:
+            # #358: the v3 coverage claim this run earns. ``last_processed_
+            # trace_patch_id`` is guaranteed non-None here — search_results is
+            # non-empty, so at least one patch reached the search step, and
+            # only an id-bearing patch can reach it. scope_trace_id is the
+            # ``trace_id`` ARGUMENT (not any per-patch trace_id) — null for an
+            # unscoped run, set for a trace-scoped run (R5, ``trail attach``).
+            coverage = {
+                "through_trace_patch_id": last_processed_trace_patch_id,
+                "scope_trace_id": trace_id,
+            }
             # One summary event per (commit, reconcile-run): trace_id/step_index are
             # None because it spans the searched patches (per-patch trace_id /
             # step_index live inside results[]).
@@ -473,6 +555,7 @@ def reconcile_commit_anchors(
                         search_head=commit_id,
                         algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
                         results=search_results,
+                        coverage=coverage,
                     ),
                 )
             )

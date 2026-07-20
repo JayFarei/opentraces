@@ -660,22 +660,24 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
     assert commit_result.exit_code == 0, commit_result.output
     payload = json.loads(commit_result.output)
     assert payload["trace_patches"] == []
-    search_events = [
-        event
-        for event in payload["source_events"]
-        if event["event_type"] == "git_anchor_search_completed"
-    ]
-    assert search_events
-    assert search_events[0]["result"] == "unknown"
+    # #358 v3: a live (uncompacted) coverage-claim summary carries NO
+    # per-patch record for an unknown outcome -- iter_search_records only
+    # ever yields records from results[] (anchored-only here) and
+    # unanchored_trace_patch_ids (absent on a fresh write; that list is the
+    # compacted shape). `trail explain` genuinely has no per-patch dict to
+    # surface until a compaction pass rewrites this into the v3-compact
+    # shape. The RAW event still proves the search happened and which
+    # algorithms were attempted.
+    assert payload["source_events"] == []
     stored_search_events = [
         event
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-        and any(
-            r["trace_patch_id"] == _tp("orphan")
-            for r in event.payload.get("results", [])
-        )
+        and event.payload.get("coverage", {}).get("through_trace_patch_id")
+        == _tp("orphan")
     ]
+    assert len(stored_search_events) == 1
+    assert stored_search_events[0].payload["unknown"] == 1
     # Phase 5 expanded the algorithm list to include the structural
     # fallback; the summary records every tier attempted (top-level).
     assert stored_search_events[0].payload["algorithms_attempted"] == [
@@ -728,14 +730,16 @@ def test_unanchored_patch_can_be_researched_under_new_attribution_version(
         == []
     )
 
+    # #358 v3: this patch is never anchored, so it is dropped from every
+    # summary's results[] (anchored-only) and only reachable via each run's
+    # coverage claim -- the version-scoped re-search behavior this test pins
+    # is unaffected, just observed through the claim instead of results[].
     search_versions = [
         event.ATTRIBUTION_VERSION
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-        and any(
-            r["trace_patch_id"] == _tp("research")
-            for r in event.payload.get("results", [])
-        )
+        and event.payload.get("coverage", {}).get("through_trace_patch_id")
+        == _tp("research")
     ]
     assert search_versions == ["0.1.0", "0.2.0"]
 

@@ -26,7 +26,16 @@ SEARCH_SCHEMA_VERSION = "opentraces.trail.search.v1"
 # list. This is the EVENT payload schema_version and is intentionally distinct
 # from SEARCH_SCHEMA_VERSION above (the unrelated ``trail search`` projection
 # envelope). Bump only when the summary payload shape changes.
-ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v2"
+#
+# v3 (issue #358): v2's ``results[]`` carried one dict per SEARCHED patch,
+# unknown outcomes included — on a mature repo that fanned ~26GB of mostly
+# never-anchored unknown dicts into every trace companion the summary
+# touched. v3 keeps ``results[]`` ANCHORED-ONLY and replaces the dropped
+# unknown dicts with one ``coverage`` through-pointer claim (see
+# ``search_records.iter_coverage_claims``) — the dedup and fan-out surfaces
+# consumers need from an unknown outcome (was it searched? did it touch this
+# trace?) come from the claim and the scalars, not a per-patch dict.
+ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v3"
 RESOLVE_SCHEMA_VERSION = "opentraces.trail.resolve.v1"
 # ``trail blame`` --json envelopes (ADR-0007 lint L5). Three distinct versions
 # because a schema_version identifies a SHAPE and the three blame forms share
