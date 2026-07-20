@@ -255,7 +255,12 @@ def test_unrelated_lines_do_not_anchor_via_structural_match(tmp_path: Path) -> N
         e for e in events if e.event_type == "git_anchor_search_completed"
     ]
     assert len(search_events) == 1
-    assert search_events[0].payload["results"][0]["result"] == "unknown"
+    payload = search_events[0].payload
+    # #358 v3: results[] is ANCHORED-ONLY; the sole unknown outcome is
+    # recorded as a scalar + a coverage claim, not a per-patch dict.
+    assert payload["unknown"] == 1
+    assert payload["results"] == []
+    assert payload["coverage"]["through_trace_patch_id"] == "fixture-phantom"
     assert not any(e.event_type == "git_anchor_created" for e in events)
 
 
@@ -345,8 +350,11 @@ def test_before_blob_guard_rejects_revert_commit_as_landing(tmp_path: Path) -> N
         and (e.payload.get("search_head") or {}).get("hex") == revert
     ]
     assert len(revert_searches) == 1
-    results = revert_searches[0].payload["results"]
-    assert any(r["result"] == "unknown" for r in results)
+    revert_payload = revert_searches[0].payload
+    # #358 v3: results[] is ANCHORED-ONLY -- the guard-rejected (unknown)
+    # outcome is a scalar + coverage claim, not a per-patch dict.
+    assert revert_payload["unknown"] >= 1
+    assert not any(r["result"] == "unknown" for r in revert_payload["results"])
     # No anchor was created on the revert commit.
     assert not any(
         e.event_type == "git_anchor_created"

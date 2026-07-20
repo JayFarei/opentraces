@@ -895,22 +895,32 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
         second_commit,
     }
 
-    search_events = [
-        event
-        for event in read_events(repo)
-        if event.event_type == "git_anchor_search_completed"
-        and any(
-            r["trace_patch_id"] == _tp("repeat")
-            for r in event.payload.get("results", [])
-        )
-    ]
+    # #358 v3: results[] is ANCHORED-ONLY, so the middle (unknown) commit's
+    # summary carries zero result dicts for this patch -- read the outcome
+    # off the scalars (shape-independent) instead of digging into results[],
+    # and cross-check results[] content for the two anchored commits.
+    def _outcome_for(commit_sha: str) -> str:
+        matches = [
+            event
+            for event in read_events(repo)
+            if event.event_type == "git_anchor_search_completed"
+            and (event.payload.get("search_head") or {}).get("hex") == commit_sha
+        ]
+        assert len(matches) == 1, f"expected exactly one search summary for {commit_sha}"
+        payload = matches[0].payload
+        if payload["anchored"]:
+            assert any(
+                r["trace_patch_id"] == _tp("repeat") and r["result"] == "anchored"
+                for r in payload["results"]
+            )
+            return "anchored"
+        assert payload["unknown"] == 1
+        assert payload["results"] == []
+        return "unknown"
+
     assert [
-        next(
-            r["result"]
-            for r in event.payload["results"]
-            if r["trace_patch_id"] == _tp("repeat")
-        )
-        for event in search_events
+        _outcome_for(commit)
+        for commit in [first_commit, middle_commit, second_commit]
     ] == [
         "anchored",
         "unknown",

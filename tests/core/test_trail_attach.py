@@ -229,7 +229,15 @@ def test_attach_with_no_matching_commit_emits_search_unknown(tmp_path: Path) -> 
         e for e in events if e.event_type == "git_anchor_search_completed"
     ]
     assert len(search_events) == 1
-    assert search_events[0].payload["results"][0]["result"] == "unknown"
+    payload = search_events[0].payload
+    # #358 v3: results[] is ANCHORED-ONLY -- an all-unknown search (this
+    # patch never lands anywhere) carries zero result dicts. The honest
+    # "searched, not found" record is the scalar + the coverage claim, scoped
+    # to tr1 (this is a trace-scoped attach run, R5).
+    assert payload["unknown"] == 1
+    assert payload["results"] == []
+    assert payload["coverage"]["scope_trace_id"] == "tr1"
+    assert payload["coverage"]["through_trace_patch_id"] == "fixture-phantom"
     assert search_events[0].capture_method == ["manual_attach"]
     assert not any(e.event_type == "git_anchor_created" for e in events)
 
