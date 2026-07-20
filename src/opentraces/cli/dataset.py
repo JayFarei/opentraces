@@ -23,9 +23,11 @@ from ..core.datasets import (
     apply_dataset_security_edit,
     append_rows,
     create_dataset,
+    DatasetRemoteAcknowledgmentError,
     DatasetPublishWithheldError,
     DatasetRemotePermissionError,
     DatasetRemoteSchemaAheadError,
+    DatasetRemoteUnavailableError,
     dataset_path,
     fake_remote_create,
     fake_remote_delete,
@@ -1616,6 +1618,26 @@ def dataset_publish(
     except DatasetRemoteSchemaAheadError as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    except (DatasetRemoteUnavailableError, DatasetRemoteAcknowledgmentError) as exc:
+        if as_json:
+            click.echo(
+                _dump_json(
+                    {
+                        "status": "error",
+                        "error": {
+                            "code": exc.classification,
+                            "message": str(exc),
+                        },
+                        "publish": {
+                            "dataset": name,
+                            "remote": remote,
+                        },
+                    }
+                )
+            )
+        else:
+            click.echo(str(exc), err=True)
+        sys.exit(exc.exit_code)
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
