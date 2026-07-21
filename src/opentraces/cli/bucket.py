@@ -971,9 +971,17 @@ def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
                 f"  companions={proj['companion_count']}"
             )
             click.echo(f"        bytes: {proj['bytes_before']} -> {proj['bytes_after']}")
+            if proj["ref_bytes_reclaimable_after_gc"]:
+                click.echo(
+                    f"        ref: {proj['ref_bytes_before']} -> {proj['ref_bytes_after']}"
+                    f"  ({proj['ref_bytes_reclaimable_after_gc']} B still on disk in .git"
+                    " until 'git gc' runs — not counted above)"
+                )
     click.echo(f"  total bytes reclaimed: {search_data['bytes_reclaimed']}")
     if not apply:
         click.echo("  (dry run — nothing rewritten; pass --apply to reclaim)")
+    for err in search_data["errors"]:
+        click.echo(f"  error: {err}", err=True)
 
 
 @bucket_group.command("verify", cls=OpentracesCommand)
