@@ -9,7 +9,9 @@ finds the ones actually carrying legacy per-patch or v2-fat
 1. Compacts the project's canonical event chain and swaps the Git ref in
    place (``import_event_log`` — build the new chain, then ONE
    compare-and-swap ``update-ref``; a no-op when the chain is already
-   compact, per its own idempotency check).
+   compact, per its own idempotency check). The swap's CAS base is the head
+   the chain was actually snapshotted from (``_swap_compacted_chain``), not a
+   fresh self-read at swap time — see the "Crash safety" section below.
 2. Reconciles the bucket's events mirror (``bucket/events/v1/``) so it stops
    carrying byte-identical copies of the same fat content. The mirror is a
    single flat batch stream shared across every synced project (no
@@ -49,6 +51,20 @@ not just "write-new-then-remove-stale" ordering:
   (duplicate events, broken replay contiguity). The rewritten index also
   stamps the REAL new ``event_log_head`` (not ``None``) so that later sync
   takes its incremental/no-op path instead of a full rebuild.
+* The chain snapshot this pass compacts (``read_events``) is taken BEFORE the
+  minutes-long O(corpus) compaction work below it; a writer elsewhere (a hot
+  post-commit hook reconcile, a watcher maturation tick, a trail attach) can
+  append events into that window. Swapping against a FRESH self-read at that
+  point — what ``import_event_log`` does when called without an explicit
+  expectation — would silently force-overwrite the append: it is absent from
+  ``read_events`` afterwards even though the report says ``action=compacted``
+  with zero errors, and its mirror-file copy can survive as an orphan
+  outside the new layout. ``_swap_compacted_chain`` instead CASes against the
+  snapshot's own head (``import_event_log(..., expected_head=...)``) and, on
+  a CAS failure, folds the append-only delta onto the compacted chain's tail
+  (``compact_and_append``) before retrying — bounded, so a hot writer cannot
+  livelock the pass; exhaustion reports ``action="error"`` with the mirror
+  and companions untouched, never a partial swap.
 
 Honest boundary: a project whose Git repo is unreachable can only be
 compacted from the bucket's own mirror, and — because the mirror carries no
@@ -96,7 +112,8 @@ from .bucket_envelope import _events_for_trace_from_iter, _iter_opted_in_project
 from .bucket_events import BUCKET_EVENTS_INDEX_SCHEMA, read_events_mirror_batches
 from .bucket_layout import _path_part, events_v1_batches_dir, events_v1_index_path, traces_v1_root, trace_v1_trail_path
 from .trails import EVENT_LOG_REF, ANCHOR_SEARCH_EVENT_TYPE, TrailEvent, import_event_log, read_events
-from .trails.search_compaction import compact_search_events
+from .trails.event_log import EventLogHeadMovedError, read_events_since
+from .trails.search_compaction import compact_and_append, compact_search_events
 
 # Below this many raw bytes in a project's canonical ``events/`` tree, a full
 # read+compact is not worth the O(corpus) cost — this only needs to catch the
@@ -111,6 +128,14 @@ _FAT_PREFILTER_MIN_BYTES = 64
 _RECLAIM_WRITER = "bucket-reclaim-anchor-search"
 
 _JOURNAL_SCHEMA = "opentraces.bucket.reclaim.anchor_search_journal.v1"
+
+# Bounded retry count for the ref-swap CAS-on-concurrent-append path (issue
+# #358 repair, finding 1). Each retry only re-finalizes the newly appended
+# suffix via ``compact_and_append`` — never redoes the O(corpus) compaction
+# above it — so a handful of attempts is enough to outrun a hot writer
+# (a post-commit hook reconcile, a watcher maturation tick, a trail attach)
+# without risking a livelock.
+_SWAP_MAX_RETRIES = 5
 
 
 def _events_tree_bytes(repo: Path, head: str) -> int:
@@ -375,7 +400,16 @@ def _reconcile_mirror_for_project(
     shortcut, and a wrong (``None``) head is what forces the duplicate-
     producing full-rebuild-without-cleanup path in the first place.
 
-    Returns ``(events_removed, events_added)``.
+    Returns ``(batch_files_removed, batch_files_written)`` — batch-FILE
+    counts, not event counts (a compacted stream lands in ONE unified batch
+    per :func:`_project_batch_layout`, so ``batch_files_written`` is 0 or 1
+    regardless of how many events it holds, and a removed batch file's event
+    count includes untouched-but-relocated events alongside genuinely stale
+    ones — see the docstring paragraph above). Callers report these under
+    their own honestly-named fields; never as ``mirror_events_removed``/
+    ``mirror_events_added`` (issue #358 repair, finding 2: that mismatch is
+    exactly what let dry-run and apply report different UNITS for the same
+    quiescent world).
     """
 
     batches_dir = events_v1_batches_dir()
@@ -444,11 +478,24 @@ class ProjectAnchorSearchReport:
     ref_bytes_before: int = 0
     ref_bytes_after: int = 0
     mirror_rewritten: bool = False
+    # Event counts, NOT batch-file counts — the same preview semantics in
+    # dry-run and apply (issue #358 repair, finding 2: apply used to
+    # overwrite these with ``_reconcile_mirror_for_project``'s file-level
+    # return, a different unit that silently disagreed with the dry-run
+    # preview). See ``mirror_batch_files_removed``/``_written`` for the
+    # file-level numbers.
     mirror_events_removed: int = 0
     mirror_events_added: int = 0
+    mirror_batch_files_removed: int = 0
+    mirror_batch_files_written: int = 0
     companion_bytes_before: int = 0
     companion_bytes_after: int = 0
     companions_regenerated: list[str] = field(default_factory=list)
+    # Count of CAS failures the ref swap absorbed (issue #358 repair, finding
+    # 1) — 0 on every quiescent run; >0 means a concurrent writer's append
+    # was detected and folded onto the compacted chain's tail before the
+    # swap landed. See ``_swap_compacted_chain``.
+    swap_retries: int = 0
 
     @property
     def bytes_before(self) -> int:
@@ -491,11 +538,14 @@ class ProjectAnchorSearchReport:
             "mirror_rewritten": self.mirror_rewritten,
             "mirror_events_removed": self.mirror_events_removed,
             "mirror_events_added": self.mirror_events_added,
+            "mirror_batch_files_removed": self.mirror_batch_files_removed,
+            "mirror_batch_files_written": self.mirror_batch_files_written,
             "companions_regenerated": list(self.companions_regenerated),
             "companion_count": len(self.companions_regenerated),
             "bytes_before": self.bytes_before,
             "bytes_after": self.bytes_after,
             "bytes_reclaimed": self.bytes_reclaimed,
+            "swap_retries": self.swap_retries,
         }
 
 
@@ -542,6 +592,63 @@ def _companion_deltas(
         if b != a:
             any_changed = True
     return before, after, any_changed
+
+
+def _swap_compacted_chain(
+    repo: Path, *, snapshot_head: str, compacted: list[Any], affected: set[str]
+) -> tuple[list[Any], set[str], str | None, int]:
+    """Land ``compacted`` onto ``EVENT_LOG_REF`` via compare-and-swap against
+    ``snapshot_head`` — the head ``compacted`` was actually derived FROM
+    (captured before the O(corpus) compaction work below started), never a
+    fresh self-read taken at swap time (issue #358 repair, finding 1: see the
+    module docstring's "Crash safety" section — a fresh self-read is exactly
+    what silently force-overwrites a concurrent append).
+
+    A CAS failure (:class:`EventLogHeadMovedError`) means some OTHER writer
+    (a hot post-commit hook reconcile, a watcher maturation tick, a trail
+    attach) appended events in the window this pass spent compacting.
+    Because the log is append-only, that delta is EXACTLY
+    ``snapshot_head..current_head`` (:func:`read_events_since`); it is
+    re-finalized onto the compacted chain's own tail (:func:`compact_and_
+    append` — never re-planning the whole, possibly huge, base chain) and the
+    swap is retried against the newly observed head. Bounded to
+    ``_SWAP_MAX_RETRIES`` attempts — each attempt only does O(delta) work, so
+    a handful outruns a hot writer without risking a livelock; on exhaustion
+    this raises so the caller's journal (already written before this is
+    called) is left in place for the next attempt and neither the mirror nor
+    companions get touched.
+
+    Returns ``(final_compacted, final_affected, new_head, retries)``.
+    """
+    expected: str | None = snapshot_head
+    for attempt in range(1, _SWAP_MAX_RETRIES + 1):
+        try:
+            import_event_log(
+                repo, compacted, writer=_RECLAIM_WRITER, force=True, expected_head=expected,
+            )
+            return compacted, affected, _head_sha(repo), attempt - 1
+        except EventLogHeadMovedError:
+            current_head, delta_events = read_events_since(repo, expected)
+            if current_head is None or delta_events is None:
+                # Not append-only relative to `expected` after all (missing
+                # ref, or a history rewrite by some other process) — refuse
+                # rather than guess; falls through to the exhaustion raise.
+                break
+            if delta_events:
+                # Patch-id -> trace_id attribution for a v3-compact delta
+                # entry can reach back into the base chain (its own
+                # ``trace_patch_created`` may predate this crash window), so
+                # this reads `compacted` (already resident, no extra I/O) —
+                # not just `delta_events` — before extending it.
+                affected = affected | _search_touch_ids(compacted + delta_events)
+                compacted, _delta_stats = compact_and_append(compacted, delta_events)
+            expected = current_head
+
+    raise RuntimeError(
+        f"{EVENT_LOG_REF} kept moving during the reclaim ref swap for a "
+        f"concurrently-written project after {_SWAP_MAX_RETRIES} retries — "
+        "journal left in place for the next attempt, mirror/companions untouched"
+    )
 
 
 def _process_reachable_project(
@@ -643,17 +750,49 @@ def _process_reachable_project(
         _write_journal(slug, old_event_ids=old_ids, affected_trace_ids=affected)
 
     if head is not None:
-        import_event_log(repo, compacted, writer=_RECLAIM_WRITER, force=True)
-    report.ref_rewritten = ref_would_change
-    new_head = _head_sha(repo) if head is not None else None
+        # CAS against the snapshot this run's `compacted` was actually
+        # derived from — never a fresh self-read at swap time (issue #358
+        # repair, finding 1: see ``_swap_compacted_chain``'s docstring for
+        # why that distinction is load-bearing, not cosmetic).
+        compacted, affected, new_head, report.swap_retries = _swap_compacted_chain(
+            repo, snapshot_head=head, compacted=compacted, affected=affected,
+        )
+    else:
+        new_head = None
+    report.ref_rewritten = ref_would_change or new_head != head
+    report.events_after = len(compacted)
     report.ref_bytes_after = _events_tree_bytes(repo, new_head) if new_head else report.ref_bytes_before
 
+    if report.swap_retries:
+        # A concurrent append landed mid-run and got folded onto the
+        # compacted tail (`_swap_compacted_chain`) — the preview computed
+        # above now describes a world that no longer matches what is about
+        # to be written, so it must be re-derived here rather than reported
+        # stale (issue #358 repair, finding 1's honesty requirement). Gated
+        # on an actual retry so the quiescent (overwhelmingly common) case
+        # never pays a second O(affected) companion-delta pass.
+        target_ids = {e.event_id for e in compacted}
+        stale_ids = journaled_old_ids - target_ids
+        to_add = [e for e in compacted if e.event_id not in existing_ids]
+        would_touch_mirror = mirror_present and (bool(stale_ids & existing_ids) or bool(to_add))
+        report.mirror_events_removed = len(stale_ids & existing_ids)
+        report.mirror_events_added = len(to_add)
+        comp_before, comp_after, _companions_stale = _companion_deltas(slug, affected, compacted)
+        report.companion_bytes_before = comp_before
+        report.companion_bytes_after = comp_after
+        report.companions_regenerated = sorted(affected)
+
     if would_touch_mirror or stale_ids:
-        removed, added = _reconcile_mirror_for_project(
+        # (#358 repair finding 2): the returned counts are batch-FILE
+        # counts, a different unit from the event counts above — kept
+        # under their own honestly-named fields (see ``_reconcile_mirror_
+        # for_project``'s docstring), never used to overwrite the
+        # event-count preview.
+        files_removed, files_written = _reconcile_mirror_for_project(
             compacted, old_ids=journaled_old_ids, event_log_head=new_head, repo_id=slug,
         )
-        report.mirror_events_removed = removed
-        report.mirror_events_added = added
+        report.mirror_batch_files_removed = files_removed
+        report.mirror_batch_files_written = files_written
         report.mirror_rewritten = True
 
     _clear_journal(slug)
@@ -762,11 +901,15 @@ def _process_unreachable_project(slug: str, *, apply: bool, single_project_bucke
         )
 
     if mirror_would_change or stale_ids:
-        removed, added = _reconcile_mirror_for_project(
+        # (#358 repair finding 2): file-level counts, kept under their own
+        # honestly-named fields — never used to overwrite the event-count
+        # preview set above (see ``_reconcile_mirror_for_project``'s
+        # docstring and ``_process_reachable_project``'s matching fix).
+        files_removed, files_written = _reconcile_mirror_for_project(
             compacted, old_ids=journaled_old_ids, event_log_head=preserved_head, repo_id=slug,
         )
-        report.mirror_events_removed = removed
-        report.mirror_events_added = added
+        report.mirror_batch_files_removed = files_removed
+        report.mirror_batch_files_written = files_written
         report.mirror_rewritten = True
 
     _clear_journal(slug)

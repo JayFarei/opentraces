@@ -247,17 +247,27 @@ def plan_compacted_stream(events: list[TrailEvent]) -> tuple[list[_Slot], Compac
     return slots, stats
 
 
-def _refinalize(slots: list[_Slot]) -> list[TrailEvent]:
+def _refinalize(
+    slots: list[_Slot],
+    *,
+    start_sequence: int = 1,
+    start_previous_event_id: str | None = None,
+) -> list[TrailEvent]:
     """Assign a fresh contiguous sequence + chain and finalize every slot.
 
     Produces a self-consistent canonical chain (``import_event_log`` validates
     it). Passthrough events keep their content (type / payload / versions /
     capture_method / trace fields / event_time); only their sequence,
     previous_event_id and the derived event_id change.
+
+    ``start_sequence`` / ``start_previous_event_id`` seed the chain instead of
+    always restarting at (1, None) — :func:`compact_and_append` uses this to
+    continue an ALREADY-finalized chain's tail rather than re-planning it.
     """
     finalized: list[TrailEvent] = []
-    previous_event_id: str | None = None
-    for index, slot in enumerate(slots, start=1):
+    previous_event_id: str | None = start_previous_event_id
+    for offset, slot in enumerate(slots):
+        index = start_sequence + offset
         if slot.kind == "passthrough":
             assert slot.event is not None
             src = slot.event
@@ -333,6 +343,40 @@ def compact_search_events(
         if e.event_type == ANCHOR_SEARCH_EVENT_TYPE and is_summary_search_event(e)
     )
     return compacted, stats
+
+
+def compact_and_append(
+    base_compacted: list[TrailEvent], delta_events: list[TrailEvent]
+) -> tuple[list[TrailEvent], CompactionStats]:
+    """Extend an ALREADY-compacted chain with a freshly-appended suffix.
+
+    ``base_compacted`` is trusted as-is (a prior :func:`compact_search_events`
+    or :func:`compact_and_append` output) and never re-walked; only
+    ``delta_events`` — a small, real, append-only suffix — gets the same
+    legacy/v2-fat rollup treatment via :func:`plan_compacted_stream`, then
+    :func:`_refinalize` continues the chain from ``base_compacted``'s own
+    tail instead of restarting at ``(1, None)``.
+
+    Bucket-reclaim's CAS-retry path (issue #358 repair, finding 1) is the
+    caller: when a concurrent writer appends events during the O(corpus)
+    compaction pass, this is what folds exactly that delta onto the tail
+    without redoing the expensive base compaction.
+    """
+    if not delta_events:
+        return list(base_compacted), CompactionStats()
+    slots, stats = plan_compacted_stream(delta_events)
+    tail_sequence = base_compacted[-1].event_sequence if base_compacted else 0
+    tail_event_id = base_compacted[-1].event_id if base_compacted else None
+    appended = _refinalize(
+        slots, start_sequence=tail_sequence + 1, start_previous_event_id=tail_event_id,
+    )
+    stats.events_out = len(appended)
+    stats.summary_events_out = sum(
+        1
+        for e in appended
+        if e.event_type == ANCHOR_SEARCH_EVENT_TYPE and is_summary_search_event(e)
+    )
+    return list(base_compacted) + appended, stats
 
 
 def compact_repo(

@@ -385,18 +385,41 @@ def _validate_import_events(events: list[TrailEvent]) -> list[TrailEvent]:
     return ordered
 
 
+class EventLogHeadMovedError(RuntimeError):
+    """Raised by :func:`import_event_log` when ``expected_head`` was supplied
+    and no longer matches the ref's actual current head at swap time — the
+    caller's snapshot precondition no longer holds, so it must not proceed
+    with a swap built from data read against that stale snapshot (issue #358
+    repair: a fresh self-read here is exactly what let a long-running caller
+    silently force-overwrite a concurrent append)."""
+
+
+# Sentinel distinguishing "no expectation supplied" (preserve the original
+# fresh-self-read behavior every other caller relies on) from an explicit
+# ``expected_head=None`` (the caller's snapshot WAS an empty ref).
+_UNSET: Any = object()
+
+
 def import_event_log(
     cwd: Path,
     events: list[TrailEvent | dict[str, Any]],
     *,
     writer: str = "bucket-restore",
     force: bool = False,
+    expected_head: str | None = _UNSET,
 ) -> dict[str, Any]:
     """Materialize a complete TrailEvent stream into ``EVENT_LOG_REF``.
 
     Bucket sync exports Trace Trails as file-shaped JSONL segments. This helper
     rebuilds the local Git ref from that stream so normal trail commands can run
     against a repo supplied by the user.
+
+    ``expected_head``, when supplied, turns the swap into a real compare-and-
+    swap against a snapshot the CALLER already holds: the ref's actual current
+    head must equal it or this raises :class:`EventLogHeadMovedError` before
+    doing any work, rather than falling back to a fresh self-read of whatever
+    the head happens to be right now. Omitting it preserves the original
+    self-read behavior.
     """
 
     cwd = cwd.resolve()
@@ -406,6 +429,11 @@ def import_event_log(
     ]
     ordered = _validate_import_events(parsed)
     head = _ref_head(cwd)
+    if expected_head is not _UNSET and head != expected_head:
+        raise EventLogHeadMovedError(
+            f"{EVENT_LOG_REF} head is {head!r}, expected {expected_head!r} — "
+            "the ref moved after the caller's snapshot was taken"
+        )
     if head is not None:
         existing = read_events(cwd, verify=False)
         existing_ids = [event.event_id for event in existing]

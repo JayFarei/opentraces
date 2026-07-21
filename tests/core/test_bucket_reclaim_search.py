@@ -962,22 +962,31 @@ def test_concurrent_append_during_compaction_survives_via_cas_retry(tmp_path: Pa
     repo, slug = world["repo"], world["slug"]
 
     real_compact = reclaim_mod.compact_search_events
-    concurrent_patch_id = "tracepatch-sha256:" + ("9" + "c" * 63)
+    concurrent_patch_id = "9" + "c" * 63
+    commit_c = "c" * 40
 
     def _compact_then_concurrent_append(events):
         result = real_compact(events)
         # The exact race window the finding names: a writer lands new
         # content WHILE this (real, minutes-long on the motivating 27GB
-        # bucket) compaction call is still running.
+        # bucket) compaction call is still running -- a real post-commit
+        # hook reconcile creates the patch AND immediately searches it, so
+        # the delta carries both events, matching the module docstring's
+        # own list of concurrent writers (hot hook / watcher maturation /
+        # trail attach).
         append_event_batch(
             repo,
             [
                 _patch_created(
-                    trace_id="t-concurrent", trace_patch_id=concurrent_patch_id,
+                    trace_id="t-concurrent", trace_patch_id=f"tracepatch-sha256:{concurrent_patch_id}",
                     file_path="concurrent.py", step_index=0,
-                )
+                ),
+                _legacy_search(
+                    trace_id="t-concurrent", step_index=0, patch_id=concurrent_patch_id,
+                    commit_hex=commit_c, result="anchored", anchor_ids=["gitanchor-sha256:" + "c" * 64],
+                ),
             ],
-            writer="capture-claude-code",
+            writer="watcher",
         )
         return result
 
@@ -997,12 +1006,16 @@ def test_concurrent_append_during_compaction_survives_via_cas_retry(tmp_path: Pa
     assert verdict["event_chain_valid"] is True
     assert verdict["content_hashes_valid"] is True
 
-    concurrent_live = [
-        e for e in live_events
-        if e.event_type == "trace_patch_created"
-        and (e.payload or {}).get("trace_patch_id") == concurrent_patch_id
-    ]
-    assert len(concurrent_live) == 1, "the concurrently-appended event is missing from the final chain"
+    def _touches_concurrent_patch(event) -> bool:
+        if event.event_type != "git_anchor_search_completed":
+            return False
+        return any(
+            r.get("trace_patch_id") == f"tracepatch-sha256:{concurrent_patch_id}"
+            for r in (event.payload or {}).get("results") or []
+        )
+
+    concurrent_live = [e for e in live_events if _touches_concurrent_patch(e)]
+    assert len(concurrent_live) == 1, "the concurrently-appended search event is missing from the final chain"
 
     mirror_ids = {e.event_id for e in read_events_mirror_batches()}
     assert concurrent_live[0].event_id in mirror_ids, "the concurrently-appended event is missing from the mirror"
@@ -1010,9 +1023,18 @@ def test_concurrent_append_during_compaction_survives_via_cas_retry(tmp_path: Pa
     assert "t-concurrent" in proj.companions_regenerated
     concurrent_trail = _read_trail_events(slug, "t-concurrent")
     assert any(
-        e["event_type"] == "trace_patch_created" and e["payload"].get("trace_patch_id") == concurrent_patch_id
+        e["event_type"] == "trace_patch_created"
+        and e["payload"].get("trace_patch_id") == f"tracepatch-sha256:{concurrent_patch_id}"
         for e in concurrent_trail
-    ), "the concurrently-appended event is missing from its trace's companion"
+    ), "the concurrently-appended patch is missing from its trace's companion"
+    assert any(
+        e["event_type"] == "git_anchor_search_completed"
+        and any(
+            r.get("trace_patch_id") == f"tracepatch-sha256:{concurrent_patch_id}"
+            for r in (e["payload"].get("results") or [])
+        )
+        for e in concurrent_trail
+    ), "the concurrently-appended search event is missing from its trace's companion"
 
 
 def test_concurrent_appends_every_retry_exhausts_to_error_without_partial_swap(tmp_path: Path) -> None:
@@ -1073,8 +1095,15 @@ def test_concurrent_appends_every_retry_exhausts_to_error_without_partial_swap(t
         ), f"hot event {n} is missing from the canonical chain"
 
     # Nothing half-swapped: the swap never landed, so mirror/companions are
-    # byte-identical to before this run touched anything.
-    assert _bucket_snapshot(paths.bucket_dir()) == before_bucket
+    # byte-identical to before this run touched anything -- excluding the
+    # journal itself (under ``reclaim/``), which IS expected to exist now
+    # (written durably before the first swap attempt; it is what makes the
+    # next attempt recoverable).
+    def _without_journal(snapshot: dict[str, bytes]) -> dict[str, bytes]:
+        return {k: v for k, v in snapshot.items() if not k.startswith("reclaim" + "/")}
+
+    after_bucket = _bucket_snapshot(paths.bucket_dir())
+    assert _without_journal(after_bucket) == _without_journal(before_bucket)
 
 
 def test_quiescent_apply_reports_zero_swap_retries(tmp_path: Path) -> None:
