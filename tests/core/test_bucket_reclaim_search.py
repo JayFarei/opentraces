@@ -935,3 +935,202 @@ def test_one_project_error_does_not_sink_the_others(tmp_path: Path) -> None:
     proj_b = next(p for p in result.projects if p.project_slug == other["slug"])
     assert proj_b.action == "clean"  # unaffected by A's failure
 
+
+# ---------------------------------------------------------------------------
+# Issue #358 repair v3: CAS-on-concurrent-append (blocker) + dry-run/apply
+# mirror event-count parity (major) -- both verifier-confirmed against a real
+# end-to-end repro.
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_append_during_compaction_survives_via_cas_retry(tmp_path: Path) -> None:
+    """Issue #358 repair (blocker, verifier-confirmed): ``_process_reachable_
+    project`` snapshots the chain (``read_events``), spends minutes of
+    O(corpus) work compacting it, then used to swap against a FRESH self-read
+    -- which, if some OTHER writer (a hot post-commit hook reconcile, a
+    watcher maturation tick, a trail attach) appended an event during that
+    window, already reflected the append. The CAS trivially "succeeded"
+    against data computed from the STALE pre-append snapshot, so the append
+    was force-overwritten out of the ref -- absent from ``read_events``
+    afterwards even though the report said ``action=compacted`` with zero
+    errors. The append must survive in the canonical chain, the mirror, AND
+    its trace's companion, with the report honest that a retry happened."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    real_compact = reclaim_mod.compact_search_events
+    concurrent_patch_id = "tracepatch-sha256:" + ("9" + "c" * 63)
+
+    def _compact_then_concurrent_append(events):
+        result = real_compact(events)
+        # The exact race window the finding names: a writer lands new
+        # content WHILE this (real, minutes-long on the motivating 27GB
+        # bucket) compaction call is still running.
+        append_event_batch(
+            repo,
+            [
+                _patch_created(
+                    trace_id="t-concurrent", trace_patch_id=concurrent_patch_id,
+                    file_path="concurrent.py", step_index=0,
+                )
+            ],
+            writer="capture-claude-code",
+        )
+        return result
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "compact_search_events", _compact_then_concurrent_append)
+    try:
+        proj = reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    finally:
+        patch.undo()
+
+    assert proj.action == "compacted"
+    assert proj.swap_retries == 1
+
+    live_events = read_events(repo, verify=False)
+    assert proj.events_after == len(live_events)
+    verdict = verify_event_log(repo)
+    assert verdict["event_chain_valid"] is True
+    assert verdict["content_hashes_valid"] is True
+
+    concurrent_live = [
+        e for e in live_events
+        if e.event_type == "trace_patch_created"
+        and (e.payload or {}).get("trace_patch_id") == concurrent_patch_id
+    ]
+    assert len(concurrent_live) == 1, "the concurrently-appended event is missing from the final chain"
+
+    mirror_ids = {e.event_id for e in read_events_mirror_batches()}
+    assert concurrent_live[0].event_id in mirror_ids, "the concurrently-appended event is missing from the mirror"
+
+    assert "t-concurrent" in proj.companions_regenerated
+    concurrent_trail = _read_trail_events(slug, "t-concurrent")
+    assert any(
+        e["event_type"] == "trace_patch_created" and e["payload"].get("trace_patch_id") == concurrent_patch_id
+        for e in concurrent_trail
+    ), "the concurrently-appended event is missing from its trace's companion"
+
+
+def test_concurrent_appends_every_retry_exhausts_to_error_without_partial_swap(tmp_path: Path) -> None:
+    """Issue #358 repair (blocker): a writer hot enough to land a NEW append
+    before EVERY retry attempt must not livelock the swap forever. On
+    exhausting the bound: nothing is lost (every hot event a real writer
+    landed is still on the ref -- this pass's swap never actually landed),
+    nothing is half-swapped (mirror/companions stay byte-identical to before
+    this run), and the journal survives for a future attempt."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core import paths
+    from opentraces.core.trails.event_log import EventLogHeadMovedError
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+    before_bucket = _bucket_snapshot(paths.bucket_dir())
+
+    calls = {"n": 0}
+
+    def _always_races(cwd, events, *, writer, force, expected_head=None):
+        calls["n"] += 1
+        # A genuinely new, real writer lands another event before every
+        # single retry attempt -- the worst case the bound exists for.
+        append_event_batch(
+            repo,
+            [
+                _patch_created(
+                    trace_id=f"t-hot-{calls['n']}",
+                    trace_patch_id=f"tracepatch-sha256:{calls['n']}{'e' * 63}",
+                    file_path=f"hot{calls['n']}.py", step_index=0,
+                )
+            ],
+            writer="watcher",
+        )
+        raise EventLogHeadMovedError("simulated: ref moved (test)")
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "import_event_log", _always_races)
+    try:
+        result = reclaim_mod.reclaim_anchor_search(apply=True)
+    finally:
+        patch.undo()
+
+    assert calls["n"] == reclaim_mod._SWAP_MAX_RETRIES
+
+    proj = next(p for p in result.projects if p.project_slug == slug)
+    assert proj.action == "error"
+    assert any(slug in err for err in result.errors)
+    assert reclaim_mod._journal_path(slug).exists(), "journal must survive for a future attempt"
+
+    # Nothing lost: every hot writer's event actually landed on the ref --
+    # our failed reclaim swap never touched it.
+    live_events = read_events(repo, verify=False)
+    for n in range(1, calls["n"] + 1):
+        assert any(
+            e.event_type == "trace_patch_created" and e.trace_id == f"t-hot-{n}"
+            for e in live_events
+        ), f"hot event {n} is missing from the canonical chain"
+
+    # Nothing half-swapped: the swap never landed, so mirror/companions are
+    # byte-identical to before this run touched anything.
+    assert _bucket_snapshot(paths.bucket_dir()) == before_bucket
+
+
+def test_quiescent_apply_reports_zero_swap_retries(tmp_path: Path) -> None:
+    """Issue #358 repair: the original quiescent-world behavior (no
+    concurrent writer) is unchanged by the CAS-retry machinery -- zero
+    retries, same as before this repair existed."""
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_world(tmp_path)
+    result = reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == world["slug"])
+    assert proj.swap_retries == 0
+
+
+def test_dry_run_and_apply_report_identical_mirror_event_counts(tmp_path: Path) -> None:
+    """Issue #358 repair (major, verifier-confirmed): dry-run counted mirror
+    deltas in EVENT units (``len(to_add)``, ``len(stale_ids & existing_
+    ids)``) but apply overwrote them with ``_reconcile_mirror_for_
+    project``'s return, which counts batch FILES written and every event id
+    in a removed file (including untouched-but-relocated ones) -- a
+    different unit that silently disagreed on the SAME quiescent world."""
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_world(tmp_path)
+    slug = world["slug"]
+
+    dry = reclaim_anchor_search(apply=False)
+    proj_dry = next(p for p in dry.projects if p.project_slug == slug)
+
+    applied = reclaim_anchor_search(apply=True)
+    proj_apply = next(p for p in applied.projects if p.project_slug == slug)
+
+    assert proj_dry.mirror_events_added > 0
+    assert proj_dry.mirror_events_removed > 0
+    assert proj_apply.mirror_events_added == proj_dry.mirror_events_added
+    assert proj_apply.mirror_events_removed == proj_dry.mirror_events_removed
+
+    # The file-level numbers are a DIFFERENT unit, honestly reported under
+    # their own field names -- never conflated with the event counts above.
+    assert proj_apply.mirror_batch_files_written >= 1
+
+
+def test_unreachable_dry_run_and_apply_report_identical_mirror_event_counts(tmp_path: Path) -> None:
+    """Same fix, mirror-only path (issue #358 repair, finding 2)."""
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_unreachable_world(tmp_path)
+    slug = world["slug"]
+
+    dry = reclaim_anchor_search(apply=False)
+    proj_dry = next(p for p in dry.projects if p.project_slug == slug)
+
+    applied = reclaim_anchor_search(apply=True)
+    proj_apply = next(p for p in applied.projects if p.project_slug == slug)
+
+    assert proj_dry.mirror_events_added > 0
+    assert proj_apply.mirror_events_added == proj_dry.mirror_events_added
+    assert proj_apply.mirror_events_removed == proj_dry.mirror_events_removed
+
