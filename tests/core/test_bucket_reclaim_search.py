@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -183,6 +184,45 @@ def _build_world(tmp_path: Path) -> dict:
     }
 
 
+def _build_unreachable_world(tmp_path: Path) -> dict:
+    """Like ``_build_world``, but the project's repo directory is moved
+    ASIDE afterward (not deleted) -- ``_iter_opted_in_projects`` skips a
+    registered project whose on-disk path is missing, so this reproduces
+    "repo unreachable" exactly (a missing/unmounted path, or an un-enrolled
+    project), while ``world["moved_repo"]`` lets a test move it BACK to
+    prove the "project becomes reachable again" scenario without changing
+    its Git history at all (same head, byte-identical repo)."""
+
+    world = _build_world(tmp_path)
+    moved = tmp_path / "proj-moved-aside"
+    shutil.move(str(world["repo"]), str(moved))
+    world["moved_repo"] = moved
+    return world
+
+
+def _build_second_clean_project(tmp_path: Path, *, trace_id: str) -> dict:
+    """A second, ordinary project with NO anchor-search history at all --
+    used to prove a per-project failure elsewhere doesn't stop this one
+    from being processed normally."""
+    from opentraces.core.bucket_store import bucket_repair, write_trace_record
+    from opentraces.core.config import get_project_dir, load_config, register_project, save_config
+
+    repo = tmp_path / "proj-clean"
+    _init_repo(repo)
+    append_event_batch(
+        repo,
+        [_patch_created(trace_id=trace_id, trace_patch_id=f"tracepatch-sha256:{'c' * 64}", file_path="c.py", step_index=0)],
+        writer="capture-claude-code",
+    )
+    cfg = load_config()
+    register_project(cfg, repo)
+    save_config(cfg)
+    slug = get_project_dir(repo).name
+    write_trace_record(_record(trace_id), project_slug=slug, source_layer="canonical")
+    bucket_repair(dry_run=False)
+    return {"repo": repo, "slug": slug}
+
+
 def _bucket_snapshot(bucket_root: Path) -> dict[str, bytes]:
     """Every file under the bucket root, by relative path -> bytes."""
     return {
@@ -336,8 +376,14 @@ def test_kill_mid_run_leaves_readable_bucket_and_resume_completes(tmp_path: Path
     # isolation and start reading/writing the real ``~/.opentraces``.
     kill_patch = pytest.MonkeyPatch()
     kill_patch.setattr(reclaim_mod, "project_per_trace_exports", _boom)
+    # Call the per-project worker directly, not ``reclaim_anchor_search`` --
+    # the top-level entry point now CATCHES a per-project exception (issue
+    # #358 repair: one bad project must never sink the whole reclaim pass,
+    # see test_one_project_error_does_not_sink_the_others), so it would no
+    # longer raise here. Driving the worker directly is what actually
+    # simulates "the process died mid-run" for this test's purpose.
     with pytest.raises(RuntimeError, match="simulated kill"):
-        reclaim_mod.reclaim_anchor_search(apply=True)
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
     kill_patch.undo()
 
     # Ref + mirror already advanced past the interrupted point; bucket is
@@ -375,3 +421,327 @@ def test_kill_mid_run_leaves_readable_bucket_and_resume_completes(tmp_path: Path
     result3 = reclaim_mod.reclaim_anchor_search(apply=True)
     proj3 = next(p for p in result3.projects if p.project_slug == slug)
     assert proj3.bytes_reclaimed == 0
+
+
+def _assert_mirror_matches_live_and_replays(tmp_path: Path, repo: Path, slug: str, label: str) -> None:
+    """Shared post-resume assertion for the kill-injection tests below: the
+    mirror's event_id set is EXACTLY the live canonical chain's (no stale
+    leftovers, no duplicates), the chain itself verifies, a fresh clone
+    replays it byte-identically at the event level, AND — the concrete
+    consequence a wrong ordinal/filename scheme produces (issue #358 repair
+    finding) — a FOLLOW-UP, independent ``sync_events_mirror`` call stays a
+    clean no-op rather than duplicating everything under a second set of
+    filenames."""
+    from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
+    from opentraces.core.bucket_store import restore_trail_events_to_repo
+
+    live_events = read_events(repo, verify=False)
+    live_ids = [e.event_id for e in live_events]
+    mirror_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert sorted(mirror_ids) == sorted(live_ids)
+    assert len(mirror_ids) == len(set(mirror_ids)), "mirror carries duplicate event_ids"
+
+    verdict = verify_event_log(repo)
+    assert verdict["event_chain_valid"] is True
+    assert verdict["content_hashes_valid"] is True
+
+    fresh = tmp_path / f"replayed-{label}"
+    _init_repo(fresh)
+    restore_trail_events_to_repo(fresh, repo_id=slug, force=True)
+    replayed_ids = [e.event_id for e in read_events(fresh, verify=False)]
+    assert replayed_ids == live_ids
+    assert verify_event_log(fresh)["event_chain_valid"] is True
+
+    sync_events_mirror(repo, repo_id=slug)
+    after_sync_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert len(after_sync_ids) == len(set(after_sync_ids)), (
+        "a routine sync after resume duplicated the mirror"
+    )
+    assert sorted(after_sync_ids) == sorted(live_ids)
+
+
+def test_kill_between_ref_swap_and_mirror_write_resume_removes_stale(tmp_path: Path) -> None:
+    """Issue #358 repair (blocker): a kill AFTER ``import_event_log`` swaps
+    the ref but BEFORE the mirror is touched at all used to leave the mirror
+    permanently fat -- resume recomputed ``old_ids`` from the ALREADY-
+    compacted ref, saw ``old_ids == target_ids`` (compaction is idempotent on
+    compact input), and concluded there was nothing stale to remove. The
+    per-project journal (written durably before the ref swap) is what makes
+    resume see the ORIGINAL removal target instead."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated kill between ref swap and mirror write")
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "_reconcile_mirror_for_project", _boom)
+    with pytest.raises(RuntimeError, match="simulated kill between ref swap"):
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    patch.undo()
+
+    # Prove the crash window is real: ref already moved, mirror untouched.
+    live_ids_mid = {e.event_id for e in read_events(repo, verify=False)}
+    mirror_ids_mid = {e.event_id for e in read_events_mirror_batches()}
+    assert mirror_ids_mid != live_ids_mid
+
+    result = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+    assert proj.action == "compacted"
+
+    _assert_mirror_matches_live_and_replays(tmp_path, repo, slug, "a1")
+
+    result2 = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj2 = next(p for p in result2.projects if p.project_slug == slug)
+    assert proj2.bytes_reclaimed == 0
+
+
+def test_kill_inside_mirror_write_resume_completes(tmp_path: Path) -> None:
+    """Issue #358 repair (blocker): a kill INSIDE the mirror reconcile call --
+    new batch file(s) already written, stale file(s) already removed, but the
+    index (and therefore the journal clear) never committed -- must also
+    resume cleanly to a mirror that matches the live chain exactly, not a
+    mix of two differently-numbered layouts (the concrete duplication repro
+    from the #358 repair finding)."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    real_write_json = reclaim_mod._atomic_write_json
+
+    def _boom_on_index_write(path, payload):
+        if path.name == "index.json":
+            raise RuntimeError("simulated kill mid mirror write")
+        return real_write_json(path, payload)
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "_atomic_write_json", _boom_on_index_write)
+    with pytest.raises(RuntimeError, match="simulated kill mid mirror write"):
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    patch.undo()
+
+    # The batch files themselves already mutated (write-new-then-remove-stale
+    # inside _reconcile_mirror_for_project ran to completion); only the index
+    # commit (and the journal clear that follows it) was interrupted.
+    mirror_ids_mid = {e.event_id for e in read_events_mirror_batches()}
+    live_ids_mid = {e.event_id for e in read_events(repo, verify=False)}
+    assert mirror_ids_mid == live_ids_mid  # the file mutations themselves were already correct
+
+    result = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+    assert proj.action == "compacted"
+
+    _assert_mirror_matches_live_and_replays(tmp_path, repo, slug, "a2")
+
+    result2 = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj2 = next(p for p in result2.projects if p.project_slug == slug)
+    assert proj2.bytes_reclaimed == 0
+
+
+def test_reclaim_then_normal_sync_no_duplicates_single_project(tmp_path: Path) -> None:
+    """Issue #358 repair (blocker, repro-confirmed): a routine
+    ``sync_events_mirror`` call AFTER ``bucket reclaim --apply`` used to
+    duplicate every event in the mirror, because reclaim stamped
+    ``event_log_head: None`` (forcing the next sync into a full,
+    never-cleans-up-stale-files rebuild) and renumbered batch files with an
+    ordinal scheme a standalone rebuild would never reproduce."""
+    from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    reclaim_anchor_search(apply=True)
+    mid_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert len(mid_ids) == len(set(mid_ids))
+
+    sync_events_mirror(repo, repo_id=slug)  # a routine watcher tick / bucket repair
+
+    after_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert len(after_ids) == len(set(after_ids)), "mirror duplicated after reclaim + a normal sync"
+    assert sorted(after_ids) == sorted({e.event_id for e in read_events(repo, verify=False)})
+
+
+def test_reclaim_then_normal_sync_no_duplicates_multi_project(tmp_path: Path) -> None:
+    """Same as the single-project case, but with a SECOND, untouched project
+    sharing the mirror -- reclaim must not disturb project B's own batch
+    files, and B's own later sync must not collide with what reclaim wrote
+    for A."""
+    from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_world(tmp_path / "a")
+    other = _build_second_clean_project(tmp_path / "b", trace_id="tB")
+
+    reclaim_anchor_search(apply=True)
+
+    sync_events_mirror(world["repo"], repo_id=world["slug"])
+    sync_events_mirror(other["repo"], repo_id=other["slug"])
+
+    after_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert len(after_ids) == len(set(after_ids)), "mirror duplicated after reclaim + a normal sync"
+
+    expected = {e.event_id for e in read_events(world["repo"], verify=False)} | {
+        e.event_id for e in read_events(other["repo"], verify=False)
+    }
+    assert set(after_ids) == expected
+
+
+def test_ref_bytes_are_not_counted_as_reclaimed(tmp_path: Path) -> None:
+    """Issue #358 repair (major): ``import_event_log`` writes a whole NEW
+    chain and moves the ref, but the OLD chain's objects stay in the Git
+    object database (unreachable, retained -- this module never runs
+    ``git gc``). The headline ``bytes_reclaimed`` must therefore count only
+    the companion shrink that is REALLY on disk, with the ref-side delta
+    reported separately and honestly."""
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+    before_head = subprocess.run(
+        ["git", "rev-parse", "refs/opentraces/local/events/v1"], cwd=repo,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    result = reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+
+    assert proj.ref_bytes_reclaimable_after_gc > 0
+    assert proj.bytes_before == proj.companion_bytes_before
+    assert proj.bytes_after == proj.companion_bytes_after
+    assert proj.bytes_reclaimed == proj.companion_bytes_before - proj.companion_bytes_after
+    assert result.bytes_reclaimed == sum(
+        p.companion_bytes_before - p.companion_bytes_after for p in result.projects
+    )
+
+    # The old head's objects are still retained -- exactly what makes
+    # counting the ref delta as "reclaimed" dishonest without a gc.
+    still_present = subprocess.run(
+        ["git", "cat-file", "-e", before_head], cwd=repo, capture_output=True,
+    )
+    assert still_present.returncode == 0
+
+
+def test_unreachable_dry_run_reports_and_mutates_nothing(tmp_path: Path) -> None:
+    from opentraces.core import paths
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_unreachable_world(tmp_path)
+    before_bucket = _bucket_snapshot(paths.bucket_dir())
+
+    result = reclaim_anchor_search(apply=False)
+    proj = next(p for p in result.projects if p.project_slug == world["slug"])
+
+    assert proj.repo_reachable is False
+    assert proj.action == "mirror_only_compacted"
+    assert proj.mirror_rewritten is True
+    assert _bucket_snapshot(paths.bucket_dir()) == before_bucket
+
+
+def test_unreachable_apply_compacts_mirror_and_companions(tmp_path: Path) -> None:
+    from opentraces.core.bucket_events import read_events_mirror_batches
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_unreachable_world(tmp_path)
+    slug = world["slug"]
+
+    result = reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+
+    assert proj.action == "mirror_only_compacted"
+    assert proj.mirror_rewritten is True
+
+    mirror_events = list(read_events_mirror_batches())
+    mirror_ids = [e.event_id for e in mirror_events]
+    assert len(mirror_ids) == len(set(mirror_ids))
+    for event in mirror_events:
+        if event.event_type != "git_anchor_search_completed":
+            continue
+        payload = event.payload or {}
+        assert "coverage" in payload or "unanchored_trace_patch_ids" in payload
+
+    anchored_trail = _read_trail_events(slug, "t-anchored")
+    assert len(_search_events(anchored_trail)) == 1
+    fat_trail = _read_trail_events(slug, "t-fat-unanchored")
+    assert _search_events(fat_trail) == []
+
+
+def test_unreachable_second_apply_is_idempotent(tmp_path: Path) -> None:
+    from opentraces.core import paths
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_unreachable_world(tmp_path)
+    reclaim_anchor_search(apply=True)
+
+    after_first = _bucket_snapshot(paths.bucket_dir())
+    result2 = reclaim_anchor_search(apply=True)
+    proj2 = next(p for p in result2.projects if p.project_slug == world["slug"])
+
+    assert proj2.bytes_reclaimed == 0
+    assert proj2.mirror_rewritten is False
+    assert _bucket_snapshot(paths.bucket_dir()) == after_first
+
+
+def test_unreachable_project_reappearing_does_not_duplicate_on_sync(tmp_path: Path) -> None:
+    """Issue #358 repair (major): mirror-only compaction used to stamp
+    ``event_log_head: None``, so once the project's repo path comes back
+    (a remount, or the project being re-enrolled) the NEXT routine sync
+    took the full-rebuild-without-cleanup path and duplicated every event.
+    Preserving the pre-existing (still-accurate, since this path never
+    rewrites the repo's own ref) ``event_log_head`` closes that."""
+    from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_unreachable_world(tmp_path)
+    slug = world["slug"]
+
+    reclaim_anchor_search(apply=True)
+
+    # The repo "comes back" byte-identically (same Git history / head).
+    shutil.move(str(world["moved_repo"]), str(world["repo"]))
+
+    sync_events_mirror(world["repo"], repo_id=slug)
+
+    after_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert len(after_ids) == len(set(after_ids)), "mirror duplicated once the project became reachable again"
+
+
+def test_one_project_error_does_not_sink_the_others(tmp_path: Path) -> None:
+    """Issue #358 repair (major): one project's processing failure (a git
+    error mid-swap, a corrupt event) must not take down the whole ``bucket
+    reclaim`` verb -- every OTHER project still gets processed and reported,
+    and the failure is surfaced in ``errors`` / that project's own
+    ``action="error"`` row instead of propagating."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+
+    world = _build_world(tmp_path / "a")
+    other = _build_second_clean_project(tmp_path / "b", trace_id="tB")
+
+    real_process = reclaim_mod._process_reachable_project
+
+    def _boom(slug, repo, *, apply):
+        if slug == world["slug"]:
+            raise RuntimeError("simulated per-project failure")
+        return real_process(slug, repo, apply=apply)
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "_process_reachable_project", _boom)
+    try:
+        result = reclaim_mod.reclaim_anchor_search(apply=True)  # must NOT raise
+    finally:
+        patch.undo()
+
+    assert any("simulated per-project failure" in err for err in result.errors)
+
+    proj_a = next(p for p in result.projects if p.project_slug == world["slug"])
+    assert proj_a.action == "error"
+    assert proj_a.reason == "simulated per-project failure"
+
+    proj_b = next(p for p in result.projects if p.project_slug == other["slug"])
+    assert proj_b.action == "clean"  # unaffected by A's failure
+
