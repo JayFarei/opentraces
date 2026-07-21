@@ -316,7 +316,7 @@ def test_second_apply_is_idempotent(tmp_path: Path) -> None:
     assert _bucket_snapshot(paths.bucket_dir()) == after_first
 
 
-def test_kill_mid_run_leaves_readable_bucket_and_resume_completes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_kill_mid_run_leaves_readable_bucket_and_resume_completes(tmp_path: Path) -> None:
     from opentraces.core import bucket_reclaim_search as reclaim_mod
 
     world = _build_world(tmp_path)
@@ -329,10 +329,16 @@ def test_kill_mid_run_leaves_readable_bucket_and_resume_completes(tmp_path: Path
     def _boom(*args, **kwargs):
         raise RuntimeError("simulated kill before companion regen")
 
-    monkeypatch.setattr(reclaim_mod, "project_per_trace_exports", _boom)
+    # A LOCAL MonkeyPatch instance, undone explicitly right after the
+    # simulated kill -- the fixture-provided ``monkeypatch`` is shared with
+    # the autouse bucket/HOME isolation fixture (same function-scoped
+    # instance), so calling ``.undo()`` on IT would also roll back that
+    # isolation and start reading/writing the real ``~/.opentraces``.
+    kill_patch = pytest.MonkeyPatch()
+    kill_patch.setattr(reclaim_mod, "project_per_trace_exports", _boom)
     with pytest.raises(RuntimeError, match="simulated kill"):
         reclaim_mod.reclaim_anchor_search(apply=True)
-    monkeypatch.undo()
+    kill_patch.undo()
 
     # Ref + mirror already advanced past the interrupted point; bucket is
     # readable (companions are stale/fat, not corrupt).

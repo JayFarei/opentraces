@@ -905,27 +905,42 @@ def bucket_repair_cmd(bucket_root: Path | None, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
-    """Reclaim leaked Trace Trails cruft under ``.git/**/opentraces/``.
+    """Reclaim leaked Trace Trails cruft AND fat anchor-search history.
 
-    Lists leaked ``*.tmp`` files and orphan/duplicate accelerator pickles
-    (per-worktree ``event_log_snapshot.pkl`` / ``event_index`` copies left by
-    the pre-#169-C duplication bug) with per-candidate byte counts and a total.
+    Two passes, both DRY-RUN BY DEFAULT (a plain run mutates nothing;
+    ``--apply`` performs the writes):
 
-    DRY-RUN BY DEFAULT: a plain run deletes nothing and leaves the file set
-    byte-for-byte unchanged. ``--apply`` removes the listed cruft and NEVER
-    touches the live ``event_log_snapshot.pkl``, the live ``event_index/base.pkl``,
-    the canonical event ref, or anything under the bucket.
+    \b
+    1. Leaked ``.git/**/opentraces/`` cruft (``--repo``-scoped, defaults to
+       the current directory): leaked ``*.tmp`` files and orphan/duplicate
+       accelerator pickles (per-worktree ``event_log_snapshot.pkl`` /
+       ``event_index`` copies left by the pre-#169-C duplication bug), with
+       per-candidate byte counts. NEVER touches the live
+       ``event_log_snapshot.pkl``, the live ``event_index/base.pkl``, the
+       canonical event ref, or anything under the bucket.
+    2. Fat anchor-search history (issue #358, bucket-wide — every project the
+       bucket knows about, not just ``--repo``): legacy per-patch and v2-fat
+       ``git_anchor_search_completed`` events are the ~26 GB driver behind an
+       oversized bucket. This pass compacts each affected project's canonical
+       event chain to the v3-compact shape (an atomic ``update-ref`` swap),
+       reconciles the bucket's events mirror, and regenerates only the trail
+       companions a fat/legacy search event touched. Interrupt-safe
+       (write-new-then-swap); a killed run leaves a readable bucket and a
+       re-run completes the job.
     """
     from ..core.bucket_reclaim import reclaim_repo
+    from ..core.bucket_reclaim_search import reclaim_anchor_search
 
     target = Path(repo) if repo is not None else Path.cwd()
-    report = reclaim_repo(target, apply=apply)
-    payload = envelope("opentraces.bucket.reclaim.v1", reclaim=report.as_dict())
+    cruft_report = reclaim_repo(target, apply=apply)
+    search_report = reclaim_anchor_search(apply=apply)
+    data = cruft_report.as_dict()
+    data["anchor_search"] = search_report.as_dict()
+    payload = envelope("opentraces.bucket.reclaim.v1", reclaim=data)
     if as_json:
         click.echo(_dump_json(payload))
         return
 
-    data = report.as_dict()
     click.echo(f"Bucket reclaim (apply={apply}):")
     click.echo(f"  repo: {data['repo']}")
     click.echo(f"  candidates: {data['candidate_count']} ({data['total_bytes']} bytes)")
@@ -937,6 +952,28 @@ def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
         click.echo("  (dry run — nothing deleted; pass --apply to reclaim)")
     for err in data["errors"]:
         click.echo(f"  error: {err}", err=True)
+
+    search_data = data["anchor_search"]
+    click.echo("")
+    click.echo(f"Anchor-search compaction (apply={apply}):")
+    for proj in search_data["projects"]:
+        suffix = f" — {proj['reason']}" if proj["reason"] else ""
+        click.echo(f"    - {proj['project_slug']} [{proj['action']}]{suffix}")
+        if proj["action"] in ("compacted", "mirror_only_compacted"):
+            click.echo(
+                f"        events: {proj['events_before']} -> {proj['events_after']}"
+                f"  (legacy_collapsed={proj['legacy_events_collapsed']},"
+                f" fat_rewritten={proj['fat_summaries_rewritten']})"
+            )
+            click.echo(
+                f"        ref_rewritten={proj['ref_rewritten']}"
+                f"  mirror_rewritten={proj['mirror_rewritten']}"
+                f"  companions={proj['companion_count']}"
+            )
+            click.echo(f"        bytes: {proj['bytes_before']} -> {proj['bytes_after']}")
+    click.echo(f"  total bytes reclaimed: {search_data['bytes_reclaimed']}")
+    if not apply:
+        click.echo("  (dry run — nothing rewritten; pass --apply to reclaim)")
 
 
 @bucket_group.command("verify", cls=OpentracesCommand)
