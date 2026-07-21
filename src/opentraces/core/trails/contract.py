@@ -25,8 +25,12 @@ SEARCH_SCHEMA_VERSION = "opentraces.trail.search.v1"
 # summary event per (commit, reconcile-run) carrying a per-patch ``results``
 # list. This is the EVENT payload schema_version and is intentionally distinct
 # from SEARCH_SCHEMA_VERSION above (the unrelated ``trail search`` projection
-# envelope). Bump only when the summary payload shape changes.
-#
+# envelope). Bump only when the summary payload shape changes — three callers
+# (anchors.py's write path, maturation.py's periodic flush, search_compaction.py's
+# rollup) share this constant, so it identifies the full-mixed-``results[]``
+# shape all three still emit; do not repoint it at a shape only one of them
+# produces.
+ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v2"
 # v3 (issue #358): v2's ``results[]`` carried one dict per SEARCHED patch,
 # unknown outcomes included — on a mature repo that fanned ~26GB of mostly
 # never-anchored unknown dicts into every trace companion the summary
@@ -34,8 +38,16 @@ SEARCH_SCHEMA_VERSION = "opentraces.trail.search.v1"
 # unknown dicts with one ``coverage`` through-pointer claim (see
 # ``search_records.iter_coverage_claims``) — the dedup and fan-out surfaces
 # consumers need from an unknown outcome (was it searched? did it touch this
-# trace?) come from the claim and the scalars, not a per-patch dict.
-ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v3"
+# trace?) come from the claim and the scalars, not a per-patch dict. A
+# SEPARATE constant, not a bump of ANCHOR_SEARCH_SCHEMA_VERSION above: only
+# anchors.py's live coverage-bearing write path emits this shape today.
+# maturation.py's periodic flush and search_compaction.py's rollup still
+# build full-mixed ``results[]`` (no ``coverage``, unknown dicts included) —
+# stamping this label on their output would mislabel a v2 payload as v3,
+# and the planned compaction pass (design: "v3 events pass through
+# unchanged") would then skip those fat events forever instead of compacting
+# them. Repoint a caller here only once it actually emits the v3 shape.
+ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION = "opentraces.trail.anchor_search.v3"
 RESOLVE_SCHEMA_VERSION = "opentraces.trail.resolve.v1"
 # ``trail blame`` --json envelopes (ADR-0007 lint L5). Three distinct versions
 # because a schema_version identifies a SHAPE and the three blame forms share

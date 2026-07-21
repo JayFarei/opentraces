@@ -10,7 +10,7 @@ from typing import Any
 
 from ...enrichment._shared import path_matches
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
-from .contract import ANCHOR_SEARCH_SCHEMA_VERSION
+from .contract import ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
 from .event_log import append_event_batch, read_events_scoped
 from .ids import (
     GIT_ANCHOR_CANONICALIZATION,
@@ -238,19 +238,17 @@ def reconcile_commit_anchors(
     # None the per-commit scoped read is byte-identical (the post-commit hook
     # path is unchanged).
     if patch_events is not None and anchor_keys is not None and search_keys is not None:
-        # #65 pre-extracted path: keys arrive ready-made; the patch list may
-        # still need the trace filter the legacy path applies below. No
-        # coverage claims here — the caller's SQLite key cache (post_commit.py,
-        # maturation.py) does not index v3 coverage claims yet, so this path
-        # dedups on exact keys only, exactly as before #358.
+        # #65 pre-extracted path: keys arrive ready-made. No coverage claims
+        # here — the caller's SQLite key cache (post_commit.py, maturation.py)
+        # does not index v3 coverage claims yet, so this path dedups on exact
+        # keys only, exactly as before #358. ``all_patch_events`` is the
+        # UNSCOPED list the caller supplied — the trace_id scope filter is
+        # applied uniformly below, after the sort, alongside the direct-read
+        # branch's.
         existing_anchor_keys = anchor_keys
         existing_search_keys = search_keys
         claims: list[dict[str, Any]] = []
-        patch_events = [
-            event
-            for event in patch_events
-            if trace_id is None or event.trace_id == trace_id
-        ]
+        all_patch_events = patch_events
     else:
         if events is None:
             events = read_events_scoped(
@@ -315,33 +313,45 @@ def reconcile_commit_anchors(
             for claim in iter_coverage_claims(event)
             if claim["attribution_version"] == effective_attribution_version
         ]
-        patch_events = [
-            event
-            for event in events
-            if event.event_type == "trace_patch_created"
-            and (trace_id is None or event.trace_id == trace_id)
+        all_patch_events = [
+            event for event in events if event.event_type == "trace_patch_created"
         ]
 
-    # #358: the loop below walks patch_events in canonical event_sequence
-    # order — both the deadline-break resume semantics (unaffected) and the
-    # coverage through-pointer semantics (new) depend on that order. Sort
+    # #358: sort ONCE, in canonical event_sequence order, over the UNSCOPED
+    # patch list — both the deadline-break resume semantics (unaffected) and
+    # the coverage through-pointer semantics (new) depend on that order. Sort
     # explicitly rather than trusting the read path (the #65 pre-extracted
     # path and a caller-provided ``events`` list are not guaranteed sorted).
-    patch_events = sorted(patch_events, key=lambda event: event.event_sequence)
+    # ``patch_events`` (the list the search loop below iterates) is then a
+    # stable filter of the sorted list, so it inherits the same order without
+    # a second sort.
+    all_patch_events = sorted(all_patch_events, key=lambda event: event.event_sequence)
+    patch_events = [
+        event
+        for event in all_patch_events
+        if trace_id is None or event.trace_id == trace_id
+    ]
 
-    # #358: resolve each coverage claim's through_trace_patch_id to its INDEX
-    # in the CURRENT (sequence-sorted, already trace_id-filtered) patch list —
-    # never to a raw event_sequence number, which a compaction rewrite can
-    # renumber. trace_patch_created events are never reordered or dropped by
-    # compaction, so this index is stable across a rewrite. A claim whose
-    # through-id is not found here covers NOTHING: fail open to re-search,
-    # never fail closed (e.g. a scoped run's patch_events excludes every other
-    # trace's patches, so a claim from a different scope simply can't resolve
-    # and is harmlessly ignored this run).
+    # #358: resolve each coverage claim's through_trace_patch_id — and, in the
+    # search loop below, every visited patch's own position — to an INDEX in
+    # ``all_patch_events`` (the FULL, un-scoped ordering), never to a raw
+    # event_sequence number (a compaction rewrite can renumber) and never to
+    # an index into the trace-scoped ``patch_events`` list: an unscoped
+    # claim's boundary patch may belong to a DIFFERENT trace than a
+    # trace-scoped run (R5, ``trail attach``) is searching, so resolving
+    # against the scoped list would make that claim unreadable to a scoped
+    # run and force a spurious re-search. A duplicate trace_patch_id
+    # (re-ingested session, hook retry) collapses to its LAST occurrence —
+    # always overwrite rather than keep-first — because a content-derived id
+    # searches identically regardless of which occurrence produced it, so
+    # extending the boundary to a later duplicate is never unsound, and it is
+    # what keeps a distinct patch sitting BETWEEN two occurrences of the same
+    # id from falling outside the boundary. A claim whose through-id is not
+    # found here covers NOTHING: fail open to re-search, never fail closed.
     patch_position: dict[str, int] = {}
-    for position, patch_event in enumerate(patch_events):
+    for position, patch_event in enumerate(all_patch_events):
         pid = id_from_payload(patch_event.payload, "trace_patch")
-        if pid and pid not in patch_position:
+        if pid:
             patch_position[pid] = position
     resolved_claims: list[tuple[int, str | None]] = [
         (patch_position[claim["through_trace_patch_id"]], claim["scope_trace_id"])
@@ -398,7 +408,7 @@ def reconcile_commit_anchors(
     # either (id-less patches can never reach the search step), so the
     # ``if search_results:`` emission gate already excludes that case.
     last_processed_trace_patch_id: str | None = None
-    for position, patch_event in enumerate(patch_events):
+    for patch_event in patch_events:
         patch = patch_event.payload
         trace_patch_id = id_from_payload(patch, "trace_patch")
         if not trace_patch_id:
@@ -411,7 +421,12 @@ def reconcile_commit_anchors(
             commit,
             effective_attribution_version,
         ) in existing_search_keys
-        if already_searched or _covered_by_claim(position, patch_event.trace_id):
+        # patch_position[trace_patch_id] is guaranteed present: patch_events is
+        # a filter of all_patch_events, which is exactly where patch_position
+        # was built from.
+        if already_searched or _covered_by_claim(
+            patch_position[trace_patch_id], patch_event.trace_id
+        ):
             # A prior search for this (patch, commit) already recorded a
             # result under the same attribution version — via an exact key
             # (legacy/v2, or a v3 anchored entry) or a v3 coverage claim
@@ -551,7 +566,7 @@ def reconcile_commit_anchors(
                     capture_method=effective_capture_method,
                     ATTRIBUTION_VERSION=effective_attribution_version,
                     payload=build_anchor_search_summary_payload(
-                        schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
+                        schema_version=ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION,
                         search_head=commit_id,
                         algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
                         results=search_results,
