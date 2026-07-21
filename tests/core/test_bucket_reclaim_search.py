@@ -1842,3 +1842,98 @@ def test_cli_bucket_reclaim_json_dry_run_then_apply_matches_direct_call(tmp_path
     for field_name in ("action", "events_before", "events_after", "ref_rewritten", "bytes_before"):
         assert dry_proj[field_name] == applied_proj[field_name], field_name
 
+
+# ---------------------------------------------------------------------------
+# Issue #358 repair v3 round 2 follow-up, second pass (team-lead ruling on
+# the two items flagged in the first follow-up round).
+#
+# The reachable path's ``_clear_journal``-before-companion-loop bug does NOT
+# have an exact twin here -- adversarially testing the team lead's predicted
+# repro (kill mid companion loop, resume, expect stale companions to be
+# permanently missed) disproved it: ``_search_touch_ids`` is specifically
+# designed (see its own docstring) to re-resolve an already-compacted
+# ``unanchored_trace_patch_ids`` entry back to its trace via the SAME
+# ``trace_patch_created`` events the ORIGINAL (non-compacted) read would
+# have used, so a FRESH recompute on an already-compact mirror still finds
+# the trace, and ``_companion_deltas`` still correctly flags the on-disk
+# company stale -- with no byte-size prefilter on this path (unlike the
+# reachable path) to short-circuit before that check ever runs. Verified
+# directly: `companions_stale=True` on a fresh, journal-less recompute over
+# an already-compacted mirror for this exact fixture.
+#
+# The reorder is still applied below, for a real (if narrower) reason: it
+# lets the CHEAP, SCOPED ``resume_pending_anchor_search_journals()`` --
+# which ``bucket_repair`` runs automatically before its own per-project sync
+# specifically so nobody has to remember to re-run ``bucket reclaim
+# --apply`` -- heal this exact crash window too. Pre-fix, that scoped path
+# finds nothing here (no journal survives the kill, so `_pending_journal_
+# slugs()` never lists this project); a full, bucket-wide `bucket reclaim
+# --apply` re-run was the only thing that happened to still work, only
+# because of the mechanism above. Post-fix, the journal survives the crash
+# and the scoped healing path picks it up directly, matching the guarantee
+# the reachable path already has.
+# ---------------------------------------------------------------------------
+
+
+def test_unreachable_kill_mid_companion_regen_leaves_journal_for_scoped_resume(tmp_path: Path) -> None:
+    """Issue #358 repair v3 round 2 follow-up, second pass: a kill inside
+    the mirror-only path's companion-regen loop must leave the journal in
+    place (not already cleared before the loop even started), so the
+    lightweight, project-scoped ``resume_pending_anchor_search_journals()``
+    -- not just a full bucket-wide ``bucket reclaim --apply`` re-run -- can
+    heal it. Before the fix this loop's kill point runs strictly after
+    ``_clear_journal``, so no journal survives for the scoped path to find;
+    after the fix, the journal survives until the loop (and therefore all
+    companion regeneration) actually finishes."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_store import bucket_repair
+
+    world = _build_unreachable_world(tmp_path)
+    slug = world["slug"]
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated kill mid unreachable companion regen")
+
+    kill_patch = pytest.MonkeyPatch()
+    kill_patch.setattr(reclaim_mod, "project_per_trace_exports", _boom)
+    with pytest.raises(RuntimeError, match="simulated kill mid unreachable companion regen"):
+        reclaim_mod._process_unreachable_project(slug, apply=True, single_project_bucket=True)
+    kill_patch.undo()
+
+    # The load-bearing assertion: the journal must SURVIVE this crash point
+    # so the scoped resume below can find it via `_pending_journal_slugs()`.
+    assert reclaim_mod._journal_path(slug).exists(), (
+        "journal was already cleared before the companion loop finished -- "
+        "the scoped resume_pending_anchor_search_journals() path has "
+        "nothing to find for this project"
+    )
+    fat_trail_mid = _read_trail_events(slug, "t-fat-unanchored")
+    assert _search_events(fat_trail_mid), "repro invalid -- fat companion already regenerated before the kill"
+    anchored_trail_mid = _read_trail_events(slug, "t-anchored")
+    assert len(_search_events(anchored_trail_mid)) == 2, "repro invalid -- anchored companion already regenerated"
+
+    # Heal via the SCOPED path only -- proves the journal alone is enough,
+    # without a full bucket-wide reclaim_anchor_search() rescan.
+    healed = reclaim_mod.resume_pending_anchor_search_journals()
+    assert [r.project_slug for r in healed] == [slug]
+    assert healed[0].action == "mirror_only_compacted"
+    assert "t-fat-unanchored" in healed[0].companions_regenerated
+    assert "t-anchored" in healed[0].companions_regenerated
+    assert not reclaim_mod._journal_path(slug).exists()
+
+    fat_trail_after = _read_trail_events(slug, "t-fat-unanchored")
+    assert _search_events(fat_trail_after) == []
+    anchored_trail_after = _read_trail_events(slug, "t-anchored")
+    assert len(_search_events(anchored_trail_after)) == 1
+
+    # The same routine path bucket_repair actually runs stays a no-op now.
+    bucket_repair(dry_run=False)
+    assert _read_trail_events(slug, "t-fat-unanchored") == fat_trail_after
+    assert _read_trail_events(slug, "t-anchored") == anchored_trail_after
+
+    # A full run is a true no-op too -- the scoped heal already finished
+    # everything a full pass would have done.
+    result = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+    assert proj.bytes_reclaimed == 0
+
