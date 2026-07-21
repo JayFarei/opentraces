@@ -86,6 +86,31 @@ not just "write-new-then-remove-stale" ordering:
   returns, never a fresh self-read taken after the swap lands (issue #358
   repair v3, finding 2) — the identical anti-pattern one line lower, closed
   the same way.
+* ``_read_events_snapshot``'s bracket can also observe the ref go from
+  present to MISSING mid-read — a re-clone or damaged repo during the
+  minutes-long window it spans, the same hazard ``_process_reachable_
+  project``'s own entry guard (above) refuses one call stack frame higher
+  (issue #358 repair v3 round 2, blocker). Looping with the newly-``None``
+  head instead of raising would eventually return ``(None, [])``; the
+  caller's swap gate would then skip the CAS entirely, derive an EMPTY
+  compaction target, and — with a pending journal — hand
+  ``_reconcile_mirror_for_project`` a removal scope covering the WHOLE
+  mirror (its sole surviving copy once the ref is gone). This raises
+  instead, matching the entry guard, so the loss is contained the same way
+  no matter which of the two reads notices it first.
+* A CAS-retry delta event (above) keeps its OWN pre-fold ``event_id`` on the
+  canonical ref right up until ``compact_and_append`` re-chains it —
+  ``_refinalize`` derives a fresh id for every slot from the new
+  ``previous_event_id`` link, even a plain passthrough event. A routine,
+  reclaim-unrelated ``sync_events_mirror`` tick can mirror that delta under
+  its original id before this swap ever lands; because that id was never
+  part of the pre-append ``old_ids``/``journaled_old_ids`` snapshot, a
+  removal scope built from those alone can never see it (issue #358 repair
+  v3 round 2, major). ``_swap_compacted_chain`` now returns every delta
+  event's original id explicitly, and the caller unions it into
+  ``journaled_old_ids`` before deriving ``stale_ids`` — the superseded
+  original-id copy and the rewritten copy are the SAME logical event, and
+  only one of them should survive the mirror.
 
 Honest boundary: a project whose Git repo is unreachable can only be
 compacted from the bucket's own mirror, and — because the mirror carries no
@@ -218,7 +243,7 @@ def _head_sha(repo: Path) -> str | None:
     return sha or None
 
 
-def _read_events_snapshot(repo: Path, head: str | None) -> tuple[str | None, list[Any]]:
+def _read_events_snapshot(repo: Path, head: str) -> tuple[str, list[Any]]:
     """Read the canonical event chain and confirm the ref head it actually
     reflects, bracketing ``read_events`` with a ``_head_sha`` check instead
     of trusting the single, possibly-stale ``head`` passed in (issue #358
@@ -241,12 +266,31 @@ def _read_events_snapshot(repo: Path, head: str | None) -> tuple[str | None, lis
     pathologically hot writer cannot livelock the pass; exhaustion raises,
     caught by the caller's per-project try/except into ``action="error"``,
     same as swap exhaustion.
+
+    The caller only ever passes a ``head`` it has already confirmed non-None
+    (its own missing-ref guard runs first and either returns or raises
+    before this is called), so a re-read that comes back ``None`` here can
+    only mean the ref was PRESENT a moment ago and vanished during this very
+    bracket — a re-clone or damaged repo mid-run, the exact hazard that
+    entry guard exists for, one call stack frame lower. Treating that as
+    "confirmed head is now None, keep looping" (issue #358 repair v3 round
+    2, blocker) would eventually fall through with ``head=None`` and no
+    events read at all; the caller's ``if head is not None`` swap gate would
+    then skip the CAS entirely, derive an EMPTY compaction target, and — with
+    a pending journal — let ``_reconcile_mirror_for_project`` delete every
+    mirror batch file for this project as "stale" (its sole surviving copy
+    once the ref is gone). Raise instead, matching the entry guard, so this
+    mid-bracket loss is contained the same way.
     """
     for _ in range(_SNAPSHOT_MAX_ATTEMPTS):
-        if head is None:
-            return None, []
         events = read_events(repo, verify=False)
         confirmed = _head_sha(repo)
+        if confirmed is None:
+            raise RuntimeError(
+                f"{EVENT_LOG_REF} disappeared while reclaim was reading the "
+                "canonical event chain for a concurrently-written project — "
+                "refusing to treat a lost ref as 'compacted to nothing'"
+            )
         if confirmed == head:
             return head, events
         head = confirmed
@@ -543,6 +587,11 @@ class ProjectAnchorSearchReport:
     events_after: int = 0
     legacy_events_collapsed: int = 0
     fat_summaries_rewritten: int = 0
+    # Same preview semantics in dry-run and apply (issue #358 repair v3
+    # round 2, major): dry-run used to leave this at its ``False`` default
+    # even when ``ref_would_change`` was already known True, so a cautious
+    # operator auditing what ``--apply`` will touch read a preview that
+    # under-reported the single most sensitive mutation this pass performs.
     ref_rewritten: bool = False
     ref_bytes_before: int = 0
     ref_bytes_after: int = 0
@@ -665,7 +714,7 @@ def _companion_deltas(
 
 def _swap_compacted_chain(
     repo: Path, *, snapshot_head: str, compacted: list[Any], affected: set[str]
-) -> tuple[list[Any], set[str], str | None, int]:
+) -> tuple[list[Any], set[str], str | None, int, set[str]]:
     """Land ``compacted`` onto ``EVENT_LOG_REF`` via compare-and-swap against
     ``snapshot_head`` — the head ``compacted`` was actually derived FROM
     (captured before the O(corpus) compaction work below started), never a
@@ -687,9 +736,23 @@ def _swap_compacted_chain(
     called) is left in place for the next attempt and neither the mirror nor
     companions get touched.
 
-    Returns ``(final_compacted, final_affected, new_head, retries)``.
+    Returns ``(final_compacted, final_affected, new_head, retries,
+    delta_original_ids)``. ``delta_original_ids`` is every delta event's OWN
+    ``event_id`` — the one it carried on the canonical ref BEFORE this call
+    folded it — across every retry (issue #358 repair v3 round 2, major):
+    ``compact_and_append`` -> ``_refinalize`` derives a fresh ``event_id``
+    for every slot it re-chains (the new ``previous_event_id`` link changes
+    the content hash), including plain passthrough events, so a delta event
+    NEVER keeps its pre-fold id in ``compacted``. A routine, reclaim-
+    unrelated ``sync_events_mirror`` tick can mirror that delta under its
+    original id before this swap ever lands; ``old_ids``/``journaled_old_ids``
+    are both PRE-append snapshots and so never contain it either, meaning the
+    caller's removal scope needs this returned explicitly or that superseded
+    mirror copy is never a subset of anything and survives forever alongside
+    the rewritten one.
     """
     expected: str | None = snapshot_head
+    delta_original_ids: set[str] = set()
     for attempt in range(1, _SWAP_MAX_RETRIES + 1):
         try:
             result = import_event_log(
@@ -702,7 +765,7 @@ def _swap_compacted_chain(
             # stamping the mirror index with a head newer than what the
             # mirror actually reflects and permanently hiding the raced
             # event from a later incremental sync's ancestor check.
-            return compacted, affected, result["head"], attempt - 1
+            return compacted, affected, result["head"], attempt - 1, delta_original_ids
         except EventLogHeadMovedError:
             current_head, delta_events = read_events_since(repo, expected)
             if current_head is None or delta_events is None:
@@ -711,6 +774,7 @@ def _swap_compacted_chain(
                 # rather than guess; falls through to the exhaustion raise.
                 break
             if delta_events:
+                delta_original_ids |= {e.event_id for e in delta_events}
                 # Patch-id -> trace_id attribution for a v3-compact delta
                 # entry can reach back into the base chain (its own
                 # ``trace_patch_created`` may predate this crash window), so
@@ -836,6 +900,14 @@ def _process_reachable_project(
     if not apply:
         report.ref_bytes_after = sum(_event_blob_bytes(e) for e in compacted) if compacted else 0
         report.mirror_rewritten = would_touch_mirror
+        # `ref_would_change` is already the exact predicate `apply` checks
+        # before it ever calls `_swap_compacted_chain` -- previewing it here
+        # too, not just the mirror fields above, is what keeps a cautious
+        # operator's dry-run read honest about the single most sensitive
+        # mutation `--apply` performs (issue #358 repair v3 round 2, major;
+        # same dry-run/apply-parity defect class as the mirror-count fix
+        # above, left open for this field).
+        report.ref_rewritten = ref_would_change
         return report
 
     if journal is None and (ref_would_change or would_touch_mirror):
@@ -847,9 +919,21 @@ def _process_reachable_project(
         # derived from — never a fresh self-read at swap time (issue #358
         # repair, finding 1: see ``_swap_compacted_chain``'s docstring for
         # why that distinction is load-bearing, not cosmetic).
-        compacted, affected, new_head, report.swap_retries = _swap_compacted_chain(
+        compacted, affected, new_head, report.swap_retries, delta_original_ids = _swap_compacted_chain(
             repo, snapshot_head=head, compacted=compacted, affected=affected,
         )
+        if delta_original_ids:
+            # A CAS-retry delta event keeps its OWN pre-fold id right up
+            # until `compact_and_append` re-chains it, and a routine,
+            # reclaim-unrelated `sync_events_mirror` tick can mirror it under
+            # that original id before this swap ever lands -- an id that was
+            # never in `old_ids`/`journaled_old_ids` (both pre-append
+            # snapshots) to begin with. Union it into the removal scope now
+            # so `stale_ids` below actually targets that superseded copy
+            # instead of leaving it to coexist with the rewritten one forever
+            # (issue #358 repair v3 round 2, major: see
+            # `_swap_compacted_chain`'s docstring).
+            journaled_old_ids = journaled_old_ids | delta_original_ids
     else:
         new_head = None
     report.ref_rewritten = ref_would_change or new_head != head
