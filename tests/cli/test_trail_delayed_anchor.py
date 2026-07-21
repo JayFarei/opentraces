@@ -312,7 +312,11 @@ def test_trail_mature_records_unknowns_and_is_idempotent(tmp_path: Path) -> None
         if e.event_type == "git_anchor_search_completed"
     ]
     assert len(searches) == 1
-    assert searches[0].payload["results"][0]["result"] == "unknown"
+    # #359: maturation's flush is the v3-compact shape -- anchored-only
+    # results[] (empty here, the one patch is unknown) plus the unknown
+    # outcome as an exact id, never a fat per-patch dict.
+    assert searches[0].payload["results"] == []
+    assert len(searches[0].payload["unanchored_trace_patch_ids"]) == 1
 
 
 def test_trail_mature_fails_for_invalid_explicit_commit(tmp_path: Path) -> None:

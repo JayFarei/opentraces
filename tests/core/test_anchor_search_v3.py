@@ -30,6 +30,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from opentraces.core.trails import (
     TrailEventDraft,
     append_event_batch,
@@ -533,17 +535,21 @@ def test_v2_shaped_payload_keeps_v2_label_not_the_coverage_constant():
 
 
 def test_maturation_reflush_of_claim_covered_unknowns_keeps_v2_label(tmp_path, monkeypatch):
-    """A hook-reconciled commit's unknown patches are claim-covered (no exact
-    key), so maturation's #65 pre-extracted path -- which does not consume
-    coverage claims (out of scope for this stage, disclosed) -- re-searches
-    them on its next sweep and appends a SECOND summary event. That re-search
-    is a known, disclosed limitation of this stage (unchanged, not fixed
-    here); what this pins is that the re-emitted event is NOT mislabeled v3
-    -- it is byte-shape v2 (full mixed results[], no coverage) and must carry
-    the v2 label, exactly as maturation produced before #358, so a future
-    compaction pass still recognizes and compacts it."""
+    """#359 flip: a hook-reconciled commit's unknown patches are claim-covered
+    (no exact key). Before #359, maturation's #65 pre-extracted path did not
+    consume coverage claims, so its next sweep re-searched every one of them
+    and re-appended a SECOND, fat v2 summary -- the exact "regrowth" #359
+    exists to cure. This now pins the cure: maturation expands each claim
+    into its own dedup keys BEFORE the sweep (search_records.
+    resolve_coverage_claims, shared with anchors.py), so the claim-covered
+    unknowns are neither re-searched nor re-flushed at all, while a genuinely
+    late-ingested patch -- past the claim's boundary, never covered -- is
+    still searched, and its result flushed SLIM: anchored-only ``results[]``
+    plus the exact ``unanchored_trace_patch_ids`` id (never a fat per-patch
+    dict), carrying the v3 label -- maturation's chunked, pre-extracted view
+    can compute exact ids but never a sound coverage claim, so ``coverage``
+    itself must be absent."""
     from opentraces.core.trails import mature_trails
-    from opentraces.core.trails.contract import ANCHOR_SEARCH_SCHEMA_VERSION as V2_LABEL
 
     repo = tmp_path / "r"
     _init_repo(repo)
@@ -559,23 +565,39 @@ def test_maturation_reflush_of_claim_covered_unknowns_keeps_v2_label(tmp_path, m
     assert len(before) == 1
     assert before[0].payload["schema_version"] == ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
 
+    # Emitted AFTER the claim -- outside its boundary, so it is genuinely
+    # unsearched and must still reach the search step.
+    _emit_patch(repo, trace_id="tr-late", trace_patch_id="tp-late",
+                file_path="late.py", authored="LATE = 1\n")
+    event_log.invalidate_read_events_cache(repo)
+
+    calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
     mature_trails(repo, commit_refs=[head])
     event_log.invalidate_read_events_cache(repo)
-    after = _search_summaries(repo)
-
-    new_events = after[len(before):]
-    assert new_events, (
-        "sanity: the #65 path does not consume coverage claims yet, so the "
-        "sweep is expected to re-search and append -- if this is empty the "
-        "disclosed limitation was fixed elsewhere and this test should be "
-        "revisited, not silently left passing for the wrong reason"
+    assert calls["n"] == 1, (
+        "only tp-late (past the claim's boundary) may reach the search step "
+        "-- tp-1..tp-3 are claim-covered and must not be re-searched"
     )
-    for event in new_events:
-        assert event.payload["schema_version"] == V2_LABEL, (
-            "a caller that still emits the full-mixed v2 shape (no coverage) "
-            "must never stamp the v3 coverage label on it"
-        )
-        assert event.payload["schema_version"] != ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
+
+    after = _search_summaries(repo)
+    new_events = after[len(before):]
+    assert len(new_events) == 1, (
+        "one slim summary for the genuinely-unsearched tail -- no SECOND "
+        "event re-flushing the claim-covered unknowns"
+    )
+    event = new_events[0]
+    assert event.payload["schema_version"] == ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
+    assert "coverage" not in event.payload, (
+        "maturation must never mint a coverage claim -- its pre-extracted/"
+        "chunked view cannot compute a sound max-position boundary (#359)"
+    )
+    assert all(r["result"] == "anchored" for r in event.payload["results"]), (
+        "results[] must stay anchored-only"
+    )
+    assert event.payload["unanchored_trace_patch_ids"] == ["tp-late"], (
+        "the genuinely-unsearched tail patch's unknown outcome must appear "
+        "as an exact id, never a fat per-patch dict"
+    )
 
 
 def test_scoped_attach_resolves_unscoped_claim_across_traces(tmp_path, monkeypatch):
@@ -706,3 +728,181 @@ def test_scoped_attach_recovers_patch_past_moved_dup_boundary(tmp_path, monkeypa
         "trail attach for the late-backfilled trace silently no-ops: its "
         "never-searched patch is wrongly covered by the moved claim boundary"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 7. Issue #359: maturation becomes coverage-claim-aware, and coverage-claim
+#    minting is made structurally impossible outside anchors.py's own
+#    complete scoped read.
+# --------------------------------------------------------------------------- #
+
+def test_maturation_scoped_claim_does_not_leak_across_traces(tmp_path, monkeypatch):
+    """#359, R5: maturation's claim expansion must honor ``scope_trace_id``
+    exactly like anchors.py's in-memory check. tp-y (tr-y) is emitted BEFORE
+    tp-x (tr-x) -- lower canonical position, so once tr-x's scoped claim
+    lands (through tp-x, its only visited patch) a POSITION-ONLY check would
+    wrongly treat tp-y as covered too. Both patches stay unknown (no exact
+    key either), so a claim-unaware sweep re-searches BOTH (calls=2) and a
+    scope-blind expansion silently covers BOTH (calls=0); only a correctly
+    scoped expansion searches tp-y alone (calls=1)."""
+    from opentraces.core.trails import mature_trails
+    from opentraces.core.trails.attach import attach_trace_to_commit
+
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _emit_patch(repo, trace_id="tr-y", trace_patch_id="tp-y", file_path="y.py", authored="Y = 2\n")
+    _emit_patch(repo, trace_id="tr-x", trace_patch_id="tp-x", file_path="x.py", authored="X = 1\n")
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")  # both unknown
+
+    scoped = attach_trace_to_commit(repo, "tr-x", head)
+    assert scoped == []  # tp-x unknown; the scoped run's only visited patch
+    event_log.invalidate_read_events_cache(repo)
+    before = _search_summaries(repo)
+    assert len(before) == 1
+    assert before[0].payload["coverage"] == {
+        "through_trace_patch_id": "tp-x", "scope_trace_id": "tr-x",
+    }
+
+    calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
+    mature_trails(repo, commit_refs=[head])
+    event_log.invalidate_read_events_cache(repo)
+    assert calls["n"] == 1, (
+        "tp-y belongs to a DIFFERENT trace than tr-x's scoped claim, and "
+        "sits at a LOWER canonical position than the claim's boundary "
+        "(tp-x) -- it must still be searched by maturation's sweep, not "
+        "silently covered by a position-only check"
+    )
+    after = _search_summaries(repo)
+    assert len(after) == 2, "one new slim summary for tp-y's genuine search -- not two"
+    new_payload = after[-1].payload
+    assert "coverage" not in new_payload
+    assert new_payload["unanchored_trace_patch_ids"] == ["tp-y"]
+
+
+def test_maturation_attribution_version_bump_forces_re_search(tmp_path, monkeypatch):
+    """#359: a coverage claim minted under one ATTRIBUTION_VERSION must
+    suppress maturation's search of the SAME version's claim-covered
+    unknowns (proves claim consumption actually happened -- a claim-unaware
+    sweep would re-search all 3 even under a matching version) but must NOT
+    suppress the same patches once maturation sweeps under a NEWER version."""
+    from opentraces.core.trails import mature_trails
+
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    for i in range(3):
+        _emit_patch(repo, trace_id=f"tr{i}", trace_patch_id=f"tp-{i}",
+                    file_path=f"m{i}.py", authored=f"V{i}\n")
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")  # all 3 unknown
+
+    reconcile_commit_anchors(repo, head, attribution_version="0.1.0")
+    event_log.invalidate_read_events_cache(repo)
+    before = _search_summaries(repo)
+    assert len(before) == 1
+
+    calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
+    mature_trails(repo, commit_refs=[head], attribution_version="0.1.0")
+    event_log.invalidate_read_events_cache(repo)
+    assert calls["n"] == 0, (
+        "the SAME version's claim must suppress every one of these "
+        "claim-covered unknowns"
+    )
+    assert len(_search_summaries(repo)) == 1, "no new summary when everything is covered"
+
+    mature_trails(repo, commit_refs=[head], attribution_version="0.2.0")
+    event_log.invalidate_read_events_cache(repo)
+    assert calls["n"] == 3, "a bumped ATTRIBUTION_VERSION must re-search every patch"
+    after = _search_summaries(repo)
+    assert len(after) == 2, "the re-search under the new version flushes its own summary"
+
+
+def test_maturation_duplicate_patch_id_claim_expansion_stays_stable_across_dup_reingest(
+    tmp_path, monkeypatch
+):
+    """#359: maturation's ``patch_positions`` table must resolve a duplicate
+    trace_patch_id via keep-first exactly like anchors.py's in-memory index --
+    a duplicate re-ingested AFTER a claim already exists must never let that
+    claim's effective boundary drift forward over a distinct, never-searched
+    patch once maturation (not just the direct path,
+    test_dup_reingested_after_claim_does_not_swallow_new_patch) expands it.
+    ``calls["n"] == 1`` is the discriminating count: a claim-unaware sweep
+    would search tp-dup's first occurrence AND tp-b (2, the within-run dedup
+    #358 already gives the SECOND tp-dup occurrence for free); a boundary
+    that drifted (fail CLOSED) would search NEITHER (0, tp-b silently
+    swallowed); only a correct keep-first expansion searches tp-b alone."""
+    from opentraces.core.trails import mature_trails
+
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    head = _commit_files(repo, {"b.py": "B_LANDS = 1\n"}, "land b content")
+
+    _emit_patch(repo, trace_id="tr-dup", trace_patch_id="tp-dup",
+                file_path="d.py", authored="NEVER_MATCHES\n", step_index=1)
+    first = reconcile_commit_anchors(repo, head)
+    assert first == []  # tp-dup unknown; run 1 emits claim through tp-dup
+    event_log.invalidate_read_events_cache(repo)
+
+    _emit_patch(repo, trace_id="tr-b", trace_patch_id="tp-b",
+                file_path="b.py", authored="B_LANDS = 1\n", step_index=1)
+    _emit_patch(repo, trace_id="tr-dup-again", trace_patch_id="tp-dup",
+                file_path="d.py", authored="NEVER_MATCHES\n", step_index=2)
+    event_log.invalidate_read_events_cache(repo)
+
+    calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
+    mature_trails(repo, commit_refs=[head])
+    event_log.invalidate_read_events_cache(repo)
+
+    anchors_for_b = [
+        e for e in read_events(repo, verify=False)
+        if e.event_type == "git_anchor_created" and e.payload.get("trace_patch_id") == "tp-b"
+    ]
+    assert calls["n"] == 1 and anchors_for_b, (
+        f"FAIL-CLOSED: tp-b was silently covered by the OLD claim whose "
+        f"boundary the re-ingested duplicate extended past it, once "
+        f"maturation's SQL expansion resolved it (searches={calls['n']})"
+    )
+
+
+def test_reconcile_commit_anchors_refuses_coverage_claim_from_pre_extracted_path(tmp_path):
+    """#359 hardening: a coverage claim's max-position boundary is only sound
+    when computed from THIS function's own complete scoped read. The
+    pre-extracted (maturation) calling convention supplies a PARTIAL, chunked
+    view -- today only maturation.py calls it, and always with
+    ``append_events=False``, but that must be structurally impossible to
+    violate, not merely unexercised by today's callers."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _emit_patch(repo, trace_id="tr-a", trace_patch_id="tp-a", file_path="a.py", authored="A\n")
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")
+    event_log.invalidate_read_events_cache(repo)
+
+    patch_events = [
+        e for e in read_events(repo, verify=False) if e.event_type == "trace_patch_created"
+    ]
+    with pytest.raises(AssertionError):
+        reconcile_commit_anchors(
+            repo, head,
+            patch_events=patch_events,
+            anchor_keys=set(),
+            search_keys=set(),
+            append_events=True,
+        )
+
+
+def test_reconcile_commit_anchors_refuses_coverage_claim_from_caller_supplied_events(tmp_path):
+    """#359 hardening: the SAME guard for the OTHER partial-view branch -- a
+    caller-supplied ``events`` list (not the pre-extracted triple) is just as
+    partial a view as ``patch_events``/``anchor_keys``/``search_keys``, so it
+    must trip the identical structural guard."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _emit_patch(repo, trace_id="tr-a", trace_patch_id="tp-a", file_path="a.py", authored="A\n")
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")
+    event_log.invalidate_read_events_cache(repo)
+
+    all_events = read_events(repo, verify=False)
+    with pytest.raises(AssertionError):
+        reconcile_commit_anchors(
+            repo, head,
+            events=all_events,
+            append_events=True,
+        )
