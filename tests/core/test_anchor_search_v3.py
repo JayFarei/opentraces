@@ -145,9 +145,9 @@ def test_write_path_drops_unknown_dicts_and_carries_coverage(tmp_path):
     payload = _search_summaries(repo)[0].payload
     assert payload["schema_version"] == ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION, (
         "the coverage-bearing write path is a SEPARATE constant from "
-        "ANCHOR_SEARCH_SCHEMA_VERSION (v2) -- maturation.py and "
-        "search_compaction.py still build the v2 shape through the shared "
-        "constant, so it must not be repointed at v3"
+        "ANCHOR_SEARCH_SCHEMA_VERSION (v2) -- that constant now only labels "
+        "the full-mixed shape already on disk from before #358/#359/the "
+        "compaction stage, none of which build it anymore"
     )
     assert payload["searched"] == n
     assert payload["anchored"] == 2
@@ -181,11 +181,13 @@ def test_write_path_drops_unknown_dicts_and_carries_coverage(tmp_path):
 
 
 def test_build_summary_payload_without_coverage_keeps_v2_shape():
-    """Pins that omitting ``coverage`` (legacy/v2 callers, search_compaction.py)
+    """Pins that omitting BOTH ``coverage`` and ``unanchored_trace_patch_ids``
     leaves the full mixed results[] untouched — the anchored-only filter is
-    strictly opt-in via ``coverage``, so compaction's byte-identical-functional-
-    stream guarantee (test_search_compaction.py) is never at risk from this
-    change."""
+    strictly opt-in, triggered by either alternate key. No live caller omits
+    both anymore (#358/#359 repointed anchors.py, maturation.py, and
+    search_compaction.py's rewrite onto one alternate key or the other); only
+    an already-on-disk v2 event, or a fixture built to look like one, still
+    has this shape."""
     results = [
         {"trace_patch_id": "a", "trace_id": "t1", "step_index": 0,
          "generation_index": 0, "result": "anchored", "created_anchor_ids": []},
@@ -508,16 +510,19 @@ def test_v3_summary_search_touches_trace_is_anchored_only(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_v2_shaped_payload_keeps_v2_label_not_the_coverage_constant():
-    """maturation.py's periodic flush and search_compaction.py's rollup both
-    call ``build_anchor_search_summary_payload`` WITHOUT ``coverage`` and
-    import ``ANCHOR_SEARCH_SCHEMA_VERSION`` unchanged (out of scope for this
-    stage) -- so that shared constant must keep identifying the v2, full-mixed
-    ``results[]`` shape those two callers still emit. Only anchors.py's live
-    coverage-bearing write path may use ``ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION``.
-    A v2-shaped payload stamped with the coverage constant would be a v2 SHAPE
-    mislabeled v3 -- contract.py's own law ("a schema_version identifies a
-    SHAPE") violated, and the planned compaction pass ("v3 events pass through
-    unchanged") would then skip it forever instead of compacting it."""
+    """``build_anchor_search_summary_payload`` takes its label from its OWN
+    ``schema_version`` argument, never inferred from whether ``coverage`` /
+    ``unanchored_trace_patch_ids`` is set -- a caller that explicitly passes
+    ``ANCHOR_SEARCH_SCHEMA_VERSION`` (v2; no live writer does anymore, #358/
+    #359 repointed anchors.py, maturation.py, and the compaction stage's
+    rewrite all onto ``ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION`` below -- only
+    an already-on-disk v2 event, or a fixture built to look like one, still
+    carries this label) gets that label back untouched. A v2-shaped payload
+    stamped with the coverage constant instead would be a v2 SHAPE mislabeled
+    v3 -- contract.py's own law ("a schema_version identifies a SHAPE")
+    violated, and compaction's own idempotence check ("an event already
+    carrying the v3 label is left untouched") would then skip it forever
+    instead of compacting it."""
     payload = build_anchor_search_summary_payload(
         schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
         search_head={"algo": "sha1", "hex": "d" * 40},

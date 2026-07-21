@@ -103,6 +103,15 @@ def _posting_from_doc(seq: int, oid: str, doc: dict[str, Any]) -> dict[str, Any]
     a v2 anchor-search summary whose ``results[]`` reference the trace
     (``summary_search_touches_trace``). So an index-served per-trace read and the
     full-scan fallback yield the identical event set.
+
+    ``patches`` likewise has to reproduce EXACTLY the trace_patch_id membership
+    ``iter_search_records`` (search_records.py) surfaces a record for — a v3
+    summary's ``unanchored_trace_patch_ids`` (the compaction stage's rewrite
+    output and maturation's live slim flush, #358/#359) each name an unknown
+    outcome's patch EXACTLY, same as a ``results[]`` entry's ``trace_patch_id``,
+    just outside that list — so a by-patch lookup must index them too, or an
+    unanchored patch searched only via that shape is invisible to it even
+    though the tri-shape reader yields a (minimal) record for it.
     """
     traces: set[str] = set()
     commits: set[str] = set()
@@ -129,6 +138,9 @@ def _posting_from_doc(seq: int, oid: str, doc: dict[str, Any]) -> dict[str, Any]
             rpid = entry.get("trace_patch_id")
             if isinstance(rpid, str) and rpid:
                 patches.add(rpid)
+        for upid in payload.get("unanchored_trace_patch_ids") or []:
+            if isinstance(upid, str) and upid:
+                patches.add(upid)
         _collect_hexes(payload, commits)
 
     return {
