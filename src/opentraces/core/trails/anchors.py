@@ -341,17 +341,23 @@ def reconcile_commit_anchors(
     # trace-scoped run (R5, ``trail attach``) is searching, so resolving
     # against the scoped list would make that claim unreadable to a scoped
     # run and force a spurious re-search. A duplicate trace_patch_id
-    # (re-ingested session, hook retry) collapses to its LAST occurrence —
-    # always overwrite rather than keep-first — because a content-derived id
-    # searches identically regardless of which occurrence produced it, so
-    # extending the boundary to a later duplicate is never unsound, and it is
-    # what keeps a distinct patch sitting BETWEEN two occurrences of the same
-    # id from falling outside the boundary. A claim whose through-id is not
-    # found here covers NOTHING: fail open to re-search, never fail closed.
+    # (re-ingested session, hook retry) collapses to its FIRST occurrence —
+    # keep-first, never overwrite — because that is the only resolution whose
+    # answer cannot change as MORE duplicates of the same id are ingested
+    # later. Keep-LAST was tried and reverted: it makes an EXISTING claim's
+    # effective boundary drift forward every time the log grows a fresh
+    # duplicate of its through-id, so a distinct patch ingested (and never
+    # searched) after the claim can end up silently claim-covered — fail
+    # CLOSED, which the design forbids ("fail open to re-search, never fail
+    # closed"). Keep-first pins every id's position for good the moment it is
+    # first seen; a later duplicate of that id always resolves back to the
+    # SAME position, so it can never extend a stored claim past ground it
+    # never covered. A claim whose through-id is not found here covers
+    # NOTHING: fail open to re-search, never fail closed.
     patch_position: dict[str, int] = {}
     for position, patch_event in enumerate(all_patch_events):
         pid = id_from_payload(patch_event.payload, "trace_patch")
-        if pid:
+        if pid and pid not in patch_position:
             patch_position[pid] = position
     resolved_claims: list[tuple[int, str | None]] = [
         (patch_position[claim["through_trace_patch_id"]], claim["scope_trace_id"])
@@ -399,22 +405,39 @@ def reconcile_commit_anchors(
     budget_exhausted = False
     patches_searched = 0
     patches_total = len(patch_events)
-    # #358: the id of the LAST patch_event this run visited-and-processed
-    # (searched, or skipped as already-anchored/already-searched/claim-covered)
-    # WITHOUT hitting the deadline break — i.e. every ``continue`` below and the
-    # full search path update it, the ``break`` does not. Becomes this run's
-    # emitted coverage claim; stays None (no claim emitted) if every processed
-    # patch lacked an id, which can only happen if NO patch was ever searched
-    # either (id-less patches can never reach the search step), so the
-    # ``if search_results:`` emission gate already excludes that case.
-    last_processed_trace_patch_id: str | None = None
+    # #358 adversarial repair: the claim this run earns must be the MAXIMUM
+    # first-occurrence position it actually visited-and-processed (searched,
+    # or skipped as already-anchored/already-searched/claim-covered) WITHOUT
+    # hitting the deadline break — never simply "whichever patch_event the
+    # loop happened to iterate last". Raw iteration order (event_sequence)
+    # and first-occurrence-position order can diverge: a duplicate
+    # trace_patch_id resolves, via ``patch_position`` (keep-first), to an
+    # EARLIER position than its own raw index, so a duplicate visited late in
+    # the loop must never overwrite a higher-position id this run already
+    # visited — that would silently shrink the claim below ground already
+    # covered. ``_note_processed`` tracks the running maximum; every
+    # ``continue`` below and the full search path call it, the ``break`` does
+    # not. Stays unset (no claim emitted) if every processed patch lacked an
+    # id, which can only happen if NO patch was ever searched either (id-less
+    # patches can never reach the search step), so the ``if search_results:``
+    # emission gate already excludes that case.
+    coverage_position = -1
+    coverage_trace_patch_id: str | None = None
+
+    def _note_processed(pid: str) -> None:
+        nonlocal coverage_position, coverage_trace_patch_id
+        position = patch_position[pid]
+        if position > coverage_position:
+            coverage_position = position
+            coverage_trace_patch_id = pid
+
     for patch_event in patch_events:
         patch = patch_event.payload
         trace_patch_id = id_from_payload(patch, "trace_patch")
         if not trace_patch_id:
             continue
         if (trace_patch_id, commit) in existing_anchor_keys:
-            last_processed_trace_patch_id = trace_patch_id
+            _note_processed(trace_patch_id)
             continue
         already_searched = (
             trace_patch_id,
@@ -433,7 +456,7 @@ def reconcile_commit_anchors(
             # (unknown outcomes never get an exact key under v3) — don't
             # re-record a duplicate. Newer attribution versions are allowed to
             # append a new search so periodic re-search remains possible.
-            last_processed_trace_patch_id = trace_patch_id
+            _note_processed(trace_patch_id)
             continue
         # #65: gate the wall-clock budget AFTER the cheap dedup-skips above, never
         # before. An already-searched/anchored prefix must not consume the
@@ -443,7 +466,7 @@ def reconcile_commit_anchors(
         if deadline is not None and time.monotonic() >= deadline:
             budget_exhausted = True
             break
-        last_processed_trace_patch_id = trace_patch_id
+        _note_processed(trace_patch_id)
         patches_searched += 1
         match = _find_exact_anchor(patch, hunks)
         evidence_tier = "exact_range_hash"
@@ -545,14 +568,15 @@ def reconcile_commit_anchors(
     drafts: list[TrailEventDraft] = []
     if append_events:
         if search_results:
-            # #358: the v3 coverage claim this run earns. ``last_processed_
+            # #358: the v3 coverage claim this run earns. ``coverage_
             # trace_patch_id`` is guaranteed non-None here — search_results is
             # non-empty, so at least one patch reached the search step, and
-            # only an id-bearing patch can reach it. scope_trace_id is the
-            # ``trace_id`` ARGUMENT (not any per-patch trace_id) — null for an
-            # unscoped run, set for a trace-scoped run (R5, ``trail attach``).
+            # only an id-bearing patch can reach it (so ``_note_processed``
+            # ran at least once). scope_trace_id is the ``trace_id`` ARGUMENT
+            # (not any per-patch trace_id) — null for an unscoped run, set for
+            # a trace-scoped run (R5, ``trail attach``).
             coverage = {
-                "through_trace_patch_id": last_processed_trace_patch_id,
+                "through_trace_patch_id": coverage_trace_patch_id,
                 "scope_trace_id": trace_id,
             }
             # One summary event per (commit, reconcile-run): trace_id/step_index are
