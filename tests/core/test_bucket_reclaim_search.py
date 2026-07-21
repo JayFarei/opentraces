@@ -244,6 +244,23 @@ def _search_events(events: list[dict]) -> list[dict]:
     return [e for e in events if e["event_type"] == "git_anchor_search_completed"]
 
 
+def _raw_mirror_event_ids() -> list[str]:
+    """Every ``event_id`` across ALL mirror batch files, WITHOUT the
+    duplicate-collapsing ``read_events_mirror_batches`` now applies -- used
+    to prove a crash-window superset is physically on disk, not just that
+    the deduping reader tolerates it."""
+    from opentraces.core.bucket_layout import events_v1_batches_dir
+
+    batches_dir = events_v1_batches_dir()
+    if not batches_dir.exists():
+        return []
+    ids: list[str] = []
+    for path in sorted(batches_dir.glob("*.jsonl.gz")):
+        raw = gzip.decompress(path.read_bytes()).decode("utf-8")
+        ids.extend(json.loads(line)["event_id"] for line in raw.splitlines() if line.strip())
+    return ids
+
+
 def test_dry_run_reports_and_mutates_nothing(tmp_path: Path) -> None:
     from opentraces.core import paths
     from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
@@ -423,6 +440,61 @@ def test_kill_mid_run_leaves_readable_bucket_and_resume_completes(tmp_path: Path
     assert proj3.bytes_reclaimed == 0
 
 
+def test_resume_with_journal_but_missing_ref_errors_without_wiping_mirror(tmp_path: Path) -> None:
+    """Issue #358 repair (blocker): a journal survives a kill (written
+    durably BEFORE the ref swap), but the project's canonical ref then goes
+    missing before resume -- e.g. a re-clone during crash recovery, since
+    ``refs/opentraces/local/events/v1`` is local-only and never pushed. The
+    old code treated ``head is None`` on resume as "compacted to an empty
+    chain" and, via the journal's own removal scope, deleted every mirror
+    batch file for this project (its sole surviving copy at that point) and
+    regenerated every affected companion to empty. Resume must refuse
+    instead, leaving the mirror/companions untouched and the journal in
+    place for a future recovery."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    mirror_before = list(read_events_mirror_batches())
+    assert mirror_before
+    anchored_before = _read_trail_events(slug, "t-anchored")
+    assert anchored_before
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated kill before ref swap")
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "import_event_log", _boom)
+    with pytest.raises(RuntimeError, match="simulated kill before ref swap"):
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    patch.undo()
+    assert reclaim_mod._journal_path(slug).exists(), "journal must persist after the kill"
+
+    # Crash-recovery re-clone: refs/opentraces/* are local-only, never
+    # pushed, so a fresh clone genuinely lacks this ref.
+    subprocess.run(
+        ["git", "update-ref", "-d", "refs/opentraces/local/events/v1"],
+        cwd=repo, check=True,
+    )
+
+    result = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+
+    assert proj.action == "error"
+    assert "missing" in (proj.reason or "")
+    assert any(slug in err for err in result.errors)
+
+    # The journal is NOT cleared on this failure path -- a future run, once
+    # the ref is restored, can still recover from it.
+    assert reclaim_mod._journal_path(slug).exists()
+
+    mirror_after = list(read_events_mirror_batches())
+    assert {e.event_id for e in mirror_after} == {e.event_id for e in mirror_before}
+    assert _read_trail_events(slug, "t-anchored") == anchored_before
+
+
 def _assert_mirror_matches_live_and_replays(tmp_path: Path, repo: Path, slug: str, label: str) -> None:
     """Shared post-resume assertion for the kill-injection tests below: the
     mirror's event_id set is EXACTLY the live canonical chain's (no stale
@@ -541,6 +613,124 @@ def test_kill_inside_mirror_write_resume_completes(tmp_path: Path) -> None:
     result2 = reclaim_mod.reclaim_anchor_search(apply=True)
     proj2 = next(p for p in result2.projects if p.project_slug == slug)
     assert proj2.bytes_reclaimed == 0
+
+
+def test_kill_before_stale_removal_leaves_broken_reads_until_repair_heals_it(tmp_path: Path) -> None:
+    """Issue #358 repair (major): a kill INSIDE ``_reconcile_mirror_for_
+    project`` AFTER the new consolidated batch file is written but BEFORE
+    the stale-removal loop completes even one iteration leaves a strict
+    superset on disk -- the old AND new files together. ``compact_search_
+    events`` re-chains the WHOLE stream from the first touched slot onward
+    (``search_compaction._refinalize``), so only the untouched prefix keeps
+    its original ``event_id``; everything superseded gets a genuinely
+    DIFFERENT one. ``read_events_mirror_batches`` collapses the true (same-
+    id) duplicates -- real, but partial: the mismatched-id leftovers are not
+    something a generic reader can safely arbitrate on its own, so
+    ``restore_trail_events_to_repo`` still raises mid-window. What actually
+    closes the window is this project's OWN reconcile finishing --
+    ``resume_pending_anchor_search_journals`` (which ``bucket_repair`` now
+    runs before its own per-project mirror sync) -- not read-side
+    tolerance."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches
+    from opentraces.core.bucket_store import restore_trail_events_to_repo
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    def _boom_on_first_read(path):
+        raise RuntimeError("simulated kill before stale removal")
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "_read_gzip_bytes", _boom_on_first_read)
+    with pytest.raises(RuntimeError, match="simulated kill before stale removal"):
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    patch.undo()
+
+    live_ids = [e.event_id for e in read_events(repo, verify=False)]
+    raw_ids_mid = _raw_mirror_event_ids()
+    assert len(raw_ids_mid) > len(live_ids), "crash window not reached -- repro invalid"
+    assert len(raw_ids_mid) != len(set(raw_ids_mid)), "no physical duplicate on disk -- repro invalid"
+
+    # The dedup fix (bucket_events.py) collapses the TRUE (same event_id)
+    # duplicates -- no raise, no duplicate ids -- but that alone does not
+    # reconstruct the live chain: genuinely superseded (different-id) stale
+    # content is still mixed in.
+    deduped_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert len(deduped_ids) == len(set(deduped_ids))
+    assert sorted(deduped_ids) != sorted(live_ids)
+
+    # The concrete consumer the finding named: replay mid-window DOES still
+    # raise -- read-side tolerance alone is not the fix.
+    fresh = tmp_path / "replayed-mid-window"
+    _init_repo(fresh)
+    with pytest.raises(ValueError, match="contiguous event_sequence"):
+        restore_trail_events_to_repo(fresh, repo_id=slug, force=True)
+
+    # What actually closes the window: the project's OWN reconcile finishing.
+    # ``resume_pending_anchor_search_journals`` scopes to ONLY the slug with a
+    # pending journal (never opens an unrelated project's log looking for new
+    # fat content), matching what ``bucket_repair`` now runs automatically.
+    healed = reclaim_mod.resume_pending_anchor_search_journals()
+    assert [r.project_slug for r in healed] == [slug]
+    assert healed[0].action == "compacted"
+    assert not reclaim_mod._journal_path(slug).exists()
+
+    raw_ids_after = _raw_mirror_event_ids()
+    assert sorted(raw_ids_after) == sorted(live_ids)
+    assert len(raw_ids_after) == len(set(raw_ids_after))
+
+    fresh2 = tmp_path / "replayed-after-heal"
+    _init_repo(fresh2)
+    restore_trail_events_to_repo(fresh2, repo_id=slug, force=True)
+    assert [e.event_id for e in read_events(fresh2, verify=False)] == live_ids
+
+    # A subsequent full reclaim run stays a true no-op -- healing via the
+    # scoped resume already finished everything a full pass would have done.
+    result = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+    assert proj.bytes_reclaimed == 0
+
+
+def test_bucket_repair_heals_pending_anchor_search_journal_before_its_own_sync(tmp_path: Path) -> None:
+    """Issue #358 repair (major): the same crash window, but proving the
+    ACTUAL routine path the finding named -- a plain ``bucket_repair()``
+    call (no direct reference to the reclaim module) must heal a pending
+    journal before its own per-project ``sync_events_mirror`` runs, so nobody
+    has to remember to re-run ``bucket reclaim --apply``. Dry-run must not
+    mutate anything (same read-only contract as the rest of this pass)."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches
+    from opentraces.core.bucket_store import bucket_repair
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    def _boom_on_first_read(path):
+        raise RuntimeError("simulated kill before stale removal")
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "_read_gzip_bytes", _boom_on_first_read)
+    with pytest.raises(RuntimeError, match="simulated kill before stale removal"):
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    patch.undo()
+
+    raw_ids_mid = _raw_mirror_event_ids()
+    assert len(raw_ids_mid) != len(set(raw_ids_mid))
+
+    # dry_run must not touch the pending journal or the mirror.
+    bucket_repair(dry_run=True)
+    assert reclaim_mod._journal_path(slug).exists()
+    assert sorted(_raw_mirror_event_ids()) == sorted(raw_ids_mid)
+
+    bucket_repair(dry_run=False)
+
+    assert not reclaim_mod._journal_path(slug).exists()
+    live_ids = [e.event_id for e in read_events(repo, verify=False)]
+    mirror_ids = [e.event_id for e in read_events_mirror_batches()]
+    assert sorted(mirror_ids) == sorted(live_ids)
+    raw_ids_after = _raw_mirror_event_ids()
+    assert len(raw_ids_after) == len(set(raw_ids_after))
 
 
 def test_reclaim_then_normal_sync_no_duplicates_single_project(tmp_path: Path) -> None:

@@ -9,11 +9,16 @@ invariant).
 
 from __future__ import annotations
 
+import gzip
+import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 import opentraces.core.trails as trails_pkg
-from opentraces.core.bucket_events import sync_events_mirror
+from opentraces.core._bucket_io import _gzip_deterministic
+from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
 from opentraces.core.paths import bucket_dir
 from opentraces.core.trails import TrailEventDraft, append_event_batch
 
@@ -96,3 +101,56 @@ def test_idempotent_when_log_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(trails_pkg, "read_events", _boom)
     again = sync_events_mirror(repo, repo_id="proj-b")
     assert again["batch_count"] == 1
+
+
+def test_read_events_mirror_batches_dedupes_identical_duplicate_across_files(tmp_path):
+    """Issue #358 repair (major): a kill mid ``bucket reclaim`` mirror
+    reconcile can leave BOTH a stale batch file and its freshly written
+    replacement on disk at once (write-new-then-remove-stale --
+    ``bucket_reclaim_search._reconcile_mirror_for_project``). An unchanged
+    event's two copies share one content-addressed ``event_id`` (``batch_
+    id``/``writer`` sit outside the hash), so the reader must collapse them
+    to a single yield rather than surface a duplicate that would break a
+    downstream contiguous-sequence consumer such as ``import_event_log``."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _append_round(repo, 2, "dup")
+    sync_events_mirror(repo, repo_id="proj-dup")
+
+    batches_dir = bucket_dir() / "events" / "v1" / "batches"
+    (only_file,) = list(batches_dir.glob("*.jsonl.gz"))
+    body = only_file.read_bytes()
+
+    # Simulate the crash-window superset: the SAME content re-appears under
+    # a second, differently-numbered file (a stale pre-reconcile copy that
+    # write-new-then-remove-stale had not gotten to removing yet).
+    stray = batches_dir / "000000000099-stray.jsonl.gz"
+    stray.write_bytes(body)
+
+    events = list(read_events_mirror_batches())
+    ids = [e.event_id for e in events]
+    assert len(ids) == len(set(ids))
+    assert len(events) == 2  # the two events from _append_round, not 4
+
+
+def test_read_events_mirror_batches_raises_on_genuine_event_id_conflict(tmp_path):
+    """If two files carry the SAME ``event_id`` but genuinely different
+    replay-relevant content -- real corruption, not the reclaim crash
+    window above -- the reader must raise rather than silently pick one
+    copy; arbitrating between conflicting copies is not this function's
+    job."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _append_round(repo, 1, "conflict")
+    sync_events_mirror(repo, repo_id="proj-conflict")
+
+    batches_dir = bucket_dir() / "events" / "v1" / "batches"
+    (only_file,) = list(batches_dir.glob("*.jsonl.gz"))
+    event_dict = json.loads(gzip.decompress(only_file.read_bytes()).decode("utf-8").strip())
+    event_dict["trace_id"] = "corrupted-tampering"  # content-material field; event_id left stale
+
+    stray = batches_dir / "000000000099-stray.jsonl.gz"
+    stray.write_bytes(_gzip_deterministic((json.dumps(event_dict) + "\n").encode("utf-8")))
+
+    with pytest.raises(ValueError, match="conflicting copies"):
+        list(read_events_mirror_batches())
