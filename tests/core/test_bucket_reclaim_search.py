@@ -1163,3 +1163,226 @@ def test_unreachable_dry_run_and_apply_report_identical_mirror_event_counts(tmp_
     assert proj_apply.mirror_events_added == proj_dry.mirror_events_added
     assert proj_apply.mirror_events_removed == proj_dry.mirror_events_removed
 
+
+# ---------------------------------------------------------------------------
+# Issue #358 repair v3 adversarial re-review: two further blockers and one
+# major found IN the finding-1/finding-2 repairs above -- all verifier-
+# confirmed against real repros.
+# ---------------------------------------------------------------------------
+
+
+def test_append_during_prefilter_window_is_not_duplicated(tmp_path: Path) -> None:
+    """Issue #358 repair v3 (blocker, verifier-confirmed): the CAS base and
+    the events snapshot were not taken atomically. ``head = _head_sha(repo)``
+    was captured BEFORE the O(corpus) ``_events_tree_bytes`` prefilter walk
+    and before ``read_events`` -- and ``read_events`` re-reads the ref head
+    itself at call time. A writer that appends DURING that window (a hot
+    post-commit hook reconcile, a watcher maturation tick, a trail attach --
+    the module's own named concurrent writers) is therefore already inside
+    ``old_events``/``compacted`` by the time ``read_events`` returns, while
+    the CAS base variable still names the OLDER, pre-append commit. The swap
+    then fails against that stale base, ``read_events_since(stale_head)``
+    returns the SAME append as a 'delta' the caller believes is new, and
+    ``compact_and_append`` folds it onto the compacted tail a SECOND time --
+    silent duplication, not loss (the mirror image of finding 1, which this
+    stage already fixed for the window BELOW ``read_events``). The
+    concurrently-appended patch and its search result must each survive
+    EXACTLY once in the final canonical chain."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    real_tree_bytes = reclaim_mod._events_tree_bytes
+    concurrent_patch_id = "9" + "d" * 63
+    commit_c = "d" * 40
+    fired = {"done": False}
+
+    def _tree_bytes_then_concurrent_append(r, head):
+        result = real_tree_bytes(r, head)
+        if not fired["done"]:
+            fired["done"] = True
+            append_event_batch(
+                repo,
+                [
+                    _patch_created(
+                        trace_id="t-window", trace_patch_id=f"tracepatch-sha256:{concurrent_patch_id}",
+                        file_path="window.py", step_index=0,
+                    ),
+                    _legacy_search(
+                        trace_id="t-window", step_index=0, patch_id=concurrent_patch_id,
+                        commit_hex=commit_c, result="anchored",
+                        anchor_ids=["gitanchor-sha256:" + "d" * 64],
+                    ),
+                ],
+                writer="watcher",
+            )
+        return result
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "_events_tree_bytes", _tree_bytes_then_concurrent_append)
+    try:
+        proj = reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    finally:
+        patch.undo()
+
+    assert proj.action == "compacted"
+
+    live_events = read_events(repo, verify=False)
+    verdict = verify_event_log(repo)
+    assert verdict["event_chain_valid"] is True
+
+    patch_copies = [
+        e for e in live_events
+        if e.event_type == "trace_patch_created"
+        and (e.payload or {}).get("trace_patch_id") == f"tracepatch-sha256:{concurrent_patch_id}"
+    ]
+    assert len(patch_copies) == 1, (
+        f"concurrently-appended patch appears {len(patch_copies)} times in the "
+        f"final canonical chain (swap_retries={proj.swap_retries})"
+    )
+
+    search_copies = [
+        e for e in live_events
+        if e.event_type == "git_anchor_search_completed"
+        and any(
+            r.get("trace_patch_id") == f"tracepatch-sha256:{concurrent_patch_id}"
+            for r in (e.payload or {}).get("results") or []
+        )
+    ]
+    assert len(search_copies) == 1, (
+        f"concurrently-appended search result appears in {len(search_copies)} "
+        f"summaries in the final canonical chain (swap_retries={proj.swap_retries})"
+    )
+
+
+def test_swap_reports_import_events_own_head_not_a_stale_fresh_read(tmp_path: Path) -> None:
+    """Issue #358 repair v3 (major, verifier-confirmed): ``_swap_compacted_
+    chain`` returned a FRESH ``_head_sha(repo)`` read taken AFTER
+    ``import_event_log`` had already landed the swap, instead of using
+    ``import_event_log``'s OWN reported ``head`` -- the exact fresh-self-read
+    anti-pattern finding 1 eliminated at the CAS boundary, reintroduced one
+    line below it. A writer that appends between the ref update inside
+    ``import_event_log`` and this module's own subsequent ``_head_sha`` call
+    stamps the mirror index with a head NEWER than what the mirror actually
+    reflects; ``sync_events_mirror``'s incremental fast path then sees
+    ``prior_head == current_head`` and takes the no-op route forever,
+    permanently hiding the raced event from the mirror."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.trails import import_event_log as real_import_event_log
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    captured: dict[str, str] = {}
+    raced = {"done": False}
+
+    def _import_then_race(*args, **kwargs):
+        result = real_import_event_log(*args, **kwargs)
+        captured["swap_head"] = result["head"]
+        if not raced["done"]:
+            raced["done"] = True
+            # A genuinely new writer lands right after the ref moves --
+            # between `import_event_log`'s own `update-ref` and this
+            # module's next `_head_sha` call.
+            append_event_batch(
+                repo,
+                [
+                    _patch_created(
+                        trace_id="t-race2", trace_patch_id=f"tracepatch-sha256:{'8' * 64}",
+                        file_path="race2.py", step_index=0,
+                    )
+                ],
+                writer="watcher",
+            )
+        return result
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "import_event_log", _import_then_race)
+    try:
+        proj = reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    finally:
+        patch.undo()
+
+    assert proj.action == "compacted"
+    assert "swap_head" in captured
+
+    from opentraces.core.bucket_layout import events_v1_index_path
+
+    index = json.loads(events_v1_index_path().read_text(encoding="utf-8"))
+    assert index["event_log_head"] == captured["swap_head"], (
+        "the mirror index was stamped with a head OTHER than the one "
+        "import_event_log actually swapped in -- a later sync will compare "
+        "against a commit that does not match what the mirror holds"
+    )
+
+
+def test_resume_after_crash_unions_journaled_and_fresh_old_ids(tmp_path: Path) -> None:
+    """Issue #358 repair v3 (major, verifier-confirmed): on resume,
+    ``journaled_old_ids`` REPLACED the journal's set instead of UNIONING it
+    with the fresh pre-compaction read (``affected`` unions correctly one
+    line below -- the asymmetry is the bug). A writer that appends a NEW
+    event during the crash window (after the journal is durably written,
+    before the swap lands) is invisible to the journal by construction; a
+    ROUTINE, reclaim-unrelated ``sync_events_mirror`` tick mirrors it into
+    its own batch file before resume runs. On resume, ``_refinalize``
+    re-chains the WHOLE stream from the first touched slot onward, so the
+    new event gets a REWRITTEN id/sequence too -- but its pre-compaction
+    batch file is not a subset of ``journaled_old_ids`` alone, so
+    ``_reconcile_mirror_for_project`` never removes it: the mirror ends up
+    carrying BOTH the superseded (original-id) and the rewritten (new-id)
+    copy of the same logical event forever."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated kill after journal write, before swap")
+
+    kill_patch = pytest.MonkeyPatch()
+    kill_patch.setattr(reclaim_mod, "import_event_log", _boom)
+    with pytest.raises(RuntimeError, match="simulated kill after journal write, before swap"):
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    kill_patch.undo()
+    assert reclaim_mod._journal_path(slug).exists(), "journal must persist after the kill"
+
+    # A real, reclaim-unrelated writer lands a NEW event and a routine
+    # mirror sync ticks BEFORE resume runs -- matching the module's own
+    # named concurrent writers, not a reclaim internal.
+    race_patch_id = "9" * 64
+    append_event_batch(
+        repo,
+        [
+            _patch_created(
+                trace_id="t-race3", trace_patch_id=f"tracepatch-sha256:{race_patch_id}",
+                file_path="race3.py", step_index=0,
+            )
+        ],
+        writer="watcher",
+    )
+    sync_events_mirror(repo, repo_id=slug)
+
+    proj = reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    assert proj.action == "compacted"
+    assert not reclaim_mod._journal_path(slug).exists()
+
+    live_events = read_events(repo, verify=False)
+    canonical_race = [
+        e for e in live_events if e.trace_id == "t-race3" and e.event_type == "trace_patch_created"
+    ]
+    assert len(canonical_race) == 1
+
+    mirror_events = list(read_events_mirror_batches())
+    mirror_race = [
+        e for e in mirror_events if e.trace_id == "t-race3" and e.event_type == "trace_patch_created"
+    ]
+    assert len(mirror_race) == 1, (
+        f"the concurrently-appended event survives as {len(mirror_race)} distinct "
+        "copies in the mirror -- its superseded pre-compaction batch file was "
+        "never removed because journaled_old_ids replaced, rather than unioned "
+        "with, the fresh pre-compaction read"
+    )
+    assert mirror_race[0].event_id == canonical_race[0].event_id
+
