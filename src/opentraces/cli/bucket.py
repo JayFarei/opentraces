@@ -924,9 +924,11 @@ def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
        oversized bucket. This pass compacts each affected project's canonical
        event chain to the v3-compact shape (an atomic ``update-ref`` swap),
        reconciles the bucket's events mirror, and regenerates only the trail
-       companions a fat/legacy search event touched. Interrupt-safe
-       (write-new-then-swap); a killed run leaves a readable bucket and a
-       re-run completes the job.
+       companions a fat/legacy search event touched. A killed run is
+       journaled and RESUMABLE — re-running ``bucket reclaim`` finishes the
+       interrupted work — but is NOT guaranteed readable in between: reads of
+       an affected project (e.g. ``trail`` companions) can error until the
+       re-run completes.
     """
     from ..core.bucket_reclaim import reclaim_repo
     from ..core.bucket_reclaim_search import reclaim_anchor_search
