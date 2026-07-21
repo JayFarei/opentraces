@@ -223,6 +223,29 @@ def read_events_mirror_batches() -> Iterator[Any]:
     Walks ``bucket/events/v1/batches/*.jsonl.gz`` in sequence-prefix order,
     decompressing each batch and yielding events in original order. Raises
     ``FileNotFoundError`` if the mirror is missing entirely.
+
+    A project mid ``bucket reclaim`` mirror reconcile can, for one
+    interrupted window, have BOTH its freshly written consolidated batch
+    file and its stale pre-reconcile batch file(s) on disk at once
+    (write-new-then-remove-stale --
+    see ``bucket_reclaim_search._reconcile_mirror_for_project``). An
+    unchanged event's two copies share the same content-addressed
+    ``event_id`` (``batch_id``/``writer`` sit outside the hash -- see
+    ``TrailEvent.canonical_event_material``) and differ only in those
+    transport fields, so a later occurrence of an already-yielded
+    ``event_id`` is dropped rather than re-yielded -- callers such as
+    ``restore_trail_events_to_repo`` need one contiguous stream, and
+    content-addressing guarantees the drop is safe. This only ever collapses
+    a TRUE duplicate (same ``event_id`` in both files); a stale event whose
+    replacement got a genuinely different ``event_id`` (compaction re-chains
+    everything from the first touched slot onward, so most superseded
+    content falls in this bucket, not the same-id one) is not something this
+    function can safely arbitrate on its own -- see ``bucket_reclaim_
+    search.resume_pending_anchor_search_journals`` for what actually closes
+    that window. If the replay-relevant fields ever genuinely differ under
+    the same ``event_id`` (real corruption, not this crash window), this
+    raises instead of silently picking one -- arbitrating between
+    conflicting copies is not this function's job.
     """
 
     from .trails import TrailEvent
@@ -247,6 +270,7 @@ def read_events_mirror_batches() -> Iterator[Any]:
     batches_dir = events_v1_batches_dir()
     if not batches_dir.exists():
         return
+    seen: dict[str, dict[str, Any]] = {}
     for batch_path in sorted(batches_dir.glob("*.jsonl.gz")):
         try:
             raw = _read_gzip_bytes(batch_path).decode("utf-8")
@@ -255,7 +279,19 @@ def read_events_mirror_batches() -> Iterator[Any]:
         for line in raw.splitlines():
             if not line.strip():
                 continue
-            yield TrailEvent.model_validate_json(line)
+            event = TrailEvent.model_validate_json(line)
+            material = event.canonical_event_material()
+            prior = seen.get(event.event_id)
+            if prior is not None:
+                if prior != material:
+                    raise ValueError(
+                        f"events mirror carries two conflicting copies of event_id "
+                        f"{event.event_id!r} (content differs beyond batch_id/writer); "
+                        f"run 'opentraces bucket repair'"
+                    )
+                continue
+            seen[event.event_id] = material
+            yield event
 
 
 # Compat alias for callers still on the v1 export reader signature. Returns

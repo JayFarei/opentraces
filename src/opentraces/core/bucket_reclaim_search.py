@@ -348,7 +348,23 @@ def _reconcile_mirror_for_project(
     so the old file holding it is now redundant even though none of its
     events are individually "stale". New files are written BEFORE any old
     file is removed (write-new-then-remove-stale), so a kill mid-call leaves
-    a strict superset on disk.
+    a strict superset on disk. Issue #358 repair: compaction re-chains the
+    WHOLE stream (``search_compaction._refinalize`` reassigns ``event_
+    sequence``/``previous_event_id`` from the first touched slot onward), so
+    only the untouched PREFIX before that slot keeps its original
+    ``event_id`` -- everything from there on gets a fresh one. A reader mid-
+    window therefore sees two disjoint kinds of leftover: true duplicates
+    (the untouched prefix, same ``event_id`` in both the old and new file --
+    ``read_events_mirror_batches`` in ``bucket_events.py`` collapses these on
+    read, so they alone never break replay) and genuinely SUPERSEDED events
+    (the old shape of whatever got rewritten, a DIFFERENT ``event_id`` with
+    no counterpart to collapse against -- no generic reader can safely tell
+    these apart from real content without this project's own canonical
+    order). Full consistency for a reader mid-window therefore depends on
+    this project's OWN reconcile finishing, not on read-side tolerance alone
+    -- see ``resume_pending_anchor_search_journals``, which ``bucket_repair``
+    runs before its own per-project mirror sync specifically so nothing
+    routine has to wait for a human to re-run ``bucket reclaim --apply``.
 
     ``event_log_head`` is stamped into the index exactly (the real,
     just-swapped ref head, or the still-valid preserved head for a
@@ -536,10 +552,32 @@ def _process_reachable_project(
     journal = _read_journal(slug)
 
     head = _head_sha(repo)
-    if head is None and journal is None:
-        report.action = "clean"
-        report.reason = "no canonical event log for this project"
-        return report
+    if head is None:
+        if journal is None:
+            report.action = "clean"
+            report.reason = "no canonical event log for this project"
+            return report
+        # A journal for this project is only ever written (below) after a
+        # run found a real ``head`` here, so its existence is proof this ref
+        # held real events at some point. Its absence now is NOT "compacted
+        # to nothing" -- treating it that way would derive an empty target
+        # from ``old_events = []`` and, via the journal's own removal scope,
+        # let ``_reconcile_mirror_for_project`` delete every mirror batch
+        # file for this project (the sole surviving copy once the ref is
+        # gone) and regenerate every affected companion to empty (issue
+        # #358 repair finding: a re-clone or damaged repo during crash
+        # recovery loses the ref between the journal write and resume).
+        # Refuse instead -- the per-project try/except in
+        # ``reclaim_anchor_search`` turns this into an ``action="error"``
+        # row without touching the mirror or companions, and the journal is
+        # left in place so a resume once the ref is restored still recovers.
+        raise RuntimeError(
+            f"project {slug!r} has a pending reclaim journal but its "
+            f"canonical event ref ({EVENT_LOG_REF}) is missing; refusing to "
+            f"compact to an empty chain -- restore the ref before retrying, "
+            f"or remove {_journal_path(slug)} manually if the loss is "
+            f"intentional"
+        )
 
     if head is not None:
         tree_bytes = _events_tree_bytes(repo, head)
@@ -787,3 +825,59 @@ def reclaim_anchor_search(*, apply: bool = False) -> AnchorSearchReclaimReport:
             )
 
     return report
+
+
+def _pending_journal_slugs() -> list[str]:
+    """Project slugs with a durable, not-yet-cleared anchor-search reclaim
+    journal on disk — proof a prior ``bucket reclaim --apply`` run committed
+    to a removal target (wrote the journal) but was killed before finishing
+    it (see the module docstring's "Crash safety" section)."""
+
+    journal_dir = paths.bucket_dir() / "reclaim" / "anchor_search"
+    if not journal_dir.exists():
+        return []
+    return sorted(p.stem for p in journal_dir.glob("*.json"))
+
+
+def resume_pending_anchor_search_journals() -> list[ProjectAnchorSearchReport]:
+    """Finish any anchor-search reclaim run a prior process left interrupted
+    — WITHOUT scanning or touching any project that has no pending journal.
+
+    Unlike :func:`reclaim_anchor_search`, this never opens a project's
+    canonical log looking for NEW fat/legacy content to compact; it exists
+    only to close the read-time gap a killed run's own crash window leaves
+    open (issue #358 repair finding): a mirror superset a reader can be
+    caught mid-window on (see ``bucket_events.read_events_mirror_batches``'s
+    duplicate-collapsing) is reliably cleaned up only by that project's OWN
+    reconcile finishing, and that must not wait for someone to remember to
+    re-run ``bucket reclaim --apply``. ``bucket_repair`` runs this BEFORE
+    its own per-project mirror sync so a healed project's normal sync sees
+    consistent state and — per the journal-driven resume path stamping the
+    real ``event_log_head`` — takes its cheap incremental/no-op route.
+
+    One project's failure here is skipped (its journal, and therefore its
+    stale mirror content, is left exactly as it was for the next attempt)
+    rather than raised — a corrupt journal for project A must not block an
+    otherwise-unrelated repair pass over the rest of the bucket.
+    """
+
+    slugs = _pending_journal_slugs()
+    if not slugs:
+        return []
+
+    slug_to_repo = {slug: path for path, slug in _iter_opted_in_projects()}
+    single_project_bucket = len(set(slug_to_repo) | _bucket_known_slugs()) == 1
+
+    reports: list[ProjectAnchorSearchReport] = []
+    for slug in slugs:
+        repo = slug_to_repo.get(slug)
+        try:
+            if repo is not None:
+                reports.append(_process_reachable_project(slug, repo, apply=True))
+            else:
+                reports.append(
+                    _process_unreachable_project(slug, apply=True, single_project_bucket=single_project_bucket)
+                )
+        except Exception:  # noqa: BLE001 - see docstring: one bad journal must not block the rest
+            continue
+    return reports
