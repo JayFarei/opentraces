@@ -849,12 +849,16 @@ def _process_reachable_project(
             f"intentional"
         )
 
-    if head is not None:
-        tree_bytes = _events_tree_bytes(repo, head)
-        report.ref_bytes_before = report.ref_bytes_after = tree_bytes
-        if journal is None and tree_bytes < _FAT_PREFILTER_MIN_BYTES:
-            report.reason = "below fat-detection size prefilter"
-            return report
+    # `head` is guaranteed non-None here: the `if head is None:` block above
+    # always returns or raises, so execution only reaches this line when it
+    # did not (issue #358 repair v3 round 2 follow-up, second pass — same
+    # dead-conditional class as the swap gate below; removed the wrapper,
+    # kept the body).
+    tree_bytes = _events_tree_bytes(repo, head)
+    report.ref_bytes_before = report.ref_bytes_after = tree_bytes
+    if journal is None and tree_bytes < _FAT_PREFILTER_MIN_BYTES:
+        report.reason = "below fat-detection size prefilter"
+        return report
 
     # Bracketed against a post-read ``_head_sha`` check (issue #358 repair
     # v3, finding 4) rather than reused from the `head` captured above the
@@ -1136,13 +1140,29 @@ def _process_unreachable_project(slug: str, *, apply: bool, single_project_bucke
         report.mirror_batch_files_written = files_written
         report.mirror_rewritten = True
 
-    _clear_journal(slug)
-
+    # Cleared only AFTER the companion loop below finishes (issue #358
+    # repair v3 round 2 follow-up, second pass — mirrors the reachable
+    # path's matching fix for consistency: the journal represents pending
+    # work until EVERYTHING, including companions, is done, not just until
+    # the mirror is). This path in particular serves projects whose repos
+    # are unreachable, so it deserves the same guarantee even though —
+    # unlike the reachable path — a kill here does not actually strand a
+    # resume today: `affected` is re-derived fresh from `read_events_mirror_
+    # batches()` every call, and an already-compacted mirror's
+    # `unanchored_trace_patch_ids` still resolves back to this trace via the
+    # SAME `trace_patch_created` events `_search_touch_ids` always consults
+    # (see its own docstring), so `_companion_deltas` still correctly finds
+    # the on-disk company stale and this loop still runs on resume even with
+    # the journal already gone. There is no byte-size prefilter on this path
+    # to short-circuit before that check the way there is on the reachable
+    # path, which is what made THAT path's early clear actually lose work.
     for trace_id in sorted(affected):
         project_per_trace_exports(
             None, project_slug=slug, trace_id=trace_id, events=compacted,
             events_authoritative=True, mirror_fallback=False,
         )
+
+    _clear_journal(slug)
 
     return report
 
