@@ -498,8 +498,11 @@ def test_v3_summary_search_touches_trace_is_anchored_only(tmp_path):
 # --------------------------------------------------------------------------- #
 # 6. Adversarial-review repairs: a caller that stays on the v2 shape must
 #    keep the v2 label, a scoped run must be able to resolve an unscoped
-#    claim's boundary, and a duplicate trace_patch_id in the log must not
-#    livelock the claim boundary.
+#    claim's boundary, a duplicate trace_patch_id in the log must not
+#    livelock the claim boundary, and (second adversarial round) a duplicate
+#    re-ingested AFTER a claim already exists must never let that claim's
+#    boundary drift forward over a distinct, never-searched patch (fail
+#    open to re-search, never fail closed).
 # --------------------------------------------------------------------------- #
 
 def test_v2_shaped_payload_keeps_v2_label_not_the_coverage_constant():
@@ -610,11 +613,15 @@ def test_scoped_attach_resolves_unscoped_claim_across_traces(tmp_path, monkeypat
 
 def test_duplicate_trace_patch_id_does_not_livelock_reconcile(tmp_path):
     """A re-ingested session or hook retry can emit the SAME trace_patch_id
-    twice. The claim boundary must resolve to the id's LAST occurrence in
-    canonical order (content-derived ids search identically regardless of
-    which occurrence produced the claim), or a distinct patch sitting BETWEEN
-    the two occurrences falls outside the boundary and gets re-searched --
-    and re-emitted as a new summary event -- on every subsequent run."""
+    twice. Both occurrences of tp-dup exist BEFORE any claim is ever made, so
+    a single run processes all three patches together; the claim boundary
+    must land on the MAXIMUM stable first-occurrence position actually
+    visited (tp-a's, since tp-dup's two occurrences both resolve to its own
+    FIRST occurrence, which sits before tp-a) -- not on whichever raw event
+    the loop happened to iterate last. A distinct patch sitting BETWEEN two
+    occurrences of a duplicate id must never fall outside the boundary, or it
+    gets re-searched -- and re-emitted as a new summary event -- on every
+    subsequent run."""
     repo = tmp_path / "r"
     _init_repo(repo)
     _emit_patch(repo, trace_id="tr-dup", trace_patch_id="tp-dup", file_path="d.py", authored="D\n", step_index=1)
@@ -629,6 +636,73 @@ def test_duplicate_trace_patch_id_does_not_livelock_reconcile(tmp_path):
     summaries = _search_summaries(repo)
     assert len(summaries) == 1, (
         f"got {len(summaries)} summary events across 4 runs -- a wrong claim "
-        "boundary (first-occurrence position instead of last) leaves tp-a "
-        "permanently uncovered and re-emits a new event every run"
+        "boundary leaves tp-a permanently uncovered and re-emits a new event "
+        "every run"
+    )
+
+
+def test_dup_reingested_after_claim_does_not_swallow_new_patch(tmp_path, monkeypatch):
+    """Second adversarial round: keep-LAST duplicate resolution let an
+    EXISTING claim's effective boundary drift forward every time the log
+    grew a fresh duplicate of its through-id, silently claim-covering a
+    distinct patch ingested (and never searched) after the claim -- fail
+    CLOSED, which the design forbids. Order of events: (1) only tp-dup
+    exists, unscoped reconcile searches it (unknown) and mints a claim
+    through tp-dup; (2) tp-b is late-ingested with content that DOES land in
+    the commit; (3) tp-dup is RE-INGESTED (same id, e.g. a re-ingested
+    session or hook retry). A correct run 2 must still search tp-b -- and,
+    because it lands, create its anchor -- proving the miss as lost lineage,
+    not just lost search work."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    head = _commit_files(repo, {"b.py": "B_LANDS = 1\n"}, "land b content")
+
+    _emit_patch(repo, trace_id="tr-dup", trace_patch_id="tp-dup",
+                file_path="d.py", authored="NEVER_MATCHES\n", step_index=1)
+    first = reconcile_commit_anchors(repo, head)
+    assert first == []  # tp-dup unknown; run 1 emits claim through tp-dup
+    event_log.invalidate_read_events_cache(repo)
+
+    _emit_patch(repo, trace_id="tr-b", trace_patch_id="tp-b",
+                file_path="b.py", authored="B_LANDS = 1\n", step_index=1)
+    _emit_patch(repo, trace_id="tr-dup-again", trace_patch_id="tp-dup",
+                file_path="d.py", authored="NEVER_MATCHES\n", step_index=2)
+    event_log.invalidate_read_events_cache(repo)
+
+    calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
+    second = reconcile_commit_anchors(repo, head)
+    event_log.invalidate_read_events_cache(repo)
+
+    anchors_for_b = [a for a in second if a["trace_patch_id"] == "tp-b"]
+    assert calls["n"] >= 1 and anchors_for_b, (
+        f"FAIL-CLOSED: tp-b was silently covered by the OLD claim whose "
+        f"boundary the re-ingested duplicate extended past it "
+        f"(searches={calls['n']}, anchors={second})"
+    )
+
+
+def test_scoped_attach_recovers_patch_past_moved_dup_boundary(tmp_path, monkeypatch):
+    """Same fail-closed shape reached via the R5 recovery verb: ``trail
+    attach`` is the designated recovery for a late-backfilled trace, and must
+    not silently no-op because a duplicate re-emission of an unscoped claim's
+    through-id moved the boundary past the trace being attached."""
+    repo = tmp_path / "r2"
+    _init_repo(repo)
+    _emit_patch(repo, trace_id="tr-x", trace_patch_id="tp-x", file_path="x.py", authored="X\n")
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")
+    reconcile_commit_anchors(repo, head)  # unscoped claim through tp-x
+    event_log.invalidate_read_events_cache(repo)
+
+    _emit_patch(repo, trace_id="tr-y", trace_patch_id="tp-y", file_path="y.py", authored="Y\n")
+    _emit_patch(repo, trace_id="tr-x", trace_patch_id="tp-x", file_path="x.py", authored="X\n", step_index=2)
+    event_log.invalidate_read_events_cache(repo)
+
+    from opentraces.core.trails.attach import attach_trace_to_commit
+
+    calls = _count_calls(monkeypatch, anchors_mod, "_find_exact_anchor")
+    attach_trace_to_commit(repo, "tr-y", head)
+    event_log.invalidate_read_events_cache(repo)
+    assert calls["n"] == 1, (
+        "trail attach for the late-backfilled trace silently no-ops: its "
+        "never-searched patch is wrongly covered by the moved claim boundary"
     )
