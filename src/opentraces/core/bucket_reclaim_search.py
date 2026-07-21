@@ -38,7 +38,16 @@ not just "write-new-then-remove-stale" ordering:
   per-project journal (``_write_journal`` / ``_read_journal`` /
   ``_clear_journal``, under ``bucket/reclaim/anchor_search/``) is written
   durably BEFORE the ref swap and consumed on resume instead of recomputing,
-  so the removal target survives however far the interrupted run got.
+  so the removal target survives however far the interrupted run got. On
+  resume the journal's id set is UNIONED with, not replaced by, this run's
+  fresh pre-compaction read (issue #358 repair v3, finding 3): a writer can
+  append a new event between the journal write and the crash, invisible to
+  the journal by construction, then a ROUTINE (reclaim-unrelated)
+  ``sync_events_mirror`` tick mirrors it into its own batch file before
+  resume runs; the resumed compaction's whole-stream re-chain gives that
+  event a fresh id/sequence too, but a removal scope built from the journal
+  alone can never see its pre-compaction batch file, leaving the superseded
+  and rewritten copies to coexist in the mirror forever.
 * This project's mirror batch files must be assigned the EXACT (seq,
   batch_id) pairs a standalone ``sync_events_mirror`` full rebuild of this
   project's OWN canonical events would independently derive
@@ -64,7 +73,19 @@ not just "write-new-then-remove-stale" ordering:
   a CAS failure, folds the append-only delta onto the compacted chain's tail
   (``compact_and_append``) before retrying — bounded, so a hot writer cannot
   livelock the pass; exhaustion reports ``action="error"`` with the mirror
-  and companions untouched, never a partial swap.
+  and companions untouched, never a partial swap. That CAS base and the
+  ``read_events`` snapshot it protects must themselves be taken atomically
+  (issue #358 repair v3, finding 4): ``_read_events_snapshot`` brackets the
+  read with a ``_head_sha`` check taken right before AND right after it,
+  retrying from the newly observed head on a mismatch instead of trusting a
+  single pre-read belief — otherwise an append landing inside that gap is
+  already present in ``old_events``/``compacted`` while the CAS base still
+  names the older commit, so a CAS failure's delta fold (above) re-applies
+  the SAME append a second time instead of a genuinely new one. Symmetrically,
+  ``_swap_compacted_chain`` reports the ``head`` ``import_event_log`` itself
+  returns, never a fresh self-read taken after the swap lands (issue #358
+  repair v3, finding 2) — the identical anti-pattern one line lower, closed
+  the same way.
 
 Honest boundary: a project whose Git repo is unreachable can only be
 compacted from the bucket's own mirror, and — because the mirror carries no
@@ -137,6 +158,13 @@ _JOURNAL_SCHEMA = "opentraces.bucket.reclaim.anchor_search_journal.v1"
 # without risking a livelock.
 _SWAP_MAX_RETRIES = 5
 
+# Bounded retry count for the head/events snapshot bracket (issue #358
+# repair v3, finding 4). Each retry is a cheap ``_head_sha`` rev-parse plus a
+# ``read_events`` call that hits the ``(repo, head)`` cache on every attempt
+# after the first observed head, so a handful of attempts is enough to
+# outrun a hot writer without risking a livelock.
+_SNAPSHOT_MAX_ATTEMPTS = 5
+
 
 def _events_tree_bytes(repo: Path, head: str) -> int:
     """Sum blob sizes for every historical ``events/*.json`` object reachable
@@ -188,6 +216,47 @@ def _head_sha(repo: Path) -> str | None:
         return None
     sha = proc.stdout.strip()
     return sha or None
+
+
+def _read_events_snapshot(repo: Path, head: str | None) -> tuple[str | None, list[Any]]:
+    """Read the canonical event chain and confirm the ref head it actually
+    reflects, bracketing ``read_events`` with a ``_head_sha`` check instead
+    of trusting the single, possibly-stale ``head`` passed in (issue #358
+    repair v3, finding 4). ``read_events`` re-fetches ``EVENT_LOG_REF``
+    itself at call time, so a writer that appends between an EARLIER head
+    read (e.g. the one behind the ``_events_tree_bytes`` prefilter walk, or
+    a previous iteration of this same loop) and this call would already be
+    inside the returned events while ``head`` still names the OLDER commit.
+    CASing the swap against that stale belief makes ``_swap_compacted_
+    chain`` treat the already-read append as a fresh ``read_events_since``
+    delta on retry and fold it onto the compacted chain a SECOND time —
+    silent duplication, the mirror image of the force-overwrite finding 1
+    fixed at the swap boundary itself.
+
+    A ``_head_sha`` read taken right after ``read_events`` that matches
+    ``head`` is proof nothing landed mid-read; a mismatch means the read is
+    stale and must be retried from the newly observed head — cheap, since
+    ``read_events``'s own ``(repo, head)`` cache key makes the retry's
+    ``read_events`` call a hit once the head stabilizes. Bounded so a
+    pathologically hot writer cannot livelock the pass; exhaustion raises,
+    caught by the caller's per-project try/except into ``action="error"``,
+    same as swap exhaustion.
+    """
+    for _ in range(_SNAPSHOT_MAX_ATTEMPTS):
+        if head is None:
+            return None, []
+        events = read_events(repo, verify=False)
+        confirmed = _head_sha(repo)
+        if confirmed == head:
+            return head, events
+        head = confirmed
+
+    raise RuntimeError(
+        f"{EVENT_LOG_REF} kept moving while reclaim was reading the canonical "
+        f"event chain for a concurrently-written project after "
+        f"{_SNAPSHOT_MAX_ATTEMPTS} attempts — refusing to snapshot a "
+        "possibly-inconsistent (head, events) pair"
+    )
 
 
 def _search_touch_ids(events: list[Any]) -> set[str]:
@@ -623,10 +692,17 @@ def _swap_compacted_chain(
     expected: str | None = snapshot_head
     for attempt in range(1, _SWAP_MAX_RETRIES + 1):
         try:
-            import_event_log(
+            result = import_event_log(
                 repo, compacted, writer=_RECLAIM_WRITER, force=True, expected_head=expected,
             )
-            return compacted, affected, _head_sha(repo), attempt - 1
+            # `result["head"]` is the commit `import_event_log` ACTUALLY just
+            # swapped in (issue #358 repair v3, finding 2) — never a fresh
+            # `_head_sha(repo)` re-read here, which a writer landing between
+            # that swap's own `update-ref` and this line would race ahead of,
+            # stamping the mirror index with a head newer than what the
+            # mirror actually reflects and permanently hiding the raced
+            # event from a later incremental sync's ancestor check.
+            return compacted, affected, result["head"], attempt - 1
         except EventLogHeadMovedError:
             current_head, delta_events = read_events_since(repo, expected)
             if current_head is None or delta_events is None:
@@ -693,7 +769,13 @@ def _process_reachable_project(
             report.reason = "below fat-detection size prefilter"
             return report
 
-    old_events = read_events(repo, verify=False) if head is not None else []
+    # Bracketed against a post-read ``_head_sha`` check (issue #358 repair
+    # v3, finding 4) rather than reused from the `head` captured above the
+    # O(corpus) ``_events_tree_bytes`` walk -- see ``_read_events_snapshot``'s
+    # docstring for why that gap is load-bearing, not cosmetic. `head` is
+    # reassigned to whatever it actually reflects, so `_swap_compacted_
+    # chain`'s CAS below is always consistent with `old_events`/`compacted`.
+    head, old_events = _read_events_snapshot(repo, head)
     compacted, stats = compact_search_events(old_events)
     report.events_before = len(old_events)
     report.events_after = len(compacted)
@@ -706,10 +788,21 @@ def _process_reachable_project(
 
     fresh_affected = _search_touch_ids(old_events) | _search_touch_ids(compacted)
     if journal is not None:
-        # Trust the ORIGINAL run's decision over whatever this run's fresh
-        # read shows — see the module docstring's "Crash safety" section for
-        # why the fresh read can no longer be trusted once the ref has moved.
-        journaled_old_ids = set(journal["old_event_ids"])
+        # UNION with the fresh pre-compaction read, not a replacement (issue
+        # #358 repair v3, finding 3): the journal only knows what was old at
+        # the ORIGINAL run's read time, but a writer can append a new event
+        # between that journal write and the crash -- invisible to the
+        # journal by construction, yet still present (and, after this run's
+        # whole-stream re-chain, re-id'd) in `old_ids`. A batch file holding
+        # ONLY such an event is a subset of neither set alone, so replacing
+        # rather than unioning left it permanently unreachable by
+        # ``_reconcile_mirror_for_project``'s removal scope. Safe to widen:
+        # removal already skips files matching the just-written layout, and
+        # any file wholly inside the union is by construction redundant
+        # (either superseded by THIS run's compaction or already stale from
+        # the interrupted one). `affected` unions the same way one field
+        # below -- this was the one asymmetric field, not a new pattern.
+        journaled_old_ids = set(journal["old_event_ids"]) | old_ids
         affected = set(journal["affected_trace_ids"]) | fresh_affected
     else:
         journaled_old_ids = old_ids
