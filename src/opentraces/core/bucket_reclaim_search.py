@@ -110,7 +110,17 @@ not just "write-new-then-remove-stale" ordering:
   event's original id explicitly, and the caller unions it into
   ``journaled_old_ids`` before deriving ``stale_ids`` — the superseded
   original-id copy and the rewritten copy are the SAME logical event, and
-  only one of them should survive the mirror.
+  only one of them should survive the mirror. That union alone only widens
+  an in-PROCESS-MEMORY variable, though (issue #358 repair v3 round 2
+  follow-up): the durable journal was written, if at all, BEFORE this swap
+  was even attempted, from the pre-swap belief, so a kill between the swap
+  landing and ``_reconcile_mirror_for_project`` running would resume from a
+  journal that never learned about the delta — the same permanent-orphan
+  outcome this finding already fixed for the in-memory case, just one crash
+  window later. The caller now re-writes the journal with the widened
+  ``journaled_old_ids``/``affected`` immediately after the swap returns and
+  before that reconcile call, so a kill in that narrow window still resumes
+  from what this run actually decided.
 
 Honest boundary: a project whose Git repo is unreachable can only be
 compacted from the bucket's own mirror, and — because the mirror carries no
@@ -164,12 +174,25 @@ from .trails.search_compaction import compact_and_append, compact_search_events
 # Below this many raw bytes in a project's canonical ``events/`` tree, a full
 # read+compact is not worth the O(corpus) cost — this only needs to catch the
 # "no anchor-search history at all" case cheaply (a v2-fat summary is the
-# reported 26 GB driver; even a single such blob dwarfs this). Kept low so a
-# project with a genuinely small, already-mostly-compact search history still
-# gets read (companions/mirror reconciliation can be needed even when there
-# is nothing left to compact — see the resume note on ``_process_reachable_
-# project``).
-_FAT_PREFILTER_MIN_BYTES = 64
+# reported 26 GB driver; even a single such blob dwarfs this).
+#
+# 64 KiB sits comfortably between the two shapes this prefilter has to tell
+# apart: a slim, ordinary event (a plain ``trace_patch_created`` or an
+# already-v3-compact search summary) serializes to roughly 1.5 KB, so a
+# healthy or already-compacted project's WHOLE history can hold dozens of
+# them and still clear this threshold; a fat shape this pass exists to catch
+# is >100 KB in practice for a single unknowns-bearing v2 summary, and the
+# issue #358 motivating case is ~4.3 MB — both land an order of magnitude (or
+# three) above 64 KiB on their very first oversized blob. The old value (64
+# raw BYTES, not KiB) was smaller than a single slim event's own JSON
+# encoding, so every project with any history at all failed the prefilter —
+# the fast no-op path it exists for never fired, and a zero-fat bucket paid
+# the full O(corpus) read + compact on every ``bucket reclaim`` run anyway.
+# Kept low enough that a project with a genuinely small, already-mostly-
+# compact search history still gets read (companions/mirror reconciliation
+# can be needed even when there is nothing left to compact — see the resume
+# note on ``_process_reachable_project``).
+_FAT_PREFILTER_MIN_BYTES = 65536
 
 _RECLAIM_WRITER = "bucket-reclaim-anchor-search"
 
@@ -914,28 +937,43 @@ def _process_reachable_project(
         # Durable BEFORE the ref swap below — see the module docstring.
         _write_journal(slug, old_event_ids=old_ids, affected_trace_ids=affected)
 
-    if head is not None:
-        # CAS against the snapshot this run's `compacted` was actually
-        # derived from — never a fresh self-read at swap time (issue #358
-        # repair, finding 1: see ``_swap_compacted_chain``'s docstring for
-        # why that distinction is load-bearing, not cosmetic).
-        compacted, affected, new_head, report.swap_retries, delta_original_ids = _swap_compacted_chain(
-            repo, snapshot_head=head, compacted=compacted, affected=affected,
-        )
-        if delta_original_ids:
-            # A CAS-retry delta event keeps its OWN pre-fold id right up
-            # until `compact_and_append` re-chains it, and a routine,
-            # reclaim-unrelated `sync_events_mirror` tick can mirror it under
-            # that original id before this swap ever lands -- an id that was
-            # never in `old_ids`/`journaled_old_ids` (both pre-append
-            # snapshots) to begin with. Union it into the removal scope now
-            # so `stale_ids` below actually targets that superseded copy
-            # instead of leaving it to coexist with the rewritten one forever
-            # (issue #358 repair v3 round 2, major: see
-            # `_swap_compacted_chain`'s docstring).
-            journaled_old_ids = journaled_old_ids | delta_original_ids
-    else:
-        new_head = None
+    # CAS against the snapshot this run's `compacted` was actually derived
+    # from — never a fresh self-read at swap time (issue #358 repair, finding
+    # 1: see ``_swap_compacted_chain``'s docstring for why that distinction is
+    # load-bearing, not cosmetic). `head` is guaranteed non-None here: the
+    # entry guard above and ``_read_events_snapshot`` (issue #358 repair v3
+    # round 2) both raise rather than ever handing back a `None` head, so the
+    # `head is None` branch this gate used to guard was unreachable (issue
+    # #358 repair v3 round 2 follow-up — dead code removed, not behavior).
+    compacted, affected, new_head, report.swap_retries, delta_original_ids = _swap_compacted_chain(
+        repo, snapshot_head=head, compacted=compacted, affected=affected,
+    )
+    if delta_original_ids:
+        # A CAS-retry delta event keeps its OWN pre-fold id right up
+        # until `compact_and_append` re-chains it, and a routine,
+        # reclaim-unrelated `sync_events_mirror` tick can mirror it under
+        # that original id before this swap ever lands -- an id that was
+        # never in `old_ids`/`journaled_old_ids` (both pre-append
+        # snapshots) to begin with. Union it into the removal scope now
+        # so `stale_ids` below actually targets that superseded copy
+        # instead of leaving it to coexist with the rewritten one forever
+        # (issue #358 repair v3 round 2, major: see
+        # `_swap_compacted_chain`'s docstring).
+        journaled_old_ids = journaled_old_ids | delta_original_ids
+        # Re-write the journal NOW, durably, before `_reconcile_mirror_
+        # for_project` below ever runs (issue #358 repair v3 round 2
+        # follow-up, blocker): the journal written above -- if any --
+        # predates this swap entirely and was gated on the PRE-swap
+        # belief (`ref_would_change`/`would_touch_mirror` computed before
+        # `_swap_compacted_chain` was even called), so it cannot already
+        # contain `delta_original_ids`. Widening only the in-process
+        # `journaled_old_ids` variable is invisible to a killed run's
+        # resume, which reads the journal back off disk -- `_write_
+        # journal` is the same atomic write-new-then-rename
+        # `_atomic_write_json` uses everywhere else in this module, so a
+        # kill mid-rewrite still leaves either the old or the new
+        # journal intact, never a half-written one.
+        _write_journal(slug, old_event_ids=journaled_old_ids, affected_trace_ids=affected)
     report.ref_rewritten = ref_would_change or new_head != head
     report.events_after = len(compacted)
     report.ref_bytes_after = _events_tree_bytes(repo, new_head) if new_head else report.ref_bytes_before
@@ -972,12 +1010,21 @@ def _process_reachable_project(
         report.mirror_batch_files_written = files_written
         report.mirror_rewritten = True
 
-    _clear_journal(slug)
-
+    # Cleared only AFTER the companion loop below finishes (issue #358
+    # repair v3 round 2 follow-up): clearing it here, before that loop ran,
+    # meant a kill mid-loop left NO journal for a killed run's resume to
+    # bypass the prefilter with — and the ref/mirror are already compacted
+    # by this point, so their tree can legitimately (see the module
+    # docstring, and now `_FAT_PREFILTER_MIN_BYTES` at a real 64 KiB rather
+    # than the old, always-cleared 64 BYTES) fall back under the prefilter
+    # threshold, silently short-circuiting the resume before it ever reaches
+    # `_companion_deltas` and re-running the interrupted regen.
     for trace_id in sorted(affected):
         project_per_trace_exports(
             repo, project_slug=slug, trace_id=trace_id, events=compacted, events_authoritative=True,
         )
+
+    _clear_journal(slug)
 
     return report
 

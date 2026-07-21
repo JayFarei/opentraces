@@ -26,6 +26,13 @@ from opentraces.core.trails import (
 from opentraces.core.trails.anchors import ANCHOR_ALGORITHMS_PHASE5
 from opentraces.core.trails.ids import trace_patch_ref
 
+# How many padding-only "unknown" results `_build_world`'s v2-fat summary
+# carries on top of its six real patches -- see the docstring on
+# `_build_world` for why this exists (issue #358 repair v3 round 2
+# follow-up). Sized so the fixture's total canonical-events tree clears
+# `_FAT_PREFILTER_MIN_BYTES` (65536) with comfortable margin.
+_FAT_PADDING_ENTRY_COUNT = 450
+
 
 def _init_repo(repo: Path) -> None:
     repo.mkdir(parents=True, exist_ok=True)
@@ -107,10 +114,24 @@ def _build_world(tmp_path: Path) -> dict:
     """One project's repo carrying a legacy group (trace ``t-anchored``, one
     anchored + one unknown patch, same reconcile-run batch -- collapses to
     ONE v3-compact summary) and a v2-fat summary (trace ``t-fat-unanchored``,
-    six patches, ALL unknown -- loses search-event touch entirely once
+    six real patches plus ``_FAT_PADDING_ENTRY_COUNT`` padding-only unknown
+    results, ALL unknown -- loses search-event touch entirely once
     compacted). Registers the project, syncs the mirror, and projects both
     traces' companions via ``bucket_repair`` so the "before" state is exactly
-    what a real affected machine would have on disk."""
+    what a real affected machine would have on disk.
+
+    The padding entries exist so this fixture clears ``_FAT_PREFILTER_MIN_
+    BYTES`` (issue #358 repair v3 round 2 follow-up): a real v2-fat summary
+    is large because of accumulated RESULT COUNT (the module docstring's
+    26 GB driver), not large individual fields, so padding the same way here
+    is what the prefilter is actually supposed to see as "fat" -- six real
+    patches alone (~14.5 KB total tree) cleared the OLD, useless 64-byte
+    threshold by accident but would silently look "clean" under any
+    defensible one. Padding entries carry no backing ``trace_patch_created``
+    event -- unnecessary, since ``_search_touch_ids``/``summary_search_
+    touches_trace`` both resolve a v2-fat entry's trace via its own inline
+    ``trace_id`` field, never a patch lookup (that lookup only exists for
+    the already-compacted v3 ``unanchored_trace_patch_ids`` shape)."""
 
     from opentraces.core.bucket_store import bucket_repair, write_trace_record
     from opentraces.core.config import get_project_dir, load_config, register_project, save_config
@@ -160,6 +181,17 @@ def _build_world(tmp_path: Path) -> dict:
             "result": "unknown", "created_anchor_ids": [],
         }
         for i, pid in enumerate(fat_patch_ids)
+    ]
+    # Padding-only entries (no backing `trace_patch_created` event -- see
+    # the docstring above) purely to push this summary's own byte size
+    # comfortably past `_FAT_PREFILTER_MIN_BYTES`, the way a real fat v2
+    # summary's size actually accumulates.
+    fat_entries += [
+        {
+            "trace_patch_id": f"tracepatch-sha256:pad{i:04d}{'b' * 57}", "trace_id": "t-fat-unanchored",
+            "step_index": i, "generation_index": 0, "result": "unknown", "created_anchor_ids": [],
+        }
+        for i in range(_FAT_PADDING_ENTRY_COUNT)
     ]
     append_event_batch(
         repo, [_v2_fat_search_event(commit_hex=commit_b, entries=fat_entries)], writer="watcher",
