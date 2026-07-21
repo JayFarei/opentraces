@@ -12,11 +12,16 @@ from pathlib import Path
 from typing import Iterable
 
 from .anchors import ANCHOR_ALGORITHMS_PHASE5, reconcile_commit_anchors
-from .contract import ANCHOR_SEARCH_SCHEMA_VERSION
+from .contract import ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
 from .event_log import append_event_batch, read_events_scoped
 from .ids import id_from_payload
 from .models import ATTRIBUTION_VERSION, TrailEventDraft
-from .search_records import build_anchor_search_summary_payload, iter_search_records
+from .search_records import (
+    build_anchor_search_summary_payload,
+    iter_coverage_claims,
+    iter_search_records,
+    resolve_coverage_claims,
+)
 
 DEFAULT_RECENT_COMMITS = 50
 MATURATION_CAPTURE_METHOD = ["trail_maturation"]
@@ -97,7 +102,7 @@ def mature_trails(
             # #65 cure: retain dedup keys in a disk-backed scratch index, not in
             # Python sets for the whole tick. Per-chunk queries below materialize
             # only O(chunk_size * candidate_commits) keys in memory.
-            _build_dedup_index(repo, scratch, commits)
+            _build_dedup_index(repo, scratch, commits, attribution_version=effective_version)
 
             # The shared scan is atomic by design. If it overruns the caller's
             # budget, do not use a partial dedup view; return a truncated no-op
@@ -247,6 +252,11 @@ def _open_maturation_scratch(path: Path) -> sqlite3.Connection:
             attribution_version TEXT NOT NULL,
             PRIMARY KEY (patch_id, commit_sha, attribution_version)
         );
+        CREATE TABLE patch_positions (
+            patch_id TEXT PRIMARY KEY,
+            position INTEGER NOT NULL,
+            trace_id TEXT
+        );
         CREATE TABLE search_results (
             commit_sha TEXT NOT NULL,
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -290,13 +300,17 @@ def _build_dedup_index(
     repo: Path,
     scratch: sqlite3.Connection,
     commits: list[str],
+    *,
+    attribution_version: str,
 ) -> None:
     commit_set = set(commits)
     anchor_rows: list[tuple[str, str]] = []
     search_rows: list[tuple[str, str, str]] = []
+    position_rows: list[tuple[str, int, str | None]] = []
+    claims: list[dict] = []
 
     def _flush() -> None:
-        nonlocal anchor_rows, search_rows
+        nonlocal anchor_rows, search_rows, position_rows
         if anchor_rows:
             scratch.executemany(
                 "INSERT OR IGNORE INTO anchor_keys(patch_id, commit_sha) "
@@ -311,9 +325,32 @@ def _build_dedup_index(
                 search_rows,
             )
             search_rows = []
+        if position_rows:
+            scratch.executemany(
+                "INSERT OR IGNORE INTO patch_positions"
+                "(patch_id, position, trace_id) VALUES (?, ?, ?)",
+                position_rows,
+            )
+            position_rows = []
 
     def _key_sink(event) -> None:
-        if event.event_type == "git_anchor_created":
+        if event.event_type == "trace_patch_created":
+            # #359: keep-first position over the FULL, un-scoped patch
+            # history (this type carries no commit_filter above, so
+            # ``read_events_scoped`` hands every trace_patch_created event to
+            # this sink regardless of ``commit_set`` — a coverage claim's
+            # through-id can point at any patch ever ingested, not just one
+            # touching a candidate commit). ``INSERT OR IGNORE`` keyed on
+            # ``patch_id`` keeps only the FIRST row inserted for an id; events
+            # arrive in canonical event_sequence order (read_events_scoped,
+            # #65), so that first row is always the id's first occurrence —
+            # matching anchors.py's keep-first ``build_patch_position_index``
+            # exactly (search_records.py), without holding the full patch
+            # history (authored_text and all) in memory at once.
+            patch_id = id_from_payload(event.payload, "trace_patch")
+            if patch_id:
+                position_rows.append((patch_id, event.event_sequence, event.trace_id))
+        elif event.event_type == "git_anchor_created":
             patch_id = id_from_payload(event.payload, "trace_patch")
             commit = (event.payload.get("commit_id") or {}).get("hex")
             if patch_id and commit in commit_set:
@@ -325,12 +362,24 @@ def _build_dedup_index(
                 version = record.get("attribution_version")
                 if patch_id and commit in commit_set and version:
                     search_rows.append((patch_id, commit, version))
-        if len(anchor_rows) + len(search_rows) >= 4096:
+            # #359: a v3 coverage claim covers every patch at-or-before its
+            # boundary INSTEAD of a per-patch key for each — collected here,
+            # expanded into ordinary ``search_keys`` rows below once every
+            # patch's position is known (a stale ATTRIBUTION_VERSION must not
+            # suppress a re-search under a newer one, same rule as anchors.py).
+            for claim in iter_coverage_claims(event):
+                if (
+                    claim["search_head_sha"] in commit_set
+                    and claim["attribution_version"] == attribution_version
+                ):
+                    claims.append(claim)
+        if len(anchor_rows) + len(search_rows) + len(position_rows) >= 4096:
             _flush()
 
     read_events_scoped(
         repo,
         event_types={
+            "trace_patch_created",
             "git_anchor_created",
             "git_anchor_search_completed",
         },
@@ -342,6 +391,66 @@ def _build_dedup_index(
         sink=_key_sink,
     )
     _flush()
+    scratch.commit()
+    _expand_coverage_claims(scratch, claims)
+
+
+def _expand_coverage_claims(
+    scratch: sqlite3.Connection,
+    claims: list[dict],
+) -> None:
+    """Turn each resolved v3 coverage claim into ordinary ``search_keys``
+    rows (#359), one per patch it covers, so the EXISTING dedup queries
+    (``_dedup_keys_for_chunk``, unchanged) treat a claim-covered patch exactly
+    like one with an explicit exact key — the #65 pre-extracted path
+    ``reconcile_commit_anchors`` takes from maturation never needs to know
+    claims exist at all.
+
+    Resolution goes through the SAME ``resolve_coverage_claims`` helper
+    anchors.py uses (search_records.py), with ``patch_positions`` (built by
+    ``_build_dedup_index`` immediately before this call, keep-first) as the
+    position lookup — so a claim whose ``through_trace_patch_id`` never
+    occurs there (fail open) is dropped and contributes NO rows; nothing from
+    a failed-open resolution is ever cached.
+    """
+    if not claims:
+        return
+
+    def _position_of(patch_id: str) -> int | None:
+        row = scratch.execute(
+            "SELECT position FROM patch_positions WHERE patch_id = ?",
+            (patch_id,),
+        ).fetchone()
+        return row[0] if row is not None else None
+
+    for claim in resolve_coverage_claims(claims, _position_of):
+        # scope_trace_id None covers every trace up to the boundary; a scoped
+        # claim (R5, ``trail attach``) covers ONLY its own trace's patches —
+        # never leak coverage to a trace the claiming run never searched.
+        if claim["scope_trace_id"] is None:
+            scratch.execute(
+                "INSERT OR IGNORE INTO search_keys"
+                "(patch_id, commit_sha, attribution_version) "
+                "SELECT patch_id, ?, ? FROM patch_positions WHERE position <= ?",
+                (
+                    claim["search_head_sha"],
+                    claim["attribution_version"],
+                    claim["boundary_position"],
+                ),
+            )
+        else:
+            scratch.execute(
+                "INSERT OR IGNORE INTO search_keys"
+                "(patch_id, commit_sha, attribution_version) "
+                "SELECT patch_id, ?, ? FROM patch_positions "
+                "WHERE position <= ? AND trace_id = ?",
+                (
+                    claim["search_head_sha"],
+                    claim["attribution_version"],
+                    claim["boundary_position"],
+                    claim["scope_trace_id"],
+                ),
+            )
     scratch.commit()
 
 
@@ -466,6 +575,21 @@ def _flush_maturation_scratch(
             continue
         drafts: list[TrailEventDraft] = []
         if results:
+            # #359: maturation's view of the log is the #65 pre-extracted
+            # slice, chunked to bound memory — it never sees the FULL,
+            # unscoped patch ordering a coverage claim's max-position
+            # boundary needs to be sound (that soundness argument belongs
+            # only to anchors.py's own complete scoped read, structurally
+            # enforced there). So this flush stays claim-free and instead
+            # keeps ``results[]`` anchored-only plus the EXACT ids of the
+            # unknown outcomes this run recorded (the v3-compact shape the
+            # tri-shape reader already handles, search_records.py) — never
+            # the v2 full-mixed shape those unknown dicts came from.
+            unanchored_trace_patch_ids = [
+                str(result["trace_patch_id"])
+                for result in results
+                if result.get("result") != "anchored" and result.get("trace_patch_id")
+            ]
             drafts.append(
                 TrailEventDraft(
                     event_type="git_anchor_search_completed",
@@ -474,10 +598,11 @@ def _flush_maturation_scratch(
                     capture_method=MATURATION_CAPTURE_METHOD,
                     ATTRIBUTION_VERSION=attribution_version,
                     payload=build_anchor_search_summary_payload(
-                        schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
+                        schema_version=ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION,
                         search_head={"algo": "sha1", "hex": commit},
                         algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
                         results=results,
+                        unanchored_trace_patch_ids=unanchored_trace_patch_ids,
                     ),
                 )
             )

@@ -25,28 +25,34 @@ SEARCH_SCHEMA_VERSION = "opentraces.trail.search.v1"
 # summary event per (commit, reconcile-run) carrying a per-patch ``results``
 # list. This is the EVENT payload schema_version and is intentionally distinct
 # from SEARCH_SCHEMA_VERSION above (the unrelated ``trail search`` projection
-# envelope). Bump only when the summary payload shape changes — three callers
-# (anchors.py's write path, maturation.py's periodic flush, search_compaction.py's
-# rollup) share this constant, so it identifies the full-mixed-``results[]``
-# shape all three still emit; do not repoint it at a shape only one of them
-# produces.
+# envelope). Bump only when the summary payload shape changes — search_compaction.py's
+# legacy-per-patch rollup is the one remaining caller of this constant
+# (out of scope for #358/#359: it is an offline, not-wired-in-CLI capability;
+# see its module docstring), so it identifies the full-mixed-``results[]``
+# shape THAT caller still emits; do not repoint it at a shape only a
+# different caller produces.
 ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v2"
 # v3 (issue #358): v2's ``results[]`` carried one dict per SEARCHED patch,
 # unknown outcomes included — on a mature repo that fanned ~26GB of mostly
 # never-anchored unknown dicts into every trace companion the summary
-# touched. v3 keeps ``results[]`` ANCHORED-ONLY and replaces the dropped
-# unknown dicts with one ``coverage`` through-pointer claim (see
-# ``search_records.iter_coverage_claims``) — the dedup and fan-out surfaces
-# consumers need from an unknown outcome (was it searched? did it touch this
-# trace?) come from the claim and the scalars, not a per-patch dict. A
-# SEPARATE constant, not a bump of ANCHOR_SEARCH_SCHEMA_VERSION above: only
-# anchors.py's live coverage-bearing write path emits this shape today.
-# maturation.py's periodic flush and search_compaction.py's rollup still
-# build full-mixed ``results[]`` (no ``coverage``, unknown dicts included) —
-# stamping this label on their output would mislabel a v2 payload as v3,
-# and the planned compaction pass (design: "v3 events pass through
-# unchanged") would then skip those fat events forever instead of compacting
-# them. Repoint a caller here only once it actually emits the v3 shape.
+# touched. v3 keeps ``results[]`` ANCHORED-ONLY and drops the unknown dicts,
+# replacing them with EITHER of two alternate, mutually exclusive keys (see
+# ``build_anchor_search_summary_payload``): a ``coverage`` through-pointer
+# claim (anchors.py's own complete scoped read only — see
+# ``search_records.iter_coverage_claims``) or an exact
+# ``unanchored_trace_patch_ids`` list (issue #359: maturation.py's periodic
+# flush — its chunked, pre-extracted view can't compute a sound max-position
+# boundary, so it names the unknown ids exactly instead of claiming a
+# boundary). Both variants share THIS constant: the dedup- and fan-out-
+# relevant property both give consumers (results[] is anchored-only; every
+# unknown outcome is still accounted for, exactly or via a claim) is the
+# same, and neither is the v2 full-mixed shape above. A SEPARATE constant,
+# not a bump of ANCHOR_SEARCH_SCHEMA_VERSION: search_compaction.py's rollup
+# still builds the full-mixed shape (out of scope, unmodified by #358/#359)
+# — stamping this label on its output would mislabel a v2 payload as v3, and
+# the planned compaction pass (design: "v3 events pass through unchanged")
+# would then skip those fat events forever instead of compacting them.
+# Repoint a caller here only once it actually emits the anchored-only shape.
 ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION = "opentraces.trail.anchor_search.v3"
 RESOLVE_SCHEMA_VERSION = "opentraces.trail.resolve.v1"
 # ``trail blame`` --json envelopes (ADR-0007 lint L5). Three distinct versions

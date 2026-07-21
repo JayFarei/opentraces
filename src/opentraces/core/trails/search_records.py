@@ -11,10 +11,14 @@ v2's ``results[]`` still carried one dict per searched patch, unknown outcomes
 included, which fanned the never-anchored majority of patches into every trace
 companion the summary touched. v3 (#358) keeps ``results[]`` ANCHORED-ONLY and
 carries a ``coverage`` through-pointer claim instead of the dropped unknown
-dicts (see :func:`iter_coverage_claims`); a rewritten (compacted) log MAY
-instead carry an EXACT ``unanchored_trace_patch_ids`` list alongside the
-anchored-only ``results[]`` (the "v3-compact" shape) so dedup keys stay
-identical to v2 after compaction (search_compaction.py, out of scope here).
+dicts (see :func:`iter_coverage_claims`) — sound only from a COMPLETE view of
+the patch history, so only anchors.py's own scoped read mints one. A caller
+whose view is partial instead carries an EXACT ``unanchored_trace_patch_ids``
+list alongside the anchored-only ``results[]`` (the "v3-compact" shape) so
+dedup keys stay identical to v2: maturation.py's periodic flush (#359 — its
+chunked, pre-extracted view can't compute a sound max-position boundary) and,
+for legacy/v2 data already on disk, the planned offline compaction rewrite
+(search_compaction.py, still v2-emitting and out of scope for #358/#359).
 
 The ~505K legacy per-patch events already on live logs must keep working, so
 every consumer (the reconcile dedup, maturation counters, the query projection,
@@ -25,7 +29,7 @@ This is the only place that needs to know all three shapes exist.
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .ids import id_from_payload, normalize_id, trace_patch_ref
 
@@ -77,27 +81,42 @@ def build_anchor_search_summary_payload(
     algorithms_attempted: list[str],
     results: list[dict[str, Any]],
     coverage: dict[str, Any] | None = None,
+    unanchored_trace_patch_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the anchor-search summary payload from the per-patch ``results``
     collected by a single reconcile run.
 
     ``results`` is always the FULL per-patch outcome list (anchored AND
     unknown) so the ``searched``/``anchored``/``unknown`` scalars stay correct
-    regardless of caller. When ``coverage`` is given (the v3 write path,
-    #358) the emitted ``results[]`` is filtered to ANCHORED-ONLY entries and
-    the ``coverage`` through-pointer claim is attached in place of the dropped
-    unknown dicts — dedup no longer needs a per-patch record for a patch it
-    already searched and found unanchored. Legacy/v2 callers (and
-    search_compaction.py's v2 rollup, unmodified by #358) omit ``coverage``
-    and keep the full mixed ``results[]``, byte-for-byte as before.
+    regardless of caller. ``coverage`` and ``unanchored_trace_patch_ids`` are
+    mutually exclusive, both opt-in, and both filter the emitted ``results[]``
+    to ANCHORED-ONLY entries — dedup no longer needs a per-patch record for a
+    patch it already searched and found unanchored:
+    - ``coverage`` (the v3 write path, #358): a through-pointer claim,
+      attached in place of the dropped unknown dicts, asserting every patch
+      at-or-before it was search-covered. Only sound from a COMPLETE view of
+      the patch history (anchors.py's own scoped read).
+    - ``unanchored_trace_patch_ids`` (the v3-compact shape, #359): the EXACT
+      ids of the dropped unknown entries, for a caller whose view is partial
+      (maturation.py's chunked sweep) and so cannot compute a sound
+      through-pointer boundary, but can still say precisely which ids it
+      searched and found unanchored.
+    Legacy/v2 callers (and search_compaction.py's v2 rollup, unmodified by
+    #358/#359) omit both and keep the full mixed ``results[]``, byte-for-byte
+    as before.
 
     ``search_head`` and ``algorithms_attempted`` stay TOP-LEVEL (load-bearing:
     read_events_scoped's commit_filter and explain_commit's commit gate both
-    read ``payload['search_head']['hex']``). ``results[]`` and ``coverage``
-    keys must stay free of any ``*_sha`` suffix (TrailEvent payload validation
-    rejects bare git shas under such keys); commit identity lives only in the
-    top-level ``search_head``.
+    read ``payload['search_head']['hex']``). ``results[]``, ``coverage``, and
+    ``unanchored_trace_patch_ids`` keys must stay free of any ``*_sha`` suffix
+    (TrailEvent payload validation rejects bare git shas under such keys);
+    commit identity lives only in the top-level ``search_head``.
     """
+    assert coverage is None or unanchored_trace_patch_ids is None, (
+        "coverage and unanchored_trace_patch_ids are alternate ways to drop "
+        "the unknown dicts -- a payload carries at most one"
+    )
+    anchored_only = coverage is not None or unanchored_trace_patch_ids is not None
     anchored_results = [r for r in results if r.get("result") == "anchored"]
     payload: dict[str, Any] = {
         "schema_version": schema_version,
@@ -107,10 +126,12 @@ def build_anchor_search_summary_payload(
         "searched": len(results),
         "anchored": len(anchored_results),
         "unknown": len(results) - len(anchored_results),
-        "results": anchored_results if coverage is not None else results,
+        "results": anchored_results if anchored_only else results,
     }
     if coverage is not None:
         payload["coverage"] = coverage
+    if unanchored_trace_patch_ids is not None:
+        payload["unanchored_trace_patch_ids"] = unanchored_trace_patch_ids
     return payload
 
 
@@ -268,3 +289,89 @@ def iter_coverage_claims(event: Any) -> Iterator[dict[str, Any]]:
         "through_trace_patch_id": normalize_id(raw_through_id),
         "attribution_version": getattr(event, "ATTRIBUTION_VERSION", None),
     }
+
+
+# --------------------------------------------------------------------------- #
+# #359: shared coverage-claim resolution. anchors.py's live write path and
+# maturation.py's periodic flush both need to turn a claim's
+# ``through_trace_patch_id`` into a boundary a per-patch dedup check can
+# compare against — the keep-first / fail-open rules must be identical in
+# both places, so both consult these helpers instead of each carrying its own
+# copy of the resolution logic. The two callers differ only in HOW they look
+# up a patch id's position (anchors.py: a small in-memory dict built from one
+# reconcile run's ``all_patch_events``; maturation.py: a disk-backed SQLite
+# table built from a whole-log streamed scan, #65) — ``position_of`` is the
+# seam that lets one algorithm serve both.
+# --------------------------------------------------------------------------- #
+
+
+def build_patch_position_index(patch_events: list[Any]) -> dict[str, int]:
+    """Keep-first (trace_patch_id -> position) over ``patch_events``.
+
+    ``patch_events`` must already be in canonical event_sequence order
+    (sorting is the caller's responsibility — a caller-supplied or
+    pre-extracted list is not guaranteed sorted). Position is the 0-based
+    RANK of the event within ``patch_events``, assigned to a trace_patch_id
+    on its FIRST occurrence only — a later duplicate of the same id resolves
+    back to that same first position, because that is the only resolution
+    whose answer cannot change as MORE duplicates of the same id are
+    ingested later (#358: keep-LAST was tried and reverted — it let an
+    EXISTING claim's boundary drift forward every time the log grew a fresh
+    duplicate of its through-id, silently covering a distinct patch ingested,
+    and never searched, after the claim — fail CLOSED, which the design
+    forbids). An event without a trace_patch_id never occupies a slot in the
+    returned mapping (it can never be searched, so it never needs one).
+    """
+    patch_position: dict[str, int] = {}
+    for position, patch_event in enumerate(patch_events):
+        pid = id_from_payload(patch_event.payload, "trace_patch")
+        if pid and pid not in patch_position:
+            patch_position[pid] = position
+    return patch_position
+
+
+def resolve_coverage_claims(
+    claims: list[dict[str, Any]],
+    position_of: Callable[[str], int | None],
+) -> list[dict[str, Any]]:
+    """Resolve each claim's ``through_trace_patch_id`` to a numeric boundary.
+
+    ``position_of`` is a keep-first id -> position lookup (e.g.
+    ``build_patch_position_index(...).get`` for an in-memory patch list, or a
+    disk-backed equivalent for a streamed one). Returns each claim that
+    resolved, as the ORIGINAL claim dict plus a ``boundary_position`` key
+    (every other field — ``search_head_sha``, ``scope_trace_id``,
+    ``attribution_version`` — passes through so a caller that needs them,
+    e.g. maturation.py expanding a claim into per-patch cache rows, does not
+    have to re-associate a resolved boundary back to its source claim).
+
+    A claim whose through-id does not resolve (never ingested, or not yet
+    visible to this caller's view of the log) is DROPPED — it covers
+    NOTHING. Fail open to re-search, never fail closed (#358 adversarial
+    repair).
+    """
+    resolved: list[dict[str, Any]] = []
+    for claim in claims:
+        position = position_of(claim["through_trace_patch_id"])
+        if position is not None:
+            resolved.append({**claim, "boundary_position": position})
+    return resolved
+
+
+def covered_by_claim(
+    position: int,
+    patch_trace_id: str | None,
+    resolved_claims: list[dict[str, Any]],
+) -> bool:
+    """True when ``position`` is covered by some resolved claim.
+
+    Covered means at-or-before the claim's boundary AND, when the claim is
+    scope-restricted (``scope_trace_id`` set — an R5 ``trail attach`` run),
+    the checked patch belongs to that same trace. An unscoped claim
+    (``scope_trace_id`` is ``None``) covers every trace up to the boundary.
+    """
+    return any(
+        position <= claim["boundary_position"]
+        and (claim["scope_trace_id"] is None or claim["scope_trace_id"] == patch_trace_id)
+        for claim in resolved_claims
+    )

@@ -22,8 +22,11 @@ from .ids import (
 from .models import ATTRIBUTION_VERSION, GitObjectID, TrailEvent, TrailEventDraft
 from .search_records import (
     build_anchor_search_summary_payload,
+    build_patch_position_index,
+    covered_by_claim,
     iter_coverage_claims,
     iter_search_records,
+    resolve_coverage_claims,
 )
 
 ANCHOR_ALGORITHMS_PHASE3 = ["exact_range_hash"]
@@ -212,6 +215,19 @@ def reconcile_commit_anchors(
     original append-on-return behavior.
     """
     repo = repo.resolve()
+    # #359: captured before ``patch_events``/``events`` are consulted or
+    # reassigned below, so these reflect exactly what the CALLER supplied.
+    # Only a call that reaches its OWN complete scoped read (neither flag
+    # set) may later mint a coverage claim — see the emission guard near the
+    # bottom of this function. A pre-extracted or caller-supplied ``events``
+    # view is necessarily PARTIAL (a chunk, a caller-filtered subset), and a
+    # claim minted from a partial view can't compute a sound max-position
+    # boundary (the design's soundness argument requires ``all_patch_events``
+    # to be the FULL, unscoped corpus).
+    pre_extracted = (
+        patch_events is not None and anchor_keys is not None and search_keys is not None
+    )
+    caller_supplied_events = not pre_extracted and events is not None
     effective_capture_method = (
         list(capture_method) if capture_method else ["post_commit_correlator"]
     )
@@ -237,11 +253,17 @@ def reconcile_commit_anchors(
     # commit_filter would — preserving plan-090 R5 dedup. When ``events`` is
     # None the per-commit scoped read is byte-identical (the post-commit hook
     # path is unchanged).
-    if patch_events is not None and anchor_keys is not None and search_keys is not None:
-        # #65 pre-extracted path: keys arrive ready-made. No coverage claims
-        # here — the caller's SQLite key cache (post_commit.py, maturation.py)
-        # does not index v3 coverage claims yet, so this path dedups on exact
-        # keys only, exactly as before #358. ``all_patch_events`` is the
+    if pre_extracted:
+        # #65 pre-extracted path: keys arrive ready-made. Today only
+        # maturation.py's chunked SQLite-backed sweep calls this way (the hot
+        # post-commit hook always uses the direct-read branch below). No
+        # coverage claims are RESOLVED here — this branch dedups on exact
+        # keys only, exactly as before #358. That is not a gap: #359 makes
+        # the caller (maturation.py) expand each coverage claim it finds into
+        # ordinary exact ``(patch_id, commit, attribution_version)`` rows in
+        # its OWN cache BEFORE calling this function, so a claim-covered
+        # patch already dedup-skips through ``existing_search_keys`` below
+        # like any other already-searched patch. ``all_patch_events`` is the
         # UNSCOPED list the caller supplied — the trace_id scope filter is
         # applied uniformly below, after the sort, alongside the direct-read
         # branch's.
@@ -332,47 +354,20 @@ def reconcile_commit_anchors(
         if trace_id is None or event.trace_id == trace_id
     ]
 
-    # #358: resolve each coverage claim's through_trace_patch_id — and, in the
-    # search loop below, every visited patch's own position — to an INDEX in
-    # ``all_patch_events`` (the FULL, un-scoped ordering), never to a raw
-    # event_sequence number (a compaction rewrite can renumber) and never to
+    # #358/#359: resolve each coverage claim's through_trace_patch_id — and,
+    # in the search loop below, every visited patch's own position — to an
+    # INDEX in ``all_patch_events`` (the FULL, un-scoped ordering), never to
     # an index into the trace-scoped ``patch_events`` list: an unscoped
     # claim's boundary patch may belong to a DIFFERENT trace than a
     # trace-scoped run (R5, ``trail attach``) is searching, so resolving
     # against the scoped list would make that claim unreadable to a scoped
-    # run and force a spurious re-search. A duplicate trace_patch_id
-    # (re-ingested session, hook retry) collapses to its FIRST occurrence —
-    # keep-first, never overwrite — because that is the only resolution whose
-    # answer cannot change as MORE duplicates of the same id are ingested
-    # later. Keep-LAST was tried and reverted: it makes an EXISTING claim's
-    # effective boundary drift forward every time the log grows a fresh
-    # duplicate of its through-id, so a distinct patch ingested (and never
-    # searched) after the claim can end up silently claim-covered — fail
-    # CLOSED, which the design forbids ("fail open to re-search, never fail
-    # closed"). Keep-first pins every id's position for good the moment it is
-    # first seen; a later duplicate of that id always resolves back to the
-    # SAME position, so it can never extend a stored claim past ground it
-    # never covered. A claim whose through-id is not found here covers
-    # NOTHING: fail open to re-search, never fail closed.
-    patch_position: dict[str, int] = {}
-    for position, patch_event in enumerate(all_patch_events):
-        pid = id_from_payload(patch_event.payload, "trace_patch")
-        if pid and pid not in patch_position:
-            patch_position[pid] = position
-    resolved_claims: list[tuple[int, str | None]] = [
-        (patch_position[claim["through_trace_patch_id"]], claim["scope_trace_id"])
-        for claim in claims
-        if claim["through_trace_patch_id"] in patch_position
-    ]
-
-    def _covered_by_claim(position: int, patch_trace_id: str | None) -> bool:
-        # scope_trace_id None covers every trace up to the boundary; a scoped
-        # claim (R5, ``trail attach``) covers ONLY its own trace's patches —
-        # never leak coverage to a trace the claiming run never searched.
-        return any(
-            position <= boundary and (scope is None or scope == patch_trace_id)
-            for boundary, scope in resolved_claims
-        )
+    # run and force a spurious re-search. Shared with maturation.py's SQL
+    # equivalent (search_records.build_patch_position_index /
+    # resolve_coverage_claims / covered_by_claim) so both callers apply
+    # IDENTICAL keep-first / fail-open semantics — see those docstrings for
+    # the full rationale.
+    patch_position = build_patch_position_index(all_patch_events)
+    resolved_claims = resolve_coverage_claims(claims, patch_position.get)
 
     # plan 090: collect every patch's search outcome into ONE per-commit
     # summary event (search_results) rather than appending one
@@ -447,8 +442,8 @@ def reconcile_commit_anchors(
         # patch_position[trace_patch_id] is guaranteed present: patch_events is
         # a filter of all_patch_events, which is exactly where patch_position
         # was built from.
-        if already_searched or _covered_by_claim(
-            patch_position[trace_patch_id], patch_event.trace_id
+        if already_searched or covered_by_claim(
+            patch_position[trace_patch_id], patch_event.trace_id, resolved_claims
         ):
             # A prior search for this (patch, commit) already recorded a
             # result under the same attribution version — via an exact key
@@ -568,6 +563,20 @@ def reconcile_commit_anchors(
     drafts: list[TrailEventDraft] = []
     if append_events:
         if search_results:
+            # #359: a coverage claim is only sound when ``all_patch_events``
+            # is the COMPLETE corpus — true only for this function's own
+            # direct scoped read (both flags unset). A pre-extracted or
+            # caller-supplied ``events`` view is a PARTIAL slice; today no
+            # caller pairs either with ``append_events=True`` (maturation.py
+            # always passes False and builds its own slim payload from the
+            # returned ``search_results`` instead), so this can only trip via
+            # a future misuse — make that structurally impossible rather than
+            # silently persisting an unsound boundary.
+            assert not pre_extracted and not caller_supplied_events, (
+                "a coverage claim may only be minted from reconcile_commit_"
+                "anchors' own complete scoped read; pre_extracted="
+                f"{pre_extracted} caller_supplied_events={caller_supplied_events}"
+            )
             # #358: the v3 coverage claim this run earns. ``coverage_
             # trace_patch_id`` is guaranteed non-None here — search_results is
             # non-empty, so at least one patch reached the search step, and
