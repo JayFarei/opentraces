@@ -35,9 +35,10 @@ A multi-project bucket with an unreachable project's repo is reported
 touching a different project's data. Blobs, snapshots, and non-search events
 are never touched by this pass, matching ``search_compaction``'s own scope.
 
-Same O(corpus) class as ``bucket repair`` — a cheap ``git ls-tree`` byte-size
-prefilter (no JSON parsing) skips the full read+compact for a project whose
-canonical ``events/`` tree is too small to hold anything worth reclaiming.
+Same O(corpus) class as ``bucket repair`` — a cheap byte-size prefilter (see
+``_events_tree_bytes``; no JSON parsing) skips the full read+compact for a
+project whose canonical event history is too small to hold anything worth
+reclaiming.
 """
 
 from __future__ import annotations
