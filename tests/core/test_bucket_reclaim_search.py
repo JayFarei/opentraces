@@ -1582,3 +1582,231 @@ def test_dry_run_previews_ref_rewritten_when_apply_will_rewrite_it(tmp_path: Pat
     proj_apply = next(p for p in applied.projects if p.project_slug == slug)
     assert proj_apply.ref_rewritten is True
 
+
+# ---------------------------------------------------------------------------
+# Issue #358 repair v3 round 2 follow-up: adversarial re-review of the
+# round-2 CAS-retry delta-id fix (above) found the fix itself has an
+# unpersisted gap, plus a prefilter that never fires and CLI-level coverage
+# no test above provides.
+# ---------------------------------------------------------------------------
+
+
+def test_kill_after_swap_before_reconcile_journals_cas_retry_delta_ids(tmp_path: Path) -> None:
+    """Issue #358 repair v3 round 2 follow-up (blocker): ``_swap_compacted_
+    chain``'s CAS-retry fold widens the mirror removal scope with a
+    concurrent append's pre-fold ``delta_original_ids`` -- but the caller
+    (``_process_reachable_project``) only unions that into the IN-PROCESS-
+    MEMORY ``journaled_old_ids`` variable. The durable journal was written
+    BEFORE the swap (gated on ``journal is None``, from the pre-swap belief)
+    and is never re-written after the swap widens the decision. A kill
+    between the swap landing and ``_reconcile_mirror_for_project`` therefore
+    resumes from a journal that never knew about the delta: on resume,
+    ``journaled_old_ids = journal(pre-append) | old_ids(fresh, already
+    re-chained)`` -- the delta's pre-fold ids, mirrored under a ROUTINE
+    ``sync_events_mirror`` tick before the swap landed, are in NEITHER set,
+    so that batch file is never a subset of anything and survives forever
+    alongside the rewritten copy. Fix: re-write the journal (delta ids
+    unioned in, affected set updated) right after the swap returns and
+    before the reconcile call that can be killed."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+
+    real_compact = reclaim_mod.compact_search_events
+    concurrent_patch_id = "9" + "9" * 63
+    commit_g = "9" * 40
+    fired = {"done": False}
+    captured: dict[str, set[str]] = {}
+
+    def _compact_then_mirrored_concurrent_append(events):
+        result = real_compact(events)
+        if not fired["done"]:
+            fired["done"] = True
+            # A hot post-commit hook reconcile creates the patch AND
+            # immediately searches it -- the module docstring's own named
+            # concurrent writer -- WHILE this (real, minutes-long on the
+            # motivating 27GB bucket) compaction call is still running.
+            append_event_batch(
+                repo,
+                [
+                    _patch_created(
+                        trace_id="t-kill-race", trace_patch_id=f"tracepatch-sha256:{concurrent_patch_id}",
+                        file_path="killrace.py", step_index=0,
+                    ),
+                    _legacy_search(
+                        trace_id="t-kill-race", step_index=0, patch_id=concurrent_patch_id,
+                        commit_hex=commit_g, result="anchored",
+                        anchor_ids=["gitanchor-sha256:" + "9" * 64],
+                    ),
+                ],
+                writer="watcher",
+            )
+            # A ROUTINE, reclaim-unrelated mirror sync tick mirrors the
+            # append under its OWN pre-fold ids -- before this pass's swap
+            # ever attempts to land, exactly as a real independent watcher
+            # or hook process would between the append above and this
+            # module's own swap below.
+            sync_events_mirror(repo, repo_id=slug)
+            captured["original_ids"] = {
+                e.event_id for e in read_events(repo, verify=False) if e.trace_id == "t-kill-race"
+            }
+        return result
+
+    def _boom_reconcile(*args, **kwargs):
+        raise RuntimeError("simulated kill after swap, before reconcile")
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "compact_search_events", _compact_then_mirrored_concurrent_append)
+    patch.setattr(reclaim_mod, "_reconcile_mirror_for_project", _boom_reconcile)
+    with pytest.raises(RuntimeError, match="simulated kill after swap, before reconcile"):
+        reclaim_mod._process_reachable_project(slug, repo, apply=True)
+    patch.undo()
+
+    assert len(captured.get("original_ids", set())) == 2, "repro invalid -- the concurrent append never mirrored"
+    assert reclaim_mod._journal_path(slug).exists(), "journal must persist after the kill"
+
+    # The load-bearing assertion: the journal ON DISK must already carry the
+    # CAS-retry delta's pre-fold ids -- not just this run's now-lost
+    # in-memory belief -- since the swap already landed before the kill.
+    journal = json.loads(reclaim_mod._journal_path(slug).read_text(encoding="utf-8"))
+    journaled_ids = set(journal["old_event_ids"])
+    assert captured["original_ids"] <= journaled_ids, (
+        "journal on disk was not re-written after the CAS-retry swap widened "
+        "the removal decision -- a resume starting from this journal cannot "
+        "see the delta's pre-fold ids"
+    )
+
+    # Resume (no monkeypatch): finishes the interrupted reconcile step.
+    result = reclaim_mod.reclaim_anchor_search(apply=True)
+    proj = next(p for p in result.projects if p.project_slug == slug)
+    assert proj.action == "compacted"
+    assert proj.mirror_rewritten is True
+    assert not reclaim_mod._journal_path(slug).exists()
+
+    live_events = read_events(repo, verify=False)
+    live_ids = {e.event_id for e in live_events}
+    verdict = verify_event_log(repo)
+    assert verdict["event_chain_valid"] is True
+    assert verdict["content_hashes_valid"] is True
+
+    mirror_events = list(read_events_mirror_batches())
+    mirror_ids = [e.event_id for e in mirror_events]
+    assert len(mirror_ids) == len(set(mirror_ids)), "mirror carries duplicate event_ids"
+    assert set(mirror_ids) == live_ids, (
+        "mirror must exactly match the live canonical chain after resume -- "
+        "the CAS-retry delta's pre-fold original id must not survive "
+        "alongside its rewritten copy"
+    )
+    assert not (captured["original_ids"] & set(mirror_ids)), (
+        "the concurrent append's ORIGINAL (pre-fold) ids are still present "
+        "in the mirror alongside their rewritten copies"
+    )
+
+    # No orphan pre-fold batch file left on disk (raw, undeduped read -- the
+    # concrete, permanent leak the finding describes).
+    raw_ids_after = _raw_mirror_event_ids()
+    assert len(raw_ids_after) == len(set(raw_ids_after)), "orphan pre-fold batch file survives on disk"
+
+
+def test_prefilter_skips_expensive_path_for_slim_history(tmp_path: Path) -> None:
+    """Issue #358 repair v3 round 2 follow-up (major): ``_FAT_PREFILTER_MIN_
+    BYTES`` at 64 raw bytes means EVERY project with any history at all fails
+    the prefilter -- a single ordinary event's JSON blob already exceeds 64
+    bytes -- so a healthy or already-compacted bucket never takes the fast
+    no-op path this prefilter exists for; every ``bucket reclaim`` run pays
+    the full O(corpus) read + compact even for a project with zero fat
+    anchor-search history. A chain of many slim, ordinary events must skip
+    ``_read_events_snapshot`` (and therefore ``compact_search_events``)
+    entirely once the threshold is raised to a defensible size."""
+    from opentraces.core import bucket_reclaim_search as reclaim_mod
+    from opentraces.core.config import get_project_dir, load_config, register_project, save_config
+
+    repo = tmp_path / "proj-slim"
+    _init_repo(repo)
+    for i in range(30):
+        append_event_batch(
+            repo,
+            [
+                _patch_created(
+                    trace_id=f"t-{i}", trace_patch_id=f"tracepatch-sha256:{i:02d}{'9' * 62}",
+                    file_path=f"f{i}.py", step_index=0,
+                )
+            ],
+            writer="capture-claude-code",
+        )
+
+    head = reclaim_mod._head_sha(repo)
+    tree_bytes = reclaim_mod._events_tree_bytes(repo, head)
+    assert tree_bytes < reclaim_mod._FAT_PREFILTER_MIN_BYTES, (
+        f"fixture not slim enough for this test's premise ({tree_bytes} bytes >= "
+        f"{reclaim_mod._FAT_PREFILTER_MIN_BYTES})"
+    )
+
+    cfg = load_config()
+    register_project(cfg, repo)
+    save_config(cfg)
+    slug = get_project_dir(repo).name
+
+    calls = {"n": 0}
+    real_snapshot = reclaim_mod._read_events_snapshot
+
+    def _counting_snapshot(*args, **kwargs):
+        calls["n"] += 1
+        return real_snapshot(*args, **kwargs)
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(reclaim_mod, "_read_events_snapshot", _counting_snapshot)
+    try:
+        report = reclaim_mod._process_reachable_project(slug, repo, apply=False)
+    finally:
+        patch.undo()
+
+    assert calls["n"] == 0, "the expensive read+compact path ran despite a slim, sub-threshold history"
+    assert report.action == "clean"
+    assert report.reason == "below fat-detection size prefilter"
+
+
+def test_cli_bucket_reclaim_json_dry_run_then_apply_matches_direct_call(tmp_path: Path) -> None:
+    """Issue #358 repair v3 round 2 follow-up (CLI-level coverage gap): every
+    test above drives ``reclaim_anchor_search()`` directly; the only ``bucket
+    reclaim --json`` ``CliRunner`` coverage (the L1 agent-contract lint) runs
+    on an EMPTY home, so nothing proves the CLI actually surfaces the
+    anchor-search section's fields on a real, populated bucket, or that its
+    dry-run preview matches what ``--apply`` actually does."""
+    import json as _json
+
+    from click.testing import CliRunner
+
+    from opentraces.cli import main
+
+    world = _build_world(tmp_path)
+    repo, slug = world["repo"], world["slug"]
+    runner = CliRunner()
+
+    dry = runner.invoke(main, ["bucket", "reclaim", "--repo", str(repo), "--json"])
+    assert dry.exit_code == 0, dry.output
+    dry_proj = next(
+        p for p in _json.loads(dry.output)["reclaim"]["anchor_search"]["projects"]
+        if p["project_slug"] == slug
+    )
+    assert dry_proj["action"] == "compacted"
+    assert dry_proj["events_before"] > dry_proj["events_after"]
+    assert dry_proj["ref_rewritten"] is True
+    assert dry_proj["bytes_before"] > dry_proj["bytes_after"]
+
+    applied = runner.invoke(main, ["bucket", "reclaim", "--repo", str(repo), "--apply", "--json"])
+    assert applied.exit_code == 0, applied.output
+    applied_proj = next(
+        p for p in _json.loads(applied.output)["reclaim"]["anchor_search"]["projects"]
+        if p["project_slug"] == slug
+    )
+    assert applied_proj["action"] == "compacted"
+
+    # Dry-run's preview must match what --apply actually did on this
+    # quiescent world -- the same parity contract the direct-call tests
+    # above already prove for `reclaim_anchor_search()` itself.
+    for field_name in ("action", "events_before", "events_after", "ref_rewritten", "bytes_before"):
+        assert dry_proj[field_name] == applied_proj[field_name], field_name
+
