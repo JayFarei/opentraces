@@ -497,8 +497,14 @@ def test_resume_with_journal_but_missing_ref_errors_without_wiping_mirror(tmp_pa
     def _boom(*args, **kwargs):
         raise RuntimeError("simulated kill before ref swap")
 
+    # Issue #358 streaming rewrite: the CAS swap moved from `import_event_
+    # log` (list-based, materialized `compacted`) to `_swap_candidate_ref`
+    # (streams the ALREADY-built candidate commit's own tree/commit
+    # objects onto the ref) -- same seam ROLE (the one call that lands the
+    # ref update), same generic boom-on-any-args wrapper, same "kill right
+    # before the swap lands" trigger point.
     patch = pytest.MonkeyPatch()
-    patch.setattr(reclaim_mod, "import_event_log", _boom)
+    patch.setattr(reclaim_mod, "_swap_candidate_ref", _boom)
     with pytest.raises(RuntimeError, match="simulated kill before ref swap"):
         reclaim_mod._process_reachable_project(slug, repo, apply=True)
     patch.undo()
@@ -993,12 +999,21 @@ def test_concurrent_append_during_compaction_survives_via_cas_retry(tmp_path: Pa
     world = _build_world(tmp_path)
     repo, slug = world["repo"], world["slug"]
 
-    real_compact = reclaim_mod.compact_search_events
+    real_stream_compact_chain = reclaim_mod._stream_compact_chain
     concurrent_patch_id = "9" + "c" * 63
     commit_c = "c" * 40
 
-    def _compact_then_concurrent_append(events):
-        result = real_compact(events)
+    def _compact_then_concurrent_append(repo_arg, head_arg, patch_to_trace_arg):
+        # Issue #358 streaming rewrite: the O(corpus) compaction work moved
+        # from `compact_search_events(old_events)` to `_stream_compact_
+        # chain(repo, head, patch_to_trace)` -- the ONE place a fresh (non-
+        # retry) compaction pass runs, called exactly once per swap attempt
+        # (the CAS-retry fold uses a DIFFERENT function, `_stream_compact_
+        # delta`, deliberately not wrapped here -- see that function's own
+        # docstring), so this is the same seam ROLE: run the real,
+        # (real, minutes-long on the motivating 27GB bucket) compaction to
+        # completion, THEN let a concurrent writer land, THEN return.
+        result = real_stream_compact_chain(repo_arg, head_arg, patch_to_trace_arg)
         # The exact race window the finding names: a writer lands new
         # content WHILE this (real, minutes-long on the motivating 27GB
         # bucket) compaction call is still running -- a real post-commit
@@ -1023,7 +1038,7 @@ def test_concurrent_append_during_compaction_survives_via_cas_retry(tmp_path: Pa
         return result
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(reclaim_mod, "compact_search_events", _compact_then_concurrent_append)
+    patch.setattr(reclaim_mod, "_stream_compact_chain", _compact_then_concurrent_append)
     try:
         proj = reclaim_mod._process_reachable_project(slug, repo, apply=True)
     finally:
@@ -1086,7 +1101,12 @@ def test_concurrent_appends_every_retry_exhausts_to_error_without_partial_swap(t
 
     calls = {"n": 0}
 
-    def _always_races(cwd, events, *, writer, force, expected_head=None):
+    # Issue #358 streaming rewrite: the CAS swap moved from `import_event_
+    # log(cwd, events, *, writer, force, expected_head=None)` to `_swap_
+    # candidate_ref(repo, *, commit_sha, expected_head)` -- same seam ROLE
+    # (the one call that lands the ref update, raising on a lost race),
+    # signature updated to match the new function it replaces.
+    def _always_races(repo_arg, *, commit_sha, expected_head=None):
         calls["n"] += 1
         # A genuinely new, real writer lands another event before every
         # single retry attempt -- the worst case the bound exists for.
@@ -1104,7 +1124,7 @@ def test_concurrent_appends_every_retry_exhausts_to_error_without_partial_swap(t
         raise EventLogHeadMovedError("simulated: ref moved (test)")
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(reclaim_mod, "import_event_log", _always_races)
+    patch.setattr(reclaim_mod, "_swap_candidate_ref", _always_races)
     try:
         result = reclaim_mod.reclaim_anchor_search(apply=True)
     finally:
@@ -1301,22 +1321,31 @@ def test_swap_reports_import_events_own_head_not_a_stale_fresh_read(tmp_path: Pa
     ``prior_head == current_head`` and takes the no-op route forever,
     permanently hiding the raced event from the mirror."""
     from opentraces.core import bucket_reclaim_search as reclaim_mod
-    from opentraces.core.trails import import_event_log as real_import_event_log
 
     world = _build_world(tmp_path)
     repo, slug = world["repo"], world["slug"]
 
+    real_swap_candidate_ref = reclaim_mod._swap_candidate_ref
     captured: dict[str, str] = {}
     raced = {"done": False}
 
-    def _import_then_race(*args, **kwargs):
-        result = real_import_event_log(*args, **kwargs)
+    # Issue #358 streaming rewrite: the CAS swap moved from `import_event_
+    # log` to `_swap_candidate_ref` -- same seam ROLE (the one call that
+    # lands the ref update and returns the head it actually landed), same
+    # "run the real swap, capture its OWN reported head, THEN let a
+    # concurrent writer land" trigger point. The property under test (the
+    # mirror index gets stamped with the swap's OWN returned head, never a
+    # fresh re-read taken after) is now true by construction in the new
+    # implementation -- `_swap_candidate_ref` returns the commit_sha it was
+    # GIVEN, never re-derives via `_head_sha` after landing the update --
+    # this still exercises it end to end rather than asserting it in the
+    # abstract.
+    def _swap_then_race(*args, **kwargs):
+        result = real_swap_candidate_ref(*args, **kwargs)
         captured["swap_head"] = result["head"]
         if not raced["done"]:
             raced["done"] = True
-            # A genuinely new writer lands right after the ref moves --
-            # between `import_event_log`'s own `update-ref` and this
-            # module's next `_head_sha` call.
+            # A genuinely new writer lands right after the ref moves.
             append_event_batch(
                 repo,
                 [
@@ -1330,7 +1359,7 @@ def test_swap_reports_import_events_own_head_not_a_stale_fresh_read(tmp_path: Pa
         return result
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(reclaim_mod, "import_event_log", _import_then_race)
+    patch.setattr(reclaim_mod, "_swap_candidate_ref", _swap_then_race)
     try:
         proj = reclaim_mod._process_reachable_project(slug, repo, apply=True)
     finally:
@@ -1373,8 +1402,11 @@ def test_resume_after_crash_unions_journaled_and_fresh_old_ids(tmp_path: Path) -
     def _boom(*args, **kwargs):
         raise RuntimeError("simulated kill after journal write, before swap")
 
+    # Issue #358 streaming rewrite: `import_event_log` -> `_swap_candidate_
+    # ref` (see the module docstring's crash-safety section); same seam
+    # role, same generic boom.
     kill_patch = pytest.MonkeyPatch()
-    kill_patch.setattr(reclaim_mod, "import_event_log", _boom)
+    kill_patch.setattr(reclaim_mod, "_swap_candidate_ref", _boom)
     with pytest.raises(RuntimeError, match="simulated kill after journal write, before swap"):
         reclaim_mod._process_reachable_project(slug, repo, apply=True)
     kill_patch.undo()
@@ -1453,8 +1485,10 @@ def test_ref_lost_mid_snapshot_bracket_raises_without_wiping_mirror(tmp_path: Pa
     def _boom(*args, **kwargs):
         raise RuntimeError("simulated kill before ref swap")
 
+    # Issue #358 streaming rewrite: `import_event_log` -> `_swap_candidate_
+    # ref` (same seam role, same generic boom).
     kill_patch = pytest.MonkeyPatch()
-    kill_patch.setattr(reclaim_mod, "import_event_log", _boom)
+    kill_patch.setattr(reclaim_mod, "_swap_candidate_ref", _boom)
     with pytest.raises(RuntimeError, match="simulated kill before ref swap"):
         reclaim_mod._process_reachable_project(slug, repo, apply=True)
     kill_patch.undo()
@@ -1467,24 +1501,30 @@ def test_ref_lost_mid_snapshot_bracket_raises_without_wiping_mirror(tmp_path: Pa
 
     # Resume: the ref is still present when this run's OWN entry guard reads
     # it (`head = _head_sha(repo)`), so that guard does not fire -- the loss
-    # instead happens INSIDE `_read_events_snapshot`'s bracket, right after
-    # its `read_events` call returns, matching the finding's own repro
-    # (re-clone/damage racing the O(corpus) read window).
-    real_read_events = reclaim_mod.read_events
+    # instead happens DURING the streaming compaction read, right after it
+    # finishes, matching the finding's own repro (re-clone/damage racing the
+    # O(corpus) read window). Issue #358 streaming rewrite: the read moved
+    # from `read_events` (a materialized list) to `event_log.iter_events`
+    # (a generator, imported into this module's namespace as `iter_events`)
+    # -- the wrapper eagerly drains it into a list FIRST (so the ref
+    # deletion below still lands strictly after the read completes, same
+    # trigger point as before) and returns an iterator over that list, since
+    # merely calling a generator function does nothing until consumed.
+    real_iter_events = reclaim_mod.iter_events
     lost = {"done": False}
 
     def _read_then_lose_ref(r, *args, **kwargs):
-        result = real_read_events(r, *args, **kwargs)
+        result = list(real_iter_events(r, *args, **kwargs))
         if not lost["done"]:
             lost["done"] = True
             subprocess.run(
                 ["git", "update-ref", "-d", "refs/opentraces/local/events/v1"],
                 cwd=repo, check=True,
             )
-        return result
+        return iter(result)
 
     ref_patch = pytest.MonkeyPatch()
-    ref_patch.setattr(reclaim_mod, "read_events", _read_then_lose_ref)
+    ref_patch.setattr(reclaim_mod, "iter_events", _read_then_lose_ref)
     try:
         with pytest.raises(RuntimeError, match="disappeared"):
             reclaim_mod._process_reachable_project(slug, repo, apply=True)
@@ -1519,14 +1559,19 @@ def test_swap_retry_delta_original_id_is_removed_from_mirror(tmp_path: Path) -> 
     world = _build_world(tmp_path)
     repo, slug = world["repo"], world["slug"]
 
-    real_compact = reclaim_mod.compact_search_events
+    real_stream_compact_chain = reclaim_mod._stream_compact_chain
     concurrent_patch_id = "9" + "f" * 63
     commit_f = "f" * 40
     fired = {"done": False}
     captured: dict[str, set[str]] = {}
 
-    def _compact_then_mirrored_concurrent_append(events):
-        result = real_compact(events)
+    # Issue #358 streaming rewrite: `compact_search_events` -> `_stream_
+    # compact_chain` -- the ONE place a fresh (non-retry) compaction pass
+    # runs (see `test_concurrent_append_during_compaction_survives_via_cas_
+    # retry`'s retarget comment for why this, not `stream_compact_events`
+    # itself, is the right seam).
+    def _compact_then_mirrored_concurrent_append(repo_arg, head_arg, patch_to_trace_arg):
+        result = real_stream_compact_chain(repo_arg, head_arg, patch_to_trace_arg)
         if not fired["done"]:
             fired["done"] = True
             # A hot post-commit hook reconcile creates the patch AND
@@ -1560,7 +1605,7 @@ def test_swap_retry_delta_original_id_is_removed_from_mirror(tmp_path: Path) -> 
         return result
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(reclaim_mod, "compact_search_events", _compact_then_mirrored_concurrent_append)
+    patch.setattr(reclaim_mod, "_stream_compact_chain", _compact_then_mirrored_concurrent_append)
     try:
         proj = reclaim_mod._process_reachable_project(slug, repo, apply=True)
     finally:
@@ -1646,14 +1691,16 @@ def test_kill_after_swap_before_reconcile_journals_cas_retry_delta_ids(tmp_path:
     world = _build_world(tmp_path)
     repo, slug = world["repo"], world["slug"]
 
-    real_compact = reclaim_mod.compact_search_events
+    real_stream_compact_chain = reclaim_mod._stream_compact_chain
     concurrent_patch_id = "9" + "9" * 63
     commit_g = "9" * 40
     fired = {"done": False}
     captured: dict[str, set[str]] = {}
 
-    def _compact_then_mirrored_concurrent_append(events):
-        result = real_compact(events)
+    # Issue #358 streaming rewrite: `compact_search_events` -> `_stream_
+    # compact_chain` (see the earlier CAS-retry tests' retarget comments).
+    def _compact_then_mirrored_concurrent_append(repo_arg, head_arg, patch_to_trace_arg):
+        result = real_stream_compact_chain(repo_arg, head_arg, patch_to_trace_arg)
         if not fired["done"]:
             fired["done"] = True
             # A hot post-commit hook reconcile creates the patch AND
@@ -1690,7 +1737,7 @@ def test_kill_after_swap_before_reconcile_journals_cas_retry_delta_ids(tmp_path:
         raise RuntimeError("simulated kill after swap, before reconcile")
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(reclaim_mod, "compact_search_events", _compact_then_mirrored_concurrent_append)
+    patch.setattr(reclaim_mod, "_stream_compact_chain", _compact_then_mirrored_concurrent_append)
     patch.setattr(reclaim_mod, "_reconcile_mirror_for_project", _boom_reconcile)
     with pytest.raises(RuntimeError, match="simulated kill after swap, before reconcile"):
         reclaim_mod._process_reachable_project(slug, repo, apply=True)
@@ -1750,8 +1797,8 @@ def test_prefilter_skips_expensive_path_for_slim_history(tmp_path: Path) -> None
     no-op path this prefilter exists for; every ``bucket reclaim`` run pays
     the full O(corpus) read + compact even for a project with zero fat
     anchor-search history. A chain of many slim, ordinary events must skip
-    ``_read_events_snapshot`` (and therefore ``compact_search_events``)
-    entirely once the threshold is raised to a defensible size."""
+    ``_stream_compact_chain`` entirely once the threshold is raised to a
+    defensible size."""
     from opentraces.core import bucket_reclaim_search as reclaim_mod
     from opentraces.core.config import get_project_dir, load_config, register_project, save_config
 
@@ -1782,14 +1829,21 @@ def test_prefilter_skips_expensive_path_for_slim_history(tmp_path: Path) -> None
     slug = get_project_dir(repo).name
 
     calls = {"n": 0}
-    real_snapshot = reclaim_mod._read_events_snapshot
+    # Issue #358 streaming rewrite: `_read_events_snapshot` -> `_stream_
+    # compact_chain` -- the expensive O(corpus) read+compact entry point
+    # the prefilter exists to skip entirely moved here (the streaming
+    # implementation no longer has a separate "just read and snapshot the
+    # head" step distinct from the compaction pass itself -- see the module
+    # docstring for why `event_log.iter_events`'s explicit-sha reads make
+    # the old bracket-and-retry shape unnecessary).
+    real_stream_compact_chain = reclaim_mod._stream_compact_chain
 
-    def _counting_snapshot(*args, **kwargs):
+    def _counting_stream_compact_chain(*args, **kwargs):
         calls["n"] += 1
-        return real_snapshot(*args, **kwargs)
+        return real_stream_compact_chain(*args, **kwargs)
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(reclaim_mod, "_read_events_snapshot", _counting_snapshot)
+    patch.setattr(reclaim_mod, "_stream_compact_chain", _counting_stream_compact_chain)
     try:
         report = reclaim_mod._process_reachable_project(slug, repo, apply=False)
     finally:
@@ -1817,10 +1871,17 @@ def test_cli_bucket_reclaim_json_dry_run_then_apply_matches_direct_call(tmp_path
     repo, slug = world["repo"], world["slug"]
     runner = CliRunner()
 
+    # Issue #358: reclaim now emits a one-line-per-project progress notice
+    # to STDERR (never stdout, so `--json` stdout stays pure JSON) -- Click
+    # 8.2+'s `.output` is explicitly documented as a MIX of stdout+stderr
+    # "as the user would see it in a terminal" (`.stdout` is the stdout-only
+    # stream); asserting JSON-parseability against the stdout-only stream is
+    # what actually tests "the JSON payload is clean", now that there is
+    # real stderr chatter to mix in.
     dry = runner.invoke(main, ["bucket", "reclaim", "--repo", str(repo), "--json"])
     assert dry.exit_code == 0, dry.output
     dry_proj = next(
-        p for p in _json.loads(dry.output)["reclaim"]["anchor_search"]["projects"]
+        p for p in _json.loads(dry.stdout)["reclaim"]["anchor_search"]["projects"]
         if p["project_slug"] == slug
     )
     assert dry_proj["action"] == "compacted"
@@ -1831,7 +1892,7 @@ def test_cli_bucket_reclaim_json_dry_run_then_apply_matches_direct_call(tmp_path
     applied = runner.invoke(main, ["bucket", "reclaim", "--repo", str(repo), "--apply", "--json"])
     assert applied.exit_code == 0, applied.output
     applied_proj = next(
-        p for p in _json.loads(applied.output)["reclaim"]["anchor_search"]["projects"]
+        p for p in _json.loads(applied.stdout)["reclaim"]["anchor_search"]["projects"]
         if p["project_slug"] == slug
     )
     assert applied_proj["action"] == "compacted"
