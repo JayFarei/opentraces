@@ -781,6 +781,145 @@ def iter_events(cwd: Path, head: str) -> "Iterator[TrailEvent]":
         yield TrailEvent.model_validate_json(raw)
 
 
+# The (quoted) byte image of the anchor-search event type — the ONLY event
+# shape ``iter_event_views`` reads without full pydantic validation (issue
+# #362). Kept as a literal so the reader never imports the search-records
+# module just to scope its fast path.
+_ANCHOR_SEARCH_TYPE_TOKEN = b'"git_anchor_search_completed"'
+
+
+class _RawEventView:
+    """A lightweight, duck-typed stand-in for a fully-validated ``TrailEvent``,
+    built from ``json.loads(raw)`` instead of ``TrailEvent.model_validate_json``
+    (issue #362 Lever 4).
+
+    ``iter_event_views`` yields one of these ONLY for a
+    ``git_anchor_search_completed`` blob — a fat v2 summary pays a jiter-parse
+    plus TWO full recursive O(payload) reject-walks (``models._reject_bare_git_
+    object_ids`` / ``_reject_unknown_capture_limitations``) under full
+    validation, and on a mature log those two walks over ~10GB of fat JSON are
+    the reclaim CPU killer. This view exposes exactly the attributes the
+    compaction pipeline reads (``search_compaction.stream_compact_events`` /
+    ``plan_compacted_stream`` / ``_finalize_slot``, ``search_records.is_summary_
+    search_event``, and ``bucket_reclaim_search._touch_ids_for_event``), all
+    getattr-duck-typed, so it drops in with ZERO compaction-logic change.
+
+    Byte-identity is UNCONDITIONAL, not empirical, because the fast path is
+    scoped to the anchor-search type ALONE: json.loads-vs-jiter scalar
+    divergence only bites float-bearing payloads, and anchor-search payloads
+    are provably float-free (hex strings, ids, int indices, string results).
+    Every OTHER event type still round-trips through full pydantic
+    (``iter_event_views`` yields a real ``TrailEvent`` for it), so a future
+    float-bearing anchor event would need re-scoping — the fast path is
+    type-scoped, never applied blindly to every blob.
+
+    Absent keys fall back to ``TrailEvent``'s own field defaults so a
+    hand-built or older blob reads identically to a validated one.
+    """
+
+    __slots__ = ("_d",)
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._d = data
+
+    @property
+    def event_id(self) -> str:
+        return self._d["event_id"]
+
+    @property
+    def event_sequence(self) -> int:
+        return self._d["event_sequence"]
+
+    @property
+    def event_time(self) -> str:
+        return self._d["event_time"]
+
+    @property
+    def previous_event_id(self) -> str | None:
+        return self._d.get("previous_event_id")
+
+    @property
+    def trace_id(self) -> str | None:
+        return self._d.get("trace_id")
+
+    @property
+    def generation_index(self) -> int | None:
+        return self._d.get("generation_index", 0)
+
+    @property
+    def step_index(self) -> int | None:
+        return self._d.get("step_index")
+
+    @property
+    def batch_id(self) -> str:
+        return self._d["batch_id"]
+
+    @property
+    def writer(self) -> str:
+        return self._d["writer"]
+
+    @property
+    def capture_method(self) -> list[str]:
+        return self._d["capture_method"]
+
+    @property
+    def event_type(self) -> str:
+        return self._d["event_type"]
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return self._d.get("payload") or {}
+
+    @property
+    def SCHEMA_VERSION(self) -> str | None:
+        return self._d.get("SCHEMA_VERSION")
+
+    @property
+    def SECURITY_VERSION(self) -> str | None:
+        return self._d.get("SECURITY_VERSION")
+
+    @property
+    def ATTRIBUTION_VERSION(self) -> str | None:
+        return self._d.get("ATTRIBUTION_VERSION")
+
+
+def iter_event_views(cwd: Path, head: str) -> "Iterator[TrailEvent | _RawEventView]":
+    """Like :func:`iter_events`, but yields a lightweight :class:`_RawEventView`
+    (``json.loads`` only) for every ``git_anchor_search_completed`` blob and a
+    fully-validated ``TrailEvent`` for every other event type (issue #362).
+
+    Same blob enumeration / streaming / cache-bypass as ``iter_events`` (an
+    explicit immutable commit sha, no ``_READ_EVENTS_CACHE``, no #137 memo), so
+    a caller walking many projects never pins one project's parsed chain. The
+    ONLY difference is that the two recursive reject-walks a fat anchor-search
+    event would pay under full validation are skipped — the compaction pipeline
+    reads it duck-typed, and re-mints every OUTPUT event through
+    ``finalize_event`` (which re-runs BOTH reject-validators on the slim
+    result), so validation coverage moves from fat-input to slim-output, never
+    dropped.
+
+    This mirrors the raw-JSON partial-parse technique ``event_index._apply_
+    delta`` already applies to this same log.
+    """
+    cwd = cwd.resolve()
+    entries = _list_event_blob_entries(cwd, head)
+    for raw in _iter_blobs_batch(cwd, entries):
+        # The token is a cheap prefilter (present in the vast majority of
+        # non-anchor blobs 0 times); a blob that carries it is json-loaded and
+        # its ACTUAL ``event_type`` checked, so the raw view is used ONLY for a
+        # genuine anchor-search event. A non-anchor blob that merely embeds the
+        # literal token in a value falls through to full ``model_validate_json``
+        # (jiter) — byte-identical to ``iter_events`` — so byte-identity is
+        # UNCONDITIONAL, never dependent on no non-anchor event ever containing
+        # the string.
+        if _ANCHOR_SEARCH_TYPE_TOKEN in raw:
+            data = json.loads(raw)
+            if data.get("event_type") == "git_anchor_search_completed":
+                yield _RawEventView(data)
+                continue
+        yield TrailEvent.model_validate_json(raw)
+
+
 def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
     """Read every event belonging to ``trace_id`` — bounded by ONE trace's
     footprint, never the whole log.

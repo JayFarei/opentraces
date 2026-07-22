@@ -224,6 +224,7 @@ from .trails.event_log import (
     _iter_blobs_batch,
     _update_event_log_ref,
     invalidate_read_events_cache,
+    iter_event_views,
     iter_events,
     read_events_scoped,
     read_events_since,
@@ -1188,7 +1189,20 @@ def _stream_compact_chain(repo: Path, head: str, patch_to_trace: dict[str, str])
     stats = CompactionStats()
 
     def _source() -> Any:
-        for event in iter_events(repo, head):
+        # iter_event_views (issue #362 Lever 4): the O(corpus) dirty read is
+        # the #362 CPU killer — each fat v2 `git_anchor_search_completed` blob
+        # pays a jiter-parse plus TWO full recursive reject-walks under full
+        # pydantic validation. The hybrid reader hands compaction a duck-typed
+        # raw view for the anchor-search type ONLY (provably float-free, so
+        # byte-identical to full validation — see the byte-identity gate in
+        # test_bucket_reclaim_search_fastpath.py) and full pydantic for every
+        # other type. Output is still finalize_event-minted, so both
+        # reject-validators still run on every EMITTED (slim) event; validation
+        # coverage moves from fat-input to slim-output, never dropped. The rare
+        # CAS-retry delta fold (_stream_compact_delta) deliberately stays on
+        # iter_events — it re-reads the already-slim candidate, so there is no
+        # fat to skip and no reason to widen the reader change to that path.
+        for event in iter_event_views(repo, head):
             old_ids.add(event.event_id)
             affected.update(_touch_ids_for_event(event, patch_to_trace))
             yield event
