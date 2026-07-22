@@ -174,6 +174,81 @@ def build_fat_world(
     return {"root": root, "slugs": slugs}
 
 
+def _anchored_fat_v2_event(*, commit_hex: str, trace_id: str, entry_count: int, tag: str):
+    """Like ``_fat_v2_event``, but every entry is ANCHORED (issue #358
+    repair round 3, major): ``build_anchor_search_summary_payload`` filters
+    a v3-compact rewrite's ``results[]`` to anchored-only entries, so
+    ``_fat_v2_event``'s all-``unknown`` shape empties out of ``results[]``
+    entirely once compacted -- and ``_bucket_events_for_traces``'s own
+    membership predicate only ever checks ``results[]`` (never
+    ``unanchored_trace_patch_ids``), so a padding-only fixture's trace
+    winds up with an EMPTY post-compaction bucket regardless of how the
+    regen pass is implemented. Anchored entries survive compaction
+    untouched, so a summary built from this stays big and stays matched to
+    its trace after compaction -- what actually reproduces "this trace's
+    own big summary event stays retained in RAM after compaction"."""
+    from opentraces.core.trails import TrailEventDraft
+    from opentraces.core.trails.anchors import ANCHOR_ALGORITHMS_PHASE5
+
+    entries = [
+        {
+            "trace_patch_id": f"tracepatch-sha256:{tag}{i:06d}" + "c" * 51,
+            "trace_id": trace_id,
+            "step_index": i,
+            "generation_index": 0,
+            "result": "anchored",
+            "created_anchor_ids": [f"gitanchor-sha256:{tag}{i:06d}" + "c" * 51],
+        }
+        for i in range(entry_count)
+    ]
+    return TrailEventDraft(
+        event_type="git_anchor_search_completed",
+        trace_id=None,
+        step_index=None,
+        capture_method=["watcher_reconcile"],
+        payload={
+            "schema_version": "opentraces.trail.anchor_search.v2",
+            "summary": True,
+            "search_head": {"algo": "sha1", "hex": commit_hex},
+            "algorithms_attempted": ANCHOR_ALGORITHMS_PHASE5,
+            "searched": entry_count,
+            "anchored": entry_count,
+            "unknown": 0,
+            "results": entries,
+        },
+    )
+
+
+def build_fanout_world(root: Path, *, traces_per_project: int = 20, entry_count: int = 3000) -> dict:
+    """ONE project, ``traces_per_project`` DISTINCT traces, each carrying
+    its own ANCHORED fat v2 summary (see ``_anchored_fat_v2_event``) -- the
+    shape issue #358 repair round 3 needs to reproduce companion-regen
+    fan-out: after compaction, ``affected`` is every trace this project
+    has, and EACH trace's own bucket genuinely retains a real, sizeable
+    event (never emptied), unlike ``build_fat_world``'s all-``unknown``
+    entries. No trace-record / bucket projection step (``bucket_repair``)
+    is needed here, matching ``build_fat_world`` -- the memory bound under
+    test is about the read+compact+bucket path a dry-run already exercises
+    in full, not the companion-projection bookkeeping ``_build_world``
+    also does.
+    """
+    from opentraces.core.config import get_project_dir, load_config, register_project, save_config
+    from opentraces.core.trails import append_event_batch
+
+    repo = root / "proj0"
+    _init_repo(repo)
+    for t in range(traces_per_project):
+        commit_hex = f"{t:040d}"[:40]
+        trace_id = f"t-{t}"
+        event = _anchored_fat_v2_event(commit_hex=commit_hex, trace_id=trace_id, entry_count=entry_count, tag=f"{t:03d}")
+        append_event_batch(repo, [event], writer="watcher")
+    cfg = load_config()
+    register_project(cfg, repo)
+    save_config(cfg)
+    slug = get_project_dir(repo).name
+    return {"root": root, "slug": slug}
+
+
 def largest_event_bytes(entry_count: int = 8500) -> int:
     """The exact serialized size (bytes, ``model_dump(mode='json')`` + the
     same ``json.dumps(..., sort_keys=True, indent=2)`` encoding

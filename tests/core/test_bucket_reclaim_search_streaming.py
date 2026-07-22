@@ -1,6 +1,6 @@
 """Issue #358 (STAGE: memory-bounded ``bucket reclaim`` anchor-search pass).
 
-Three RED-first properties for the streaming rewrite of
+Four RED-first properties for the streaming rewrite of
 ``bucket_reclaim_search.py``'s read+compact+swap+companion-regen pipeline:
 
 1. Equivalence -- the streaming implementation must reproduce the CURRENT
@@ -17,7 +17,15 @@ Three RED-first properties for the streaming rewrite of
    a genuinely fresh CHILD PROCESS (ORCHESTRATOR RULING R2): ``ru_maxrss`` is
    a process-lifetime high-water mark, so measuring in-process would let
    Python's own import/world-building allocations pollute the number.
-3. Cache discipline -- after reclaiming multiple projects, ``_READ_EVENTS_
+3. Fan-out bound (issue #358 repair round 3, major) -- the companion-regen
+   pass's own bucketing step must not retain every affected trace's matched
+   events simultaneously: quadrupling the number of DISTINCT affected
+   traces (same per-trace event size) must not roughly quadruple peak RSS.
+   ``build_fat_world`` (property 2's world) cannot exercise this -- its
+   entries are all-``unknown`` and vanish from every bucket once compacted
+   (see ``sup.build_fanout_world``'s docstring) -- so this uses its own,
+   ANCHORED-entry world.
+4. Cache discipline -- after reclaiming multiple projects, ``_READ_EVENTS_
    CACHE`` (and the #137 event-index memo) must hold no entry for any
    reclaimed project's repo -- reclaim's own read path must never populate
    the shared, cross-project cache event_log.py exists to warm for OTHER
@@ -214,7 +222,89 @@ def _measure_single_fat_event_parse_rss(tmp_path: Path) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 3. Cache discipline
+# 3. Fan-out bound
+# ---------------------------------------------------------------------------
+
+
+def _measure_fanout_reclaim_rss(tmp_path: Path, home_name: str, *, traces_per_project: int, entry_count: int) -> int:
+    """Build a ``sup.build_fanout_world`` under a fresh, isolated ``HOME``
+    and return a fresh-child-process ``reclaim_anchor_search(apply=False)``
+    peak RSS for it -- same env-isolation shape as
+    ``test_reclaim_peak_rss_is_bounded_by_largest_event_not_corpus``'s own
+    ``fat_home`` setup (module attribute rebinding, not just the ``HOME``
+    env var, because ``paths``/``config`` cache their roots at import time)."""
+    import os
+
+    home = tmp_path / home_name
+    (home / ".opentraces" / "projects").mkdir(parents=True)
+    (home / ".opentraces" / "staging").mkdir(parents=True)
+
+    old_home = os.environ.get("HOME")
+    os.environ["HOME"] = str(home)
+    try:
+        from opentraces.core import config as _config
+        from opentraces.core import paths as _paths
+
+        opentraces_dir = home / ".opentraces"
+        for mod in (_paths, _config):
+            mod.OPENTRACES_DIR = opentraces_dir
+            mod.CONFIG_PATH = opentraces_dir / "config.json"
+            mod.CREDENTIALS_PATH = opentraces_dir / "credentials"
+            mod.PROJECTS_DIR = opentraces_dir / "projects"
+            if hasattr(mod, "STAGING_DIR"):
+                mod.STAGING_DIR = opentraces_dir / "staging"
+        sup.build_fanout_world(home / "projs", traces_per_project=traces_per_project, entry_count=entry_count)
+    finally:
+        if old_home is not None:
+            os.environ["HOME"] = old_home
+
+    return sup.measure_reclaim_peak_rss_bytes(home, timeout=300)
+
+
+def test_reclaim_companion_regen_rss_does_not_scale_with_trace_fanout(tmp_path: Path) -> None:
+    """Issue #358 repair round 3, major.
+
+    ``_bucket_events_for_traces`` used to retain EVERY matched event for
+    EVERY affected trace in one materialized ``dict`` simultaneously. On
+    the #358 corpus's own fan-out shape -- a big anchor-search summary per
+    trace, so ``affected`` ends up as every trace the project has -- that
+    dict's peak size scaled with the number of DISTINCT affected traces,
+    not with any one event's size (``build_fat_world``, property 2's
+    all-``unknown`` world, cannot show this: its entries vanish from every
+    bucket once compacted, so nothing accumulates regardless of
+    implementation -- see ``sup.build_fanout_world``'s docstring for why
+    this test needs its own, anchored-entry world).
+
+    Quadrupling the trace count (holding per-trace event size fixed) must
+    NOT come anywhere near quadrupling peak RSS: a genuinely per-trace,
+    on-disk-scratch companion-regen pass should barely move.
+    """
+    baseline_home = tmp_path / "fanout-baseline-home"
+    (baseline_home / ".opentraces" / "projects").mkdir(parents=True)
+    (baseline_home / ".opentraces" / "staging").mkdir(parents=True)
+    baseline_rss = sup.measure_reclaim_peak_rss_bytes(baseline_home)
+
+    small_rss = _measure_fanout_reclaim_rss(tmp_path, "fanout-small-home", traces_per_project=8, entry_count=3000)
+    big_rss = _measure_fanout_reclaim_rss(tmp_path, "fanout-big-home", traces_per_project=32, entry_count=3000)
+
+    small_delta = max(small_rss - baseline_rss, 1)
+    big_delta = max(big_rss - baseline_rss, 0)
+
+    # 4x the DISTINCT trace count, same per-trace event size, must not come
+    # anywhere near 4x the RSS delta. The bound (2x) is well under linear
+    # scaling -- comfortable headroom for run-to-run noise -- while still
+    # flatly rejecting an O(affected traces) implementation.
+    assert big_delta <= small_delta * 2, (
+        f"reclaim peak RSS grew {big_delta / small_delta:.2f}x for a 4x increase "
+        f"in DISTINCT affected traces (baseline={baseline_rss/1e6:.1f}MB, "
+        f"small={small_rss/1e6:.1f}MB, big={big_rss/1e6:.1f}MB) -- the companion-"
+        f"regen path is retaining something proportional to trace COUNT, not to "
+        f"one trace's own footprint"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. Cache discipline
 # ---------------------------------------------------------------------------
 
 

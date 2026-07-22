@@ -22,8 +22,13 @@ from opentraces.core.trails import (
 )
 from opentraces.core.trails.anchors import ANCHOR_ALGORITHMS_PHASE5
 from opentraces.core.trails.contract import ANCHOR_SEARCH_COVERAGE_SCHEMA_VERSION
-from opentraces.core.trails.ids import trace_patch_ref
-from opentraces.core.trails.search_compaction import compact_repo, compact_search_events
+from opentraces.core.trails.ids import git_anchor_ref, trace_patch_ref
+from opentraces.core.trails.search_compaction import (
+    CompactionStats,
+    compact_repo,
+    compact_search_events,
+    stream_compact_events,
+)
 from opentraces.core.trails.search_records import (
     build_anchor_search_summary_payload,
     is_summary_search_event,
@@ -129,6 +134,70 @@ def _seed_legacy(repo: Path) -> None:
         for i in range(4)
     ]
     append_event_batch(repo, run2, writer="watcher")
+
+
+def _git_anchor_created(*, trace_id, step_index, patch_id, commit_hex):
+    """A ``git_anchor_created`` draft shaped like ``anchors.py``'s own
+    (``git show 8b71cc7f1ea:src/opentraces/core/trails/anchors.py``) --
+    used only by :func:`_seed_legacy_interleaved` to reproduce the real
+    pre-plan-090 writer's batch order, never by ``_seed_legacy`` (whose
+    legacy batches are pure runs of search events)."""
+    trace_patch_id = f"tracepatch-sha256:{patch_id}"
+    return TrailEventDraft(
+        event_type="git_anchor_created",
+        trace_id=trace_id,
+        generation_index=0,
+        step_index=step_index,
+        capture_method=["watcher_reconcile"],
+        payload={
+            "git_anchor_id": f"gitanchor-sha256:{patch_id}",
+            "git_anchor_ref": git_anchor_ref(f"gitanchor-sha256:{patch_id}"),
+            "trace_patch_id": trace_patch_id,
+            "trace_patch_ref": trace_patch_ref(trace_patch_id),
+            "commit_id": {"algo": "sha1", "hex": commit_hex},
+            "path": "a.py",
+            "range": {"start_line": 1, "end_line": 1},
+            "patch_id": patch_id,
+            "observed_ref": commit_hex,
+            "relation": "anchored_in_git",
+            "evidence_tier": "exact_range_hash",
+            "evidence_firmness": "firm",
+            "source": "watcher",
+            "limitations": [],
+        },
+    )
+
+
+def _seed_legacy_interleaved(repo: Path) -> None:
+    """ONE reconcile-run batch, patches interleaved with their OWN
+    ``git_anchor_created`` events -- the REAL pre-plan-090 writer's order
+    (issue #358 repair round 3, blocker; verified against ``git show
+    8b71cc7f1ea:src/opentraces/core/trails/anchors.py``): for each patch,
+    ``reconcile_commit_anchors`` appended a ``git_anchor_search_completed``
+    draft and, only when that patch anchored, a ``git_anchor_created`` draft
+    right after it -- both into the SAME ``append_event_batch`` call, so a
+    legacy group's members are routinely interleaved with non-member events
+    WITHIN their own batch, not merely adjacent. ``_seed_legacy`` above
+    (every other fixture in this module) never interleaves -- both of its
+    batches are pure runs of search events -- so this is the one fixture
+    that actually exercises the shape a mature, pre-plan-090 bucket has."""
+    commit_a = "a" * 40
+    patch_ids = [f"{i:02d}{'a' * 62}" for i in range(3)]
+    drafts: list[TrailEventDraft] = []
+    for i, patch_id in enumerate(patch_ids):
+        anchored = i % 2 == 0
+        drafts.append(
+            _legacy_search(
+                trace_id="t-1", step_index=i, patch_id=patch_id, commit_hex=commit_a,
+                result="anchored" if anchored else "unknown",
+                anchor_ids=[f"gitanchor-sha256:{patch_id}"] if anchored else [],
+            )
+        )
+        if anchored:
+            drafts.append(
+                _git_anchor_created(trace_id="t-1", step_index=i, patch_id=patch_id, commit_hex=commit_a)
+            )
+    append_event_batch(repo, drafts, writer="watcher")
 
 
 def _functional(events, *, strip_unknown_identity: bool = False):
@@ -422,3 +491,37 @@ def test_compact_repo_refuses_in_place(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         compact_repo(repo, repo, force=True)
+
+
+def test_stream_compact_events_matches_list_path_on_interleaved_legacy_batch(tmp_path: Path) -> None:
+    """Issue #358 repair round 3, blocker.
+
+    The streaming compactor used to close a legacy group the instant ANY
+    differing event appeared, then raise ``NonContiguousSearchGroupError``
+    if the same ``(batch_id, search_head)`` key ever reappeared. That fires
+    on the ORDINARY shape ``_seed_legacy_interleaved`` builds -- a patch's
+    own ``git_anchor_created`` sitting between it and the next patch's
+    search event, all one reconcile-run batch -- which is exactly how the
+    real pre-plan-090 writer wrote history. The fix batches by
+    ``batch_id`` (a legacy group can never span two batches -- ``batch_id``
+    identifies one atomic ``append_event_batch`` call), so this must not
+    only avoid raising but reproduce the list-based path byte-identically.
+    """
+    repo = tmp_path / "src"
+    _init_repo(repo)
+    _seed_legacy_interleaved(repo)
+    original = read_events(repo, verify=False)
+
+    compacted_list, list_stats = compact_search_events(original)
+
+    stats = CompactionStats()
+    compacted_stream = list(stream_compact_events(iter(original), stats))
+
+    assert [e.model_dump(mode="json") for e in compacted_stream] == [
+        e.model_dump(mode="json") for e in compacted_list
+    ]
+    assert stats.legacy_search_events_in == list_stats.legacy_search_events_in == 3
+    assert stats.groups_collapsed == list_stats.groups_collapsed == 1
+    assert stats.non_search_events == list_stats.non_search_events == 2
+    assert stats.events_out == list_stats.events_out
+    assert _dedup_keys(compacted_stream) == _dedup_keys(original)

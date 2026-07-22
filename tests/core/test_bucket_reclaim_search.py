@@ -24,7 +24,7 @@ from opentraces.core.trails import (
     verify_event_log,
 )
 from opentraces.core.trails.anchors import ANCHOR_ALGORITHMS_PHASE5
-from opentraces.core.trails.ids import trace_patch_ref
+from opentraces.core.trails.ids import git_anchor_ref, trace_patch_ref
 
 # How many padding-only "unknown" results `_build_world`'s v2-fat summary
 # carries on top of its six real patches -- see the docstring on
@@ -253,6 +253,102 @@ def _build_second_clean_project(tmp_path: Path, *, trace_id: str) -> dict:
     write_trace_record(_record(trace_id), project_slug=slug, source_layer="canonical")
     bucket_repair(dry_run=False)
     return {"repo": repo, "slug": slug}
+
+
+def _git_anchor_created(*, trace_id, step_index, patch_id, commit_hex):
+    """A ``git_anchor_created`` draft shaped like ``anchors.py``'s own
+    (``git show 8b71cc7f1ea:src/opentraces/core/trails/anchors.py``) --
+    used only by ``_build_world_with_interleaved_legacy_batch`` to
+    reproduce the real pre-plan-090 writer's batch order."""
+    trace_patch_id = f"tracepatch-sha256:{patch_id}"
+    return TrailEventDraft(
+        event_type="git_anchor_created",
+        trace_id=trace_id,
+        generation_index=0,
+        step_index=step_index,
+        capture_method=["watcher_reconcile"],
+        payload={
+            "git_anchor_id": f"gitanchor-sha256:{patch_id}",
+            "git_anchor_ref": git_anchor_ref(f"gitanchor-sha256:{patch_id}"),
+            "trace_patch_id": trace_patch_id,
+            "trace_patch_ref": trace_patch_ref(trace_patch_id),
+            "commit_id": {"algo": "sha1", "hex": commit_hex},
+            "path": "a.py",
+            "range": {"start_line": 1, "end_line": 1},
+            "patch_id": patch_id,
+            "observed_ref": commit_hex,
+            "relation": "anchored_in_git",
+            "evidence_tier": "exact_range_hash",
+            "evidence_firmness": "firm",
+            "source": "watcher",
+            "limitations": [],
+        },
+    )
+
+
+def _build_world_with_interleaved_legacy_batch(tmp_path: Path) -> dict:
+    """Like ``_build_world``, but ``t-anchored``'s legacy group is built in
+    the REAL pre-plan-090 writer's order (issue #358 repair round 3,
+    blocker): a ``git_anchor_search_completed`` draft for a patch, then --
+    only when it anchored -- a ``git_anchor_created`` draft for that SAME
+    patch right after it, all in ONE reconcile-run batch (mirrors
+    ``_seed_legacy_interleaved`` in ``test_search_compaction.py`` at the
+    reclaim end-to-end level instead of the compaction-unit level).
+    ``_build_world`` itself never interleaves -- its legacy batch is a pure
+    run of search events -- and every other test in this module reads
+    exact byte/count assertions against that shared fixture, so this is a
+    separate, minimal world rather than a change to it.
+
+    24 patches (not 3) -- purely to clear ``_FAT_PREFILTER_MIN_BYTES``
+    (65536): a legacy per-patch batch accumulates size one small EVENT at a
+    time (unlike ``_build_world``'s v2-fat summary, which pads one big
+    ``results[]``), and 24 interleaved patches' worth of canonical history
+    measures ~90KB, comfortably above the threshold -- 3 patches alone
+    (~12KB) would hit the SAME "below fat-detection size prefilter" early
+    return every other prefilter-conscious fixture in this module already
+    has to work around."""
+
+    from opentraces.core.bucket_store import bucket_repair, write_trace_record
+    from opentraces.core.config import get_project_dir, load_config, register_project, save_config
+
+    repo = tmp_path / "proj"
+    _init_repo(repo)
+
+    commit_a = "a" * 40
+    patch_ids = [f"{i:02d}{'a' * 62}" for i in range(24)]
+    trace_patch_ids = [f"tracepatch-sha256:{pid}" for pid in patch_ids]
+    append_event_batch(
+        repo,
+        [
+            _patch_created(trace_id="t-anchored", trace_patch_id=tpid, file_path=f"a{i}.py", step_index=i)
+            for i, tpid in enumerate(trace_patch_ids)
+        ],
+        writer="capture-claude-code",
+    )
+    drafts: list[TrailEventDraft] = []
+    for i, patch_id in enumerate(patch_ids):
+        anchored = i % 2 == 0
+        drafts.append(
+            _legacy_search(
+                trace_id="t-anchored", step_index=i, patch_id=patch_id, commit_hex=commit_a,
+                result="anchored" if anchored else "unknown",
+                anchor_ids=[f"gitanchor-sha256:{patch_id}"] if anchored else [],
+            )
+        )
+        if anchored:
+            drafts.append(
+                _git_anchor_created(trace_id="t-anchored", step_index=i, patch_id=patch_id, commit_hex=commit_a)
+            )
+    append_event_batch(repo, drafts, writer="watcher")
+
+    cfg = load_config()
+    register_project(cfg, repo)
+    save_config(cfg)
+    slug = get_project_dir(repo).name
+    write_trace_record(_record("t-anchored"), project_slug=slug, source_layer="canonical")
+    bucket_repair(dry_run=False)
+
+    return {"repo": repo, "slug": slug, "trace_patch_ids": trace_patch_ids}
 
 
 def _bucket_snapshot(bucket_root: Path) -> dict[str, bytes]:
@@ -1997,4 +2093,48 @@ def test_unreachable_kill_mid_companion_regen_leaves_journal_for_scoped_resume(t
     result = reclaim_mod.reclaim_anchor_search(apply=True)
     proj = next(p for p in result.projects if p.project_slug == slug)
     assert proj.bytes_reclaimed == 0
+
+
+def test_reclaim_compacts_interleaved_legacy_batch_without_erroring(tmp_path: Path) -> None:
+    """Issue #358 repair round 3, blocker.
+
+    On a project whose legacy group interleaves a patch's own
+    ``git_anchor_created`` event with the NEXT patch's search event (the
+    real pre-plan-090 writer's order -- see
+    ``_build_world_with_interleaved_legacy_batch``), the streaming
+    compactor used to raise ``NonContiguousSearchGroupError`` and
+    ``reclaim_anchor_search`` reported ``action="error"`` with ZERO bytes
+    reclaimed for the WHOLE project -- on exactly the corpora this pass
+    exists to compact. Compaction must succeed instead, and collapse to
+    the SAME v3-compact shape the (still list-based) unreachable-project
+    path already produces for this data."""
+    from opentraces.core.bucket_reclaim_search import reclaim_anchor_search
+
+    world = _build_world_with_interleaved_legacy_batch(tmp_path)
+    trace_patch_ids = world["trace_patch_ids"]
+
+    result = reclaim_anchor_search(apply=True)
+
+    assert result.errors == []
+    project = next(p for p in result.projects if p.project_slug == world["slug"])
+    assert project.action == "compacted", project.reason
+    assert project.legacy_events_collapsed == 24
+
+    compacted = read_events(world["repo"], verify=False)
+    summaries = [e for e in compacted if e.event_type == "git_anchor_search_completed"]
+    assert len(summaries) == 1
+    payload = summaries[0].payload
+    anchored_ids = trace_patch_ids[0::2]
+    unanchored_ids = trace_patch_ids[1::2]
+    assert [r["result"] for r in payload["results"]] == ["anchored"] * len(anchored_ids)
+    assert {r["trace_patch_id"] for r in payload["results"]} == set(anchored_ids)
+    assert set(payload["unanchored_trace_patch_ids"]) == set(unanchored_ids)
+    assert sum(1 for e in compacted if e.event_type == "git_anchor_created") == len(anchored_ids)
+
+    # A second apply is a true no-op -- proves the compacted chain doesn't
+    # keep re-triggering the same interleaved-group detection.
+    second = reclaim_anchor_search(apply=True)
+    second_project = next(p for p in second.projects if p.project_slug == world["slug"])
+    assert second_project.action == "clean"
+    assert second_project.bytes_reclaimed == 0
 
