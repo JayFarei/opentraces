@@ -1974,7 +1974,14 @@ def test_cli_bucket_reclaim_json_dry_run_then_apply_matches_direct_call(tmp_path
     # stream); asserting JSON-parseability against the stdout-only stream is
     # what actually tests "the JSON payload is clean", now that there is
     # real stderr chatter to mix in.
-    dry = runner.invoke(main, ["bucket", "reclaim", "--repo", str(repo), "--json"])
+    # Issue #362: the anchor-search pass ships EXPERIMENTAL and opt-in behind
+    # ``--anchor-search`` (default off, because it is O(corpus) and slow on
+    # large real buckets); a plain ``bucket reclaim`` runs only the cruft pass
+    # and reports the anchor-search section as skipped. This CLI test exercises
+    # the pass, so it must pass the flag.
+    dry = runner.invoke(
+        main, ["bucket", "reclaim", "--repo", str(repo), "--anchor-search", "--json"]
+    )
     assert dry.exit_code == 0, dry.output
     dry_proj = next(
         p for p in _json.loads(dry.stdout)["reclaim"]["anchor_search"]["projects"]
@@ -1985,7 +1992,17 @@ def test_cli_bucket_reclaim_json_dry_run_then_apply_matches_direct_call(tmp_path
     assert dry_proj["ref_rewritten"] is True
     assert dry_proj["bytes_before"] > dry_proj["bytes_after"]
 
-    applied = runner.invoke(main, ["bucket", "reclaim", "--repo", str(repo), "--apply", "--json"])
+    # Default (no flag): anchor-search is skipped, cruft pass still runs clean.
+    off = runner.invoke(main, ["bucket", "reclaim", "--repo", str(repo), "--json"])
+    assert off.exit_code == 0, off.output
+    assert _json.loads(off.stdout)["reclaim"]["anchor_search"] == {
+        "skipped": True,
+        "reason": "experimental; pass --anchor-search to run (issue #358/#362)",
+    }
+
+    applied = runner.invoke(
+        main, ["bucket", "reclaim", "--repo", str(repo), "--anchor-search", "--apply", "--json"]
+    )
     assert applied.exit_code == 0, applied.output
     applied_proj = next(
         p for p in _json.loads(applied.stdout)["reclaim"]["anchor_search"]["projects"]

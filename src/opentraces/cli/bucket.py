@@ -903,12 +903,24 @@ def bucket_repair_cmd(bucket_root: Path | None, as_json: bool) -> None:
     is_flag=True,
     help="Actually remove the listed cruft. Without it, this is print-only.",
 )
+@click.option(
+    "--anchor-search",
+    "anchor_search",
+    is_flag=True,
+    help=(
+        "EXPERIMENTAL, opt-in: also compact fat anchor-search history "
+        "(issue #358). Off by default — this pass is O(corpus) and currently "
+        "slow on large real buckets. See issue #362."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
-    """Reclaim leaked Trace Trails cruft AND fat anchor-search history.
+def bucket_reclaim_cmd(
+    repo: Path | None, apply: bool, anchor_search: bool, as_json: bool
+) -> None:
+    """Reclaim leaked Trace Trails cruft (and, opt-in, fat anchor-search history).
 
-    Two passes, both DRY-RUN BY DEFAULT (a plain run mutates nothing;
-    ``--apply`` performs the writes):
+    DRY-RUN BY DEFAULT (a plain run mutates nothing; ``--apply`` performs the
+    writes):
 
     \b
     1. Leaked ``.git/**/opentraces/`` cruft (``--repo``-scoped, defaults to
@@ -918,26 +930,35 @@ def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
        per-candidate byte counts. NEVER touches the live
        ``event_log_snapshot.pkl``, the live ``event_index/base.pkl``, the
        canonical event ref, or anything under the bucket.
-    2. Fat anchor-search history (issue #358, bucket-wide — every project the
-       bucket knows about, not just ``--repo``): legacy per-patch and v2-fat
+    2. Fat anchor-search history (issue #358) — ONLY with ``--anchor-search``.
+       EXPERIMENTAL and opt-in: legacy per-patch and v2-fat
        ``git_anchor_search_completed`` events are the ~26 GB driver behind an
-       oversized bucket. This pass compacts each affected project's canonical
-       event chain to the v3-compact shape (an atomic ``update-ref`` swap),
-       reconciles the bucket's events mirror, and regenerates only the trail
-       companions a fat/legacy search event touched. A killed run is
-       journaled and RESUMABLE — re-running ``bucket reclaim`` finishes the
-       interrupted work — but is NOT guaranteed readable in between: reads of
-       an affected project (e.g. ``trail`` companions) can error until the
-       re-run completes.
+       oversized bucket, but this compaction pass is O(corpus) and currently
+       too slow to run by default on large real buckets (issue #362). When
+       enabled it compacts each affected project's canonical event chain to
+       the v3-compact shape (an atomic ``update-ref`` swap), reconciles the
+       bucket's events mirror, and regenerates only the trail companions a
+       fat/legacy search event touched. A killed run is journaled and
+       RESUMABLE — re-running finishes the interrupted work — but is NOT
+       guaranteed readable in between: reads of an affected project (e.g.
+       ``trail`` companions) can error until the re-run completes.
     """
     from ..core.bucket_reclaim import reclaim_repo
-    from ..core.bucket_reclaim_search import reclaim_anchor_search
 
     target = Path(repo) if repo is not None else Path.cwd()
     cruft_report = reclaim_repo(target, apply=apply)
-    search_report = reclaim_anchor_search(apply=apply)
     data = cruft_report.as_dict()
-    data["anchor_search"] = search_report.as_dict()
+    search_report = None
+    if anchor_search:
+        from ..core.bucket_reclaim_search import reclaim_anchor_search
+
+        search_report = reclaim_anchor_search(apply=apply)
+        data["anchor_search"] = search_report.as_dict()
+    else:
+        data["anchor_search"] = {
+            "skipped": True,
+            "reason": "experimental; pass --anchor-search to run (issue #358/#362)",
+        }
     payload = envelope("opentraces.bucket.reclaim.v1", reclaim=data)
     if as_json:
         click.echo(_dump_json(payload))
@@ -954,6 +975,14 @@ def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
         click.echo("  (dry run — nothing deleted; pass --apply to reclaim)")
     for err in data["errors"]:
         click.echo(f"  error: {err}", err=True)
+
+    if not anchor_search:
+        click.echo("")
+        click.echo(
+            "Anchor-search compaction: skipped (experimental; pass "
+            "--anchor-search to compact fat #358 history — slow on large buckets)"
+        )
+        return
 
     search_data = data["anchor_search"]
     click.echo("")
