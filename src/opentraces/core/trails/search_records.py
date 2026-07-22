@@ -15,10 +15,13 @@ dicts (see :func:`iter_coverage_claims`) — sound only from a COMPLETE view of
 the patch history, so only anchors.py's own scoped read mints one. A caller
 whose view is partial instead carries an EXACT ``unanchored_trace_patch_ids``
 list alongside the anchored-only ``results[]`` (the "v3-compact" shape) so
-dedup keys stay identical to v2: maturation.py's periodic flush (#359 — its
-chunked, pre-extracted view can't compute a sound max-position boundary) and,
-for legacy/v2 data already on disk, the planned offline compaction rewrite
-(search_compaction.py, still v2-emitting and out of scope for #358/#359).
+dedup keys stay identical to v2: maturation.py's deadline-truncated flush or a
+commit-subset sweep (#359 — neither is a complete view, so it can't compute a
+sound max-position boundary; but since #363 maturation's UNTRUNCATED full
+recent-window sweep IS complete and mints the ``coverage`` claim like
+anchors.py) and, for legacy/v2 data already on disk, the planned offline
+compaction rewrite (search_compaction.py, still v2-emitting and out of scope
+for #358/#359).
 
 The ~505K legacy per-patch events already on live logs must keep working, so
 every consumer (the reconcile dedup, maturation counters, the query projection,
@@ -95,12 +98,16 @@ def build_anchor_search_summary_payload(
     - ``coverage`` (the v3 write path, #358): a through-pointer claim,
       attached in place of the dropped unknown dicts, asserting every patch
       at-or-before it was search-covered. Only sound from a COMPLETE view of
-      the patch history (anchors.py's own scoped read).
+      the patch history — anchors.py's own scoped read, and (since #363)
+      maturation.py's UNTRUNCATED full recent-window sweep, whose
+      contiguous-prefix chunking searches every patch against each commit so
+      the global-max position is a sound boundary even though the ordering is
+      never all held in memory at once.
     - ``unanchored_trace_patch_ids`` (the v3-compact shape, #359): the EXACT
       ids of the dropped unknown entries, for a caller whose view is partial
-      (maturation.py's chunked sweep) and so cannot compute a sound
-      through-pointer boundary, but can still say precisely which ids it
-      searched and found unanchored.
+      (maturation.py's deadline-truncated flush, or a commit-subset sweep) and
+      so cannot compute a sound through-pointer boundary, but can still say
+      precisely which ids it searched and found unanchored.
     Legacy/v2 callers (and search_compaction.py's v2 rollup, unmodified by
     #358/#359) omit both and keep the full mixed ``results[]``, byte-for-byte
     as before.
@@ -261,8 +268,10 @@ def iter_coverage_claims(event: Any) -> Iterator[dict[str, Any]]:
     ``trace_patch_created`` at-or-before ``through_trace_patch_id`` (in
     canonical event_sequence order, restricted to ``scope_trace_id`` when set)
     was already search-covered by this event's ``(search_head,
-    attribution_version)``. Legacy, v2, and v3-compact events never carry a
-    ``coverage`` block, so this yields nothing for them. ``attribution_version``
+    attribution_version)``. Minted by anchors.py's own complete scoped read and
+    (since #363) maturation.py's untruncated full recent-window sweep. Legacy,
+    v2, and v3-compact events never carry a ``coverage`` block, so this yields
+    nothing for them. ``attribution_version``
     lives on the event ENVELOPE, matching :func:`iter_search_records`'s
     per-record dedup dimension.
 
