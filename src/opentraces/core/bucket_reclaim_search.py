@@ -33,14 +33,24 @@ is gone; the pipeline below is genuinely streaming end to end:
   a time (never ``read_events``'s full materialized list, never the shared
   ``_READ_EVENTS_CACHE`` — see ``_stream_compact_chain``).
 * ``search_compaction.stream_compact_events`` transforms that stream with
-  O(1) running chain state (next sequence, previous_event_id) instead of
-  planning the whole output up front.
+  O(1) running chain state (next sequence, previous_event_id) plus AT MOST
+  ONE buffered batch (bounded by one reconcile run's own patch count, never
+  the whole corpus — see that function's own docstring for why grouping
+  needs a whole-batch buffer, not O(1) event-at-a-time) instead of planning
+  the whole output up front.
 * ``event_log.StreamingChainWriter`` stages each finalized event into a
   scratch git index and derives the tree on demand — the candidate commit is
   built WITHOUT ever holding the compacted stream as a Python list.
 * Per-trace companion content is read back from that candidate via a
-  bounded, single BUCKETED pass (``_bucket_events_for_traces``) scoped to
-  exactly the affected traces — never the whole corpus (issue #358 part C).
+  bounded, single streaming pass (``_bucket_events_for_traces``) scoped to
+  exactly the affected traces — but issue #358 repair round 3 found that,
+  on the motivating fan-out shape (a summary's ``results[]`` touching
+  nearly every trace, so ``affected`` is effectively "every trace"),
+  retaining every matched event for every affected trace in one in-RAM
+  dict was O(corpus) again. That pass now appends matched events to a
+  per-trace ON-DISK scratch (:class:`_TraceEventScratch`) instead, read
+  back ONE trace at a time — bounded to O(one trace's own footprint), never
+  O(sum of every affected trace).
 * ``bucket_dir``-scanning callers walk every project in one process; each
   project's own ``invalidate_read_events_cache``/``event_index.invalidate_
   event_index_memo`` call at the end of ``_process_reachable_project``
@@ -185,6 +195,7 @@ import gzip
 import json
 import subprocess
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -790,20 +801,85 @@ def _companion_deltas(
     return before, after, any_changed
 
 
-def _bucket_events_for_traces(
-    repo: Path, head: str, trace_ids: set[str]
-) -> dict[str, tuple[list[Any], list[Any]]]:
-    """ONE streaming pass over ``head``'s full event chain, bucketing each
-    event into every ``trace_ids`` member it belongs to per the SAME
-    predicate ``bucket_envelope._events_for_trace_from_iter`` applies
-    per-trace (issue #358 part C): top-level/payload ``trace_id`` match, or
-    — for a search-summary event — a ``results[]`` entry referencing the
-    trace. Bounded to O(sum of each trace's own footprint) — never the
-    whole chain — because only events that touch a WANTED trace are ever
-    retained; everything else is discarded the moment its membership check
-    fails. A summary event touching MULTIPLE wanted traces is correctly
-    appended to EACH of their buckets (the same event legitimately belongs
-    in every trace's companion it searched).
+class _TraceEventScratch:
+    """On-disk per-trace scratch built by :func:`_bucket_events_for_traces`
+    (issue #358 repair round 3, major): one small file per (trace,
+    trail-or-context) pair under a private ``tempfile.TemporaryDirectory``,
+    instead of a materialized ``dict[trace_id, (list, list)]``. On the
+    #358-motivating fan-out shape (a search summary's ``results[]`` can
+    reference nearly every trace the project ever searched, so ``affected``
+    is effectively "every trace") the old dict retained EVERY matched event
+    for EVERY affected trace simultaneously — O(corpus) again, the exact
+    hazard this whole rewrite exists to remove. ``get(trace_id)`` reads back
+    ONLY that one trace's own file, so peak memory across the companion-
+    regen pass this backs is O(one trace's own footprint), never O(sum of
+    every affected trace's footprint) — the TIME cost of the extra
+    open/write/close per matched event is a deliberate trade for that bound,
+    the same trade the CAS-retry path makes (see the module docstring's
+    "Honest boundary").
+
+    Mirrors ``StreamingChainWriter``'s ``tempfile.TemporaryDirectory`` +
+    explicit ``close()``/context-manager shape (same module family: scratch
+    state lives on disk, not in a Python list, and the caller owns closing
+    it — see ``event_log.py``).
+    """
+
+    def __init__(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="opentraces-reclaim-scratch-")
+
+    def _path(self, trace_id: str, kind: str) -> Path:
+        return Path(self._tmpdir.name) / f"{_path_part(trace_id)}.{kind}.jsonl"
+
+    def _append(self, trace_id: str, kind: str, line: str) -> None:
+        with self._path(trace_id, kind).open("a", encoding="utf-8") as fh:
+            fh.write(line)
+
+    def get(self, trace_id: str, default: Any = None) -> tuple[list[Any], list[Any]]:
+        # ``default`` is accepted, not used -- every caller already treats a
+        # trace with no matched events as ``([], [])``, which is exactly
+        # what an absent scratch file reads back as; matching ``dict.get``'s
+        # signature is what lets every existing call site stay unchanged.
+        return self._read(self._path(trace_id, "trail")), self._read(self._path(trace_id, "context"))
+
+    @staticmethod
+    def _read(path: Path) -> list[Any]:
+        if not path.exists():
+            return []
+        events: list[Any] = []
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    events.append(TrailEvent.model_validate(json.loads(line)))
+        return events
+
+    def close(self) -> None:
+        self._tmpdir.cleanup()
+
+    def __enter__(self) -> "_TraceEventScratch":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+def _bucket_events_for_traces(repo: Path, head: str, trace_ids: set[str]) -> _TraceEventScratch:
+    """ONE streaming pass over ``head``'s full event chain, appending each
+    event into every ``trace_ids`` member's own ON-DISK scratch file (issue
+    #358 part C; issue #358 repair round 3 replaced the in-RAM ``dict`` this
+    used to build with :class:`_TraceEventScratch` — see its docstring for
+    why) per the SAME predicate ``bucket_envelope._events_for_trace_from_
+    iter`` applies per-trace: top-level/payload ``trace_id`` match, or — for
+    a search-summary event — a ``results[]`` entry referencing the trace. A
+    summary event touching MULTIPLE wanted traces is correctly appended to
+    EACH of their files (the same event legitimately belongs in every
+    trace's companion it searched). This pass itself still costs O(1) event
+    in flight — the memory saving is in never RETAINING what it reads; the
+    caller pays O(corpus) TIME either way (an ordinary Git object read per
+    event), same class as ``bucket repair``.
+
+    Returns a :class:`_TraceEventScratch` the caller MUST close (context
+    manager or explicit ``.close()``) once done reading it back.
 
     ``head`` is typically the streaming candidate's own (still unreferenced,
     for a dry-run or a not-yet-swapped preview) commit sha — ``iter_events``
@@ -822,9 +898,9 @@ def _bucket_events_for_traces(
         CONTEXT_LAYER_CAPTURED, CONTEXT_NODE_OBSERVED, CONTEXT_COMPACTION_OBSERVED, CONTEXT_TREE_RECONCILED,
     }
 
-    buckets: dict[str, tuple[list[Any], list[Any]]] = {tid: ([], []) for tid in trace_ids}
+    scratch = _TraceEventScratch()
     if not trace_ids:
-        return buckets
+        return scratch
 
     for event in iter_events(repo, head):
         touched: set[str] = set()
@@ -841,18 +917,20 @@ def _bucket_events_for_traces(
                     touched.add(tid)
         if not touched:
             continue
-        bucket_kind = 1 if event.event_type in context_types else 0
+        kind = "context" if event.event_type in context_types else "trail"
+        line = _canonical_json(event.model_dump(mode="json")) + "\n"
         for tid in touched:
-            buckets[tid][bucket_kind].append(event)
-    return buckets
+            scratch._append(tid, kind, line)
+    return scratch
 
 
 def _companion_deltas_from_buckets(
-    slug: str, affected_trace_ids: set[str], buckets: dict[str, tuple[list[Any], list[Any]]]
+    slug: str, affected_trace_ids: set[str], buckets: "_TraceEventScratch"
 ) -> tuple[int, int, bool]:
-    """Streaming analog of ``_companion_deltas``: ``buckets`` is already
-    scoped to ``affected_trace_ids`` (see ``_bucket_events_for_traces``),
-    never the whole corpus."""
+    """Streaming analog of ``_companion_deltas``: ``buckets`` reads back ONE
+    trace's own on-disk scratch at a time (see ``_bucket_events_for_traces``
+    / :class:`_TraceEventScratch`), never the whole affected set in RAM at
+    once."""
 
     before = 0
     after = 0
@@ -1222,198 +1300,210 @@ def _process_reachable_project(
     stale_ids = journaled_old_ids - candidate.target_ids
 
     # Per-trace bucketed read off the CANDIDATE (issue #358 part C): ONE
-    # streaming pass scoped to exactly `affected`, never the whole corpus
-    # nor a materialized `compacted` list -- see `_bucket_events_for_
-    # traces`. Used for BOTH the preview (dry-run and the "anything to do"
-    # decision below) and, on `apply`, the actual companion write further
-    # down; a CAS retry re-derives it from the folded candidate (see
-    # below), matching the pre-streaming implementation's own "re-derive
-    # only on an actual retry" gate.
+    # streaming pass scoped to exactly `affected`, appended into per-trace
+    # on-disk scratch files rather than a materialized dict (issue #358
+    # repair round 3, major -- see `_bucket_events_for_traces` /
+    # `_TraceEventScratch`: on the motivating fan-out shape, `affected` is
+    # effectively "every trace", so a dict retaining every one of their
+    # events at once was O(corpus) again). Used for BOTH the preview
+    # (dry-run and the "anything to do" decision below) and, on `apply`,
+    # the actual companion write further down; a CAS retry re-derives it
+    # from the folded candidate (see below), matching the pre-streaming
+    # implementation's own "re-derive only on an actual retry" gate.
+    # `buckets` owns a scratch directory that MUST be closed on every exit
+    # path (including the swap-exhaustion raise below) -- the `finally`
+    # closes whatever `buckets` currently refers to, so the reassignment on
+    # a CAS retry (below) explicitly closes the stale one first rather than
+    # leaking it.
     buckets = _bucket_events_for_traces(repo, candidate.commit_sha, affected)
-    comp_before, comp_after, companions_stale = _companion_deltas_from_buckets(slug, affected, buckets)
+    try:
+        comp_before, comp_after, companions_stale = _companion_deltas_from_buckets(slug, affected, buckets)
 
-    # Mirror preview — read-only, safe in both modes. Computed (and, below,
-    # ALWAYS acted on) regardless of ``ref_would_change`` so a resume — the
-    # ref already swapped by an earlier, interrupted run, compaction
-    # finding nothing new THIS pass — still finishes a mirror or companion
-    # step that pass never reached.
-    mirror_present = events_v1_index_path().exists()
-    existing_ids = {e.event_id for e in read_events_mirror_batches()} if mirror_present else set()
-    to_add_count = len(candidate.target_ids - existing_ids)
-    would_touch_mirror = mirror_present and (bool(stale_ids & existing_ids) or bool(to_add_count))
-    report.mirror_events_removed = len(stale_ids & existing_ids)
-    report.mirror_events_added = to_add_count
-
-    if journal is None and not (ref_would_change or would_touch_mirror or companions_stale):
-        report.reason = "no legacy or v2-fat anchor-search events found"
-        return report
-
-    report.companion_bytes_before = comp_before
-    report.companion_bytes_after = comp_after
-    report.companions_regenerated = sorted(affected)
-    report.action = "compacted"
-
-    if not apply:
-        report.ref_bytes_after = candidate.projected_ref_bytes
-        report.mirror_rewritten = would_touch_mirror
-        # `ref_would_change` is already the exact predicate `apply` checks
-        # before it ever attempts the CAS -- previewing it here too, not
-        # just the mirror fields above, is what keeps a cautious operator's
-        # dry-run read honest about the single most sensitive mutation
-        # `--apply` performs (issue #358 repair v3 round 2, major).
-        report.ref_rewritten = ref_would_change
-        return report
-
-    if journal is None and (ref_would_change or would_touch_mirror):
-        # Durable BEFORE the ref swap below — see the module docstring.
-        _write_journal(slug, old_event_ids=candidate.old_ids, affected_trace_ids=affected)
-
-    # CAS the already-built candidate against the snapshot it was actually
-    # derived from — never a fresh self-read at swap time (issue #358
-    # repair, finding 1). On a lost race, fold JUST the appended delta onto
-    # the candidate's own tail (`_stream_compact_delta`) and retry — bounded
-    # to `_SWAP_MAX_RETRIES`, each attempt only re-planning the delta (see
-    # the module docstring's "Honest boundary" for the streaming rewrite's
-    # O(base) TIME, still O(1) MEMORY, per-retry cost).
-    final = candidate
-    delta_original_ids: set[str] = set()
-    expected: str | None = head
-    new_head: str | None = None
-    swap_retries = 0
-
-    # A KNOWN no-op (this run's own candidate content is id-for-id
-    # identical to what `head` already holds) AND nobody moved the ref
-    # while we were building it: skip the CAS entirely (issue #358). Unlike
-    # the pre-streaming `import_event_log`, which detected this via its own
-    # `existing_ids == incoming_ids` probe over a materialized list and
-    # returned WITHOUT writing, a streaming candidate is always built up
-    # front (its own memory bound never depends on knowing the answer in
-    # advance) — attempting the CAS anyway would move the ref to a
-    # content-identical but SHA-different commit (git commit-tree stamps a
-    # fresh author/committer timestamp every call) on EVERY idempotent
-    # re-run, defeating "a second apply reports zero deltas" by
-    # construction. When the ref HAS moved despite `ref_would_change` being
-    # False (a concurrent writer raced in without changing what THIS
-    # project's compaction itself would produce), the normal swap loop
-    # below still runs and correctly folds whatever real delta exists.
-    if not ref_would_change and _head_sha(repo) == head:
-        new_head = head
-    else:
-        for attempt in range(1, _SWAP_MAX_RETRIES + 1):
-            try:
-                result = _swap_candidate_ref(repo, commit_sha=final.commit_sha, expected_head=expected)
-                new_head = result["head"]
-                swap_retries = attempt - 1
-                break
-            except EventLogHeadMovedError:
-                current_head, delta_events = read_events_since(repo, expected)
-                if current_head is None or delta_events is None:
-                    # Not append-only relative to `expected` after all
-                    # (missing ref, or a history rewrite by some other
-                    # process) — refuse rather than guess; falls through to
-                    # the exhaustion raise.
-                    break
-                if delta_events:
-                    delta_original_ids |= {e.event_id for e in delta_events}
-                    # Patch-id -> trace_id attribution for a v3-compact
-                    # delta entry can reach back into the base chain (its
-                    # own ``trace_patch_created`` may predate this crash
-                    # window), so this reads the base's own affected set
-                    # (already resident) -- not just `delta_events` --
-                    # before extending it.
-                    final = _stream_compact_delta(repo, final, delta_events, patch_to_trace)
-                    affected = affected | final.affected
-                expected = current_head
-
-        if new_head is None:
-            raise RuntimeError(
-                f"{EVENT_LOG_REF} kept moving during the reclaim ref swap for a "
-                f"concurrently-written project after {_SWAP_MAX_RETRIES} retries — "
-                "journal left in place for the next attempt, mirror/companions untouched"
-            )
-
-    report.swap_retries = swap_retries
-    if delta_original_ids:
-        # A CAS-retry delta event keeps its OWN pre-fold id right up
-        # until `_stream_compact_delta` re-chains it, and a routine,
-        # reclaim-unrelated `sync_events_mirror` tick can mirror it under
-        # that original id before this swap ever lands -- an id that was
-        # never in `candidate.old_ids`/`journaled_old_ids` (both pre-append
-        # snapshots) to begin with. Union it into the removal scope now
-        # so `stale_ids` below actually targets that superseded copy
-        # instead of leaving it to coexist with the rewritten one forever
-        # (issue #358 repair v3 round 2, major).
-        journaled_old_ids = journaled_old_ids | delta_original_ids
-        # Re-write the journal NOW, durably, before `_reconcile_mirror_
-        # for_project` below ever runs (issue #358 repair v3 round 2
-        # follow-up, blocker): the journal written above -- if any --
-        # predates this swap entirely and was gated on the PRE-swap
-        # belief (`ref_would_change`/`would_touch_mirror` computed before
-        # the swap loop was even entered), so it cannot already contain
-        # `delta_original_ids`. Widening only the in-process
-        # `journaled_old_ids` variable is invisible to a killed run's
-        # resume, which reads the journal back off disk -- `_write_
-        # journal` is the same atomic write-new-then-rename
-        # `_atomic_write_json` uses everywhere else in this module, so a
-        # kill mid-rewrite still leaves either the old or the new
-        # journal intact, never a half-written one.
-        _write_journal(slug, old_event_ids=journaled_old_ids, affected_trace_ids=affected)
-    report.ref_rewritten = ref_would_change or new_head != head
-    report.events_after = final.tail_sequence
-    report.ref_bytes_after = _events_tree_bytes(repo, new_head) if new_head else report.ref_bytes_before
-
-    if report.swap_retries:
-        # A concurrent append landed mid-run and got folded onto the
-        # compacted tail -- the preview computed above now describes a
-        # world that no longer matches what is about to be written, so it
-        # must be re-derived here rather than reported stale (issue #358
-        # repair, finding 1's honesty requirement). Gated on an actual
-        # retry so the quiescent (overwhelmingly common) case never pays a
-        # second bucketed pass.
-        target_ids = final.target_ids
-        stale_ids = journaled_old_ids - target_ids
-        to_add_count = len(target_ids - existing_ids)
+        # Mirror preview — read-only, safe in both modes. Computed (and, below,
+        # ALWAYS acted on) regardless of ``ref_would_change`` so a resume — the
+        # ref already swapped by an earlier, interrupted run, compaction
+        # finding nothing new THIS pass — still finishes a mirror or companion
+        # step that pass never reached.
+        mirror_present = events_v1_index_path().exists()
+        existing_ids = {e.event_id for e in read_events_mirror_batches()} if mirror_present else set()
+        to_add_count = len(candidate.target_ids - existing_ids)
         would_touch_mirror = mirror_present and (bool(stale_ids & existing_ids) or bool(to_add_count))
         report.mirror_events_removed = len(stale_ids & existing_ids)
         report.mirror_events_added = to_add_count
-        buckets = _bucket_events_for_traces(repo, final.commit_sha, affected)
-        comp_before, comp_after, _companions_stale = _companion_deltas_from_buckets(slug, affected, buckets)
+
+        if journal is None and not (ref_would_change or would_touch_mirror or companions_stale):
+            report.reason = "no legacy or v2-fat anchor-search events found"
+            return report
+
         report.companion_bytes_before = comp_before
         report.companion_bytes_after = comp_after
         report.companions_regenerated = sorted(affected)
+        report.action = "compacted"
 
-    if would_touch_mirror or stale_ids:
-        # (#358 repair finding 2): the returned counts are batch-FILE
-        # counts, a different unit from the event counts above — kept
-        # under their own honestly-named fields (see ``_reconcile_mirror_
-        # for_project``'s docstring). Streaming (issue #358): reads the
-        # FINAL candidate back off its own commit rather than passing a
-        # materialized list.
-        files_removed, files_written = _reconcile_mirror_for_project(
-            iter_events(repo, final.commit_sha), old_ids=journaled_old_ids, event_log_head=new_head, repo_id=slug,
-        )
-        report.mirror_batch_files_removed = files_removed
-        report.mirror_batch_files_written = files_written
-        report.mirror_rewritten = True
+        if not apply:
+            report.ref_bytes_after = candidate.projected_ref_bytes
+            report.mirror_rewritten = would_touch_mirror
+            # `ref_would_change` is already the exact predicate `apply` checks
+            # before it ever attempts the CAS -- previewing it here too, not
+            # just the mirror fields above, is what keeps a cautious operator's
+            # dry-run read honest about the single most sensitive mutation
+            # `--apply` performs (issue #358 repair v3 round 2, major).
+            report.ref_rewritten = ref_would_change
+            return report
 
-    # Cleared only AFTER the companion loop below finishes (issue #358
-    # repair v3 round 2 follow-up): clearing it here, before that loop ran,
-    # meant a kill mid-loop left NO journal for a killed run's resume to
-    # bypass the prefilter with — and the ref/mirror are already compacted
-    # by this point, so their tree can legitimately fall back under the
-    # prefilter threshold, silently short-circuiting the resume before it
-    # ever reaches the companion-delta check and re-running the
-    # interrupted regen.
-    for trace_id in sorted(affected):
-        trail_events, context_events = buckets.get(trace_id, ([], []))
-        project_per_trace_exports(
-            repo, project_slug=slug, trace_id=trace_id,
-            events=trail_events + context_events, events_authoritative=True,
-        )
+        if journal is None and (ref_would_change or would_touch_mirror):
+            # Durable BEFORE the ref swap below — see the module docstring.
+            _write_journal(slug, old_event_ids=candidate.old_ids, affected_trace_ids=affected)
 
-    _clear_journal(slug)
+        # CAS the already-built candidate against the snapshot it was actually
+        # derived from — never a fresh self-read at swap time (issue #358
+        # repair, finding 1). On a lost race, fold JUST the appended delta onto
+        # the candidate's own tail (`_stream_compact_delta`) and retry — bounded
+        # to `_SWAP_MAX_RETRIES`, each attempt only re-planning the delta (see
+        # the module docstring's "Honest boundary" for the streaming rewrite's
+        # O(base) TIME, still O(1) MEMORY, per-retry cost).
+        final = candidate
+        delta_original_ids: set[str] = set()
+        expected: str | None = head
+        new_head: str | None = None
+        swap_retries = 0
 
-    return report
+        # A KNOWN no-op (this run's own candidate content is id-for-id
+        # identical to what `head` already holds) AND nobody moved the ref
+        # while we were building it: skip the CAS entirely (issue #358). Unlike
+        # the pre-streaming `import_event_log`, which detected this via its own
+        # `existing_ids == incoming_ids` probe over a materialized list and
+        # returned WITHOUT writing, a streaming candidate is always built up
+        # front (its own memory bound never depends on knowing the answer in
+        # advance) — attempting the CAS anyway would move the ref to a
+        # content-identical but SHA-different commit (git commit-tree stamps a
+        # fresh author/committer timestamp every call) on EVERY idempotent
+        # re-run, defeating "a second apply reports zero deltas" by
+        # construction. When the ref HAS moved despite `ref_would_change` being
+        # False (a concurrent writer raced in without changing what THIS
+        # project's compaction itself would produce), the normal swap loop
+        # below still runs and correctly folds whatever real delta exists.
+        if not ref_would_change and _head_sha(repo) == head:
+            new_head = head
+        else:
+            for attempt in range(1, _SWAP_MAX_RETRIES + 1):
+                try:
+                    result = _swap_candidate_ref(repo, commit_sha=final.commit_sha, expected_head=expected)
+                    new_head = result["head"]
+                    swap_retries = attempt - 1
+                    break
+                except EventLogHeadMovedError:
+                    current_head, delta_events = read_events_since(repo, expected)
+                    if current_head is None or delta_events is None:
+                        # Not append-only relative to `expected` after all
+                        # (missing ref, or a history rewrite by some other
+                        # process) — refuse rather than guess; falls through to
+                        # the exhaustion raise.
+                        break
+                    if delta_events:
+                        delta_original_ids |= {e.event_id for e in delta_events}
+                        # Patch-id -> trace_id attribution for a v3-compact
+                        # delta entry can reach back into the base chain (its
+                        # own ``trace_patch_created`` may predate this crash
+                        # window), so this reads the base's own affected set
+                        # (already resident) -- not just `delta_events` --
+                        # before extending it.
+                        final = _stream_compact_delta(repo, final, delta_events, patch_to_trace)
+                        affected = affected | final.affected
+                    expected = current_head
+
+            if new_head is None:
+                raise RuntimeError(
+                    f"{EVENT_LOG_REF} kept moving during the reclaim ref swap for a "
+                    f"concurrently-written project after {_SWAP_MAX_RETRIES} retries — "
+                    "journal left in place for the next attempt, mirror/companions untouched"
+                )
+
+        report.swap_retries = swap_retries
+        if delta_original_ids:
+            # A CAS-retry delta event keeps its OWN pre-fold id right up
+            # until `_stream_compact_delta` re-chains it, and a routine,
+            # reclaim-unrelated `sync_events_mirror` tick can mirror it under
+            # that original id before this swap ever lands -- an id that was
+            # never in `candidate.old_ids`/`journaled_old_ids` (both pre-append
+            # snapshots) to begin with. Union it into the removal scope now
+            # so `stale_ids` below actually targets that superseded copy
+            # instead of leaving it to coexist with the rewritten one forever
+            # (issue #358 repair v3 round 2, major).
+            journaled_old_ids = journaled_old_ids | delta_original_ids
+            # Re-write the journal NOW, durably, before `_reconcile_mirror_
+            # for_project` below ever runs (issue #358 repair v3 round 2
+            # follow-up, blocker): the journal written above -- if any --
+            # predates this swap entirely and was gated on the PRE-swap
+            # belief (`ref_would_change`/`would_touch_mirror` computed before
+            # the swap loop was even entered), so it cannot already contain
+            # `delta_original_ids`. Widening only the in-process
+            # `journaled_old_ids` variable is invisible to a killed run's
+            # resume, which reads the journal back off disk -- `_write_
+            # journal` is the same atomic write-new-then-rename
+            # `_atomic_write_json` uses everywhere else in this module, so a
+            # kill mid-rewrite still leaves either the old or the new
+            # journal intact, never a half-written one.
+            _write_journal(slug, old_event_ids=journaled_old_ids, affected_trace_ids=affected)
+        report.ref_rewritten = ref_would_change or new_head != head
+        report.events_after = final.tail_sequence
+        report.ref_bytes_after = _events_tree_bytes(repo, new_head) if new_head else report.ref_bytes_before
+
+        if report.swap_retries:
+            # A concurrent append landed mid-run and got folded onto the
+            # compacted tail -- the preview computed above now describes a
+            # world that no longer matches what is about to be written, so it
+            # must be re-derived here rather than reported stale (issue #358
+            # repair, finding 1's honesty requirement). Gated on an actual
+            # retry so the quiescent (overwhelmingly common) case never pays a
+            # second bucketed pass.
+            target_ids = final.target_ids
+            stale_ids = journaled_old_ids - target_ids
+            to_add_count = len(target_ids - existing_ids)
+            would_touch_mirror = mirror_present and (bool(stale_ids & existing_ids) or bool(to_add_count))
+            report.mirror_events_removed = len(stale_ids & existing_ids)
+            report.mirror_events_added = to_add_count
+            buckets.close()
+            buckets = _bucket_events_for_traces(repo, final.commit_sha, affected)
+            comp_before, comp_after, _companions_stale = _companion_deltas_from_buckets(slug, affected, buckets)
+            report.companion_bytes_before = comp_before
+            report.companion_bytes_after = comp_after
+            report.companions_regenerated = sorted(affected)
+
+        if would_touch_mirror or stale_ids:
+            # (#358 repair finding 2): the returned counts are batch-FILE
+            # counts, a different unit from the event counts above — kept
+            # under their own honestly-named fields (see ``_reconcile_mirror_
+            # for_project``'s docstring). Streaming (issue #358): reads the
+            # FINAL candidate back off its own commit rather than passing a
+            # materialized list.
+            files_removed, files_written = _reconcile_mirror_for_project(
+                iter_events(repo, final.commit_sha), old_ids=journaled_old_ids, event_log_head=new_head, repo_id=slug,
+            )
+            report.mirror_batch_files_removed = files_removed
+            report.mirror_batch_files_written = files_written
+            report.mirror_rewritten = True
+
+        # Cleared only AFTER the companion loop below finishes (issue #358
+        # repair v3 round 2 follow-up): clearing it here, before that loop ran,
+        # meant a kill mid-loop left NO journal for a killed run's resume to
+        # bypass the prefilter with — and the ref/mirror are already compacted
+        # by this point, so their tree can legitimately fall back under the
+        # prefilter threshold, silently short-circuiting the resume before it
+        # ever reaches the companion-delta check and re-running the
+        # interrupted regen.
+        for trace_id in sorted(affected):
+            trail_events, context_events = buckets.get(trace_id, ([], []))
+            project_per_trace_exports(
+                repo, project_slug=slug, trace_id=trace_id,
+                events=trail_events + context_events, events_authoritative=True,
+            )
+
+        _clear_journal(slug)
+
+        return report
+    finally:
+        buckets.close()
 
 
 def _process_unreachable_project(slug: str, *, apply: bool, single_project_bucket: bool) -> ProjectAnchorSearchReport:

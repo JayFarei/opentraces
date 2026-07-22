@@ -357,26 +357,6 @@ def compact_search_events(
     return compacted, stats
 
 
-class NonContiguousSearchGroupError(RuntimeError):
-    """Raised by :func:`stream_compact_events` when a legacy per-patch
-    anchor-search group's ``(batch_id, search_head.hex)`` key reappears
-    AFTER streaming compaction already closed that group earlier in the same
-    pass.
-
-    A real log can never produce this: a single reconcile run commits its
-    whole batch as ONE atomic append (``event_log.append_event_batch``
-    assigns every draft in one call sequential, contiguous ``event_sequence``
-    values under one ``batch_id``), so a legacy group's members are always
-    CONTIGUOUS in sequence order — only hand-built, batch-straddling fixture
-    data could trigger this. Raising here (rather than silently opening a
-    SECOND summary for the same logical group, or growing an unbounded
-    number of concurrently-open groups to tolerate interleaving) is what
-    keeps streaming compaction's peak memory bounded to ONE open group's
-    accumulated ``results[]`` entries at a time — see the module docstring
-    and :func:`stream_compact_events`.
-    """
-
-
 def stream_compact_events(
     events: "Iterable[TrailEvent]",
     stats: CompactionStats,
@@ -386,29 +366,44 @@ def stream_compact_events(
 ) -> "Iterator[TrailEvent]":
     """Streaming counterpart to :func:`compact_search_events`: consumes
     ``events`` ONE AT A TIME, in sequence order, and yields each finalized
-    output event as soon as its slot closes — never materializing ``events``
-    or the output chain into a list (issue #358: parsing one mature
-    project's ~500K-event canonical chain into ``TrailEvent`` objects alone
-    cost 10-16GB of RSS; holding BOTH that and the freshly ``_refinalize``d
-    compacted list at once — every passthrough event also gets a brand-new
-    ``TrailEvent`` instance, see ``_finalize_slot`` — doubled it to the
-    observed 34-37GB spike).
+    output event as soon as its BATCH closes — never materializing
+    ``events`` or the output chain into a list (issue #358: parsing one
+    mature project's ~500K-event canonical chain into ``TrailEvent`` objects
+    alone cost 10-16GB of RSS; holding BOTH that and the freshly
+    ``_refinalize``d compacted list at once — every passthrough event also
+    gets a brand-new ``TrailEvent`` instance, see ``_finalize_slot`` —
+    doubled it to the observed 34-37GB spike).
 
-    Peak memory here is O(1) ``TrailEvent`` (the one currently being
-    classified) plus AT MOST ONE open legacy-group's accumulated
-    ``results[]`` entries (small per-patch dicts, not full events — see
-    ``_result_entry_from_legacy``), never the whole stream. Classification
-    and slot construction mirror :func:`plan_compacted_stream` /
-    :func:`_refinalize` EXACTLY — both call the shared ``_finalize_slot`` —
-    so the two are byte-identical on the same input; only HOW the chain is
-    walked and built differs.
+    Buffers ONE ``batch_id`` at a time and hands that buffer to
+    :func:`plan_compacted_stream` — the SAME grouping function the
+    list-based path uses — instead of tracking one open legacy group across
+    the whole stream and closing it on any differing event (issue #358
+    repair round 3, blocker). A legacy per-patch search group's key is
+    ``(batch_id, search_head.hex)``, and ``batch_id`` identifies ONE atomic
+    ``append_event_batch`` call, so a group can never span two batches — but
+    the pre-plan-090 writer (``anchors.py``, before this issue repointed it;
+    verified against ``git show 8b71cc7f1ea:src/opentraces/core/trails/
+    anchors.py``) appended a ``git_anchor_search_completed`` draft AND,
+    whenever the patch anchored, a ``git_anchor_created`` draft into the
+    SAME batch for the SAME patch, so a legacy group's members are routinely
+    interleaved with non-member events WITHIN their own batch, not merely
+    adjacent to one another. Closing a group the instant ANY differing event
+    appeared (the pre-round-3 shape) treated that ordinary interleaving as
+    "the group ended", then raised when the next same-key legacy event
+    reappeared later in the SAME batch — on exactly the shape a mature,
+    pre-plan-090 bucket actually has. Buffering the whole batch before
+    finalizing any of its slots removes the false premise entirely: within
+    one batch, event ordering can no longer split a group. Peak memory here
+    is O(one batch) — a batch is bounded by one reconcile run's own patch
+    count (deadline-gated, #65 anti-livelock) — never O(corpus), which is
+    the property this module actually needs.
 
-    A group closes — and its summary slot finalizes and is yielded — the
-    moment a DIFFERENT event is seen (a non-search event, an already-v3
-    event, a v2 fat summary, or a legacy event with a different
-    ``(batch_id, search_head)`` key), never lazily at end-of-stream only.
-    See :class:`NonContiguousSearchGroupError` for why at most one group is
-    ever open.
+    Classification and slot construction mirror :func:`plan_compacted_
+    stream` / :func:`_refinalize` EXACTLY, because each batch buffer is
+    handed to the former verbatim and each resulting slot is finalized via
+    the shared ``_finalize_slot`` — so the two are byte-identical on the
+    same input by construction; only HOW the chain is walked and built
+    differs.
 
     ``stats`` is mutated in place (a generator cannot both yield values and
     ``return`` a final result the caller can read before the generator is
@@ -417,111 +412,35 @@ def stream_compact_events(
     """
     previous_event_id = start_previous_event_id
     next_index = start_sequence
-    open_key: tuple[str, str | None] | None = None
-    open_slot: _Slot | None = None
-    closed_keys: set[tuple[str, str | None]] = set()
-    summary_events_out = 0
+    batch_buffer: list[TrailEvent] = []
 
-    def _close() -> TrailEvent | None:
-        nonlocal open_key, open_slot, previous_event_id, next_index
-        if open_slot is None:
-            return None
-        finalized = _finalize_slot(open_slot, index=next_index, previous_event_id=previous_event_id)
-        next_index += 1
-        previous_event_id = finalized.event_id
-        closed_keys.add(open_key)
-        open_key = None
-        open_slot = None
-        return finalized
+    def _flush() -> "Iterator[TrailEvent]":
+        nonlocal previous_event_id, next_index
+        if not batch_buffer:
+            return
+        slots, batch_stats = plan_compacted_stream(batch_buffer)
+        stats.legacy_search_events_in += batch_stats.legacy_search_events_in
+        stats.summary_events_in += batch_stats.summary_events_in
+        stats.fat_summaries_rewritten += batch_stats.fat_summaries_rewritten
+        stats.non_search_events += batch_stats.non_search_events
+        stats.groups_collapsed += batch_stats.groups_collapsed
+        for slot in slots:
+            finalized = _finalize_slot(slot, index=next_index, previous_event_id=previous_event_id)
+            next_index += 1
+            previous_event_id = finalized.event_id
+            if finalized.event_type == ANCHOR_SEARCH_EVENT_TYPE and is_summary_search_event(finalized):
+                stats.summary_events_out += 1
+            yield finalized
+        batch_buffer.clear()
 
     for event in events:
         stats.events_in += 1
-        if is_summary_search_event(event):
-            stats.summary_events_in += 1
-            payload = event.payload or {}
-            closed = _close()
-            if closed is not None:
-                summary_events_out += 1
-                yield closed
-            if _is_already_v3_shaped(payload):
-                finalized = _finalize_slot(
-                    _Slot(kind="passthrough", event=event),
-                    index=next_index, previous_event_id=previous_event_id,
-                )
-            else:
-                stats.fat_summaries_rewritten += 1
-                slot = _Slot(
-                    kind="summary",
-                    search_head=payload.get("search_head"),
-                    algorithms_attempted=list(payload.get("algorithms_attempted") or []),
-                    capture_method=list(event.capture_method),
-                    schema_version=event.SCHEMA_VERSION,
-                    security_version=event.SECURITY_VERSION,
-                    attribution_version=event.ATTRIBUTION_VERSION,
-                    event_time=event.event_time,
-                )
-                slot.results.extend(
-                    entry for entry in payload.get("results") or [] if isinstance(entry, dict)
-                )
-                finalized = _finalize_slot(slot, index=next_index, previous_event_id=previous_event_id)
-            next_index += 1
-            previous_event_id = finalized.event_id
-            summary_events_out += 1
-            yield finalized
-            continue
-        if _is_legacy_per_patch_search(event):
-            stats.legacy_search_events_in += 1
-            payload = event.payload or {}
-            search_head = payload.get("search_head")
-            head_hex = search_head.get("hex") if isinstance(search_head, dict) else None
-            group_key = (event.batch_id, head_hex)
-            if open_key is not None and open_key != group_key:
-                closed = _close()
-                if closed is not None:
-                    summary_events_out += 1
-                    yield closed
-            if open_key is None:
-                if group_key in closed_keys:
-                    raise NonContiguousSearchGroupError(
-                        f"legacy anchor-search group {group_key!r} reappeared after "
-                        "closing earlier in the streaming compaction pass -- groups "
-                        "must be contiguous (see NonContiguousSearchGroupError)"
-                    )
-                open_key = group_key
-                open_slot = _Slot(
-                    kind="summary",
-                    search_head=search_head,
-                    algorithms_attempted=list(payload.get("algorithms_attempted") or []),
-                    capture_method=list(event.capture_method),
-                    schema_version=event.SCHEMA_VERSION,
-                    security_version=event.SECURITY_VERSION,
-                    attribution_version=event.ATTRIBUTION_VERSION,
-                    event_time=event.event_time,
-                )
-            assert open_slot is not None
-            open_slot.results.append(_result_entry_from_legacy(event))
-            continue
-        stats.non_search_events += 1
-        closed = _close()
-        if closed is not None:
-            summary_events_out += 1
-            yield closed
-        finalized = _finalize_slot(
-            _Slot(kind="passthrough", event=event),
-            index=next_index, previous_event_id=previous_event_id,
-        )
-        next_index += 1
-        previous_event_id = finalized.event_id
-        yield finalized
+        if batch_buffer and event.batch_id != batch_buffer[0].batch_id:
+            yield from _flush()
+        batch_buffer.append(event)
 
-    closed = _close()
-    if closed is not None:
-        summary_events_out += 1
-        yield closed
-
+    yield from _flush()
     stats.events_out += next_index - start_sequence
-    stats.summary_events_out += summary_events_out
-    stats.groups_collapsed += len(closed_keys)
 
 
 def compact_and_append(
