@@ -174,7 +174,11 @@ class TestWatcherSweep:
             if event.event_type == "git_anchor_search_completed"
         ]
         assert len(searches) == 1
-        assert searches[0].payload["results"][0]["result"] == "unknown"
+        # #359: maturation's flush is the v3-compact shape -- anchored-only
+        # results[] (empty here, the one patch is unknown) plus the unknown
+        # outcome as an exact id, never a fat per-patch dict.
+        assert searches[0].payload["results"] == []
+        assert searches[0].payload["unanchored_trace_patch_ids"] == ["quiet-patch"]
 
     def test_steady_state_quiet_tick_skips_maturation_scan(
         self, tmp_path, monkeypatch

@@ -903,29 +903,67 @@ def bucket_repair_cmd(bucket_root: Path | None, as_json: bool) -> None:
     is_flag=True,
     help="Actually remove the listed cruft. Without it, this is print-only.",
 )
+@click.option(
+    "--anchor-search",
+    "anchor_search",
+    is_flag=True,
+    help=(
+        "EXPERIMENTAL, opt-in: also compact fat anchor-search history "
+        "(issue #358). Off by default — this pass is O(corpus) and currently "
+        "slow on large real buckets. See issue #362."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
-    """Reclaim leaked Trace Trails cruft under ``.git/**/opentraces/``.
+def bucket_reclaim_cmd(
+    repo: Path | None, apply: bool, anchor_search: bool, as_json: bool
+) -> None:
+    """Reclaim leaked Trace Trails cruft (and, opt-in, fat anchor-search history).
 
-    Lists leaked ``*.tmp`` files and orphan/duplicate accelerator pickles
-    (per-worktree ``event_log_snapshot.pkl`` / ``event_index`` copies left by
-    the pre-#169-C duplication bug) with per-candidate byte counts and a total.
+    DRY-RUN BY DEFAULT (a plain run mutates nothing; ``--apply`` performs the
+    writes):
 
-    DRY-RUN BY DEFAULT: a plain run deletes nothing and leaves the file set
-    byte-for-byte unchanged. ``--apply`` removes the listed cruft and NEVER
-    touches the live ``event_log_snapshot.pkl``, the live ``event_index/base.pkl``,
-    the canonical event ref, or anything under the bucket.
+    \b
+    1. Leaked ``.git/**/opentraces/`` cruft (``--repo``-scoped, defaults to
+       the current directory): leaked ``*.tmp`` files and orphan/duplicate
+       accelerator pickles (per-worktree ``event_log_snapshot.pkl`` /
+       ``event_index`` copies left by the pre-#169-C duplication bug), with
+       per-candidate byte counts. NEVER touches the live
+       ``event_log_snapshot.pkl``, the live ``event_index/base.pkl``, the
+       canonical event ref, or anything under the bucket.
+    2. Fat anchor-search history (issue #358) — ONLY with ``--anchor-search``.
+       EXPERIMENTAL and opt-in: legacy per-patch and v2-fat
+       ``git_anchor_search_completed`` events are the ~26 GB driver behind an
+       oversized bucket, but this compaction pass is O(corpus) and currently
+       too slow to run by default on large real buckets (issue #362). When
+       enabled it compacts each affected project's canonical event chain to
+       the v3-compact shape (an atomic ``update-ref`` swap), reconciles the
+       bucket's events mirror, and regenerates only the trail companions a
+       fat/legacy search event touched. A killed run is journaled and
+       RESUMABLE — re-running finishes the interrupted work — but is NOT
+       guaranteed readable in between: reads of an affected project (e.g.
+       ``trail`` companions) can error until the re-run completes.
     """
     from ..core.bucket_reclaim import reclaim_repo
 
     target = Path(repo) if repo is not None else Path.cwd()
-    report = reclaim_repo(target, apply=apply)
-    payload = envelope("opentraces.bucket.reclaim.v1", reclaim=report.as_dict())
+    cruft_report = reclaim_repo(target, apply=apply)
+    data = cruft_report.as_dict()
+    search_report = None
+    if anchor_search:
+        from ..core.bucket_reclaim_search import reclaim_anchor_search
+
+        search_report = reclaim_anchor_search(apply=apply)
+        data["anchor_search"] = search_report.as_dict()
+    else:
+        data["anchor_search"] = {
+            "skipped": True,
+            "reason": "experimental; pass --anchor-search to run (issue #358/#362)",
+        }
+    payload = envelope("opentraces.bucket.reclaim.v1", reclaim=data)
     if as_json:
         click.echo(_dump_json(payload))
         return
 
-    data = report.as_dict()
     click.echo(f"Bucket reclaim (apply={apply}):")
     click.echo(f"  repo: {data['repo']}")
     click.echo(f"  candidates: {data['candidate_count']} ({data['total_bytes']} bytes)")
@@ -936,6 +974,44 @@ def bucket_reclaim_cmd(repo: Path | None, apply: bool, as_json: bool) -> None:
     else:
         click.echo("  (dry run — nothing deleted; pass --apply to reclaim)")
     for err in data["errors"]:
+        click.echo(f"  error: {err}", err=True)
+
+    if not anchor_search:
+        click.echo("")
+        click.echo(
+            "Anchor-search compaction: skipped (experimental; pass "
+            "--anchor-search to compact fat #358 history — slow on large buckets)"
+        )
+        return
+
+    search_data = data["anchor_search"]
+    click.echo("")
+    click.echo(f"Anchor-search compaction (apply={apply}):")
+    for proj in search_data["projects"]:
+        suffix = f" — {proj['reason']}" if proj["reason"] else ""
+        click.echo(f"    - {proj['project_slug']} [{proj['action']}]{suffix}")
+        if proj["action"] in ("compacted", "mirror_only_compacted"):
+            click.echo(
+                f"        events: {proj['events_before']} -> {proj['events_after']}"
+                f"  (legacy_collapsed={proj['legacy_events_collapsed']},"
+                f" fat_rewritten={proj['fat_summaries_rewritten']})"
+            )
+            click.echo(
+                f"        ref_rewritten={proj['ref_rewritten']}"
+                f"  mirror_rewritten={proj['mirror_rewritten']}"
+                f"  companions={proj['companion_count']}"
+            )
+            click.echo(f"        bytes: {proj['bytes_before']} -> {proj['bytes_after']}")
+            if proj["ref_bytes_reclaimable_after_gc"]:
+                click.echo(
+                    f"        ref: {proj['ref_bytes_before']} -> {proj['ref_bytes_after']}"
+                    f"  ({proj['ref_bytes_reclaimable_after_gc']} B still on disk in .git"
+                    " until 'git gc' runs — not counted above)"
+                )
+    click.echo(f"  total bytes reclaimed: {search_data['bytes_reclaimed']}")
+    if not apply:
+        click.echo("  (dry run — nothing rewritten; pass --apply to reclaim)")
+    for err in search_data["errors"]:
         click.echo(f"  error: {err}", err=True)
 
 

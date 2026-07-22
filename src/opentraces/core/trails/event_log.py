@@ -10,7 +10,7 @@ import tempfile
 import uuid
 from opentraces.core._time import utc_now_str
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .models import (
     GitObjectID,
@@ -175,87 +175,129 @@ def _tree_oid_from_payload(cwd: Path, event: TrailEvent) -> GitObjectID | None:
     return oid
 
 
-def _write_batch_tree(cwd: Path, events: list[TrailEvent], batch: dict[str, Any]) -> str:
-    snapshot_tree_entries: list[tuple[str, str]] = []
-    boundary_tree_entries: list[tuple[str, str]] = []
-    with tempfile.TemporaryDirectory(prefix="opentraces-trails-index-") as td:
-        index_path = str(Path(td) / "index")
-        env = os.environ.copy()
-        env["GIT_INDEX_FILE"] = index_path
-        _git(cwd, ["read-tree", "--empty"], env=env)
+class StreamingChainWriter:
+    """Incrementally stage ``TrailEvent``\\ s into a scratch git index and
+    derive a tree SHA on demand (issue #358).
 
-        batch_blob = _hash_blob(cwd, json.dumps(batch, sort_keys=True, indent=2) + "\n")
+    ``_write_batch_tree`` used to require a fully materialized ``list[
+    TrailEvent]`` up front purely because its CALLERS always had one in hand
+    -- the per-event staging loop itself only ever needs ONE event at a
+    time. Pulling that loop body out into ``stage()`` lets a caller feed
+    events one at a time from a live generator (issue #358's streaming
+    reclaim compaction) without ever holding more than the one event
+    currently being staged in Python memory; the accumulating state (staged
+    blob/tree oids, the batch tree itself) lives in the SCRATCH GIT INDEX on
+    disk, not in a Python list.
+
+    ``finalize()`` can be called more than once on the SAME writer: staging
+    more events after a prior ``finalize()`` and calling it again derives a
+    tree covering everything staged so far (the scratch index is never
+    reset), which is what a CAS-retry delta-fold needs -- see
+    ``bucket_reclaim_search.py``.
+    """
+
+    def __init__(self, cwd: Path) -> None:
+        self._cwd = cwd
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="opentraces-trails-index-")
+        index_path = str(Path(self._tmpdir.name) / "index")
+        self._env = os.environ.copy()
+        self._env["GIT_INDEX_FILE"] = index_path
+        _git(cwd, ["read-tree", "--empty"], env=self._env)
+        self._retained_blobs: set[str] = set()
+        self._retained_trees: set[str] = set()
+        self._snapshot_tree_entries: list[tuple[str, str]] = []
+        self._boundary_tree_entries: list[tuple[str, str]] = []
+        self.event_count = 0
+
+    def stage(self, event: TrailEvent) -> None:
+        cwd, env = self._cwd, self._env
+        payload = event.model_dump(mode="json")
+        event_blob = _hash_blob(cwd, json.dumps(payload, sort_keys=True, indent=2) + "\n")
         _git(
             cwd,
-            ["update-index", "--add", "--cacheinfo", f"100644,{batch_blob},batch.json"],
+            [
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"100644,{event_blob},events/{event.event_sequence:012d}.json",
+            ],
             env=env,
         )
-
-        retained_blobs: set[str] = set()
-        retained_trees: set[str] = set()
-        for event in events:
-            payload = event.model_dump(mode="json")
-            event_blob = _hash_blob(cwd, json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        for oid in _collect_object_ids(event.payload):
+            if oid.hex in self._retained_blobs:
+                continue
+            if _object_type(cwd, oid) != "blob":
+                continue
+            self._retained_blobs.add(oid.hex)
             _git(
                 cwd,
                 [
                     "update-index",
                     "--add",
                     "--cacheinfo",
-                    f"100644,{event_blob},events/{event.event_sequence:012d}.json",
+                    f"100644,{oid.hex},objects/blobs/{oid.hex}",
                 ],
                 env=env,
             )
-            for oid in _collect_object_ids(event.payload):
-                if oid.hex in retained_blobs:
-                    continue
-                if _object_type(cwd, oid) != "blob":
-                    continue
-                retained_blobs.add(oid.hex)
-                _git(
-                    cwd,
-                    [
-                        "update-index",
-                        "--add",
-                        "--cacheinfo",
-                        f"100644,{oid.hex},objects/blobs/{oid.hex}",
-                    ],
-                    env=env,
-                )
-            snapshot_id = event.payload.get("snapshot_id")
-            oid = _tree_oid_from_payload(cwd, event)
-            if oid:
-                safe_event_id = _safe_tree_entry_name(event.event_id)
-                boundary_tree_entries.append(
-                    (f"{event.event_sequence:012d}-{safe_event_id}", oid.hex)
-                )
-            if event.event_type == "trace_snapshot_created" and oid and snapshot_id:
-                if oid.hex not in retained_trees:
-                    retained_trees.add(oid.hex)
-                    safe_snapshot_id = _safe_tree_entry_name(str(snapshot_id))
-                    snapshot_tree_entries.append((safe_snapshot_id, oid.hex))
+        snapshot_id = event.payload.get("snapshot_id")
+        oid = _tree_oid_from_payload(cwd, event)
+        if oid:
+            safe_event_id = _safe_tree_entry_name(event.event_id)
+            self._boundary_tree_entries.append(
+                (f"{event.event_sequence:012d}-{safe_event_id}", oid.hex)
+            )
+        if event.event_type == "trace_snapshot_created" and oid and snapshot_id:
+            if oid.hex not in self._retained_trees:
+                self._retained_trees.add(oid.hex)
+                safe_snapshot_id = _safe_tree_entry_name(str(snapshot_id))
+                self._snapshot_tree_entries.append((safe_snapshot_id, oid.hex))
+        self.event_count += 1
 
+    def finalize(self, batch: dict[str, Any]) -> str:
+        cwd, env = self._cwd, self._env
+        batch_blob = _hash_blob(cwd, json.dumps(batch, sort_keys=True, indent=2) + "\n")
+        _git(
+            cwd,
+            ["update-index", "--add", "--cacheinfo", f"100644,{batch_blob},batch.json"],
+            env=env,
+        )
         base_tree = _git(cwd, ["write-tree"], env=env).stdout.strip()
 
-    if not snapshot_tree_entries and not boundary_tree_entries:
-        return base_tree
+        if not self._snapshot_tree_entries and not self._boundary_tree_entries:
+            return base_tree
 
-    root_entries = _git(cwd, ["ls-tree", base_tree]).stdout
-    if snapshot_tree_entries:
-        snapshots_tree_input = "".join(
-            f"040000 tree {tree_hex}\t{name}\n"
-            for name, tree_hex in sorted(snapshot_tree_entries)
-        )
-        snapshots_tree = _git(cwd, ["mktree"], input=snapshots_tree_input).stdout.strip()
-        root_entries += f"040000 tree {snapshots_tree}\tsnapshots\n"
-    if boundary_tree_entries:
-        trees_tree_input = "".join(
-            f"040000 tree {tree_hex}\t{name}\n"
-            for name, tree_hex in sorted(boundary_tree_entries)
-        )
-        trees_tree = _git(cwd, ["mktree"], input=trees_tree_input).stdout.strip()
-        root_entries += f"040000 tree {trees_tree}\ttrees\n"
-    return _git(cwd, ["mktree"], input=root_entries).stdout.strip()
+        root_entries = _git(cwd, ["ls-tree", base_tree]).stdout
+        if self._snapshot_tree_entries:
+            snapshots_tree_input = "".join(
+                f"040000 tree {tree_hex}\t{name}\n"
+                for name, tree_hex in sorted(self._snapshot_tree_entries)
+            )
+            snapshots_tree = _git(cwd, ["mktree"], input=snapshots_tree_input).stdout.strip()
+            root_entries += f"040000 tree {snapshots_tree}\tsnapshots\n"
+        if self._boundary_tree_entries:
+            trees_tree_input = "".join(
+                f"040000 tree {tree_hex}\t{name}\n"
+                for name, tree_hex in sorted(self._boundary_tree_entries)
+            )
+            trees_tree = _git(cwd, ["mktree"], input=trees_tree_input).stdout.strip()
+            root_entries += f"040000 tree {trees_tree}\ttrees\n"
+        return _git(cwd, ["mktree"], input=root_entries).stdout.strip()
+
+    def close(self) -> None:
+        self._tmpdir.cleanup()
+
+    def __enter__(self) -> "StreamingChainWriter":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+def _write_batch_tree(cwd: Path, events: "list[TrailEvent] | Any", batch: dict[str, Any]) -> str:
+    with StreamingChainWriter(cwd) as writer:
+        for event in events:
+            writer.stage(event)
+        return writer.finalize(batch)
 
 
 def _commit_batch(cwd: Path, tree_sha: str, head: str | None, batch_id: str) -> str:
@@ -385,18 +427,41 @@ def _validate_import_events(events: list[TrailEvent]) -> list[TrailEvent]:
     return ordered
 
 
+class EventLogHeadMovedError(RuntimeError):
+    """Raised by :func:`import_event_log` when ``expected_head`` was supplied
+    and no longer matches the ref's actual current head at swap time — the
+    caller's snapshot precondition no longer holds, so it must not proceed
+    with a swap built from data read against that stale snapshot (issue #358
+    repair: a fresh self-read here is exactly what let a long-running caller
+    silently force-overwrite a concurrent append)."""
+
+
+# Sentinel distinguishing "no expectation supplied" (preserve the original
+# fresh-self-read behavior every other caller relies on) from an explicit
+# ``expected_head=None`` (the caller's snapshot WAS an empty ref).
+_UNSET: Any = object()
+
+
 def import_event_log(
     cwd: Path,
     events: list[TrailEvent | dict[str, Any]],
     *,
     writer: str = "bucket-restore",
     force: bool = False,
+    expected_head: str | None = _UNSET,
 ) -> dict[str, Any]:
     """Materialize a complete TrailEvent stream into ``EVENT_LOG_REF``.
 
     Bucket sync exports Trace Trails as file-shaped JSONL segments. This helper
     rebuilds the local Git ref from that stream so normal trail commands can run
     against a repo supplied by the user.
+
+    ``expected_head``, when supplied, turns the swap into a real compare-and-
+    swap against a snapshot the CALLER already holds: the ref's actual current
+    head must equal it or this raises :class:`EventLogHeadMovedError` before
+    doing any work, rather than falling back to a fresh self-read of whatever
+    the head happens to be right now. Omitting it preserves the original
+    self-read behavior.
     """
 
     cwd = cwd.resolve()
@@ -406,6 +471,11 @@ def import_event_log(
     ]
     ordered = _validate_import_events(parsed)
     head = _ref_head(cwd)
+    if expected_head is not _UNSET and head != expected_head:
+        raise EventLogHeadMovedError(
+            f"{EVENT_LOG_REF} head is {head!r}, expected {expected_head!r} — "
+            "the ref moved after the caller's snapshot was taken"
+        )
     if head is not None:
         existing = read_events(cwd, verify=False)
         existing_ids = [event.event_id for event in existing]
@@ -681,6 +751,34 @@ def _read_events_for_trace_fullscan(
             matched.append(event)
     matched.sort(key=lambda event: event.event_sequence)
     return matched
+
+
+def iter_events(cwd: Path, head: str) -> "Iterator[TrailEvent]":
+    """Stream every event reachable from ``head``, ONE AT A TIME, in
+    ``event_sequence`` order -- never materializing the whole chain into a
+    list (issue #358: that is exactly what ``read_events`` does, and what
+    pinned 10-16GB parsing a single mature project's canonical log).
+
+    ``head`` is an explicit, already-resolved commit sha -- unlike
+    ``read_events``, this never re-derives it from the ref internally, so a
+    concurrent writer moving ``EVENT_LOG_REF`` after the caller resolved
+    ``head`` cannot change what this reads (the commit object graph a sha
+    names is immutable); the caller's own CAS against that same ``head`` is
+    what detects the race, not a bracket around this read.
+
+    Blobs stream through ONE ``git cat-file --batch`` via
+    ``_iter_blobs_batch``, parsed and yielded immediately -- peak memory is
+    ONE parsed ``TrailEvent`` (plus whatever the consumer's own generator
+    pipeline holds onto), never the list ``read_events`` returns and caches.
+    Deliberately bypasses ``_READ_EVENTS_CACHE`` and the #137 index entirely
+    (no by-key lookup is needed for "give me everything") so a caller
+    walking many projects in one process (bucket reclaim) never pins one
+    project's parsed chain while moving on to the next.
+    """
+    cwd = cwd.resolve()
+    entries = _list_event_blob_entries(cwd, head)
+    for raw in _iter_blobs_batch(cwd, entries):
+        yield TrailEvent.model_validate_json(raw)
 
 
 def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:

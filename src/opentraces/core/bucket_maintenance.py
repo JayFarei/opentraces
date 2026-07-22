@@ -41,6 +41,7 @@ from .bucket_envelope import (
     project_per_trace_exports,
 )
 from .bucket_events import BUCKET_EVENTS_INDEX_SCHEMA, sync_events_mirror
+from .bucket_reclaim_search import resume_pending_anchor_search_journals
 from .bucket_layout import (
     blobs_v1_context_path,
     blobs_v1_root,
@@ -258,6 +259,16 @@ def bucket_repair(
     bucket_sourced_traces = 0
     events_mirrored = 0
     manifest_regenerated = False
+
+    # Issue #358 repair: finish any anchor-search reclaim run a prior
+    # process left interrupted BEFORE the normal per-project mirror sync
+    # below runs — a reader mid that crash window can otherwise be handed a
+    # mirror superset (see ``bucket_reclaim_search`` module docstring's
+    # "Crash safety" section), and nothing else routine ever revisits it. A
+    # no-op scan (the common case: no pending journal) costs one directory
+    # listing.
+    if not dry_run:
+        resume_pending_anchor_search_journals()
 
     projects = _iter_opted_in_projects()
     handled_pairs: set[tuple[str, str]] = set()

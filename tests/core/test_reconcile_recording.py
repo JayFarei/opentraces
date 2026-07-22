@@ -120,7 +120,12 @@ def test_zero_anchor_reconcile_appends_exactly_one_summary_event(tmp_path):
     assert payload["searched"] == 5
     assert payload["anchored"] == 0
     assert payload["unknown"] == 5
-    assert len(payload["results"]) == 5
+    # #358 v3: results[] is ANCHORED-ONLY — a fully-unknown reconcile carries
+    # zero result dicts. Coverage takes over: the through-pointer claims the
+    # 5 searched-but-unknown patches without a per-patch dict for any of them.
+    assert payload["results"] == []
+    assert payload["coverage"]["scope_trace_id"] is None
+    assert payload["coverage"]["through_trace_patch_id"] == "tp-4"
 
 
 def test_k_anchor_reconcile_appends_k_plus_one_events(tmp_path):
