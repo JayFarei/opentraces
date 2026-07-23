@@ -168,12 +168,31 @@ def mature_trails(
             # watermark is still only stamped on a full, untruncated sweep (below),
             # so the quiet-tick gate keeps re-entering until the remainder is done.
             try:
+                # #363: a coverage claim may be minted ONLY from a provably
+                # complete view. That is EXACTLY the full recent-window,
+                # untruncated sweep — the same condition that stamps the
+                # watermark below. Coupling the two guarantees that whenever a
+                # coverage claim is minted the watermark is stamped in the SAME
+                # call, so the (deliberately coverage-blind) quiet-tick gate
+                # short-circuits on the next tick and cannot livelock on a
+                # claim it does not read. A commit-subset sweep or any
+                # deadline-truncated flush is NOT complete -> exact-ids.
+                # #363 verify (must-fix): a swallowed per-(chunk, commit)
+                # reconcile exception lands in `errors` WITHOUT setting
+                # `truncated`, so `not truncated` alone is NOT proof of a
+                # complete view. Any accumulated error means at least one
+                # commit's search was incomplete -> fall back to the
+                # conservative exact-ids shape rather than mint an unsound
+                # coverage claim from a partial view (the load-bearing
+                # "coverage claim ONLY from a COMPLETE view" honesty contract).
+                mint_coverage = commit_refs is None and not truncated and not errors
                 _flush_maturation_scratch(
                     repo,
                     scratch,
                     commits=commits,
                     attribution_version=effective_version,
                     writer=writer,
+                    mint_coverage=mint_coverage,
                 )
                 anchors_created = pending_anchors_created
                 searches_completed = pending_searches_completed
@@ -546,6 +565,21 @@ def _store_chunk_outputs(
     scratch.commit()
 
 
+def _max_patch_id(scratch: sqlite3.Connection) -> str | None:
+    """The trace_patch_id at the GLOBAL-max (keep-first) position, or None.
+
+    ``patch_positions`` is the full, un-scoped patch ordering (keep-first per id
+    over canonical event_sequence order — see ``_build_dedup_index``). Its
+    max-position row is the last patch in canonical order, which is exactly the
+    through-pointer a coverage claim minted from a complete sweep must carry
+    (matching anchors.py's ``coverage_trace_patch_id`` = max first-occurrence
+    position over all processed patches)."""
+    row = scratch.execute(
+        "SELECT patch_id FROM patch_positions ORDER BY position DESC LIMIT 1"
+    ).fetchone()
+    return row[0] if row is not None else None
+
+
 def _flush_maturation_scratch(
     repo: Path,
     scratch: sqlite3.Connection,
@@ -553,7 +587,15 @@ def _flush_maturation_scratch(
     commits: list[str],
     attribution_version: str,
     writer: str,
+    mint_coverage: bool = False,
 ) -> None:
+    # #363: on a provably-COMPLETE sweep (full recent window, untruncated — see
+    # the caller's ``mint_coverage`` computation) every patch at-or-before the
+    # global-max position was search-covered for every flushed commit, so this
+    # flush mints the O(1) ``coverage`` through-pointer claim instead of the
+    # O(backlog) ``unanchored_trace_patch_ids`` exact-id list. The through-id is
+    # the global-max patch, loop-invariant across commits, resolved once here.
+    coverage_through_id = _max_patch_id(scratch) if mint_coverage else None
     for commit in commits:
         results = [
             json.loads(row[0])
@@ -575,21 +617,43 @@ def _flush_maturation_scratch(
             continue
         drafts: list[TrailEventDraft] = []
         if results:
-            # #359: maturation's view of the log is the #65 pre-extracted
-            # slice, chunked to bound memory — it never sees the FULL,
-            # unscoped patch ordering a coverage claim's max-position
-            # boundary needs to be sound (that soundness argument belongs
-            # only to anchors.py's own complete scoped read, structurally
-            # enforced there). So this flush stays claim-free and instead
+            # #359/#363: maturation's view of the log is the #65 pre-extracted
+            # slice, chunked to bound memory — it can never HOLD the full patch
+            # ordering in memory at once. But a coverage claim's soundness needs
+            # only that every patch at-or-before its boundary was
+            # search-covered, plus the boundary's id — NOT the whole ordering
+            # resident. On an UNTRUNCATED full recent-window sweep
+            # (``mint_coverage``, computed by the caller) both hold: the sweep
+            # streams every ``trace_patch_created`` in canonical order into
+            # contiguous-prefix chunks and searches every uncovered patch
+            # against each commit, so every patch at-or-before the global-max
+            # position (``coverage_through_id``, read once from the on-disk
+            # ``patch_positions`` table) is search-covered for THIS commit —
+            # exactly the completeness anchors.py's own complete read has. So
+            # this flush mints the O(1) ``coverage`` claim, replacing the
+            # O(backlog) exact-id list that dripped ~9MB/min on the real machine
+            # (#363). When the sweep is NOT provably complete (a commit-subset
+            # sweep, or any deadline-truncated flush) it stays claim-free and
             # keeps ``results[]`` anchored-only plus the EXACT ids of the
             # unknown outcomes this run recorded (the v3-compact shape the
-            # tri-shape reader already handles, search_records.py) — never
-            # the v2 full-mixed shape those unknown dicts came from.
-            unanchored_trace_patch_ids = [
-                str(result["trace_patch_id"])
-                for result in results
-                if result.get("result") != "anchored" and result.get("trace_patch_id")
-            ]
+            # tri-shape reader already handles, search_records.py) — never the
+            # v2 full-mixed shape those unknown dicts came from.
+            coverage: dict[str, object] | None = None
+            unanchored_trace_patch_ids: list[str] | None = None
+            if mint_coverage and coverage_through_id is not None:
+                # Unscoped full sweep -> scope_trace_id is None (covers every
+                # trace up to the boundary); the sweep searched all traces'
+                # patches, so that is sound.
+                coverage = {
+                    "through_trace_patch_id": coverage_through_id,
+                    "scope_trace_id": None,
+                }
+            else:
+                unanchored_trace_patch_ids = [
+                    str(result["trace_patch_id"])
+                    for result in results
+                    if result.get("result") != "anchored" and result.get("trace_patch_id")
+                ]
             drafts.append(
                 TrailEventDraft(
                     event_type="git_anchor_search_completed",
@@ -602,6 +666,7 @@ def _flush_maturation_scratch(
                         search_head={"algo": "sha1", "hex": commit},
                         algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
                         results=results,
+                        coverage=coverage,
                         unanchored_trace_patch_ids=unanchored_trace_patch_ids,
                     ),
                 )

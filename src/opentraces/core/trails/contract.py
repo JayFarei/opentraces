@@ -41,11 +41,13 @@ ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v2"
 # touched. v3 keeps ``results[]`` ANCHORED-ONLY and drops the unknown dicts,
 # replacing them with EITHER of two alternate, mutually exclusive keys (see
 # ``build_anchor_search_summary_payload``): a ``coverage`` through-pointer
-# claim (anchors.py's own complete scoped read only — see
+# claim (any COMPLETE view — anchors.py's own scoped read, and since #363
+# maturation.py's untruncated full recent-window sweep — see
 # ``search_records.iter_coverage_claims``) or an exact
 # ``unanchored_trace_patch_ids`` list, for a caller whose view is partial and
 # so cannot compute a sound max-position boundary — issue #359's
-# maturation.py periodic flush, and the compaction stage's rewrite of
+# maturation.py deadline-truncated / commit-subset flush, and the compaction
+# stage's rewrite of
 # legacy/v2 events already on disk (search_compaction.py, which like
 # maturation only ever sees the events it is given, never anchors.py's own
 # complete scoped corpus read, so it too can only ever name unknown ids

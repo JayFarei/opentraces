@@ -174,11 +174,17 @@ class TestWatcherSweep:
             if event.event_type == "git_anchor_search_completed"
         ]
         assert len(searches) == 1
-        # #359: maturation's flush is the v3-compact shape -- anchored-only
-        # results[] (empty here, the one patch is unknown) plus the unknown
-        # outcome as an exact id, never a fat per-patch dict.
+        # #363: the watcher's full-window (commit_refs=None) untruncated sweep is
+        # a provably-complete view, so its flush is the v3-COVERAGE shape --
+        # anchored-only results[] (empty here, the one patch is unknown) plus an
+        # O(1) coverage through-pointer claim, never the O(backlog) exact-id
+        # list. (A commit-SUBSET or deadline-truncated sweep stays on the exact-
+        # ids compact shape -- pinned in tests/core/test_anchor_search_v3.py.)
         assert searches[0].payload["results"] == []
-        assert searches[0].payload["unanchored_trace_patch_ids"] == ["quiet-patch"]
+        assert "unanchored_trace_patch_ids" not in searches[0].payload
+        assert searches[0].payload["coverage"] == {
+            "through_trace_patch_id": "quiet-patch", "scope_trace_id": None,
+        }
 
     def test_steady_state_quiet_tick_skips_maturation_scan(
         self, tmp_path, monkeypatch
