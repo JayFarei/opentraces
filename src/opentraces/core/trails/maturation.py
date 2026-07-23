@@ -177,7 +177,15 @@ def mature_trails(
                 # short-circuits on the next tick and cannot livelock on a
                 # claim it does not read. A commit-subset sweep or any
                 # deadline-truncated flush is NOT complete -> exact-ids.
-                mint_coverage = commit_refs is None and not truncated
+                # #363 verify (must-fix): a swallowed per-(chunk, commit)
+                # reconcile exception lands in `errors` WITHOUT setting
+                # `truncated`, so `not truncated` alone is NOT proof of a
+                # complete view. Any accumulated error means at least one
+                # commit's search was incomplete -> fall back to the
+                # conservative exact-ids shape rather than mint an unsound
+                # coverage claim from a partial view (the load-bearing
+                # "coverage claim ONLY from a COMPLETE view" honesty contract).
+                mint_coverage = commit_refs is None and not truncated and not errors
                 _flush_maturation_scratch(
                     repo,
                     scratch,

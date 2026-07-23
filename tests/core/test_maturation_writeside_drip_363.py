@@ -356,3 +356,57 @@ def test_commit_subset_sweep_keeps_exact_ids_not_coverage(tmp_path):
         "conservative exact-ids shape"
     )
     assert payload["unanchored_trace_patch_ids"] == ["tp-x"]
+
+
+# --------------------------------------------------------------------------- #
+# 8. #363 verify must-fix: a FULL (commit_refs=None) sweep that is NOT
+#    truncated but had a swallowed per-(chunk, commit) reconcile gap (an error
+#    appended WITHOUT setting truncated) is NOT a provably-complete view, so it
+#    must fall back to the conservative exact-ids shape -- never mint a coverage
+#    claim from a partial view (the load-bearing honesty contract).
+# --------------------------------------------------------------------------- #
+
+def test_full_sweep_with_swallowed_reconcile_gap_falls_back_to_exact_ids(
+    tmp_path, monkeypatch
+):
+    import opentraces.core.trails.maturation as maturation_mod
+
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _seed_orphan_backlog(repo, 6)
+    head = _commit_files(repo, {"unrelated.py": "noop\n"}, "no match")
+
+    # Simulate a per-commit reconcile that partially succeeded but reported a
+    # gap: append an error to the chunk result WITHOUT setting truncated. On the
+    # pre-fix gate (`commit_refs is None and not truncated`) this still minted a
+    # coverage claim from an incomplete view; the fix adds `and not errors`.
+    orig = maturation_mod._mature_patch_chunk
+
+    def _gappy_chunk(*args, **kwargs):
+        result = orig(*args, **kwargs)
+        result.errors.append("injected: simulated per-commit reconcile gap")
+        return result
+
+    monkeypatch.setattr(maturation_mod, "_mature_patch_chunk", _gappy_chunk)
+
+    summary = mature_trails(repo)  # full-window hot path, but now incomplete
+    assert summary.errors, "the injected gap must surface in the sweep errors"
+    assert not summary.truncated, (
+        "the gap did NOT truncate -- this is exactly the case `not truncated` "
+        "alone would wrongly treat as complete"
+    )
+    event_log.invalidate_read_events_cache(repo)
+
+    summaries = [
+        e for e in _search_summaries(repo)
+        if e.payload.get("search_head", {}).get("hex") == head
+    ]
+    assert summaries, "the full sweep still records a summary for the commit"
+    payload = summaries[-1].payload
+    assert "coverage" not in payload, (
+        "a sweep with a swallowed reconcile gap is NOT a complete view -- it "
+        "must NOT mint an O(1) coverage claim (honesty contract)"
+    )
+    assert "unanchored_trace_patch_ids" in payload, (
+        "the incomplete sweep must fall back to the conservative exact-ids shape"
+    )
