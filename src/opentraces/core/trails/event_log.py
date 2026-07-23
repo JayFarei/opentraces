@@ -1,6 +1,7 @@
 """Append-only Git event log for Trace Trails."""
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import pickle
 import subprocess
 import tempfile
 import uuid
+import zlib
 from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -175,6 +177,95 @@ def _tree_oid_from_payload(cwd: Path, event: TrailEvent) -> GitObjectID | None:
     return oid
 
 
+def _assemble_root_tree(
+    cwd: Path,
+    base_tree: str,
+    snapshot_tree_entries: list[tuple[str, str]],
+    boundary_tree_entries: list[tuple[str, str]],
+) -> str:
+    """Graft the ``snapshots/`` and ``trees/`` subtrees onto ``base_tree``.
+
+    Extracted VERBATIM from ``StreamingChainWriter.finalize``'s tail so BOTH
+    the reference writer and ``FastChainWriter`` derive the final root tree by
+    the exact same git commands on the exact same inputs — tree-SHA equivalence
+    by shared code, not by two builders happening to canonicalize alike. When
+    neither subtree contributes, ``base_tree`` (already the whole tree) is the
+    answer, matching the reference's early return.
+    """
+    if not snapshot_tree_entries and not boundary_tree_entries:
+        return base_tree
+
+    root_entries = _git(cwd, ["ls-tree", base_tree]).stdout
+    if snapshot_tree_entries:
+        snapshots_tree_input = "".join(
+            f"040000 tree {tree_hex}\t{name}\n"
+            for name, tree_hex in sorted(snapshot_tree_entries)
+        )
+        snapshots_tree = _git(cwd, ["mktree"], input=snapshots_tree_input).stdout.strip()
+        root_entries += f"040000 tree {snapshots_tree}\tsnapshots\n"
+    if boundary_tree_entries:
+        trees_tree_input = "".join(
+            f"040000 tree {tree_hex}\t{name}\n"
+            for name, tree_hex in sorted(boundary_tree_entries)
+        )
+        trees_tree = _git(cwd, ["mktree"], input=trees_tree_input).stdout.strip()
+        root_entries += f"040000 tree {trees_tree}\ttrees\n"
+    return _git(cwd, ["mktree"], input=root_entries).stdout.strip()
+
+
+def _hash_ctor_for_format(object_format: str):
+    """Return the hashlib constructor for a git object format string."""
+    return hashlib.sha256 if object_format.strip() == "sha256" else hashlib.sha1
+
+
+def _resolve_objects_dir(cwd: Path) -> Path:
+    """Absolute path to this repo's loose-object store (``.git/objects``)."""
+    proc = _git(cwd, ["rev-parse", "--git-path", "objects"])
+    path = Path(proc.stdout.strip())
+    if not path.is_absolute():
+        path = (Path(cwd) / path).resolve()
+    return path
+
+
+def _write_loose_object(objects_dir: Path, text: str, hash_ctor) -> str:
+    """Materialize ``text`` as a git loose blob object directly (no fork).
+
+    The OID hashes the UNCOMPRESSED ``blob <len>\\0<body>`` header+body (so the
+    zlib compression level is irrelevant to identity — git reads any valid zlib
+    stream back). Written atomically via a temp file + ``os.replace`` and
+    idempotent: a pre-existing object (content-addressed, immutable) is left
+    untouched. Returns the hex OID — byte-identical to ``git hash-object`` for
+    the same repo's object format, which the probe self-checks before use.
+    """
+    body = text.encode("utf-8")
+    header = b"blob " + str(len(body)).encode("ascii") + b"\x00"
+    oid = hash_ctor(header + body).hexdigest()
+    dest = objects_dir / oid[:2] / oid[2:]
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        compressed = zlib.compress(header + body)
+        fd, tmp = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(compressed)
+            os.replace(tmp, dest)  # atomic; overwrite-on-race is harmless (immutable)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    return oid
+
+
+def write_loose(cwd: Path, objects_dir: Path, text: str) -> str:
+    """Standalone loose-object writer that resolves the repo's hash algo itself.
+
+    Used by the capability probe's self-check; the hot path uses
+    ``FastChainWriter._write_loose`` which caches the constructor to avoid the
+    per-call ``rev-parse`` fork.
+    """
+    object_format = _git(cwd, ["rev-parse", "--show-object-format"]).stdout.strip()
+    return _write_loose_object(objects_dir, text, _hash_ctor_for_format(object_format))
+
+
 class StreamingChainWriter:
     """Incrementally stage ``TrailEvent``\\ s into a scratch git index and
     derive a tree SHA on demand (issue #358).
@@ -262,26 +353,9 @@ class StreamingChainWriter:
             env=env,
         )
         base_tree = _git(cwd, ["write-tree"], env=env).stdout.strip()
-
-        if not self._snapshot_tree_entries and not self._boundary_tree_entries:
-            return base_tree
-
-        root_entries = _git(cwd, ["ls-tree", base_tree]).stdout
-        if self._snapshot_tree_entries:
-            snapshots_tree_input = "".join(
-                f"040000 tree {tree_hex}\t{name}\n"
-                for name, tree_hex in sorted(self._snapshot_tree_entries)
-            )
-            snapshots_tree = _git(cwd, ["mktree"], input=snapshots_tree_input).stdout.strip()
-            root_entries += f"040000 tree {snapshots_tree}\tsnapshots\n"
-        if self._boundary_tree_entries:
-            trees_tree_input = "".join(
-                f"040000 tree {tree_hex}\t{name}\n"
-                for name, tree_hex in sorted(self._boundary_tree_entries)
-            )
-            trees_tree = _git(cwd, ["mktree"], input=trees_tree_input).stdout.strip()
-            root_entries += f"040000 tree {trees_tree}\ttrees\n"
-        return _git(cwd, ["mktree"], input=root_entries).stdout.strip()
+        return _assemble_root_tree(
+            cwd, base_tree, self._snapshot_tree_entries, self._boundary_tree_entries
+        )
 
     def close(self) -> None:
         self._tmpdir.cleanup()
@@ -293,8 +367,242 @@ class StreamingChainWriter:
         self.close()
 
 
+class FastChainWriter:
+    """Fork-free drop-in for :class:`StreamingChainWriter` (issue #362).
+
+    Same ``stage`` / ``finalize`` / ``close`` / context-manager surface and the
+    SAME accumulator semantics — but where the reference forks git ~2-4x PER
+    EVENT (``hash-object`` + ``update-index --cacheinfo`` + per embedded-oid
+    ``cat-file -t`` + ``update-index``), this instance opens exactly TWO
+    long-lived child processes for the whole run: one ``cat-file --batch-check``
+    for OID typing and one ``update-index --index-info`` per finalize-segment
+    that receives every staged path as a streamed line. Event/batch/loose blobs
+    are written directly from Python (:func:`_write_loose_object`), so there is
+    no ``hash-object`` fork and no temp-file storm. On a ~964k-event project
+    that collapses ~2-4M forks to a small constant, writing the identical loose
+    objects at the identical paths.
+
+    The final root tree is produced by the SHARED :func:`_assemble_root_tree`
+    over the SAME cumulative ``snapshots``/``trees`` accumulators, so the output
+    tree SHA is byte-identical to the reference's for any staged set — the
+    non-negotiable equivalence gate.
+    """
+
+    def __init__(self, cwd: Path) -> None:
+        self._cwd = cwd
+        object_format = _git(cwd, ["rev-parse", "--show-object-format"]).stdout.strip()
+        self._hash_ctor = _hash_ctor_for_format(object_format)
+        self._objects_dir = _resolve_objects_dir(cwd)
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="opentraces-trails-index-")
+        index_path = str(Path(self._tmpdir.name) / "index")
+        self._env = os.environ.copy()
+        self._env["GIT_INDEX_FILE"] = index_path
+        _git(cwd, ["read-tree", "--empty"], env=self._env)
+        self._retained_blobs: set[str] = set()
+        self._retained_trees: set[str] = set()
+        self._snapshot_tree_entries: list[tuple[str, str]] = []
+        self._boundary_tree_entries: list[tuple[str, str]] = []
+        self.event_count = 0
+        # One persistent typer for the whole writer lifetime.
+        self._typecheck = subprocess.Popen(
+            ["git", "cat-file", "--batch-check"],
+            cwd=cwd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+        # Lazily-opened per finalize-segment; None between segments.
+        self._index_proc: subprocess.Popen | None = None
+
+    # -- child process helpers -------------------------------------------
+
+    def _classify(self, hex_: str) -> str | None:
+        """Object type of ``hex_`` via the persistent batch-check, or None when
+        the object is absent (mirrors ``_object_type`` returning None)."""
+        proc = self._typecheck
+        assert proc.stdin is not None and proc.stdout is not None
+        proc.stdin.write((hex_ + "\n").encode("ascii"))
+        proc.stdin.flush()
+        line = proc.stdout.readline()
+        if not line:
+            raise RuntimeError("git cat-file --batch-check closed unexpectedly")
+        parts = line.split()
+        if parts and parts[-1] == b"missing":
+            return None
+        if len(parts) == 3:
+            return parts[1].decode()
+        raise RuntimeError(f"unexpected cat-file --batch-check line: {line!r}")
+
+    def _ensure_index_proc(self) -> subprocess.Popen:
+        if self._index_proc is None:
+            self._index_proc = subprocess.Popen(
+                ["git", "update-index", "--index-info"],
+                cwd=self._cwd,
+                env=self._env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        return self._index_proc
+
+    def _index_line(self, path: str, oid: str) -> None:
+        proc = self._ensure_index_proc()
+        assert proc.stdin is not None
+        proc.stdin.write(f"100644 {oid} 0\t{path}\n".encode("utf-8"))
+
+    def _finish_index_proc(self) -> None:
+        """Close + drain the current index-info child so its writes flush to the
+        on-disk index BEFORE ``write-tree`` reads it. A fresh ``stage`` after
+        this lazily reopens against the SAME on-disk index (index-info is an
+        additive merge — it never clears the index), which is exactly the
+        multi-finalize / persistent-index contract the reference relies on."""
+        if self._index_proc is None:
+            return
+        proc = self._index_proc
+        self._index_proc = None
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except OSError:
+            pass
+        rc = proc.wait()
+        if rc != 0:
+            raise RuntimeError(f"git update-index --index-info failed (rc={rc})")
+
+    def _write_loose(self, text: str) -> str:
+        return _write_loose_object(self._objects_dir, text, self._hash_ctor)
+
+    def _tree_oid_from_payload(self, event: TrailEvent) -> GitObjectID | None:
+        tree_id = event.payload.get("tree_id")
+        if not tree_id:
+            return None
+        try:
+            oid = GitObjectID.model_validate(tree_id)
+        except Exception:
+            return None
+        if self._classify(oid.hex) != "tree":
+            return None
+        return oid
+
+    # -- public surface (mirrors StreamingChainWriter exactly) -----------
+
+    def stage(self, event: TrailEvent) -> None:
+        payload = event.model_dump(mode="json")
+        event_blob = self._write_loose(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        self._index_line(f"events/{event.event_sequence:012d}.json", event_blob)
+        for oid in _collect_object_ids(event.payload):
+            if oid.hex in self._retained_blobs:
+                continue
+            if self._classify(oid.hex) != "blob":
+                continue
+            self._retained_blobs.add(oid.hex)
+            self._index_line(f"objects/blobs/{oid.hex}", oid.hex)
+        snapshot_id = event.payload.get("snapshot_id")
+        oid = self._tree_oid_from_payload(event)
+        if oid:
+            safe_event_id = _safe_tree_entry_name(event.event_id)
+            self._boundary_tree_entries.append(
+                (f"{event.event_sequence:012d}-{safe_event_id}", oid.hex)
+            )
+        if event.event_type == "trace_snapshot_created" and oid and snapshot_id:
+            if oid.hex not in self._retained_trees:
+                self._retained_trees.add(oid.hex)
+                safe_snapshot_id = _safe_tree_entry_name(str(snapshot_id))
+                self._snapshot_tree_entries.append((safe_snapshot_id, oid.hex))
+        self.event_count += 1
+
+    def finalize(self, batch: dict[str, Any]) -> str:
+        batch_blob = self._write_loose(json.dumps(batch, sort_keys=True, indent=2) + "\n")
+        self._index_line("batch.json", batch_blob)
+        self._finish_index_proc()
+        base_tree = _git(self._cwd, ["write-tree"], env=self._env).stdout.strip()
+        return _assemble_root_tree(
+            self._cwd, base_tree, self._snapshot_tree_entries, self._boundary_tree_entries
+        )
+
+    def close(self) -> None:
+        for proc in (self._index_proc, self._typecheck):
+            if proc is None:
+                continue
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            proc.wait()
+        self._index_proc = None
+        self._tmpdir.cleanup()
+
+    def __enter__(self) -> "FastChainWriter":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+@functools.lru_cache(maxsize=None)
+def _fast_writer_supported(cwd: Path) -> bool:
+    """One-time per-(process, repo) capability + self-check probe for the fast
+    writer. Returns True only when a Python-written loose object's OID matches
+    ``git hash-object`` for this repo's object format AND ``update-index
+    --index-info`` + ``write-tree`` work in a throwaway index — otherwise (or on
+    the ``OT_TRAILS_FASTWRITER=0`` kill-switch, or ANY exception) the reference
+    writer is used, byte-identical but slower. Because a wrong loose object OID
+    fails this check, a wrong candidate tree is structurally unreachable."""
+    if os.environ.get("OT_TRAILS_FASTWRITER") == "0":
+        return False
+    try:
+        object_format = _git(cwd, ["rev-parse", "--show-object-format"]).stdout.strip()
+        if object_format not in ("sha1", "sha256"):
+            return False
+        objects_dir = _resolve_objects_dir(cwd)
+        if not os.access(objects_dir, os.W_OK):
+            return False
+        sentinel = "opentraces-fastwriter-probe\n"
+        oid = write_loose(cwd, objects_dir, sentinel)
+        expected = _git(cwd, ["hash-object", "--stdin"], input=sentinel).stdout.strip()
+        if oid != expected:
+            return False
+        with tempfile.TemporaryDirectory(prefix="opentraces-fastwriter-probe-") as td:
+            env = os.environ.copy()
+            env["GIT_INDEX_FILE"] = str(Path(td) / "index")
+            _git(cwd, ["read-tree", "--empty"], env=env)
+            info = subprocess.run(
+                ["git", "update-index", "--index-info"],
+                cwd=cwd,
+                env=env,
+                input=f"100644 {oid} 0\tprobe.txt\n".encode(),
+                capture_output=True,
+            )
+            if info.returncode != 0:
+                return False
+            wt = subprocess.run(
+                ["git", "write-tree"], cwd=cwd, env=env, capture_output=True
+            )
+            if wt.returncode != 0:
+                return False
+        return True
+    except Exception:  # noqa: BLE001 — any probe failure ⇒ safe reference fallback
+        return False
+
+
+def make_chain_writer(cwd: Path) -> "StreamingChainWriter | FastChainWriter":
+    """Return the fast candidate-write writer when this repo supports it, else
+    the unchanged :class:`StreamingChainWriter`. The decision is made ONCE up
+    front (never mid-stream), so a run is never half-fast/half-slow."""
+    if _fast_writer_supported(cwd):
+        try:
+            return FastChainWriter(cwd)
+        except Exception:  # noqa: BLE001 — child spawn / path issue ⇒ reference
+            return StreamingChainWriter(cwd)
+    return StreamingChainWriter(cwd)
+
+
 def _write_batch_tree(cwd: Path, events: "list[TrailEvent] | Any", batch: dict[str, Any]) -> str:
-    with StreamingChainWriter(cwd) as writer:
+    with make_chain_writer(cwd) as writer:
         for event in events:
             writer.stage(event)
         return writer.finalize(batch)

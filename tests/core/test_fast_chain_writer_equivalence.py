@@ -409,3 +409,40 @@ def test_fast_writer_has_bounded_fork_count(tmp_path):
     # Reference forks scale with events (>= ~200); fast must be a small constant.
     assert fast_forks < 20
     assert fast_forks * 5 < ref_forks
+
+
+@pytest.mark.perf
+def test_fast_writer_wall_clock_speedup(tmp_path):
+    """Non-gating smoke: the fast writer must be an ORDER OF MAGNITUDE below the
+    reference on the same staged set, with a byte-identical tree — no absolute
+    CI number asserted (machine-dependent)."""
+    import time
+
+    repo = _init_repo(tmp_path)
+    blob = _write_blob(repo, "shared\n")
+    n = 2000
+    events = []
+    prev = None
+    for i in range(n):
+        ev = _make_event(
+            i + 1,
+            "git_anchor_recorded",
+            {"trace_id": f"t{i % 7}", "blob_id": _oid(blob), "note": f"s{i}"},
+            previous=prev,
+        )
+        events.append(ev)
+        prev = ev.event_id
+    batch = _batch(n)
+
+    t = time.perf_counter()
+    with StreamingChainWriter(repo) as w:
+        ref_tree = _stream_into(w, events, batch)
+    ref_dt = time.perf_counter() - t
+
+    t = time.perf_counter()
+    with FastChainWriter(repo) as w:
+        fast_tree = _stream_into(w, events, batch)
+    fast_dt = time.perf_counter() - t
+
+    assert fast_tree == ref_tree
+    assert fast_dt * 10 < ref_dt, f"fast={fast_dt:.3f}s ref={ref_dt:.3f}s"

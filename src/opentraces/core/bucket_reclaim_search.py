@@ -219,7 +219,7 @@ from .trails import EVENT_LOG_REF, ANCHOR_SEARCH_EVENT_TYPE, TrailEvent
 from .trails import event_index
 from .trails.event_log import (
     EventLogHeadMovedError,
-    StreamingChainWriter,
+    make_chain_writer,
     _commit_batch,
     _iter_blobs_batch,
     _update_event_log_ref,
@@ -1212,7 +1212,7 @@ def _stream_compact_chain(repo: Path, head: str, patch_to_trace: dict[str, str])
     tail_sequence = 0
     tail_event_id: str | None = None
 
-    with StreamingChainWriter(repo) as writer:
+    with make_chain_writer(repo) as writer:
         for event in stream_compact_events(_source(), stats):
             target_ids.add(event.event_id)
             affected.update(_touch_ids_for_event(event, patch_to_trace))
@@ -1293,7 +1293,7 @@ def _stream_compact_delta(
     tail_event_id = base.tail_event_id
     stats = CompactionStats()
 
-    with StreamingChainWriter(repo) as writer:
+    with make_chain_writer(repo) as writer:
         for event in iter_events(repo, base.commit_sha):
             writer.stage(event)
         for event in stream_compact_events(
