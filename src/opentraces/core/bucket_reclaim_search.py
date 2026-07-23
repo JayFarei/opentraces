@@ -219,10 +219,12 @@ from .trails import EVENT_LOG_REF, ANCHOR_SEARCH_EVENT_TYPE, TrailEvent
 from .trails import event_index
 from .trails.event_log import (
     EventLogHeadMovedError,
-    StreamingChainWriter,
+    make_chain_writer,
     _commit_batch,
+    _iter_blobs_batch,
     _update_event_log_ref,
     invalidate_read_events_cache,
+    iter_event_views,
     iter_events,
     read_events_scoped,
     read_events_since,
@@ -465,6 +467,155 @@ def _write_journal(
 
 def _clear_journal(slug: str) -> None:
     _journal_path(slug).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Clean-project watermark + raw-bytes suffix signature scan (issue #362).
+#
+# The reported #362 case is a LARGE-but-already-CLEAN project (born >= 0.4.11,
+# or reclaimed once): the summed-size prefilter (``_events_tree_bytes`` <
+# ``_FAT_PREFILTER_MIN_BYTES``) cannot tell it apart from a dirty one, so
+# without this a clean multi-GB canonical log is re-validated four times to
+# discover zero deltas. The watermark records a head a prior run PROVED carries
+# no fat/legacy anchor-search events; while its head has not moved, or while the
+# appended suffix carries no fat/legacy blob (a raw-bytes token scan, never
+# json/pydantic), the whole project can be skipped without parsing a single
+# event.
+#
+# Soundness rests on TWO write-path invariants:
+#  * The event ref is append-only and CAS-guarded, and batch trees are
+#    non-cumulative + content-addressed, so an identical head means
+#    byte-identical history -- the same fat/legacy status it had when proven
+#    clean. Head-equality is therefore an O(1) proof of cleanliness.
+#  * Both live anchor-search minters ALWAYS emit a v3 token (anchors.py's
+#    coverage claim, maturation.py's ``unanchored_trace_patch_ids``), and
+#    ``search_compaction`` always emits ``unanchored_trace_patch_ids`` too, so
+#    the ONLY tokenless anchor-search blobs on disk are exactly the v2-fat +
+#    legacy set this pass compacts. The token signature therefore has NO false
+#    negatives; over-inclusion (a non-anchor blob that happens to embed the
+#    type token) only ever forces a safe full walk.
+#
+# The watermark is repo-local metadata (a digest-excluded sibling of the #137
+# event index, under ``$GIT_COMMON_DIR/opentraces/``), NOT bucket data, and is
+# written ONLY at a proven-clean point (a full walk that found nothing, a clean
+# suffix scan, or a completed apply whose new head is v3 by construction). A
+# pending resume journal ALWAYS bypasses the probe (the journal-present project
+# MUST be processed), so the probe can never skip stranded resume work -- the
+# only source of reclaim-stale companions carries a journal.
+# ---------------------------------------------------------------------------
+
+
+_CLEAN_WATERMARK_SCHEMA = "opentraces.bucket.reclaim.anchor_search_clean_watermark.v1"
+
+# Byte images of ``search_compaction._is_legacy_per_patch_search`` /
+# ``_is_already_v3_shaped``: a serialized event blob is a fat/legacy
+# anchor-search event iff it carries the (quoted) type token AND NEITHER v3
+# alternate-key token. Scanned as raw bytes, no JSON parse.
+_ANCHOR_SEARCH_TYPE_TOKEN = b'"' + ANCHOR_SEARCH_EVENT_TYPE.encode("utf-8") + b'"'
+_V3_COVERAGE_TOKEN = b'"coverage"'
+_V3_UNANCHORED_TOKEN = b'"unanchored_trace_patch_ids"'
+
+
+class _WatermarkProbeError(Exception):
+    """Any git-plumbing failure or non-ancestor/corrupt watermark encountered
+    during the clean-watermark suffix signature scan. The caller treats it as
+    UNKNOWN and falls back to a full walk -- a probe failure must never be
+    resolved as 'clean' (issue #362, Lever 2: no probe path may downgrade a
+    refusal or an unknown into a clean skip)."""
+
+
+def _clean_watermark_path(repo: Path) -> Path | None:
+    """``$GIT_COMMON_DIR/opentraces/reclaim_clean_watermark.json`` for ``repo``
+    -- a digest-excluded, repo-local sibling of the #137 event index
+    (``event_index._index_dir``), never inside a ref, the working tree, or the
+    bucket (so the ref OID and bucket digest are untouched). Returns None when
+    the git dir cannot be resolved (caller then never skips)."""
+    proc = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=repo, capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    git_dir = Path(proc.stdout.strip())
+    if not git_dir.is_absolute():
+        git_dir = (Path(repo) / git_dir).resolve()
+    return git_dir / "opentraces" / "reclaim_clean_watermark.json"
+
+
+def _read_clean_watermark(repo: Path) -> str | None:
+    """The proven-clean head recorded for ``repo``, or None when absent /
+    unreadable / wrong-schema (all read as 'no watermark' -> caller full-walks,
+    never skips on a corrupt watermark)."""
+    path = _clean_watermark_path(repo)
+    if path is None or not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("schema_version") != _CLEAN_WATERMARK_SCHEMA:
+        return None
+    head = data.get("event_log_head")
+    return head if isinstance(head, str) and head else None
+
+
+def _write_clean_watermark(repo: Path, head: str) -> None:
+    """Record ``head`` as proven-clean for ``repo`` (atomic write-new-then-
+    rename). Callers invoke this ONLY after a full walk found nothing to
+    compact, a clean suffix scan, or a completed apply whose new head is v3 by
+    construction."""
+    path = _clean_watermark_path(repo)
+    if path is None:
+        return
+    _atomic_write_json(
+        path,
+        {"schema_version": _CLEAN_WATERMARK_SCHEMA, "event_log_head": head, "written_at": utc_now_str()},
+    )
+
+
+def _suffix_is_dirty(repo: Path, base: str, head: str) -> bool:
+    """True iff any event blob in the ``base..head`` suffix is a v2-fat or
+    legacy per-patch ``git_anchor_search_completed`` event -- a RAW-BYTES token
+    scan, never json/pydantic (issue #362).
+
+    A blob is DIRTY iff it carries the anchor-search TYPE token AND NEITHER v3
+    alternate-key token (``coverage`` / ``unanchored_trace_patch_ids``). Raises
+    :class:`_WatermarkProbeError` when ``base`` is not an ancestor of ``head``
+    (history rewrite / unknown object) or on ANY git-plumbing failure -- the
+    caller then full-walks, never concluding 'clean' on an error."""
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base, head],
+        cwd=repo, capture_output=True, text=True, check=False,
+    )
+    if ancestor.returncode != 0:
+        raise _WatermarkProbeError(
+            f"{base} is not an ancestor of {head} (or git failed): suffix undefined"
+        )
+    proc = subprocess.run(
+        ["git", "rev-list", "--objects", f"{base}..{head}", "--", "events"],
+        cwd=repo, capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        raise _WatermarkProbeError("git rev-list failed during clean-watermark suffix scan")
+    entries: list[tuple[str, str]] = []
+    for line in proc.stdout.splitlines():
+        oid, sep, path = line.partition(" ")
+        if not sep:
+            continue
+        if path.startswith("events/") and path.endswith(".json"):
+            entries.append((path, oid))
+    if not entries:
+        return False
+    try:
+        for raw in _iter_blobs_batch(repo, entries):
+            if _ANCHOR_SEARCH_TYPE_TOKEN not in raw:
+                continue
+            if _V3_COVERAGE_TOKEN in raw or _V3_UNANCHORED_TOKEN in raw:
+                continue
+            return True
+    except RuntimeError as exc:  # _iter_blobs_batch surfaces truncation/malformed as RuntimeError
+        raise _WatermarkProbeError(str(exc)) from exc
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1038,7 +1189,20 @@ def _stream_compact_chain(repo: Path, head: str, patch_to_trace: dict[str, str])
     stats = CompactionStats()
 
     def _source() -> Any:
-        for event in iter_events(repo, head):
+        # iter_event_views (issue #362 Lever 4): the O(corpus) dirty read is
+        # the #362 CPU killer — each fat v2 `git_anchor_search_completed` blob
+        # pays a jiter-parse plus TWO full recursive reject-walks under full
+        # pydantic validation. The hybrid reader hands compaction a duck-typed
+        # raw view for the anchor-search type ONLY (provably float-free, so
+        # byte-identical to full validation — see the byte-identity gate in
+        # test_bucket_reclaim_search_fastpath.py) and full pydantic for every
+        # other type. Output is still finalize_event-minted, so both
+        # reject-validators still run on every EMITTED (slim) event; validation
+        # coverage moves from fat-input to slim-output, never dropped. The rare
+        # CAS-retry delta fold (_stream_compact_delta) deliberately stays on
+        # iter_events — it re-reads the already-slim candidate, so there is no
+        # fat to skip and no reason to widen the reader change to that path.
+        for event in iter_event_views(repo, head):
             old_ids.add(event.event_id)
             affected.update(_touch_ids_for_event(event, patch_to_trace))
             yield event
@@ -1048,7 +1212,7 @@ def _stream_compact_chain(repo: Path, head: str, patch_to_trace: dict[str, str])
     tail_sequence = 0
     tail_event_id: str | None = None
 
-    with StreamingChainWriter(repo) as writer:
+    with make_chain_writer(repo) as writer:
         for event in stream_compact_events(_source(), stats):
             target_ids.add(event.event_id)
             affected.update(_touch_ids_for_event(event, patch_to_trace))
@@ -1129,7 +1293,7 @@ def _stream_compact_delta(
     tail_event_id = base.tail_event_id
     stats = CompactionStats()
 
-    with StreamingChainWriter(repo) as writer:
+    with make_chain_writer(repo) as writer:
         for event in iter_events(repo, base.commit_sha):
             writer.stage(event)
         for event in stream_compact_events(
@@ -1245,6 +1409,35 @@ def _process_reachable_project(
         report.reason = "below fat-detection size prefilter"
         return report
 
+    # O(1) clean-project probe (issue #362) — placed AFTER the missing-ref
+    # refusal and the journal-present bypass above so BOTH keep priority: a
+    # present journal means resume work is pending, and the `journal is None`
+    # guard here inherits that bypass verbatim (a journaled project MUST be
+    # processed, never O(1)-skipped — the resume-short-circuit-under-prefilter
+    # regression). Only an UNJOURNALED project is eligible to skip:
+    #  (b) head == watermark.head  -> provably clean (append-only, CAS-guarded,
+    #      content-addressed history => identical head is identical bytes), O(1);
+    #  (c) watermark.head is an ancestor of head AND the appended suffix carries
+    #      no fat/legacy anchor-search blob (raw-bytes token scan, no pydantic)
+    #      -> advance the watermark and skip;
+    #  (d) non-ancestor / corrupt watermark / ANY git failure -> full walk
+    #      (never conclude 'clean' on an error — Lever 2).
+    if journal is None:
+        watermark = _read_clean_watermark(repo)
+        if watermark is not None:
+            if watermark == head:
+                report.reason = "clean watermark: head unchanged since last proven-clean pass"
+                return report
+            try:
+                suffix_dirty = _suffix_is_dirty(repo, watermark, head)
+            except _WatermarkProbeError:
+                suffix_dirty = None  # unknown -> full walk, never 'clean'
+            if suffix_dirty is False:
+                _write_clean_watermark(repo, head)
+                report.reason = "clean watermark: appended suffix carries no fat/legacy anchor-search events"
+                return report
+            # suffix_dirty True (fat/legacy found) or None (unknown) -> full walk.
+
     try:
         # Streaming chain compaction (issue #358): reads `head`'s canonical
         # log ONE event at a time (`event_log.iter_events`), compacts it
@@ -1332,6 +1525,12 @@ def _process_reachable_project(
         report.mirror_events_added = to_add_count
 
         if journal is None and not (ref_would_change or would_touch_mirror or companions_stale):
+            # Fully clean at `head` (ref, mirror, and companions all current) —
+            # record the proven-clean head so the next run O(1)-skips (issue
+            # #362). Same in dry-run and apply: this reflects a proven-clean
+            # FACT about the canonical log, not a mutation of trace data, and
+            # is repo-local metadata (never the bucket).
+            _write_clean_watermark(repo, head)
             report.reason = "no legacy or v2-fat anchor-search events found"
             return report
 
@@ -1500,6 +1699,13 @@ def _process_reachable_project(
             )
 
         _clear_journal(slug)
+
+        # The apply is fully reconciled (ref/mirror/companions) and `new_head`
+        # is a v3-compact chain by construction — record it as proven-clean so
+        # the next run O(1)-skips (issue #362). Cleared journal already gone, so
+        # a crash after this point simply re-proves the same clean head next run.
+        if new_head is not None:
+            _write_clean_watermark(repo, new_head)
 
         return report
     finally:
