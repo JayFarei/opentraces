@@ -509,6 +509,15 @@ def write_trace_to_bucket(
                 project_slug=project_slug,
                 trace_id=trace_id,
                 record=final_record,
+                # #365: this trace was minted/refreshed from the live session
+                # and live project immediately above. The bucket's historical
+                # events mirror is not an ingest input. Falling back to it when
+                # the live Trail read is empty used to materialize the whole
+                # global mirror (9.5 GB compressed on the reported machine)
+                # just to discover that a new trace was absent, taking a
+                # 16 MiB Codex rollout to ~62 GiB RSS. Cross-machine repair
+                # callers retain the default mirror fallback.
+                mirror_fallback=False,
             )
             outcome.writes["per_trace_exports"] = None
         except Exception as exc:  # noqa: BLE001
