@@ -183,7 +183,7 @@ def test_ingest_session_with_large_record_does_not_expand_global_mirror(
 
     assert verdict == "ok", (
         "hot ingest expanded the unrelated global events mirror and breached "
-        f"the 800 MiB RSS ceiling: {verdict}"
+        f"the durable 800 MiB peak RSS ceiling: {verdict}"
     )
     staged = list((home / ".opentraces" / "projects").glob("*/traces/*.jsonl"))
     assert len(staged) == 1, "bounded completion must still stage the trace"

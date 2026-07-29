@@ -193,6 +193,119 @@ def test_git_anchor_candidates_carry_trail_survival_state_facet(tmp_path):
         )
 
 
+def test_git_anchor_query_uses_multi_patch_survival_reader(
+    tmp_path, monkeypatch
+):
+    """A finite query result must not build a cache from the full Trail log."""
+    from opentraces.core import trails
+    from opentraces.core.trace_index import query_index, rebuild_index
+    from opentraces.core.trails.event_log import (
+        append_event_batch,
+        make_survival_cache_draft,
+        read_events_scoped,
+    )
+
+    project = tmp_path / "demo"
+    commit_sha = _init_repo(project)
+    _register_project(project, uuid.uuid4().hex)
+    trace_id = "trace-anchor-bounded-survival"
+    _seed_patch_trail(
+        project,
+        commit_sha=commit_sha,
+        trace_id=trace_id,
+    )
+    patch_event = read_events_scoped(
+        project, event_types={"trace_patch_created"}
+    )[0]
+    patch_id = patch_event.payload["trace_patch_id"]
+    append_event_batch(
+        project,
+        [
+            make_survival_cache_draft(
+                trace_patch_id=patch_id,
+                observed_head_sha=commit_sha,
+                survival={"survival_state": "repaired"},
+                trace_id=trace_id,
+            )
+        ],
+        writer="test",
+    )
+    rebuild_index()
+
+    full_reads = []
+
+    def _trap_full_read(repo, *, verify=True):
+        full_reads.append((repo, verify))
+        raise RuntimeError("query attempted a full Trail read")
+
+    monkeypatch.setattr(trails, "read_events", _trap_full_read)
+
+    packets = query_index(candidate_kind="git_anchor")
+
+    assert full_reads == []
+    matching = [
+        packet
+        for packet in packets
+        if any(
+            facet.name == "trace_patch.id" and facet.value == patch_id
+            for facet in packet.facets
+        )
+    ]
+    assert matching
+    assert any(
+        facet.name == "trail.survival_state"
+        and facet.value == "repaired"
+        for facet in matching[0].facets
+    )
+
+
+def test_git_anchor_query_overlays_local_survival_cache(tmp_path):
+    """The live local cache must override an absent legacy on-ref cache row."""
+    from opentraces.core.trace_index import query_index, rebuild_index
+    from opentraces.core.trails import survival_cache_store
+    from opentraces.core.trails.event_log import read_events_scoped
+
+    project = tmp_path / "demo"
+    commit_sha = _init_repo(project)
+    _register_project(project, uuid.uuid4().hex)
+    trace_id = "trace-anchor-local-survival"
+    _seed_patch_trail(
+        project,
+        commit_sha=commit_sha,
+        trace_id=trace_id,
+    )
+    patch_event = read_events_scoped(
+        project, event_types={"trace_patch_created"}
+    )[0]
+    patch_id = patch_event.payload["trace_patch_id"]
+    assert survival_cache_store.write_entries(
+        project,
+        {
+            (patch_id, commit_sha): {
+                "survival_state": "repaired",
+            }
+        },
+    )
+    rebuild_index()
+
+    packets = query_index(candidate_kind="git_anchor")
+
+    matching = [
+        packet
+        for packet in packets
+        if any(
+            facet.name == "trace_patch.id" and facet.value == patch_id
+            for facet in packet.facets
+        )
+    ]
+    assert matching
+    assert any(
+        facet.name == "trail.survival_state"
+        and facet.value == "repaired"
+        for facet in matching[0].facets
+    )
+
+
 # --------------------------------------------------- A5 trace baseline
 def _toolless_prompt_trace(trace_id: str) -> TraceRecord:
     """A trace with no tool calls: just a user prompt that pastes a URL."""

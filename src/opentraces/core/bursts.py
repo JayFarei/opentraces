@@ -393,10 +393,10 @@ def detect_bursts(
         _augment_burst_commit_sha(burst, commit_index)
     bursts = _merge_adjacent_bursts_sharing_commit(bursts)
 
-    # Cluster F: load the project's TrailEvent log once and use it both
-    # for survival enrichment and quality-signal correlation. Cheap to
-    # do here even when no patches match — read_events handles missing
-    # refs gracefully.
+    # Cluster F: load this trace's TrailEvents once and use them both for
+    # survival enrichment and quality-signal correlation.  The trace-indexed
+    # reader retains the same patch/anchor/cache event semantics without
+    # materialising an unrelated mature project log (#365).
     trail_events: list[Any] | None = None
     trace_id_attr = getattr(trace_record, "trace_id", None)
     if trace_id_attr is None and isinstance(trace_record, dict):
@@ -407,8 +407,54 @@ def detect_bursts(
         and trace_id_attr
     ):
         try:
-            from .trails import read_events as _read_events
-            trail_events = _read_events(repo_path_obj)
+            from .trails.event_log import (
+                CACHED_SURVIVAL_EVENT_TYPE,
+                read_events_for_patches,
+                read_events_for_trace,
+            )
+
+            trail_events = read_events_for_trace(
+                repo_path_obj,
+                str(trace_id_attr),
+                rebuild_index=False,
+            )
+            # Historical ``patch_survival_cached`` rows can predate top-level
+            # trace attribution, so the trace index cannot own them. Once the
+            # burst windows give us a finite patch set, supplement only those
+            # legacy rows via the patch index. This preserves the former
+            # full-log semantics without restoring an unbounded read.
+            patch_ids = {
+                event.payload.get("trace_patch_id")
+                for event in trail_events
+                if event.event_type == "trace_patch_created"
+                and event.trace_id == str(trace_id_attr)
+                and event.step_index is not None
+                and any(
+                    start <= event.step_index <= end
+                    for start, end in (
+                        burst.step_range
+                        for burst in bursts
+                        if len(burst.step_range) == 2
+                    )
+                )
+                and isinstance(event.payload.get("trace_patch_id"), str)
+                and event.payload.get("trace_patch_id")
+            }
+            if patch_ids:
+                legacy_cache_events = read_events_for_patches(
+                    repo_path_obj,
+                    patch_ids,
+                    event_types={CACHED_SURVIVAL_EVENT_TYPE},
+                    rebuild_index=False,
+                )
+                by_event_id = {
+                    event.event_id: event
+                    for event in [*trail_events, *legacy_cache_events]
+                }
+                trail_events = sorted(
+                    by_event_id.values(),
+                    key=lambda event: event.event_sequence,
+                )
         except Exception:
             trail_events = None
 

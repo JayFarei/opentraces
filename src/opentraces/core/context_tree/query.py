@@ -359,7 +359,15 @@ def build_context_tree_projection(
     subagent_session_ids_by_trace: dict[str, list[str]] = {}
     capture_limitations_by_trace: dict[str, list[str]] = {}
 
-    for event in (events if events is not None else read_events(repo)):
+    source_events = events
+    if source_events is None:
+        source_events = (
+            read_events_for_trace(repo, trace_id, rebuild_index=False)
+            if trace_id is not None
+            else read_events(repo)
+        )
+
+    for event in source_events:
         if trace_id is not None:
             ev_tid = event.trace_id or (
                 event.payload.get("trace_id")
@@ -480,7 +488,7 @@ def build_context_tree_projection_for_trace(
     return build_context_tree_projection(
         repo,
         trace_id=trace_id,
-        events=read_events_for_trace(repo, trace_id),
+        events=read_events_for_trace(repo, trace_id, rebuild_index=False),
         **kwargs,
     )
 

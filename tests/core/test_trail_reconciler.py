@@ -180,7 +180,11 @@ def test_watcher_observation_inside_unique_step_window_attributes_patch(
         after_blob_id=after_blob,
     )
 
-    summary = reconcile_watcher_observations(tmp_path)
+    emitted = []
+    summary = reconcile_watcher_observations(
+        tmp_path,
+        event_sink=emitted.append,
+    )
     assert summary["attributed"] == 1
     assert summary["patches_upgraded"] == 1
     assert summary["unbounded_mutation_window"] == 0
@@ -190,6 +194,7 @@ def test_watcher_observation_inside_unique_step_window_attributes_patch(
     patch_events = [e for e in events if e.event_type == "trace_patch_created"]
     assert len(patch_events) == 2, "hook patch + reconciler upgrade"
     latest_patch = max(patch_events, key=lambda e: e.event_sequence)
+    assert latest_patch in emitted
     assert "hook_posttooluse" in latest_patch.capture_method
     assert "watcher_backstop" in latest_patch.capture_method
     earliest_patch = min(patch_events, key=lambda e: e.event_sequence)
@@ -288,7 +293,11 @@ def test_watcher_corroboration_requires_matching_blob_identity(tmp_path: Path) -
         after_blob_id=watcher_after,
     )
 
-    summary = reconcile_watcher_observations(tmp_path)
+    emitted = []
+    summary = reconcile_watcher_observations(
+        tmp_path,
+        event_sink=emitted.append,
+    )
     assert summary["attributed"] == 1
     assert summary["patches_upgraded"] == 0
     assert summary["patches_created"] == 1
@@ -309,6 +318,7 @@ def test_watcher_corroboration_requires_matching_blob_identity(tmp_path: Path) -
         and e.payload.get("source_observation_event_id") == obs.event_id
     ]
     assert len(created) == 1
+    assert created[0] in emitted
     assert created[0].payload["before_blob_id"] == watcher_before.model_dump(mode="json")
     assert created[0].payload["after_blob_id"] == watcher_after.model_dump(mode="json")
 
@@ -353,7 +363,11 @@ def test_unique_watcher_observation_without_hook_patch_emits_trace_patch(
         after_blob_id=after_blob,
     )
 
-    summary = reconcile_watcher_observations(tmp_path)
+    emitted = []
+    summary = reconcile_watcher_observations(
+        tmp_path,
+        event_sink=emitted.append,
+    )
     assert summary["attributed"] == 1
     assert summary["patches_created"] == 1
     assert summary["patches_upgraded"] == 0
@@ -367,6 +381,7 @@ def test_unique_watcher_observation_without_hook_patch_emits_trace_patch(
     ]
     assert len(created) == 1
     patch = created[0]
+    assert patch in emitted
     assert patch.trace_id == "tr1"
     assert patch.step_index == 1
     assert patch.capture_method == ["watcher_backstop"]
@@ -1584,7 +1599,9 @@ def test_reconcile_never_calls_full_read_events(tmp_path: Path, monkeypatch) -> 
             "reconcile must not call the full read_events (#45 scoped-read guard)"
         )
 
-    monkeypatch.setattr(reconciler_mod, "read_events", _boom)
+    # The production module intentionally no longer imports ``read_events``.
+    # Install the sentinel anyway so any future reintroduction and call fails.
+    monkeypatch.setattr(reconciler_mod, "read_events", _boom, raising=False)
     summary = reconcile_watcher_observations(repo)
     assert summary["attributed"] == 1
     assert summary["patches_upgraded"] == 1

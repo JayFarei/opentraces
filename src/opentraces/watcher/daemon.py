@@ -30,6 +30,7 @@ import json
 import logging
 import logging.handlers
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -956,6 +957,14 @@ def _reexec_self(interval: int) -> None:
 # the machine. Tune per-host via OT_WATCHER_TICK_MAX_RSS_MB.
 DEFAULT_TICK_MAX_RSS_MB = 4096
 DEFAULT_TICK_TIMEOUT_S = 900
+# Live process-group RSS is necessarily sampled on portable macOS/Linux.
+# Procfs is cheap enough for a 50 ms cadence; macOS shells out to ``ps``, so
+# use 100 ms there. Operators can trade latency for overhead within explicit
+# bounds via OT_WATCHER_TICK_RSS_POLL_INTERVAL_S.
+DEFAULT_TICK_RSS_POLL_INTERVAL_PROCFS_S = 0.05
+DEFAULT_TICK_RSS_POLL_INTERVAL_PS_S = 0.1
+MIN_TICK_RSS_POLL_INTERVAL_S = 0.01
+MAX_TICK_RSS_POLL_INTERVAL_S = 0.5
 
 
 def _tick_budget_mb() -> float:
@@ -974,6 +983,25 @@ def _tick_timeout_s() -> float:
     except ValueError:
         value = 0.0
     return value if value > 0 else float(DEFAULT_TICK_TIMEOUT_S)
+
+
+def _tick_rss_poll_interval_s() -> float:
+    default = (
+        DEFAULT_TICK_RSS_POLL_INTERVAL_PROCFS_S
+        if Path("/proc").is_dir()
+        else DEFAULT_TICK_RSS_POLL_INTERVAL_PS_S
+    )
+    raw = os.environ.get("OT_WATCHER_TICK_RSS_POLL_INTERVAL_S")
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        value = default
+    if value <= 0:
+        value = default
+    return min(
+        MAX_TICK_RSS_POLL_INTERVAL_S,
+        max(MIN_TICK_RSS_POLL_INTERVAL_S, value),
+    )
 
 
 # #65 soak finding (run 1): a real home can carry hundreds of enlistments, and
@@ -1045,23 +1073,183 @@ def _last_tick_mtime(project_cwd: Path) -> float:
     return newest
 
 
-def _child_rss_mb(pid: int) -> float | None:
-    """CURRENT RSS of ``pid`` in MiB, or None when unreadable."""
-    statm = Path(f"/proc/{pid}/statm")
-    if statm.is_file():
+def _linux_process_rss_rows() -> dict[int, tuple[int, int, float]]:
+    """Snapshot Linux ``pid -> (ppid, pgrp, rss_mib)`` rows from procfs."""
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return {}
+    rows: dict[int, tuple[int, int, float]] = {}
+    try:
+        entries = proc_root.iterdir()
+    except OSError:
+        return {}
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
         try:
-            resident_pages = int(statm.read_text().split()[1])
-            return resident_pages * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024)
-        except Exception:  # noqa: BLE001 — fall through to ps
-            pass
+            # ``comm`` may contain spaces or ``)``; fields after its final
+            # closing parenthesis start at state (field 3).
+            fields = (entry / "stat").read_bytes().rsplit(b")", 1)[1].split()
+            ppid = int(fields[1])
+            pgrp = int(fields[2])
+            rss_pages = max(0, int(fields[21]))
+            rows[int(entry.name)] = (
+                ppid,
+                pgrp,
+                rss_pages * page_size / (1024 * 1024),
+            )
+        except (IndexError, OSError, ValueError):
+            # Processes can exit at any point during the snapshot.
+            continue
+    return rows
+
+
+def _ps_process_rss_rows(pgrp: int) -> dict[int, tuple[int, int, float]]:
+    """Portable process-group snapshot with one compatibility fallback."""
+
+    columns = "pid=,ppid=,pgid=,rss="
+    scoped_argv = (
+        ["ps", "--pgroup", str(pgrp), "-o", columns]
+        if sys.platform.startswith("linux")
+        else ["ps", "-g", str(pgrp), "-o", columns]
+    )
     try:
         out = subprocess.run(
-            ["ps", "-o", "rss=", "-p", str(pid)],
-            capture_output=True, text=True, check=False,
+            scoped_argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
         )
-        return int(out.stdout.strip()) / 1024.0
-    except Exception:  # noqa: BLE001
-        return None
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if out.returncode != 0:
+        # Some non-Linux POSIX ps implementations do not support scoped group
+        # selection. Fall back once to the historical portable full snapshot;
+        # the caller still filters exact pgrp membership.
+        try:
+            out = subprocess.run(
+                ["ps", "-axo", columns],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return {}
+        if out.returncode != 0:
+            return {}
+    rows: dict[int, tuple[int, int, float]] = {}
+    for line in out.stdout.splitlines():
+        try:
+            raw_pid, raw_ppid, raw_pgrp, raw_rss = line.split()
+            rows[int(raw_pid)] = (
+                int(raw_ppid),
+                int(raw_pgrp),
+                max(0, int(raw_rss)) / 1024.0,
+            )
+        except ValueError:
+            continue
+    return rows
+
+
+def _child_rss_mb(pid: int) -> float | None:
+    """Sample the tick process group's current aggregate RSS in MiB.
+
+    ``start_new_session=True`` makes the direct child's pid its process-group
+    id, and ordinary descendants inherit that group.  Sum one row per process
+    so a small tick parent cannot hide memory in Git/configured-tool children.
+    Process-table races are expected: unreadable/exited rows are skipped. This
+    is a low-latency sample, not a mathematically durable portable group peak;
+    ``wait4`` separately preserves the direct child's durable peak.
+    """
+    rows = _linux_process_rss_rows()
+    members = [rss_mb for _ppid, pgrp, rss_mb in rows.values() if pgrp == pid]
+    if not members:
+        # macOS has no procfs. On Linux this also gives one best-effort retry
+        # when every relevant procfs row raced with process exit.
+        rows = _ps_process_rss_rows(pid)
+        members = [rss_mb for _ppid, pgrp, rss_mb in rows.values() if pgrp == pid]
+    return sum(members) if members else None
+
+
+def _rusage_peak_rss_mb(maxrss: int | float) -> float:
+    """Normalize the direct child's ``wait4`` peak RSS to MiB.
+
+    Darwin reports ``ru_maxrss`` in bytes; Linux reports it in KiB.
+    """
+    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return float(maxrss) / divisor
+
+
+def _wait4_child(
+    proc: subprocess.Popen,
+    *,
+    nohang: bool,
+) -> tuple[int, float] | None:
+    """Reap ``proc`` once and retain the direct child's durable peak RSS.
+
+    ``Popen.poll``/``wait`` use ``waitpid`` and discard rusage, so this owner
+    calls ``wait4`` directly and then records the return code on the Popen
+    object to prevent a second reap.
+    """
+    if nohang:
+        # Observe exit without reaping first. The unreaped child keeps its pid
+        # (and therefore its dedicated process-group id) reserved while we
+        # terminate any descendants it left behind. Reaping first would open a
+        # tiny pid/pgid-reuse race in which ``killpg(proc.pid, ...)`` could
+        # target an unrelated, newly-created process group.
+        while True:
+            try:
+                exited = os.waitid(
+                    os.P_PID,
+                    proc.pid,
+                    os.WEXITED | os.WNOHANG | os.WNOWAIT,
+                )
+                break
+            except InterruptedError:
+                continue
+        if exited is None or exited.si_pid == 0:
+            return None
+        _terminate_owned_process_group(proc)
+
+    options = 0
+    while True:
+        try:
+            waited_pid, status, usage = os.wait4(proc.pid, options)
+            break
+        except InterruptedError:
+            continue
+    returncode = os.waitstatus_to_exitcode(status)
+    proc.returncode = returncode
+    return returncode, _rusage_peak_rss_mb(usage.ru_maxrss)
+
+
+def _terminate_owned_process_group(proc: subprocess.Popen) -> None:
+    """Terminate the child's dedicated group while its pid is still owned."""
+
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (PermissionError, ProcessLookupError):
+        # The group can disappear after its last descendant exits. Darwin may
+        # instead report EPERM when the unreaped zombie is the group's only
+        # remaining member. Callers still reap the direct child.
+        pass
+
+
+def _kill_and_reap_child(proc: subprocess.Popen) -> tuple[int, float]:
+    """SIGKILL the tick's process group, then reap its direct child once.
+
+    Tick work can spawn Git and configured tools.  The child starts a dedicated
+    session whose process-group id is its pid, so killing only ``proc.pid``
+    would orphan that work after an RSS/timeout verdict.  ``wait4`` still owns
+    only the direct child, preserving its race-honest return code and peak RSS.
+    """
+    _terminate_owned_process_group(proc)
+    reaped = _wait4_child(proc, nohang=False)
+    assert reaped is not None  # blocking wait4 always returns the owned child
+    return reaped
 
 
 def _tick_in_child(
@@ -1073,10 +1261,12 @@ def _tick_in_child(
 ) -> str:
     """Run one project tick in a budgeted child process.
 
-    Returns ``"ok"``, ``"rss_killed"``, ``"timeout_killed"``, or
-    ``"error:<rc>"``. The #65 invariant this enforces: a pathological project
-    can never take the sweep parent's memory with it — the child is killed at
-    the budget and the sweep continues with the next project.
+    Returns ``"ok"``, ``"rss_killed"``, ``"peak_rss_exceeded"``,
+    ``"timeout_killed"``, ``"error:timeout_exceeded"``, or ``"error:<rc>"``.
+    A sampled live process-group budget breach is killed. A completed direct
+    child whose durable ``wait4`` peak breaches the budget is reported as
+    ``peak_rss_exceeded``. This deliberately does not claim an impossible
+    portable, mathematically complete peak over every short-lived descendant.
 
     ``_argv`` overrides the child command (tests substitute a controlled
     allocator/sleeper so the kill paths are exercised against REAL processes
@@ -1086,35 +1276,66 @@ def _tick_in_child(
                      "tick", str(project_cwd)]
     proc = subprocess.Popen(
         argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     started = time.monotonic()
+    poll_interval_s = _tick_rss_poll_interval_s()
     verdict = "ok"
     while True:
-        rc = proc.poll()
-        if rc is not None:
-            verdict = "ok" if rc == 0 else f"error:{rc}"
+        reaped = _wait4_child(proc, nohang=True)
+        if reaped is not None:
+            rc, peak_rss = reaped
+            if rc != 0:
+                if peak_rss >= budget_mb:
+                    logger.warning(
+                        "tick child for %s failed with exit %d after breaching "
+                        "direct-child peak RSS budget (%.0fMiB >= %.0fMiB)",
+                        project_cwd, rc, peak_rss, budget_mb,
+                    )
+                verdict = f"error:{rc}"
+            elif peak_rss >= budget_mb:
+                logger.warning(
+                    "tick child for %s completed after breaching direct-child "
+                    "peak RSS budget (%.0fMiB >= %.0fMiB)",
+                    project_cwd, peak_rss, budget_mb,
+                )
+                verdict = "peak_rss_exceeded"
+            else:
+                verdict = "ok"
             break
-        elapsed = time.monotonic() - started
         rss = _child_rss_mb(proc.pid)
         if rss is not None and rss >= budget_mb:
             logger.warning(
-                "tick child for %s breached RSS budget (%.0fMiB >= %.0fMiB) — killed",
+                "tick child for %s breached sampled process-group RSS budget "
+                "(%.0fMiB >= %.0fMiB) — terminating",
                 project_cwd, rss, budget_mb,
             )
-            proc.kill()
-            proc.wait(timeout=10)
-            verdict = "rss_killed"
+            rc, _peak_rss = _kill_and_reap_child(proc)
+            if rc == -signal.SIGKILL:
+                verdict = "rss_killed"
+            elif rc == 0:
+                verdict = "peak_rss_exceeded"
+            else:
+                verdict = f"error:{rc}"
             break
+        # Check the wall clock after the potentially non-zero-cost RSS probe so
+        # its runtime cannot be followed by a stale full polling sleep.
+        elapsed = time.monotonic() - started
         if elapsed >= timeout_s:
             logger.warning(
-                "tick child for %s breached wall budget (%.0fs >= %.0fs) — killed",
+                "tick child for %s breached wall budget (%.0fs >= %.0fs) "
+                "— terminating",
                 project_cwd, elapsed, timeout_s,
             )
-            proc.kill()
-            proc.wait(timeout=10)
-            verdict = "timeout_killed"
+            rc, _peak_rss = _kill_and_reap_child(proc)
+            if rc == -signal.SIGKILL:
+                verdict = "timeout_killed"
+            elif rc == 0:
+                verdict = "error:timeout_exceeded"
+            else:
+                verdict = f"error:{rc}"
             break
-        time.sleep(0.5)
+        time.sleep(min(poll_interval_s, timeout_s - elapsed))
     return verdict
 
 
@@ -1160,8 +1381,15 @@ def run_sweep(
     budget_mb = _tick_budget_mb()
     timeout_s = _tick_timeout_s()
     sweep_deadline = time.monotonic() + _sweep_budget_s()
-    summary = {"projects": len(targets), "ok": 0, "rss_killed": 0,
-               "timeout_killed": 0, "errors": 0, "deferred": 0}
+    summary = {
+        "projects": len(targets),
+        "ok": 0,
+        "rss_killed": 0,
+        "peak_rss_exceeded": 0,
+        "timeout_killed": 0,
+        "errors": 0,
+        "deferred": 0,
+    }
     if prune_summary is not None:
         summary["pruned"] = (
             prune_summary.get("pruned_tmp", 0)
@@ -1198,15 +1426,18 @@ def run_sweep(
             summary["ok"] += 1
         elif verdict == "rss_killed":
             summary["rss_killed"] += 1
+        elif verdict == "peak_rss_exceeded":
+            summary["peak_rss_exceeded"] += 1
         elif verdict == "timeout_killed":
             summary["timeout_killed"] += 1
         else:
             summary["errors"] += 1
     logger.info(
-        "sweep complete: %d projects, %d ok, %d rss-killed, %d timeout-killed, "
-        "%d errors, %d deferred",
+        "sweep complete: %d projects, %d ok, %d rss-killed, "
+        "%d peak-rss-exceeded, %d timeout-killed, %d errors, %d deferred",
         summary["projects"], summary["ok"], summary["rss_killed"],
-        summary["timeout_killed"], summary["errors"], summary["deferred"],
+        summary["peak_rss_exceeded"], summary["timeout_killed"],
+        summary["errors"], summary["deferred"],
     )
     return summary
 

@@ -82,7 +82,10 @@ def test_posting_indexes_empty_unanchored_list_without_error() -> None:
         "unanchored_trace_patch_ids": [],
     })
     posting = _posting_from_doc(7, "deadbeef", doc)
-    assert posting["p"] == ["tracepatch-sha256:" + "a" * 64]
+    assert posting["p"] == [
+        "a" * 64,
+        "tracepatch-sha256:" + "a" * 64,
+    ]
 
 
 def _init_repo(repo: Path) -> None:

@@ -18,7 +18,11 @@ import pytest
 
 import opentraces.core.trails as trails_pkg
 from opentraces.core._bucket_io import _gzip_deterministic
-from opentraces.core.bucket_events import read_events_mirror_batches, sync_events_mirror
+from opentraces.core.bucket_events import (
+    read_events_mirror_batches,
+    read_events_mirror_for_trace,
+    sync_events_mirror,
+)
 from opentraces.core.paths import bucket_dir
 from opentraces.core.trails import TrailEventDraft, append_event_batch
 
@@ -34,15 +38,24 @@ def _init_repo(repo: Path) -> None:
 
 
 def _append_round(repo: Path, n: int, tag: str) -> None:
-    append_event_batch(repo, [
-        TrailEventDraft(
-            event_type="trace_patch_created", trace_id=f"tr-{tag}",
-            step_index=i, capture_method=["hook_posttooluse"],
-            payload={"trace_patch_id": f"tracepatch-sha256:{tag}-{i}",
-                     "file_path": "f.py", "authored_text": f"# {tag} {i}\n"},
-        )
-        for i in range(n)
-    ], writer=f"test-{tag}")
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id=f"tr-{tag}",
+                step_index=i,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": f"tracepatch-sha256:{tag}-{i}",
+                    "file_path": "f.py",
+                    "authored_text": f"# {tag} {i}\n",
+                },
+            )
+            for i in range(n)
+        ],
+        writer=f"test-{tag}",
+    )
 
 
 def _mirror_files() -> dict[str, bytes]:
@@ -52,9 +65,7 @@ def _mirror_files() -> dict[str, bytes]:
     return {p.name: p.read_bytes() for p in sorted(batches.glob("*.jsonl.gz"))}
 
 
-def test_incremental_sync_never_full_reads_and_matches_rebuild(
-    tmp_path, monkeypatch
-):
+def test_incremental_sync_never_full_reads_and_matches_rebuild(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     _init_repo(repo)
     _append_round(repo, 3, "one")
@@ -72,6 +83,7 @@ def test_incremental_sync_never_full_reads_and_matches_rebuild(
     # instance would ALSO revert the conftest's HOME isolation (it nearly
     # wrote into the real ~/.opentraces during development of this test).
     import pytest as _pytest
+
     with _pytest.MonkeyPatch.context() as mp:
         mp.setattr(trails_pkg, "read_events", _boom)
         second = sync_events_mirror(repo, repo_id="proj-a")
@@ -83,6 +95,7 @@ def test_incremental_sync_never_full_reads_and_matches_rebuild(
 
     # Byte-identity: wipe the mirror, rebuild from scratch, compare.
     import shutil
+
     shutil.rmtree(bucket_dir() / "events")
     rebuilt = sync_events_mirror(repo, repo_id="proj-a")
     assert rebuilt["batch_count"] == 3
@@ -101,6 +114,35 @@ def test_idempotent_when_log_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(trails_pkg, "read_events", _boom)
     again = sync_events_mirror(repo, repo_id="proj-b")
     assert again["batch_count"] == 1
+
+
+def test_trace_scoped_reader_accepts_each_project_slice_in_shared_mirror(tmp_path):
+    """Each project owns its ordinal namespace inside the shared mirror."""
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    _init_repo(repo_a)
+    _init_repo(repo_b)
+    _append_round(repo_a, 1, "project-a")
+    _append_round(repo_b, 1, "project-b")
+
+    sync_events_mirror(repo_a, repo_id="project-a")
+    sync_events_mirror(repo_b, repo_id="project-b")
+
+    batch_names = sorted(
+        path.name for path in (bucket_dir() / "events" / "v1" / "batches").glob("*.jsonl.gz")
+    )
+    assert len(batch_names) == 2
+    assert all(name.startswith("000000000001-") for name in batch_names)
+    assert [event.trace_id for event in read_events_mirror_for_trace("tr-project-a")] == [
+        "tr-project-a"
+    ]
+    assert [event.trace_id for event in read_events_mirror_for_trace("tr-project-b")] == [
+        "tr-project-b"
+    ]
+    assert {event.trace_id for event in read_events_mirror_batches()} == {
+        "tr-project-a",
+        "tr-project-b",
+    }
 
 
 def test_read_events_mirror_batches_dedupes_identical_duplicate_across_files(tmp_path):

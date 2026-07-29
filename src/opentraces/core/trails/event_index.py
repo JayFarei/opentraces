@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .ids import normalize_id
 from .models import TrailEvent
 
 # Bump when the on-disk index format changes so a stale sidecar is discarded
@@ -117,6 +118,18 @@ def _posting_from_doc(seq: int, oid: str, doc: dict[str, Any]) -> dict[str, Any]
     commits: set[str] = set()
     patches: set[str] = set()
 
+    def _add_patch_id(value: Any) -> None:
+        if not isinstance(value, str) or not value:
+            return
+        # Preserve the historical wire spelling AND index its canonical
+        # normalized alias. Readers use normalized ids from typed refs, while
+        # old events commonly carry ``tracepatch-sha256:<digest>`` in the flat
+        # field; both keys must resolve the same posting.
+        patches.add(value)
+        normalized = normalize_id(value)
+        if normalized:
+            patches.add(normalized)
+
     tid = doc.get("trace_id")
     if isinstance(tid, str) and tid:
         traces.add(tid)
@@ -127,8 +140,7 @@ def _posting_from_doc(seq: int, oid: str, doc: dict[str, Any]) -> dict[str, Any]
         if isinstance(ptid, str) and ptid:
             traces.add(ptid)
         pid = payload.get("trace_patch_id")
-        if isinstance(pid, str) and pid:
-            patches.add(pid)
+        _add_patch_id(pid)
         for entry in payload.get("results") or []:
             if not isinstance(entry, dict):
                 continue
@@ -136,11 +148,9 @@ def _posting_from_doc(seq: int, oid: str, doc: dict[str, Any]) -> dict[str, Any]
             if isinstance(rtid, str) and rtid:
                 traces.add(rtid)
             rpid = entry.get("trace_patch_id")
-            if isinstance(rpid, str) and rpid:
-                patches.add(rpid)
+            _add_patch_id(rpid)
         for upid in payload.get("unanchored_trace_patch_ids") or []:
-            if isinstance(upid, str) and upid:
-                patches.add(upid)
+            _add_patch_id(upid)
         _collect_hexes(payload, commits)
 
     return {
@@ -207,6 +217,43 @@ class EventIndex:
 
     def entries_for_trace(self, trace_id: str) -> list[tuple[str, str]]:
         return self.entries_for_seqs(self.by_trace.get(trace_id, ()))
+
+    def entries_for_patches(
+        self,
+        trace_patch_ids: Iterable[str],
+        *,
+        event_types: set[str] | None = None,
+    ) -> list[tuple[str, str]]:
+        """Return the union of postings for a finite patch-id set.
+
+        Format-2 indexes written before normalized aliases were added may only
+        contain the historical ``tracepatch-sha256:<digest>`` key. Probe the
+        finite, known aliases for each requested id rather than walking every
+        ``by_patch`` key; the index format remains backward-compatible and the
+        query stays O(number of requested ids). When event types are supplied,
+        intersect their postings before resolving blobs so a same-patch fat
+        summary is never loaded for an unrelated typed query.
+        """
+
+        seqs: set[int] = set()
+        for patch_id in trace_patch_ids:
+            normalized = normalize_id(patch_id)
+            aliases = {
+                patch_id,
+                normalized,
+                f"tracepatch-sha256:{normalized}",
+                f"sha256:{normalized}",
+                f"ot://trace-patch/sha256/{normalized}",
+            }
+            for alias in aliases:
+                if alias:
+                    seqs.update(self.by_patch.get(alias, ()))
+        if event_types is not None:
+            type_seqs: set[int] = set()
+            for event_type in event_types:
+                type_seqs.update(self.by_type.get(event_type, ()))
+            seqs.intersection_update(type_seqs)
+        return self.entries_for_seqs(seqs)
 
     def entries_for_scoped(
         self,

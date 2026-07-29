@@ -1049,7 +1049,7 @@ def _read_events_for_trace_fullscan(
     entries = _list_event_blob_entries(cwd, head)
     if not entries:
         return []
-    token = trace_id.encode()
+    token = json.dumps(trace_id).encode()
     matched: list[TrailEvent] = []
     for raw in _iter_blobs_batch(cwd, entries):
         if token not in raw:
@@ -1228,7 +1228,12 @@ def iter_event_views(cwd: Path, head: str) -> "Iterator[TrailEvent | _RawEventVi
         yield TrailEvent.model_validate_json(raw)
 
 
-def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
+def read_events_for_trace(
+    cwd: Path,
+    trace_id: str,
+    *,
+    rebuild_index: bool = True,
+) -> list[TrailEvent]:
     """Read every event belonging to ``trace_id`` — bounded by ONE trace's
     footprint, never the whole log.
 
@@ -1238,9 +1243,15 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
     per-trace predicate (:func:`_event_owns_trace`) — top-level ``trace_id``, a
     payload ``trace_id``, or a v2 summary touching the trace — which every
     consumer (``_events_for_trace_from_iter``, workspace export, context-tree
-    fan-in) already post-filters to. When the index is unavailable it is rebuilt
-    once (the bootstrap scan); only if that also fails does it fall back to the
-    full scan, slow-but-correct (the index is an accelerator, never required).
+    fan-in) already post-filters to.
+
+    By default, an unavailable index is rebuilt once (the bootstrap scan);
+    only if that also fails does the reader use the legacy sorted full scan.
+    Hot exact callers may pass ``rebuild_index=False`` to bypass the global
+    persisted index entirely: the ref is token-prefiltered through an O(one
+    blob + result) raw stream without loading or building the index or retaining
+    the full blob-entry list. The exact ownership filter and final sequence
+    sort keep both paths byte-identical.
     """
     cwd = cwd.resolve()
     head = _ref_head(cwd)
@@ -1255,6 +1266,19 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
     if cached is not None:
         return cached
     from . import event_index
+
+    if not rebuild_index:
+        token = json.dumps(trace_id).encode()
+        matched: list[TrailEvent] = []
+        for raw in _iter_event_blobs_streaming(cwd, head):
+            if token not in raw:
+                continue
+            event = TrailEvent.model_validate_json(raw)
+            if _event_owns_trace(event, trace_id):
+                matched.append(event)
+        matched.sort(key=lambda event: event.event_sequence)
+        _save_trace_events_cache(cwd, trace_id, head, matched)
+        return matched
 
     idx = event_index.fresh_index_for_read(cwd, head)
     if idx is None:
@@ -1273,6 +1297,191 @@ def read_events_for_trace(cwd: Path, trace_id: str) -> list[TrailEvent]:
     return matched
 
 
+def _iter_event_blobs_streaming(cwd: Path, head: str):
+    """Yield canonical event blobs with O(one blob) retained memory.
+
+    Unlike the indexed readers, this cold fallback never builds or loads the
+    rebuildable event-index pickle. ``rev-list`` and ``cat-file`` remain live
+    streams, so a mature log pays O(log) time but not O(log) retained Python
+    objects merely to resolve one exact identifier.
+    """
+
+    rev_list = subprocess.Popen(
+        ["git", "rev-list", "--objects", head],
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    cat_file = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert rev_list.stdout is not None
+    assert cat_file.stdin is not None
+    assert cat_file.stdout is not None
+    try:
+        for raw_entry in rev_list.stdout:
+            oid, separator, path = raw_entry.rstrip(b"\n").partition(b" ")
+            if (
+                not separator
+                or not path.startswith(b"events/")
+                or not path.endswith(b".json")
+            ):
+                continue
+            cat_file.stdin.write(oid + b"\n")
+            cat_file.stdin.flush()
+            header = cat_file.stdout.readline()
+            parts = header.split()
+            if len(parts) != 3 or parts[0] != oid or parts[1] != b"blob":
+                raise RuntimeError("git cat-file --batch returned unexpected object")
+            size = int(parts[2])
+            blob = cat_file.stdout.read(size)
+            if blob is None or len(blob) != size:
+                raise RuntimeError("git cat-file --batch returned truncated blob")
+            cat_file.stdout.read(1)
+            yield blob
+        rev_list.stdout.close()
+        if rev_list.wait() != 0:
+            detail = (
+                rev_list.stderr.read().decode("utf-8", errors="replace").strip()
+                if rev_list.stderr is not None
+                else ""
+            )
+            raise RuntimeError(f"git rev-list --objects failed: {detail}")
+    finally:
+        try:
+            cat_file.stdin.close()
+        except OSError:
+            pass
+        for proc in (cat_file, rev_list):
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+
+
+def read_event_for_snapshot(cwd: Path, snapshot_id: str) -> TrailEvent | None:
+    """Resolve the latest exact snapshot event without materialising its type.
+
+    The head tree's ``snapshots/<safe_snapshot_id>`` entry points at the
+    captured workspace tree, not the event blob carrying trace/step metadata;
+    shared trees are retained first-write-wins as well. It therefore cannot
+    answer this lookup safely. This fallback scans raw blobs with cheap type/id
+    tokens, validates only candidates, and retains one exact latest match.
+    """
+
+    from .ids import normalize_id
+
+    cwd = cwd.resolve()
+    head = _ref_head(cwd)
+    wanted = normalize_id(snapshot_id)
+    if head is None or not wanted:
+        return None
+    type_token = b'"trace_snapshot_created"'
+    id_token = wanted.encode("utf-8")
+    latest: TrailEvent | None = None
+    for raw in _iter_event_blobs_streaming(cwd, head):
+        if type_token not in raw or id_token not in raw:
+            continue
+        event = TrailEvent.model_validate_json(raw)
+        if event.event_type != "trace_snapshot_created":
+            continue
+        if normalize_id(event.payload.get("snapshot_id")) != wanted:
+            continue
+        if latest is None or event.event_sequence > latest.event_sequence:
+            latest = event
+    return latest
+
+
+def _event_patch_ids(event: TrailEvent) -> set[str]:
+    """Patch ids indexed from one event, matching ``event_index`` exactly."""
+
+    payload = event.payload
+    if not isinstance(payload, dict):
+        return set()
+    patch_ids: set[str] = set()
+    direct = payload.get("trace_patch_id")
+    if isinstance(direct, str) and direct:
+        patch_ids.add(direct)
+    for result in payload.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        candidate = result.get("trace_patch_id")
+        if isinstance(candidate, str) and candidate:
+            patch_ids.add(candidate)
+    for candidate in payload.get("unanchored_trace_patch_ids") or []:
+        if isinstance(candidate, str) and candidate:
+            patch_ids.add(candidate)
+    return patch_ids
+
+
+def read_events_for_patches(
+    cwd: Path,
+    trace_patch_ids: set[str],
+    *,
+    event_types: set[str] | None = None,
+    rebuild_index: bool = True,
+) -> list[TrailEvent]:
+    """Read events for a finite patch set with one indexed union lookup.
+
+    Candidate blobs come from the rebuildable ``by_patch`` postings and are
+    parsed once, regardless of how many requested patches reference them (for
+    example one anchor-search summary).  Exact patch and optional event-type
+    filters are applied after parsing. With the default ``rebuild_index=True``,
+    an already-fresh persisted index is used when present. Explicit
+    ``rebuild_index=False`` bypasses the global persisted index entirely and
+    uses one token-prefiltered stream over the log, preserving semantics
+    without falling into N full scans.
+    """
+
+    from . import event_index
+    from .ids import normalize_id
+
+    cwd = cwd.resolve()
+    head = _ref_head(cwd)
+    wanted = {
+        normalize_id(patch_id)
+        for patch_id in trace_patch_ids
+        if isinstance(patch_id, str) and patch_id
+    }
+    if head is None or not wanted:
+        return []
+
+    lookup_ids = set(trace_patch_ids) | wanted
+    idx = event_index.fresh_index_for_read(cwd, head) if rebuild_index else None
+    if idx is not None:
+        entries = idx.entries_for_patches(lookup_ids, event_types=event_types)
+        prefilter = None
+        raw_events = _iter_blobs_batch(cwd, entries)
+    else:
+        patch_tokens = [patch_id.encode() for patch_id in lookup_ids]
+        type_tokens = [
+            f'"{event_type}"'.encode() for event_type in (event_types or set())
+        ]
+
+        def prefilter(raw: bytes) -> bool:
+            if type_tokens and not any(token in raw for token in type_tokens):
+                return False
+            return any(token in raw for token in patch_tokens)
+
+        raw_events = _iter_event_blobs_streaming(cwd, head)
+
+    matched: list[TrailEvent] = []
+    for raw in raw_events:
+        if prefilter is not None and not prefilter(raw):
+            continue
+        event = TrailEvent.model_validate_json(raw)
+        if event_types is not None and event.event_type not in event_types:
+            continue
+        owned = {normalize_id(patch_id) for patch_id in _event_patch_ids(event)}
+        if owned & wanted:
+            matched.append(event)
+    matched.sort(key=lambda event: event.event_sequence)
+    return matched
+
+
 def read_events_scoped(
     cwd: Path,
     *,
@@ -1281,6 +1490,7 @@ def read_events_scoped(
     commit_sha: str | None = None,
     commit_shas: set[str] | None = None,
     sink: "Callable[[TrailEvent], None] | None" = None,
+    rebuild_index: bool = True,
 ) -> list[TrailEvent]:
     """Read only events of ``event_types``, streaming per-commit so the whole
     history is never materialised at once (Bug B hot-path reader).
@@ -1306,6 +1516,13 @@ def read_events_scoped(
     ``(repo, head)`` and shared with full-history callers) — a partial
     list there would silently truncate them — and never runs verification.
 
+    With the default ``rebuild_index=True``, sink callbacks retain the legacy
+    event-sequence ordering guarantee even when index rebuilding fails. The
+    explicit ``rebuild_index=False`` cold path instead streams Git's object
+    enumeration with O(one blob) retained memory; callers selecting that path
+    must use an order-independent sink (for example, keep the maximum event
+    sequence) or consume the returned list, which is sorted before return.
+
     Performance: a single ``git rev-list --objects`` lists every event blob in
     one pass, then blobs are read in chunks via ``git cat-file --batch`` with a
     cheap raw-bytes prefilter so only the wanted-type blobs (typically <1% of
@@ -1328,17 +1545,18 @@ def read_events_scoped(
     if commit_shas:
         wanted_shas.update(commit_shas)
 
-    # #137: resolve candidate blobs through the rebuildable OID index when it is
-    # fresh — only the wanted-type (and, for commit-keyed types, wanted-commit)
-    # blobs are read, instead of byte-streaming the whole ref. The index is a
-    # SUPERSET of the events that pass the exact post-parse filter below, so the
-    # filtered result is byte-identical to the full scan — just bounded. When the
-    # index is unavailable it is rebuilt once; only if that also fails does this
-    # fall back to the whole-log raw-bytes-prefilter scan (slow-but-correct).
+    # #137: default callers resolve candidate blobs through the rebuildable OID
+    # index when it is fresh — only the wanted-type (and, for commit-keyed
+    # types, wanted-commit) blobs are read. The index is a SUPERSET of the
+    # events that pass the exact post-parse filter below, so the filtered result
+    # is byte-identical to the full scan. Explicit ``rebuild_index=False``
+    # callers bypass even persisted-index loading and take the streaming path.
+    # Otherwise an unavailable index is rebuilt once; only if that also fails
+    # does the default path use the sorted raw-bytes-prefilter fallback.
     from . import event_index
 
-    idx = event_index.fresh_index_for_read(cwd, head)
-    if idx is None:
+    idx = event_index.fresh_index_for_read(cwd, head) if rebuild_index else None
+    if idx is None and rebuild_index:
         idx = event_index.rebuild_event_index(cwd, head)
 
     _prefilter = None
@@ -1348,8 +1566,8 @@ def read_events_scoped(
             commit_filter=commit_filter,
             wanted_shas=wanted_shas,
         )
+        raw_events = _iter_blobs_batch(cwd, entries)
     else:
-        entries = _list_event_blob_entries(cwd, head)
         # Cheap raw-bytes prefilter so only wanted blobs are JSON-parsed. Types
         # carrying a commit_filter are additionally gated on a wanted sha
         # appearing in the blob — on a real log these commit-keyed events
@@ -1369,17 +1587,27 @@ def read_events_scoped(
                 return False
             return any(token in raw for token in filtered_tokens)
 
-    if not entries:
-        return []
+        if rebuild_index:
+            # Preserve the legacy sink ordering contract after a failed index
+            # rebuild. This materialises only the (path, oid) entry list, then
+            # streams the sorted blobs through one cat-file process.
+            raw_events = _iter_blobs_batch(
+                cwd,
+                _list_event_blob_entries(cwd, head),
+            )
+        else:
+            # Exact hot-path callers opt into O(one blob) retained memory and
+            # use order-independent sinks. Non-sink results are sorted below.
+            raw_events = _iter_event_blobs_streaming(cwd, head)
 
-    # #65: with a ``sink``, matching events are handed over one at a time (in
-    # event_sequence order — ``entries`` is sorted by the zero-padded name)
-    # and never retained here, so a consumer that keeps only a bounded
+    # #65: with a ``sink``, matching events are handed over one at a time and
+    # never retained here, so a consumer that keeps only a bounded
     # projection (the reconciler's cold rebuild) has bounded peak RSS no
-    # matter how large the log is. Blobs stream one at a time through
-    # ``_iter_blobs_batch``.
+    # matter how large the log is. Default/indexed callers see event-sequence
+    # order; explicit non-rebuilding raw-stream callers accept unspecified
+    # order as documented above.
     matched: list[TrailEvent] = []
-    for raw in _iter_blobs_batch(cwd, entries):
+    for raw in raw_events:
         if _prefilter is not None and not _prefilter(raw):
             continue
         event = TrailEvent.model_validate_json(raw)

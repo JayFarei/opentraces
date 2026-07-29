@@ -54,7 +54,8 @@ from ._bucket_io import (
 # Re-export trail/events-mirror cluster from bucket_events.
 # ---------------------------------------------------------------------------
 from .bucket_events import (
-    read_events_mirror_batches,
+    read_events_mirror_batches as read_events_mirror_batches,
+    read_events_mirror_for_trace,
 )
 
 # ---------------------------------------------------------------------------
@@ -99,9 +100,7 @@ from .bucket_trace_records import (
 # ---------------------------------------------------------------------------
 
 
-def _events_for_trace_from_iter(
-    events_iter: Any, trace_id: str
-) -> tuple[list[Any], list[Any]]:
+def _events_for_trace_from_iter(events_iter: Any, trace_id: str) -> tuple[list[Any], list[Any]]:
     """Split an event iterable into (trail_events, context_events) for one trace.
 
     Shared by :func:`project_per_trace_exports` (Git event log) and the
@@ -142,9 +141,7 @@ def _events_for_trace_from_iter(
     return trail_events, context_events
 
 
-def _context_events_for_trace_readonly(
-    project_slug: str, trace_id: str
-) -> list[Any]:
+def _context_events_for_trace_readonly(project_slug: str, trace_id: str) -> list[Any]:
     """Return this trace's context events from canonical data WITHOUT writing.
 
     Issue #55 read-only summary helper. Mirrors :func:`project_per_trace_exports`'s
@@ -185,19 +182,14 @@ def _context_events_for_trace_readonly(
             events_iter = list(read_events(repo, verify=False))
         except Exception:
             events_iter = []
-    trail_events, context_events = _events_for_trace_from_iter(
-        events_iter, trace_id
-    )
+    trail_events, context_events = _events_for_trace_from_iter(events_iter, trace_id)
 
     if not trail_events and not context_events:
         try:
-            mirror_events = list(read_events_mirror_batches())
-        except (FileNotFoundError, ValueError, BucketLayoutError):
+            mirror_events = list(read_events_mirror_for_trace(trace_id))
+        except (FileNotFoundError, BucketLayoutError):
             mirror_events = []
-        except Exception:
-            mirror_events = []
-        if mirror_events:
-            _, context_events = _events_for_trace_from_iter(mirror_events, trace_id)
+        _, context_events = _events_for_trace_from_iter(mirror_events, trace_id)
     return context_events
 
 
@@ -282,9 +274,7 @@ def canonical_anchor_maps(
                 commit_hex = (payload.get("commit_id") or {}).get("hex")
                 if not (trace_id and patch_id and commit_hex):
                     continue
-                anchors_by_trace_patch.setdefault(trace_id, {}).setdefault(
-                    patch_id, []
-                ).append(
+                anchors_by_trace_patch.setdefault(trace_id, {}).setdefault(patch_id, []).append(
                     (
                         event.event_sequence,
                         commit_hex,
@@ -299,6 +289,39 @@ def canonical_anchor_maps(
             resolved_slugs.add(slug)
 
     return anchors_by_trace_patch, distinct_anchored_by_trace, resolved_slugs
+
+
+def canonical_anchor_ids_for_trace(repo: Path | None, trace_id: str) -> tuple[set[str], bool]:
+    """Return one trace's canonical anchored patch ids and read authority.
+
+    This is the capture-time counterpart to :func:`canonical_anchor_maps`.
+    Manifest sweeps intentionally read the anchor slice once per repository;
+    a single-row upsert must instead use the trace index and retain only this
+    trace's events.  ``resolved`` becomes true only after the canonical read
+    succeeds, preserving the #172 no-deattribution-on-read-failure contract.
+    """
+
+    from .trails.event_log import read_events_for_trace
+    from .trails.ids import id_from_payload
+
+    if repo is None:
+        return set(), False
+
+    try:
+        events = read_events_for_trace(repo, trace_id, rebuild_index=False)
+    except Exception:
+        return set(), False
+
+    anchored: set[str] = set()
+    for event in events:
+        if event.event_type != "git_anchor_created":
+            continue
+        payload = event.payload or {}
+        patch_id = id_from_payload(payload, "trace_patch")
+        commit_hex = (payload.get("commit_id") or {}).get("hex")
+        if patch_id and commit_hex:
+            anchored.add(patch_id)
+    return anchored, True
 
 
 def anchor_map_from_trail_events(
@@ -388,9 +411,7 @@ def _rederive_patch_rows(
             # Distinct anchor commits, oldest-first by event sequence.
             ordered: list[tuple] = []
             seen_commits: set[str] = set()
-            for seq, commit_hex, tier, firm, path, etime in sorted(
-                events_for_patch
-            ):
+            for seq, commit_hex, tier, firm, path, etime in sorted(events_for_patch):
                 if commit_hex in seen_commits:
                     continue
                 seen_commits.add(commit_hex)
@@ -411,9 +432,7 @@ def _rederive_patch_rows(
                     "evidence_tier": tier or "exact_range_hash",
                     "evidence_firmness": firm or "firm_observed",
                 }
-                row["superseded_by"] = [
-                    c for c in reversed(all_commits) if c != commit_hex
-                ]
+                row["superseded_by"] = [c for c in reversed(all_commits) if c != commit_hex]
                 new_patches.append(row)
         else:
             # No backing event -> de-attribute. Preserve a prior search
@@ -447,6 +466,7 @@ def _write_per_trace_envelope(
     trail_events: list[Any],
     context_events: list[Any],
     patch_anchors: dict[str, list[tuple]] | None = None,
+    preserve_existing_empty_companions: bool = False,
 ) -> dict[str, Any]:
     """File-writing tail of :func:`project_per_trace_exports` (issue #31 step B).
 
@@ -459,19 +479,49 @@ def _write_per_trace_envelope(
     trace_dir = traces_v1_dir(project_slug, trace_id)
     trace_dir.mkdir(parents=True, exist_ok=True)
 
+    def _preserved_line_count(path: Path) -> int | None:
+        if not preserve_existing_empty_companions or not path.exists():
+            return None
+        try:
+            with gzip.open(path, "rb") as handle:
+                count = 0
+                line_has_content = False
+                while chunk := handle.read(64 * 1024):
+                    parts = chunk.split(b"\n")
+                    for part in parts[:-1]:
+                        line_has_content = (
+                            line_has_content
+                            or bool(part)
+                            and not part.isspace()
+                        )
+                        if line_has_content:
+                            count += 1
+                        line_has_content = False
+                    tail = parts[-1]
+                    line_has_content = (
+                        line_has_content
+                        or bool(tail)
+                        and not tail.isspace()
+                    )
+                return count + int(line_has_content)
+        except (OSError, gzip.BadGzipFile):
+            return None
+
     # 2. trail.jsonl.gz
-    trail_lines = [
-        _canonical_json(event.model_dump(mode="json")) for event in trail_events
-    ]
+    trail_path = trace_v1_trail_path(project_slug, trace_id)
+    trail_lines = [_canonical_json(event.model_dump(mode="json")) for event in trail_events]
     trail_body = ("\n".join(trail_lines) + "\n").encode("utf-8") if trail_lines else b""
-    _atomic_write_gzip(trace_v1_trail_path(project_slug, trace_id), trail_body)
+    preserved_trail_count = _preserved_line_count(trail_path)
+    if preserved_trail_count is None:
+        _atomic_write_gzip(trail_path, trail_body)
 
     # 3. context.jsonl.gz
-    context_lines = [
-        _canonical_json(event.model_dump(mode="json")) for event in context_events
-    ]
+    context_path = trace_v1_context_path(project_slug, trace_id)
+    context_lines = [_canonical_json(event.model_dump(mode="json")) for event in context_events]
     context_body = ("\n".join(context_lines) + "\n").encode("utf-8") if context_lines else b""
-    _atomic_write_gzip(trace_v1_context_path(project_slug, trace_id), context_body)
+    preserved_context_count = _preserved_line_count(context_path)
+    if preserved_context_count is None:
+        _atomic_write_gzip(context_path, context_body)
 
     # 4. sources.jsonl.gz — placeholder empty file when no raw source refs.
     sources_path = trace_v1_sources_path(project_slug, trace_id)
@@ -506,8 +556,12 @@ def _write_per_trace_envelope(
         "trace_path": trace_v1_json_path(project_slug, trace_id)
         .relative_to(paths.bucket_dir())
         .as_posix(),
-        "trail_event_count": len(trail_events),
-        "context_event_count": len(context_events),
+        "trail_event_count": (
+            preserved_trail_count if preserved_trail_count is not None else len(trail_events)
+        ),
+        "context_event_count": (
+            preserved_context_count if preserved_context_count is not None else len(context_events)
+        ),
         "has_trace_record": record is not None,
         "projected_at": utc_now_str(),
     }
@@ -580,29 +634,56 @@ def project_per_trace_exports(
     # read that FAILED (``_events_for_export_loop`` returned ``([], False)``), so
     # the empty list is NOT treated as authoritative.
     anchor_source_ok = False
+    explicit_source_authoritative = events is not None and events_authoritative
     if events is not None:
         events_iter = events
         anchor_source_ok = events_authoritative
     elif repo is not None:
         try:
-            events_iter = read_events_for_trace(repo, trace_id)
-            anchor_source_ok = True
+            events_iter = read_events_for_trace(
+                repo,
+                trace_id,
+                rebuild_index=False,
+            )
+            # A non-empty live slice is canonical evidence. An empty automatic
+            # read cannot prove that prior anchors no longer exist; disabling
+            # fallback is the hot-ingest signal to preserve prior attribution.
+            anchor_source_ok = bool(events_iter)
         except Exception:
             events_iter = []
             anchor_source_ok = False
     trail_events, context_events = _events_for_trace_from_iter(events_iter, trace_id)
+    # Companion replacement has its own authority state. Only an explicitly
+    # supplied authoritative event set may clear companions without consulting
+    # the mirror. An automatic live trace read that happens to be empty is not
+    # enough to clear prior state. The trace's existing companions remain the
+    # last authoritative projection unless a non-empty fallback supplies
+    # replacement evidence or the caller explicitly supplies authoritative
+    # emptiness.
+    companion_source_authoritative = events is not None and events_authoritative
 
-    if not trail_events and not context_events and mirror_fallback:
+    if (
+        not trail_events
+        and not context_events
+        and mirror_fallback
+        and not explicit_source_authoritative
+    ):
         try:
-            mirror_events = list(read_events_mirror_batches())
+            mirror_events = list(read_events_mirror_for_trace(trace_id))
+            # Current v2 mirror metadata proves the declared filename slice,
+            # but carries no per-batch digest/content count. Matching events
+            # are usable evidence; an empty scan cannot prove trace absence
+            # because a valid-gzip batch may still be semantically incomplete.
+            # Only an explicit authoritative event set may clear prior state.
+            companion_source_authoritative = bool(mirror_events)
+            anchor_source_ok = bool(mirror_events)
         except (FileNotFoundError, ValueError, BucketLayoutError):
             mirror_events = []
+            anchor_source_ok = False
         except Exception:
             mirror_events = []
-        if mirror_events:
-            trail_events, context_events = _events_for_trace_from_iter(
-                mirror_events, trace_id
-            )
+            anchor_source_ok = False
+        trail_events, context_events = _events_for_trace_from_iter(mirror_events, trace_id)
 
     # #172 GAP 1 — build the trace's per-patch anchor map from its own trail
     # events (already in hand — no second read) so the persisted trace.json
@@ -612,9 +693,7 @@ def project_per_trace_exports(
     # pass None so the already-healed on-disk record is written verbatim rather
     # than fabricated / stripped (#172 review fix — never de-attribute on a
     # transient read failure).
-    patch_anchors = (
-        anchor_map_from_trail_events(trail_events) if anchor_source_ok else None
-    )
+    patch_anchors = anchor_map_from_trail_events(trail_events) if anchor_source_ok else None
 
     return _write_per_trace_envelope(
         project_slug,
@@ -623,6 +702,11 @@ def project_per_trace_exports(
         trail_events,
         context_events,
         patch_anchors=patch_anchors,
+        preserve_existing_empty_companions=(
+            not trail_events
+            and not context_events
+            and not companion_source_authoritative
+        ),
     )
 
 
@@ -776,11 +860,7 @@ def _per_trace_v2_summary(
             anchored_count = len(distinct_anchored or set())
         else:
             anchored_count = len(
-                {
-                    p.patch_id
-                    for p in patches
-                    if p.anchor is not None and p.anchor.found
-                }
+                {p.patch_id for p in patches if p.anchor is not None and p.anchor.found}
             )
         title = (record.task.description if record.task else None) or None
         lifecycle = record.lifecycle
@@ -898,9 +978,7 @@ def iter_traces_v2(
     rows: list[dict[str, Any]] = []
     if not root.exists():
         return rows
-    glob_prefix = (
-        f"{_path_part(project_slug)}/*" if project_slug else "*/*"
-    )
+    glob_prefix = f"{_path_part(project_slug)}/*" if project_slug else "*/*"
     for trace_json in sorted(root.glob(f"{glob_prefix}/trace.json")):
         proj_dir = trace_json.parent.parent
         proj_slug = unquote(proj_dir.name)
@@ -917,9 +995,7 @@ def iter_traces_v2(
         if envelope is None:
             envelope = _resolve_record_envelope(proj_slug, tid, record)
         anchors_resolved = anchor_maps is not None and proj_slug in anchor_maps[1]
-        distinct_anchored = (
-            anchor_maps[0].get(tid) if anchor_maps is not None else None
-        )
+        distinct_anchored = anchor_maps[0].get(tid) if anchor_maps is not None else None
         rows.append(
             _per_trace_v2_summary(
                 proj_slug,
@@ -1090,15 +1166,10 @@ def _is_legacy_read_in_place_mirror(project_slug: str, trace_id: str) -> bool:
             return False
         in_place = (Path(staging_root) / f"{trace_id}.jsonl").exists()
     else:
-        in_place = (
-            paths.PROJECTS_DIR / project_slug / "traces" / f"{trace_id}.jsonl"
-        ).exists()
+        in_place = (paths.PROJECTS_DIR / project_slug / "traces" / f"{trace_id}.jsonl").exists()
     if not in_place:
         return False
     capture_link = (
-        raw_sources_root()
-        / "sources"
-        / _path_part(project_slug)
-        / f"{_path_part(trace_id)}.json"
+        raw_sources_root() / "sources" / _path_part(project_slug) / f"{_path_part(trace_id)}.json"
     )
     return not capture_link.exists()
