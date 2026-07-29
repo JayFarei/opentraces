@@ -43,7 +43,7 @@ import posixpath
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .capture_limitations import (
@@ -56,7 +56,6 @@ from .event_log import (
 )
 from .event_log import (
     append_event_batch,
-    read_events,
     read_events_scoped,
     read_events_since,
 )
@@ -960,12 +959,15 @@ def reconcile_watcher_observations(
     repo: Path,
     *,
     writer: str = RECONCILER_WRITER,
+    event_sink: Callable[[TrailEvent], None] | None = None,
 ) -> dict[str, Any]:
     """Process unattributed watcher observations against step windows.
 
     Returns a summary describing what the reconciler did. The caller can use
     this for telemetry; the source of truth is the appended events in the
-    canonical event log.
+    canonical event log. When ``event_sink`` is supplied, each event appended
+    by this run is also handed to the caller after the append succeeds. This
+    lets hot ingest reuse its bounded delta without rereading global history.
 
     Concurrency: the per-repo file lock prevents two reconcilers from
     double-emitting attribution for the same observation. The append-only
@@ -1151,7 +1153,10 @@ def reconcile_watcher_observations(
             summary["attributed"] += 1
 
         if drafts:
-            append_event_batch(repo, drafts, writer=writer)
+            written = append_event_batch(repo, drafts, writer=writer)
+            if event_sink is not None:
+                for event in written:
+                    event_sink(event)
         # Save AFTER a successful append (or when there was nothing to append):
         # the watermark is the head as of the read, so our own batch is re-read
         # next run and retires these observations even if this save fails.

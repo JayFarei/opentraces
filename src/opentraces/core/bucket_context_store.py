@@ -37,10 +37,8 @@ from opentraces.core._time import utc_now_str
 
 from .bucket_layout import (
     _path_part,
-    blobs_v1_context_path,
     blobs_v1_root,
     context_layer_blob_path,
-    context_tree_dir,
     context_tree_head_path,
     context_tree_nodes_path,
     context_tree_reconciliation_path,
@@ -158,7 +156,10 @@ def project_context_tree_to_bucket(
 ) -> dict[str, Any]:
     """Project Context Tree events from the canonical event log into the bucket.
 
-    Reads ``read_events(repo)`` through ``build_context_tree_projection``.
+    Aggregate projections read ``read_events(repo)`` through
+    ``build_context_tree_projection``. Single-trace projections use the
+    trace-indexed reader once and reuse that list for projection and sequence
+    accounting.
     For each trace (or just ``trace_id`` if given) writes layer blobs,
     nodes.jsonl, optional reconciliation.json, then atomically writes
     head.json LAST so a partial run never points at missing blobs.
@@ -175,20 +176,32 @@ def project_context_tree_to_bucket(
     ``events`` and ``seq_suffix`` (the all-type suffix since the daemon's
     projection watermark). That value may transiently under-report trail-only
     activity for traces whose context didn't change — the bucket
-    repair/status verbs keep the exact full-fidelity accounting. Legacy
-    behavior (``events=None``) is unchanged.
+    repair/status verbs keep the exact full-fidelity accounting. Aggregate
+    behavior (``trace_id=None, events=None``) is unchanged.
     """
 
     from .context_tree.contract import CONTEXT_TREE_RECONCILED
     from .context_tree.query import build_context_tree_projection
-    from .trails import event_log_status, read_events
+    from .trails import (
+        event_log_status,
+        event_log_verification_status,
+        read_events,
+    )
+    from .trails.event_log import read_events_for_trace
+
+    if events is None and trace_id is not None:
+        events = read_events_for_trace(repo, trace_id, rebuild_index=False)
 
     # When a single trace is targeted (the per-session ingest path), build
-    # only that trace's projection instead of re-walking the whole history.
+    # only that trace's projection and reuse the same bounded list below.
     projection = build_context_tree_projection(
         repo, trace_id=trace_id, events=events
     )
-    status = event_log_status(repo)
+    status = (
+        event_log_verification_status(repo, mode="quick")
+        if trace_id is not None
+        else event_log_status(repo)
+    )
     event_log_head = status.get("head")
     blob_scope = _context_blob_scope()
 
@@ -522,7 +535,8 @@ def compute_context_tree_status() -> dict[str, Any]:
     """
 
     from .config import get_project_dir, load_config, opted_in_projects
-    from .trails import event_log_status, read_events
+    from .trails import event_log_status
+    from .trails.event_log import iter_events
 
     # Walk every head.json exactly once and feed the three aggregators
     # via internal ``_heads`` kwargs so they never re-read from disk.
@@ -567,21 +581,26 @@ def compute_context_tree_status() -> dict[str, Any]:
         events_behind += delta
         if delta > 0:
             try:
-                events = read_events(project_path, verify=False)
+                current_head = status.get("head")
+                events = (
+                    iter_events(project_path, str(current_head))
+                    if current_head
+                    else ()
+                )
+                for event in events:
+                    if event.event_sequence <= max_processed:
+                        continue
+                    ts = getattr(event, "event_time", None)
+                    if ts is not None:
+                        ts_str = ts if isinstance(ts, str) else ts.isoformat()
+                        if (
+                            oldest_unprojected_event_time is None
+                            or ts_str < oldest_unprojected_event_time
+                        ):
+                            oldest_unprojected_event_time = ts_str
+                    break
             except Exception:
-                events = []
-            for event in sorted(events, key=lambda e: e.event_sequence):
-                if event.event_sequence <= max_processed:
-                    continue
-                ts = getattr(event, "created_at", None)
-                if ts is not None:
-                    ts_str = ts if isinstance(ts, str) else ts.isoformat()
-                    if (
-                        oldest_unprojected_event_time is None
-                        or ts_str < oldest_unprojected_event_time
-                    ):
-                        oldest_unprojected_event_time = ts_str
-                break
+                pass
 
     return {
         "schema_version": snapshot.get("schema_version"),

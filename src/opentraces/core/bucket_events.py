@@ -17,6 +17,10 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
+import tempfile
+import zlib
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -29,11 +33,9 @@ from .bucket_layout import (
     events_v1_root,
 )
 from ._bucket_io import (
-    _atomic_write_bytes,
     _atomic_write_json,
     _canonical_json,
     _read_gzip_bytes,
-    _gzip_deterministic,
 )
 
 # Schema constants (imported from facade to keep a single source of truth).
@@ -42,6 +44,55 @@ from ._bucket_io import (
 # mirrored to both; the test suite enforces this via the manifest digests.
 BUCKET_EVENTS_INDEX_SCHEMA = "opentraces.bucket.events.v2"
 TRAIL_EVENT_SNAPSHOT_SCHEMA = "opentraces.bucket.trail_events_snapshot.v1"
+
+
+def _same_file_bytes(left: Path, right: Path) -> bool:
+    """Compare two files without retaining either file in memory."""
+
+    if left.stat().st_size != right.stat().st_size:
+        return False
+    with left.open("rb") as left_handle, right.open("rb") as right_handle:
+        while True:
+            left_chunk = left_handle.read(1024 * 1024)
+            right_chunk = right_handle.read(1024 * 1024)
+            if left_chunk != right_chunk:
+                return False
+            if not left_chunk:
+                return True
+
+
+def _write_event_batch_streaming(path: Path, events: Iterator[Any]) -> tuple[bool, int]:
+    """Write one event batch with O(one event + codec buffers) peak memory.
+
+    The byte stream matches :func:`_gzip_deterministic` exactly: canonical JSON,
+    one newline per event, zlib level 6 with a gzip wrapper, ``mtime=0``, and the
+    normalized RFC-1952 OS byte.  Candidate comparison is chunked as well, so a
+    pre-existing multi-gigabyte batch never becomes two in-memory ``bytes``
+    objects merely to preserve the write-only-on-change contract.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    compressor = zlib.compressobj(6, zlib.DEFLATED, 31)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    latest_event_sequence = 0
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            for event in events:
+                latest_event_sequence = max(latest_event_sequence, int(event.event_sequence))
+                line = _canonical_json(event.model_dump(mode="json"))
+                handle.write(compressor.compress(line.encode("utf-8") + b"\n"))
+            handle.write(compressor.flush())
+        with tmp_path.open("r+b") as handle:
+            handle.seek(9)
+            handle.write(b"\xff")
+        if path.exists() and _same_file_bytes(path, tmp_path):
+            return False, latest_event_sequence
+        tmp_path.replace(path)
+        return True, latest_event_sequence
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def sync_events_mirror(
@@ -60,9 +111,14 @@ def sync_events_mirror(
     rewriting index.json when the counters are unchanged).
     """
 
-    from .trails import EVENT_LOG_REF, event_log_status, read_events
+    from .trails import EVENT_LOG_REF, event_log_verification_status
 
-    status = event_log_status(repo)
+    # Watcher ingestion is a hot recovery path, not an explicit integrity
+    # audit.  The quick surface resolves the ref and bounded counters without
+    # falling back to ``read_events`` when its verification watermark is
+    # absent or stale.  Full validation remains available through
+    # ``trail verify --mode full`` and the explicit verification APIs.
+    status = event_log_verification_status(repo, mode="quick")
     if status.get("state") == "missing":
         # Issue #28 — do NOT clobber a restored mirror. On a fresh clone /
         # cross-machine restore the live project's Git event-log ref is missing,
@@ -79,10 +135,7 @@ def sync_events_mirror(
                 prior = json.loads(index_path.read_text(encoding="utf-8"))
             except (OSError, ValueError, json.JSONDecodeError):
                 prior = None
-            if (
-                isinstance(prior, dict)
-                and int(prior.get("batch_count") or 0) > 0
-            ):
+            if isinstance(prior, dict) and int(prior.get("batch_count") or 0) > 0:
                 return prior
         index = {
             "schema_version": BUCKET_EVENTS_INDEX_SCHEMA,
@@ -132,77 +185,71 @@ def sync_events_mirror(
     # live, the 2GB snapshot pickle) only to filter it down to the appended
     # suffix. Read just the suffix instead; the full read remains for true
     # rebuilds (no/invalid prior index, rewritten history).
-    work_events: list[Any] | None = None
+    work_events: Iterator[Any] | None = None
     if incremental:
         _, new_events = read_events_since(repo, prior_head)
         if new_events is None:
             incremental = False
         else:
-            work_events = [
-                e for e in sorted(new_events, key=lambda e: e.event_sequence)
-                if e.event_sequence > prior_seq
-            ]
+            work_events = iter(
+                [
+                    e
+                    for e in sorted(new_events, key=lambda e: e.event_sequence)
+                    if e.event_sequence > prior_seq
+                ]
+            )
     if work_events is None:
-        work_events = sorted(
-            read_events(repo, verify=False), key=lambda e: e.event_sequence
-        )
-    seq_offset = prior_batch_count if incremental else 0
+        # #365: a missing/invalid mirror index is automatic watcher recovery,
+        # not an explicit maintenance command.  The old fallback parsed and
+        # retained every TrailEvent, then retained them a second time in
+        # ``by_batch``.  ``iter_events`` walks one immutable head in sequence
+        # order and the groupby below consumes one batch at a time.
+        from .trails.event_log import iter_events
 
-    # Group the events we need to write by batch_id, in sequence order.
-    batch_order: list[str] = []
-    by_batch: dict[str, list[Any]] = {}
-    for event in work_events:
-        bid = event.batch_id
-        if bid not in by_batch:
-            by_batch[bid] = []
-            batch_order.append(bid)
-        by_batch[bid].append(event)
+        head = status.get("head")
+        work_events = iter_events(repo, head) if isinstance(head, str) else iter(())
+    seq_offset = prior_batch_count if incremental else 0
 
     batches_dir = events_v1_batches_dir()
     batches_dir.mkdir(parents=True, exist_ok=True)
 
     batches_written = 0
-    last_batch_id: str | None = (
-        prior_index.get("last_batch_id") if incremental else None
-    )
+    last_batch_id: str | None = prior_index.get("last_batch_id") if incremental else None
     latest_event_sequence = prior_seq if incremental else 0
-    for offset, bid in enumerate(batch_order, start=1):
+    batch_count = 0
+    for offset, (bid, batch_events) in enumerate(
+        groupby(work_events, key=lambda event: event.batch_id), start=1
+    ):
+        batch_count = offset
         seq = seq_offset + offset
-        batch_events = by_batch[bid]
         # Filename: <seq>-<batch-id>.jsonl.gz; seq is zero-padded for sort.
         safe_bid = _path_part(bid)
         filename = f"{seq:012d}-{safe_bid}.jsonl.gz"
         path = batches_dir / filename
-        lines = [
-            _canonical_json(event.model_dump(mode="json"))
-            for event in sorted(batch_events, key=lambda e: e.event_sequence)
-        ]
-        body = ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
-        compressed = _gzip_deterministic(body)
-        if not (path.exists() and path.read_bytes() == compressed):
-            _atomic_write_bytes(path, compressed)
+        wrote, batch_latest = _write_event_batch_streaming(path, batch_events)
+        if wrote:
             batches_written += 1
         last_batch_id = bid
-        for ev in batch_events:
-            if ev.event_sequence > latest_event_sequence:
-                latest_event_sequence = ev.event_sequence
+        latest_event_sequence = max(latest_event_sequence, batch_latest)
 
     index = {
         "schema_version": BUCKET_EVENTS_INDEX_SCHEMA,
         "repo_id": repo_id,
         "event_log_ref": EVENT_LOG_REF,
         "event_log_head": status.get("head"),
-        "batch_count": seq_offset + len(batch_order),
+        "batch_count": seq_offset + batch_count,
         "last_batch_id": last_batch_id,
         "latest_event_sequence": latest_event_sequence,
-        "state": status.get("state"),
+        # This is canonical synced mirror state, not the machine-local
+        # verification state. A current full-verification watermark changes
+        # quick diagnostics from ``unverified_large`` to ``ok`` without
+        # changing one byte of the Git ref; allowing that cache state into the
+        # index made identical buckets hash differently across machines.
+        # Missing refs are handled above, and structural quick-check failures
+        # remain honestly invalid. Detailed local verification diagnostics
+        # stay available through ``event_log_verification_status``.
+        "state": "invalid" if status.get("state") == "invalid" else "ok",
         "updated_at": utc_now_str(),
-        "verification": {
-            "batch_count": status.get("batch_count"),
-            "batch_parents_linear": status.get("batch_parents_linear"),
-            "content_hashes_valid": status.get("content_hashes_valid"),
-            "event_chain_valid": status.get("event_chain_valid"),
-        },
         "batches_written": batches_written,
     }
     _atomic_write_json(events_v1_index_path(), index)
@@ -215,6 +262,160 @@ def sync_trail_events_from_repo(repo: Path, *, repo_id: str) -> dict[str, Any]:
     """Deprecated alias for :func:`sync_events_mirror`. Plan 080 Resolution B."""
 
     return sync_events_mirror(repo, repo_id=repo_id)
+
+
+def _mirror_batch_paths() -> list[Path]:
+    """Validate the mirror index and return immutable batches in replay order.
+
+    The aggregate mirror is shared by multiple projects and can legitimately
+    contain duplicate ordinal prefixes and files outside the most recently
+    written project's index slice. Replay therefore keeps every batch file;
+    scoped readers establish non-empty ownership from validated event content,
+    never from the shared filename ordinal namespace. The index can also lag
+    the immutable files during reclaim crash recovery, so its counters are
+    diagnostics rather than a file-selection boundary.
+    """
+
+    from .bucket_models import BucketLayoutError
+
+    index_path = events_v1_index_path()
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"no v2 events mirror found at {index_path}; run "
+            f"'opentraces setup watcher tick' or 'opentraces bucket repair'"
+        )
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"unreadable events mirror index: {exc}") from exc
+    if index.get("schema_version") != BUCKET_EVENTS_INDEX_SCHEMA:
+        raise BucketLayoutError(
+            f"events mirror schema {index.get('schema_version')!r} incompatible with "
+            f"local {BUCKET_EVENTS_INDEX_SCHEMA!r}; run "
+            f"'opentraces bucket repair'"
+        )
+    if index.get("state") == "missing":
+        raise FileNotFoundError(
+            "events mirror index records a missing canonical event log; run "
+            "'opentraces setup watcher tick' or 'opentraces bucket repair'"
+        )
+    try:
+        declared_count = int(index.get("batch_count"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("events mirror index has an invalid batch_count") from exc
+    if declared_count < 0:
+        raise ValueError("events mirror index has a negative batch_count")
+
+    batches_dir = events_v1_batches_dir()
+    if not batches_dir.exists():
+        return []
+    return sorted(batches_dir.glob("*.jsonl.gz"))
+
+
+def _iter_gzip_candidate_lines(
+    batch_path: Path,
+    token: bytes,
+    *,
+    chunk_size: int = 64 * 1024,
+) -> Iterator[tuple[int, bytes]]:
+    """Yield token-bearing JSONL rows without retaining unrelated fat rows.
+
+    The current line is written to a bounded-memory spool and spills to a
+    temporary file after one chunk. Only a token-bearing candidate is read
+    back as one ``bytes`` value for JSON validation; an unrelated event can be
+    arbitrarily large without becoming one Python allocation.
+    """
+
+    overlap = max(len(token) - 1, 0)
+    line_number = 1
+    line_has_token = False
+    token_tail = b""
+    line = tempfile.SpooledTemporaryFile(max_size=chunk_size, mode="w+b")
+
+    def _consume(part: bytes) -> None:
+        nonlocal line_has_token, token_tail
+        if part:
+            window = token_tail + part
+            if token in window:
+                line_has_token = True
+            token_tail = window[-overlap:] if overlap else b""
+            line.write(part)
+
+    def _finish() -> bytes | None:
+        nonlocal line, line_has_token, token_tail
+        candidate: bytes | None = None
+        if line_has_token:
+            line.seek(0)
+            candidate = line.read()
+        line.close()
+        line = tempfile.SpooledTemporaryFile(max_size=chunk_size, mode="w+b")
+        line_has_token = False
+        token_tail = b""
+        return candidate
+
+    try:
+        with gzip.open(batch_path, "rb") as handle:
+            while chunk := handle.read(chunk_size):
+                parts = chunk.split(b"\n")
+                for part in parts[:-1]:
+                    _consume(part)
+                    candidate = _finish()
+                    if candidate is not None:
+                        yield line_number, candidate
+                    line_number += 1
+                _consume(parts[-1])
+        if line.tell():
+            candidate = _finish()
+            if candidate is not None:
+                yield line_number, candidate
+    finally:
+        line.close()
+
+
+def read_events_mirror_for_trace(trace_id: str) -> Iterator[Any]:
+    """Yield exactly one trace's mirror events without inflating any batch.
+
+    Each gzip file is scanned in fixed-size chunks, with the current row held
+    in a bounded spool. A quoted trace-id token is only a raw prefilter;
+    candidate lines are still fully validated and checked with the canonical
+    ownership rule (top-level id, payload id, or an anchor-search summary
+    touching the trace). Malformed unrelated JSON is therefore skippable,
+    while malformed candidate bytes or conflicting relevant duplicates remain
+    an honest error. Retained memory is O(one chunk + this trace), not O(the
+    global mirror or its largest unrelated row).
+    """
+
+    from .trails import TrailEvent
+    from .trails.event_log import _event_owns_trace
+
+    token = json.dumps(trace_id, ensure_ascii=False).encode("utf-8")
+    seen: dict[str, dict[str, Any]] = {}
+    for batch_path in _mirror_batch_paths():
+        try:
+            for line_number, raw_line in _iter_gzip_candidate_lines(batch_path, token):
+                try:
+                    event = TrailEvent.model_validate_json(raw_line)
+                except Exception as exc:
+                    raise ValueError(
+                        "unreadable relevant event in events mirror batch "
+                        f"{batch_path} at line {line_number}: {exc}"
+                    ) from exc
+                if not _event_owns_trace(event, trace_id):
+                    continue
+                material = event.canonical_event_material()
+                prior = seen.get(event.event_id)
+                if prior is not None:
+                    if prior != material:
+                        raise ValueError(
+                            "events mirror carries two conflicting relevant "
+                            f"copies of event_id {event.event_id!r}; run "
+                            "'opentraces bucket repair'"
+                        )
+                    continue
+                seen[event.event_id] = material
+                yield event
+        except (OSError, EOFError, gzip.BadGzipFile) as exc:
+            raise ValueError(f"unreadable events mirror batch {batch_path}: {exc}") from exc
 
 
 def read_events_mirror_batches() -> Iterator[Any]:
@@ -249,29 +450,9 @@ def read_events_mirror_batches() -> Iterator[Any]:
     """
 
     from .trails import TrailEvent
-    from .bucket_store import BucketLayoutError
 
-    index_path = events_v1_index_path()
-    if not index_path.exists():
-        raise FileNotFoundError(
-            f"no v2 events mirror found at {index_path}; run "
-            f"'opentraces setup watcher tick' or 'opentraces bucket repair'"
-        )
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(f"unreadable events mirror index: {exc}") from exc
-    if index.get("schema_version") != BUCKET_EVENTS_INDEX_SCHEMA:
-        raise BucketLayoutError(
-            f"events mirror schema {index.get('schema_version')!r} incompatible with "
-            f"local {BUCKET_EVENTS_INDEX_SCHEMA!r}; run "
-            f"'opentraces bucket repair'"
-        )
-    batches_dir = events_v1_batches_dir()
-    if not batches_dir.exists():
-        return
     seen: dict[str, dict[str, Any]] = {}
-    for batch_path in sorted(batches_dir.glob("*.jsonl.gz")):
+    for batch_path in _mirror_batch_paths():
         try:
             raw = _read_gzip_bytes(batch_path).decode("utf-8")
         except (OSError, gzip.BadGzipFile) as exc:

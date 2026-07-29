@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any
@@ -72,6 +72,7 @@ class StepWindowOpenResult:
 class StepTrailEmissionResult:
     emitted_events: list[TrailEvent]
     skipped_tool_calls: int = 0
+    projection_events: list[TrailEvent] = field(default_factory=list)
 
 
 
@@ -922,12 +923,12 @@ def emit_origin_snapshot(
         f"refs/opentraces/local/traces/{trace_id}/{generation_index}/snapshots/origin"
     )
 
-    from .event_log import read_events
+    from .event_log import read_events_for_trace
 
     already = any(
         event.event_type == "trace_snapshot_created"
         and event.payload.get("snapshot_id") == snapshot_id
-        for event in read_events(repo, verify=False)
+        for event in read_events_for_trace(repo, trace_id, rebuild_index=False)
     )
     if not already:
         append_event_batch(
@@ -977,9 +978,13 @@ def emit_step_window_events_from_record(
     if not pre_hooks and not post_hooks and not hook_stops:
         return StepTrailEmissionResult(emitted_events=[])
 
-    from .event_log import read_events
+    from .event_log import read_events_for_trace
 
-    existing = read_events(repo, verify=False)
+    existing = read_events_for_trace(
+        repo,
+        record.trace_id,
+        rebuild_index=False,
+    )
     existing_windows = {
         (
             event.event_type,
@@ -1318,7 +1323,20 @@ def emit_step_window_events_from_record(
     emitted = append_event_batch(repo, drafts, writer=writer)
     for ref, tree_hex in snapshot_refs:
         _create_snapshot_ref(repo, ref, tree_hex)
-    return StepTrailEmissionResult(emitted_events=emitted, skipped_tool_calls=skipped)
+    # ``existing`` was already read through the bounded per-trace path to make
+    # emission idempotent. Return the current generation's owned slice as well
+    # as the new append delta so an ingest retry after "append succeeded,
+    # staging crashed" can rebuild patches without another/global Trail read.
+    projection_events = [
+        event
+        for event in [*existing, *emitted]
+        if (event.generation_index or 0) == record.generation_index
+    ]
+    return StepTrailEmissionResult(
+        emitted_events=emitted,
+        skipped_tool_calls=skipped,
+        projection_events=projection_events,
+    )
 
 
 def append_step_snapshot(
@@ -1394,9 +1412,9 @@ def _snapshot_for_step(events: list, trace_id: str, step_index: int) -> tuple[di
 
 def diff_step_snapshots(repo: Path, trace_id: str, from_step: int, to_step: int) -> dict[str, Any]:
     """Return the Trace Patch between two captured step snapshots."""
-    from .event_log import EVENT_LOG_REF, read_events
+    from .event_log import EVENT_LOG_REF, read_events_for_trace
 
-    events = read_events(repo)
+    events = read_events_for_trace(repo, trace_id, rebuild_index=False)
     from_pair = _snapshot_for_step(events, trace_id, from_step)
     to_pair = _snapshot_for_step(events, trace_id, to_step)
     if from_pair is None or to_pair is None:

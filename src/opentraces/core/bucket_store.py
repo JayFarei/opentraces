@@ -166,6 +166,7 @@ from .bucket_envelope import (
     _resolve_trace_record_pointer,
     _trace_ids_for_project,
     _write_per_trace_envelope,
+    canonical_anchor_ids_for_trace,
     canonical_anchor_maps,
     iter_corpus_trace_records,
     iter_trace_record_objects,
@@ -822,22 +823,19 @@ def upsert_manifest_trace_row(
     # sweep and re-heals stay idempotent.
     #
     # #172 GAP 1 — single-source ``anchored_count`` from the canonical
-    # ``git_anchor_created`` events for this ONE trace (bounded to its own slug,
-    # one scoped read) so the upsert-maintained row matches the full-sweep row
-    # byte-for-byte. At capture time anchors are pre-commit (0 == 0); after
+    # ``git_anchor_created`` events for this ONE trace (one trace-indexed read)
+    # so the upsert-maintained row matches the full-sweep row byte-for-byte.
+    # At capture time anchors are pre-commit (0 == 0); after
     # post-commit re-projection the events exist and this catches the row up. When
     # the project is not resolvable, fall back to record-derived (== today).
-    try:
-        _, _distinct_by_trace, _resolved = canonical_anchor_maps({project_slug})
-    except Exception:
-        _distinct_by_trace, _resolved = {}, set()
+    _distinct_anchored, _anchors_resolved = canonical_anchor_ids_for_trace(repo, trace_id)
     row = _per_trace_v2_summary(
         project_slug,
         trace_id,
         record,
         record_envelope=_resolve_record_envelope(project_slug, trace_id, record),
-        distinct_anchored=_distinct_by_trace.get(trace_id),
-        anchors_resolved=project_slug in _resolved,
+        distinct_anchored=_distinct_anchored,
+        anchors_resolved=_anchors_resolved,
     )
 
     manifest_path = bucket_manifest_path()

@@ -365,3 +365,48 @@ def test_record_emitter_origin_is_idempotent(tmp_path: Path) -> None:
         and e.payload.get("snapshot_role") == SNAPSHOT_ROLE_ORIGIN
     ]
     assert len(origins) == 1
+
+
+def test_idempotent_retry_recovers_patch_after_pre_staging_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retry projects the already-appended bounded trace slice.
+
+    This models a crash after Trail append but before the staging JSONL write:
+    the retry's append is idempotently empty, yet the patch must still reach
+    ``TraceRecord.patches`` without consulting project-wide Trail history.
+    """
+    from opentraces.core import ingest
+    from opentraces.core.trails import event_log
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_base(repo)
+    record, _ = _codex_session_with_one_edit(repo, tmp_path)
+
+    first = emit_step_window_events_from_record(repo, record)
+    first_patch_ids = {
+        event.payload.get("trace_patch_id")
+        for event in first.emitted_events
+        if event.event_type == "trace_patch_created"
+    }
+    assert first_patch_ids
+    assert not (tmp_path / "staged.jsonl").exists(), (
+        "fixture models the crash window before any staged record exists"
+    )
+
+    def _global_read_forbidden(*_args, **_kwargs):
+        raise AssertionError("retry patch recovery read global Trail history")
+
+    monkeypatch.setattr(event_log, "read_events", _global_read_forbidden)
+    retry = emit_step_window_events_from_record(repo, record)
+
+    assert retry.emitted_events == []
+    recovered = ingest._backfill_patches_from_trail_events(
+        repo,
+        record.trace_id,
+        record.generation_index,
+        events=retry.projection_events,
+    )
+    assert {patch.patch_id for patch in recovered} == first_patch_ids

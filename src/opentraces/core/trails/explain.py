@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .event_log import EVENT_LOG_REF, read_events
+from .event_log import (
+    EVENT_LOG_REF,
+    read_events_for_patches,
+    read_events_for_trace,
+    read_events_scoped,
+)
 from .ids import git_anchor_ref, id_from_payload, trace_patch_ref
 from .models import TrailEvent
 from .search_records import iter_search_records
@@ -56,7 +61,7 @@ def _git_anchor_view(
 
 def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, Any]:
     """Explain a trace step by rebuilding state from the local event log."""
-    events = read_events(repo)
+    events = read_events_for_trace(repo, trace_id, rebuild_index=False)
     snapshots: dict[str, tuple[dict[str, Any], TrailEvent]] = {}
     patches: list[tuple[dict[str, Any], TrailEvent]] = []
     context_events: list[TrailEvent] = []
@@ -240,17 +245,41 @@ def explain_commit(repo: Path, commit_ref: str) -> dict[str, Any]:
         check=False,
     )
     commit = proc.stdout.strip() if proc.returncode == 0 else commit_ref
-    events = read_events(repo)
+    anchor_events = read_events_scoped(
+        repo,
+        event_types={
+            "git_anchor_created",
+            "git_anchor_search_completed",
+        },
+        commit_filter={
+            "git_anchor_created": "commit_id",
+            "git_anchor_search_completed": "search_head",
+        },
+        commit_sha=commit,
+        rebuild_index=False,
+    )
+    referenced_patch_ids = {
+        patch_id
+        for event in anchor_events
+        if event.event_type == "git_anchor_created"
+        for patch_id in [id_from_payload(event.payload, "trace_patch")]
+        if patch_id
+    }
+    patch_events = read_events_for_patches(
+        repo,
+        referenced_patch_ids,
+        event_types={"trace_patch_created"},
+        rebuild_index=False,
+    )
     patches_by_id: dict[str, tuple[dict[str, Any], TrailEvent]] = {}
-    for event in events:
-        if event.event_type == "trace_patch_created":
-            patch_id = id_from_payload(event.payload, "trace_patch")
-            if patch_id:
-                patches_by_id[patch_id] = (event.payload, event)
+    for event in patch_events:
+        patch_id = id_from_payload(event.payload, "trace_patch")
+        if patch_id:
+            patches_by_id[patch_id] = (event.payload, event)
 
     trace_patches: list[dict[str, Any]] = []
     source_events: list[dict[str, Any]] = []
-    for event in events:
+    for event in anchor_events:
         if event.event_type == "git_anchor_search_completed":
             search_head = event.payload.get("search_head") or {}
             if search_head.get("hex") == commit:
@@ -329,10 +358,43 @@ def explain_file_line(repo: Path, target: str) -> dict[str, Any]:
     except ValueError as exc:
         raise ValueError("target line must be an integer") from exc
 
-    events = read_events(repo)
+    latest_anchor: TrailEvent | None = None
+
+    def _retain_best_anchor(event: TrailEvent) -> None:
+        nonlocal latest_anchor
+        anchor_path = event.payload.get("path")
+        anchor_range = event.payload.get("range") or {}
+        if anchor_path != path:
+            return
+        start = anchor_range.get("start_line")
+        end = anchor_range.get("end_line")
+        if start is None or end is None or not (int(start) <= line_no <= int(end)):
+            return
+        if latest_anchor is None or event.event_sequence > latest_anchor.event_sequence:
+            latest_anchor = event
+
+    read_events_scoped(
+        repo,
+        event_types={"git_anchor_created"},
+        sink=_retain_best_anchor,
+        rebuild_index=False,
+    )
+    events = [latest_anchor] if latest_anchor is not None else []
+    referenced_patch_ids = {
+        patch_id
+        for event in events
+        for patch_id in [id_from_payload(event.payload, "trace_patch")]
+        if patch_id
+    }
+    patch_events = read_events_for_patches(
+        repo,
+        referenced_patch_ids,
+        event_types={"trace_patch_created"},
+        rebuild_index=False,
+    )
     patches_by_id: dict[str, tuple[dict[str, Any], TrailEvent]] = {
         id_from_payload(event.payload, "trace_patch"): (event.payload, event)
-        for event in events
+        for event in patch_events
         if event.event_type == "trace_patch_created"
         and id_from_payload(event.payload, "trace_patch")
     }

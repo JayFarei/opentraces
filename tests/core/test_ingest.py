@@ -350,6 +350,10 @@ class TestIngestOneSession:
         assert len(patch_events) == 1
         assert patch_events[0].step_index == write_step
         assert "new-from-hooked-session" in patch_events[0].payload["authored_text"]
+        patch_rows_before_refresh = record["patches"]
+        assert [patch["patch_id"] for patch in patch_rows_before_refresh] == [
+            patch_events[0].payload["trace_patch_id"],
+        ]
         session_closed = trail_events[-1]
         assert session_closed.capture_method == ["hook_stop"]
         assert session_closed.payload["tree_id"] == after_tree
@@ -357,6 +361,8 @@ class TestIngestOneSession:
         refreshed = ingest_one_session(session_path, project_dir, reparse=True)
         assert refreshed.action == "refreshed"
         assert refreshed.trace_id == result.trace_id
+        refreshed_record = json.loads(staging.read_text())
+        assert refreshed_record["patches"] == patch_rows_before_refresh
         assert [
             event.event_id for event in read_events(project_dir)
             if event.trace_id == result.trace_id

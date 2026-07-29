@@ -2,9 +2,9 @@
 
 Pins the four structural bounds added for #65:
 
-* budgeted child ticks: a real child process breaching its RSS or wall budget
-  is killed (REAL processes, REAL `ps` readings — no monkeypatched meters)
-  and the sweep continues;
+* budgeted child ticks: a sampled process group breaching its RSS or wall
+  budget is killed (REAL processes, REAL OS RSS readings — no monkeypatched
+  meters) and the sweep continues;
 * the run-forever backstop fires MID-SWEEP using the real RSS reader (the
   between-sweeps-only check was unreachable on real machines);
 * enlistment liveness pruning (#23 finished): tmp-rooted/stale and
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -30,6 +31,66 @@ from opentraces.watcher.prune import prune_enlistments
 
 
 # --- budgeted child ticks ---------------------------------------------------
+
+
+def test_ps_rss_snapshot_queries_only_owned_process_group(monkeypatch):
+    """The portable sampler does not scan every process on each fast poll."""
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="41 40 123 2048\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(wd.sys, "platform", "darwin")
+    monkeypatch.setattr(wd.subprocess, "run", _run)
+
+    rows = wd._ps_process_rss_rows(123)
+
+    assert rows == {41: (40, 123, 2.0)}
+    assert calls[0][0] == [
+        "ps",
+        "-g",
+        "123",
+        "-o",
+        "pid=,ppid=,pgid=,rss=",
+    ]
+    assert len(calls) == 1
+
+
+def test_ps_rss_snapshot_falls_back_when_scoped_selection_is_unsupported(
+    monkeypatch,
+):
+    """A non-zero scoped ps result gets one bounded full-snapshot fallback."""
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="bad option")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="41 40 123 2048\n42 1 999 4096\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(wd.sys, "platform", "darwin")
+    monkeypatch.setattr(wd.subprocess, "run", _run)
+
+    rows = wd._ps_process_rss_rows(123)
+
+    assert rows == {
+        41: (40, 123, 2.0),
+        42: (1, 999, 4.0),
+    }
+    assert calls[0][0][0:3] == ["ps", "-g", "123"]
+    assert calls[1][0] == ["ps", "-axo", "pid=,ppid=,pgid=,rss="]
+    assert all(call[1]["timeout"] == 2 for call in calls)
 
 
 def test_child_killed_on_rss_budget(tmp_path):
@@ -49,6 +110,285 @@ def test_child_killed_on_rss_budget(tmp_path):
     assert elapsed < 20, "kill must come from the RSS budget, not the timeout"
 
 
+def test_child_killed_when_only_grandchild_breaches_rss_budget(tmp_path):
+    """A small tick parent cannot hide an allocating descendant from the budget."""
+    grandchild_ready = tmp_path / "grandchild-ready"
+    grandchild = (
+        "import time\n"
+        "from pathlib import Path\n"
+        "buf = bytearray(160 * 1024 * 1024)\n"
+        "for offset in range(0, len(buf), 4096): buf[offset] = 1\n"
+        f"Path({str(grandchild_ready)!r}).write_text('ready')\n"
+        "time.sleep(30)\n"
+    )
+    small_parent = (
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        f"ready = Path({str(grandchild_ready)!r})\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+        "while not ready.is_file(): time.sleep(0.01)\n"
+        "time.sleep(30)\n"
+    )
+
+    t0 = time.monotonic()
+    verdict = wd._tick_in_child(
+        tmp_path,
+        budget_mb=64,
+        timeout_s=8,
+        _argv=[sys.executable, "-c", small_parent],
+    )
+    elapsed = time.monotonic() - t0
+
+    assert grandchild_ready.read_text() == "ready"
+    assert verdict == "rss_killed"
+    assert elapsed < 8, "the sampled process-group RSS budget must fire before timeout"
+
+
+def test_short_parallel_grandchildren_hit_sampled_group_rss_budget(tmp_path):
+    """A synchronized aggregate spike is sampled before the children finish.
+
+    Each grandchild stays below the 80 MiB budget on its own. Together they
+    hold roughly 90 MiB of bytearrays (plus interpreter overhead) for 150 ms,
+    entirely inside the old 500 ms polling blind window.
+    """
+    allocation_release = tmp_path / "allocation-release"
+    release = tmp_path / "release"
+    completed = tmp_path / "completed"
+    ready_paths = [tmp_path / f"ready-{index}" for index in range(2)]
+    resident_paths = [tmp_path / f"resident-{index}" for index in range(2)]
+    grandchild = (
+        "import time\n"
+        "from pathlib import Path\n"
+        "ready = Path(__import__('sys').argv[1])\n"
+        "resident = Path(__import__('sys').argv[2])\n"
+        "allocation_release = Path(__import__('sys').argv[3])\n"
+        "release = Path(__import__('sys').argv[4])\n"
+        "ready.write_text('ready')\n"
+        "while not allocation_release.is_file(): time.sleep(0.001)\n"
+        "buf = bytearray(45 * 1024 * 1024)\n"
+        "for offset in range(0, len(buf), 4096): buf[offset] = 1\n"
+        "resident.write_text('resident')\n"
+        "while not release.is_file(): time.sleep(0.001)\n"
+    )
+    small_parent = (
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        f"ready_paths = {[str(path) for path in ready_paths]!r}\n"
+        f"resident_paths = {[str(path) for path in resident_paths]!r}\n"
+        f"allocation_release = Path({str(allocation_release)!r})\n"
+        f"release = Path({str(release)!r})\n"
+        f"completed = Path({str(completed)!r})\n"
+        f"code = {grandchild!r}\n"
+        "time.sleep(0.05)\n"
+        "children = [subprocess.Popen([sys.executable, '-c', code, ready, "
+        "resident, str(allocation_release), str(release)]) for ready, resident "
+        "in zip(ready_paths, resident_paths)]\n"
+        "while not all(Path(path).is_file() for path in ready_paths): "
+        "time.sleep(0.001)\n"
+        "allocation_release.write_text('allocate')\n"
+        "while not all(Path(path).is_file() for path in resident_paths): "
+        "time.sleep(0.001)\n"
+        "time.sleep(0.15)\n"
+        "release.write_text('release')\n"
+        "[child.wait() for child in children]\n"
+        "completed.write_text('completed')\n"
+    )
+
+    verdict = wd._tick_in_child(
+        tmp_path,
+        budget_mb=80,
+        timeout_s=8,
+        _argv=[sys.executable, "-c", small_parent],
+    )
+
+    assert all(path.read_text() == "ready" for path in ready_paths)
+    assert verdict == "rss_killed"
+    assert not completed.exists()
+
+
+def test_rss_kill_terminates_tick_descendants(tmp_path):
+    """A killed tick cannot leave its subprocesses running after the verdict."""
+    grandchild_pid_path = tmp_path / "grandchild.pid"
+    allocator_with_grandchild = (
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "grandchild = subprocess.Popen("
+        "[sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"Path({str(grandchild_pid_path)!r}).write_text(str(grandchild.pid))\n"
+        "buf = bytearray(300 * 1024 * 1024)\n"
+        "time.sleep(60)\n"
+    )
+
+    verdict = wd._tick_in_child(
+        tmp_path,
+        budget_mb=100,
+        timeout_s=25,
+        _argv=[sys.executable, "-c", allocator_with_grandchild],
+    )
+    grandchild_pid = int(grandchild_pid_path.read_text())
+
+    def _running(pid: int) -> bool:
+        probe = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        state = probe.stdout.strip()
+        return probe.returncode == 0 and bool(state) and not state.startswith("Z")
+
+    def _wait_until_stopped(pid: int) -> bool:
+        deadline = time.monotonic() + 2
+        while _running(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return not _running(pid)
+
+    try:
+        assert verdict == "rss_killed"
+        assert _wait_until_stopped(grandchild_pid), (
+            "RSS-killing a tick must terminate the whole tick process group"
+        )
+    finally:
+        if _running(grandchild_pid):
+            os.kill(grandchild_pid, signal.SIGKILL)
+
+
+def test_natural_parent_exit_terminates_tick_descendants(tmp_path):
+    """A successful direct child cannot orphan work outside the RSS guard."""
+    grandchild_pid_path = tmp_path / "grandchild.pid"
+    parent_with_grandchild = (
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "grandchild = subprocess.Popen("
+        "[sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"Path({str(grandchild_pid_path)!r}).write_text(str(grandchild.pid))\n"
+    )
+
+    verdict = wd._tick_in_child(
+        tmp_path,
+        budget_mb=1_000,
+        timeout_s=25,
+        _argv=[sys.executable, "-c", parent_with_grandchild],
+    )
+    grandchild_pid = int(grandchild_pid_path.read_text())
+
+    def _running(pid: int) -> bool:
+        probe = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        state = probe.stdout.strip()
+        return probe.returncode == 0 and bool(state) and not state.startswith("Z")
+
+    def _wait_until_stopped(pid: int) -> bool:
+        deadline = time.monotonic() + 2
+        while _running(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return not _running(pid)
+
+    try:
+        assert verdict == "ok"
+        assert _wait_until_stopped(grandchild_pid), (
+            "a naturally exiting tick must terminate its remaining process group"
+        )
+    finally:
+        if _running(grandchild_pid):
+            os.kill(grandchild_pid, signal.SIGKILL)
+
+
+def test_fast_child_peak_over_rss_budget_is_reported_honestly(tmp_path):
+    """A completed fast child reports an honest post-exit peak verdict."""
+    completed = tmp_path / "fast-child-completed"
+    allocator = (
+        "from pathlib import Path\n"
+        "buf = bytearray(128 * 1024 * 1024)\n"
+        f"Path({str(completed)!r}).write_text('completed')\n"
+    )
+    verdict = wd._tick_in_child(
+        tmp_path,
+        budget_mb=64,
+        timeout_s=25,
+        _argv=[sys.executable, "-c", allocator],
+    )
+    assert completed.read_text() == "completed"
+    assert verdict == "peak_rss_exceeded"
+
+
+def test_fast_failed_child_keeps_error_authoritative_over_peak_rss(
+    tmp_path,
+    monkeypatch,
+):
+    """A failed tick remains an error even when its durable peak is over budget."""
+    completed = tmp_path / "fast-failed-child-completed"
+    allocator = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "buf = bytearray(128 * 1024 * 1024)\n"
+        f"Path({str(completed)!r}).write_text('completed')\n"
+        "sys.exit(7)\n"
+    )
+    verdict = wd._tick_in_child(
+        tmp_path,
+        budget_mb=64,
+        timeout_s=25,
+        _argv=[sys.executable, "-c", allocator],
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(wd, "_tick_in_child", lambda *_args, **_kwargs: verdict)
+
+    summary = wd.run_sweep(projects=[project])
+
+    assert completed.read_text() == "completed"
+    assert (verdict, summary["errors"], summary["peak_rss_exceeded"]) == (
+        "error:7",
+        1,
+        0,
+    )
+
+
+def test_rss_kill_race_preserves_natural_success(tmp_path, monkeypatch):
+    """A child that completes before SIGKILL is not reported as killed."""
+
+    class _Child:
+        pid = 123
+
+    monkeypatch.setattr(wd.subprocess, "Popen", lambda *_args, **_kwargs: _Child())
+    monkeypatch.setattr(wd, "_wait4_child", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(wd, "_child_rss_mb", lambda _pid: 101.0)
+    monkeypatch.setattr(
+        wd,
+        "_kill_and_reap_child",
+        lambda _proc: (0, 101.0),
+    )
+
+    verdict = wd._tick_in_child(tmp_path, budget_mb=100, timeout_s=25)
+
+    assert verdict == "peak_rss_exceeded"
+
+
+def test_rss_kill_race_preserves_natural_error(tmp_path, monkeypatch):
+    """A child failing before SIGKILL keeps its real return code."""
+
+    class _Child:
+        pid = 123
+
+    monkeypatch.setattr(wd.subprocess, "Popen", lambda *_args, **_kwargs: _Child())
+    monkeypatch.setattr(wd, "_wait4_child", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(wd, "_child_rss_mb", lambda _pid: 101.0)
+    monkeypatch.setattr(
+        wd,
+        "_kill_and_reap_child",
+        lambda _proc: (7, 101.0),
+    )
+
+    verdict = wd._tick_in_child(tmp_path, budget_mb=100, timeout_s=25)
+
+    assert verdict == "error:7"
+
+
 def test_child_killed_on_wall_budget(tmp_path):
     """A hanging child is killed at the wall budget."""
     verdict = wd._tick_in_child(
@@ -56,6 +396,63 @@ def test_child_killed_on_wall_budget(tmp_path):
         _argv=[sys.executable, "-c", "import time; time.sleep(30)"],
     )
     assert verdict == "timeout_killed"
+
+
+def test_timeout_kill_race_preserves_natural_success(
+    tmp_path,
+    monkeypatch,
+):
+    """A child completing past the wall deadline is an error, not a kill."""
+
+    class _Child:
+        pid = 123
+
+    clock = iter((0.0, 1.0))
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(wd.subprocess, "Popen", lambda *_args, **_kwargs: _Child())
+    monkeypatch.setattr(wd, "_wait4_child", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(wd, "_child_rss_mb", lambda _pid: None)
+    monkeypatch.setattr(wd.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        wd,
+        "_kill_and_reap_child",
+        lambda _proc: (0, 10.0),
+    )
+
+    verdict = wd._tick_in_child(tmp_path, budget_mb=100, timeout_s=0.5)
+    monkeypatch.setattr(wd.time, "monotonic", real_monotonic)
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(wd, "_tick_in_child", lambda *_args, **_kwargs: verdict)
+    summary = wd.run_sweep(projects=[project])
+
+    assert (verdict, summary["errors"], summary["timeout_killed"]) == (
+        "error:timeout_exceeded",
+        1,
+        0,
+    )
+
+
+def test_timeout_kill_race_preserves_natural_error(tmp_path, monkeypatch):
+    """A child failing at the wall deadline keeps its real return code."""
+
+    class _Child:
+        pid = 123
+
+    clock = iter((0.0, 1.0))
+    monkeypatch.setattr(wd.subprocess, "Popen", lambda *_args, **_kwargs: _Child())
+    monkeypatch.setattr(wd, "_wait4_child", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(wd, "_child_rss_mb", lambda _pid: None)
+    monkeypatch.setattr(wd.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        wd,
+        "_kill_and_reap_child",
+        lambda _proc: (7, 10.0),
+    )
+
+    verdict = wd._tick_in_child(tmp_path, budget_mb=100, timeout_s=0.5)
+
+    assert verdict == "error:7"
 
 
 def test_child_ok_and_error_verdicts(tmp_path):
@@ -89,6 +486,25 @@ def test_run_sweep_continues_past_killed_child(tmp_path, monkeypatch):
     assert [p.name for p in calls] == ["a", "b", "c"]
     assert summary["ok"] == 2
     assert summary["rss_killed"] == 1
+
+
+def test_run_sweep_reports_post_exit_peak_without_calling_it_killed(
+    tmp_path, monkeypatch
+):
+    """A measured post-exit breach remains distinct in the sweep summary."""
+    project = tmp_path / "completed-over-budget"
+    project.mkdir()
+    monkeypatch.setattr(
+        wd,
+        "_tick_in_child",
+        lambda *_args, **_kwargs: "peak_rss_exceeded",
+    )
+
+    summary = wd.run_sweep(projects=[project])
+
+    assert summary["peak_rss_exceeded"] == 1
+    assert summary["rss_killed"] == 0
+    assert summary["errors"] == 0
 
 
 def test_run_sweep_in_process_uses_run_once(tmp_path, monkeypatch):

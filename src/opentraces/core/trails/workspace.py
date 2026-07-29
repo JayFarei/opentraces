@@ -21,7 +21,11 @@ from ...core.config import (
 )
 from ...core.repo_identity import encode_claude_path
 from ...core.state import StateManager
-from .event_log import EVENT_LOG_REF, read_events, read_events_for_trace
+from .event_log import (
+    EVENT_LOG_REF,
+    read_event_for_snapshot,
+    read_events_for_trace,
+)
 from .ids import normalize_id
 from .models import TrailEvent
 from .search_records import summary_search_touches_trace
@@ -147,7 +151,7 @@ def list_trace_snapshots(repo: Path, trace_id: str) -> dict[str, Any]:
     repo = repo.resolve()
     snapshots = [
         _snapshot_row(event)
-        for event in read_events(repo)
+        for event in read_events_for_trace(repo, trace_id, rebuild_index=False)
         if event.event_type == "trace_snapshot_created" and event.trace_id == trace_id
     ]
     snapshots.sort(
@@ -168,16 +172,7 @@ def list_trace_snapshots(repo: Path, trace_id: str) -> dict[str, Any]:
 
 
 def _snapshot_event_for_ref(repo: Path, snapshot_ref: str) -> TrailEvent | None:
-    snapshot_id = normalize_id(snapshot_ref)
-    candidates = [
-        event
-        for event in read_events(repo)
-        if event.event_type == "trace_snapshot_created"
-        and normalize_id(event.payload.get("snapshot_id")) == snapshot_id
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda event: event.event_sequence)
+    return read_event_for_snapshot(repo, snapshot_ref)
 
 
 def _parse_step_index(step_id: str | int) -> int:
@@ -199,7 +194,7 @@ def _snapshot_event_for_step(
     step_index = _parse_step_index(step_id)
     candidates = [
         event
-        for event in read_events(repo)
+        for event in read_events_for_trace(repo, trace_id, rebuild_index=False)
         if event.event_type == "trace_snapshot_created"
         and event.trace_id == trace_id
         and event.step_index == step_index
@@ -339,7 +334,7 @@ def _trace_events(repo: Path, trace_id: str) -> list[TrailEvent]:
     # (was a ~10min/OOM full-log walk on a large corpus).
     return [
         event
-        for event in read_events_for_trace(repo, trace_id)
+        for event in read_events_for_trace(repo, trace_id, rebuild_index=False)
         if event.trace_id == trace_id
         or event.payload.get("trace_id") == trace_id
         or summary_search_touches_trace(event, trace_id)

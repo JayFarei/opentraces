@@ -255,30 +255,45 @@ def _emit_trail_events(
     *,
     reconcile_watcher: bool,
     trace_record_only: bool,
-) -> None:
+) -> list:
     """Emit the local Trail event-log projection for this record.
 
     Trace Trails Phase 2: hook metadata is parsed before the canonical
     trace_id exists. Emit the local event-log projection after identity and
     generation are known. This substrate must not make normal inbox capture
-    fragile, so TrailEvent write failures are logged but non-fatal.
+    fragile, so TrailEvent write failures are logged but non-fatal. Returns
+    the current generation's already-owned event slice plus reconciler
+    additions/upgrades, so the adjacent patch projection survives an
+    append-before-staging crash without reading global Trail history.
     """
     if trace_record_only:
-        return
+        return []
+    emitted: list = []
     try:
         from .trails import (
             emit_step_window_events_from_record,
             reconcile_watcher_observations,
         )
 
-        emit_step_window_events_from_record(project_dir, final_record)
+        result = emit_step_window_events_from_record(project_dir, final_record)
+        # The emitter already read this exact trace to make append idempotent.
+        # Reuse that bounded generation slice on retries where no new event is
+        # emitted; older test doubles expose only ``emitted_events``.
+        emitted.extend(
+            getattr(result, "projection_events", result.emitted_events)
+        )
         if reconcile_watcher:
-            reconcile_watcher_observations(project_dir)
+            reconcile_watcher_observations(
+                project_dir,
+                event_sink=emitted.append,
+            )
+        return emitted
     except Exception:
         logger.warning(
             "trace trail event emission/reconciliation failed for %s", trace_id,
             exc_info=True,
         )
+        return emitted
 
 
 def _backfill_patches_onto_record(
@@ -287,29 +302,95 @@ def _backfill_patches_onto_record(
     trace_id: str,
     *,
     trace_record_only: bool,
+    events,
 ) -> None:
-    """Backfill ``TraceRecord.patches[]`` from the canonical trail event log.
+    """Backfill ``TraceRecord.patches[]`` from this ingest's Trail events.
 
     Plan 080 §3: ``trace_patch_created`` events are the spine of truth for
     patches; this projection lifts a curated Patch row per event onto the
     record so consumers (datasets, viewer, blame) get the cross-substrate join
     keys (``patch_id``, ``step_index``, ``tool_call_id``, ``capture_method``)
-    without reading the event log themselves. Full diff content stays in
+    without reading the event log themselves. The current ingest already has
+    those just-emitted events in memory; re-reading a mature project-wide ref
+    here would make hot capture O(all history). Full diff content stays in
     trail.jsonl.gz. Defensive: failure here must not block ingest. The
     post-commit hook (Track 2) sets ``Patch.anchor`` later; the derive helper
     then projects to ``outcome`` + ``git_links``.
     """
-    if trace_record_only or final_record.patches:
+    if trace_record_only:
         return
     try:
-        final_record.patches = _backfill_patches_from_trail_events(
-            project_dir, final_record.trace_id, final_record.generation_index,
+        prior_patches = _load_prior_staged_patches(
+            project_dir,
+            final_record.trace_id,
         )
+        current_patches = _backfill_patches_from_trail_events(
+            project_dir,
+            final_record.trace_id,
+            final_record.generation_index,
+            events=events,
+        )
+        merged: list = []
+        positions: dict[str, int] = {}
+        for patch in [
+            *prior_patches,
+            *(final_record.patches or []),
+            *current_patches,
+        ]:
+            patch_id = patch.patch_id
+            if patch_id in positions:
+                prior = merged[positions[patch_id]]
+                if patch.anchor is None:
+                    # Parser/event projections do not recompute durable Git
+                    # attribution. A reconciler upgrade of the same patch id
+                    # is authoritative for capture metadata, but its default
+                    # ``anchor=None`` / empty supersede chain must not erase a
+                    # post-commit result already persisted in staging.
+                    patch = patch.model_copy(
+                        update={
+                            "anchor": prior.anchor,
+                            "superseded_by": list(prior.superseded_by),
+                        }
+                    )
+                merged[positions[patch_id]] = patch
+            else:
+                positions[patch_id] = len(merged)
+                merged.append(patch)
+        merged.sort(
+            key=lambda patch: (
+                patch.step_index is None,
+                patch.step_index if patch.step_index is not None else 0,
+            ),
+        )
+        final_record.patches = merged
     except Exception:
         logger.warning(
             "patches backfill from trail events failed for %s", trace_id,
             exc_info=True,
         )
+
+
+def _load_prior_staged_patches(project_dir: Path, trace_id: str) -> list:
+    """Load one prior trace projection without consulting global Trail state."""
+
+    from opentraces_schema import TraceRecord
+
+    path = get_project_traces_dir(project_dir) / f"{trace_id}.jsonl"
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            line = handle.readline()
+        if not line.strip():
+            return []
+        return list(TraceRecord.model_validate_json(line).patches or [])
+    except Exception:  # noqa: BLE001 — prior projection is best-effort.
+        logger.warning(
+            "prior staged patches unreadable for %s",
+            trace_id,
+            exc_info=True,
+        )
+        return []
 
 
 def _derive_outcome_from_patches(final_record, trace_id: str) -> None:
@@ -509,6 +590,15 @@ def write_trace_to_bucket(
                 project_slug=project_slug,
                 trace_id=trace_id,
                 record=final_record,
+                # #365: this trace was minted/refreshed from the live session
+                # and live project immediately above. The bucket's historical
+                # events mirror is not an ingest input. Falling back to it when
+                # the live Trail read is empty used to materialize the whole
+                # global mirror (9.5 GB compressed on the reported machine)
+                # just to discover that a new trace was absent, taking a
+                # 16 MiB Codex rollout to ~62 GiB RSS. Cross-machine repair
+                # callers retain the default mirror fallback.
+                mirror_fallback=False,
             )
             outcome.writes["per_trace_exports"] = None
         except Exception as exc:  # noqa: BLE001
@@ -791,18 +881,20 @@ def _ingest_locked(
 
     # Trace Trails Phase 2: emit the local event-log projection now that
     # identity + generation are known. Best-effort + attributable.
-    _emit_trail_events(
+    emitted_trail_events = _emit_trail_events(
         project_dir, final_record, trace_id,
         reconcile_watcher=reconcile_watcher,
         trace_record_only=trace_record_only,
     )
 
-    # Plan 080 §3 + Resolution C: backfill patches[] from the canonical trail
-    # event log, then refresh outcome/git_links from any anchored patch.
+    # Plan 080 §3 + Resolution C: backfill patches[] from this ingest's
+    # successfully appended Trail-event delta, then refresh outcome/git_links
+    # from any anchored patch.
     # Best-effort + attributable.
     _backfill_patches_onto_record(
         project_dir, final_record, trace_id,
         trace_record_only=trace_record_only,
+        events=emitted_trail_events,
     )
     _derive_outcome_from_patches(final_record, trace_id)
 
@@ -1076,43 +1168,28 @@ def scan_project(
 
 
 def _backfill_patches_from_trail_events(
-    project_dir: Path,
+    _project_dir: Path,
     trace_id: str,
     generation_index: int,
+    *,
+    events,
 ) -> list:
     """Project ``trace_patch_created`` events onto a ``list[Patch]``.
 
-    Reads the canonical TrailEvent log (plan 080's spine of truth) and lifts
-    one ``Patch`` per matching event. Only the curated cross-substrate join
-    keys are projected — full diff content stays in ``trail.jsonl.gz``. The
-    post-commit hook (Track 2) sets ``Patch.anchor`` after Git correlation;
-    at ingest time anchors are always ``None``.
+    Projects only events already produced for the current ingest.  Hot session
+    ingest must never rediscover them by walking the project-wide Trail ref or
+    loading its global index: on a mature repository that turns a one-trace
+    projection into an O(all-history) memory spike. Only the curated
+    cross-substrate join keys are lifted; full diff content stays in
+    ``trail.jsonl.gz``. The post-commit hook (Track 2) sets ``Patch.anchor``
+    after Git correlation; at ingest time anchors are always ``None``.
 
-    Returns an empty list when the project is not a Git worktree, when the
-    event log has not been initialized yet, or when no patches belong to
-    this trace generation.
+    Returns an empty list when no supplied event belongs to this trace
+    generation.
 
     Patch ordering: by ``step_index`` ascending, then by event_sequence so
     multiple patches at the same step preserve their emission order.
     """
-    from .trails.event_log import read_events_scoped
-
-    # #45: scope to the single event type this backfill projects. The watcher
-    # session sweep calls this per ingested generation, so a full-log read here
-    # is the same per-tick RSS cost Bug B closed on the hook path. No
-    # commit_filter — ``trace_patch_created`` is not commit-keyed, so it is kept
-    # in full and the trace_id/generation_index post-filter is unchanged.
-    try:
-        events = read_events_scoped(
-            project_dir, event_types={"trace_patch_created"}
-        )
-    except Exception:  # noqa: BLE001 — backfill is non-fatal at ingest time.
-        logger.warning(
-            "read_events failed during patches backfill for %s", trace_id,
-            exc_info=True,
-        )
-        return []
-
     matched = [
         event
         for event in events

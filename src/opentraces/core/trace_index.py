@@ -1164,9 +1164,9 @@ def _filter_name(raw: str) -> str:
 def _apply_lazy_survival(db_path: Path, units: list[TraceUnit]) -> None:
     """Patch ``trail.survival_state`` facets using the per-project cache.
 
-    Reads each project's survival cache once (via ``read_events`` against
-    the project's repo) and updates the facet in-place for every
-    git_anchor unit that resolves a cached row. Misses are left alone:
+    Reads each project's survival cache once through the indexed union of the
+    finite patch ids in this query result, then updates the facet in-place for
+    every git_anchor unit that resolves a cached row. Misses are left alone:
     the unit keeps ``"unknown"`` and the user can run ``trail track`` to
     populate the cache.
 
@@ -1201,7 +1201,12 @@ def _apply_lazy_survival(db_path: Path, units: list[TraceUnit]) -> None:
         return
 
     # Lazy import to avoid trails ↔ trace_index circularity at module load.
-    from .trails import build_survival_cache_index, read_events
+    from .trails import (
+        CACHED_SURVIVAL_EVENT_TYPE,
+        build_survival_cache_index,
+        read_events_for_patches,
+        survival_cache_store,
+    )
 
     for slug, slug_units in by_project.items():
         repo_str = repo_paths.get(slug)
@@ -1210,8 +1215,21 @@ def _apply_lazy_survival(db_path: Path, units: list[TraceUnit]) -> None:
         repo = Path(repo_str)
         if not repo.exists():
             continue
+        patch_ids = {
+            str(facet.value)
+            for unit in slug_units
+            for facet in unit.facets
+            if facet.name == "trace_patch.id" and facet.value
+        }
+        if not patch_ids:
+            continue
         try:
-            events = read_events(repo, verify=False)
+            events = read_events_for_patches(
+                repo,
+                patch_ids,
+                event_types={CACHED_SURVIVAL_EVENT_TYPE},
+                rebuild_index=False,
+            )
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
             continue
         # Resolve current HEAD once.
@@ -1228,6 +1246,10 @@ def _apply_lazy_survival(db_path: Path, units: list[TraceUnit]) -> None:
         if not head:
             continue
         cache_index = build_survival_cache_index(events)
+        # New survival rows are written only to the local evictable store;
+        # legacy on-ref events remain the fallback. Local rows win on the
+        # shared ``(patch_id, observed_head)`` key, matching ``sync_patch``.
+        cache_index.update(survival_cache_store.load_index(repo))
         for unit in slug_units:
             patch_id = None
             for facet in unit.facets:

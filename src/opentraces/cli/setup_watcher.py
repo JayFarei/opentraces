@@ -191,6 +191,7 @@ def setup_watcher_sweep(in_process: bool, json_out: bool) -> None:
     click.echo(
         f"sweep: {summary['projects']} projects, {summary['ok']} ok, "
         f"{summary['rss_killed']} rss-killed, "
+        f"{summary['peak_rss_exceeded']} peak-rss-exceeded, "
         f"{summary['timeout_killed']} timeout-killed, "
         f"{summary['errors']} errors"
         + (f", {summary['pruned']} enlistments pruned" if "pruned" in summary else "")

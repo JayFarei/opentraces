@@ -244,13 +244,11 @@ def _audit_trail_capture(repo: Path, trace_id: str) -> dict[str, Any]:
     ``incomplete`` (True when file_edits > 0 AND patch_created == 0). This
     is the C-4 signal that surfaces missing-capture bugs early.
     """
-    from ..core.trails import read_events
+    from ..core.trails.event_log import read_events_for_trace
 
     file_edits = 0
     patches = 0
-    for event in read_events(repo):
-        if event.trace_id != trace_id:
-            continue
+    for event in read_events_for_trace(repo, trace_id, rebuild_index=False):
         if event.event_type == "file_edit":
             file_edits += 1
         elif event.event_type == "trace_patch_created":
