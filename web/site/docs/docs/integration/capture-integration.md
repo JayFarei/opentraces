@@ -384,12 +384,28 @@ The watcher daemon (`src/opentraces/watcher/daemon.py`) is mostly agent-agnostic
 
 On an active tick the watcher also auto-flushes the project's active OTel-captured Context Tree sessions into the bucket (`_auto_flush_otel_sessions`, #158 B). It is zero-touch and best-effort: the common no-OTel path is a single `is_dir` check, it reads only the cheap per-session staging snapshot (never the raw-bodies corpus), and it flushes each session at most once per generation and only once the session's snapshot signature has gone stable (idle). So per-step OTel context lands automatically without a manual `opentraces capture-otlp flush`.
 
+Live session ingest is deliberately not a repair path. Patch backfill reuses the
+events emitted or reconciled for the current trace generation, and the
+per-trace envelope reads only that trace's live Trail slice without loading or
+rebuilding the global event index. It never falls back to the aggregate bucket
+events mirror merely because that live slice is empty; an empty read preserves
+the last authoritative companion and anchor projection. Mirror fallback remains
+available to explicit `bucket repair` and cross-machine reconstruction.
+
 The default path uses `capture.discover_project_sessions(project_cwd)`. For non-Claude agents, implement `ProjectSessionDiscoverer.discover_project_sessions(project_dir)` so the registry can map the repo to native session files. To add special recursive probes for nested sidecar files that should wake the watcher but are not independently parseable:
 
 1. Add a per-agent directory resolver.
 2. Extend `_jsonl_activity_since` to include those files in the mtime probe while keeping ingestion routed through the registered parser.
 
 What is shared: nothing in `watcher/installer.py` changes per agent, the macOS launchd plist and Linux systemd timer install one shared `ot-watcher` shim that polls all enlisted projects regardless of which agent they use.
+
+Production supervision runs one sweep and exits. Each project tick runs in its
+own process group with RSS and wall-clock budgets; live process-group RSS is a
+portable sample, while the direct child's peak is retained by `wait4`. A breach
+terminates the owned group so descendants do not outlive the tick, and a
+sweep-level deadline defers the remaining projects fairly to the next sweep.
+`--in-process` bypasses those child-process bounds and is for tests or
+debugging only.
 
 ## Test coverage requirements
 

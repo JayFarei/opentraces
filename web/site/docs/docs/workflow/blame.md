@@ -28,6 +28,13 @@ refs/opentraces/local/events/v1
 Bucket exports mirror that event log in `bucket/events/v1/`, which makes the
 bucket portable across machines.
 
+Live capture keeps that portability path out of the one-trace hot path. It
+builds patch rows from the current generation's emitted or reconciled events
+and reads only the trace's live Trail slice; an empty live slice does not
+trigger an aggregate mirror fallback or clear prior companion/anchor evidence.
+The mirror remains the source for explicit repair, replay, and cross-machine
+reconstruction.
+
 ## Mental Model
 
 | Concept | Meaning |

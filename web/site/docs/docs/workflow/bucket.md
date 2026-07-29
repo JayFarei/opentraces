@@ -113,6 +113,11 @@ and blobs — the documented crash-recovery primitive, idempotent and safe to
 re-run. `bucket replay` reconstructs the canonical Trace Trails Git event ref
 in another Git repository from bucket-exported events.
 
+These are the operations that may consume the historical bucket events mirror
+as a fallback. Ordinary live session ingest does not use the aggregate mirror
+to backfill one trace when its live Trail slice is empty; it preserves the last
+authoritative per-trace companion and anchor projection instead.
+
 ## Remote Sync
 
 ```bash
