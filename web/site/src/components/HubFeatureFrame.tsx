@@ -84,6 +84,11 @@ export interface HubFeatureFrameProps {
   trace?: string;
   /** Open straight into a PR detail (pulls view). */
   pr?: string;
+  /** v2 deep-links: artifact page, evidence record, capsule detail, bench inner tab. */
+  artifact?: string;
+  evidence?: string;
+  capsule?: string;
+  benchtab?: "atlas" | "evidence" | "runs";
   /** Logical canvas height (px) for this feature — tuned per view. */
   height: number;
   /** Logical canvas width (px) override for dense views — defaults to CANVAS_W. */
@@ -100,6 +105,10 @@ export default function HubFeatureFrame({
   tab,
   trace,
   pr,
+  artifact,
+  evidence,
+  capsule,
+  benchtab,
   height,
   canvasWidth,
   label,
@@ -126,6 +135,10 @@ export default function HubFeatureFrame({
   if (tab) params.set("tab", tab);
   if (trace) params.set("trace", trace);
   if (pr) params.set("pr", pr);
+  if (artifact) params.set("artifact", artifact);
+  if (evidence) params.set("evidence", evidence);
+  if (capsule) params.set("capsule", capsule);
+  if (benchtab) params.set("benchtab", benchtab);
   const src = `/hub-preview/index.html?${params.toString()}`;
 
   // Measure width → scale factor.

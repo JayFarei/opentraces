@@ -45,11 +45,11 @@ const SOPS = [
 
 // ─────────────  Alerts  ─────────────
 const ALERTS = [
-  { id: "al-fail",     name: "trace failure rate > 5%",     condIf: "trace_status='failed' rate exceeds 5% over the past 2 hours", condThen: "Send the top 5 failing repos + a fingerprint sample for each",   channel: "slack/jay",   every: "2h", last: "about 3 hours ago", status: "active" },
-  { id: "al-ctx",      name: "context overflow > 90%",      condIf: "any trace consumes more than 90% of its window over the past hour", condThen: "Include the offending trace IDs and the agents that hit ceiling", channel: "slack/jay",   every: "1h", last: "about 8 hours ago", status: "active" },
-  { id: "al-thrash",   name: "tool thrash > 10/trace",      condIf: "alternating Read/Edit on the same file exceeds 10 per trace", condThen: "List the files and the loop length",                                  channel: "slack/jay",   every: "1h", last: "Never",              status: "active" },
-  { id: "al-secret",   name: "SOP violation: secrets",      condIf: "Any SOP violation matching 'No secrets in commits' detected", condThen: "Send the diff hunk and the conversation ID for immediate review",      channel: "slack/jay",   every: "1h", last: "about 6 hours ago", status: "active" },
-  { id: "al-cost",     name: "cost per trace > $10",        condIf: "single-trace token cost exceeds $10 in the past 4 hours", condThen: "Include affected harnesses and the offending repo",                       channel: "slack/jay",   every: "4h", last: "Never",              status: "paused" },
+  { id: "al-fail",     name: "trace failure rate > 5%",     condIf: "trace_status='failed' rate exceeds 5% over the past 2 hours", condThen: "Send the top 5 failing repos + a fingerprint sample for each",   channel: "slack/openmake",   every: "2h", last: "about 3 hours ago", status: "active" },
+  { id: "al-ctx",      name: "context overflow > 90%",      condIf: "any trace consumes more than 90% of its window over the past hour", condThen: "Include the offending trace IDs and the agents that hit ceiling", channel: "slack/openmake",   every: "1h", last: "about 8 hours ago", status: "active" },
+  { id: "al-thrash",   name: "tool thrash > 10/trace",      condIf: "alternating Read/Edit on the same file exceeds 10 per trace", condThen: "List the files and the loop length",                                  channel: "slack/openmake",   every: "1h", last: "Never",              status: "active" },
+  { id: "al-secret",   name: "SOP violation: secrets",      condIf: "Any SOP violation matching 'No secrets in commits' detected", condThen: "Send the diff hunk and the conversation ID for immediate review",      channel: "slack/openmake",   every: "1h", last: "about 6 hours ago", status: "active" },
+  { id: "al-cost",     name: "cost per trace > $10",        condIf: "single-trace token cost exceeds $10 in the past 4 hours", condThen: "Include affected harnesses and the offending repo",                       channel: "slack/openmake",   every: "4h", last: "Never",              status: "paused" },
 ];
 
 // ─────────────  Self-Improving heal jobs  ─────────────

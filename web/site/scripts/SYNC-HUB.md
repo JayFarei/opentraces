@@ -6,7 +6,9 @@ in same-origin iframes. The site does not reimplement the design; it boots slice
 of it. The Claude design is therefore the single source of truth.
 
 - **Design project:** `OpenTraces Hub` on claude.ai/design (project id
-  `019dd8a2-8252-7bf5-9bdd-83deba8fbe4e`, entry file `OpenTraces Hub.html`).
+  `019dd8a2-8252-7bf5-9bdd-83deba8fbe4e`, entry file `OpenTraces Hub v2.html`
+  since the Hub v2 import of 2026-08; the older `OpenTraces Hub.html` is the
+  retired v1 entry).
 - **Where it lives on the site:** `public/hub-preview/` (entry `index.html`).
 - **How the site renders it:**
   - Landing teaser → `src/components/HubWindow.tsx` iframes the full-chrome app.
@@ -42,9 +44,16 @@ The claude_design MCP (`DesignSync`) is agent-driven, not a CLI. Have the agent:
 
 - `DesignSync list_files` for the project, then `get_file` each **runtime** file
   and write it into `public/hub-preview/`, overwriting in place.
-- **Allowlist:** top-level `*.jsx` / `*.css` / `*.json`, the entry
-  `OpenTraces Hub.html` (written as `index.html`), plus `data/*.{json,html,svg}`
-  and `assets/*.svg`.
+- **Allowlist:** the exact set of `*.jsx` / `*.css` files referenced by the
+  entry HTML's `<script>`/`<link>` tags (derive it from the entry, don't glob —
+  the project holds retired v1 files too), the entry `OpenTraces Hub v2.html`
+  (written as `index.html`), plus `data/*.{json,html,svg}` and `assets/*`.
+  After a pull, delete top-level files the new entry no longer references
+  (keep `_embed.css` and `trace-slim.json`).
+- Known gotcha: the DesignSync MCP is only available in the MAIN session —
+  subagents cannot call it. Large `get_file` results are persisted to the
+  session `tool-results/` dir; extract the `content` field with `jq`/python
+  instead of retyping (byte-faithful).
 - **Exclude:** `screenshots/`, `uploads/`, `src/`, `docs/`, `.thumbnail`,
   `debug-*.png`, and any binary `*.png` (the deployed posters/assets already exist).
 - Known cap: `get_file` is limited to 256 KiB. `data/traces.json` exceeds it; it is
@@ -62,6 +71,12 @@ builds for **production** (faster, matches how the site has always shipped). It 
 **strict**: if the design's App structure moved an anchor, it throws naming the
 anchor — that is the drift alarm; re-review the seam against the new structure
 rather than shipping a broken embed.
+
+v2 note: two v1-era patches were retired because the design absorbed them —
+conversation-tab header compaction (v2 wires `compactFromScroll` on both
+scrollers itself) and the pulls PR deep-link (v2's `RepoPullsPageV2` takes
+`pullId` from the route, which the URL parser seeds). The v2 parser also
+accepts `artifact`, `evidence`, `capsule` and `benchtab` params.
 
 ### 3. Verify the view contract
 

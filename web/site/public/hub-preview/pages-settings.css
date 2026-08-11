@@ -2,6 +2,27 @@
    Reuses rs-* primitives from pages-repo.css. */
 
 .gs-hero { align-items: center; }
+
+/* account-type chip — quiet marker at the end of the hero byline */
+.gs-acct-type {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-left: 10px; padding: 2px 9px;
+  border-radius: 999px; border: 1px solid var(--border);
+  color: var(--fg-mute);
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  vertical-align: 1px; white-space: nowrap;
+}
+.sbp-acct {
+  margin-left: 9px; vertical-align: 0; font-weight: 400; letter-spacing: 0.08em;
+  gap: 0; cursor: default;
+}
+.sbp-acct > span {
+  max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; margin-left: 0;
+  transition: max-width 0.35s ease, opacity 0.25s ease, margin-left 0.35s ease;
+}
+.sbp-acct:hover > span { max-width: 96px; opacity: 1; margin-left: 5px; }
+
 .gs-avatar {
   width: 44px; height: 44px;
   border-radius: 12px;
@@ -188,4 +209,67 @@
     grid-template-areas: "ico id state" ". traces sync" ". push push" ". blocked blocked";
     row-gap: 6px;
   }
+}
+
+/* ── account pages: personal profile (pa-) + org admin (oa-) ── */
+.pa-value { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--fg); }
+.pa-face { border-radius: 50%; display: block; }
+.pa-conn { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--fg-dim); }
+.pa-conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-git); }
+.pa-keys { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-top: 4px; }
+.pa-key-head, .pa-key-row { display: grid; grid-template-columns: minmax(80px, 0.8fr) minmax(110px, 1fr) minmax(90px, 1fr) minmax(64px, 0.6fr) minmax(74px, 0.7fr) auto; gap: 12px; align-items: center; padding: 8px 12px; font-size: 12px; }
+.pa-key-head { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--fg-mute); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.pa-key-row + .pa-key-row { border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+.pa-key-row .nm { font-weight: 600; }
+.pa-key-row .tok { color: var(--fg-dim); }
+.pa-key-row .sc { color: var(--fg-mute); font-size: 11.5px; }
+.pa-key-row .dim { color: var(--fg-mute); }
+.pa-revoke { justify-self: end; }
+.pa-keys-foot { margin-top: 10px; }
+.pa-danger-btn { color: var(--c-error); border-color: color-mix(in oklch, var(--c-error) 40%, var(--border)); }
+.pa-danger-btn:hover { background: color-mix(in oklch, var(--c-error) 12%, transparent); }
+
+.oa-mark { width: 44px; height: 44px; border-radius: 10px; background: #17191d; display: grid; place-items: center; border: 1px solid var(--border); flex: none; }
+[data-theme="light"] .oa-mark { background: #ffffff; }
+.oa-mark .om-sq { width: 18px; height: 18px; }
+.oa-roles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 4px 0 14px; }
+.oa-role-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--surface-2); }
+.oa-role-card .t { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.oa-role-card .n { font-size: 12px; color: var(--fg-dim); }
+.oa-role-card .d { font-size: 11px; color: var(--fg-mute); line-height: 1.5; }
+.oa-role { display: inline-flex; font-size: 10.5px; padding: 1.5px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-dim); white-space: nowrap; }
+.oa-role[data-role="owner"] { color: var(--c-user); border-color: color-mix(in oklch, var(--c-user) 40%, transparent); }
+.oa-role[data-role="admin"] { color: var(--c-read); border-color: color-mix(in oklch, var(--c-read) 40%, transparent); }
+.oa-role[data-role="billing"] { color: var(--c-plan); border-color: color-mix(in oklch, var(--c-plan) 40%, transparent); }
+.oa-members-head { align-items: center; }
+.oa-filter { display: flex; gap: 6px; flex-wrap: wrap; }
+.oa-table { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-top: 8px; }
+.oa-thead, .oa-tr { display: grid; grid-template-columns: minmax(150px, 1.6fr) minmax(72px, 0.7fr) 36px minmax(84px, 0.9fr) minmax(72px, 0.8fr); gap: 12px; align-items: center; padding: 9px 12px; }
+.oa-thead { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--fg-mute); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.oa-tr { font-size: 12.5px; }
+.oa-tr + .oa-tr { border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+.oa-tr[data-status="suspended"] { opacity: 0.55; }
+.oa-member { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.oa-initials { width: 26px; height: 26px; border-radius: 50%; background: var(--surface-3); color: var(--fg-dim); display: grid; place-items: center; font-size: 10px; font-weight: 650; letter-spacing: 0.04em; flex: none; }
+.oa-who { display: flex; flex-direction: column; min-width: 0; }
+.oa-who .nm { font-weight: 600; font-size: 12.5px; }
+.oa-who .em { font-size: 11px; color: var(--fg-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oa-2fa.on { color: var(--c-git); }
+.oa-2fa.off { color: var(--fg-mute); }
+.oa-last { font-size: 11.5px; color: var(--fg-dim); }
+.oa-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
+.oa-status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.oa-status.st-ok { color: var(--c-git); }
+.oa-status.st-warn { color: var(--c-user); }
+.oa-status.st-dim { color: var(--fg-mute); }
+
+/* narrow-width fallbacks for the account tables */
+@media (max-width: 1100px) {
+  .pa-key-head span:nth-child(4), .pa-key-row > span:nth-child(4),
+  .pa-key-head span:nth-child(3), .pa-key-row .sc { display: none; }
+  .pa-key-head, .pa-key-row { grid-template-columns: minmax(80px, 0.9fr) minmax(110px, 1.1fr) minmax(80px, 0.9fr) auto; }
+}
+@media (max-width: 1100px) {
+  .oa-thead span:nth-child(3), .oa-tr .oa-2fa { display: none; }
+  .oa-thead, .oa-tr { grid-template-columns: minmax(150px, 1.6fr) minmax(70px, 0.7fr) minmax(84px, 0.9fr) minmax(72px, 0.8fr); }
 }

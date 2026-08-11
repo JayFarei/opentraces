@@ -2,7 +2,9 @@
    Chromeless embed layout for the marketing-site /hub iframes (?embed=1).
    The Claude design's own app.css is left untouched; this overlay is preserved
    across design re-imports (the sync job never overwrites it). */
+/* v2 shell: .sb-flip (sidebar+CLUI rail) is not rendered in embed mode (JSX
+   guard), so the content column just needs to own the full width, and the main
+   scroll area reclaims the topbar's height. */
 .app-shell[data-embed="1"] { grid-template-columns: 1fr; }
-/* No topbar in embed mode, so the main scroll area reclaims its 56px and the
- * conversation scrollers (which subtract --main-chrome) fill the full canvas. */
+.app-shell[data-embed="1"] .app-content { width: 100%; }
 .app-shell[data-embed="1"] .main { --main-chrome: 0px; height: 100vh; }

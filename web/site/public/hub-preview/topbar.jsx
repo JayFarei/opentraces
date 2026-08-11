@@ -105,12 +105,12 @@ function Topbar({ workspace, project, traceShortId, onBack, theme, onToggleTheme
   const isLanding = view !== "trace";
   const showBack = view === "trace" || view === "compare";
   const PAGE_LABELS = {
+    "traces-index": { group: "Workspace", page: "Traces" },
     intents:   { group: "Intelligence", page: "Intents" },
     evals:     { group: "Intelligence", page: "Evals" },
     spotlight: { group: "Intelligence", page: "Spotlight" },
     capsules:  { group: "Intelligence", page: "Capsules" },
     alerts:    { group: "Intelligence", page: "Alerts" },
-    improving: { group: "Intelligence", page: "Self-Improving" },
   };
   const pg = PAGE_LABELS[view];
   return (
@@ -156,3 +156,4 @@ function Topbar({ workspace, project, traceShortId, onBack, theme, onToggleTheme
 }
 
 window.Topbar = Topbar;
+window.AvatarChat = AvatarChat;

@@ -126,7 +126,9 @@ function ToolCall({ tc, expanded, onToggle }) {
   );
 }
 
-function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAllTools }) {
+function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAllTools, sliceRange }) {
+  // Dim entries outside the active trace slice (slicer scoping).
+  const outOfSlice = (i) => (sliceRange && (i < sliceRange[0] || i > sliceRange[1]) ? " out-of-slice" : "");
   // Determine which steps to render
   // Group consecutive think + tool steps into "segments" attached to nearest agent text.
   const [openTool, setOpenTool] = React.useState(() => new Set());
@@ -198,7 +200,7 @@ function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAll
       {items.map((it, ix) => {
         if (it.kind === "user") {
           return (
-            <div key={`u${it.i}`} className="msg user" data-step={it.i}>
+            <div key={`u${it.i}`} className={"msg user" + outOfSlice(it.i)} data-step={it.i}>
               <div className="msg-gutter"><div className="msg-icon"><Icon name="user" size={13} /></div></div>
               <div>
                 <div className="msg-body">{renderRichText(it.step.content, it.i)}</div>
@@ -208,7 +210,7 @@ function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAll
         }
         if (it.kind === "agent-text") {
           return (
-            <div key={`a${it.i}`} className="msg agent-text" data-step={it.i}>
+            <div key={`a${it.i}`} className={"msg agent-text" + outOfSlice(it.i)} data-step={it.i}>
               <div className="msg-gutter"><div className="msg-icon"><Icon name="bot" size={13} /></div></div>
               <div>
                 <div className="msg-body">{renderRichText(it.step.content, it.i)}</div>
@@ -220,7 +222,7 @@ function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAll
           const txt = it.step.reasoning_content;
           const short = firstLine(txt);
           return (
-            <div key={`t${it.i}`} className="msg agent-think" data-step={it.i}>
+            <div key={`t${it.i}`} className={"msg agent-think" + outOfSlice(it.i)} data-step={it.i}>
               <div className="msg-gutter"><div className="msg-icon"><Icon name="brain" size={13} /></div></div>
               <div>
                 <div className="msg-body">{renderRichText(short, it.i)}</div>
@@ -231,7 +233,7 @@ function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAll
         if (it.kind === "tool") {
           const k = `${it.i}-${it.j}`;
           return (
-            <div key={`tc${k}`} className="msg tool" data-step={it.i}>
+            <div key={`tc${k}`} className={"msg tool" + outOfSlice(it.i)} data-step={it.i}>
               <div className="msg-gutter"><div className="msg-icon"><Icon name="tool" size={12} /></div></div>
               <div>
                 <ToolCall tc={it.tc} expanded={openTool.has(k)} onToggle={() => toggleTool(k)} />
@@ -241,7 +243,7 @@ function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAll
         }
         if (it.kind === "checkpoint") {
           return (
-            <div key={`cp${it.i}`} className="checkpoint" data-step={it.i}>
+            <div key={`cp${it.i}`} className={"checkpoint" + outOfSlice(it.i)} data-step={it.i}>
               <div className="cp-icon"><Icon name="git-commit" size={13} /></div>
               <div className="cp-mid">
                 <div className="cp-subject">{it.subject || "commit"}</div>
@@ -257,5 +259,5 @@ function ConversationView({ steps, filters, expandedTools, onOpenStep, expandAll
   );
 }
 
-window.ConversationView = ConversationView;
+window.ConversationView = React.memo(ConversationView);
 window.FilterSidebar = FilterSidebar;

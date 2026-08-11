@@ -168,12 +168,13 @@ function PageHero({ kicker, title, subtitle, actions, scope }) {
 }
 
 // Small toolbar button used inside cards (Add intent, Run, Auto-generate)
-function ToolBtn({ icon, label, onClick, primary, disabled }) {
+function ToolBtn({ icon, label, onClick, primary, disabled, ...rest }) {
   return (
     <button
       className={"tool-btn" + (primary ? " primary" : "") + (disabled ? " disabled" : "")}
       onClick={onClick}
       disabled={disabled}
+      {...rest}
     >
       {icon && <Icon name={icon} size={12} />}
       <span>{label}</span>

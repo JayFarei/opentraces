@@ -101,19 +101,45 @@ function TraceHeader({ trace, meta, compact, contextWaste, runHealth, wasteFilte
   );
 }
 
-function Minimap({ classes, focusedIdx, onSelect }) {
+function Minimap({ classes, focusedIdx, onSelect, slices, sliceRange, slicerSig, hoverSlice, onHoverSlice }) {
   const n = classes.length;
   // Center cursor on the active segment: each segment occupies (1/n) of width,
   // and its center is at ((i + 0.5) / n) * 100%
   const cursorPct = n > 0 ? ((focusedIdx + 0.5) / n) * 100 : 0;
+  const out = (i) => sliceRange && (i < sliceRange[0] || i > sliceRange[1]);
+  const inSel = (i) => sliceRange && i >= sliceRange[0] && i <= sliceRange[1];
+  const hovRange = hoverSlice != null && slices && slices[hoverSlice] ? slices[hoverSlice] : null;
+  // The slice containing the focused step — lit while you navigate, so the
+  // spine always shows which slice you're in (hover/selection take over).
+  const curSlice = slices && !hovRange && !sliceRange ? slices.findIndex((s) => focusedIdx >= s.s && focusedIdx <= s.e) : -1;
+  const sliceOfStep = (i) => (slices ? slices.findIndex((s) => i >= s.s && i <= s.e) : -1);
+
   return (
     <div className="minimap-card">
-      <div className="minimap" role="navigation" aria-label="Trace minimap">
+      <div
+        className="minimap"
+        role="navigation"
+        aria-label="Trace minimap"
+        onMouseLeave={() => { onHoverSlice && onHoverSlice(null); }}
+      >
+        {slices && slices.map((s, k) => (
+          <div
+            key={"z" + k}
+            className={
+              "slice-zone" + (k === 0 ? " first" : "") + (k === slices.length - 1 ? " last" : "") +
+              (hoverSlice === k ? " hov" : "") +
+              (curSlice === k ? " cur" : "") +
+              (sliceRange && s.s === sliceRange[0] && s.e === sliceRange[1] ? " on" : "")
+            }
+            style={{ left: `${(s.s / n) * 100}%`, width: `${((s.e - s.s + 1) / n) * 100}%`, "--sl-sig": slicerSig }}
+          />
+        ))}
         {classes.map((c, i) => (
           <div
             key={i}
-            className={`seg ${c} ${i === focusedIdx ? "active" : ""}`}
+            className={`seg ${c} ${i === focusedIdx ? "active" : ""}${out(i) ? " out-of-slice" : ""}${inSel(i) ? " in-slice" : ""}${hovRange && (i < hovRange.s || i > hovRange.e) ? " dim-hov" : ""}`}
             title={`Step ${String(i).padStart(3, "0")} · ${c}`}
+            onMouseEnter={() => { if (onHoverSlice && slices) { const k = sliceOfStep(i); onHoverSlice(k >= 0 ? k : null); } }}
             onClick={() => onSelect(i)}
           />
         ))}
@@ -139,5 +165,5 @@ function Tabs({ active, onChange }) {
 }
 
 window.TraceHeader = TraceHeader;
-window.Minimap = Minimap;
+window.Minimap = React.memo(Minimap);
 window.Tabs = Tabs;

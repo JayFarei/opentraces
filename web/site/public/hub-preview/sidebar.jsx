@@ -14,6 +14,7 @@ const REPO_CHILDREN = [
   { id: "overview", label: "Overview" },
   { id: "traces", label: "Traces" },
   { id: "pulls", label: "Pull requests" },
+  { id: "environment", label: "Arena" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -76,11 +77,40 @@ function SectionHeader({ id, label, icon, count, expanded, onToggle, onAdd, addT
   );
 }
 
-function FlatGroupLabel({ label, count, onAdd, addTitle }) {
+// Sidebar lists only show the most recently-active few of each entity;
+// the full lists live at the Datasets / Projects index pages.
+const SB_RECENT_N = 4;
+
+// Collapsed/expanded state per flat group, persisted across reloads.
+function useGroupCollapsed(key) {
+  const [closed, setClosed] = React.useState(() => {
+    try { return localStorage.getItem("ot-sb-group-" + key) === "1"; } catch (e) { return false; }
+  });
+  const toggle = React.useCallback(() => {
+    setClosed(v => {
+      const nv = !v;
+      try { localStorage.setItem("ot-sb-group-" + key, nv ? "1" : "0"); } catch (e) {}
+      return nv;
+    });
+  }, [key]);
+  return [closed, toggle];
+}
+
+// Group head — clicking it collapses/expands the section. The chevron on the
+// right flips to point sideways when collapsed so it reads as "click to expand".
+function FlatGroupLabel({ label, count, onAdd, addTitle, open = true, onToggle }) {
   return (
-    <div className="sb-flat-group-head">
-      <span className="sb-flat-group-label">{label}</span>
-      {typeof count === "number" && <span className="sb-flat-group-count mono">{count}</span>}
+    <div className="sb-flat-group-head" data-open={open ? "true" : "false"}>
+      <button
+        className="sb-flat-group-toggle"
+        aria-expanded={open}
+        title={open ? "Collapse " + label : "Expand " + label}
+        onClick={onToggle}
+      >
+        <span className="sb-flat-group-label">{label}</span>
+        {typeof count === "number" && <span className="sb-flat-group-count mono">{count}</span>}
+        <Icon name="chevron-down" size={10} className="chev" />
+      </button>
       {onAdd && (
         <button className="sb-flat-group-add" aria-label={addTitle} title={addTitle} onClick={onAdd}>
           <Icon name="plus" size={12} />
@@ -90,24 +120,41 @@ function FlatGroupLabel({ label, count, onAdd, addTitle }) {
   );
 }
 
+// Icon-only stand-in for a flat group when the sidebar is the collapsed rail.
+function RailGroupIcon({ icon, label, onClick }) {
+  return (
+    <div className="sb-section flat rail">
+      <button className="sb-nav-item" title={label} aria-label={label} onClick={onClick}>
+        <Icon name={icon} size={16} className="icon" />
+      </button>
+    </div>
+  );
+}
+
 function StatusDot({ status }) {
   return <span className="sb-status-dot" style={{ background: STATUS_COLOR[status] || "var(--fg-mute)" }} />;
 }
 
-function DatasetsSection({ expandedDataset, onExpandDataset, activeId, activeChild, onSelectDataset, onSelectChild, collapsed }) {
+function DatasetsSection({ expandedDataset, onExpandDataset, activeId, activeChild, onSelectDataset, onSelectChild, collapsed, onViewAll }) {
+  const [groupClosed, onToggleGroup] = useGroupCollapsed("datasets");
+  const recent = DATASETS.slice(0, SB_RECENT_N);
+  if (collapsed) {
+    return <RailGroupIcon icon="datasets" label="Datasets" onClick={onViewAll} />;
+  }
   return (
     <div className="sb-section flat">
-      {!collapsed && (
-        <FlatGroupLabel
-          label="Datasets"
-          count={DATASETS.length}
-          onAdd={() => {}}
-          addTitle="Add dataset"
-        />
-      )}
+      <FlatGroupLabel
+        label="Datasets"
+        count={DATASETS.length}
+        onAdd={() => {}}
+        addTitle="Add dataset"
+        open={!groupClosed}
+        onToggle={onToggleGroup}
+      />
+      {!groupClosed && (
       <div className="sb-section-body flat">
         <div className="sb-list repos">
-          {DATASETS.map(d => {
+          {recent.map(d => {
             const isExpanded = expandedDataset === d.id;
             return (
               <div key={d.id} className="sb-repo">
@@ -146,26 +193,44 @@ function DatasetsSection({ expandedDataset, onExpandDataset, activeId, activeChi
               </div>
             );
           })}
+          {!collapsed && DATASETS.length > recent.length && (
+            <button
+              className="sb-view-all"
+              onClick={onViewAll}
+              title={`Showing ${recent.length} recent · ${DATASETS.length} total`}
+            >
+              <span>View all datasets</span>
+              <span className="count mono">{DATASETS.length}</span>
+              <Icon name="chevron-right" size={11} className="go" />
+            </button>
+          )}
         </div>
       </div>
+      )}
     </div>
   );
 }
 
-function RepositoriesSection({ expandedRepo, onExpandRepo, activeRepo, activeRepoChild, onSelectRepoChild, collapsed }) {
+function RepositoriesSection({ expandedRepo, onExpandRepo, activeRepo, activeRepoChild, onSelectRepoChild, collapsed, onViewAll }) {
+  const [groupClosed, onToggleGroup] = useGroupCollapsed("projects");
+  const recent = REPOS.slice(0, SB_RECENT_N);
+  if (collapsed) {
+    return <RailGroupIcon icon="git-branch" label="Projects" onClick={onViewAll} />;
+  }
   return (
     <div className="sb-section flat">
-      {!collapsed && (
-        <FlatGroupLabel
-          label="Projects"
-          count={REPOS.length}
-          onAdd={() => {}}
-          addTitle="Add a project"
-        />
-      )}
+      <FlatGroupLabel
+        label="Projects"
+        count={REPOS.length}
+        onAdd={() => {}}
+        addTitle="Add a project"
+        open={!groupClosed}
+        onToggle={onToggleGroup}
+      />
+      {!groupClosed && (
       <div className="sb-section-body flat">
         <div className="sb-list repos">
-          {REPOS.map(repo => {
+          {recent.map(repo => {
             const isExpanded = expandedRepo === repo.id;
             return (
               <div key={repo.id} className="sb-repo">
@@ -198,8 +263,20 @@ function RepositoriesSection({ expandedRepo, onExpandRepo, activeRepo, activeRep
               </div>
             );
           })}
+          {!collapsed && REPOS.length > recent.length && (
+            <button
+              className="sb-view-all"
+              onClick={onViewAll}
+              title={`Showing ${recent.length} recent · ${REPOS.length} total`}
+            >
+              <span>View all projects</span>
+              <span className="count mono">{REPOS.length}</span>
+              <Icon name="chevron-right" size={11} className="go" />
+            </button>
+          )}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -210,6 +287,7 @@ function Sidebar({
   searchQuery, onSearchQuery, onActivateSearch,
   expandedDataset, onExpandDataset, activeDatasetId, activeDatasetChild, onSelectDatasetChild,
   expandedRepo, onExpandRepo, activeRepo, activeRepoChild, onSelectRepoChild,
+  onSelectArtifact, activeArtifactId,
   collapsed, onToggleCollapsed,
 }) {
   const isExp = (id) => expandedSections.includes(id);
@@ -217,21 +295,23 @@ function Sidebar({
   return (
     <aside className="sidebar" data-testid="sidebar" data-collapsed={collapsed ? "true" : "false"}>
       <div className="sb-brand">
-        {!collapsed && (
+        {collapsed ? null : (
           <span className="wm">
             <span className="open">open</span>
             <span className="traces">traces</span>
             <span className="hub-tag">Hub</span>
           </span>
         )}
+        {typeof onToggleCollapsed === "function" && !collapsed && (
         <button
           className="sb-collapse-btn"
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
           onClick={onToggleCollapsed}
         >
-          <Icon name={collapsed ? "chevron-right" : "chevron-left"} size={14} />
+          <Icon name="chevron-left" size={14} />
         </button>
+        )}
       </div>
 
       {/* Search — opens the global command palette (⌘K) */}
@@ -258,6 +338,24 @@ function Sidebar({
           <Icon name="grid" size={16} className="icon" />
           <span>Overview</span>
         </button>
+        <button
+          className="sb-nav-item"
+          aria-current={activeNav === "traces-index"}
+          onClick={() => onNav("traces-index")}
+          title="All traces"
+        >
+          <Icon name="activity" size={16} className="icon" />
+          <span>Traces</span>
+        </button>
+        <button
+          className="sb-nav-item"
+          aria-current={activeNav === "settings"}
+          onClick={() => onNav("settings")}
+          title="Settings"
+        >
+          <Icon name="settings" size={16} className="icon" />
+          <span>Settings</span>
+        </button>
       </nav>
 
       {!collapsed && <div className="sb-group-label">Trace intelligence</div>}
@@ -266,9 +364,9 @@ function Sidebar({
           <Icon name="sparkles" size={15} className="icon" />
           <span>Spotlight</span>
         </button>
-        <button className="sb-nav-item" aria-current={activeNav === "intents"} onClick={() => onNav("intents")} title="Intents">
-          <Icon name="tag" size={15} className="icon" />
-          <span>Intents</span>
+        <button className="sb-nav-item" aria-current={activeNav === "intents"} onClick={() => onNav("intents")} title="Arenas">
+          <Icon name="arena" size={15} className="icon" />
+          <span>Arenas</span>
         </button>
         <button className="sb-nav-item" aria-current={activeNav === "evals"} onClick={() => onNav("evals")} title="Evals">
           <Icon name="shield" size={15} className="icon" />
@@ -282,15 +380,12 @@ function Sidebar({
           <Icon name="bell" size={15} className="icon" />
           <span>Alerts</span>
         </button>
-        <button className="sb-nav-item" aria-current={activeNav === "improving"} onClick={() => onNav("improving")} title="Self-Improving">
-          <Icon name="heart-pulse" size={15} className="icon" />
-          <span>Self-Improving</span>
-        </button>
       </nav>
 
       <div className="sb-tree">
         <DatasetsSection
           collapsed={collapsed}
+          onViewAll={() => onNav("datasets-index")}
           expandedDataset={expandedDataset}
           onExpandDataset={onExpandDataset}
           activeId={activeDatasetId}
@@ -299,22 +394,23 @@ function Sidebar({
         />
         <RepositoriesSection
           collapsed={collapsed}
+          onViewAll={() => onNav("projects-index")}
           expandedRepo={expandedRepo}
           onExpandRepo={onExpandRepo}
           activeRepo={activeRepo}
           activeRepoChild={activeRepoChild}
           onSelectRepoChild={onSelectRepoChild}
         />
+        <ArtifactsSection
+          collapsed={collapsed}
+          onViewAll={() => onNav("artifacts-index")}
+          onSelectArtifact={onSelectArtifact}
+          activeArtifactId={activeArtifactId}
+        />
       </div>
 
-      <div className="sb-foot">
-        <button className="sb-nav-item" aria-current={activeNav === "settings"} onClick={() => onNav("settings")} title="Settings">
-          <Icon name="settings" size={15} className="icon" />
-          <span>Settings</span>
-        </button>
-      </div>
     </aside>
   );
 }
 
-window.Sidebar = Sidebar;
+Object.assign(window, { Sidebar, FlatGroupLabel, RailGroupIcon, useGroupCollapsed });

@@ -10,8 +10,8 @@ export default function HubTeaser() {
       <div className="section-title">Learn from your team data.</div>
       <p className="section-sub" style={{ maxWidth: 640, marginBottom: 24 }}>
         Every run your team makes is data you can learn from. The Hub is the web companion to the
-        CLI, where your shared bucket, trails, context tree, and datasets become browsable, with
-        trace intelligence on top.
+        CLI, where your traces, projects, benches, datasets, and sealed replays become browsable,
+        with trace intelligence on top.
       </p>
 
       <div className="hub-teaser-wide">

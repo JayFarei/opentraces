@@ -57,7 +57,7 @@ function SpotlightPage({ initialQuery, onConsumeQuery }) {
           className="sp-search"
           onSubmit={(e) => { e.preventDefault(); run(); }}
         >
-          <Icon name="search" size={16} className="sp-search-ico" />
+          <Icon name="search" size={18} className="sp-search-ico" />
           <input
             ref={inputRef}
             value={q}
@@ -67,15 +67,15 @@ function SpotlightPage({ initialQuery, onConsumeQuery }) {
             spellCheck={false}
           />
           <button type="submit" className="sp-search-btn" disabled={!q.trim() || running}>
-            {running ? "Searching…" : "Search"}
+            {running ? "Searching…" : <React.Fragment>Search <span className="k">↵</span></React.Fragment>}
           </button>
         </form>
 
         <div className="sp-beta">
           <div className="sp-beta-tag">Beta</div>
           <div className="sp-beta-body">
-            <div className="sp-beta-h">AI-graded search</div>
-            <div className="sp-beta-s">Searches over the past 14 days. Typically responds in 10–90 seconds depending on trace volume.</div>
+            <div className="sp-beta-h">AI-graded search.</div>
+            <div className="sp-beta-s">Past 14 days · responds in 10–90 s.</div>
           </div>
         </div>
 

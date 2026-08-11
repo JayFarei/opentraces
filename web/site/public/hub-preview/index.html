@@ -3,23 +3,31 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>OpenTraces Hub · Trace Viewer</title>
+<title>OpenTraces Hub · v2</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="app.css?v=2" />
-<link rel="stylesheet" href="landing.css?v=7" />
-<link rel="stylesheet" href="pages.css?v=5" />
-<link rel="stylesheet" href="pages-pulls.css?v=3" />
+<link rel="stylesheet" href="app.css?v=5" />
+<link rel="stylesheet" href="landing.css?v=8" />
+<link rel="stylesheet" href="pages.css?v=6" />
+<link rel="stylesheet" href="pages-pulls.css?v=4" />
 <link rel="stylesheet" href="pages-repo.css?v=3" />
 <link rel="stylesheet" href="pages-settings.css?v=1" />
 <link rel="stylesheet" href="run-intel.css?v=1" />
-<link rel="stylesheet" href="capsules.css?v=6" />
+<link rel="stylesheet" href="capsules.css?v=8" />
+<link rel="stylesheet" href="artifacts.css?v=1" />
+<link rel="stylesheet" href="agent-eval.css?v=1" />
 <link rel="stylesheet" href="command-palette.css?v=1" />
+<link rel="stylesheet" href="liquid-glass.css?v=1" />
+<link rel="stylesheet" href="clui-island.css?v=7" />
+<link rel="stylesheet" href="clui-composer.css?v=1" />
+<link rel="stylesheet" href="slicers.css?v=1" />
+<link rel="stylesheet" href="pages-intents-slices.css?v=1" />
+<link rel="stylesheet" href="v2.css?v=1" />
+<link rel="stylesheet" href="usage-meter.css?v=1" />
 <!-- @ot-embed-seam — site-owned chromeless-embed overlay (not in the design export) -->
-<link rel="stylesheet" href="_embed.css?v=1" />
+<link rel="stylesheet" href="_embed.css?v=2" />
 <script>
-  // Apply theme immediately to avoid flash of wrong theme
   try {
     var t = localStorage.getItem('ot-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', t);
@@ -39,6 +47,7 @@
 
 <script type="text/babel" src="icons.jsx"></script>
 <script type="text/babel" src="trace-utils.jsx"></script>
+<script type="text/babel" src="slicers.jsx"></script>
 <script type="text/babel" src="run-intel-data.jsx"></script>
 <script type="text/babel" src="run-intel.jsx"></script>
 <script type="text/babel" src="sidebar.jsx"></script>
@@ -46,9 +55,15 @@
 <script type="text/babel" src="header.jsx"></script>
 <script type="text/babel" src="trail.jsx"></script>
 <script type="text/babel" src="conversation.jsx"></script>
+<script type="text/babel" src="org-data.jsx"></script>
 <script type="text/babel" src="landing-data.jsx"></script>
 <script type="text/babel" src="landing-shared.jsx"></script>
 <script type="text/babel" src="landing-traces.jsx"></script>
+<script type="text/babel" src="landing-overview-simple.jsx"></script>
+<script type="text/babel" src="landing-overview-v2.jsx"></script>
+<script type="text/babel" src="landing-traces-index.jsx"></script>
+<script type="text/babel" src="landing-entities-index.jsx"></script>
+<script type="text/babel" src="landing-arenas-index.jsx"></script>
 <script type="text/babel" src="compare.jsx"></script>
 <script type="text/babel" src="landing-repo.jsx"></script>
 <script type="text/babel" src="landing-repo-pulls.jsx"></script>
@@ -57,23 +72,44 @@
 <script type="text/babel" src="landing-repo-traces.jsx"></script>
 <script type="text/babel" src="landing-repo-settings.jsx"></script>
 <script type="text/babel" src="landing-settings-global.jsx"></script>
+<script type="text/babel" src="pages-account.jsx"></script>
 <script type="text/babel" src="landing-dataset.jsx"></script>
 <script type="text/babel" src="pages-data.jsx"></script>
 <script type="text/babel" src="pages-shared.jsx"></script>
-<script type="text/babel" src="pages-intents.jsx"></script>
-<script type="text/babel" src="pages-evals.jsx"></script>
+<script type="text/babel" src="pages-intents-slices.jsx"></script>
+<script type="text/babel" src="pages-intents-workflows.jsx"></script>
 <script type="text/babel" src="pages-spotlight.jsx"></script>
 <script type="text/babel" src="pages-capsules-data.jsx"></script>
 <script type="text/babel" src="pages-capsules-episode.jsx"></script>
 <script type="text/babel" src="pages-capsules.jsx"></script>
-<script type="text/babel" src="pages-capsules-watch.jsx"></script>
-<script type="text/babel" src="pages-capsules-detail.jsx"></script>
-<script type="text/babel" src="pages-capsules-table.jsx"></script>
 <script type="text/babel" src="pages-alerts.jsx"></script>
-<script type="text/babel" src="pages-improving.jsx"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="pages-capsules-tweaks.jsx"></script>
-<script type="text/babel" src="command-palette.jsx"></script>
+<script type="text/babel" src="ot-registry.jsx"></script>
+<script type="text/babel" src="artifacts-store.jsx"></script>
+<script type="text/babel" src="pages-artifacts.jsx?v=3"></script>
+<script type="text/babel" src="agent-eval.jsx"></script>
+<script type="text/babel" src="ot-commands.jsx"></script>
+<script type="text/babel" src="clui-edits.jsx"></script>
+<script type="text/babel" src="clui-composer.jsx"></script>
+<script type="text/babel" src="clui-island.jsx"></script>
+<script type="text/babel" src="clui-window.jsx"></script>
+
+<!-- v40-aligned surfaces -->
+<script type="text/babel" src="v2-vocab.jsx"></script>
+<script type="text/babel" src="v2-data.jsx"></script>
+<script type="text/babel" src="sidebar-v2.jsx"></script>
+<script type="text/babel" src="topbar-nav-v2.jsx"></script>
+<script type="text/babel" src="command-palette-v2.jsx"></script>
+<script type="text/babel" src="pages-evidence.jsx"></script>
+<script type="text/babel" src="pages-evidence-detail.jsx"></script>
+<script type="text/babel" src="pages-atlas.jsx"></script>
+<script type="text/babel" src="pages-bench.jsx"></script>
+<script type="text/babel" src="pages-parameterizer.jsx"></script>
+<script type="text/babel" src="pages-world.jsx"></script>
+<script type="text/babel" src="pages-usage-meter.jsx?v=5"></script>
+<script type="text/babel" src="pages-boxes.jsx"></script>
+<script type="text/babel" src="pages-capsules-v2.jsx"></script>
+<script type="text/babel" src="pages-pr-gate.jsx"></script>
 
 <script>
 /* @ot-embed-seam:start — site-owned host seam (deep-link + chromeless embed).
@@ -81,7 +117,9 @@
    full-chrome defaults the Claude design ships with, so the artifact renders as
    authored. The marketing site passes ?embed=1&view=… to boot one chromeless
    panel. This block is re-applied verbatim by scripts/sync-hub on every design
-   re-import, and is structured to lift straight into the design source later. */
+   re-import, and is structured to lift straight into the design source later.
+   It emits window.__HUB_INIT__ = { embed, tab, benchTab, route } where route is
+   a v2 canonical route object (the same shape App.navigate/applyRoute use). */
 (function () {
   var p;
   try { p = new URLSearchParams(window.location.search); } catch (e) { p = new URLSearchParams(""); }
@@ -92,27 +130,38 @@
   var traceId = p.get("trace");
   var tab = p.get("tab");
   var pr = p.get("pr");
+  var artifact = p.get("artifact");
+  var evidence = p.get("evidence");
+  var capsule = p.get("capsule");
+  var benchtab = p.get("benchtab");
   var init = {
     embed: p.get("embed") === "1",
-    view: "traces-landing",
-    activeNav: "traces",
-    activeRepoId: null, activeRepoChild: null, expandedRepo: "jayfarei/opentraces",
-    activeDatasetId: null, activeDatasetChild: null, expandedDataset: null,
-    activeTraceId: null,
-    activeTab: tab === "trail" ? "trail" : "conversation",
-    pullId: pr ? (pr.indexOf("pr-") === 0 ? pr : "pr-" + pr) : null,
+    tab: tab === "trail" ? "trail" : "conversation",
+    benchTab: null,
+    route: null,
   };
+  var HOME_REPO = "jayfarei/opentraces";
   if (v === "repo") {
-    var r = repo || "jayfarei/opentraces";
-    init.view = "repo"; init.activeNav = ""; init.activeRepoId = r; init.expandedRepo = r; init.activeRepoChild = child || "overview";
+    var r = repo || HOME_REPO;
+    var c = child || "overview";
+    /* pseudo-children map onto the bench hub's inner tab, mirroring openRepo */
+    if (c === "atlas" || c === "checks" || c === "environment") { init.benchTab = "atlas"; c = "bench"; }
+    else if (c === "evidence") { init.benchTab = "evidence"; c = "bench"; }
+    else if (c === "bench") { init.benchTab = benchtab || "runs"; }
+    init.route = { view: "repo", repoId: r, repoChild: c,
+      pullId: (c === "pulls" && pr) ? (pr.indexOf("pr-") === 0 ? pr : "pr-" + pr) : null };
   } else if (v === "dataset") {
-    var d = dataset || "ds-edge-traces";
-    init.view = "dataset"; init.activeNav = ""; init.activeDatasetId = d; init.expandedDataset = d; init.activeDatasetChild = child || "overview";
+    init.route = { view: "dataset", datasetId: dataset, datasetChild: child || "overview" };
   } else if (v === "trace") {
-    init.view = "trace"; init.activeNav = ""; init.activeTraceId = traceId || null;
+    init.route = { view: "trace", traceId: traceId || null };
+  } else if (v === "artifact") {
+    init.route = { view: "artifact", nav: "artifacts-index", artifactId: artifact || null };
+  } else if (v === "evidence-detail") {
+    init.route = { view: "evidence-detail", nav: "evidence", evidenceId: evidence || null };
+  } else if (v === "capsule-detail") {
+    init.route = { view: "capsule-detail", nav: "capsules", capsuleId: capsule || null };
   } else if (v) {
-    var navFor = { "traces-landing": "traces", spotlight: "spotlight", intents: "intents", evals: "evals", capsules: "capsules", alerts: "alerts", improving: "improving", settings: "settings", compare: "" };
-    init.view = v; init.activeNav = navFor[v] != null ? navFor[v] : "";
+    init.route = { view: v, nav: v === "traces-landing" ? "traces" : v };
   }
   window.__HUB_INIT__ = init;
 })();
@@ -125,30 +174,74 @@ function App() {
   const [meta, setMeta] = React.useState(null);
   const [loadErr, setLoadErr] = React.useState(null);
 
-  // App nav state
-  // view: 'trace' (existing trace viewer), 'traces-landing', 'repo', 'dataset'
   /* @ot-embed-seam:start — boot initial nav state from the host (URL params),
      each falling back to the design's own default so standalone is unchanged. */
   const HUB_INIT = (typeof window !== "undefined" && window.__HUB_INIT__) || {};
   const embed = !!HUB_INIT.embed;
-  const [view, setView] = React.useState(HUB_INIT.view || "traces-landing");
-  const [activeNav, setActiveNav] = React.useState(HUB_INIT.activeNav ?? "traces");
+  const INIT_ROUTE = HUB_INIT.route || {};
   /* @ot-embed-seam:end */
-  const [expandedSections, setExpandedSections] = React.useState(["datasets", "repositories"]);
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const [activeTraceId, setActiveTraceId] = React.useState(HUB_INIT.activeTraceId ?? null);
-  const [activeDatasetId, setActiveDatasetId] = React.useState(HUB_INIT.activeDatasetId ?? null);
-  const [activeDatasetChild, setActiveDatasetChild] = React.useState(HUB_INIT.activeDatasetChild ?? null);
-  const [expandedDataset, setExpandedDataset] = React.useState(HUB_INIT.expandedDataset ?? null);
-  const [activeRepoId, setActiveRepoId] = React.useState(HUB_INIT.activeRepoId ?? null);
-  const [expandedRepo, setExpandedRepo] = React.useState(HUB_INIT.expandedRepo || "jayfarei/opentraces");
-  const [activeRepoChild, setActiveRepoChild] = React.useState(HUB_INIT.activeRepoChild ?? null);
-  const [activeTab, setActiveTab] = React.useState(HUB_INIT.activeTab || "conversation");
+  const [view, setView] = React.useState(INIT_ROUTE.view || "traces-landing");
+  const [activeNav, setActiveNav] = React.useState(INIT_ROUTE.view ? (INIT_ROUTE.nav || "") : "traces");
+  const [activeTraceId, setActiveTraceId] = React.useState(INIT_ROUTE.traceId ?? null);
+  const [activeDatasetId, setActiveDatasetId] = React.useState(INIT_ROUTE.datasetId ?? null);
+  const [activeDatasetChild, setActiveDatasetChild] = React.useState(INIT_ROUTE.datasetChild ?? null);
+  const [expandedDataset, setExpandedDataset] = React.useState(INIT_ROUTE.datasetId ?? null);
+  const [activeRepoId, setActiveRepoId] = React.useState(INIT_ROUTE.repoId ?? null);
+  const [expandedRepo, setExpandedRepo] = React.useState(INIT_ROUTE.repoId || window.ACCOUNT_HOME_REPO || "jayfarei/opentraces");
+  const [activeRepoChild, setActiveRepoChild] = React.useState(INIT_ROUTE.repoChild ?? null);
+  const [activePullId, setActivePullId] = React.useState(INIT_ROUTE.pullId ?? null);
+  const [activeArtifactId, setActiveArtifactId] = React.useState(INIT_ROUTE.artifactId ?? null);
+  const [activeEvidenceId, setActiveEvidenceId] = React.useState(INIT_ROUTE.evidenceId ?? null);
+  const [activeCapsuleId, setActiveCapsuleId] = React.useState(INIT_ROUTE.capsuleId ?? null);
+  const [atlasFocus, setAtlasFocus] = React.useState(null);
+  const [benchTab, setBenchTab] = React.useState(HUB_INIT.benchTab || "atlas");
+  const [account, setAccount] = React.useState(() => {
+    try { return localStorage.getItem("ot-account") || "personal"; } catch (e) { return "personal"; }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("ot-account", account); } catch (e) {}
+    document.body.setAttribute("data-account", account);
+    document.documentElement.setAttribute("data-account", account);
+  }, [account]);
+  const switchAccount = (a) => {
+    if (window.applyAccountData) window.applyAccountData(a);
+    setAccount(a);
+    setExpandedRepo(window.ACCOUNT_HOME_REPO || "jayfarei/opentraces");
+    handleNav("traces");
+  };
+  const openAccountSettings = (a) => handleNav(a === "org" ? "org-settings" : "profile-settings");
+  const [activeTab, setActiveTab] = React.useState(HUB_INIT.tab || "conversation"); /* @ot-embed-seam: ?tab=trail deep-link */
+  const [slicerKey, setSlicerKey] = React.useState("milestone");
+  const [activeSlice, setActiveSlice] = React.useState(null);
+  const [hoverSlice, setHoverSlice] = React.useState(null);
   const [focusedIdx, setFocusedIdx] = React.useState(0);
   const [openedStep, setOpenedStep] = React.useState(null);
   const [headerCompact, setHeaderCompact] = React.useState(false);
   const [wasteFilter, setWasteFilter] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
+  const [cluiOpen, setCluiOpen] = React.useState(false);
+  const [sidebarW, setSidebarW] = React.useState(() => {
+    try { return parseInt(localStorage.getItem("ot-sbw"), 10) || 0; } catch (e) { return 0; }
+  });
+  const [resizing, setResizing] = React.useState(false);
+  React.useEffect(() => {
+    try { if (sidebarW) localStorage.setItem("ot-sbw", String(sidebarW)); } catch (e) {}
+  }, [sidebarW]);
+  const startResize = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const flip = document.querySelector(".sb-flip");
+    const startW = sidebarW || (flip ? flip.offsetWidth : 280);
+    setResizing(true);
+    const move = (ev) => setSidebarW(Math.min(560, Math.max(232, startW + ev.clientX - startX)));
+    const up = () => {
+      setResizing(false);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
   const [spotlightQuery, setSpotlightQuery] = React.useState(null);
   const mainScrollRef = React.useRef(null);
   const [theme, setTheme] = React.useState(() => {
@@ -181,29 +274,173 @@ function App() {
       }
     } catch (e) {}
     /* @ot-embed-seam:end */
-    // remove the disable-transitions class after the swap commits
     requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove("theme-swap")));
+    const tid = setTimeout(() => html.classList.remove("theme-swap"), 250);
+    return () => clearTimeout(tid);
   }, [theme]);
 
-  // Global ⌘K / Ctrl+K opens the command palette.
   React.useEffect(() => {
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
         setPaletteOpen(o => !o);
       }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "B")) {
+        e.preventDefault();
+        setSidebarCollapsed(v => !v);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Filter state
+  // ── Canonical routes + history stack ──
+  const ROUTE_HOME = { view: "traces-landing", nav: "traces" };
+  const [hist, setHist] = React.useState({ stack: [ROUTE_HOME], idx: 0 });
+  const routeKey = (r) => [r.view, r.nav || "", r.traceId || "", r.repoId || "", r.repoChild || "", r.pullId || "", r.datasetId || "", r.datasetChild || "", r.artifactId || "", r.evidenceId || "", r.capsuleId || ""].join("|");
+  const applyRoute = (r) => {
+    setView(r.view);
+    setActiveNav(r.nav || "");
+    setActiveTraceId(r.traceId || null);
+    setActiveRepoId(r.repoId || null);
+    setActiveRepoChild(r.repoChild || null);
+    setActivePullId(r.pullId || null);
+    setActiveDatasetId(r.datasetId || null);
+    setActiveDatasetChild(r.datasetChild || null);
+    setActiveArtifactId(r.artifactId || null);
+    setActiveEvidenceId(r.evidenceId || null);
+    setActiveCapsuleId(r.capsuleId || null);
+    if (r.repoId) setExpandedRepo(r.repoId);
+    if (r.datasetId) setExpandedDataset(r.datasetId);
+  };
+  const navigate = (r) => {
+    applyRoute(r);
+    setHist(h => {
+      if (routeKey(h.stack[h.idx]) === routeKey(r)) return h;
+      const stack = [...h.stack.slice(0, h.idx + 1), r];
+      return { stack, idx: stack.length - 1 };
+    });
+  };
+  const goBack = () => {
+    if (hist.idx <= 0) return;
+    applyRoute(hist.stack[hist.idx - 1]);
+    setHist(h => ({ ...h, idx: Math.max(0, h.idx - 1) }));
+  };
+  const goFwd = () => {
+    if (hist.idx >= hist.stack.length - 1) return;
+    applyRoute(hist.stack[hist.idx + 1]);
+    setHist(h => ({ ...h, idx: Math.min(h.stack.length - 1, h.idx + 1) }));
+  };
+
+  const handleNav = (id) => navigate(id === "traces" ? ROUTE_HOME : { view: id, nav: id });
+  const openTrace = (id, range) => navigate({ view: "trace", traceId: id });
+  const openDataset = (id, child) => navigate({ view: "dataset", datasetId: id, datasetChild: child || "overview" });
+  const openRepo = (id, child) => {
+    let c = child || "overview";
+    if (c === "environment" || c === "checks" || c === "atlas") { setBenchTab("atlas"); c = "bench"; }
+    else if (c === "evidence") { setBenchTab("evidence"); c = "bench"; }
+    else if (c === "bench") { setBenchTab("runs"); }
+    navigate({ view: "repo", repoId: id, repoChild: c });
+  };
+  const openPullRoute = (repoId, pullId) => navigate({ view: "repo", repoId, repoChild: "pulls", pullId });
+  const openArtifact = (id) => navigate({ view: "artifact", artifactId: id, nav: "artifacts-index" });
+  const openCompare = () => navigate({ view: "compare" });
+  const openEvidence = (id) => navigate({ view: "evidence-detail", nav: "evidence", evidenceId: id });
+  const openCapsule = (id) => navigate({ view: "capsule-detail", nav: "capsules", capsuleId: id });
+  const openChecks = (guaranteeId) => {
+    setAtlasFocus(guaranteeId || null);
+    setBenchTab("atlas");
+    navigate({ view: "repo", repoId: window.ACCOUNT_HOME_REPO || "jayfarei/opentraces", repoChild: "bench" });
+  };
+  const openProjectEvidence = () => { setBenchTab("evidence"); navigate({ view: "repo", repoId: window.ACCOUNT_HOME_REPO || "jayfarei/opentraces", repoChild: "bench" }); };
+  const openProjectBench = () => { setBenchTab("runs"); navigate({ view: "repo", repoId: window.ACCOUNT_HOME_REPO || "jayfarei/opentraces", repoChild: "bench" }); };
+
+  // ── Self-describing routes ──
+  React.useEffect(() => {
+    const R = (id, label, description, open, extra) => ({ id, label, description, open, ...(extra || {}) });
+    OtRegistry.registerRoutes([
+      R("traces", "Overview", "Workspace home — trace ledger, volume heatmap, recent traces", () => handleNav("traces"), { aliases: ["home", "overview"] }),
+      R("traces-index", "Traces", "Full list of every trace in the workspace", () => handleNav("traces-index"), { aliases: ["all traces"] }),
+      R("datasets-index", "Datasets", "Every dataset — rows, inbox, sync state", () => handleNav("datasets-index"), { aliases: ["datasets"], entities: "datasets" }),
+      R("projections-index", "Projections", "One table of everything derived from the app — datasets, benches, capsules, gyms", () => handleNav("projections-index"), { aliases: ["projections", "arenas"] }),
+      R("projects-index", "Projects", "Every repository in the workspace", () => handleNav("projects-index"), { aliases: ["projects", "repos"], entities: "repos" }),
+      R("artifacts-index", "Artifacts", "Generative dashboards/reports built with Claude", () => handleNav("artifacts-index"), { aliases: ["artifacts"], entities: "artifacts" }),
+      R("evidence", "Evidence", "A project's run records rendered twice — a page for people, a feed for agents", () => openProjectEvidence(), { aliases: ["evidence", "run records"] }),
+      R("atlas", "Atlas", "A project's atlas — one row per product guarantee, named holes, two gates, world signals", () => openChecks(), { aliases: ["atlas", "guarantees", "checks", "sops", "world signals"] }),
+      R("bench", "Bench", "A project's bench (one per project) — scenario + verifier on a disposable box", () => openProjectBench(), { aliases: ["bench runs", "runner"] }),
+      R("boxes", "Boxes & AI", "Usage — box leases (hourly, per environment) and AI credits (per model call)", () => handleNav("boxes"), { aliases: ["boxes", "runners", "credits", "usage", "ai credits"] }),
+      R("parameterizer", "Parameterizer", "Harvests tasks and scenarios from real slices (horizon)", () => handleNav("parameterizer"), { aliases: ["classifiers", "task families"] }),
+      R("spotlight", "Spotlight", "Semantic search over traces", () => handleNav("spotlight"), { aliases: ["search"] }),
+      R("capsules", "Capsules", "Sealed runs that travel — witness-first", () => handleNav("capsules"), { aliases: ["capsules", "replays"] }),
+      R("alerts", "Alerts", "Triggers and notifications", () => handleNav("alerts")),
+      R("settings", "Settings", "Workspace settings", () => handleNav("settings")),
+      R("profile-settings", "Your profile", "Personal account — profile, connections, API keys", () => handleNav("profile-settings"), { aliases: ["profile", "account settings"] }),
+      R("org-settings", "Organisation admin", "OpenMake — members, roles, last sign-ins", () => handleNav("org-settings"), { aliases: ["members", "rbac", "org admin"] }),
+      R("compare", "Compare", "Side-by-side diff of two traces", () => openCompare()),
+      R("evidence-detail", "Evidence record", "A single frozen run record", (p) => {
+        if (!p.id) throw new Error("evidence route needs {id}");
+        openEvidence(p.id);
+        return "Opened evidence " + p.id;
+      }, { params: { id: "evidence id" } }),
+      R("trace", "Trace viewer", "A single trace", (p) => {
+        if (!p.id) throw new Error("trace route needs {id}");
+        openTrace(p.id);
+        if (p.tab === "trail") setActiveTab("trail");
+        return "Opened trace " + String(p.id).slice(0, 7) + (p.tab === "trail" ? " on Trail" : "");
+      }, { params: { id: "trace id", tab: "conversation | trail (visual timeline)" }, entities: "traces" }),
+      R("repo", "Repository", "A repo's pages", (p) => {
+        if (!p.id) throw new Error("repo route needs {id}");
+        openRepo(p.id, p.page || "overview");
+        return "Opened " + p.id + " → " + (p.page || "overview");
+      }, { params: { id: "owner/name", page: "overview | traces | pulls | checks | settings" }, entities: "repos" }),
+      R("dataset", "Dataset", "A dataset's pages", (p) => {
+        if (!p.id) throw new Error("dataset route needs {id}");
+        openDataset(p.id, p.page || "overview");
+        return "Opened dataset " + p.id;
+      }, { params: { id: "dataset id", page: "overview | rows | inbox | settings" }, entities: "datasets" }),
+      R("artifact", "Artifact", "A generated artifact page", (p) => {
+        if (!p.id) throw new Error("artifact route needs {id}");
+        openArtifact(p.id);
+        return "Opened artifact";
+      }, { params: { id: "artifact id" }, entities: "artifacts" }),
+      R("pull", "Pull request", "A PR's detail page inside its repo", (p) => {
+        const rid = p.repo || window.ACCOUNT_HOME_REPO || "jayfarei/opentraces";
+        const pulls = (window.REPO_PULLS && window.REPO_PULLS[rid]) || [];
+        if (!pulls.length) throw new Error("No traced PRs for " + rid);
+        const pr = p.number != null ? pulls.find(x => x.number === Number(p.number)) : pulls[0];
+        if (!pr) throw new Error("PR #" + p.number + " not in " + rid + " — have: " + pulls.map(x => x.number).join(", "));
+        openPullRoute(rid, pr.id);
+        return "Opened PR #" + pr.number + " — " + pr.title;
+      }, { params: { repo: "owner/name", number: "PR number (omit for latest)" }, entities: "pulls" }),
+      R("agent-eval", "Agent eval", "Dev harness — batch intent queries scored on real app state (also ⌥E)", () => { if (window.__otEval) window.__otEval.open(); return "Opened the agent eval harness"; }),
+    ]);
+  }, []);
+
+  React.useEffect(() => {
+    window.__otOpenTrace = openTrace;
+    window.__otRoute = {
+      view, nav: activeNav, traceId: activeTraceId, repoId: activeRepoId, repoChild: activeRepoChild, pullId: activePullId,
+      datasetId: activeDatasetId, artifactId: activeArtifactId, evidenceId: activeEvidenceId, capsuleId: activeCapsuleId, activeTab,
+    };
+  });
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (!e.altKey || (e.metaKey || e.ctrlKey)) return;
+      if (e.key === "ArrowLeft")  { e.preventDefault(); goBack(); }
+      if (e.key === "ArrowRight") { e.preventDefault(); goFwd(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   const [filters, setFilters] = React.useState({
     user: true, plan: true, think: true, checkpoint: true,
     file_edits: true, bash: true, read: true, other: true,
   });
   const [expandedTools, setExpandedTools] = React.useState(true);
   const [expandAllToolsTick, setExpandAllToolsTick] = React.useState(null);
+  const convSpyRaf = React.useRef(0);
 
   React.useEffect(() => {
     Promise.all([
@@ -217,10 +454,21 @@ function App() {
 
   const classes = React.useMemo(() => trace ? trace.steps.map(classifyStep) : [], [trace]);
 
-  // Keep the timeline grid-head pinned flush beneath the sticky trace header.
-  // The header's height changes (and animates) between expanded/compact, so we
-  // track its live height and feed it to the grid-head's sticky `top` as a CSS
-  // var — this is what makes the header "remain" and the hand-off jitter-free.
+  const slices = React.useMemo(
+    () => (slicerKey === "full" ? [] : computeSlices(classes, slicerKey)),
+    [classes, slicerKey]
+  );
+  const sliceRange = activeSlice != null && slices[activeSlice]
+    ? [slices[activeSlice].s, slices[activeSlice].e]
+    : null;
+  React.useEffect(() => { setActiveSlice(null); }, [slicerKey, activeTraceId]);
+  React.useEffect(() => {
+    if (activeSlice == null) return;
+    const onEsc = (e) => { if (e.key === "Escape") setActiveSlice(null); };
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
+  }, [activeSlice]);
+
   React.useLayoutEffect(() => {
     if (view !== "trace") return;
     const main = mainScrollRef.current;
@@ -238,7 +486,6 @@ function App() {
     return () => { ro.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [view, trace, activeTab, headerCompact]);
 
-  // counts for filter sidebar
   const counts = React.useMemo(() => {
     const c = { user: 0, plan: 0, think: 0, checkpoint: 0, file_edits: 0, bash: 0, read: 0, other: 0, tools: 0 };
     if (!trace) return c;
@@ -267,57 +514,23 @@ function App() {
   if (loadErr) return <div style={{padding: 40, fontFamily: "monospace"}}>load error: {loadErr}</div>;
   if (!trace) return <div style={{padding: 40, color: "#9ba1a8"}}>Loading…</div>;
 
-  const handleNav = (id) => {
-    setActiveNav(id);
-    setActiveTraceId(null);
-    setActiveDatasetId(null);
-    setActiveRepoId(null);
-    setActiveRepoChild(null);
-    if (id === "traces")     setView("traces-landing");
-    else if (id === "intents")   setView("intents");
-    else if (id === "evals")     setView("evals");
-    else if (id === "spotlight") setView("spotlight");
-    else if (id === "capsules")  setView("capsules");
-    else if (id === "alerts")    setView("alerts");
-    else if (id === "improving") setView("improving");
-    else if (id === "settings")  setView("settings");
+  const convScrollSpy = (el) => {
+    if (convSpyRaf.current) return;
+    convSpyRaf.current = requestAnimationFrame(() => {
+      convSpyRaf.current = 0;
+      const line = el.getBoundingClientRect().top + 40;
+      let best = -1;
+      const nodes = el.querySelectorAll("[data-step]");
+      for (let k = 0; k < nodes.length; k++) {
+        if (nodes[k].getBoundingClientRect().top <= line) best = Number(nodes[k].dataset.step);
+        else break;
+      }
+      if (best >= 0) setFocusedIdx(best);
+    });
   };
-  const openTrace = (id) => {
-    setActiveTraceId(id);
-    setActiveDatasetId(null);
-    setActiveRepoId(null);
-    setActiveRepoChild(null);
-    setActiveNav("");
-    setView("trace");
-  };
-  const openDataset = (id, child) => {
-    setExpandedDataset(id);
-    setActiveDatasetId(id);
-    setActiveDatasetChild(child || "overview");
-    setActiveTraceId(null);
-    setActiveRepoId(null);
-    setActiveNav("");
-    setView("dataset");
-  };
-  const openRepo = (id, child) => {
-    setExpandedRepo(id);
-    setActiveRepoId(id);
-    setActiveRepoChild(child || "overview");
-    setActiveTraceId(null);
-    setActiveDatasetId(null);
-    setActiveNav("");
-    setView("repo");
-  };
-  const openCompare = () => {
-    setActiveTraceId(null);
-    setActiveDatasetId(null);
-    setActiveRepoId(null);
-    setActiveRepoChild(null);
-    setActiveNav("");
-    setView("compare");
-  };
-  const handleSelectStep = (i) => {    setFocusedIdx(i);
-    // scroll the active pane to the step row
+
+  const handleSelectStep = (i) => {
+    setFocusedIdx(i);
     const target = document.querySelector(`[data-step="${i}"]`);
     if (target) {
       const container = target.closest(".main, #conv-main");
@@ -329,37 +542,54 @@ function App() {
       }
     }
   };
+  const jumpToSliceStart = (i) => {
+    setFocusedIdx(i);
+    const target = document.querySelector(`[data-step="${i}"]`);
+    if (!target) return;
+    const container = target.closest("#conv-main");
+    if (container) {
+      const t = target.getBoundingClientRect();
+      const c = container.getBoundingClientRect();
+      container.scrollTo({ top: (t.top - c.top) + container.scrollTop - 24, behavior: "smooth" });
+    } else {
+      handleSelectStep(i);
+    }
+  };
   const handleJumpLatest = () => {
-    const stream = document.getElementById("conv-stream");
+    const stream = document.getElementById("conv-main");
     stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
   };
-  /* @ot-embed-seam:start — sticky-header compaction shared by both trace
-     scrollers. The trail tab scrolls .main; the conversation tab scrolls its own
-     .conv-main, so wire both to one handler. Hysteresis: compact past 48px,
-     restore below 12px. */
-  const applyHeaderCompact = (y) => {
+  const compactFromScroll = (y) => {
     setHeaderCompact(prev => {
-      if (!prev && y > 48) return true;
-      if (prev && y < 12) return false;
+      if (!prev && y > 64) return true;
+      if (prev && y < 8) return false;
       return prev;
     });
   };
-  /* @ot-embed-seam:end */
 
   return (
-    <div className="app-shell" data-embed={embed ? "1" : "0"} data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
+    <div
+      className="app-shell"
+      data-embed={embed ? "1" : "0"}
+      data-sb={sidebarCollapsed ? "collapsed" : "expanded"}
+      data-clui={cluiOpen ? "open" : "closed"}
+      data-resizing={resizing ? "true" : "false"}
+      style={sidebarW ? { "--sidebar-w": sidebarW + "px" } : undefined}
+    >
       {/* @ot-embed-seam: chrome is suppressed in embed mode so each /hub iframe
           shows only its feature panel. Standalone (embed=false) renders both. */}
       {!embed && (
-      <Sidebar
+      <div className="sb-flip">
+        <div className="sb-flip-strip">
+        <div className="sb-flip-pane pane-nav" aria-hidden={cluiOpen}>
+      <div className="acct-flip" data-account={account}>
+        {!sidebarCollapsed && <AccountDeck account={account} onSwitch={switchAccount} onOpenSettings={openAccountSettings} />}
+        <div className="acct-pane pane-personal" aria-hidden={account !== "personal"}>
+          <SidebarV2
+            account="personal"
         collapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
         activeNav={activeNav}
         onNav={handleNav}
-        expandedSections={expandedSections}
-        onToggleSection={(id) => setExpandedSections(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])}
-        searchQuery={searchQuery}
-        onSearchQuery={setSearchQuery}
         onActivateSearch={() => setPaletteOpen(true)}
         expandedDataset={expandedDataset}
         onExpandDataset={(id) => setExpandedDataset(id === expandedDataset ? null : id)}
@@ -371,48 +601,181 @@ function App() {
         activeRepo={activeRepoId}
         activeRepoChild={activeRepoChild}
         onSelectRepoChild={(rid, cid) => openRepo(rid, cid)}
-      />
+        onSelectArtifact={openArtifact}
+        activeArtifactId={activeArtifactId}
+        onOpenCapsule={openCapsule}
+        activeCapsuleId={activeCapsuleId}
+        onSwitchAccount={switchAccount}
+          />
+        </div>
+        <div className="acct-pane pane-org" aria-hidden={account !== "org"}>
+          <SidebarV2
+            account="org"
+        collapsed={sidebarCollapsed}
+        activeNav={activeNav}
+        onNav={handleNav}
+        onActivateSearch={() => setPaletteOpen(true)}
+        expandedDataset={expandedDataset}
+        onExpandDataset={(id) => setExpandedDataset(id === expandedDataset ? null : id)}
+        activeDatasetId={activeDatasetId}
+        activeDatasetChild={activeDatasetChild}
+        onSelectDatasetChild={(did, cid) => openDataset(did, cid)}
+        expandedRepo={expandedRepo}
+        onExpandRepo={(id) => setExpandedRepo(id === expandedRepo ? null : id)}
+        activeRepo={activeRepoId}
+        activeRepoChild={activeRepoChild}
+        onSelectRepoChild={(rid, cid) => openRepo(rid, cid)}
+        onSelectArtifact={openArtifact}
+        activeArtifactId={activeArtifactId}
+        onOpenCapsule={openCapsule}
+        activeCapsuleId={activeCapsuleId}
+        onSwitchAccount={switchAccount}
+          />
+        </div>
+      </div>
+        </div>
+        <div className="sb-flip-pane pane-clui" aria-hidden={!cluiOpen}>
+          <CluiSidebar
+            open={cluiOpen}
+            onToggle={() => setCluiOpen(o => !o)}
+            context={{
+              view,
+              activeNav,
+              activeTraceId,
+              activeRepoId,
+              activeDatasetId,
+              theme,
+              traceShortId: trace?.trace_id?.slice(0, 7) || "",
+            }}
+            actions={{
+              navigate: handleNav,
+              openTrace: (id, tab) => { openTrace(id); setActiveTab(tab === "trail" ? "trail" : "conversation"); },
+              setTraceTab: (tab) => setActiveTab(tab === "trail" ? "trail" : "conversation"),
+              openRepo: (id, child) => openRepo(id, child || "overview"),
+              openPull: openPullRoute,
+              openArtifact,
+              openCompare,
+              runSpotlight: (query) => { setSpotlightQuery(query); handleNav("spotlight"); },
+              setTheme: (t) => setTheme(t === "light" ? "light" : "dark"),
+            }}
+          />
+        </div>
+        </div>
+        <CluiSwitch
+          open={cluiOpen}
+          collapsed={sidebarCollapsed}
+          onSelect={(m) => setCluiOpen(m === "claude")}
+          onSetCollapsed={setSidebarCollapsed}
+        />
+        <div className="clui-resize" onMouseDown={startResize} title="Drag to resize"></div>
+      </div>
       )}
 
-      <div style={{display: "flex", flexDirection: "column", minWidth: 0}}>
+      <div className="app-content">
+        <CluiWindowFrame
+          open={cluiOpen}
+          context={{
+            view,
+            activeTab,
+            activeRepoId,
+            activeRepoChild,
+            activeDatasetId,
+            traceShortId: trace?.trace_id?.slice(0, 7) || "",
+          }}
+        >
         {!embed && (
-        <Topbar
-          workspace="Jayfarei"
-          project="test3"
+        <TopbarNavV2
+          workspace={account === "org" ? "OpenMake" : "Jayfarei"}
+          route={{ view, nav: activeNav, traceId: activeTraceId, repoId: activeRepoId, repoChild: activeRepoChild, pullId: activePullId, datasetId: activeDatasetId, datasetChild: activeDatasetChild, artifactId: activeArtifactId, capsuleId: activeCapsuleId }}
+          canBack={hist.idx > 0}
+          canFwd={hist.idx < hist.stack.length - 1}
+          onHistBack={goBack}
+          onHistFwd={goFwd}
+          actions={{ navPage: handleNav, openTrace, openRepo, openDataset, openCompare, openArtifact, openPull: openPullRoute }}
           theme={theme}
-          view={view}
-          contextLabel={
-            view === "repo" ? activeRepoId :
-            view === "dataset" ? (DATASET_DEFS[activeDatasetId]?.name || "") : ""
-          }
           onToggleTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
           traceShortId={trace?.trace_id?.slice(0, 7) || ""}
-          onBack={() => setView("traces-landing")}
         />
         )}
 
-        <div className="main" ref={mainScrollRef} onScroll={(e) => {
-          /* @ot-embed-seam: the conversation tab scrolls .conv-main, not .main;
-             let it own compaction so the two scrollers do not fight. */
-          if (view === "trace" && activeTab === "conversation") return;
-          applyHeaderCompact(e.currentTarget.scrollTop);
-        }}>
+        <div className="main" key={account} ref={mainScrollRef} onScroll={(e) => compactFromScroll(e.currentTarget.scrollTop)}>
           {view === "traces-landing" && (
-            <TracesLanding onSelectTrace={openTrace} onSelectDataset={(id) => openDataset(id, "overview")} onCompare={openCompare} />
+            <OverviewV2 onSelectTrace={openTrace} onSelectDataset={(id) => openDataset(id, "overview")} onCompare={openCompare} onAllTraces={() => handleNav("traces-index")} onOpenCapsules={() => handleNav("capsules")} onOpenRepo={openRepo} />
+          )}
+          {view === "traces-index" && (
+            <TracesIndexPage onSelectTrace={openTrace} onCompare={openCompare} />
+          )}
+          {view === "datasets-index" && (
+            <DatasetsIndexPage onSelectDataset={(id) => openDataset(id, "overview")} />
+          )}
+          {view === "projections-index" && (
+            <ProjectionsIndexPage
+              onSelectDataset={(id) => openDataset(id, "overview")}
+              onOpenBench={(id) => openRepo(id, "bench")}
+              onOpenCapsule={openCapsule}
+            />
+          )}
+          {view === "projects-index" && (
+            <ProjectsIndexPage onSelectRepo={(id) => openRepo(id, "overview")} />
+          )}
+          {view === "artifacts-index" && (
+            <ArtifactsIndexPage theme={theme} onSelectArtifact={openArtifact} />
+          )}
+          {view === "artifact" && activeArtifactId && (
+            <ArtifactPage artifactId={activeArtifactId} theme={theme} onBack={() => handleNav("artifacts-index")} />
           )}
           {view === "compare" && (
             <div className="main-inner"><CompareView traces={RECENT_TRACES} /></div>
           )}
-          {view === "intents"   && <IntentsPage onSelectTrace={openTrace} />}
-          {view === "evals"     && <EvalsPage onSelectTrace={openTrace} />}
+          {view === "evidence-detail" && activeEvidenceId && (
+            <EvidenceDetail
+              evidenceId={activeEvidenceId}
+              onBack={openProjectEvidence}
+              onOpenTrace={openTrace}
+              onOpenChecks={openChecks}
+            />
+          )}
+          {view === "parameterizer" && (
+            <ParameterizerPage onSelectTrace={openTrace} onOpenBench={openProjectBench} />
+          )}
+          {view === "boxes" && (
+            <BoxesPage onOpenBench={openProjectBench} />
+          )}
+          {view === "capsules" && (
+            <CapsulesV2Page onOpenCapsule={openCapsule} onSelectTrace={openTrace} />
+          )}
+          {view === "capsule-detail" && activeCapsuleId && (
+            <CapsuleV2Detail capId={activeCapsuleId} onBack={() => handleNav("capsules")} onSelectTrace={openTrace} trace={trace} />
+          )}
           {view === "spotlight" && <SpotlightPage initialQuery={spotlightQuery} onConsumeQuery={() => setSpotlightQuery(null)} />}
-          {view === "capsules"  && <CapsulesPage onSelectTrace={openTrace} />}
           {view === "alerts"    && <AlertsPage />}
-          {view === "improving" && <SelfImprovingPage onSelectRepo={(id) => openRepo(id, "overview")} />}
           {view === "settings"  && <GlobalSettingsPage onSelectRepo={(id) => openRepo(id, "settings")} />}
+          {view === "profile-settings" && <ProfileSettingsPage />}
+          {view === "org-settings" && <OrgSettingsPage />}
           {view === "repo" && activeRepoId && (
-            activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} initialPull={HUB_INIT.pullId} /* @ot-embed-seam: deep-link opens a PR detail */ />
+            activeRepoChild === "pulls" ? (
+              <RepoPullsPageV2
+                repoId={activeRepoId}
+                pullId={activePullId}
+                onOpenPull={(pid) => openPullRoute(activeRepoId, pid)}
+                onClosePull={() => openRepo(activeRepoId, "pulls")}
+                onOpenEvidence={openEvidence}
+                onOpenChecks={openChecks}
+              />
+            )
             : activeRepoChild === "traces" ? <RepoTracesPage repoId={activeRepoId} onSelectTrace={openTrace} />
+            : activeRepoChild === "bench" ? (
+              <BenchHubPage
+                repoId={activeRepoId}
+                tab={benchTab}
+                onTab={setBenchTab}
+                onOpenEvidence={openEvidence}
+                onOpenTrace={openTrace}
+                onOpenParameterizer={() => handleNav("parameterizer")}
+                onOpenBoxes={() => handleNav("boxes")}
+                focusGuarantee={atlasFocus}
+              />
+            )
             : activeRepoChild === "settings" ? <RepoSettingsPage repoId={activeRepoId} />
             : <RepoOverview
                 repoId={activeRepoId}
@@ -425,7 +788,7 @@ function App() {
             <DatasetLanding datasetId={activeDatasetId} child={activeDatasetChild} onSelectTrace={openTrace} onSelectChild={(c) => openDataset(activeDatasetId, c)} />
           )}
           {view === "trace" && (
-          <div className="main-inner">
+          <div className="main-inner" data-compact={headerCompact ? "true" : "false"} data-tab={activeTab}>
             <div className="trace-sticky" data-compact={headerCompact}>
               <TraceHeader
                 trace={trace}
@@ -436,7 +799,19 @@ function App() {
                 wasteFilter={wasteFilter}
                 onToggleWasteFilter={() => { setActiveTab("trail"); setWasteFilter(v => !v); }}
               />
-              <Minimap classes={classes} focusedIdx={focusedIdx} onSelect={handleSelectStep} />
+              <Minimap classes={classes} focusedIdx={focusedIdx} onSelect={handleSelectStep} slices={slicerKey === "full" ? null : slices} sliceRange={sliceRange} slicerSig={(slicerByKey(slicerKey) || {}).sig} hoverSlice={hoverSlice} onHoverSlice={setHoverSlice} />
+              <SlicerRail
+                classes={classes}
+                steps={trace.steps}
+                slicerKey={slicerKey}
+                onSlicerKey={setSlicerKey}
+                projectSlicer="milestone"
+                activeSlice={activeSlice}
+                hoverSlice={hoverSlice}
+                onHoverSlice={setHoverSlice}
+                focusedIdx={focusedIdx}
+                onPickSlice={(i) => { setActiveSlice(i); if (i != null && slices[i]) jumpToSliceStart(slices[i].s); }}
+              />
               <Tabs active={activeTab} onChange={setActiveTab} />
             </div>
 
@@ -451,19 +826,23 @@ function App() {
                   contextWaste={CONTEXT_WASTE}
                   runHealth={RUN_HEALTH}
                   wasteFilter={wasteFilter}
-                  compact={headerCompact}
+                  sliceRange={sliceRange}
+                  slices={slicerKey === "full" ? null : slices}
+                  slicerKey={slicerKey}
+                  slicerSig={(slicerByKey(slicerKey) || {}).sig}
+                  activeSlice={activeSlice}
+                  onPickSlice={setActiveSlice}
                 />
               )}
               {activeTab === "conversation" && (
                 <div className="conv-shell">
-                  <div className="conv-main" id="conv-main"
-                    /* @ot-embed-seam: drive header compaction from the conversation scroller */
-                    onScroll={(e) => applyHeaderCompact(e.currentTarget.scrollTop)}>
+                  <div className="conv-main" id="conv-main" onScroll={(e) => { compactFromScroll(e.currentTarget.scrollTop); convScrollSpy(e.currentTarget); }}>
                     <ConversationView
                       steps={trace.steps}
                       filters={filters}
                       onOpenStep={setOpenedStep}
                       expandAllTools={expandAllToolsTick}
+                      sliceRange={sliceRange}
                     />
                   </div>
                   <div className="conv-side">
@@ -484,6 +863,7 @@ function App() {
           </div>
           )}
         </div>
+        </CluiWindowFrame>
       </div>
 
       {openedStep != null && (
@@ -520,7 +900,9 @@ function App() {
         </>
       )}
 
-      <CommandPalette
+      <AgentEvalOverlay></AgentEvalOverlay>
+
+      <CommandPaletteV2
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         actions={{

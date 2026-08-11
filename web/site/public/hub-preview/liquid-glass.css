@@ -1,0 +1,280 @@
+/* ─────────────────────────────────────────────────────────────
+ * OpenTraces Hub — Liquid Glass refinement overlay
+ * Loads AFTER all other stylesheets. Re-tokenizes surfaces as
+ * translucent layers over an ambient backdrop, floats the content
+ * pane as a glass sheet, and rounds controls into capsules.
+ * ───────────────────────────────────────────────────────────── */
+
+/* ── Tokens ── */
+html[data-theme="dark"] {
+  --bg: #0c0f15;
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-2: rgba(255, 255, 255, 0.075);
+  --surface-3: rgba(255, 255, 255, 0.115);
+  --border: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.17);
+  --radius: 14px;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-elevated: 0 12px 32px -12px rgba(0, 0, 0, 0.5), 0 2px 8px -2px rgba(0, 0, 0, 0.3);
+  /* overlay-only tokens */
+  --lg-ambient: #14171f;
+  --lg-sheet: rgba(18, 21, 29, 0.94);
+  --lg-sheet-blur: rgba(16, 19, 27, 0.85);
+  --lg-glass: rgba(24, 28, 38, 0.92);
+  --lg-hairline: rgba(255, 255, 255, 0.07);
+  --lg-sheen: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --lg-glass-shadow: 0 32px 80px -24px rgba(0, 0, 0, 0.65), 0 4px 16px -6px rgba(0, 0, 0, 0.4);
+}
+html[data-theme="light"] {
+  --bg: #eef0f3;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-2: rgba(18, 23, 34, 0.048);
+  --surface-3: rgba(18, 23, 34, 0.082);
+  --border: rgba(18, 23, 34, 0.1);
+  --border-strong: rgba(18, 23, 34, 0.18);
+  --radius: 14px;
+  --shadow-card: 0 1px 2px rgba(16, 20, 30, 0.05);
+  --shadow-elevated: 0 12px 32px -12px rgba(16, 20, 30, 0.14), 0 2px 8px -2px rgba(16, 20, 30, 0.06);
+  --lg-ambient: #e7e9ee;
+  --lg-sheet: rgba(252, 253, 255, 0.92);
+  --lg-sheet-blur: rgba(250, 251, 253, 0.85);
+  --lg-glass: rgba(255, 255, 255, 0.92);
+  --lg-hairline: rgba(18, 23, 34, 0.07);
+  --lg-sheen: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --lg-glass-shadow: 0 32px 80px -28px rgba(16, 20, 30, 0.28), 0 4px 16px -8px rgba(16, 20, 30, 0.1);
+}
+
+/* ── Ambient backdrop the glass refracts ── */
+html, body { background: var(--lg-ambient); }
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1000px 640px at 10% -12%, oklch(52% 0.11 62 / 0.34), transparent 62%),
+    radial-gradient(1200px 760px at 108% 12%, oklch(54% 0.11 290 / 0.28), transparent 65%),
+    radial-gradient(1000px 860px at 55% 118%, oklch(52% 0.1 200 / 0.26), transparent 62%);
+}
+html[data-theme="light"] body::before {
+  background:
+    radial-gradient(1000px 640px at 10% -12%, oklch(88% 0.05 62 / 0.65), transparent 62%),
+    radial-gradient(1200px 760px at 108% 12%, oklch(88% 0.045 290 / 0.55), transparent 65%),
+    radial-gradient(1000px 860px at 55% 118%, oklch(88% 0.045 200 / 0.5), transparent 62%);
+}
+#root { position: relative; }
+
+/* ── Shell: sidebar sits on the ambient, content floats as a sheet ── */
+.app-shell { background: transparent; }
+.main { background: transparent; }
+
+.app-shell > .sb-flip + div {
+  height: calc(100vh - 20px);
+  margin: 10px 12px 10px 2px;
+  border-radius: 18px;
+  background: var(--lg-sheet);
+  border: 1px solid var(--lg-hairline);
+  box-shadow: var(--lg-glass-shadow), var(--lg-sheen);
+  overflow: hidden;
+  min-height: 0;
+}
+.app-shell > .sb-flip + div > .main {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── Sidebar: transparent over the ambient, glass pills for state ── */
+.sidebar {
+  background: transparent;
+  border-right: none;
+}
+/* brand row center-aligned with the topbar breadcrumb inside the sheet
+   (sheet top 10px + topbar 58px → center at 39px → brand row 78px) */
+.sb-brand { border-bottom: 1px solid transparent; height: 78px; }
+.sb-foot { border-top: 1px solid var(--lg-hairline); }
+
+.sb-nav-item { border-radius: 10px; }
+.sb-nav-item:hover { background: rgba(127, 138, 160, 0.1); }
+.sb-nav-item[aria-current="true"] {
+  background: var(--lg-glass);
+  box-shadow: var(--lg-sheen), inset 0 0 0 1px var(--lg-hairline), 0 2px 8px -2px rgba(0, 0, 0, 0.25);
+}
+html[data-theme="light"] .sb-nav-item[aria-current="true"] {
+  box-shadow: var(--lg-sheen), inset 0 0 0 1px rgba(18, 23, 34, 0.06), 0 2px 8px -3px rgba(16, 20, 30, 0.12);
+}
+.sb-sec-toggle { border-radius: 8px; }
+.sb-list-item, .sb-repo-head { border-radius: 8px; }
+.sb-repo-child { border-radius: 7px; }
+
+/* capsule search field */
+.sb-search-input {
+  height: 32px;
+  border-radius: 999px;
+  padding: 0 10px 0 12px;
+  background: rgba(127, 138, 160, 0.12);
+  border: 1px solid transparent;
+}
+.sb-search-input:hover, .sb-search-input:focus-within {
+  background: var(--lg-glass);
+  border-color: var(--lg-hairline);
+  box-shadow: var(--lg-sheen);
+}
+.sb-search { border-radius: 999px; }
+.sb-kbd, .tb-kbd {
+  background: rgba(127, 138, 160, 0.14);
+  border: 1px solid transparent;
+  border-radius: 5px;
+}
+
+/* ── Topbar: quiet glass strip at the top of the sheet ── */
+.topbar {
+  background: transparent;
+  border-bottom: 1px solid var(--lg-hairline);
+  height: 58px;
+}
+.tb-icon-btn { border-radius: 999px; }
+.tb-back { border-radius: 999px; }
+.bc-item { border-radius: 7px; }
+.tb-search { border-radius: 999px; }
+
+/* ── Sticky trace chrome: real glass (content scrolls beneath it) ── */
+.trace-sticky {
+  background: var(--lg-sheet-blur);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  backdrop-filter: blur(22px) saturate(1.5);
+}
+.trace-sticky .tab-row { background: transparent; }
+
+/* Timeline column header pins below the trace header with rows scrolling
+ * beneath it — needs a heavy frost, not the translucent card surface,
+ * or the text becomes unreadable over passing rows. */
+.grid-head {
+  background: var(--lg-sheet-blur);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  backdrop-filter: blur(24px) saturate(1.5);
+}
+
+/* ── Cards: layered glass panels ── */
+.trace-card, .minimap-card, .ov-stat {
+  box-shadow: var(--lg-sheen), var(--shadow-card);
+}
+
+/* ── Overlays: heavy frosted glass ── */
+.cmdk-overlay {
+  background: rgba(6, 8, 12, 0.38);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  backdrop-filter: blur(8px) saturate(1.1);
+}
+html[data-theme="light"] .cmdk-overlay { background: rgba(230, 233, 240, 0.42); }
+.cmdk {
+  background: var(--lg-glass);
+  -webkit-backdrop-filter: blur(40px) saturate(1.7);
+  backdrop-filter: blur(40px) saturate(1.7);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  box-shadow: var(--lg-glass-shadow), var(--lg-sheen);
+}
+html[data-theme="light"] .cmdk { border-color: rgba(255, 255, 255, 0.7); }
+.cmdk-foot { background: transparent; border-top: 1px solid var(--lg-hairline); }
+
+.drawer-overlay {
+  background: rgba(4, 6, 10, 0.4);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+html[data-theme="light"] .drawer-overlay { background: rgba(230, 233, 240, 0.45); }
+.drawer {
+  top: 10px; right: 10px; bottom: 10px;
+  width: 488px;
+  border-radius: 18px;
+  border: 1px solid var(--lg-hairline);
+  background: var(--lg-glass);
+  -webkit-backdrop-filter: blur(36px) saturate(1.6);
+  backdrop-filter: blur(36px) saturate(1.6);
+  box-shadow: var(--lg-glass-shadow), var(--lg-sheen);
+  overflow: hidden;
+}
+.drawer-h { border-bottom: 1px solid var(--lg-hairline); }
+
+/* ── Breadcrumb switcher menus: dense glass so content doesn't read through ── */
+.bc-menu {
+  background: var(--lg-glass);
+  -webkit-backdrop-filter: blur(32px) saturate(1.5);
+  backdrop-filter: blur(32px) saturate(1.5);
+  border: 1px solid var(--lg-hairline);
+  border-radius: 14px;
+  box-shadow: var(--lg-glass-shadow), var(--lg-sheen);
+}
+
+/* ── Avatar-chat popover as glass ── */
+.avatar-chat {
+  background: var(--lg-glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.5);
+  backdrop-filter: blur(28px) saturate(1.5);
+  border-radius: 18px;
+  border: 1px solid var(--lg-hairline);
+  box-shadow: var(--lg-glass-shadow), var(--lg-sheen);
+}
+.avatar-chat-tail { display: none; }
+
+/* ── Scrollbars: floating rounded thumbs ── */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 150, 170, 0.22);
+  border-radius: 999px;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(140, 150, 170, 0.38); background-clip: padding-box; border: 2px solid transparent; }
+
+/* ── Focus: softer halo ── */
+:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--c-user) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ── Checkboxes: quiet glass wells; checked = slightly lifted glass + warm check ── */
+.filter-item .checkbox {
+  width: 16px; height: 16px;
+  border-radius: 5px;
+  border: 1px solid var(--lg-hairline);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22), inset 0 -0.5px 0 rgba(255, 255, 255, 0.05);
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+html[data-theme="light"] .filter-item .checkbox {
+  border-color: rgba(18, 23, 34, 0.14);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 1px 2px rgba(16, 20, 30, 0.08);
+}
+/* checked: the well rises to a soft frosted chip — no saturated fill;
+ * the checkmark carries the accent instead */
+.filter-item .checkbox.checked {
+  background: color-mix(in srgb, var(--surface-3) 85%, transparent);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 1px 3px -1px rgba(0, 0, 0, 0.3);
+}
+html[data-theme="light"] .filter-item .checkbox.checked {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(18, 23, 34, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 3px -1px rgba(16, 20, 30, 0.18);
+}
+.filter-item .checkbox.checked::after {
+  border-left-color: color-mix(in oklch, var(--c-user) 65%, var(--fg));
+  border-bottom-color: color-mix(in oklch, var(--c-user) 65%, var(--fg));
+}
+.filter-item .checkbox.partial,
+html[data-theme="light"] .filter-item .checkbox.partial {
+  background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+  border-color: var(--lg-hairline);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.1);
+}
+.filter-item .checkbox.partial::after {
+  background: color-mix(in oklch, var(--c-user) 65%, var(--fg));
+  height: 2px;
+}
+

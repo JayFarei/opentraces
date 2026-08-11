@@ -1,0 +1,420 @@
+/* ── Slicers — shared visual language for trace slices ─────────────── */
+
+/* attribution chip */
+.slicer-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, color-mix(in oklch, var(--fg) 4%, transparent));
+  font-size: 10.5px; color: var(--fg-mute);
+  white-space: nowrap;
+}
+.slicer-chip .slc-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--sl-sig, var(--c-user)); flex: none; }
+.slicer-chip .slc-prefix { opacity: 0.7; }
+.slicer-chip .slc-name { color: var(--fg); font-weight: 500; }
+.slicer-chip .slc-tier {
+  font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px;
+}
+.slicer-chip .slc-tier.det { background: color-mix(in oklch, var(--fg) 8%, transparent); color: var(--fg-mute); }
+.slicer-chip .slc-tier.model {
+  background: color-mix(in oklch, var(--sl-sig, var(--c-exec)) 16%, transparent);
+  color: color-mix(in oklch, var(--sl-sig, var(--c-exec)) 80%, var(--fg));
+  text-transform: none; letter-spacing: 0;
+}
+
+/* ── slicer rail (trace viewer, under the minimap) ─────────────────── */
+.slicer-rail {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 8px 14px 9px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel, var(--surface));
+  margin-top: 8px;
+}
+.slicer-rail .sr-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.slicer-rail .sr-k {
+  font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fg-mute); flex: none;
+}
+
+/* the leading slice title — tracks the focused / hovered / selected slice.
+   Container query drops the span, then the type text, before anything can
+   collide with the minor info on the right. */
+.slicer-rail .sr-title {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-width: 0; flex: 1 1 auto;
+  overflow: hidden;
+  container-type: inline-size;
+}
+.slicer-rail .sr-title-t {
+  flex: none;
+  font-size: 10px; font-weight: 600; color: var(--fg);
+  padding: 1px 7px; border-radius: 999px;
+  border: 1px solid color-mix(in oklch, var(--sl-sig, var(--fg)) 40%, transparent);
+  background: color-mix(in oklch, var(--sl-sig, var(--fg)) 12%, transparent);
+}
+.slicer-rail .sr-title-lbl {
+  font-size: 12.5px; font-weight: 500; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.slicer-rail .sr-title-span { flex: none; font-size: 10px; color: var(--fg-mute); }
+.slicer-rail .sr-title.off .sr-title-lbl { color: var(--fg-mute); font-weight: 400; }
+@container (max-width: 340px) {
+  .slicer-rail .sr-title-span { display: none; }
+}
+@container (max-width: 250px) {
+  .slicer-rail .sr-title-type { display: none; }
+}
+
+/* type chip in the title row */
+.slicer-rail .sr-title-type {
+  display: inline-flex; align-items: center; gap: 4px;
+  flex: none;
+  font-size: 10px; color: var(--fg-mute);
+  padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.slicer-rail .sr-title-type svg { color: color-mix(in oklch, var(--sl-sig, var(--fg)) 80%, var(--fg)); }
+
+/* minor info — slicer library + model, right-aligned */
+.slicer-rail .sr-minor {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex: none; margin-left: auto;
+  font-size: 10px; color: var(--fg-mute); white-space: nowrap;
+}
+.slicer-rail .sr-minor-name { color: var(--fg); }
+.slicer-rail .sr-minor-sep { opacity: 0.5; }
+
+/* the ONE applied slicer */
+.slicer-rail .sr-current {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid color-mix(in oklch, var(--sl-sig, var(--fg)) 34%, transparent);
+  background: color-mix(in oklch, var(--sl-sig, var(--fg)) 10%, transparent);
+  font-size: 11px; color: var(--fg); flex: none;
+}
+.slicer-rail .sr-current.off { border-color: var(--border); background: none; color: var(--fg-mute); }
+.slicer-rail .sr-opt-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--sl-sig, var(--fg-mute)); }
+.slicer-rail .sr-cur-name { font-weight: 500; }
+.slicer-rail .sr-cur-model { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--fg-mute); }
+.slicer-rail .sr-cur-det {
+  font-size: 8.5px; letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px;
+  background: color-mix(in oklch, var(--fg) 8%, transparent); color: var(--fg-mute);
+}
+.slicer-rail .sr-origin {
+  font-size: 8.5px; letter-spacing: 0.05em; text-transform: uppercase;
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+  color: var(--fg-mute); flex: none;
+}
+.slicer-rail .sr-attr { margin-left: auto; font-size: 10.5px; color: var(--fg-mute); white-space: nowrap; }
+.slicer-rail .sr-attr .mono { color: var(--fg); }
+.slicer-rail .sr-attr-rt {
+  font-size: 8.5px; letter-spacing: 0.05em; text-transform: uppercase;
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
+  color: var(--fg-mute);
+}
+
+/* re-slice menu */
+.slicer-rail .sr-menu-wrap { position: relative; flex: none; }
+.slicer-rail .sr-reslice {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: none; border-radius: 999px;
+  padding: 3px 10px; font: inherit; font-size: 10.5px; color: var(--fg-mute);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.slicer-rail .sr-reslice:hover { color: var(--fg); border-color: var(--fg-mute); }
+.slicer-rail .sr-menu { position: absolute; left: auto; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 240px; max-height: min(46vh, 420px); overflow: auto; transform-origin: top right; }
+/* while the menu is open, lift the sticky header's stacking context so the
+   dropdown paints above the trail's sticky grid-head (which occluded it) */
+.trace-sticky:has(.sr-menu) { z-index: 30; }
+.slicer-rail .sr-mi-dot { width: 7px; height: 7px; border-radius: 999px; flex: none; margin-right: 8px; }
+.slicer-rail .sr-menu .mi-sub { display: block; font-size: 9.5px; color: var(--fg-mute); }
+.slicer-rail .sr-menu-foot {
+  font-size: 10px; color: var(--fg-mute);
+  padding: 7px 12px; border-top: 1px solid var(--border);
+}
+
+/* slice band — the trace cut into trajectories.
+   Long traces: hovering a slice "zooms" it (elastic flex-grow) while the
+   siblings compress; when a slice is too narrow for its name, container
+   queries fall back to span, then to the bare T identifier. */
+.slicer-rail .sr-band { display: flex; gap: 3px; min-width: 0; }
+.slicer-rail .sr-seg {
+  --seg-bg: color-mix(in oklch, var(--sl-sig) 9%, transparent);
+  position: relative;
+  flex-grow: var(--w, 1); flex-basis: 0; flex-shrink: 1;
+  min-width: 8px; min-height: 22px; overflow: hidden;
+  container-type: inline-size;
+  border: 1px solid color-mix(in oklch, var(--sl-sig) 26%, var(--border));
+  border-radius: 7px;
+  background: var(--seg-bg);
+  padding: 0;
+  font: inherit; text-align: left; cursor: pointer;
+  transition:
+    flex-grow 520ms cubic-bezier(0.3, 1.35, 0.45, 1),
+    background 120ms ease, opacity 140ms ease, border-color 120ms ease;
+}
+.slicer-rail .sr-seg.alt { --seg-bg: color-mix(in oklch, var(--sl-sig) 16%, transparent); }
+.slicer-rail .sr-seg:hover { border-color: color-mix(in oklch, var(--sl-sig) 55%, transparent); }
+.slicer-rail .sr-seg.on {
+  background: color-mix(in oklch, var(--sl-sig) 24%, transparent);
+  border-color: color-mix(in oklch, var(--sl-sig) 70%, transparent);
+}
+.slicer-rail .sr-seg.dim { opacity: 0.38; }
+/* the elastic zoom: hovered (or selected, or spine-hovered) slice expands */
+.slicer-rail .sr-band .sr-seg:hover,
+.slicer-rail .sr-band .sr-seg.hov,
+.slicer-rail .sr-band .sr-seg.on { flex-grow: calc(var(--w, 1) + 220); }
+.slicer-rail .sr-seg.hov { border-color: color-mix(in oklch, var(--sl-sig) 55%, transparent); }
+/* selected slice reads as liquid glass */
+.slicer-rail .sr-seg.on {
+  background: var(--lg-glass, color-mix(in oklch, var(--sl-sig) 20%, transparent));
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: inset 0 1px 0 color-mix(in oklch, white 24%, transparent);
+}
+
+.slicer-rail .sr-seg-in {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; min-width: 0; white-space: nowrap;
+}
+.slicer-rail .sr-seg-ico {
+  flex: none; display: inline-flex; align-items: center;
+  color: color-mix(in oklch, var(--sl-sig, var(--fg)) 65%, var(--fg-mute));
+}
+.slicer-rail .sr-seg:hover .sr-seg-ico,
+.slicer-rail .sr-seg.on .sr-seg-ico { color: color-mix(in oklch, var(--sl-sig, var(--fg)) 85%, var(--fg)); }
+.slicer-rail .sr-seg-t { font-size: 10px; font-weight: 500; color: var(--fg); flex: none; }
+.slicer-rail .sr-seg-span { font-size: 9.5px; color: var(--fg-mute); flex: none; }
+.slicer-rail .sr-seg-lbl {
+  font-size: 10.5px; color: var(--fg-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.slicer-rail .sr-seg.on .sr-seg-lbl { color: var(--fg); }
+/* unselect affordance on the active slice */
+.slicer-rail .sr-seg-x {
+  margin-left: auto; flex: none;
+  font-size: 11px; line-height: 1;
+  color: var(--fg-mute);
+  padding: 0 2px;
+}
+.slicer-rail .sr-seg.on:hover .sr-seg-x { color: var(--fg); }
+/* progressive fallback: full → drop label → drop span → SYMBOLIC (glyph
+   only) — the minimised band reads as a row of task-type symbols that
+   populate with text on hover / navigation (elastic expand). */
+@container (max-width: 150px) {
+  .slicer-rail .sr-seg-lbl { display: none; }
+}
+@container (max-width: 96px) {
+  .slicer-rail .sr-seg-span { display: none; }
+}
+@container (max-width: 56px) {
+  .slicer-rail .sr-seg-t { display: none; }
+  .slicer-rail .sr-seg-in { justify-content: center; padding: 4px 0; }
+}
+/* only below icon width does it become a bare sliver */
+@container (max-width: 17px) {
+  .slicer-rail .sr-seg-in { display: none; }
+}
+
+/* active-slice scope line */
+.slicer-rail .sr-scope {
+  display: flex; align-items: center; gap: 9px; min-width: 0;
+  padding-top: 7px; border-top: 1px dashed var(--border);
+  font-size: 11px; color: var(--fg-mute);
+}
+.slicer-rail .sr-scope-t { color: var(--fg); font-weight: 500; }
+.slicer-rail .sr-scope-lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; color: var(--fg); }
+.slicer-rail .sr-clear {
+  margin-left: auto; flex: none;
+  border: 1px solid var(--border); background: none; border-radius: 6px;
+  padding: 2px 8px; font: inherit; font-size: 10.5px; color: var(--fg-mute); cursor: pointer;
+}
+.slicer-rail .sr-clear:hover { color: var(--fg); border-color: var(--fg-mute); }
+.slicer-rail .sr-clear .mono { opacity: 0.6; margin-left: 2px; }
+
+/* collapse the band when the sticky trace header is compacted (scrolled) —
+   the minimap keeps showing slice zones + scope dimming. */
+.trace-sticky[data-compact="true"] .slicer-rail .sr-band { display: none; }
+.trace-sticky[data-compact="true"] .slicer-rail { padding-top: 6px; padding-bottom: 6px; }
+
+/* minimap slice zones — selection = the whole container slice ELEVATES:
+   a liquid-glass pane lifts off the card (rise animation with a soft
+   overshoot), its steps rise with it, everything else dims below. On
+   deselect the same path plays back down (transition covers both ways). */
+.minimap .seg {
+  position: relative; z-index: 1;
+  transition: opacity 220ms ease, filter 220ms ease, transform 300ms cubic-bezier(0.34, 1.45, 0.5, 1);
+}
+.minimap .cursor { z-index: 3; }
+.minimap .slice-zone {
+  position: absolute; top: -12px; bottom: -12px; z-index: 0;
+  border-radius: 0;
+  background: transparent;
+  border-left: 1px solid color-mix(in oklch, var(--sl-sig, var(--fg)) 14%, transparent);
+  pointer-events: none;
+  /* both directions animate: rise on select, settle on deselect */
+  transition:
+    transform 320ms cubic-bezier(0.34, 1.45, 0.5, 1),
+    background 220ms ease,
+    box-shadow 320ms ease,
+    border-radius 220ms ease;
+  transform: translateY(0) scale(1);
+}
+.minimap .slice-zone.first { border-left: none; }
+/* current slice (contains the focused step) — lit while navigating */
+.minimap .slice-zone.cur {
+  background: color-mix(in oklch, var(--sl-sig, var(--fg)) 6%, transparent);
+  border-left-color: color-mix(in oklch, var(--sl-sig, var(--fg)) 42%, transparent);
+  box-shadow:
+    inset -1px 0 0 color-mix(in oklch, var(--sl-sig, var(--fg)) 42%, transparent),
+    inset 0 1px 0 color-mix(in oklch, white 10%, transparent);
+}
+/* hover: faint glass preview, no lift yet — and its cut lines firm up */
+.minimap .slice-zone.hov {
+  background: color-mix(in oklch, var(--sl-sig, var(--fg)) 7%, transparent);
+  border-left-color: color-mix(in oklch, var(--sl-sig, var(--fg)) 50%, transparent);
+  box-shadow:
+    inset -1px 0 0 color-mix(in oklch, var(--sl-sig, var(--fg)) 50%, transparent),
+    inset 0 1px 0 color-mix(in oklch, white 12%, transparent);
+}
+/* selected: firm edge-to-edge glass fill — flush with the card, no lift */
+.minimap .slice-zone.on {
+  z-index: 2;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklch, var(--sl-sig, var(--fg)) 16%, transparent),
+    color-mix(in oklch, var(--sl-sig, var(--fg)) 9%, transparent)
+  );
+  -webkit-backdrop-filter: blur(10px) saturate(1.3);
+  backdrop-filter: blur(10px) saturate(1.3);
+  border-left-color: transparent;
+  box-shadow:
+    inset 1px 0 0 color-mix(in oklch, var(--sl-sig, var(--fg)) 55%, transparent),
+    inset -1px 0 0 color-mix(in oklch, var(--sl-sig, var(--fg)) 55%, transparent),
+    inset 0 1px 0 color-mix(in oklch, white 22%, transparent);
+}
+/* steps inside the selection stay at full strength… */
+.minimap .seg.in-slice { z-index: 2; }
+/* …while the rest dim below (selection dims hard, hover dims gently) */
+.minimap .seg.out-of-slice { opacity: 0.28; filter: saturate(0.45); }
+.minimap .seg.dim-hov { opacity: 0.45; filter: saturate(0.6); }
+/* first/last slices bleed into the card's side padding so the outer edges
+   of the selection meet the card border — and wrap its rounded corners so
+   the highlight reads continuous with the card shape */
+.minimap .slice-zone.first { margin-left: -14px; padding-left: 14px; box-sizing: content-box; }
+.minimap .slice-zone.last { margin-right: 0; padding-right: 14px; box-sizing: content-box; }
+.minimap .slice-zone.first.hov,
+.minimap .slice-zone.first.cur,
+.minimap .slice-zone.first.on {
+  border-top-left-radius: var(--radius, 14px);
+  border-bottom-left-radius: var(--radius, 14px);
+}
+.minimap .slice-zone.last.hov,
+.minimap .slice-zone.last.cur,
+.minimap .slice-zone.last.on {
+  border-top-right-radius: var(--radius, 14px);
+  border-bottom-right-radius: var(--radius, 14px);
+}
+
+/* trail + conversation rows outside the active slice */
+.tj-row[data-outslice] { opacity: 0.22; filter: saturate(0.4); }
+.tj-row[data-outslice]:hover { opacity: 0.6; filter: none; }
+.conv-stream .out-of-slice { opacity: 0.25; filter: saturate(0.4); }
+.conv-stream .out-of-slice:hover { opacity: 0.65; filter: none; }
+
+/* slice divider rows inside the trail timeline — the slicer's cuts,
+   carried into the step-by-step visualization. Click scopes the slice. */
+.tj-slice-div {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; min-width: 0;
+  border: 0; background: none; cursor: pointer;
+  padding: 16px 0 8px; margin: 0;
+  font: inherit; text-align: left;
+}
+.tj-slice-div .tsd-t {
+  flex: none;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--bg, #fff);
+  padding: 2px 9px; border-radius: 999px;
+  background: color-mix(in oklch, var(--sl-sig, var(--fg)) 78%, var(--fg));
+  box-shadow: inset 0 1px 0 color-mix(in oklch, white 25%, transparent);
+}
+.tj-slice-div .tsd-lbl {
+  font-family: var(--font-ui, var(--font-sans, system-ui));
+  font-size: 12px; font-weight: 600; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tj-slice-div .tsd-span {
+  flex: none; font-size: 10px; color: var(--fg-mute);
+  padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--border);
+}
+.tj-slice-div .tsd-line {
+  flex: 1; height: 1px; min-width: 24px;
+  background: linear-gradient(to right, color-mix(in oklch, var(--sl-sig, var(--fg)) 45%, transparent), color-mix(in oklch, var(--sl-sig, var(--fg)) 8%, transparent));
+}
+.tj-slice-div:hover .tsd-lbl { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in oklch, var(--sl-sig, var(--fg)) 60%, transparent); }
+.tj-slice-div:hover .tsd-line { background: linear-gradient(to right, color-mix(in oklch, var(--sl-sig, var(--fg)) 70%, transparent), color-mix(in oklch, var(--sl-sig, var(--fg)) 15%, transparent)); }
+.tj-slice-div.on .tsd-t {
+  background: var(--sl-sig, var(--fg));
+  box-shadow:
+    0 0 0 2px color-mix(in oklch, var(--sl-sig, var(--fg)) 30%, transparent),
+    inset 0 1px 0 color-mix(in oklch, white 30%, transparent);
+}
+
+/* gutter marks: overlap-stack so multi-mark clusters stay within row height */
+.row-marks { gap: 0 !important; }
+.row-mark + .row-mark { margin-top: -5px; }
+
+/* ── capsule slice context (hub capsule detail) ────────────────────── */
+.cap-slice-ctx {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: color-mix(in oklch, var(--fg) 3%, transparent);
+  margin-bottom: 10px;
+}
+.cap-slice-ctx .csc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cap-slice-ctx .csc-k {
+  font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fg-mute);
+}
+.cap-slice-ctx .csc-span { margin-left: auto; font-size: 10.5px; color: var(--fg-mute); }
+.cap-slice-ctx .csc-track { display: flex; align-items: center; gap: 0; height: 14px; }
+.cap-slice-ctx .csc-ghost {
+  flex-basis: 0; height: 3px; border-radius: 3px;
+  background: color-mix(in oklch, var(--fg) 12%, transparent);
+}
+.cap-slice-ctx .csc-window {
+  flex-basis: 0; display: flex; gap: 1.5px; height: 14px;
+  padding: 0 2px;
+}
+.cap-slice-ctx .csc-window i { flex: 1 1 0; min-width: 1px; border-radius: 2px; }
+.cap-slice-ctx .csc-foot { font-size: 10.5px; color: var(--fg-mute); }
+
+/* ── dataset provenance ────────────────────────────────────────────── */
+.ds-slice-note {
+  font-size: 11px; color: var(--fg-mute);
+  margin: 4px 0 10px;
+}
+.ds-slice-note b { font-weight: 500; color: var(--fg); }
+.ds-slice-note .mono { color: var(--fg); }
+
+.ii-slice {
+  display: inline-flex; align-items: center; gap: 4px;
+  flex: none;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklch, var(--sl-sig, var(--c-user)) 32%, var(--border));
+  background: color-mix(in oklch, var(--sl-sig, var(--c-user)) 10%, transparent);
+  color: var(--fg-mute);
+  white-space: nowrap;
+}
+.ii-slice .iis-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--sl-sig, var(--c-user)); }
+.ii-slice .iis-total { opacity: 0.55; }

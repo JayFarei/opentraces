@@ -498,12 +498,21 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
   flex-shrink: 0;
 }
 
-/* Collapsed sidebar */
+/* Collapsed sidebar — 56px icon rail */
 .app-shell[data-sb="collapsed"] .sb-nav-item span:not(.icon),
-.app-shell[data-sb="collapsed"] .sb-tree,
-.app-shell[data-sb="collapsed"] .sb-global-search,
-.app-shell[data-sb="collapsed"] .wm,
-.app-shell[data-sb="collapsed"] .hub-tag { display: none; }
+.app-shell[data-sb="collapsed"] .sb-group-label,
+.app-shell[data-sb="collapsed"] .sidebar .wm,
+.app-shell[data-sb="collapsed"] .sidebar .hub-tag { display: none; }
+/* tree survives as one icon per group (Datasets / Projects / Artifacts) */
+.app-shell[data-sb="collapsed"] .sb-tree { padding: 8px 6px 8px; margin-top: 6px; border-top: 1px solid var(--border); }
+.app-shell[data-sb="collapsed"] .sb-section.flat.rail { margin-bottom: 0; }
+.app-shell[data-sb="collapsed"] .sb-section.flat.rail .sb-nav-item { justify-content: center; padding: 8px 0; width: 100%; }
+/* search survives as an icon-only ⌘K button */
+.app-shell[data-sb="collapsed"] .sb-global-search { padding: 10px 8px 4px; }
+.app-shell[data-sb="collapsed"] .sb-search-input { justify-content: center; padding: 0; }
+.app-shell[data-sb="collapsed"] .sb-search-ph,
+.app-shell[data-sb="collapsed"] .sb-kbd { display: none; }
+.app-shell[data-sb="collapsed"] .sb-nav-sub { padding-left: 6px; padding-right: 6px; }
 .app-shell[data-sb="collapsed"] .sb-brand {
   justify-content: center;
   padding: 14px 0;
@@ -748,12 +757,12 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 
 /* ─────────────  Main scroll area  ───────────── */
 .main {
-  /* @ot-embed-seam: topbar height reserved above the scroll area; 0 in embed
-     mode (set by _embed.css). The conversation scrollers subtract this + the
-     live sticky-header height so they grow as the header compacts on scroll. */
-  --main-chrome: 56px;
-  height: calc(100vh - var(--main-chrome));
+  height: calc(100vh - 56px);
   overflow-y: auto;
+  /* The compact header collapse shrinks content above the fold; browser
+   * scroll anchoring would yank scrollTop back across the hysteresis
+   * threshold and bounce the header open again. Own the scroll position. */
+  overflow-anchor: none;
   /* always reserve the scrollbar gutter so short pages (e.g. Spotlight) don't
    * shift the centered content sideways vs tall, scrolling pages */
   scrollbar-gutter: stable;
@@ -762,6 +771,10 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 .main-inner {
   padding: 16px 20px 24px 20px;
   max-width: 100%;
+  /* inline-size container so the trail timeline can shed column groups
+   * when the pane (not the window) gets narrow — e.g. beside a CLUI rail */
+  container-type: inline-size;
+  transition: padding var(--duration-base) var(--ease-out);
 }
 
 /* ─────────────  Sticky trace header + minimap + tabs  ───────────── */
@@ -772,6 +785,7 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
   background: var(--bg);
   margin: -16px -20px 12px -20px;
   padding: 16px 20px 0 20px;
+  transition: margin var(--duration-base) var(--ease-out);
 }
 .trace-sticky .trace-card { margin-bottom: 8px; }
 .trace-sticky .minimap-card { margin-bottom: 8px; }
@@ -1007,13 +1021,35 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-top: 14px;
+  margin-top: 18px;
   /* `clip` (not `hidden`) keeps the rounded-card clipping WITHOUT becoming a
    * scroll container — otherwise it would trap the grid-head's `position:sticky`
    * and the column header would scroll away instead of pinning. */
   overflow: clip;
   box-shadow: var(--shadow-card);
+  transition:
+    border-radius var(--duration-base) var(--ease-out),
+    border-color var(--duration-base) var(--ease-out),
+    margin var(--duration-base) var(--ease-out);
 }
+/* Compact hand-off: once the header minimizes, the active pane (trail
+ * or conversation) sheds its card inset and runs edge-to-edge; scrolling
+ * back up restores the framed card. */
+.main-inner[data-compact="true"] { padding-left: 0; padding-right: 0; }
+/* the sticky header escapes main-inner's padding with negative side
+ * margins — zero them in step with the padding so it doesn't overflow */
+.main-inner[data-compact="true"] .trace-sticky { margin-left: 0; margin-right: 0; margin-bottom: 0; }
+.main-inner[data-compact="true"] .viewport {
+  border-radius: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+  margin-top: 0;
+}
+/* Non-compact: the framed card gets breathing room below the tab-row line —
+ * both panes ease their content off the top edge; compact mode stays tight. */
+.main-inner:not([data-compact="true"]) .conv-main { padding-top: 28px; }
+.main-inner:not([data-compact="true"]) .conv-side { padding-top: 26px; }
+.main-inner:not([data-compact="true"]) .run-health { padding-top: 16px; }
 /* On the trail tab the timeline has a min-width (880px). Rather than give the
  * pane its own horizontal scroller (which would re-trap the sticky grid-head),
  * let the card grow to fit the timeline so the page scroller (.main, which
@@ -1060,6 +1096,15 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 }
 .timeline { font-family: var(--font-mono); font-size: 11.5px; min-width: 880px; }
 .trajectory-grid-cols { display: grid; }
+/* Column template (kept in CSS so container queries below can reshape it) */
+.trajectory-grid-cols, .tj-row {
+  grid-template-columns:
+    var(--col-rail) repeat(6, minmax(0, 1fr)) var(--col-git-sep)
+    var(--col-git-work) var(--col-git-local) var(--col-git-remote)
+    var(--col-git-sep) var(--col-telem) var(--col-telem) var(--col-telem) var(--col-telem);
+}
+/* Narrow-pane column shedding lives at the end of this file (container
+ * queries must cascade after the base .git-lane / .telem display rules). */
 
 /* Grid head */
 .grid-head {
@@ -1132,15 +1177,15 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 /* Miniature / condensed grid-head — pinned while scrolled. The group labels
  * (ACTIONS / GIT TREE / TELEMETRY) collapse away and the row tightens, leaving
  * a slim column header that stays put flush beneath the trace header. */
-.grid-head[data-compact="true"] .inner { padding: 7px 18px 7px 18px; }
-.grid-head[data-compact="true"] .group-row {
+.main-inner[data-compact="true"] .grid-head .inner { padding: 7px 18px 7px 18px; }
+.main-inner[data-compact="true"] .grid-head .group-row {
   max-height: 0;
   opacity: 0;
   padding-bottom: 0;
 }
-.grid-head[data-compact="true"] .col-row { padding-top: 0; }
-.grid-head[data-compact="true"] .hc { gap: 2px; }
-.grid-head[data-compact="true"] .hc-count { font-size: 12px; }
+.main-inner[data-compact="true"] .grid-head .col-row { padding-top: 0; }
+.main-inner[data-compact="true"] .grid-head .hc { gap: 2px; }
+.main-inner[data-compact="true"] .grid-head .hc-count { font-size: 12px; }
 
 /* Timeline body + rows */
 .timeline-body { padding: 6px 18px 18px 18px; }
@@ -1178,20 +1223,35 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 .tj-row .lane .node.exec .glyph { background: var(--c-exec); }
 .tj-row .lane .node.write .glyph { background: var(--c-write); }
 .tj-row .lane .node[data-error] .glyph { box-shadow: 0 0 0 2px color-mix(in oklch, var(--c-error) 40%, transparent); }
+/* label color follows the event type */
+.tj-row .lane .node.user { --node-c: var(--c-user); }
+.tj-row .lane .node.plan { --node-c: var(--c-plan); }
+.tj-row .lane .node.think { --node-c: var(--c-think); }
+.tj-row .lane .node.read { --node-c: var(--c-read); }
+.tj-row .lane .node.exec { --node-c: var(--c-exec); }
+.tj-row .lane .node.write { --node-c: var(--c-write); }
 .tj-row .lane .node-label {
-  margin-left: 8px;
   font-size: 10px;
-  color: var(--fg-dim);
-  background: color-mix(in oklch, var(--c-read) 18%, var(--surface-2));
-  border: 1px solid color-mix(in oklch, var(--c-read) 35%, transparent);
+  color: color-mix(in oklch, var(--node-c, var(--c-read)) 78%, var(--fg));
+  /* opaque — mixed over the page bg so it never clashes with rows beneath */
+  background: color-mix(in oklch, var(--node-c, var(--c-read)) 14%, var(--bg));
+  border: 1px solid color-mix(in oklch, var(--node-c, var(--c-read)) 38%, var(--bg));
   border-radius: 3px;
   padding: 1px 5px;
   white-space: nowrap;
-  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+  /* stays on the node's own line, beside the glyph */
+  position: absolute; left: 14px; top: 50%; bottom: auto; transform: translateY(-50%);
   pointer-events: none;
   opacity: 0;
+  z-index: 6;
 }
-.tj-row.focused .lane .node-label { opacity: 1; }
+/* right-side lanes (exec, write) flip the label to the left so it stays
+   clear of the git lanes and remains fully visible */
+.tj-row .lane[data-cell-class="exec"] .node-label,
+.tj-row .lane[data-cell-class="write"] .node-label {
+  left: auto; right: 16px;
+}
+.tj-row.focused .lane .node > .node-label { opacity: 1; }
 
 .tj-row .sep { width: 100%; }
 
@@ -1295,13 +1355,14 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
   padding: 20px 28px 80px 28px;
   border-right: 1px solid var(--border);
   overflow-y: auto;
-  max-height: calc(100vh - var(--main-chrome, 56px) - var(--gh-top, 396px));
+  overflow-anchor: none;
+  max-height: calc(100vh - 280px);
 }
 .conv-side {
   padding: 18px 16px;
   display: flex; flex-direction: column; gap: 18px;
   overflow-y: auto;
-  max-height: calc(100vh - var(--main-chrome, 56px) - var(--gh-top, 396px));
+  max-height: calc(100vh - 280px);
 }
 
 /* Conversation messages */
@@ -1459,24 +1520,32 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 }
 .tool-group-toggle:hover { color: var(--fg-dim); }
 
-/* Checkpoint divider */
+/* Checkpoint divider — contained card so it doesn't run hard lines through
+ * the conversation; token-mixed so it reads correctly in both themes */
 .checkpoint {
   display: grid;
   grid-template-columns: 28px 1fr auto;
   align-items: center;
   gap: 14px;
-  padding: 14px 0;
-  margin: 8px 0;
-  border-top: 1px solid color-mix(in oklch, var(--c-git) 35%, var(--border));
-  border-bottom: 1px solid color-mix(in oklch, var(--c-git) 35%, var(--border));
-  background: linear-gradient(90deg, color-mix(in oklch, var(--c-git) 8%, transparent), transparent 60%);
+  padding: 12px 16px;
+  margin: 18px 0;
+  border: 1px solid color-mix(in oklch, var(--c-git) 26%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--c-git) 7%, var(--surface));
+}
+html[data-theme="light"] .checkpoint {
+  border-color: color-mix(in oklch, var(--c-git) 22%, var(--border));
+  background: color-mix(in oklch, var(--c-git) 5%, var(--surface));
 }
 .checkpoint .cp-icon {
   width: 22px; height: 22px;
-  border-radius: 5px;
+  border-radius: 6px;
   background: color-mix(in oklch, var(--c-git) 22%, var(--surface));
   color: var(--c-git);
   display: inline-flex; align-items: center; justify-content: center;
+}
+html[data-theme="light"] .checkpoint .cp-icon {
+  background: color-mix(in oklch, var(--c-git) 14%, var(--surface));
 }
 .checkpoint .cp-mid { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .checkpoint .cp-subject {
@@ -1547,6 +1616,11 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 .filter-item .checkbox.checked {
   background: var(--fg);
   border-color: var(--fg);
+}
+/* light mode: solid near-black fills are too heavy — soften to mid slate */
+html[data-theme="light"] .filter-item .checkbox.checked {
+  background: color-mix(in oklch, var(--fg) 58%, var(--surface));
+  border-color: color-mix(in oklch, var(--fg) 58%, var(--surface));
 }
 .filter-item .checkbox.checked::after {
   content: "";
@@ -1714,3 +1788,109 @@ button.sb-search-input { width: 100%; cursor: pointer; text-align: left; }
 .breadcrumb { overflow: hidden; }
 .breadcrumb .bc-item { white-space: nowrap; }
 .breadcrumb .bc-item.current { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* ─────────────  Breadcrumb-driven nav (Liquid topbar)  ─────────────
+ * The breadcrumb is the router: history ‹ › on the left (always present, so
+ * the bar never shifts), every segment clickable, sibling switchers (⌄) on
+ * segments that have peers. */
+.tb-hist { display: flex; align-items: center; gap: 0; flex-shrink: 0; margin-right: 4px; }
+.tb-hist-btn {
+  width: 26px; height: 26px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--fg-dim);
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.tb-hist-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+.tb-hist-btn:disabled { color: var(--fg-sub); cursor: default; }
+
+/* Menus are absolutely positioned off segments — the nav must not clip them.
+ * Long labels still shrink via .bc-lbl ellipsis instead. */
+.breadcrumb.bc-nav { overflow: visible; }
+.bc-seg { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.bc-seg .bc-item { min-width: 0; }
+.bc-seg .bc-lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-seg-icon { color: var(--fg-mute); flex-shrink: 0; }
+.bc-caret-in { color: var(--fg-mute); flex-shrink: 0; margin: 1px -2px 0 -2px; transition: transform var(--duration-fast); }
+.bc-seg[data-open="true"] .bc-caret-in { transform: rotate(180deg); }
+.bc-item.has-menu:hover .bc-caret-in { color: var(--fg-dim); }
+.bc-caret {
+  width: 17px; height: 22px; margin-left: -1px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 5px; color: var(--fg-mute);
+  opacity: 0;
+  transition: opacity var(--duration-fast), background var(--duration-fast), color var(--duration-fast);
+}
+.bc-seg:hover .bc-caret, .bc-caret:focus-visible, .bc-caret[data-open="true"] { opacity: 1; }
+.bc-caret:hover, .bc-caret[data-open="true"] { background: var(--surface-2); color: var(--fg); }
+
+.bc-menu {
+  position: absolute; top: calc(100% + 9px); left: -4px;
+  min-width: 216px; max-height: min(60vh, 480px); overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px -8px color-mix(in oklch, var(--fg) 30%, transparent),
+              0 2px 6px -2px color-mix(in oklch, var(--fg) 22%, transparent);
+  padding: 5px;
+  z-index: 90;
+  transform-origin: top left;
+  animation: bc-menu-pop 140ms var(--ease-out);
+}
+.bc-menu.wide { min-width: 280px; }
+.bc-menu { max-width: min(360px, calc(100vw - 24px)); }
+.bc-menu.flip { left: auto; right: -4px; transform-origin: top right; }
+@keyframes bc-menu-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+.bc-menu-group + .bc-menu-group { border-top: 1px solid var(--border); margin-top: 5px; padding-top: 3px; }
+.bc-menu-glabel {
+  font-size: 10.5px; font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--fg-mute);
+  padding: 7px 8px 4px;
+}
+.bc-menu-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px; color: var(--fg-dim);
+  text-align: left; white-space: nowrap;
+}
+.bc-menu-item:hover { background: var(--surface-2); color: var(--fg); }
+.bc-menu-item[aria-current="true"] { color: var(--fg); }
+.bc-menu-item .mi-icon { color: var(--fg-mute); flex-shrink: 0; }
+.bc-menu-item .mi-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bc-menu-item .mi-sub { color: var(--fg-mute); }
+.bc-menu-item .mi-right { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; padding-left: 14px; flex-shrink: 0; }
+.bc-menu-item .mi-meta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-mute); }
+.bc-menu-item .mi-check { display: inline-flex; color: var(--fg); }
+
+/* ─────────────  Trail: narrow-pane column shedding  ─────────────
+ * .main-inner is an inline-size container; when the trace pane (not the
+ * window) narrows, the timeline sheds column groups instead of forcing a
+ * horizontal scroll. Kept last so display:none outranks the base rules. */
+/* Drop the telemetry group first… */
+@container (max-width: 960px) {
+  .grid-head .gh.tel, .grid-head .gh.sep-tel,
+  .grid-head .hc.sep-tel, .grid-head .hc.tel-col,
+  .tj-row .sep.sep-tel, .tj-row .telem { display: none; }
+  /* the shed timeline now fits the pane — no max-content overflow */
+  .viewport[data-tab="trail"] { width: auto; }
+  .trajectory-grid-cols, .tj-row {
+    grid-template-columns:
+      var(--col-rail) repeat(6, minmax(0, 1fr)) var(--col-git-sep)
+      var(--col-git-work) var(--col-git-local) var(--col-git-remote);
+  }
+  .timeline { min-width: 560px; }
+}
+/* …then the git tree, leaving rail + action lanes */
+@container (max-width: 660px) {
+  .grid-head .gh.git, .grid-head .gh.sep-git,
+  .grid-head .hc.sep-git, .grid-head .hc.g-working, .grid-head .hc.g-local, .grid-head .hc.g-remote,
+  .tj-row .sep.sep-git, .tj-row .git-lane { display: none; }
+  .trajectory-grid-cols, .tj-row {
+    grid-template-columns: var(--col-rail) repeat(6, minmax(0, 1fr));
+  }
+  .timeline { min-width: 0; }
+}
+

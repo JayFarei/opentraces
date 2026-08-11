@@ -5,11 +5,9 @@
 const CMD_PAGES = [
   { id: "traces",    label: "Overview",       hint: "All traces ledger",        icon: "grid",        kind: "nav" },
   { id: "spotlight", label: "Spotlight",      hint: "AI-graded trace search",   icon: "sparkles",    kind: "nav" },
-  { id: "intents",   label: "Intents",        hint: "Clustered intentions",     icon: "tag",         kind: "nav" },
-  { id: "evals",     label: "Evals",          hint: "Scored eval runs",         icon: "shield",      kind: "nav" },
-  { id: "capsules",  label: "Capsules",       hint: "Shared trace capsules",    icon: "capsule",     kind: "nav" },
+  { id: "boxes",     label: "Boxes & AI",     hint: "Box leases & AI credit usage", icon: "box",  kind: "nav" },
+  { id: "capsules",  label: "Capsules",       hint: "Sealed runs that travel — witness-first", icon: "capsule", kind: "nav" },
   { id: "alerts",    label: "Alerts",         hint: "Triggers & notifications", icon: "bell",        kind: "nav" },
-  { id: "improving", label: "Self-Improving", hint: "Auto-heal jobs",           icon: "heart-pulse", kind: "nav" },
   { id: "compare",   label: "Compare traces", hint: "Side-by-side diff",        icon: "trail",       kind: "compare" },
 ];
 
@@ -40,7 +38,7 @@ function CmdRow({ item, idx, active, onHover, onRun }) {
   );
 }
 
-function CommandPalette({ open, onClose, actions }) {
+function CommandPaletteV2({ open, onClose, actions }) {
   const [query, setQuery] = React.useState("");
   const [mode, setMode] = React.useState("all"); // 'all' | 'spotlight'
   const [active, setActive] = React.useState(0);
@@ -285,4 +283,4 @@ function CommandPalette({ open, onClose, actions }) {
   );
 }
 
-window.CommandPalette = CommandPalette;
+window.CommandPaletteV2 = CommandPaletteV2;

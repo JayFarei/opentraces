@@ -977,10 +977,10 @@
 
 /* table shell */
 .ct-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-card); }
-.ct-table { --ct-cols: 28px minmax(208px, 1.7fr) 168px 124px 150px 178px 94px 76px 46px; min-width: 1040px; }
+.ct-table { --ct-cols: 22px minmax(150px, 1.4fr) 112px 90px 116px 124px 96px 124px; min-width: 944px; }
 
 /* header */
-.ct-head-row { display: grid; grid-template-columns: var(--ct-cols); align-items: center; gap: 16px; padding: 0 16px; height: 40px; border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--surface-2) 55%, var(--surface)); position: sticky; top: 0; z-index: 2; }
+.ct-head-row { display: grid; grid-template-columns: var(--ct-cols); align-items: center; gap: 12px; padding: 0 16px; height: 40px; border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--surface-2) 55%, var(--surface)); position: sticky; top: 0; z-index: 2; }
 .cth { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-mute); font-family: inherit; background: none; padding: 0; }
 .cth.cth-views, .cth.cth-verdict { justify-content: flex-start; }
 .cth.sortable { cursor: pointer; }
@@ -994,7 +994,7 @@
 .ct-rowgroup { border-bottom: 1px solid color-mix(in oklch, var(--border) 70%, transparent); }
 .ct-rowgroup:last-child { border-bottom: 0; }
 .ct-rowgroup.open { background: color-mix(in oklch, var(--surface-2) 40%, var(--surface)); }
-.ct-row { display: grid; grid-template-columns: var(--ct-cols); align-items: center; gap: 16px; padding: 0 16px; min-height: 66px; cursor: pointer; position: relative; transition: background var(--duration-fast) var(--ease-out); }
+.ct-row { display: grid; grid-template-columns: var(--ct-cols); align-items: center; gap: 12px; padding: 0 16px; min-height: 66px; cursor: pointer; position: relative; transition: background var(--duration-fast) var(--ease-out); }
 .ct-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
 .ct-row.on-error::before { background: var(--c-error); }
 .ct-row.on-git::before { background: var(--c-git); }
@@ -1055,16 +1055,25 @@
 .ct-by-name { font-size: 12.5px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ct-by-sub { font-size: 9.5px; color: var(--fg-mute); }
 
-/* when + views */
+/* when + views (views folded under the date to save a column) */
+.ct-cell-when { flex-direction: column; align-items: flex-start; gap: 2px; }
 .ct-when { font-size: 12px; color: var(--fg-mute); white-space: nowrap; }
+.ct-when-views { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 10px; color: var(--fg-sub); }
+.ct-when-views svg { color: var(--fg-sub); }
 .ct-views { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-mute); }
 .ct-views svg { color: var(--fg-sub); }
 
 /* actions */
-.ct-cell-act { justify-content: flex-end; }
+.ct-cell-act { justify-content: flex-end; gap: 4px; }
 .ct-iconbtn { width: 30px; height: 30px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; color: var(--fg-mute); background: transparent; border: 1px solid transparent; opacity: 0; transition: all var(--duration-fast) var(--ease-out); }
 .ct-row:hover .ct-iconbtn, .ct-rowgroup.open .ct-iconbtn { opacity: 1; }
 .ct-iconbtn:hover { background: var(--surface-2); color: var(--c-read); border-color: var(--border); }
+/* Preview: the logged-out public-page affordance — a clear, always-visible
+ * labeled button on shared-by-me rows so it never hides behind a hover hunt. */
+.ct-preview-btn { display: inline-flex; align-items: center; gap: 6px; height: 29px; padding: 0 11px; border-radius: 8px; font-family: inherit; font-size: 11.5px; font-weight: 500; white-space: nowrap; color: color-mix(in oklch, var(--c-read) 88%, var(--fg)); border: 1px solid color-mix(in oklch, var(--c-read) 30%, var(--border)); background: color-mix(in oklch, var(--c-read) 9%, var(--surface)); transition: all var(--duration-fast) var(--ease-out); }
+.ct-preview-btn svg { transition: transform var(--duration-fast) var(--ease-out); }
+.ct-preview-btn:hover { background: color-mix(in oklch, var(--c-read) 17%, var(--surface)); border-color: color-mix(in oklch, var(--c-read) 46%, var(--border)); }
+.ct-preview-btn:hover svg { transform: translate(1px, -1px); }
 
 /* ── expansion ── */
 .ct-exp { border-top: 1px solid var(--border); background: color-mix(in oklch, var(--bg) 35%, var(--surface)); animation: fade-in var(--duration-base) var(--ease-out); }
@@ -1189,6 +1198,9 @@
 .cx-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 47px; border-top: 1px solid var(--border); }
 .cx-foot-cid { font-size: 11px; color: var(--fg-mute); }
 .cx-foot-actions { display: inline-flex; gap: 8px; }
+.cap-btn.sm.cx-foot-preview { margin-right: auto; color: color-mix(in oklch, var(--c-read) 88%, var(--fg)); border-color: color-mix(in oklch, var(--c-read) 32%, var(--border)); background: color-mix(in oklch, var(--c-read) 10%, var(--surface)); }
+.cap-btn.sm.cx-foot-preview:hover { background: color-mix(in oklch, var(--c-read) 18%, var(--surface)); border-color: color-mix(in oklch, var(--c-read) 48%, var(--border)); color: var(--fg); }
+.cx-foot { flex-wrap: wrap; }
 
 /* ───────────────  Responsive  ─────────────── */
 @media (max-width: 1100px) {

@@ -12,6 +12,7 @@ const DATASET_COLORS = {
   "edge-traces":      "var(--c-write)",
   "rag-fixtures":     "var(--c-exec)",
   "shortcuts-bench":  "var(--c-user)",
+  ...(window.ORG_DATASET_COLORS || {}),
 };
 
 const REPO_COLORS = {
@@ -21,6 +22,7 @@ const REPO_COLORS = {
   "jayfarei/clarify":        "var(--c-exec)",
   "jayfarei/open-data":      "var(--c-git)",
   "jayfarei/koreader-kiosk": "var(--c-user)",
+  ...(window.ORG_REPO_COLORS || {}),
 };
 
 function ProjectTokenDistribution() {
@@ -198,30 +200,75 @@ function ProjectTokenLeaderboard() {
   );
 }
 
-function ContributionHeatmap({ data, mode, onMode }) {
+// Shared store for the heatmap cell-fill algorithm — the Tweaks panel writes
+// to it, the heatmap reads it. Persisted so the choice survives reloads.
+window.HmView = window.HmView || (function () {
+  let fill = "weave";
+  try { fill = localStorage.getItem("ot-hm-fill") || "weave"; } catch (e) {}
+  let state = { fill };
+  const subs = new Set();
+  return {
+    get: () => state,
+    set(patch) {
+      state = { ...state, ...patch };
+      try { localStorage.setItem("ot-hm-fill", state.fill); } catch (e) {}
+      subs.forEach((f) => f(state));
+    },
+    sub(f) { subs.add(f); return () => subs.delete(f); },
+  };
+})();
+function useHmView() {
+  const [s, setS] = React.useState(window.HmView.get());
+  React.useEffect(() => window.HmView.sub(setS), []);
+  return s;
+}
+window.useHmView = useHmView;
+
+function ContributionHeatmap({ data, mode, onMode, onSelectDay, selectedDay }) {
   const max = React.useMemo(() => {
     let m = 0;
     data.forEach(w => w.forEach(c => { if (c.count > m) m = c.count; }));
     return m;
   }, [data]);
 
-  const cellStyle = (cell) => {
+  const hmv = useHmView();
+
+  // Compose a cell background from the day's per-project (or per-dataset)
+  // proportions. Hard-stop gradients keep each color's share readable;
+  // the per-cell index seeds the orientation so the field feels hand-set
+  // rather than mechanical.
+  const compose = (ents, palette, intensity, idx) => {
+    const totalN = ents.reduce((a, e) => a + e[1], 0) || 1;
+    const cols = ents.map(([name, n]) => ({
+      c: `color-mix(in oklch, ${palette[name] || "var(--c-git)"} ${25 + intensity * 65}%, var(--surface))`,
+      f: n / totalN,
+    }));
+    if (cols.length === 1 || hmv.fill === "solo") return { background: cols[0].c };
+    let acc = 0;
+    const stops = cols.map(({ c, f }) => {
+      const from = acc * 100; acc += f;
+      return `${c} ${from.toFixed(1)}% ${(acc * 100).toFixed(1)}%`;
+    }).join(", ");
+    if (hmv.fill === "weave")  return { background: `linear-gradient(${idx % 2 ? 135 : 45}deg, ${stops})` };
+    if (hmv.fill === "bands")  return { background: `linear-gradient(180deg, ${stops})` };
+    if (hmv.fill === "radial") return { background: `conic-gradient(from ${(idx * 47) % 360}deg, ${stops})` };
+    return { background: cols[0].c };
+  };
+
+  const cellStyle = (cell, idx) => {
     if (cell.count === 0) return { background: "color-mix(in oklch, var(--fg) 6%, transparent)" };
     const intensity = Math.min(1, cell.count / max);
     if (mode === "byRepo") {
-      const dominant = Object.entries(cell.repos).sort((a,b) => b[1]-a[1])[0]?.[0];
-      const color = REPO_COLORS[dominant] || "var(--c-git)";
-      return { background: `color-mix(in oklch, ${color} ${20 + intensity * 70}%, var(--surface))` };
+      const ents = Object.entries(cell.repos).sort((a, b) => b[1] - a[1]);
+      return compose(ents, REPO_COLORS, intensity, idx);
     }
     if (mode === "byDataset") {
-      const ents = Object.entries(cell.datasets || {});
+      const ents = Object.entries(cell.datasets || {}).sort((a, b) => b[1] - a[1]);
       if (ents.length === 0) {
         // traces with no dataset attribution — desaturated
         return { background: `color-mix(in oklch, var(--fg-mute) ${15 + intensity * 30}%, var(--surface))` };
       }
-      const dominant = ents.sort((a,b) => b[1]-a[1])[0]?.[0];
-      const color = DATASET_COLORS[dominant] || "var(--c-git)";
-      return { background: `color-mix(in oklch, ${color} ${20 + intensity * 70}%, var(--surface))` };
+      return compose(ents, DATASET_COLORS, intensity, idx);
     }
     return { background: `color-mix(in oklch, var(--c-git) ${15 + intensity * 75}%, var(--surface))` };
   };
@@ -244,11 +291,30 @@ function ContributionHeatmap({ data, mode, onMode }) {
   }, [data]);
 
   const [hover, setHover] = React.useState(null);
+  const wrapRef = React.useRef(null);
 
+  // Anchor the tooltip to the hovered cell (was pinned to the card corner).
+  // Coordinates are converted into the wrap's own space, so the .ov-dense
+  // zoom and any ancestor transforms don't throw the position off.
+  const enterCell = (cell) => (e) => {
+    const wrapEl = wrapRef.current;
+    if (!wrapEl) return;
+    const wr = wrapEl.getBoundingClientRect();
+    const scale = wrapEl.offsetWidth ? wr.width / wrapEl.offsetWidth : 1;
+    const r = e.currentTarget.getBoundingClientRect();
+    setHover({
+      cell,
+      x: (r.left + r.width / 2 - wr.left) / scale,
+      yTop: (r.top - wr.top) / scale,
+      w: wrapEl.offsetWidth,
+    });
+  };
+
+  const dsActiveNames = new Set(Object.values(DATASET_DEFS).map(d => d.name));
   const legendItems = mode === "byRepo"
-    ? Object.entries(REPO_COLORS)
+    ? Object.entries(REPO_COLORS).filter(([id]) => REPO_DEFS[id])
     : mode === "byDataset"
-      ? Object.entries(DATASET_COLORS)
+      ? Object.entries(DATASET_COLORS).filter(([nm]) => dsActiveNames.has(nm))
       : [];
 
   return (
@@ -264,7 +330,7 @@ function ContributionHeatmap({ data, mode, onMode }) {
           <button className={"hmt " + (mode === "byDataset" ? "on" : "")} onClick={() => onMode("byDataset")}>By dataset</button>
         </div>
       </div>
-      <div className="heatmap-wrap">
+      <div className="heatmap-wrap" ref={wrapRef}>
         <div className="hm-month-row">
           {monthLabels.map((m, i) => (
             <span key={i} className="hm-month" style={{ "--month-col": m.col, left: `calc(${m.col} * (var(--hm-cell) + var(--hm-gap)))` }}>{m.label}</span>
@@ -276,18 +342,26 @@ function ContributionHeatmap({ data, mode, onMode }) {
               {week.map((cell, di) => (
                 <button
                   key={di}
-                  className="hm-cell"
-                  style={cellStyle(cell)}
-                  onMouseEnter={() => setHover({ cell, wi, di })}
+                  className={"hm-cell" + (selectedDay && cell.date.toDateString() === selectedDay.toDateString() ? " sel" : "")}
+                  style={cellStyle(cell, wi * 7 + di)}
+                  onMouseEnter={enterCell(cell)}
                   onMouseLeave={() => setHover(null)}
+                  onClick={() => onSelectDay && cell.count > 0 && onSelectDay(cell)}
                   aria-label={`${cell.count} traces on ${cell.date.toDateString()}`}
+                  title={cell.count > 0 && onSelectDay ? "Filter traces to this day" : undefined}
                 />
               ))}
             </div>
           ))}
         </div>
         {hover && hover.cell.count > 0 && (
-          <div className="hm-tip">
+          <div
+            className="hm-tip"
+            style={{
+              left: Math.min(Math.max(hover.x, 110), hover.w - 110),
+              top: hover.yTop - 8,
+            }}
+          >
             <div className="tip-date">{hover.cell.date.toDateString()}</div>
             <div className="tip-count">{hover.cell.count} {hover.cell.count === 1 ? "trace" : "traces"}</div>
             {mode === "byDataset" && Object.keys(hover.cell.datasets || {}).length > 0 && (
@@ -537,6 +611,115 @@ function DatasetTiles({ onSelectDataset }) {
   );
 }
 
+// Arena summary tiles — same object vocabulary as datasets in the ledger.
+function ArenaTiles({ onOpenArenas }) {
+  const arenas = React.useMemo(
+    () => Object.entries(window.ARENA_DEFS || {}).map(([id, a]) => ({ id, ...a })),
+    []
+  );
+  if (!arenas.length) return null;
+  return (
+    <section className="ov-tiles">
+      <header className="ov-tiles-head">
+        <h2 className="ov-h2">Arenas</h2>
+        <span className="ov-tiles-sub">{arenas.length} active · sorted by last run</span>
+      </header>
+      <div className="ov-tile-grid">
+        {arenas.map(a => (
+          <button key={a.id} className="ov-tile" onClick={() => onOpenArenas && onOpenArenas(a.id)}>
+            <div className="ot-row1">
+              <span className="ot-name mono">{a.name}</span>
+              <span className={"policy-tag tier-" + a.tier}>{a.tier}</span>
+            </div>
+            <div className="ot-metrics">
+              <span className="ot-metric" title={`${a.tasks} tasks queued`}>
+                <Icon name="arena" size={13} className="ot-mi" />
+                <span className="ot-mv mono">{a.tasks}</span>
+              </span>
+              <span className="ot-metric" title={`Pass rate · ${Math.round(a.pass_rate * 100)}%`}>
+                <Icon name="check" size={13} className="ot-mi" />
+                <span className="ot-mv mono">{Math.round(a.pass_rate * 100)}%</span>
+              </span>
+              <span className="ot-metric" title={`Last run · ${a.last_run}`}>
+                <Icon name="clock" size={13} className="ot-mi" />
+                <span className="ot-mv">{shortTime(a.last_run)}</span>
+              </span>
+              <span className="ot-metric" title={`Fed by classifier · ${a.source}`}>
+                <Icon name="tag" size={13} className="ot-mi" />
+                <span className="ot-mv mono">{a.source}</span>
+              </span>
+            </div>
+          </button>
+        ))}
+        <button className="ov-tile ov-tile-more" onClick={() => onOpenArenas && onOpenArenas("__view_all__")}>
+          <div className="otm-glyph">
+            <Icon name="arena" size={15} />
+          </div>
+          <div className="otm-text">
+            <div className="otm-label">View all arenas</div>
+            <div className="otm-sub mono">{arenas.length} total · build from task families</div>
+          </div>
+          <Icon name="chevron-right" size={14} className="otm-arrow" />
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// Capsule summary tiles — sealed, shareable session slices in the ledger.
+function CapsuleTiles({ onOpenCapsules }) {
+  const caps = React.useMemo(() => (window.CAPSULES || []).slice(0, 4), []);
+  const total = (window.CAPSULES || []).length;
+  if (!caps.length) return null;
+  return (
+    <section className="ov-tiles">
+      <header className="ov-tiles-head">
+        <h2 className="ov-h2">Capsules</h2>
+        <span className="ov-tiles-sub">{total} published · sorted by activity</span>
+      </header>
+      <div className="ov-tile-grid">
+        {caps.map(c => (
+          <button key={c.id} className="ov-tile" onClick={() => onOpenCapsules && onOpenCapsules(c.id)}>
+            <div className="ot-row1">
+              <span className="ot-name mono">{c.cid}</span>
+              <span className={"policy-tag lc-" + c.lifecycle}>{c.lifecycle}</span>
+            </div>
+            <div className="ot-cap-title" title={c.title}>{c.title}</div>
+            <div className="ot-metrics">
+              <span className="ot-metric" title={`Attached to ${c.repo}#${c.issue.number}`}>
+                <Icon name="repo" size={13} className="ot-mi" />
+                <span className="ot-mv mono">{c.repo.split("/")[1]}</span>
+              </span>
+              <span className="ot-metric" title={`${c.stats.pulls} pulls`}>
+                <Icon name="down-line" size={13} className="ot-mi" />
+                <span className="ot-mv mono">{c.stats.pulls}</span>
+              </span>
+              <span className="ot-metric" title={`${c.stats.views} views`}>
+                <Icon name="eye" size={13} className="ot-mi" />
+                <span className="ot-mv mono">{c.stats.views}</span>
+              </span>
+              <span className="ot-metric" title={`Published · ${c.publishedAt}`}>
+                <Icon name="clock" size={13} className="ot-mi" />
+                <span className="ot-mv">{shortTime(c.publishedAt)}</span>
+              </span>
+            </div>
+          </button>
+        ))}
+        <button className="ov-tile ov-tile-more" onClick={() => onOpenCapsules && onOpenCapsules("__view_all__")}>
+          <div className="otm-glyph">
+            <Icon name="capsule" size={15} />
+          </div>
+          <div className="otm-text">
+            <div className="otm-label">View all capsules</div>
+            <div className="otm-sub mono">{total} total · seal &amp; share</div>
+          </div>
+          <Icon name="chevron-right" size={14} className="otm-arrow" />
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function TracesTable({ traces, groupBy, onSelect, hideRepo }) {
   const groups = React.useMemo(() => {
     const m = new Map();
@@ -615,29 +798,48 @@ function TracesTable({ traces, groupBy, onSelect, hideRepo }) {
   );
 }
 
-function TracesLanding({ onSelectTrace, onSelectDataset, onCompare }) {
+function TracesLanding({ onSelectTrace, onSelectDataset, onCompare, onAllTraces, onOpenArenas, onOpenCapsules }) {
   const [mode, setMode] = React.useState("byRepo");
   const [groupBy, setGroupBy] = React.useState("day");
+  // Day focus: clicking a heatmap cell filters the ledger to that day —
+  // the sections in between collapse so the heatmap sits above its result.
+  const [dayFilter, setDayFilter] = React.useState(null); // {date, traces}
+  const selectDay = (cell) => {
+    if (dayFilter && cell.date.toDateString() === dayFilter.date.toDateString()) { setDayFilter(null); return; }
+    setDayFilter({ date: cell.date, traces: tracesForHeatmapDay(cell) });
+  };
+  // The overview carries a WIDGET of the trace ledger — the full version
+  // lives at Jayfarei / Traces (onAllTraces).
+  const ledger = dayFilter ? dayFilter.traces : (onAllTraces ? RECENT_TRACES.slice(0, 12) : RECENT_TRACES);
   return (
     <div className="landing landing-overview">
       <PageHero
         kicker="Workspace ledger"
         title="Overview"
-        subtitle="Ledger of every trace, with ties to your projects and datasets."
+        subtitle="Ledger of every trace, with ties to your projects, datasets, arenas, and capsules."
       />
 
       <div className="ov-dense">
         <OverviewStats traces={RECENT_TRACES} />
 
         <div className="hm-row hm-stack">
-          <ContributionHeatmap data={HEATMAP} mode={mode} onMode={setMode} />
+          <ContributionHeatmap data={HEATMAP} mode={mode} onMode={setMode} onSelectDay={selectDay} selectedDay={dayFilter && dayFilter.date} />
           <ProjectTokenDistribution />
         </div>
 
-        <DatasetTiles onSelectDataset={onSelectDataset} />
+        {!dayFilter && <DatasetTiles onSelectDataset={onSelectDataset} />}
+        {!dayFilter && <ArenaTiles onOpenArenas={onOpenArenas} />}
+        {!dayFilter && <CapsuleTiles onOpenCapsules={onOpenCapsules} />}
 
         <header className="ov-table-head">
-          <h2 className="ov-h2">All traces</h2>
+          <div className="ov-th-left" style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+            <h2 className="ov-h2">{dayFilter ? "Traces · " + dayFilter.date.toDateString() : "Recent traces"}</h2>
+            {dayFilter && (
+              <button className="ov-day-chip" onClick={() => setDayFilter(null)} title="Clear day filter">
+                <span className="mono">{dayFilter.traces.length}</span> that day · clear ✕
+              </button>
+            )}
+          </div>
           <div className="ov-th-actions">
             {onCompare && (
               <button className="cmp-entry" onClick={() => onCompare()} title="Compare two runs side by side">
@@ -646,17 +848,27 @@ function TracesLanding({ onSelectTrace, onSelectDataset, onCompare }) {
               </button>
             )}
             <div className="hm-toggle" role="tablist">
-              <button className={"hmt " + (groupBy === "day"     ? "on" : "")} onClick={() => setGroupBy("day")}>By day</button>
+              {!dayFilter && <button className={"hmt " + (groupBy === "day" ? "on" : "")} onClick={() => setGroupBy("day")}>By day</button>}
               <button className={"hmt " + (groupBy === "repo"    ? "on" : "")} onClick={() => setGroupBy("repo")}>By project</button>
               <button className={"hmt " + (groupBy === "dataset" ? "on" : "")} onClick={() => setGroupBy("dataset")}>By dataset</button>
             </div>
           </div>
         </header>
-        <TracesTable traces={RECENT_TRACES} groupBy={groupBy} onSelect={onSelectTrace} />
+        <TracesTable traces={ledger} groupBy={dayFilter && groupBy === "day" ? "repo" : groupBy} onSelect={onSelectTrace} />
+        {onAllTraces && !dayFilter && (
+          <button className="ov-viewall" onClick={() => onAllTraces()}>
+            <span>View all {(window.ALL_TRACES || RECENT_TRACES).length} traces</span>
+            <Icon name="chevron-right" size={13} />
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
+// Full-screen trace ledger lives in landing-traces-index.jsx (TracesIndexPage).
+
 window.TracesLanding = TracesLanding;
 window.TracesTable = TracesTable;
+window.REPO_COLORS = REPO_COLORS;
+window.DATASET_COLORS = DATASET_COLORS;

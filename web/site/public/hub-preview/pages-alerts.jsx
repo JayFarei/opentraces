@@ -47,7 +47,7 @@ function AlertsPage() {
               </div>
               <div className="at-c at-c-chan">
                 <span className="at-chan mono">
-                  <span className="at-chan-dot" />
+                  <img className="at-chan-ico" src="assets/slack-logo.png" alt="Slack" />
                   {a.channel}
                 </span>
               </div>
@@ -75,9 +75,9 @@ function AlertsPage() {
         <div className="rail-h">Integrations</div>
         <div className="alerts-slack">
           <div className="as-conn">
-            <div className="as-icon"><Icon name="external" size={14} /></div>
+            <div className="as-icon as-icon-slack"><img src="assets/slack-logo.png" alt="Slack" width="22" height="22" /></div>
             <div>
-              <div className="as-h">slack/jay</div>
+              <div className="as-h">slack/openmake</div>
               <div className="as-s mono">connected · 5 alerts piped · last delivery 3h ago</div>
             </div>
           </div>

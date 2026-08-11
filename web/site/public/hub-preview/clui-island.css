@@ -1,0 +1,1251 @@
+/* ─────────────────────────────────────────────────────────────
+ * CLUI — Claude as an alternative sidebar + dock pill.
+ * The nav sidebar and Claude chat share a horizontal strip
+ * (.sb-flip) and slide-swap. Liquid-glass skin throughout.
+ * ───────────────────────────────────────────────────────────── */
+
+:root {
+  --clui-accent: #d97757;
+  --clui-accent-soft: rgba(217, 119, 87, 0.14);
+  --clui-amber: #f59e0b;
+  --clui-green: #4ade80;
+  --clui-red: #f87171;
+  --clui-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --clui-slide: cubic-bezier(0.32, 0.72, 0, 1);
+  /* window frame — liquid-glass hairline: lighter than the surface
+     in dark mode, darker in light mode, always subtle */
+  --clui-frame: rgba(255, 255, 255, 0.12);
+  --clui-frame-strong: rgba(242, 246, 252, 0.9);
+  /* desk behind the window (menu / claude edge) + window fill that pops off it */
+  --clui-desk: #26292f;
+  --clui-window-pop: #12171f;
+}
+html[data-theme="light"] {
+  --clui-frame: rgba(18, 23, 34, 0.12);
+  --clui-frame-strong: rgba(12, 16, 26, 0.75);
+  --clui-desk: #e9e7e4;
+  --clui-window-pop: #ffffff;
+}
+
+/* ── Horizontal strip: nav ↔ chat, with a persistent switcher below ── */
+.sb-flip {
+  position: relative;
+  min-width: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.sb-flip-strip {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.sb-flip-pane {
+  position: absolute;
+  inset: 0;
+  transition: transform 0.5s var(--clui-slide), opacity 0.4s ease;
+}
+/* chat lives to the LEFT of the nav in horizontal space */
+.sb-flip-pane.pane-clui { transform: translateX(-103%); opacity: 0; }
+.sb-flip-pane.pane-nav  { transform: translateX(0); }
+.app-shell[data-clui="open"] .sb-flip-pane.pane-clui { transform: translateX(0); opacity: 1; }
+.app-shell[data-clui="open"] .sb-flip-pane.pane-nav  { transform: translateX(103%); opacity: 0; }
+.sb-flip-pane[aria-hidden="true"] { pointer-events: none; }
+
+/* keep the column at full width while the chat is open, even if
+   the nav sidebar was collapsed */
+.app-shell { transition: grid-template-columns 0.5s var(--clui-slide), background-color 0.5s ease; }
+.app-shell[data-sb="collapsed"][data-clui="open"] { grid-template-columns: var(--sidebar-w) 1fr; }
+/* while Claude holds the window, the shell becomes a darker desk
+   so the framed content pops */
+.app-shell[data-clui="open"] { background-color: var(--clui-desk); }
+
+/* nav sidebar fills its pane (it normally sizes to the grid col) */
+.sb-flip-pane.pane-nav > .sidebar { height: 100%; }
+
+/* ── Resize handle: drag the column edge, Claude-Code style ── */
+.clui-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 40;
+}
+.clui-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.clui-resize:hover::after { background: var(--border-strong); }
+.app-shell[data-resizing="true"] { transition: none; user-select: none; cursor: col-resize; }
+/* no drag-resize while the rail is showing */
+.app-shell[data-sb="collapsed"]:not([data-clui="open"]) .clui-resize { display: none; }
+.app-shell[data-resizing="true"] .clui-resize::after { background: var(--border-strong); }
+
+/* ── Switcher: dock-style magnification between Menu and Claude.
+   The two buttons are absolutely positioned so the SAME nodes can
+   morph between the horizontal pill pair (expanded / Claude open)
+   and a vertical icon stack (collapsed rail) — left/right/top all
+   animate, so collapse↔expand↔Claude reads as one continuous move. ── */
+.clui-switch {
+  position: relative;
+  height: 60px; /* 8 top + 38 button + 14 bottom */
+  flex-shrink: 0;
+  transition: height 0.5s var(--clui-slide);
+}
+.clui-switch-btn {
+  position: absolute;
+  top: 8px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fg-mute, #6f7680);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  overflow: hidden;
+  transition:
+    left 0.5s var(--clui-slide),
+    right 0.5s var(--clui-slide),
+    top 0.5s var(--clui-slide),
+    background 0.3s ease, color 0.2s ease, box-shadow 0.3s ease;
+}
+/* horizontal layout — active side is wide, the other a 46px square */
+.clui-switch-btn.btn-claude { left: 14px; right: calc(100% - 60px); }
+.clui-switch-btn.btn-claude[data-active="true"] { left: 14px; right: 66px; }
+.clui-switch-btn.btn-menu { left: calc(100% - 60px); right: 14px; }
+.clui-switch-btn.btn-menu[data-active="true"] { left: 66px; right: 14px; }
+/* rail layout — the pair stacks vertically, full rail width */
+.clui-switch[data-rail="true"] { height: 104px; }
+.clui-switch[data-rail="true"] .clui-switch-btn.btn-claude { left: 8px; right: 8px; top: 8px; }
+.clui-switch[data-rail="true"] .clui-switch-btn.btn-menu   { left: 8px; right: 8px; top: 52px; }
+.clui-switch[data-rail="true"] .lbl { max-width: 0 !important; opacity: 0 !important; margin-left: 0 !important; }
+.clui-switch-btn:hover { background: rgba(127, 138, 160, 0.1); color: var(--fg-dim, #9ba1a8); }
+
+/* \u2500\u2500 The menu segment doubles as the sidebar's collapse control:
+   hovering it while ACTIVE crossfades panel \u2192 \u2039 chevron and swaps
+   the label Menu \u2192 Collapse; in the rail the chevron flips to \u203a
+   as an expand hint. \u2500\u2500 */
+.clui-switch-btn .ic-swap { position: relative; width: 15px; height: 15px; }
+.clui-switch-btn .ic-swap .i-a,
+.clui-switch-btn .ic-swap .i-b {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s ease, transform 0.25s var(--clui-slide);
+}
+.clui-switch-btn .ic-swap .i-b { opacity: 0; transform: translateX(5px); }
+.clui-switch-btn[data-active="true"]:hover .ic-swap .i-a { opacity: 0; transform: translateX(-5px); }
+.clui-switch-btn[data-active="true"]:hover .ic-swap .i-b { opacity: 1; transform: translateX(0); }
+/* rail: same hint, chevron points outward (expand) */
+.clui-switch[data-rail="true"] .btn-menu:hover .i-a { opacity: 0; transform: translateX(5px); }
+.clui-switch[data-rail="true"] .btn-menu:hover .i-b { opacity: 1; transform: translateX(0) rotate(180deg); }
+.clui-switch[data-rail="true"] .btn-menu .i-b { transform: translateX(-5px) rotate(180deg); }
+
+.clui-switch-btn .lbl-swap { display: inline-grid; }
+.clui-switch-btn .lbl-swap .t-a,
+.clui-switch-btn .lbl-swap .t-b {
+  grid-area: 1 / 1;
+  justify-self: start;
+  white-space: nowrap;
+  transition: opacity 0.2s ease;
+}
+.clui-switch-btn .lbl-swap .t-b { opacity: 0; }
+.clui-switch-btn[data-active="true"]:hover .lbl-swap .t-a { opacity: 0; }
+.clui-switch-btn[data-active="true"]:hover .lbl-swap .t-b { opacity: 1; }
+
+.clui-switch-btn[data-active="true"] {
+  color: var(--fg, #e6e9ed);
+  background: var(--lg-glass);
+  box-shadow: var(--lg-sheen), inset 0 0 0 1px var(--lg-hairline), 0 2px 8px -2px rgba(0, 0, 0, 0.25);
+}
+html[data-theme="light"] .clui-switch-btn[data-active="true"] {
+  box-shadow: var(--lg-sheen), inset 0 0 0 1px rgba(18, 23, 34, 0.06), 0 2px 8px -3px rgba(16, 20, 30, 0.12);
+}
+.clui-switch-btn .ic { display: inline-flex; flex-shrink: 0; }
+.clui-switch-btn .lbl {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 0.5s var(--clui-slide), opacity 0.35s ease, margin 0.5s var(--clui-slide);
+}
+.clui-switch-btn[data-active="true"] .lbl {
+  max-width: 90px;
+  opacity: 1;
+  margin-left: 8px;
+}
+
+/* ── Shared glass ── */
+.clui-glass {
+  background: var(--lg-glass);
+  -webkit-backdrop-filter: blur(32px) saturate(1.6);
+  backdrop-filter: blur(32px) saturate(1.6);
+  border: 1px solid var(--lg-hairline);
+  box-shadow: var(--lg-glass-shadow), var(--lg-sheen);
+}
+html[data-theme="light"] .clui-glass { border-color: rgba(255, 255, 255, 0.7); }
+
+/* ── Chat sidebar pane ── */
+.clui-side {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-family: "Geist", -apple-system, system-ui, sans-serif;
+  min-width: 0;
+}
+
+.clui-side-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px; /* 6px top offset + 42px = level with the window chrome bar */
+  flex-shrink: 0;
+  padding: 6px 10px 0 18px;
+}
+.clui-head-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg, #e6e9ed);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.clui-ctx-chip {
+  font-family: "Geist Mono", monospace;
+  font-size: 10px;
+  color: var(--fg-mute, #6f7680);
+  background: var(--surface-2);
+  border: 1px solid var(--lg-hairline);
+  border-radius: 999px;
+  padding: 2.5px 9px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* active-context pill floating just above the composer */
+.clui-ctx-float {
+  position: relative;
+  height: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+.clui-ctx-float .clui-ctx-chip {
+  position: absolute;
+  right: 10px;
+  top: -30px;
+  height: auto;
+  line-height: 1.4;
+  pointer-events: auto;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+  /* stroke only — no drop shadow (matches the composer treatment) */
+  border: 1px solid var(--border-strong, var(--lg-hairline));
+  box-shadow: none;
+  transition: opacity 0.12s;
+}
+/* the composer popovers are translucent glass — hide the pill under them */
+.clui-side:has(.cc-pop) .clui-ctx-float .clui-ctx-chip { opacity: 0; }
+/* the branch/checkpoint chip occupies the same floating slot — yield to it */
+.clui-side:has(.clui-side-branch) .clui-ctx-float .clui-ctx-chip { opacity: 0; pointer-events: none; }
+.clui-head-spacer { flex: 1; }
+
+/* session title in the head */
+.clui-session-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg, #e6e9ed);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* sessions popover */
+.clui-pop-backdrop { position: fixed; inset: 0; z-index: 60; }
+.clui-sessions-pop {
+  position: absolute;
+  top: 64px;
+  right: 10px;
+  width: 232px;
+  z-index: 61;
+  border-radius: 14px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  animation: clui-pop 0.18s var(--clui-spring);
+}
+@keyframes clui-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.sess-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim, #9ba1a8);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 9px;
+  cursor: pointer;
+  min-width: 0;
+}
+.sess-item:hover { background: var(--surface-2); color: var(--fg, #e6e9ed); }
+.sess-item[data-active="true"] { color: var(--fg, #e6e9ed); background: var(--surface-2); }
+.sess-item .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess-item.sess-new { color: var(--clui-accent); font-weight: 500; }
+.sess-div { height: 1px; background: var(--lg-hairline); margin: 4px 6px; }
+.clui-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--fg-mute, #6f7680);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+}
+.clui-icon-btn:hover { background: var(--surface-2); color: var(--fg, #e6e9ed); }
+
+/* ── Conversation ── */
+.clui-side-conv {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+}
+
+.clui-msg { display: flex; flex-direction: column; gap: 3px; }
+.clui-msg .who {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-mute, #6f7680);
+}
+.clui-msg .body {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg, #dfe3e8);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.clui-msg[data-role="user"] {
+  align-self: flex-end;
+  align-items: flex-end;
+  max-width: 88%;
+}
+.clui-msg[data-role="user"] .body {
+  background: var(--surface-2);
+  border: 1px solid var(--lg-hairline);
+  border-radius: 14px 14px 4px 14px;
+  padding: 7px 12px;
+}
+.clui-msg[data-role="assistant"] { max-width: 96%; }
+.clui-msg .body code {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  background: var(--clui-accent-soft);
+  color: var(--clui-accent);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.clui-msg[data-role="system"] .body {
+  font-size: 11px;
+  color: var(--fg-mute, #6f7680);
+  font-family: "Geist Mono", monospace;
+}
+
+.clui-action-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  color: var(--fg-mute, #6f7680);
+}
+.clui-action-line .tick { color: var(--clui-green); font-size: 11px; }
+
+.clui-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--fg-mute, #6f7680);
+  padding: 2px 0 4px;
+}
+
+/* ── Permission card — floats above the composer as an overlay ── */
+.clui-perm-float { position: relative; height: 0; z-index: 70; }
+.clui-perm-card {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 8px;
+  margin: 0;
+  flex-shrink: 0;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.07);
+  border-radius: 12px;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  animation: perm-in 180ms var(--ease-out);
+}
+@keyframes perm-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.clui-perm-card .q { flex: 1; font-size: 12px; color: var(--fg, #e6e9ed); }
+.clui-perm-card .hint {
+  display: block;
+  font-size: 10px;
+  color: var(--fg-mute, #6f7680);
+  margin-top: 2px;
+}
+.clui-perm-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.clui-perm-btn.allow { background: rgba(74, 222, 128, 0.16); color: var(--clui-green); }
+.clui-perm-btn.deny  { background: rgba(248, 113, 113, 0.16); color: var(--clui-red); }
+.clui-perm-btn:hover { filter: brightness(1.25); }
+
+/* ── Composer ── */
+.clui-side-composer {
+  margin: 8px 12px 12px;
+  flex-shrink: 0;
+  border-radius: 16px;
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* stroke only — the glass drop shadow competed with the framed window,
+   which is the main artifact on screen */
+.clui-side-composer.clui-glass {
+  box-shadow: none;
+  border: 1px solid var(--border-strong, var(--lg-hairline));
+}
+/* the light-theme .clui-glass border override is near-white — keep the
+   stroke visible there too */
+html[data-theme="light"] .clui-side-composer.clui-glass {
+  border-color: var(--border-strong);
+}
+.clui-input {
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg, #e6e9ed);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  max-height: 140px;
+  padding: 0;
+}
+.clui-input::placeholder { color: var(--fg-mute, #6f7680); }
+.clui-composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--fg-mute, #6f7680);
+}
+.clui-composer-foot .sep { opacity: 0.4; }
+.clui-composer-foot .spring { flex: 1; }
+.clui-foot-btn {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+.clui-foot-btn:hover { background: var(--surface-2); color: var(--fg-dim, #9ba1a8); }
+.clui-kbd {
+  font-family: "Geist Mono", monospace;
+  font-size: 9.5px;
+  background: rgba(127, 138, 160, 0.14);
+  border-radius: 4px;
+  padding: 1.5px 5px;
+}
+.clui-send {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: var(--clui-accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s ease, transform 0.2s var(--clui-spring);
+}
+.clui-send:disabled { opacity: 0.35; cursor: default; }
+.clui-send:not(:disabled):hover { transform: scale(1.08); }
+
+.clui-side-branch { padding: 0 14px; flex-shrink: 0; display: flex; }
+.clui-side-branch .clui-branch-chip { margin-bottom: 8px; }
+
+/* ── Spark + status dot ── */
+.clui-spark {
+  font-size: 17px;
+  line-height: 1;
+  color: var(--clui-accent);
+  flex-shrink: 0;
+}
+
+.clui-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--clui-accent);
+  flex-shrink: 0;
+  animation: clui-pulse 1.5s ease-in-out infinite;
+}
+@keyframes clui-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+
+/* ── Controlled window: while the Claude pane is open, the app
+   content becomes a window under Claude's control — it insets
+   with a rounded accent border, gains a chrome bar (refresh,
+   session name, mark up / comment / save), and a light sweeps
+   the border while Claude is acting. ── */
+@property --clui-sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.app-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+  border: 1px solid transparent;
+  border-radius: 0;
+  transition:
+    margin 0.5s var(--clui-slide),
+    height 0.5s var(--clui-slide),
+    border-radius 0.5s var(--clui-slide),
+    border-color 0.5s ease,
+    box-shadow 0.5s ease,
+    background-color 0.5s ease;
+}
+/* the app-content itself is the window: stroke on its outer edge,
+   a whisper of desk around it, content popped off the desk */
+.app-shell[data-clui="open"] .app-content {
+  margin: 6px 8px 6px 2px;
+  height: calc(100vh - 12px);
+  border-radius: 14px;
+  border-color: var(--clui-frame);
+  --bg: var(--clui-window-pop);
+  background: var(--clui-window-pop);
+  overflow: hidden;
+  box-shadow: var(--lg-glass-shadow), var(--lg-sheen);
+}
+/* sweeping border highlight while Claude is running a turn */
+.app-content::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  pointer-events: none;
+  z-index: 70;
+  background: conic-gradient(
+    from var(--clui-sweep),
+    transparent 0deg 250deg,
+    var(--clui-frame-strong) 320deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+}
+.app-shell[data-clui="open"][data-clui-busy="true"] .app-content::after {
+  /* fade handled inside the animation — transitioning opacity on a
+     pseudo whose animation starts in the same frame never advances */
+  animation:
+    clui-sweep-fade 0.35s ease forwards,
+    clui-watch-sweep 1.8s linear infinite;
+}
+@keyframes clui-sweep-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes clui-watch-sweep {
+  to { --clui-sweep: 360deg; }
+}
+
+/* chrome bar — the window's title bar. Collapsed to nothing while
+   the nav is showing; when open it sits INSIDE the frame with a
+   straight edge-to-edge rule beneath it. */
+.clui-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 12px;
+  flex-shrink: 0;
+  border-bottom: 0 solid var(--lg-hairline);
+  background: transparent;
+  transition: height 0.5s var(--clui-slide), opacity 0.35s ease, border-bottom-width 0.5s var(--clui-slide), background-color 0.35s ease;
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.clui-chrome[aria-hidden="true"] { pointer-events: none; }
+.app-shell[data-clui="open"] .clui-chrome {
+  height: 42px;
+  opacity: 1;
+  border-bottom-width: 1px;
+  /* title bar reads as its own material — glass tint, distinct
+     from the app it frames */
+  background: var(--lg-glass);
+  box-shadow: var(--lg-sheen);
+}
+html[data-theme="light"] .app-shell[data-clui="open"] .clui-chrome {
+  /* --lg-glass is near-white in light mode — use a soft warm gray
+     so the title bar still reads apart from the white window */
+  background: #f4f4f2;
+}
+.clui-chrome-title {
+  color: var(--fg);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clui-chrome-ctx {
+  color: var(--clui-accent);
+  background: var(--clui-accent-soft);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.clui-chrome-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--clui-accent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.clui-chrome .spring { flex: 1; }
+.clui-chrome-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 2px;
+}
+.clui-chrome-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.clui-chrome-btn:hover { color: var(--fg); background: var(--clui-accent-soft); }
+.clui-chrome-btn[data-on="true"] {
+  color: var(--clui-accent);
+  background: var(--clui-accent-soft);
+  border-color: rgba(217, 119, 87, 0.4);
+}
+.clui-chrome-btn.icon { padding: 0 6px; }
+.clui-chrome-btn.icon .rf { display: inline-flex; }
+.clui-chrome-btn.icon .rf.spin { animation: clui-refresh-spin 0.65s ease; }
+@keyframes clui-refresh-spin { to { transform: rotate(360deg); } }
+.clui-chrome-btn.ghost { color: var(--fg-mute); }
+.clui-chrome-btn.add {
+  color: #fff;
+  background: var(--clui-accent);
+  border-color: transparent;
+}
+.clui-chrome-btn.add:hover { color: #fff; background: var(--clui-accent); filter: brightness(1.12); }
+.clui-chrome-btn.save { color: var(--clui-accent); }
+.clui-chrome-btn.save:hover { background: var(--clui-accent-soft); }
+
+/* the window container inside app-content — plain layout shell */
+.clui-window {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.clui-window-view {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.clui-window-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.clui-window-body > * { flex-shrink: 0; }
+.clui-window-body > .main {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+/* ── Annotation layer: ink + comment pins ── */
+.clui-annot-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+.clui-annot-layer[data-mode="ink"],
+.clui-annot-layer[data-mode="comment"] { pointer-events: auto; }
+.clui-annot-layer[data-mode="ink"] { cursor: crosshair; }
+.clui-annot-layer[data-mode="comment"] { cursor: copy; }
+.clui-annot-layer canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.clui-pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  z-index: 61;
+}
+.clui-annot-layer .pin-dot {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50% 50% 50% 4px;
+  background: var(--clui-accent);
+  color: #fff;
+  font-family: "Geist Mono", monospace;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  animation: clui-pin-pop 0.25s var(--clui-spring);
+}
+@keyframes clui-pin-pop {
+  from { transform: scale(0.4); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+.clui-annot-layer .pin-input {
+  width: 180px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid rgba(217, 119, 87, 0.5);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  padding: 0 9px;
+  outline: none;
+}
+.clui-annot-layer .pin-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 4px 8px 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(217, 119, 87, 0.35);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.clui-annot-layer .pin-del {
+  border: none;
+  background: transparent;
+  color: var(--fg-mute);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.clui-annot-layer .pin-del:hover { color: var(--clui-red); }
+.clui-annot-layer .pin-file {
+  font-size: 9px;
+  color: var(--fg-mute);
+  padding-left: 2px;
+  white-space: nowrap;
+}
+
+/* ── Mark-up guidance + component picking ── */
+.clui-guide {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 65;
+  pointer-events: none;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--clui-accent);
+  color: #fff;
+  font-family: "Geist", -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  animation: clui-pop 0.2s var(--clui-spring);
+}
+.clui-el-hover {
+  position: absolute;
+  z-index: 62;
+  pointer-events: none;
+  border: 1.5px solid var(--clui-accent);
+  border-radius: 6px;
+  background: rgba(217, 119, 87, 0.07);
+}
+.clui-el-hover .el-tag {
+  position: absolute;
+  top: -22px;
+  left: -1.5px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: var(--clui-accent);
+  color: #fff;
+  font-family: "Geist Mono", monospace;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+/* a committed component selection */
+.clui-elpin {
+  position: absolute;
+  z-index: 61;
+  pointer-events: none;
+}
+.clui-elpin .el-box {
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--clui-accent);
+  border-radius: 6px;
+  background: rgba(217, 119, 87, 0.05);
+}
+.clui-elpin .el-note {
+  position: absolute;
+  top: -12px;
+  left: -10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+/* ── Markup popup: describe the issue, add or send ── */
+.clui-markup-pop {
+  position: absolute;
+  z-index: 66;
+  width: 340px;
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: auto;
+  cursor: default;
+  font-family: "Geist", -apple-system, sans-serif;
+  animation: clui-pop 0.2s var(--clui-spring);
+}
+.clui-markup-pop .mp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.clui-markup-pop .mp-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+.clui-markup-pop .mp-tag {
+  font-family: "Geist Mono", monospace;
+  font-size: 9.5px;
+  color: var(--clui-accent);
+  background: var(--clui-accent-soft);
+  border-radius: 4px;
+  padding: 2px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.clui-markup-pop .mp-x {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-mute);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.clui-markup-pop .mp-x:hover { background: var(--surface-2); color: var(--fg); }
+.clui-markup-pop textarea {
+  resize: none;
+  min-height: 62px;
+  border-radius: 10px;
+  border: 1px solid rgba(217, 119, 87, 0.55);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  outline: none;
+}
+.clui-markup-pop textarea::placeholder { color: var(--fg-mute); }
+.clui-markup-pop textarea:focus {
+  border-color: var(--clui-accent);
+  box-shadow: 0 0 0 3px var(--clui-accent-soft);
+}
+.clui-markup-pop .mp-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.clui-markup-pop .mp-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--lg-hairline);
+  background: var(--surface-2);
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.clui-markup-pop .mp-btn:hover:not(:disabled) { color: var(--fg); }
+.clui-markup-pop .mp-btn.primary {
+  background: var(--clui-accent);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 500;
+}
+.clui-markup-pop .mp-btn.primary:hover:not(:disabled) { filter: brightness(1.1); color: #fff; }
+.clui-markup-pop .mp-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ── Annotation messages in the chat: comment text + context chip ── */
+.clui-msg .body.annots { display: flex; flex-direction: column; gap: 10px; }
+.annot-row { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.annot-row .a-body { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
+.annot-row .a-dot {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  border-radius: 50% 50% 50% 3px;
+  background: var(--clui-accent);
+  color: #fff;
+  font-family: "Geist Mono", monospace;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.annot-row .a-ink { color: var(--clui-accent); font-size: 11px; flex-shrink: 0; }
+.annot-row .a-text { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
+.annot-row .a-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  max-width: 100%;
+  margin-left: 23px;
+  border: 1px solid var(--lg-hairline);
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-family: "Geist Mono", monospace;
+  font-size: 9.5px;
+  color: var(--fg-mute);
+  min-width: 0;
+}
+.annot-row .a-chip-el { flex-shrink: 0; color: var(--fg-dim, #9ba1a8); }
+.annot-row .a-chip-sep { flex-shrink: 0; opacity: 0.6; }
+.annot-row .a-chip-file {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* save toast */
+.clui-save-toast {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 71;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid rgba(217, 119, 87, 0.4);
+  color: var(--fg);
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  animation: clui-rise 0.3s var(--clui-spring);
+}
+.clui-save-toast .tick { color: var(--clui-green); }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-content,
+  .app-content::after { animation: none !important; }
+}
+
+/* ── Edit-mode (dev session) ── */
+.clui-edit-ring {
+  position: fixed;
+  inset: 0;
+  z-index: 79;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0.4);
+}
+.clui-branch-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  height: 34px;
+  border-radius: 999px;
+  padding: 0 5px 0 13px;
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--clui-amber);
+  animation: clui-rise 0.3s var(--clui-spring);
+}
+@keyframes clui-rise {
+  from { opacity: 0; transform: translateY(22px) scale(0.94); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.clui-branch-chip .b-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+.clui-branch-chip .b-btn.keep { background: rgba(74, 222, 128, 0.16); color: var(--clui-green); }
+.clui-branch-chip .b-btn.discard { background: rgba(248, 113, 113, 0.16); color: var(--clui-red); }
+.clui-branch-chip .b-btn:hover { filter: brightness(1.3); }
+
+/* ── Empty-state prompt hints (mode-aware) ── */
+.clui-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 6px 2px;
+}
+.clui-empty .ce-lbl {
+  font-size: 11.5px;
+  color: var(--fg-mute, #6f7680);
+  line-height: 1.5;
+}
+.clui-empty .ce-chips {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.clui-empty .ce-chip {
+  border: 1px solid var(--lg-hairline);
+  background: var(--surface-2);
+  color: var(--fg-dim, #9ba1a8);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.clui-empty .ce-chip:hover {
+  color: var(--fg, #e6e9ed);
+  border-color: rgba(217, 119, 87, 0.4);
+  background: var(--clui-accent-soft);
+}
+.clui-empty .ce-foot {
+  font-size: 10.5px;
+  color: var(--fg-mute, #6f7680);
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+
+/* ── Live-edit checkpoints (clui-edits.jsx) ── */
+.clui-side-branch { position: relative; }
+.clui-branch-chip .b-branch {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 0; margin: 0;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.clui-branch-chip .b-branch:hover { color: var(--fg); }
+.clui-branch-chip .b-count {
+  font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16); color: #f59e0b;
+}
+.clui-cp-pop {
+  position: absolute; left: 14px; right: 14px; bottom: calc(100% + 6px);
+  z-index: 60; border-radius: 12px; padding: 8px;
+  display: flex; flex-direction: column; gap: 2px;
+  animation: cp-pop-in 160ms var(--ease-out);
+}
+@keyframes cp-pop-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.clui-cp-pop .cp-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--fg-mute); padding: 2px 6px 6px;
+}
+.clui-cp-pop .cp-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border-radius: 7px; font-size: 12px; color: var(--fg-dim);
+}
+.clui-cp-pop .cp-row:hover { background: rgba(127, 127, 127, 0.09); }
+.clui-cp-pop .cp-row[data-current="true"] .cp-txt { color: var(--fg); }
+.clui-cp-pop .cp-dot { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; flex-shrink: 0; }
+.clui-cp-pop .cp-dot[data-kept="true"] { background: var(--clui-green, #4ade80); }
+.clui-cp-pop .cp-dot[data-base="true"] { background: var(--fg-sub); }
+.clui-cp-pop .cp-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clui-cp-pop .cp-ts { font-size: 10px; color: var(--fg-mute); }
+.clui-cp-pop .cp-cur { font-size: 9px; letter-spacing: 0.08em; color: #f59e0b; }
+.clui-cp-pop .cp-revert {
+  width: 22px; height: 22px; border-radius: 6px; border: 0; cursor: pointer;
+  background: rgba(127, 127, 127, 0.12); color: var(--fg-dim); font-size: 12px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.clui-cp-pop .cp-revert:hover { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.clui-cp-pop .cp-base { border-top: 1px solid var(--border); margin-top: 2px; padding-top: 7px; }
+
+
+/* ── Artifact chat card (session draft) ── */
+.clui-art-card {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 10px; margin: 2px 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; color: var(--fg-dim);
+  font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.clui-art-card:hover { border-color: var(--border-strong); color: var(--fg); }
+.clui-art-card.gone { opacity: 0.55; cursor: default; }
+.clui-art-card .cac-name { font-weight: 500; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clui-art-card .cac-kind { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-mute); }
+.clui-art-card .cac-spring { flex: 1; }
+.clui-art-card .cac-save {
+  font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  background: color-mix(in oklab, var(--c-push) 18%, transparent);
+  color: var(--c-push); border: 1px solid color-mix(in oklab, var(--c-push) 35%, transparent);
+}
+.clui-art-card .cac-save:hover { background: color-mix(in oklab, var(--c-push) 28%, transparent); }
+.clui-art-card .cac-saved { font-size: 11px; color: var(--c-git); }
+
+
+/* ── Checkpoint timeline: typed-patch extras ── */
+.clui-cp-pop .cp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.clui-cp-pop .cp-base-v { font-size: 10px; color: var(--fg-mute); }
+.clui-cp-pop .cp-cls { font-size: 9.5px; color: var(--fg-mute); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.clui-cp-pop .cp-squash { color: var(--fg-mute); font-size: 10px; }
+.clui-cp-pop .cp-seal {
+  display: block; width: 100%; margin-top: 8px; padding: 7px 10px;
+  font: inherit; font-size: 11.5px; font-weight: 600; text-align: center; cursor: pointer;
+  color: var(--c-push); background: color-mix(in oklab, var(--c-push) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--c-push) 35%, transparent); border-radius: 8px;
+}
+.clui-cp-pop .cp-seal:hover { background: color-mix(in oklab, var(--c-push) 20%, transparent); }

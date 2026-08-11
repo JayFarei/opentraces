@@ -55,6 +55,8 @@
   font-weight: 400;
 }
 .cmdk-input::placeholder { color: var(--fg-mute); }
+/* the palette frame is the focus affordance; no ring on the input itself */
+.cmdk-input:focus-visible, .cmdk-input:focus { outline: none; }
 
 .cmdk-mode {
   display: inline-flex;

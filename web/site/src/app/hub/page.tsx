@@ -12,7 +12,7 @@ import { HUB_FEATURE_GROUPS, type HubFeature } from "@/lib/hub-features";
 export const metadata: Metadata = {
   title: "OpenTraces Hub: interactive preview",
   description:
-    "An interactive preview of the OpenTraces Hub: the web companion to the CLI where your team's shared bucket, trails, context tree, and datasets become browsable, with trace intelligence on top.",
+    "An interactive preview of the OpenTraces Hub: the web companion to the CLI where your team's traces, projects, benches, datasets, and capsules become browsable, with trace intelligence on top.",
 };
 
 function FeatureCard({ feature }: { feature: HubFeature }) {
@@ -45,6 +45,10 @@ function FeatureCard({ feature }: { feature: HubFeature }) {
             child={feature.child}
             tab={feature.tab}
             pr={feature.pr}
+            artifact={feature.artifact}
+            evidence={feature.evidence}
+            capsule={feature.capsule}
+            benchtab={feature.benchtab}
             height={feature.height}
             canvasWidth={feature.canvasWidth}
             label={feature.heading}
@@ -88,9 +92,10 @@ export default function HubPage() {
           <Link href="/" className="hub-page-back">← back home</Link>
         </div>
         <p className="hub-page-sub">
-          The web companion to the CLI. Your team&apos;s shared bucket, trails, context tree, and
-          datasets become browsable. This is the real prototype, running in your browser. Drive the
-          whole thing below, or scroll for a page-by-page tour of every view.
+          The web companion to the CLI. Your team&apos;s traces, projects, benches, datasets, and
+          sealed replays become browsable, with the evidence behind every claim attached. This is the
+          real prototype, running in your browser. Drive the whole thing below, or scroll for a
+          page-by-page tour.
         </p>
         <div className="hub-hero-window">
           <HubWindow address="opentraces.ai/hub" />
@@ -110,8 +115,9 @@ export default function HubPage() {
           <div className="hub-tour-eyebrow">preview</div>
           <h2 className="hub-tour-title">An interactive preview</h2>
           <p className="hub-tour-sub">
-            A live look at what we&apos;re building into the Hub. Every panel below is the real view,
-            booted on its own, not a screenshot.
+            A live look at what we&apos;re building into the Hub, from the trace ledger to the bench
+            that gates your pull requests. Every panel below is the real view, booted on its own, not
+            a screenshot.
           </p>
         </div>
 

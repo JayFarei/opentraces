@@ -23,12 +23,12 @@ function HoverMark({ className, style, label, popClass, children, ...rest }) {
   const [open, setOpen] = React.useState(false);
   return (
     <span
+      {...rest}
       className={"row-mark " + className}
       style={style}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onClick={(e) => e.stopPropagation()}
-      {...rest}
     >
       {label}
       {open && <div className={"mark-pop " + (popClass || "")}>{children}</div>}

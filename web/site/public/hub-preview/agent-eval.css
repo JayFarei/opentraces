@@ -1,0 +1,108 @@
+/* ── Agent eval harness overlay ── */
+.oteval {
+  position: fixed;
+  right: 16px;
+  top: 62px;
+  bottom: 16px;
+  width: 380px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in oklab, var(--bg) 88%, #7a7a7a);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-body);
+  color: var(--fg);
+  overflow: hidden;
+}
+.oteval-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.oteval-title { font-size: 13px; font-weight: 600; flex: 1; }
+.oteval-score { font-size: 12px; color: var(--c-git); }
+.oteval-x {
+  width: 24px; height: 24px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--fg-mute); font-size: 12px;
+}
+.oteval-x:hover { background: var(--surface-2); color: var(--fg); }
+.oteval-sub {
+  padding: 10px 14px;
+  font-size: 11px;
+  color: var(--fg-mute);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.oteval-rows { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.oteval-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.oteval-row:hover { background: var(--surface-2); }
+.oteval-row input[type="checkbox"] { margin: 2px 0 0; accent-color: var(--c-git); }
+.oteval-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  margin-top: 4px; flex-shrink: 0;
+  background: var(--surface-3);
+}
+.oteval-row[data-status="running"] .oteval-dot { background: var(--c-user); animation: oteval-pulse 1s infinite; }
+.oteval-row[data-status="pass"] .oteval-dot { background: var(--c-git); }
+.oteval-row[data-status="fail"] .oteval-dot { background: var(--c-error); }
+@keyframes oteval-pulse { 50% { opacity: 0.35; } }
+.oteval-case { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.oteval-lbl { font-weight: 500; }
+.oteval-prompt { color: var(--fg-mute); font-size: 11px; }
+.oteval-note {
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.oteval-row[data-status="fail"] .oteval-note { color: var(--c-error); }
+.oteval-ms { font-size: 10px; color: var(--fg-mute); margin-top: 2px; }
+.oteval-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.oteval-gap { font-size: 11px; color: var(--fg-mute); display: flex; align-items: center; gap: 5px; }
+.oteval-gap input {
+  width: 44px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 6px;
+}
+.oteval-run {
+  padding: 7px 16px;
+  border-radius: 8px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 500;
+}
+.oteval-run.stop { background: var(--c-error); color: #fff; }

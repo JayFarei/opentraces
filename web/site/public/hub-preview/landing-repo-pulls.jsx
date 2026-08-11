@@ -57,6 +57,48 @@ window.toggleTurns = function (btn) {
   if (det) det.open = !det.open;
 };
 
+// ── Slice expander: surface the trail/conversation of THIS commit's slice
+// inline, built at runtime from the card's own data (bar segments, turns)
+// so every intent card gets it for free.
+window.toggleSliceView = function (btn, mode) {
+  const card = btn.closest(".intent-card");
+  if (!card) return;
+  const bar = card.querySelector(".slice-expand");
+  const pane = card.querySelector(".slice-detail-pane");
+  if (!pane) return;
+  const wasOpen = !pane.hidden && pane.dataset.mode === mode;
+  bar.querySelectorAll(".se-btn").forEach((b) => b.classList.remove("on"));
+  if (wasOpen) { pane.hidden = true; pane.dataset.mode = ""; return; }
+  btn.classList.add("on");
+  pane.dataset.mode = mode;
+  pane.hidden = false;
+
+  const head = card.querySelector(".widget.trajectory .w-head");
+  const sliceRef = head ? (head.textContent.match(/SLICE T\d+ · STEPS [\d–]+ \/ \d+/) || [""])[0] : "";
+
+  if (mode === "trail") {
+    const segs = [...card.querySelectorAll(".bar.session .lit .seg")];
+    const rows = segs.map((s) => {
+      const tip = s.getAttribute("data-tip") || "";
+      const kind = [...s.classList].find((c) => c !== "seg") || "";
+      const m = tip.match(/step (\d+) · (.+)/) || [null, "", tip];
+      return `<div class="sd-row"><span class="sd-num">${m[1] || ""}</span><span class="sd-dot ${kind}"></span><span class="sd-kind">${m[2] || ""}</span></div>`;
+    }).join("");
+    pane.innerHTML = `<div class="sd-head">${sliceRef.toLowerCase()} — step-by-step</div><div class="sd-grid">${rows}</div>`;
+  } else {
+    const turns = [...card.querySelectorAll(".turns-body ol li")].map((li) => li.textContent.trim());
+    const subject = (card.querySelector(".intent-tagbar .subject") || {}).textContent || "";
+    const sha = (card.querySelector(".intent-tagbar .sha") || {}).textContent || "";
+    const turnHtml = turns.map((t) => `<div class="sd-msg user"><span class="sd-role">user</span><span class="sd-text">${t}</span></div>`).join("");
+    pane.innerHTML = `<div class="sd-head">${sliceRef.toLowerCase()} — conversation</div>${turnHtml}<div class="sd-msg agent"><span class="sd-role">agent</span><span class="sd-text">Landed <b>${subject}</b> <span class="mono">${sha}</span> — full exchange in the session viewer.</span></div>`;
+  }
+};
+window.openFullSession = function (btn) {
+  const bar = btn.closest(".slice-expand");
+  const sid = bar ? bar.getAttribute("data-session") : null;
+  if (window.__otOpenTrace) window.__otOpenTrace(sid || (window.RECENT_TRACES || [{}])[0].id);
+};
+
 // Pull request list per repo
 const REPO_PULLS = {
   "jayfarei/opentraces": [
@@ -340,11 +382,15 @@ function RepoPullDetail({ repoId, pullId, onBack }) {
 
   React.useEffect(() => {
     if (!pr || !pr.detail) return;
+    // The preview server may prepend instrumentation (<style>/<script>) to
+    // served .html files; strip those so they don't leak into the page and
+    // blow away global styles (e.g. html/body background → transparent).
+    const clean = (html) => html.replace(/<style\b[\s\S]*?<\/style>/gi, "").replace(/<script\b[\s\S]*?<\/script>/gi, "");
     Promise.all([
       fetch(`data/pr-pulse-main.html`).then(r => r.text()),
       fetch(`data/pr-pulse-rail.html`).then(r => r.text()),
     ])
-      .then(([m, r]) => { setMainHtml(m); setRailHtml(r); })
+      .then(([m, r]) => { setMainHtml(clean(m)); setRailHtml(clean(r)); })
       .catch(e => setErr(String(e)));
   }, [pullId]);
 
@@ -352,60 +398,59 @@ function RepoPullDetail({ repoId, pullId, onBack }) {
 
   return (
     <div className="landing pulls-detail-wrap">
-      {/* Local breadcrumb back to PR list */}
-      <div className="pulls-detail-bar">
-        <button className="pdb-back" onClick={onBack}>
-          <Icon name="chevron-left" size={14} />
-          <span>All pull requests</span>
-        </button>
-        <span className="pdb-sep">/</span>
-        <span className="pdb-num mono">#{pr.number}</span>
-        <span className="pdb-branch mono">
-          <Icon name="git-branch" size={11} />
-          <span>{pr.branch}</span>
-          <span className="arrow">→</span>
-          <span>{pr.base}</span>
-        </span>
-        <PullStatusPill status={pr.status} />
-        <div className="grow" />
-        <button className="pdb-btn">
-          <ExternalIcon size={12} />
-          <span>Open on GitHub</span>
-        </button>
-      </div>
-
       <div className="pr-detail">
         {err && <div style={{padding: 20, color: "var(--c-error)"}}>load error: {err}</div>}
         {!mainHtml && !err && <div style={{padding: 40, color: "var(--fg-mute)"}}>Loading PR…</div>}
         {mainHtml && (
           <main className="app-main" dangerouslySetInnerHTML={{ __html: mainHtml }} />
         )}
-        {railHtml && (
-          <aside className="app-rail" dangerouslySetInnerHTML={{ __html: railHtml }} />
-        )}
+        <aside className="app-rail">
+          {/* PR meta — status, branch, GitHub link. Lives with the other
+              rail boxes instead of a second breadcrumb bar. */}
+          <div className="rail-section rail-meta">
+            <div className="rail-head"><span>Pull request</span><span className="right mono">#{pr.number}</span></div>
+            <div className="rm-top">
+              <PullStatusPill status={pr.status} />
+              <span className="rm-branch mono">
+                <Icon name="git-branch" size={11} />
+                <span>{pr.branch}</span>
+                <span className="arrow">→</span>
+                <span>{pr.base}</span>
+              </span>
+            </div>
+            <div className="rail-prov rm-rows">
+              <div className="row"><span className="k">author</span><span className="v">{pr.author}</span></div>
+              <div className="row"><span className="k">updated</span><span className="v">{pr.updated}</span></div>
+            </div>
+            <button className="rm-gh-btn">
+              <ExternalIcon size={12} />
+              <span>Open on GitHub</span>
+            </button>
+          </div>
+          {railHtml && <div className="rail-embed" dangerouslySetInnerHTML={{ __html: railHtml }} />}
+        </aside>
       </div>
     </div>
   );
 }
 
-// Outer router for the repo "Pull requests" child.
-// `initialPull` (optional) boots straight into a PR detail instead of the list —
-// the marketing /hub pulls card passes it via ?pr=… so the embed opens on an
-// open PR; standalone sidebar nav passes nothing and lands on the list.
-function RepoPullsPage({ repoId, initialPull }) {
-  const [openPullId, setOpenPullId] = React.useState(initialPull || null);
-  if (openPullId) {
+// Outer router for the repo "Pull requests" child. The open PR lives in the
+// app route (pullId prop) so the topbar breadcrumb is the single source of
+// navigation — no local detail bar.
+function RepoPullsPage({ repoId, pullId, onOpenPull, onClosePull }) {
+  if (pullId) {
     return (
       <RepoPullDetail
         repoId={repoId}
-        pullId={openPullId}
-        onBack={() => setOpenPullId(null)}
+        pullId={pullId}
+        onBack={onClosePull}
       />
     );
   }
-  return <RepoPullsList repoId={repoId} onOpenPull={setOpenPullId} />;
+  return <RepoPullsList repoId={repoId} onOpenPull={onOpenPull} />;
 }
 
 window.RepoPullsPage = RepoPullsPage;
 window.RepoPullsList = RepoPullsList;
 window.RepoPullDetail = RepoPullDetail;
+window.REPO_PULLS = REPO_PULLS;

@@ -2,12 +2,12 @@
 
 // Generate one year of contribution data (52 weeks × 7 days)
 // Each cell: { count, repos: { repoId: count }, datasets: { datasetName: count } }
-function buildHeatmap() {
-  const REPOS = ["jayfarei/opentraces", "jayfarei/datafetch", "jayfarei/lazymem", "jayfarei/clarify", "jayfarei/open-data", "jayfarei/koreader-kiosk"];
-  const DATASETS = ["claude-eval-v3", "keystrokes-2026", "edge-traces", "rag-fixtures", "shortcuts-bench"];
+function buildHeatmap(cfg = {}) {
+  const REPOS = cfg.repos || ["jayfarei/opentraces", "jayfarei/datafetch", "jayfarei/lazymem", "jayfarei/clarify", "jayfarei/open-data", "jayfarei/koreader-kiosk"];
+  const DATASETS = cfg.datasets || ["claude-eval-v3", "keystrokes-2026", "edge-traces", "rag-fixtures", "shortcuts-bench"];
   const cells = [];
   // Seeded pseudo-random
-  let seed = 13371337;
+  let seed = cfg.seed || 13371337;
   const rnd = () => {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
@@ -22,20 +22,29 @@ function buildHeatmap() {
       // Bias toward weekdays + recent months
       const isWeekend = d === 0 || d === 6;
       const recencyBoost = Math.max(0, 1 - daysAgo / 200);
-      let p = 0.35 + recencyBoost * 0.4;
-      if (isWeekend) p *= 0.3;
+      let p = Math.min(0.95, (0.35 + recencyBoost * 0.4) * (cfg.density || 1));
+      if (isWeekend) p *= (cfg.weekend || 0.3);
       let count = 0;
       const repos = {};
       const datasets = {};
       if (rnd() < p) {
-        count = 1 + Math.floor(rnd() * (4 + recencyBoost * 6));
-        // distribute across 1-3 repos
+        count = Math.max(1, Math.round((2 + rnd() * (5 + recencyBoost * 6)) * (cfg.scale || 1)));
+        // Most active days span 2-3 DISTINCT projects (≈75%), so the
+        // "By project" heatmap gets real color mixtures to portray.
+        const pool = [...REPOS];
+        for (let i = pool.length - 1; i > 0; i--) {
+          const j = Math.floor(rnd() * (i + 1));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        const nRepos = Math.min(count, rnd() < 0.25 ? 1 : 2 + Math.floor(rnd() * 2));
+        const weights = Array.from({ length: nRepos }, () => 0.35 + rnd());
+        const wSum = weights.reduce((a, b) => a + b, 0);
         let remaining = count;
-        const nRepos = 1 + Math.floor(rnd() * 3);
         for (let i = 0; i < nRepos && remaining > 0; i++) {
-          const r = REPOS[Math.floor(rnd() * REPOS.length)];
-          const take = i === nRepos - 1 ? remaining : Math.max(1, Math.floor(rnd() * remaining));
-          repos[r] = (repos[r] || 0) + take;
+          const take = i === nRepos - 1
+            ? remaining
+            : Math.min(remaining, Math.max(1, Math.round(count * weights[i] / wSum)));
+          repos[pool[i]] = take;
           remaining -= take;
         }
         // Independent: roughly 65% of traces are tied to a dataset
@@ -57,9 +66,11 @@ function buildHeatmap() {
 
 const HEATMAP = buildHeatmap();
 
-// 24 recent traces with synthetic minimap fingerprints
-function buildRecentTraces() {
-  const titles = [
+// Recent traces with synthetic minimap fingerprints. Generates n traces
+// walking back from "now" (~2 months at n=220); the first 24 are stable
+// regardless of n (suffix randomness only kicks in past the title list).
+function buildRecentTraces(n = 24, cfg = {}) {
+  const titles = cfg.titles || [
     "Redesign keyboard shortcuts",
     "Stage panel reorder",
     "Fix retry loop in fetcher",
@@ -85,7 +96,7 @@ function buildRecentTraces() {
     "Workflow scheduler retries",
     "Repo overview skeleton",
   ];
-  const repos = ["jayfarei/opentraces", "jayfarei/datafetch", "jayfarei/lazymem", "jayfarei/clarify", "jayfarei/open-data", "jayfarei/koreader-kiosk"];
+  const repos = cfg.repos || ["jayfarei/opentraces", "jayfarei/datafetch", "jayfarei/lazymem", "jayfarei/clarify", "jayfarei/open-data", "jayfarei/koreader-kiosk"];
   const agents = [
     { name: "Claude Code", model: "Sonnet 4.5", icon: "claude" },
     { name: "Codex", model: "GPT-5.3 Codex", icon: "codex" },
@@ -94,7 +105,7 @@ function buildRecentTraces() {
     { name: "OpenCode", model: "GPT-5 Mini", icon: "opencode" },
   ];
   const statuses = ["committed", "committed", "committed", "pushed", "working", "failed"];
-  const datasetByRepo = {
+  const datasetByRepo = cfg.datasetByRepo || {
     "jayfarei/opentraces": ["shortcuts-bench"],
     "jayfarei/datafetch": ["edge-traces"],
     "jayfarei/lazymem": ["claude-eval-v3"],
@@ -103,21 +114,27 @@ function buildRecentTraces() {
     "jayfarei/koreader-kiosk": ["keystrokes-2026"],
   };
 
-  let seed = 99999;
+  let seed = cfg.seed || 99999;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
 
   const now = new Date(Date.UTC(2026, 3, 29, 14, 0));
   const out = [];
+  const tails = ["", " — follow-up", " (round 2)", " — cleanup", " regression", " — polish", "", " retry"];
   let cursor = now.getTime();
-  for (let i = 0; i < 24; i++) {
-    cursor -= (1 + Math.floor(rnd() * 8)) * 3600 * 1000 + Math.floor(rnd() * 7200 * 1000);
+  for (let i = 0; i < n; i++) {
+    cursor -= cfg.stepMinMs != null
+      ? cfg.stepMinMs + Math.floor(rnd() * (cfg.stepJitterMs || 3600e3))
+      : (1 + Math.floor(rnd() * 8)) * 3600 * 1000 + Math.floor(rnd() * 7200 * 1000);
     const fingerprint = buildFingerprint(rnd, 28 + Math.floor(rnd() * 36));
     const repo = repos[Math.floor(rnd() * repos.length)];
     const dsList = datasetByRepo[repo] || [];
     const dataset = dsList.length > 0 && rnd() > 0.35 ? dsList[Math.floor(rnd() * dsList.length)] : null;
+    const title = i < titles.length
+      ? titles[i]
+      : titles[i % titles.length] + tails[Math.floor(rnd() * tails.length)];
     out.push({
       id: hexId(rnd),
-      title: titles[i],
+      title: title,
       repo,
       dataset,
       turns: 6 + Math.floor(rnd() * 80),
@@ -159,7 +176,35 @@ function hexId(rnd) {
   return `${a}·${b}`;
 }
 
-const RECENT_TRACES = buildRecentTraces();
+const ALL_TRACES = buildRecentTraces(220);
+const RECENT_TRACES = ALL_TRACES.slice(0, 24);
+
+// Traces for one heatmap day — the heatmap cell is the source of truth
+// (count + per-repo/dataset mix), so the drill-down always matches what
+// the cell shows. Deterministic per date, so revisiting a day is stable.
+function tracesForHeatmapDay(cell) {
+  const date = cell.date;
+  let seed = (Math.floor(date.getTime() / 86400000) * 2654435761) & 0x7fffffff;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const repoPool = [];
+  Object.entries(cell.repos || {}).forEach(([r, n]) => { for (let i = 0; i < n; i++) repoPool.push(r); });
+  const dsPool = Object.keys(cell.datasets || {});
+  const src = window.ALL_TRACES || ALL_TRACES; // follows the active account
+  const out = [];
+  for (let i = 0; i < cell.count; i++) {
+    const base = src[Math.floor(rnd() * src.length)];
+    const hour = 7 + Math.floor(rnd() * 13);
+    out.push({
+      ...base,
+      id: hexId(rnd),
+      repo: repoPool.length ? repoPool[i % repoPool.length] : base.repo,
+      dataset: dsPool.length && rnd() > 0.45 ? dsPool[Math.floor(rnd() * dsPool.length)] : null,
+      timestamp: new Date(date.getTime() + hour * 3600e3 + Math.floor(rnd() * 3500e3)),
+      fingerprint: buildFingerprint(rnd, 28 + Math.floor(rnd() * 36)),
+    });
+  }
+  return out.sort((a, b) => b.timestamp - a.timestamp);
+}
 
 // Top agents this period
 const TOP_AGENTS = [
@@ -174,6 +219,7 @@ function buildWorkflowRuns(workflowId) {
   let seed = workflowId.split("").reduce((a,c) => a * 31 + c.charCodeAt(0), 7) | 0;
   seed = Math.abs(seed);
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const dsNames = Object.values(window.DATASET_DEFS || DATASET_DEFS).map(d => d.name);
   const out = [];
   let t = Date.UTC(2026, 3, 29, 8, 0);
   for (let i = 0; i < 14; i++) {
@@ -185,7 +231,7 @@ function buildWorkflowRuns(workflowId) {
       status: ok ? "ok" : "failed",
       duration_s: 30 + Math.floor(rnd() * 600),
       rows: 100 + Math.floor(rnd() * 12000),
-      dataset: ["claude-eval-v3", "rag-fixtures", "edge-traces"][Math.floor(rnd() * 3)],
+      dataset: dsNames[Math.floor(rnd() * Math.min(3, dsNames.length))],
       fingerprint: buildFingerprint(rnd, 24 + Math.floor(rnd() * 24)),
     });
   }
@@ -514,10 +560,70 @@ function buildInboxItems(datasetId, count) {
 
 window.buildInboxItems = buildInboxItems;
 window.RECENT_TRACES = RECENT_TRACES;
+window.ALL_TRACES = ALL_TRACES;
+window.tracesForHeatmapDay = tracesForHeatmapDay;
 window.HEATMAP = HEATMAP;
+// Arenas — reproducible task environments promoted from task families.
+// Each pins repos + verify commands; tasks queue in from classifiers.
+const ARENA_DEFS = {
+  "ar-flaky-tests": { name: "flaky-test-arena", tasks: 48, tier: "silver", pass_rate: 0.62, last_run: "3h ago", source: "flaky-test-hunter" },
+  "ar-refactor":    { name: "refactor-guard",   tasks: 26, tier: "gold",   pass_rate: 0.78, last_run: "6h ago", source: "family grader" },
+  "ar-edge-og":     { name: "edge-og-arena",    tasks: 12, tier: "bronze", pass_rate: 0.41, last_run: "1d ago", source: "family grader" },
+  "ar-rag-verify":  { name: "rag-verify",       tasks: 9,  tier: "bronze", pass_rate: 0.55, last_run: "2d ago", source: "thrash-detector" },
+};
+
 window.TOP_AGENTS = TOP_AGENTS;
+window.ARENA_DEFS = ARENA_DEFS;
 window.WORKFLOW_DEFS = WORKFLOW_DEFS;
 window.DATASET_DEFS = DATASET_DEFS;
 window.REPO_DEFS = REPO_DEFS;
 window.buildWorkflowRuns = buildWorkflowRuns;
 window.buildFingerprint = buildFingerprint;
+
+// ── Account-switchable data: personal (Jay) vs org (OpenMake) ──
+// org-data.jsx (loaded before this file) supplies the ORG_* configs.
+const ORG_READY = !!window.ORG_REPO_DEFS;
+const ORG_ALL_TRACES = ORG_READY ? buildRecentTraces(520, {
+  repos: Object.keys(window.ORG_REPO_DEFS),
+  datasetByRepo: window.ORG_DATASET_BY_REPO,
+  titles: window.ORG_TRACE_TITLES,
+  seed: 424242,
+  stepMinMs: 10 * 60e3, stepJitterMs: 110 * 60e3, // minutes apart, not hours
+}) : null;
+const ORG_HEATMAP = ORG_READY ? buildHeatmap({
+  repos: Object.keys(window.ORG_REPO_DEFS),
+  datasets: Object.values(window.ORG_DATASET_DEFS).map(d => d.name),
+  seed: 20260712, density: 1.55, weekend: 0.6, scale: 3.4,
+}) : null;
+
+window.ACCOUNT_DATA = {
+  personal: {
+    HEATMAP, ALL_TRACES, RECENT_TRACES,
+    REPO_DEFS, DATASET_DEFS, WORKFLOW_DEFS, TOP_AGENTS,
+    homeRepo: "jayfarei/opentraces",
+  },
+  org: ORG_READY ? {
+    HEATMAP: ORG_HEATMAP,
+    ALL_TRACES: ORG_ALL_TRACES,
+    RECENT_TRACES: ORG_ALL_TRACES.slice(0, 24),
+    REPO_DEFS: window.ORG_REPO_DEFS,
+    DATASET_DEFS: window.ORG_DATASET_DEFS,
+    WORKFLOW_DEFS: window.ORG_WORKFLOW_DEFS || WORKFLOW_DEFS,
+    TOP_AGENTS: window.ORG_TOP_AGENTS || TOP_AGENTS,
+    homeRepo: "openmake/forge",
+  } : null,
+};
+window.applyAccountData = function (a) {
+  const d = window.ACCOUNT_DATA[a] || window.ACCOUNT_DATA.personal;
+  window.OT_ACCOUNT = d === window.ACCOUNT_DATA.org ? "org" : "personal";
+  window.ACCOUNT_HOME_REPO = d.homeRepo;
+  window.HEATMAP = d.HEATMAP;
+  window.ALL_TRACES = d.ALL_TRACES;
+  window.RECENT_TRACES = d.RECENT_TRACES;
+  window.REPO_DEFS = d.REPO_DEFS;
+  window.DATASET_DEFS = d.DATASET_DEFS;
+  window.WORKFLOW_DEFS = d.WORKFLOW_DEFS;
+  window.TOP_AGENTS = d.TOP_AGENTS;
+};
+try { window.applyAccountData(localStorage.getItem("ot-account") || "personal"); }
+catch (e) { window.applyAccountData("personal"); }

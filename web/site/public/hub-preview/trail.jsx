@@ -1,10 +1,8 @@
 // Trail (Visual) — port of hub-next/src/components/trajectory
 // Timeline → GridHead + TimelineRow → ActionCell / GitLane / TelemetryCell / CtxCell
 
-const GRID_TEMPLATE =
-  "var(--col-rail) repeat(6, minmax(0, 1fr)) var(--col-git-sep) " +
-  "var(--col-git-work) var(--col-git-local) var(--col-git-remote) " +
-  "var(--col-git-sep) var(--col-telem) var(--col-telem) var(--col-telem) var(--col-telem)";
+// Grid column template lives in app.css (.trajectory-grid-cols / .tj-row)
+// so container queries can drop the telemetry + git groups on narrow panes.
 
 const PHASE_ORDER = ["user", "plan", "think", "read", "exec", "write"];
 
@@ -24,15 +22,15 @@ function ActionCell({ step, actionClass, cellClass, focused, hasError, onClick }
 }
 
 function ActionNode({ step, actionClass, focused, hasError }) {
-  // shape: dot for most, square for write (matches hub-next)
+  // shape: dot for most, square for write (matches hub-next).
+  // One node = one step; a step with several changes is captured upstream
+  // as several steps, never as multiple glyphs in one row.
   const isSquare = actionClass === "write";
   const tcs = step.tool_calls || [];
-  // optional inline summary on focused row
-  const summary = focused && tcs.length ? summarizeToolCall(tcs[0]) : null;
   return (
     <span className={"node " + actionClass} data-shape={isSquare ? "sq" : "dot"} data-error={hasError || undefined}>
       <span className="glyph" />
-      {summary ? <span className="node-label">{summary}</span> : null}
+      {tcs.length ? <span className="node-label">{summarizeToolCall(tcs[0])}</span> : null}
     </span>
   );
 }
@@ -107,7 +105,7 @@ function CtxCell({ pct }) {
 }
 
 // ── GridHead ──────────────────────────────────────────────────
-function GridHead({ trace, classes, stages, compact }) {
+function GridHead({ trace, classes, stages }) {
   const counts = { user: 0, plan: 0, think: 0, read: 0, exec: 0, write: 0 };
   classes.forEach(c => { if (counts[c] != null) counts[c]++; });
 
@@ -146,20 +144,18 @@ function GridHead({ trace, classes, stages, compact }) {
     { k: "elapsed", l: "ELAPSED", t: elapsedSec > 0 ? formatShort(elapsedSec) : "—" },
   ];
 
-  const gridStyle = { gridTemplateColumns: GRID_TEMPLATE };
-
   return (
-    <div className="grid-head" data-compact={compact ? "true" : "false"}>
+    <div className="grid-head">
       <div className="inner">
-        <div className="trajectory-grid-cols group-row" style={gridStyle}>
+        <div className="trajectory-grid-cols group-row">
           <div className="gh" />
           <div className="gh action" style={{ gridColumn: "span 6" }}>ACTIONS</div>
-          <div className="gh" />
+          <div className="gh sep-git" />
           <div className="gh git" style={{ gridColumn: "span 3" }}>GIT TREE</div>
-          <div className="gh" />
+          <div className="gh sep-tel" />
           <div className="gh tel" style={{ gridColumn: "span 4" }}>TELEMETRY</div>
         </div>
-        <div className="trajectory-grid-cols col-row" style={gridStyle}>
+        <div className="trajectory-grid-cols col-row">
           <div className="hc rail">
             <span className="hc-count">{trace.steps.length}</span>
             <span className="lbl">STEP</span>
@@ -170,16 +166,16 @@ function GridHead({ trace, classes, stages, compact }) {
               <span className="tag" style={tag(c.k)}>{c.l}</span>
             </div>
           ))}
-          <div className="hc sep" aria-hidden="true" />
+          <div className="hc sep sep-git" aria-hidden="true" />
           {GIT_COLS.map(c => (
             <div key={c.k} className={"hc g-" + c.k + (c.c ? "" : " empty")}>
               <span className="hc-count">{orDash(c.c)}</span>
               <span className="tag">{c.l}</span>
             </div>
           ))}
-          <div className="hc sep" aria-hidden="true" />
+          <div className="hc sep sep-tel" aria-hidden="true" />
           {TEL_COLS.map(c => (
-            <div key={c.k} className={"hc" + (c.t === "—" ? " empty" : "")}>
+            <div key={c.k} className={"hc tel-col" + (c.t === "—" ? " empty" : "")}>
               <span className="hc-count">{c.t}</span>
               <span className="lbl">{c.l}</span>
             </div>
@@ -191,7 +187,7 @@ function GridHead({ trace, classes, stages, compact }) {
 }
 
 // ── TimelineRow ───────────────────────────────────────────────
-function TimelineRow({ step, stepIndex, actionClass, snapshot, telemetry, maxima, focused, trunk, sha, onFocus, onOpen, onCommitOpen, wasteFindings, healthSignals, healthFilter }) {
+function TimelineRow({ step, stepIndex, actionClass, snapshot, telemetry, maxima, focused, trunk, sha, onFocus, onOpen, onCommitOpen, wasteFindings, healthSignals, healthFilter, outOfSlice }) {
   const hasError = (step.observations || []).some(o => o.error);
   const tokInPct = maxima.tokIn > 0 ? (telemetry.tokIn / maxima.tokIn) * 100 : 0;
   const tokOutPct = maxima.tokOut > 0 ? (telemetry.tokOut / maxima.tokOut) * 100 : 0;
@@ -211,9 +207,9 @@ function TimelineRow({ step, stepIndex, actionClass, snapshot, telemetry, maxima
       data-focused={focused || undefined}
       data-class={actionClass}
       data-waste={wasteSev}
+      data-outslice={outOfSlice || undefined}
       onClick={onOpen}
       onMouseEnter={onFocus}
-      style={{ gridTemplateColumns: GRID_TEMPLATE }}
       className={"tj-row" + (focused ? " focused" : "")}
     >
       <RowMarks wasteFindings={wasteFindings} healthSignals={healthSignals} healthFilter={healthFilter} />
@@ -235,13 +231,13 @@ function TimelineRow({ step, stepIndex, actionClass, snapshot, telemetry, maxima
         />
       ))}
 
-      <div className="sep" aria-hidden="true" />
+      <div className="sep sep-git" aria-hidden="true" />
 
       <GitLane variant="work"   snapshot={snapshot} trunk={trunk.work}   />
       <GitLane variant="local"  snapshot={snapshot} trunk={trunk.local}  sha={sha} onCommitClick={onCommitOpen} />
       <GitLane variant="remote" snapshot={snapshot} trunk={trunk.remote} sha={sha} onCommitClick={onCommitOpen} />
 
-      <div className="sep" aria-hidden="true" />
+      <div className="sep sep-tel" aria-hidden="true" />
 
       <TelemetryCell kind="tokIn"  value={telemetry.tokIn}  fillPct={tokInPct} />
       <TelemetryCell kind="tokOut" value={telemetry.tokOut} fillPct={tokOutPct} />
@@ -252,7 +248,7 @@ function TimelineRow({ step, stepIndex, actionClass, snapshot, telemetry, maxima
 }
 
 // ── Timeline (TrailView) ──────────────────────────────────────
-function TrailView({ steps, classes, focusedIdx, onSelect, onOpenStep, contextWaste, runHealth, wasteFilter, compact }) {
+function TrailView({ steps, classes, focusedIdx, onSelect, onOpenStep, contextWaste, runHealth, wasteFilter, sliceRange, slices, slicerKey, slicerSig, activeSlice, onPickSlice }) {
   // Build a synthetic trace shape for the helpers
   const trace = React.useMemo(() => ({ steps, timestamp_start: steps[0]?.timestamp, timestamp_end: steps[steps.length - 1]?.timestamp }), [steps]);
 
@@ -292,6 +288,14 @@ function TrailView({ steps, classes, focusedIdx, onSelect, onOpenStep, contextWa
     return { stages, tel, maxima, shas };
   }, [trace]);
 
+  // Map slice-start step index → slice index, so the timeline can carry
+  // the slicer's cuts as labeled divider rows.
+  const sliceStarts = React.useMemo(() => {
+    const m = {};
+    (slices || []).forEach((s, k) => { m[s.s] = k; });
+    return m;
+  }, [slices]);
+
   return (
     <div className="trail-pane">
       {runHealth && (
@@ -304,11 +308,10 @@ function TrailView({ steps, classes, focusedIdx, onSelect, onOpenStep, contextWa
       )}
       <div
         className="timeline"
-        style={{ "--grid-template": GRID_TEMPLATE }}
         data-waste-filter={wasteFilter ? "true" : undefined}
         data-health-filter={healthFilter || undefined}
       >
-        <GridHead trace={trace} classes={classes} stages={derived.stages} compact={compact} />
+        <GridHead trace={trace} classes={classes} stages={derived.stages} />
         <div className="timeline-body">
           {trace.steps.map((step, i) => {
             const trunk = {
@@ -316,6 +319,26 @@ function TrailView({ steps, classes, focusedIdx, onSelect, onOpenStep, contextWa
               local: trunkFor(i, derived.stages.ranges.firstCommit, derived.stages.ranges.lastCommit),
               remote: trunkFor(i, derived.stages.ranges.firstPush, derived.stages.ranges.lastPush),
             };
+            const sliceK = sliceStarts[i];
+            const sliceDiv = sliceK != null ? (() => {
+              const s = slices[sliceK];
+              const label = window.sliceLabel ? window.sliceLabel(steps, s, slicerKey) : null;
+              const isOn = activeSlice === sliceK;
+              return (
+                <button
+                  key={"sd" + sliceK}
+                  className={"tj-slice-div" + (isOn ? " on" : "")}
+                  style={{ "--sl-sig": slicerSig }}
+                  title={isOn ? `T${sliceK} · click to unselect` : `Scope to T${sliceK} · steps ${s.s}–${s.e}`}
+                  onClick={() => onPickSlice && onPickSlice(isOn ? null : sliceK)}
+                >
+                  <span className="tsd-t mono">T{sliceK}</span>
+                  {label && <span className="tsd-lbl">{label}</span>}
+                  <span className="tsd-span mono">{s.s}–{s.e}</span>
+                  <span className="tsd-line" />
+                </button>
+              );
+            })() : null;
             const telemetry = {
               tokIn: derived.tel.deltaIn[i] || 0,
               tokOut: derived.tel.deltaOut[i] || 0,
@@ -323,24 +346,27 @@ function TrailView({ steps, classes, focusedIdx, onSelect, onOpenStep, contextWa
               ctxPct: derived.tel.ctxPct[i],
             };
             return (
-              <TimelineRow
-                key={i}
-                step={step}
-                stepIndex={i}
-                actionClass={classes[i]}
-                snapshot={derived.stages.snapshots[i]}
-                telemetry={telemetry}
-                maxima={derived.maxima}
-                focused={i === focusedIdx}
-                trunk={trunk}
-                sha={derived.shas[i]}
-                wasteFindings={overlays.wasteByIdx[i]}
-                healthSignals={overlays.healthByIdx[i]}
-                healthFilter={healthFilter}
-                onFocus={() => onSelect(i)}
-                onOpen={() => { onSelect(i); onOpenStep && onOpenStep(i); }}
-                onCommitOpen={() => onOpenStep && onOpenStep(i)}
-              />
+              <React.Fragment key={i}>
+                {sliceDiv}
+                <TimelineRow
+                  step={step}
+                  stepIndex={i}
+                  actionClass={classes[i]}
+                  snapshot={derived.stages.snapshots[i]}
+                  telemetry={telemetry}
+                  maxima={derived.maxima}
+                  focused={i === focusedIdx}
+                  trunk={trunk}
+                  sha={derived.shas[i]}
+                  wasteFindings={overlays.wasteByIdx[i]}
+                  healthSignals={overlays.healthByIdx[i]}
+                  healthFilter={healthFilter}
+                  outOfSlice={sliceRange ? (i < sliceRange[0] || i > sliceRange[1]) : false}
+                  onFocus={() => onSelect(i)}
+                  onOpen={() => { onSelect(i); onOpenStep && onOpenStep(i); }}
+                  onCommitOpen={() => onOpenStep && onOpenStep(i)}
+                />
+              </React.Fragment>
             );
           })}
         </div>
@@ -349,4 +375,8 @@ function TrailView({ steps, classes, focusedIdx, onSelect, onOpenStep, contextWa
   );
 }
 
-window.TrailView = TrailView;
+// Memoized: the header's compact flip re-renders App every scroll
+// hand-off; without memo all ~160 timeline rows re-render and the
+// height animation drops frames. Compact styling reaches .grid-head
+// via the .main-inner[data-compact] ancestor selector instead.
+window.TrailView = React.memo(TrailView);

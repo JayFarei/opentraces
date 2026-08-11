@@ -5,8 +5,8 @@
 // THE PROACTIVE SYNC JOB (run whenever the Claude design changes):
 //   1. Pull the design's runtime files into public/hub-preview/ via the
 //      claude_design MCP (DesignSync get_file), overwriting in place. The entry
-//      file "OpenTraces Hub.html" is written as index.html. This step is driven
-//      by the agent (the MCP is not a CLI); see scripts/SYNC-HUB.md.
+//      file "OpenTraces Hub v2.html" is written as index.html. This step is
+//      driven by the agent (the MCP is not a CLI); see scripts/SYNC-HUB.md.
 //   2. node scripts/sync-hub.mjs apply     ← re-applies the embed seam (this file)
 //   3. node scripts/sync-hub.mjs check     ← verifies the /hub view contract
 //   4. Re-shoot the two preview posters (public/hub-poster*.png) if visuals moved.
@@ -23,6 +23,11 @@
 // is missing (because the design's App structure changed), it throws with the
 // anchor name instead of silently shipping a broken embed. That failure IS the
 // drift alarm — re-review the seam against the new structure.
+//
+// v2 NOTE (Hub v2 import, 2026-08): two v1-era patches were retired because the
+// design absorbed them — conversation-tab header compaction (v2 wires
+// compactFromScroll on both scrollers itself) and the pulls PR deep-link (v2's
+// RepoPullsPageV2 takes pullId straight from the route, which the parser seeds).
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -39,16 +44,16 @@ const EMBED_CSS_BODY = `/* @ot-embed-seam — site-owned, NOT part of the Claude
    Chromeless embed layout for the marketing-site /hub iframes (?embed=1).
    The Claude design's own app.css is left untouched; this overlay is preserved
    across design re-imports (the sync job never overwrites it). */
+/* v2 shell: .sb-flip (sidebar+CLUI rail) is not rendered in embed mode (JSX
+   guard), so the content column just needs to own the full width, and the main
+   scroll area reclaims the topbar's height. */
 .app-shell[data-embed="1"] { grid-template-columns: 1fr; }
-/* No topbar in embed mode, so the main scroll area reclaims its 56px and the
- * conversation scrollers (which subtract --main-chrome) fill the full canvas. */
+.app-shell[data-embed="1"] .app-content { width: 100%; }
 .app-shell[data-embed="1"] .main { --main-chrome: 0px; height: 100vh; }
 `;
 
 // ── The seam, as ordered transforms over the raw export's index.html ──────────
 // Each entry: { name, marker (present => already applied, skip), find, insert|replace }.
-// `insertBefore`: insert `payload` immediately before `find`.
-// `replace`: swap exact `find` for `payload`.
 
 const PARSER_BLOCK = `<script>
 /* @ot-embed-seam:start — site-owned host seam (deep-link + chromeless embed).
@@ -56,7 +61,9 @@ const PARSER_BLOCK = `<script>
    full-chrome defaults the Claude design ships with, so the artifact renders as
    authored. The marketing site passes ?embed=1&view=… to boot one chromeless
    panel. This block is re-applied verbatim by scripts/sync-hub on every design
-   re-import, and is structured to lift straight into the design source later. */
+   re-import, and is structured to lift straight into the design source later.
+   It emits window.__HUB_INIT__ = { embed, tab, benchTab, route } where route is
+   a v2 canonical route object (the same shape App.navigate/applyRoute use). */
 (function () {
   var p;
   try { p = new URLSearchParams(window.location.search); } catch (e) { p = new URLSearchParams(""); }
@@ -67,27 +74,38 @@ const PARSER_BLOCK = `<script>
   var traceId = p.get("trace");
   var tab = p.get("tab");
   var pr = p.get("pr");
+  var artifact = p.get("artifact");
+  var evidence = p.get("evidence");
+  var capsule = p.get("capsule");
+  var benchtab = p.get("benchtab");
   var init = {
     embed: p.get("embed") === "1",
-    view: "traces-landing",
-    activeNav: "traces",
-    activeRepoId: null, activeRepoChild: null, expandedRepo: "jayfarei/opentraces",
-    activeDatasetId: null, activeDatasetChild: null, expandedDataset: null,
-    activeTraceId: null,
-    activeTab: tab === "trail" ? "trail" : "conversation",
-    pullId: pr ? (pr.indexOf("pr-") === 0 ? pr : "pr-" + pr) : null,
+    tab: tab === "trail" ? "trail" : "conversation",
+    benchTab: null,
+    route: null,
   };
+  var HOME_REPO = "jayfarei/opentraces";
   if (v === "repo") {
-    var r = repo || "jayfarei/opentraces";
-    init.view = "repo"; init.activeNav = ""; init.activeRepoId = r; init.expandedRepo = r; init.activeRepoChild = child || "overview";
+    var r = repo || HOME_REPO;
+    var c = child || "overview";
+    /* pseudo-children map onto the bench hub's inner tab, mirroring openRepo */
+    if (c === "atlas" || c === "checks" || c === "environment") { init.benchTab = "atlas"; c = "bench"; }
+    else if (c === "evidence") { init.benchTab = "evidence"; c = "bench"; }
+    else if (c === "bench") { init.benchTab = benchtab || "runs"; }
+    init.route = { view: "repo", repoId: r, repoChild: c,
+      pullId: (c === "pulls" && pr) ? (pr.indexOf("pr-") === 0 ? pr : "pr-" + pr) : null };
   } else if (v === "dataset") {
-    var d = dataset || "ds-edge-traces";
-    init.view = "dataset"; init.activeNav = ""; init.activeDatasetId = d; init.expandedDataset = d; init.activeDatasetChild = child || "overview";
+    init.route = { view: "dataset", datasetId: dataset, datasetChild: child || "overview" };
   } else if (v === "trace") {
-    init.view = "trace"; init.activeNav = ""; init.activeTraceId = traceId || null;
+    init.route = { view: "trace", traceId: traceId || null };
+  } else if (v === "artifact") {
+    init.route = { view: "artifact", nav: "artifacts-index", artifactId: artifact || null };
+  } else if (v === "evidence-detail") {
+    init.route = { view: "evidence-detail", nav: "evidence", evidenceId: evidence || null };
+  } else if (v === "capsule-detail") {
+    init.route = { view: "capsule-detail", nav: "capsules", capsuleId: capsule || null };
   } else if (v) {
-    var navFor = { "traces-landing": "traces", spotlight: "spotlight", intents: "intents", evals: "evals", capsules: "capsules", alerts: "alerts", improving: "improving", settings: "settings", compare: "" };
-    init.view = v; init.activeNav = navFor[v] != null ? navFor[v] : "";
+    init.route = { view: v, nav: v === "traces-landing" ? "traces" : v };
   }
   window.__HUB_INIT__ = init;
 })();
@@ -96,43 +114,52 @@ const PARSER_BLOCK = `<script>
 
 `;
 
-const RAW_USESTATE = `  // App nav state
-  // view: 'trace' (existing trace viewer), 'traces-landing', 'repo', 'dataset'
-  const [view, setView] = React.useState("traces-landing");
+// ── Anchors in the v2 export (exact strings; STRICT on drift) ────────────────
+
+const RAW_USESTATE = `  const [view, setView] = React.useState("traces-landing");
   const [activeNav, setActiveNav] = React.useState("traces");
-  const [expandedSections, setExpandedSections] = React.useState(["datasets", "repositories"]);
-  const [searchQuery, setSearchQuery] = React.useState("");
   const [activeTraceId, setActiveTraceId] = React.useState(null);
   const [activeDatasetId, setActiveDatasetId] = React.useState(null);
   const [activeDatasetChild, setActiveDatasetChild] = React.useState(null);
   const [expandedDataset, setExpandedDataset] = React.useState(null);
   const [activeRepoId, setActiveRepoId] = React.useState(null);
-  const [expandedRepo, setExpandedRepo] = React.useState("jayfarei/opentraces");
+  const [expandedRepo, setExpandedRepo] = React.useState(window.ACCOUNT_HOME_REPO || "jayfarei/opentraces");
   const [activeRepoChild, setActiveRepoChild] = React.useState(null);
-  const [activeTab, setActiveTab] = React.useState("conversation");`;
+  const [activePullId, setActivePullId] = React.useState(null);
+  const [activeArtifactId, setActiveArtifactId] = React.useState(null);
+  const [activeEvidenceId, setActiveEvidenceId] = React.useState(null);
+  const [activeCapsuleId, setActiveCapsuleId] = React.useState(null);
+  const [atlasFocus, setAtlasFocus] = React.useState(null);
+  const [benchTab, setBenchTab] = React.useState("atlas");`;
 
-const SEAMED_USESTATE = `  // App nav state
-  // view: 'trace' (existing trace viewer), 'traces-landing', 'repo', 'dataset'
-  /* @ot-embed-seam:start — boot initial nav state from the host (URL params),
+const SEAMED_USESTATE = `  /* @ot-embed-seam:start — boot initial nav state from the host (URL params),
      each falling back to the design's own default so standalone is unchanged. */
   const HUB_INIT = (typeof window !== "undefined" && window.__HUB_INIT__) || {};
   const embed = !!HUB_INIT.embed;
-  const [view, setView] = React.useState(HUB_INIT.view || "traces-landing");
-  const [activeNav, setActiveNav] = React.useState(HUB_INIT.activeNav ?? "traces");
+  const INIT_ROUTE = HUB_INIT.route || {};
   /* @ot-embed-seam:end */
-  const [expandedSections, setExpandedSections] = React.useState(["datasets", "repositories"]);
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const [activeTraceId, setActiveTraceId] = React.useState(HUB_INIT.activeTraceId ?? null);
-  const [activeDatasetId, setActiveDatasetId] = React.useState(HUB_INIT.activeDatasetId ?? null);
-  const [activeDatasetChild, setActiveDatasetChild] = React.useState(HUB_INIT.activeDatasetChild ?? null);
-  const [expandedDataset, setExpandedDataset] = React.useState(HUB_INIT.expandedDataset ?? null);
-  const [activeRepoId, setActiveRepoId] = React.useState(HUB_INIT.activeRepoId ?? null);
-  const [expandedRepo, setExpandedRepo] = React.useState(HUB_INIT.expandedRepo || "jayfarei/opentraces");
-  const [activeRepoChild, setActiveRepoChild] = React.useState(HUB_INIT.activeRepoChild ?? null);
-  const [activeTab, setActiveTab] = React.useState(HUB_INIT.activeTab || "conversation");`;
+  const [view, setView] = React.useState(INIT_ROUTE.view || "traces-landing");
+  const [activeNav, setActiveNav] = React.useState(INIT_ROUTE.view ? (INIT_ROUTE.nav || "") : "traces");
+  const [activeTraceId, setActiveTraceId] = React.useState(INIT_ROUTE.traceId ?? null);
+  const [activeDatasetId, setActiveDatasetId] = React.useState(INIT_ROUTE.datasetId ?? null);
+  const [activeDatasetChild, setActiveDatasetChild] = React.useState(INIT_ROUTE.datasetChild ?? null);
+  const [expandedDataset, setExpandedDataset] = React.useState(INIT_ROUTE.datasetId ?? null);
+  const [activeRepoId, setActiveRepoId] = React.useState(INIT_ROUTE.repoId ?? null);
+  const [expandedRepo, setExpandedRepo] = React.useState(INIT_ROUTE.repoId || window.ACCOUNT_HOME_REPO || "jayfarei/opentraces");
+  const [activeRepoChild, setActiveRepoChild] = React.useState(INIT_ROUTE.repoChild ?? null);
+  const [activePullId, setActivePullId] = React.useState(INIT_ROUTE.pullId ?? null);
+  const [activeArtifactId, setActiveArtifactId] = React.useState(INIT_ROUTE.artifactId ?? null);
+  const [activeEvidenceId, setActiveEvidenceId] = React.useState(INIT_ROUTE.evidenceId ?? null);
+  const [activeCapsuleId, setActiveCapsuleId] = React.useState(INIT_ROUTE.capsuleId ?? null);
+  const [atlasFocus, setAtlasFocus] = React.useState(null);
+  const [benchTab, setBenchTab] = React.useState(HUB_INIT.benchTab || "atlas");`;
+
+const RAW_ACTIVETAB = `  const [activeTab, setActiveTab] = React.useState("conversation");`;
+
+const SEAMED_ACTIVETAB = `  const [activeTab, setActiveTab] = React.useState(HUB_INIT.tab || "conversation"); /* @ot-embed-seam: ?tab=trail deep-link */`;
 
 const RAW_THEME = `    try { localStorage.setItem("ot-theme", theme); } catch (e) {}
-    // remove the disable-transitions class after the swap commits`;
+    requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove("theme-swap")));`;
 
 const SEAMED_THEME = `    try { localStorage.setItem("ot-theme", theme); } catch (e) {}
     /* @ot-embed-seam:start — the one genuinely web-only piece: when the Hub runs
@@ -151,105 +178,68 @@ const SEAMED_THEME = `    try { localStorage.setItem("ot-theme", theme); } catch
       }
     } catch (e) {}
     /* @ot-embed-seam:end */
-    // remove the disable-transitions class after the swap commits`;
+    requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove("theme-swap")));`;
 
-const RAW_SHELL = `    <div className="app-shell" data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
-      <Sidebar`;
+const RAW_SHELL_ATTRS = `    <div
+      className="app-shell"
+      data-sb={sidebarCollapsed ? "collapsed" : "expanded"}`;
 
-const SEAMED_SHELL = `    <div className="app-shell" data-embed={embed ? "1" : "0"} data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
+const SEAMED_SHELL_ATTRS = `    <div
+      className="app-shell"
+      data-embed={embed ? "1" : "0"}
+      data-sb={sidebarCollapsed ? "collapsed" : "expanded"}`;
+
+const RAW_SBFLIP_OPEN = `    >
+      <div className="sb-flip">`;
+
+const SEAMED_SBFLIP_OPEN = `    >
       {/* @ot-embed-seam: chrome is suppressed in embed mode so each /hub iframe
           shows only its feature panel. Standalone (embed=false) renders both. */}
       {!embed && (
-      <Sidebar`;
+      <div className="sb-flip">`;
 
-const RAW_SIDEBAR_CLOSE = `        onSelectRepoChild={(rid, cid) => openRepo(rid, cid)}
-      />
+const RAW_SBFLIP_CLOSE = `        <div className="clui-resize" onMouseDown={startResize} title="Drag to resize"></div>
+      </div>
 
-      <div style={{display: "flex", flexDirection: "column", minWidth: 0}}>
-        <Topbar`;
+      <div className="app-content">`;
 
-const SEAMED_SIDEBAR_CLOSE = `        onSelectRepoChild={(rid, cid) => openRepo(rid, cid)}
-      />
+const SEAMED_SBFLIP_CLOSE = `        <div className="clui-resize" onMouseDown={startResize} title="Drag to resize"></div>
+      </div>
       )}
 
-      <div style={{display: "flex", flexDirection: "column", minWidth: 0}}>
-        {!embed && (
-        <Topbar`;
+      <div className="app-content">`;
 
-const RAW_TOPBAR_CLOSE = `          onBack={() => setView("traces-landing")}
-        />`;
+const RAW_TOPBAR_OPEN = `        <TopbarNavV2
+          workspace={account === "org" ? "OpenMake" : "Jayfarei"}`;
 
-const SEAMED_TOPBAR_CLOSE = `          onBack={() => setView("traces-landing")}
+const SEAMED_TOPBAR_OPEN = `        {!embed && (
+        <TopbarNavV2
+          workspace={account === "org" ? "OpenMake" : "Jayfarei"}`;
+
+const RAW_TOPBAR_CLOSE = `          traceShortId={trace?.trace_id?.slice(0, 7) || ""}
         />
-        )}`;
 
-// Conversation-tab header compaction. The design's sticky header (description +
-// spine) collapses on scroll, but only the trail tab (which scrolls .main) wires
-// it up; the conversation tab scrolls its own .conv-main, so the effect never
-// fired there. We extract one shared handler and drive it from BOTH scrollers,
-// gating .main off in the conversation tab so the two don't fight over the state.
-// (CSS half lives in applyConvCssPatch.) Anchored on `handleJumpLatest`, which is
-// stable design code present across exports.
-const RAW_JUMPLATEST = `  const handleJumpLatest = () => {
-    const stream = document.getElementById("conv-stream");
-    stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
-  };`;
+        <div className="main" key={account}`;
 
-const SEAMED_JUMPLATEST = `  const handleJumpLatest = () => {
-    const stream = document.getElementById("conv-stream");
-    stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
-  };
-  /* @ot-embed-seam:start — sticky-header compaction shared by both trace
-     scrollers. The trail tab scrolls .main; the conversation tab scrolls its own
-     .conv-main, so wire both to one handler. Hysteresis: compact past 48px,
-     restore below 12px. */
-  const applyHeaderCompact = (y) => {
-    setHeaderCompact(prev => {
-      if (!prev && y > 48) return true;
-      if (prev && y < 12) return false;
-      return prev;
-    });
-  };
-  /* @ot-embed-seam:end */`;
+const SEAMED_TOPBAR_CLOSE = `          traceShortId={trace?.trace_id?.slice(0, 7) || ""}
+        />
+        )}
 
-const RAW_MAIN_ONSCROLL = `        <div className="main" ref={mainScrollRef} onScroll={(e) => {
-          const y = e.currentTarget.scrollTop;
-          // Hysteresis: enter compact past 48px, leave only below 12px — a
-          // single threshold flip-flops while the header height animates.
-          setHeaderCompact(prev => {
-            if (!prev && y > 48) return true;
-            if (prev && y < 12) return false;
-            return prev;
-          });
-        }}>`;
-
-const SEAMED_MAIN_ONSCROLL = `        <div className="main" ref={mainScrollRef} onScroll={(e) => {
-          /* @ot-embed-seam: the conversation tab scrolls .conv-main, not .main;
-             let it own compaction so the two scrollers do not fight. */
-          if (view === "trace" && activeTab === "conversation") return;
-          applyHeaderCompact(e.currentTarget.scrollTop);
-        }}>`;
-
-const RAW_CONVMAIN = `                  <div className="conv-main" id="conv-main">`;
-
-const SEAMED_CONVMAIN = `                  <div className="conv-main" id="conv-main"
-                    /* @ot-embed-seam: drive header compaction from the conversation scroller */
-                    onScroll={(e) => applyHeaderCompact(e.currentTarget.scrollTop)}>`;
+        <div className="main" key={account}`;
 
 function applySeam(html) {
   let out = html;
   const steps = [];
 
-  // 1. _embed.css link (version-agnostic anchor on the theme-boot script).
+  // 1. _embed.css link (anchored on the design's theme-boot script in <head>).
   if (!out.includes('href="_embed.css')) {
-    const anchor = `<script>\n  // Apply theme immediately to avoid flash of wrong theme`;
+    const anchor = `<script>\n  try {\n    var t = localStorage.getItem('ot-theme') || 'dark';`;
     if (!out.includes(anchor)) throw new Error("anchor missing: theme-boot <script> (head). Design structure changed — re-review seam.");
-    out = out.replace(anchor, `<!-- @ot-embed-seam — site-owned chromeless-embed overlay (not in the design export) -->\n<link rel="stylesheet" href="_embed.css?v=1" />\n${anchor}`);
+    out = out.replace(anchor, `<!-- @ot-embed-seam — site-owned chromeless-embed overlay (not in the design export) -->\n<link rel="stylesheet" href="_embed.css?v=2" />\n${anchor}`);
     steps.push("inject _embed.css link");
   } else steps.push("_embed.css link present (skip)");
 
   // 2. React dev → production builds (faster; matches the deployed baseline).
-  // Idempotent: only acts while the dev builds are still present.
   if (out.includes("react.development.js") || out.includes("react-dom.development.js")) {
     out = out.replace(/<script src="https:\/\/unpkg\.com\/react@([\d.]+)\/umd\/react\.development\.js"[^>]*><\/script>/,
       '<!-- @ot-embed-seam: production React builds (the design exports the slower dev\n     builds; the deployed site has always used production). Swapped by sync-hub. -->\n<script src="https://unpkg.com/react@$1/umd/react.production.min.js" crossorigin="anonymous"></script>');
@@ -266,22 +256,16 @@ function applySeam(html) {
     steps.push("inject URL-param parser");
   } else steps.push("parser present (skip)");
 
-  // 4-7. App-internal edits (idempotent + loud-fail).
+  // 4+. App-internal edits (idempotent + loud-fail).
   for (const [name, raw, seamed, markerIfApplied] of [
     ["nav-state useStates", RAW_USESTATE, SEAMED_USESTATE, "const HUB_INIT ="],
+    ["activeTab deep-link", RAW_ACTIVETAB, SEAMED_ACTIVETAB, "HUB_INIT.tab ||"],
     ["theme parent-bridge", RAW_THEME, SEAMED_THEME, "the one genuinely web-only piece"],
-    ["app-shell + Sidebar open guard", RAW_SHELL, SEAMED_SHELL, 'data-embed={embed ? "1" : "0"}'],
-    ["Sidebar close + Topbar open guard", RAW_SIDEBAR_CLOSE, SEAMED_SIDEBAR_CLOSE, "/>\n      )}\n\n      <div style={{display:"],
-    ["Topbar close guard", RAW_TOPBAR_CLOSE, SEAMED_TOPBAR_CLOSE, 'setView("traces-landing")}\n        />\n        )}'],
-    ["pulls deep-link wiring",
-      `activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} />`,
-      `activeRepoChild === "pulls" ? <RepoPullsPage repoId={activeRepoId} initialPull={HUB_INIT.pullId} /* @ot-embed-seam: deep-link opens a PR detail */ />`,
-      "initialPull={HUB_INIT.pullId}"],
-    ["conv-compaction shared handler", RAW_JUMPLATEST, SEAMED_JUMPLATEST, "const applyHeaderCompact ="],
-    ["conv-compaction .main gate", RAW_MAIN_ONSCROLL, SEAMED_MAIN_ONSCROLL,
-      "the conversation tab scrolls .conv-main, not .main"],
-    ["conv-compaction .conv-main wiring", RAW_CONVMAIN, SEAMED_CONVMAIN,
-      "drive header compaction from the conversation scroller"],
+    ["app-shell data-embed attr", RAW_SHELL_ATTRS, SEAMED_SHELL_ATTRS, 'data-embed={embed ? "1" : "0"}'],
+    ["sb-flip open guard", RAW_SBFLIP_OPEN, SEAMED_SBFLIP_OPEN, "chrome is suppressed in embed mode"],
+    ["sb-flip close guard", RAW_SBFLIP_CLOSE, SEAMED_SBFLIP_CLOSE, '</div>\n      )}\n\n      <div className="app-content">'],
+    ["TopbarNavV2 open guard", RAW_TOPBAR_OPEN, SEAMED_TOPBAR_OPEN, '{!embed && (\n        <TopbarNavV2'],
+    ["TopbarNavV2 close guard", RAW_TOPBAR_CLOSE, SEAMED_TOPBAR_CLOSE, '/>\n        )}\n\n        <div className="main" key={account}'],
   ]) {
     if (out.includes(markerIfApplied)) { steps.push(`${name} present (skip)`); continue; }
     if (!out.includes(raw)) throw new Error(`anchor missing: ${name}. Design structure changed — re-review seam.`);
@@ -292,70 +276,15 @@ function applySeam(html) {
   return { out, steps };
 }
 
-// Small component-level behavior the site keeps on top of the design export,
-// re-applied on every import until/unless it is folded into the design source.
-// (RepoPullsPage opens straight into a PR detail when deep-linked via ?pr=…)
-const PULLS_FILE = join(HUB, "landing-repo-pulls.jsx");
-const RAW_PULLS = `function RepoPullsPage({ repoId }) {
-  const [openPullId, setOpenPullId] = React.useState(null);`;
-const SEAMED_PULLS = `// \`initialPull\` (optional) boots straight into a PR detail instead of the list —
-// the marketing /hub pulls card passes it via ?pr=… so the embed opens on an
-// open PR; standalone sidebar nav passes nothing and lands on the list.
-function RepoPullsPage({ repoId, initialPull }) {
-  const [openPullId, setOpenPullId] = React.useState(initialPull || null);`;
-
-function applyPullsPatch() {
-  if (!existsSync(PULLS_FILE)) return "landing-repo-pulls.jsx missing (skip)";
-  const src = readFileSync(PULLS_FILE, "utf8");
-  if (src.includes("function RepoPullsPage({ repoId, initialPull })")) return "pulls PR-default present (skip)";
-  if (!src.includes(RAW_PULLS)) throw new Error("anchor missing: RepoPullsPage signature. Design structure changed — re-review the pulls PR-default patch.");
-  writeFileSync(PULLS_FILE, src.replace(RAW_PULLS, SEAMED_PULLS));
-  return "apply pulls PR-default";
-}
-
-// CSS half of the conversation-tab header-compaction fix (the JS half is in
-// applySeam). Ties the bounded conversation scrollers to the live sticky-header
-// height (--gh-top, maintained by the design's own ResizeObserver) so they fill
-// exactly below the header and grow as it compacts — making the stream "move up"
-// like the trail view. --main-chrome carries the topbar height (0 in embed mode,
-// set by _embed.css). Idempotent + loud-fail, like the index.html seam.
-const APP_CSS = join(HUB, "app.css");
-const RAW_MAIN_CSS = `.main {
-  height: calc(100vh - 56px);
-  overflow-y: auto;`;
-const SEAMED_MAIN_CSS = `.main {
-  /* @ot-embed-seam: topbar height reserved above the scroll area; 0 in embed
-     mode (set by _embed.css). The conversation scrollers subtract this + the
-     live sticky-header height so they grow as the header compacts on scroll. */
-  --main-chrome: 56px;
-  height: calc(100vh - var(--main-chrome));
-  overflow-y: auto;`;
-const RAW_CONV_MAXH = `max-height: calc(100vh - 280px);`;
-const SEAMED_CONV_MAXH = `max-height: calc(100vh - var(--main-chrome, 56px) - var(--gh-top, 396px));`;
-
-function applyConvCssPatch() {
-  if (!existsSync(APP_CSS)) return "app.css missing (skip)";
-  let css = readFileSync(APP_CSS, "utf8");
-  const before = css;
-  if (css.includes("--main-chrome:")) return "conv-compaction CSS present (skip)";
-  if (!css.includes(RAW_MAIN_CSS)) throw new Error("anchor missing: .main height rule (app.css). Design structure changed — re-review the conv-compaction CSS patch.");
-  if (!css.includes(RAW_CONV_MAXH)) throw new Error("anchor missing: .conv-main/.conv-side max-height (app.css). Design structure changed — re-review the conv-compaction CSS patch.");
-  css = css.replace(RAW_MAIN_CSS, SEAMED_MAIN_CSS).split(RAW_CONV_MAXH).join(SEAMED_CONV_MAXH);
-  if (css === before) return "conv-compaction CSS no-op";
-  writeFileSync(APP_CSS, css);
-  return "apply conv-compaction CSS";
-}
-
 function cmdApply() {
   if (!existsSync(INDEX)) { console.error(`✗ ${INDEX} not found — run the design pull first (see scripts/SYNC-HUB.md).`); process.exit(2); }
-  if (!existsSync(EMBED_CSS)) { writeFileSync(EMBED_CSS, EMBED_CSS_BODY); console.log("· wrote public/hub-preview/_embed.css"); }
+  writeFileSync(EMBED_CSS, EMBED_CSS_BODY);
+  console.log("· wrote public/hub-preview/_embed.css");
   const html = readFileSync(INDEX, "utf8");
   const { out, steps } = applySeam(html);
   for (const s of steps) console.log(`  · ${s}`);
   if (out !== html) { writeFileSync(INDEX, out); console.log("✓ embed seam applied to index.html"); }
   else console.log("✓ index.html already fully seamed (no change)");
-  console.log(`  · ${applyPullsPatch()}`);
-  console.log(`  · ${applyConvCssPatch()}`);
 }
 
 // Guard against a mis-mapped pull: a *.css that actually holds JS/JSX, a *.jsx

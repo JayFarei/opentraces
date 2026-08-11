@@ -15,9 +15,8 @@
   overflow-x: hidden;
 }
 .pr-detail .app-rail {
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  padding: 14px 14px;
+  background: transparent;
+  padding: 16px 16px 18px 2px;
 }
 
 /* PR-specific color tokens (mapped from app design tokens) */
@@ -379,6 +378,287 @@
 
 /* PR-LEVEL ACTIVITY BAR — port of the "minimap" pattern */
 .pr-detail .activity-bar-wrap { margin-bottom: 14px; }
+/* ── Session → trajectories: the slicer band ─────────────────
+   The PR's traced commits are SLICES of one long session, cut by the
+   change slicer at capture time. This band shows the whole session and
+   links each slice to its intent card below. */
+.pr-detail .session-slices {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 18px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+.pr-detail .session-slices .ss-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.pr-detail .session-slices .ss-k {
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.pr-detail .session-slices .ss-note {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.pr-detail .session-slices .ss-note b { font-weight: 600; color: var(--text); }
+.pr-detail .session-slices .ss-tier {
+  font-size: 8.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  margin-left: 4px;
+}
+.pr-detail .session-slices .ss-band {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+}
+.pr-detail .session-slices .ss-seg {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-basis: 0;
+  min-width: 40px;
+  overflow: hidden;
+  padding: 4px 9px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in oklch, var(--c-write) 28%, var(--border));
+  background: color-mix(in oklch, var(--c-write) 9%, transparent);
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color var(--duration-fast), background var(--duration-fast);
+}
+.pr-detail .session-slices .ss-seg.alt {
+  background: color-mix(in oklch, var(--c-write) 16%, transparent);
+}
+.pr-detail .session-slices .ss-seg:hover {
+  border-color: color-mix(in oklch, var(--c-write) 60%, transparent);
+  background: color-mix(in oklch, var(--c-write) 22%, transparent);
+}
+.pr-detail .session-slices .ss-seg .t {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text);
+}
+.pr-detail .session-slices .ss-seg .sp {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9.5px;
+  color: var(--text-faint);
+}
+.pr-detail .session-slices .ss-seg .lbl {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pr-detail .session-slices .ss-untraced {
+  flex: none;
+  align-self: center;
+  font-size: 10px;
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 0 4px;
+}
+
+/* commit sha attribution on each slice segment */
+.pr-detail .session-slices .ss-seg .csha {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9px;
+  color: var(--text-dim);
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--text) 4%, transparent);
+  flex: none;
+}
+
+/* per-commit trajectory in session context: ghost tracks are the rest of
+   the session; the lit window is the slice attributed to this commit */
+.pr-detail .widget.trajectory .bar.session {
+  justify-content: flex-start;
+  gap: 4px;
+}
+.pr-detail .widget.trajectory .bar.session .ghost {
+  flex-basis: 0;
+  min-width: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in oklch, var(--text-faint) 45%, transparent);
+  position: relative;
+}
+.pr-detail .widget.trajectory .bar.session .lit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  flex-basis: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--c-write) 8%, transparent);
+  border: 1px solid color-mix(in oklch, var(--c-write) 22%, transparent);
+}
+/* the slice's own steps must always render — let them compress to hairlines
+   (merging into a solid band at narrow widths) rather than clip outside the
+   rounded window */
+.pr-detail .widget.trajectory .bar.session .lit { gap: 1px; }
+.pr-detail .widget.trajectory .bar.session .lit .seg {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.pr-detail .widget.trajectory .bar.session .ghost::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 9.5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast);
+  z-index: 10;
+}
+.pr-detail .widget.trajectory .bar.session .ghost:hover::after { opacity: 1; }
+
+/* ── slice expander: inline trail/conversation for this commit's slice ── */
+.pr-detail .slice-expand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.pr-detail .slice-expand .se-spacer { flex: 1; }
+.pr-detail .slice-expand .se-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  background: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color var(--duration-fast), border-color var(--duration-fast), background var(--duration-fast);
+}
+.pr-detail .slice-expand .se-btn:hover { color: var(--text); border-color: var(--text-faint); }
+.pr-detail .slice-expand .se-btn.on {
+  color: var(--text);
+  background: color-mix(in oklch, var(--text) 6%, transparent);
+  border-color: var(--text-faint);
+}
+.pr-detail .slice-expand .se-btn.se-open { color: var(--text); }
+.pr-detail .slice-detail-pane {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--text) 3%, transparent);
+  padding: 10px 12px;
+}
+.pr-detail .slice-detail-pane .sd-head {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 8px;
+}
+.pr-detail .slice-detail-pane .sd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 3px 14px;
+}
+.pr-detail .slice-detail-pane .sd-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.pr-detail .slice-detail-pane .sd-num {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  min-width: 16px;
+  text-align: right;
+}
+.pr-detail .slice-detail-pane .sd-dot { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+.pr-detail .slice-detail-pane .sd-dot.prompt { background: var(--p-prompt); }
+.pr-detail .slice-detail-pane .sd-dot.think { background: var(--p-think); }
+.pr-detail .slice-detail-pane .sd-dot.read { background: var(--p-read); }
+.pr-detail .slice-detail-pane .sd-dot.edit { background: var(--p-edit); }
+.pr-detail .slice-detail-pane .sd-dot.test { background: var(--p-test); }
+.pr-detail .slice-detail-pane .sd-dot.bash { background: var(--p-bash); }
+.pr-detail .slice-detail-pane .sd-dot.commit { background: var(--p-commit); }
+.pr-detail .slice-detail-pane .sd-msg {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.pr-detail .slice-detail-pane .sd-msg + .sd-msg { border-top: 1px dashed var(--border); }
+.pr-detail .slice-detail-pane .sd-role {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  min-width: 38px;
+  padding-top: 2px;
+}
+.pr-detail .slice-detail-pane .sd-msg.agent .sd-text { color: var(--text-dim); }
+.pr-detail .slice-detail-pane .sd-text .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px; color: var(--text-faint); }
+
+/* slicer attribution inside the per-intent trajectory widget head */
+.pr-detail .widget .w-head .w-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-detail .widget .w-head .w-slicer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pr-detail .widget .w-head .w-slicer .ws-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--c-write, var(--p-edit));
+}
+
 .pr-detail .activity-bar {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -846,11 +1126,18 @@
 /* ── Right rail ──────────────────────────────────────────── */
 
 .pr-detail .app-rail {
-  background: var(--panel);
-  border-left: 1px solid var(--border);
-  padding: 12px 12px;
+  background: transparent;
 }
-.pr-detail .rail-section { margin-bottom: 14px; }
+/* Rail sections are self-contained boxes — same card treatment as the
+   verdict card, instead of one wide panel background. */
+.pr-detail .rail-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  box-shadow: var(--shadow-card);
+  margin-bottom: 12px;
+}
 .pr-detail .rail-head {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 9.5px;
@@ -1472,66 +1759,50 @@
 }
 
 /* ============================================================ */
-/* Pull-request detail breadcrumb bar                            */
+/* Pull-request detail — rail meta card (status / branch / GitHub) */
 /* ============================================================ */
 
 .pulls-detail-wrap {
   padding: 0;
 }
-.pulls-detail-bar {
+.pr-detail .rail-meta .rm-top {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 20px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 3;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
 }
-.pdb-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px 4px 4px;
-  border-radius: 5px;
-  color: var(--fg-dim);
-  font-size: 12px;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  font-family: inherit;
-}
-.pdb-back:hover { background: var(--surface-2); color: var(--fg); }
-.pdb-sep { color: var(--fg-sub); }
-.pdb-num {
-  font-size: 12px;
-  color: var(--fg-mute);
-}
-.pdb-branch {
+.pr-detail .rail-meta .rm-branch {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11.5px;
+  max-width: 100%;
+  font-size: 11px;
   color: var(--fg);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
   padding: 3px 8px;
   border-radius: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.pdb-branch .arrow { color: var(--fg-mute); }
-.pulls-detail-bar .grow { flex: 1; }
-.pdb-btn {
-  display: inline-flex;
+.pr-detail .rail-meta .rm-branch .arrow { color: var(--fg-mute); }
+.pr-detail .rail-meta .rm-rows { margin-bottom: 10px; }
+.pr-detail .rm-gh-btn {
+  display: flex;
+  width: 100%;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 5px 10px;
+  padding: 6px 10px;
   font-size: 11.5px;
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--fg-dim);
   cursor: pointer;
   font-family: inherit;
 }
-.pdb-btn:hover { background: var(--surface-2); color: var(--fg); border-color: var(--border-strong); }
+.pr-detail .rm-gh-btn:hover { background: var(--surface-3); color: var(--fg); border-color: var(--border-strong); }
+

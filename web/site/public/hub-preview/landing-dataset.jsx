@@ -110,6 +110,7 @@ function DatasetTabs({ active, onChange, inboxCount }) {
 }
 
 function DatasetOverview({ ds, runs, okCount, onOpenInbox }) {
+  const dsSlicer = slicerByKey(DATASET_SLICERS[ds.id] || DATASET_SLICERS[ds.name] || "user-turn");
   return (
     <>
       <CatchUpBanner ds={ds} onOpenInbox={onOpenInbox} />
@@ -137,11 +138,21 @@ function DatasetOverview({ ds, runs, okCount, onOpenInbox }) {
           <div className="k">Push policy</div>
           <div className="v">{ds.auto_policy ? <span className="policy-tag auto">auto</span> : <span className="policy-tag manual">manual review</span>}</div>
         </div>
+        <div className="ds-strip-item">
+          <div className="k">Slicer</div>
+          <div className="v"><SlicerChip slicer={dsSlicer} /></div>
+        </div>
       </div>
 
       <div className="ds-grid" style={{ marginTop: 18 }}>
         <section className="ds-col-main">
           <h3 className="repo-h3">Sample rows</h3>
+          <div className="ds-slice-note">
+            Each row is one <b>{dsSlicer.name.toLowerCase()}</b> slice of a source trace — not the full session
+            {dsSlicer.tier === "model"
+              ? <> · sliced &amp; labeled by <span className="mono">{dsSlicer.modelShort}</span> running locally</>
+              : <> · cut deterministically at capture</>}.
+          </div>
           <div className="ds-sample-wrap">
             <table className="ds-sample">
               <thead>
@@ -245,6 +256,16 @@ function DatasetOverview({ ds, runs, okCount, onOpenInbox }) {
 }
 
 function DatasetInbox({ ds }) {
+  const dsSlicer = slicerByKey(DATASET_SLICERS[ds.id] || DATASET_SLICERS[ds.name] || "user-turn");
+  // Deterministic per-item slice provenance: which span of the source trace
+  // this inbox candidate was cut from.
+  const sliceOf = (id) => {
+    let seed = Math.abs(String(id).split("").reduce((a, c) => (a * 33 + c.charCodeAt(0)) | 0, 7));
+    const total = 24 + (seed % 96);
+    const len = 4 + (seed % 11);
+    const start = seed % Math.max(1, total - len);
+    return { start, end: start + len - 1, total };
+  };
   const baseItems = React.useMemo(() => buildInboxItems(ds.id || "", ds.inbox_count), [ds.id, ds.inbox_count]);
   const [items, setItems] = React.useState(() => baseItems);
 
@@ -300,6 +321,13 @@ function DatasetInbox({ ds }) {
               <div className="ii-id mono">{item.id}</div>
               <div className="ii-reason"><span className={"reason-tag r-" + item.reason}>{item.reason}</span></div>
               <div className="ii-preview">
+                <span
+                  className="ii-slice mono"
+                  style={{ "--sl-sig": dsSlicer.sig }}
+                  title={`${dsSlicer.name} slice · steps ${sliceOf(item.id).start}–${sliceOf(item.id).end} of a ${sliceOf(item.id).total}-step trace${dsSlicer.tier === "model" ? ` · labeled by ${dsSlicer.modelShort} (local)` : " · deterministic"}`}
+                >
+                  <span className="iis-dot" />{dsSlicer.short} {sliceOf(item.id).start}–{sliceOf(item.id).end}<span className="iis-total">/{sliceOf(item.id).total}</span>
+                </span>
                 {item.preview.map((p, i) => <span key={i} className="ii-prev mono">{p}</span>)}
               </div>
               <div className="ii-conf">

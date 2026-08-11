@@ -18,6 +18,8 @@ const Icon = ({ name, size = 16, className = "" }) => {
     case "moon": return <svg {...props}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>;
     case "plus": return <svg {...props}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
     case "user": return <svg {...props}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>;
+    case "key": return <svg {...props}><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9"/><path d="M17 6l3 3"/><path d="M14 9l2.5 2.5"/></svg>;
+    case "users": return <svg {...props}><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5.5a3.5 3.5 0 0 1 0 7"/><path d="M17.5 14.3a6.5 6.5 0 0 1 4 5.7"/></svg>;
     case "bot": return <svg {...props}><rect x="4" y="7" width="16" height="12" rx="2.5"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M12 3v4"/><circle cx="12" cy="3" r="1" fill="currentColor"/></svg>;
     case "brain": return <svg {...props}><path d="M9 4a3 3 0 0 0-3 3v1a3 3 0 0 0-2 5 3 3 0 0 0 2 5v1a3 3 0 0 0 6 0V4a3 3 0 0 0-3 0z"/><path d="M15 4a3 3 0 0 1 3 3v1a3 3 0 0 1 2 5 3 3 0 0 1-2 5v1a3 3 0 0 1-6 0V4a3 3 0 0 1 3 0z"/></svg>;
     case "tool": return <svg {...props}><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-3 3-2-2 3-3z"/></svg>;
@@ -64,6 +66,15 @@ const Icon = ({ name, size = 16, className = "" }) => {
     case "node": return <svg {...props}><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.4 6.6l7 4M8.4 17.4l7-4"/></svg>;
     case "arrow-right": return <svg {...props}><line x1="4" y1="12" x2="19" y2="12"/><polyline points="13 6 19 12 13 18"/></svg>;
     case "git": return <svg {...props}><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="17" cy="9" r="2.4"/><path d="M17 11.4a5 5 0 0 1-5 5H6"/><line x1="6" y1="8.4" x2="6" y2="15.6"/></svg>;
+    case "panel": return <svg {...props}><rect x="3" y="4.5" width="18" height="15" rx="2"/><line x1="9.5" y1="4.5" x2="9.5" y2="19.5"/></svg>;
+    case "pen": return <svg {...props}><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>;
+    case "paperclip": return <svg {...props}><path d="M21 12.2l-8.6 8.6a5.4 5.4 0 0 1-7.6-7.6l8.9-8.9a3.6 3.6 0 0 1 5.1 5.1l-8.9 8.9a1.8 1.8 0 0 1-2.5-2.5l8.2-8.2"/></svg>;
+    case "upload": return <svg {...props}><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><polyline points="7 8 12 3 17 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>;
+    case "plug": return <svg {...props}><path d="M9 7V3"/><path d="M15 7V3"/><path d="M6 7h12v3.5a6 6 0 0 1-6 6 6 6 0 0 1-6-6z"/><path d="M12 16.5V21"/></svg>;
+    case "terminal": return <svg {...props}><rect x="3" y="4.5" width="18" height="15" rx="2"/><polyline points="7 9.5 10 12 7 14.5"/><line x1="12.5" y1="15" x2="16.5" y2="15"/></svg>;
+    case "swatch": return <svg {...props}><path d="M12 21a9 9 0 1 1 9-9c0 2-1.3 3-3 3h-2.2a2.4 2.4 0 0 0-1.9 3.9c.6.8.1 2.1-1.9 2.1z"/><circle cx="7.5" cy="11" r="1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="7.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="8" r="1" fill="currentColor" stroke="none"/></svg>;
+    case "arena": return <svg {...props}><path d="M12 3v2.2"/><path d="M12 3l3.2.9L12 4.8"/><path d="M3.5 11.5C5.5 7.4 8.5 5.2 12 5.2s6.5 2.2 8.5 6.3"/><path d="M4.5 11.5L6 20.5h12l1.5-9"/><path d="M8.2 11.5l1.2 9"/><path d="M15.8 11.5l-1.2 9"/><path d="M3.5 11.5h17"/></svg>;
+    case "save": return <svg {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
     default: return null;
   }
 };
