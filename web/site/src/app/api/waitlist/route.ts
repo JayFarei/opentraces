@@ -98,7 +98,11 @@ export async function POST(req: NextRequest) {
       await notifyWaitlistSignup(email, { count, ip });
     }
     return NextResponse.json({ ok: true, alreadyOnList });
-  } catch {
+  } catch (err) {
+    // Surface the failure in runtime logs and still capture the email in Slack,
+    // so a broken store never silently drops a signup.
+    console.error("waitlist store.add failed", err);
+    await notifyWaitlistSignup(email, { ip, storeFailed: true });
     return NextResponse.json(
       { ok: false, error: "could not save right now, please try again" },
       { status: 500 },

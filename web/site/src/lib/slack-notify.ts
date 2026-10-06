@@ -12,6 +12,8 @@ export interface WaitlistSignupMeta {
   count?: number;
   /** Best-effort client IP (from x-forwarded-for). */
   ip?: string;
+  /** The store write failed; the email exists only in this message. */
+  storeFailed?: boolean;
 }
 
 export async function notifyWaitlistSignup(
@@ -21,7 +23,11 @@ export async function notifyWaitlistSignup(
   const url = process.env.SLACK_WAITLIST_WEBHOOK_URL;
   if (!url) return;
 
-  const lines = [`:tada: New early-access signup: *${email}*`];
+  const lines = [
+    meta.storeFailed
+      ? `:warning: Early-access signup NOT SAVED (store error), add manually: *${email}*`
+      : `:tada: New early-access signup: *${email}*`,
+  ];
   const context: string[] = [];
   if (typeof meta.count === "number") context.push(`waitlist #${meta.count}`);
   if (meta.ip) context.push(`ip ${meta.ip}`);
