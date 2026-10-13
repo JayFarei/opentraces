@@ -103,7 +103,7 @@ export default {
 
     if (method === "GET" && url.pathname === "/health") {
       const staleness = await env.METRICS_DB.prepare(
-        "SELECT source, MAX(as_of) AS last_collected FROM metrics_snapshots GROUP BY source",
+        "SELECT source, MAX(as_of) AS last_collected FROM metrics_latest GROUP BY source",
       ).all<{ source: string; last_collected: string }>();
 
       const sources: Record<string, { lastCollected: string; staleMinutes: number }> = {};
@@ -158,17 +158,43 @@ export default {
       return withCors(json({ error: `Unknown project '${projectId}'` }, { status: 404 }), env);
     }
 
-    await ensureSeedData(env, project);
-
-    if (view === "summary") {
-      return withCors(json(await buildSummary(env, project)), env);
+    // Use only the URL: these public responses do not vary by request headers.
+    const cacheKey = new Request(url.toString(), { method: "GET" });
+    if (method === "GET") {
+      try {
+        const cached = await caches.default.match(cacheKey);
+        if (cached?.status === 200) {
+          return withCors(cached, env);
+        }
+      } catch (error) {
+        console.warn(`[cache:match] ${toMessage(error)}`);
+      }
     }
 
-    return withCors(json(await buildTimeseries(env, project, url.searchParams)), env);
+    await ensureSeedData(env, project);
+
+    const response = json(view === "summary"
+      ? await buildSummary(env, project)
+      : await buildTimeseries(env, project, url.searchParams));
+
+    if (method === "GET" && response.status === 200) {
+      // Store the JSON before adding CORS so hits use the current configuration.
+      ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch((error) => {
+        console.warn(`[cache:put] ${toMessage(error)}`);
+      }));
+    }
+
+    return withCors(response, env);
   },
 
   async scheduled(_controller, env, ctx): Promise<void> {
-    ctx.waitUntil(collectAllProjects(env, ctx));
+    ctx.waitUntil((async () => {
+      try {
+        await collectAllProjects(env, ctx);
+      } finally {
+        await pruneSnapshots(env);
+      }
+    })());
   },
 } satisfies ExportedHandler<Env>;
 
@@ -188,14 +214,21 @@ function isAuthorized(request: Request, env: Env): boolean {
 
 async function ensureSeedData(env: Env, project: ProjectConfig): Promise<void> {
   const row = await env.METRICS_DB.prepare(
-    "SELECT COUNT(*) AS count FROM metrics_snapshots WHERE project_id = ?1",
+    "SELECT 1 FROM metrics_snapshots WHERE project_id = ?1 LIMIT 1",
   )
     .bind(project.id)
-    .first<{ count: number }>();
+    .first();
 
-  if (!row || row.count === 0) {
+  if (!row) {
     await collectProject(env, project);
   }
+}
+
+async function pruneSnapshots(env: Env): Promise<void> {
+  const cutoff = subtractDays(new Date(), 90).toISOString();
+  await env.METRICS_DB.prepare(
+    "DELETE FROM metrics_snapshots WHERE granularity = 'snapshot' AND as_of < ?1",
+  ).bind(cutoff).run();
 }
 
 async function collectAllProjects(env: Env, _ctx: ExecutionContext) {
@@ -392,24 +425,8 @@ async function collectGitHub(env: Env, project: ProjectConfig, collectedAt: stri
 async function buildSummary(env: Env, project: ProjectConfig) {
   const rows = await env.METRICS_DB.prepare(`
     SELECT source, metric, value, unit, bucket, granularity, as_of, meta_json
-    FROM (
-      SELECT
-        source,
-        metric,
-        value,
-        unit,
-        bucket,
-        granularity,
-        as_of,
-        meta_json,
-        ROW_NUMBER() OVER (
-          PARTITION BY source, metric
-          ORDER BY as_of DESC
-        ) AS rank
-      FROM metrics_snapshots
-      WHERE project_id = ?1
-    )
-    WHERE rank = 1
+    FROM metrics_latest
+    WHERE project_id = ?1
     ORDER BY source, metric
   `)
     .bind(project.id)
@@ -565,7 +582,18 @@ async function buildTimeseries(env: Env, project: ProjectConfig, params: URLSear
 }
 
 async function upsertMetric(env: Env, row: MetricRow): Promise<void> {
-  await env.METRICS_DB.prepare(`
+  const values = [
+    row.projectId,
+    row.source,
+    row.metric,
+    row.bucket,
+    row.granularity,
+    row.unit,
+    row.value,
+    row.asOf,
+    row.meta ? JSON.stringify(row.meta) : null,
+  ];
+  const snapshot = env.METRICS_DB.prepare(`
     INSERT INTO metrics_snapshots (
       project_id,
       source,
@@ -584,19 +612,32 @@ async function upsertMetric(env: Env, row: MetricRow): Promise<void> {
       value = excluded.value,
       as_of = excluded.as_of,
       meta_json = excluded.meta_json
-  `)
-    .bind(
-      row.projectId,
-      row.source,
-      row.metric,
-      row.bucket,
-      row.granularity,
-      row.unit,
-      row.value,
-      row.asOf,
-      row.meta ? JSON.stringify(row.meta) : null,
-    )
-    .run();
+  `).bind(...values);
+
+  // Equal timestamps follow the old lookup index's granularity/bucket order
+  // (notably, all PyPI daily points in one collection share an as_of).
+  const latest = env.METRICS_DB.prepare(`
+    INSERT INTO metrics_latest (
+      project_id, source, metric, bucket, granularity, unit, value, as_of, meta_json
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+    ON CONFLICT(project_id, source, metric)
+    DO UPDATE SET
+      bucket = excluded.bucket,
+      granularity = excluded.granularity,
+      unit = excluded.unit,
+      value = excluded.value,
+      as_of = excluded.as_of,
+      meta_json = excluded.meta_json
+    WHERE excluded.as_of > metrics_latest.as_of
+      OR (excluded.as_of = metrics_latest.as_of AND (
+        excluded.granularity < metrics_latest.granularity
+        OR (excluded.granularity = metrics_latest.granularity
+          AND excluded.bucket <= metrics_latest.bucket)
+      ))
+  `).bind(...values);
+
+  // D1 batches are transactional: history and its latest projection stay in sync.
+  await env.METRICS_DB.batch([snapshot, latest]);
 }
 
 async function withRetry<T>(
