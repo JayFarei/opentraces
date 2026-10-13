@@ -15,3 +15,19 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_metrics_lookup
   ON metrics_snapshots(project_id, source, metric, granularity, bucket, as_of);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_snapshot_retention
+  ON metrics_snapshots(granularity, as_of);
+
+CREATE TABLE IF NOT EXISTS metrics_latest (
+  project_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  bucket TEXT NOT NULL,
+  granularity TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  value INTEGER NOT NULL,
+  as_of TEXT NOT NULL,
+  meta_json TEXT,
+  PRIMARY KEY(project_id, source, metric)
+) WITHOUT ROWID;

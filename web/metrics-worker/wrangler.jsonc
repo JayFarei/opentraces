@@ -10,7 +10,8 @@
     {
       "binding": "METRICS_DB",
       "database_name": "opentraces-metrics",
-      "database_id": "replace-me"
+      "database_id": "replace-me",
+      "migrations_dir": "migrations"
     }
   ],
   "vars": {
