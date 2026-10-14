@@ -1275,7 +1275,7 @@ def bucket_connect_cmd(
     )
 
 
-from .bucket_pack import bucket_pack_cmd, bucket_unpack_cmd  # noqa: E402
+from .bucket_pack import bucket_pack_cmd, bucket_unpack_cmd
 
 bucket_group.add_command(bucket_pack_cmd)
 bucket_group.add_command(bucket_unpack_cmd)

@@ -44,9 +44,10 @@ import re
 import tarfile
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from . import paths
 from .bucket_layout import trace_records_root
@@ -178,19 +179,21 @@ def _write_pack(target: Path, members: Iterator[PackMember], dict_size: int) -> 
     filters = [{"id": lzma.FILTER_LZMA2, "preset": _PRESET, "dict_size": dict_size}]
     try:
         with os.fdopen(fd, "wb") as fh:
-            with lzma.LZMAFile(fh, "wb", format=lzma.FORMAT_XZ, filters=filters) as xz:
-                with tarfile.open(fileobj=xz, mode="w|", format=tarfile.PAX_FORMAT) as tar:
-                    for member in members:
-                        info = tarfile.TarInfo(member.name)
-                        info.size = len(member.data)
-                        info.mtime = member.mtime_ns // 1_000_000_000
-                        info.mode = member.mode
-                        info.pax_headers = {
-                            _SHA_KEY: member.sha256,
-                            _MTIME_KEY: str(member.mtime_ns),
-                        }
-                        tar.addfile(info, io.BytesIO(member.data))
-                        written[member.name] = member.sha256
+            with (
+                lzma.LZMAFile(fh, "wb", format=lzma.FORMAT_XZ, filters=filters) as xz,
+                tarfile.open(fileobj=xz, mode="w|", format=tarfile.PAX_FORMAT) as tar,
+            ):
+                for member in members:
+                    info = tarfile.TarInfo(member.name)
+                    info.size = len(member.data)
+                    info.mtime = member.mtime_ns // 1_000_000_000
+                    info.mode = member.mode
+                    info.pax_headers = {
+                        _SHA_KEY: member.sha256,
+                        _MTIME_KEY: str(member.mtime_ns),
+                    }
+                    tar.addfile(info, io.BytesIO(member.data))
+                    written[member.name] = member.sha256
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, target)
