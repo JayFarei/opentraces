@@ -20,19 +20,18 @@ from opentraces.core.bucket_trace_records import (
     trace_record_path,
     write_trace_record,
 )
+from tests.core._bucket_isolation import bucket_isolation_guard  # noqa: F401
 
 OLD = time.time() - 3 * 3600
 
 
 @pytest.fixture(autouse=True, params=codecs.WRITE_PREFERENCE)
-def codec(request, monkeypatch):
+def codec(request, monkeypatch) -> str:
     """Run every test once per codec this interpreter has."""
     if request.param not in codecs.available_codecs():
         pytest.skip(f"codec {request.param} not installed")
     monkeypatch.setattr(codecs, "WRITE_PREFERENCE", (request.param,))
-    _isolated_root()
-    yield request.param
-    _isolated_root()
+    return request.param
 
 
 def _grown(turns: int, trace_id: str = "t1") -> TraceRecord:
@@ -45,14 +44,7 @@ def _grown(turns: int, trace_id: str = "t1") -> TraceRecord:
     )
 
 
-def _isolated_root() -> Path:
-    root = trace_records_root()
-    assert "pytest-" in str(root), f"refusing to touch a non-test bucket: {root}"
-    return root
-
-
 def _capture(turns: range, trace_id: str = "t1", *, age: float | None = OLD) -> Path:
-    _isolated_root()
     for n in turns:
         obj = write_trace_record(_grown(n, trace_id), project_slug="proj", source_layer="bucket")
         if age is not None:
@@ -330,3 +322,13 @@ def test_same_record_rewritten_with_new_envelope_packs_both_versions(monkeypatch
 
 def _versions_all(trace_dir: Path) -> list[tuple[str, str]]:
     return [(n, hashlib.sha256(d).hexdigest()) for n, d, _ in btp.iter_trace_record_versions(trace_dir)]
+
+
+def test_isolation_guard_fails_loudly_on_escape(monkeypatch, tmp_path_factory) -> None:
+    from opentraces.core import paths
+    from tests.core._bucket_isolation import assert_bucket_isolated
+
+    with monkeypatch.context() as m:
+        m.setattr(paths, "OPENTRACES_DIR", Path("/nonexistent-real-home/.opentraces"))
+        with pytest.raises(pytest.fail.Exception, match="bucket isolation escaped"):
+            assert_bucket_isolated(tmp_path_factory.getbasetemp())

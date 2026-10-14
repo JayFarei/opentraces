@@ -21,6 +21,7 @@ from opentraces.core.bucket_trace_records import (
     trace_record_path,
     write_trace_record,
 )
+from tests.core._bucket_isolation import bucket_isolation_guard  # noqa: F401
 
 
 def _capture(turns: int) -> None:

@@ -17,6 +17,8 @@ import pytest
 from click.testing import CliRunner
 from opentraces_schema import Agent, Step, TraceRecord
 
+from tests.core._bucket_isolation import bucket_isolation_guard  # noqa: F401
+
 CAPTURES = 8
 
 
