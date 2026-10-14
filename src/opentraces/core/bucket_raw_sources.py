@@ -17,6 +17,7 @@ from ._bucket_io import (
 )
 from .bucket_layout import _digest_hex, _path_part, raw_sources_root
 from .bucket_models import RAW_SOURCE_SCHEMA, RAW_SOURCE_SNAPSHOT_SCHEMA
+from .bucket_superseded import drop_superseded_raw_blob
 
 
 def write_raw_source_artifact(
@@ -54,8 +55,23 @@ def write_raw_source_artifact(
         },
     }
     link_path = raw_sources_root() / "sources" / _path_part(project_slug) / f"{_path_part(trace_id)}.json"
+    previous_blob_path = _previous_blob_path(link_path)
     _atomic_write_json(link_path, link)
+    # Write new, repoint, THEN drop the superseded full copy (O(N^2) otherwise).
+    try:
+        drop_superseded_raw_blob(previous_blob_path, link["blob_path"])
+    except OSError:
+        pass
     return link
+
+
+def _previous_blob_path(link_path: Path) -> str | None:
+    try:
+        previous = json.loads(link_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    blob_path = previous.get("blob_path") if isinstance(previous, dict) else None
+    return blob_path if isinstance(blob_path, str) else None
 
 
 def raw_source_snapshot(*, include_objects: bool = False) -> dict[str, Any]:

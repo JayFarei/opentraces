@@ -651,7 +651,7 @@ def bucket_verify(
     }
 
 
-def bucket_prune(*, dry_run: bool = False) -> dict[str, Any]:
+def bucket_prune(*, dry_run: bool = False, superseded_raw: bool = False) -> dict[str, Any]:
     """Reachability-based orphan-blob cleanup.
 
     Plan 080 §9 Resolution G — NEVER touches events or ``trace.json``.
@@ -666,7 +666,12 @@ def bucket_prune(*, dry_run: bool = False) -> dict[str, Any]:
        reachable set is an orphan. ``.tmp`` files older than 1 hour
        anywhere under ``blobs/v1/`` or ``traces/v1/`` are also removed.
 
-    Returns ``{would_delete, deleted, blobs: [...], tempfiles: [...]}``.
+    3. **Superseded raw blobs** (opt-in, ``superseded_raw=True``). Raw-source
+       blobs nothing references that survive as a strict byte prefix of a
+       referenced blob — see :mod:`bucket_superseded`.
+
+    Returns ``{would_delete, deleted, blobs: [...], tempfiles: [...]}``
+    (+ ``superseded: {...}`` when requested).
     """
 
     import time
@@ -761,7 +766,19 @@ def bucket_prune(*, dry_run: bool = False) -> dict[str, Any]:
             except FileNotFoundError:
                 pass
 
+    # --- 3. Superseded raw blobs (opt-in) ------------------------------
+    superseded_result: dict[str, Any] | None = None
+    if superseded_raw:
+        from .bucket_superseded import sweep_superseded_raw
+
+        superseded_result = sweep_superseded_raw(dry_run=dry_run)
+        swept = superseded_result["raw_blobs"]["count"]
+        would_delete += swept
+        if not dry_run:
+            deleted += swept
+
     return {
+        **({"superseded": superseded_result} if superseded_result is not None else {}),
         "schema_version": BUCKET_MANIFEST_SCHEMA,
         "status": "ok",
         "dry_run": dry_run,

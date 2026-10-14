@@ -1092,14 +1092,25 @@ def bucket_verify_cmd(sample_size: int, as_full: bool, as_json: bool) -> None:
     is_flag=True,
     help="Report what would be deleted without removing anything.",
 )
+@click.option(
+    "--superseded-raw",
+    "superseded_raw",
+    is_flag=True,
+    help=(
+        "Also sweep superseded raw-source blobs: unreferenced, older than one "
+        "hour, and a strict byte prefix of a still-referenced blob."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_prune_cmd(dry_run: bool, as_json: bool) -> None:
+def bucket_prune_cmd(dry_run: bool, superseded_raw: bool, as_json: bool) -> None:
     """Reachability-based orphan blob cleanup.
 
     Per plan 080 §20 Resolution G, ``bucket prune`` walks the per-trace
     envelopes + event log to build the reachable-blob set, then deletes
     blobs not in that set. It NEVER touches events or ``trace.json``
     files — only orphan blobs and atomic-write tempfile leftovers.
+    ``--superseded-raw`` widens the sweep to re-captured sessions' superseded
+    raw blobs (TraceRecord history is never swept).
 
     JSON output: ``{would_delete, deleted}``.
     """
@@ -1111,7 +1122,7 @@ def bucket_prune_cmd(dry_run: bool, as_json: bool) -> None:
         ) from exc
 
     try:
-        result = bucket_prune(dry_run=dry_run)
+        result = bucket_prune(dry_run=dry_run, superseded_raw=superseded_raw)
     except NotImplementedError as exc:
         raise click.ClickException(
             f"Phase B Track B1 stub: bucket_prune not yet implemented ({exc})"
@@ -1132,6 +1143,14 @@ def bucket_prune_cmd(dry_run: bool, as_json: bool) -> None:
     click.echo(f"Bucket prune (dry_run={dry_run}):")
     click.echo(f"  would_delete: {would_delete}")
     click.echo(f"  deleted: {deleted}")
+    sweep = result_dict.get("superseded")
+    if sweep:
+        for key in ("raw_blobs", "kept_not_prefix"):
+            category = sweep[key]
+            click.echo(
+                f"  superseded {key}: {category['count']} files, {category['bytes']} bytes"
+            )
+        click.echo(f"  superseded skipped: {sweep['skipped']}")
 
 
 @bucket_group.command("prefetch", cls=OpentracesCommand, hidden=True)
