@@ -13,6 +13,7 @@ import json
 import os
 import time
 
+import pytest
 from click.testing import CliRunner
 from opentraces_schema import Agent, Step, TraceRecord
 
@@ -33,6 +34,15 @@ def _grown(turns: int) -> TraceRecord:
     )
 
 
+def _no_codec_installed() -> bool:
+    try:
+        from opentraces.core.bucket_pack_codecs import available_codecs
+    except ImportError:  # pre-pack build: run, and fail on the missing verb
+        return False
+    return not available_codecs()
+
+
+@pytest.mark.skipif(_no_codec_installed(), reason="needs a pack codec (opentraces[pack])")
 def test_recaptured_growing_session_packs_losslessly() -> None:
     from opentraces.cli import main
     from opentraces.core.bucket_layout import trace_records_root

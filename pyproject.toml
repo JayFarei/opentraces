@@ -26,6 +26,8 @@ import = ["datasets>=2.16.0"]
 # `claude` and `codex` CLIs (with subscription auth) are preferred and
 # have no extra install. Opt in with `pip install opentraces[llm-api]`.
 llm-api = ["anthropic>=0.40.0"]
+# `opentraces bucket pack` codec (stdlib compression.zstd covers Python >= 3.14).
+pack = ["zstandard>=0.22; python_version < '3.14'"]
 dev = [
     "pytest>=8.0",
     "pytest-cov",
@@ -33,6 +35,7 @@ dev = [
     "ruff",
     "datasets>=2.16.0",
     "anthropic>=0.40.0",
+    "zstandard>=0.22; python_version < '3.14'",
 ]
 release = ["build", "twine"]
 

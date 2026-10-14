@@ -45,20 +45,25 @@ def bucket_pack_cmd(dry_run: bool, min_age_seconds: int, project_slug: str | Non
 
     Every re-capture of a growing session leaves the previous full record on
     disk. ``bucket pack`` moves those superseded records into
-    ``objects/traces/v1/<project>/<trace>/superseded.pack.tar.xz`` (xz tar,
+    ``objects/traces/v1/<project>/<trace>/superseded.otpack`` (compressed tar,
     byte-exact members, sha256-checked before each loose file is removed).
+    Needs a codec: ``pip install 'opentraces[pack]'`` or Python >= 3.14.
     The current record stays loose. ``bucket unpack`` reverses it.
 
     JSON output: counts and ``bytes_before``/``bytes_after`` of
     ``objects/traces/v1``.
     """
+    from ..core.bucket_pack_codecs import CodecUnavailable
     from ..core.bucket_trace_pack import pack_superseded_trace_records
 
-    result = pack_superseded_trace_records(
-        dry_run=dry_run,
-        min_age_seconds=max(0, min_age_seconds),
-        project_slug=project_slug,
-    )
+    try:
+        result = pack_superseded_trace_records(
+            dry_run=dry_run,
+            min_age_seconds=max(0, min_age_seconds),
+            project_slug=project_slug,
+        )
+    except CodecUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
     _emit("opentraces.bucket.pack.v1", result, as_json, "Bucket pack")
 
 

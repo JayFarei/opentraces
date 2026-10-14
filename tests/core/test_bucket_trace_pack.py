@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 from opentraces_schema import Agent, Step, TraceRecord
 
+from opentraces.core import bucket_pack_codecs as codecs
 from opentraces.core import bucket_trace_pack as btp
 from opentraces.core.bucket_layout import trace_records_root
 from opentraces.core.bucket_trace_records import (
@@ -21,6 +22,15 @@ from opentraces.core.bucket_trace_records import (
 )
 
 OLD = time.time() - 3 * 3600
+
+
+@pytest.fixture(autouse=True, params=codecs.WRITE_PREFERENCE)
+def codec(request, monkeypatch) -> str:
+    """Run every test once per codec this interpreter has."""
+    if request.param not in codecs.available_codecs():
+        pytest.skip(f"codec {request.param} not installed")
+    monkeypatch.setattr(codecs, "WRITE_PREFERENCE", (request.param,))
+    return request.param
 
 
 def _grown(turns: int, trace_id: str = "t1") -> TraceRecord:
@@ -177,7 +187,7 @@ def test_verify_checks_pack_members_without_false_dangling() -> None:
     # Corrupt one member's stored bytes by rewriting the pack with a bad sha.
     members = list(btp.iter_pack_members(btp.pack_path(trace_dir)))
     bad = [btp.PackMember(m.name, m.data + b" ", m.mtime_ns, m.mode, m.sha256) for m in members]
-    btp._write_pack(btp.pack_path(trace_dir), iter(bad), btp._MIN_DICT)
+    btp._write_pack(btp.pack_path(trace_dir), iter(bad), 20)
     kinds = {e["kind"] for e in bucket_verify(full=True)["errors"]}
     assert "pack_member_sha" in kinds
 
@@ -211,3 +221,29 @@ def test_cli_json_shape(verb: str) -> None:
     assert payload["schema_version"] == f"opentraces.bucket.{verb}.v1"
     for key in ("dry_run", "bytes_before", "bytes_after", "loose_records_before", "loose_records_after", "errors", "ok"):
         assert key in payload
+
+
+def test_pack_header_names_the_codec(codec: str) -> None:
+    trace_dir = _capture(range(1, 3))
+    report = btp.pack_superseded_trace_records()
+    assert report["codec"] == codec
+    raw = btp.pack_path(trace_dir).read_bytes()
+    assert raw.startswith(codecs.MAGIC)
+    assert codecs.pack_codec(btp.pack_path(trace_dir)) == codec
+
+
+def test_pack_written_with_another_codec_stays_readable_and_merges(codec: str, monkeypatch) -> None:
+    other = [c for c in codecs.available_codecs() if c != codec]
+    if not other:
+        pytest.skip("needs two codecs")
+    trace_dir = _capture(range(1, 3))
+    monkeypatch.setattr(codecs, "WRITE_PREFERENCE", (other[0],))
+    btp.pack_superseded_trace_records()
+    before = _versions(trace_dir)
+    monkeypatch.setattr(codecs, "WRITE_PREFERENCE", (codec,))
+    _capture(range(3, 5))
+    before.update(_objects(trace_dir))
+    btp.pack_superseded_trace_records()
+    assert codecs.pack_codec(btp.pack_path(trace_dir)) == codec
+    assert _versions(trace_dir) == before
+
