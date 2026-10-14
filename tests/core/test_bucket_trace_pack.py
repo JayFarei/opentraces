@@ -20,7 +20,7 @@ from opentraces.core.bucket_trace_records import (
     trace_record_path,
     write_trace_record,
 )
-from tests.core._bucket_isolation import bucket_isolation_guard  # noqa: F401
+from tests.core._bucket_isolation import assert_bucket_isolated, bucket_isolation_guard  # noqa: F401
 
 OLD = time.time() - 3 * 3600
 
@@ -45,6 +45,7 @@ def _grown(turns: int, trace_id: str = "t1") -> TraceRecord:
 
 
 def _capture(turns: range, trace_id: str = "t1", *, age: float | None = OLD) -> Path:
+    assert_bucket_isolated()
     for n in turns:
         obj = write_trace_record(_grown(n, trace_id), project_slug="proj", source_layer="bucket")
         if age is not None:
@@ -332,3 +333,36 @@ def test_isolation_guard_fails_loudly_on_escape(monkeypatch, tmp_path_factory) -
         m.setattr(paths, "OPENTRACES_DIR", Path("/nonexistent-real-home/.opentraces"))
         with pytest.raises(pytest.fail.Exception, match="bucket isolation escaped"):
             assert_bucket_isolated(tmp_path_factory.getbasetemp())
+
+
+def test_escape_after_monkeypatch_undo_fails_before_any_write(monkeypatch) -> None:
+    """The incident shape: undo() drops conftest isolation mid-test. Point the
+    bucket at a throwaway dir OUTSIDE basetemp (never a real home) and check
+    that capture, pack and unpack all fail before writing a single file."""
+    import shutil
+    import tempfile
+
+    from opentraces.core import config, paths
+
+    isolated = paths.OPENTRACES_DIR
+    outside = Path(tempfile.mkdtemp(prefix="ot-escape-"))
+    monkeypatch.undo()
+    escape = pytest.MonkeyPatch()
+    try:
+        for mod in (paths, config):
+            escape.setattr(mod, "OPENTRACES_DIR", outside / ".opentraces")
+        with pytest.raises(pytest.fail.Exception, match="bucket isolation escaped"):
+            write_trace_record(_grown(1), project_slug="proj", source_layer="bucket")
+        with pytest.raises(pytest.fail.Exception, match="bucket isolation escaped"):
+            _capture(range(1, 3))
+        (outside / ".opentraces" / "bucket" / "objects" / "traces" / "v1" / "proj" / "t1").mkdir(parents=True)
+        with pytest.raises(pytest.fail.Exception, match="bucket isolation escaped"):
+            btp.pack_superseded_trace_records()
+        with pytest.raises(pytest.fail.Exception, match="bucket isolation escaped"):
+            btp.unpack_superseded_trace_records()
+        assert [p for p in outside.rglob("*") if p.is_file()] == []
+    finally:
+        escape.undo()
+        for mod in (paths, config):  # restore isolation for the teardown check
+            monkeypatch.setattr(mod, "OPENTRACES_DIR", isolated)
+        shutil.rmtree(outside, ignore_errors=True)
