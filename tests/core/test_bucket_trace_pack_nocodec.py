@@ -60,6 +60,12 @@ def test_no_codec_pack_refuses_but_reads_and_verify_work(monkeypatch) -> None:
     current = read_trace_record_object(trace_record_path("proj", "t1"))
     assert current is not None and len(current.record.steps) == 3
 
+    # A superseded read that would need the pack names the missing codec.
+    import pytest
+
+    with pytest.raises(codecs.CodecUnavailable, match="opentraces\\[pack\\]"):
+        read_trace_record_object(trace_dir / ("0" * 64 + ".json"))
+
     verify = bucket_verify(full=True)
     assert verify["ok"], verify["errors"]
     assert verify["packs_checked"] == 0

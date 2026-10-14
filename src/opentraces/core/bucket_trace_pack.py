@@ -21,9 +21,12 @@ install hint, and nothing on the current-record read path needs a codec.
 
 Safety:
 
-- A loose file is removed only after the new pack is written to a tempfile,
-  fsynced, renamed into place, and re-read with every member's sha256 matching
-  the sha256 of the loose bytes it replaces.
+- The new pack is written to a tempfile, fsynced, and re-read with every
+  member's bytes hashing to its stored sha256 and the member set equal to the
+  merged set BEFORE it replaces the old pack (whose members may exist nowhere
+  else). Only then are loose files removed.
+- A version is identified by name AND bytes: the same record hash re-written
+  with a different envelope (``written_at``) is packed alongside, not refused.
 - Re-packing merges the existing pack with newly superseded loose objects, so
   the verb is idempotent. A loose file that is already in the pack with the
   same bytes (a crash after rename, before unlink) is simply removed.
@@ -67,6 +70,10 @@ DEFAULT_MIN_AGE_SECONDS = 60 * 60
 _TMP_PREFIX = f".{PACK_NAME}."
 _TMP_MAX_AGE_SECONDS = 60 * 60
 _OBJECT_NAME = re.compile(r"^[0-9a-f]{64}\.json$")
+# A packed version whose name collides with a newer loose copy of the same
+# record hash (same record, different envelope bytes, e.g. ``written_at``) is
+# restored by ``unpack`` as ``<digest>.<sha12>.json``; ``pack`` folds it back.
+_VARIANT_NAME = re.compile(r"^([0-9a-f]{64})\.([0-9a-f]{12})\.json$")
 _SHA_KEY = "OPENTRACES.sha256"
 _MTIME_KEY = "OPENTRACES.mtime_ns"
 
@@ -130,10 +137,14 @@ def iter_pack_members(path: Path) -> Iterator[PackMember]:
             yield PackMember(info.name, data, mtime_ns, info.mode, sha)
 
 
-def list_pack(path: Path) -> dict[str, str]:
-    """Return ``{member name: stored sha256}`` for a pack."""
+def list_pack(path: Path) -> set[tuple[str, str]]:
+    """Return ``{(member name, stored sha256)}`` for a pack.
 
-    return {m.name: m.sha256 for m in iter_pack_members(path)}
+    A version's identity is its name AND its bytes: the same record hash can be
+    stored twice when its envelope bytes differ.
+    """
+
+    return {(m.name, m.sha256) for m in iter_pack_members(path)}
 
 
 def read_packed_object(object_path: Path) -> bytes | None:
@@ -142,13 +153,16 @@ def read_packed_object(object_path: Path) -> bytes | None:
     pack = pack_path(object_path.parent)
     if not pack.is_file():
         return None
+    found: PackMember | None = None
     try:
         for member in iter_pack_members(pack):
-            if member.name == object_path.name:
-                return member.data
+            if member.name == object_path.name and (found is None or member.mtime_ns >= found.mtime_ns):
+                found = member
+    except CodecUnavailable:
+        raise
     except PACK_ERRORS:
         return None
-    return None
+    return found.data if found is not None else None
 
 
 def iter_trace_record_versions(trace_dir: Path) -> Iterator[tuple[str, bytes, int]]:
@@ -157,16 +171,27 @@ def iter_trace_record_versions(trace_dir: Path) -> Iterator[tuple[str, bytes, in
     Includes packed and loose objects; a name present in both is yielded once.
     """
 
-    items: dict[str, tuple[bytes, int]] = {}
+    items: dict[tuple[str, str], tuple[bytes, int]] = {}
     pack = pack_path(trace_dir)
     if pack.is_file():
         for member in iter_pack_members(pack):
-            items[member.name] = (member.data, member.mtime_ns)
+            items[(member.name, member.sha256)] = (member.data, member.mtime_ns)
     for path in trace_dir.iterdir():
-        if _OBJECT_NAME.match(path.name) and path.is_file():
-            items[path.name] = (path.read_bytes(), path.stat().st_mtime_ns)
-    for name, (data, mtime_ns) in sorted(items.items(), key=lambda kv: (kv[1][1], kv[0])):
+        name = _member_name(path.name)
+        if name is not None and path.is_file():
+            data = path.read_bytes()
+            items[(name, _sha256(data))] = (data, path.stat().st_mtime_ns)
+    for (name, _sha), (data, mtime_ns) in sorted(items.items(), key=lambda kv: (kv[1][1], kv[0])):
         yield name, data, mtime_ns
+
+
+def _member_name(file_name: str) -> str | None:
+    """Pack member name for a loose object or restored variant file, else None."""
+
+    if _OBJECT_NAME.match(file_name):
+        return file_name
+    variant = _VARIANT_NAME.match(file_name)
+    return f"{variant.group(1)}.json" if variant else None
 
 
 def _fsync_dir(path: Path) -> None:
@@ -183,11 +208,21 @@ def _fsync_dir(path: Path) -> None:
 
 
 def _write_pack(
-    target: Path, members: Iterator[PackMember], wlog: int, codec: str | None = None
-) -> dict[str, str]:
-    """Write ``members`` to ``target`` atomically; return ``{name: sha256}``."""
+    target: Path,
+    members: Iterator[PackMember],
+    wlog: int,
+    codec: str | None = None,
+    expected: set[tuple[str, str]] | None = None,
+) -> set[tuple[str, str]]:
+    """Write ``members`` to ``target`` atomically; return ``{(name, sha256)}``.
 
-    written: dict[str, str] = {}
+    The tempfile is re-read and every member's bytes are hashed BEFORE it
+    replaces ``target``: on a re-pack the old pack holds the only copy of its
+    members, so a corrupt new pack must never overwrite it. ``expected`` (the
+    merged member set) must match what was written and read back.
+    """
+
+    written: set[tuple[str, str]] = set()
     fd, tmp_name = tempfile.mkstemp(prefix=_TMP_PREFIX, suffix=".tmp", dir=str(target.parent))
     tmp = Path(tmp_name)
     codec = codec or write_codec()
@@ -207,9 +242,12 @@ def _write_pack(
                         _MTIME_KEY: str(member.mtime_ns),
                     }
                     tar.addfile(info, io.BytesIO(member.data))
-                    written[member.name] = member.sha256
+                    written.add((member.name, member.sha256))
             fh.flush()
             os.fsync(fh.fileno())
+        if expected is not None and written != expected:
+            raise PackError(f"{target}: wrote a different member set than expected")
+        _verify_pack(tmp, written)
         os.replace(tmp, target)
         _fsync_dir(target.parent)
     finally:
@@ -218,15 +256,15 @@ def _write_pack(
     return written
 
 
-def _verify_pack(path: Path, expected: dict[str, str]) -> None:
+def _verify_pack(path: Path, expected: set[tuple[str, str]]) -> None:
     """Re-read ``path`` and check every member's bytes hash to ``expected``."""
 
-    seen: dict[str, str] = {}
+    seen: set[tuple[str, str]] = set()
     for member in iter_pack_members(path):
         actual = _sha256(member.data)
         if actual != member.sha256:
             raise PackError(f"{path}: member {member.name} sha mismatch")
-        seen[member.name] = actual
+        seen.add((member.name, actual))
     if seen != expected:
         raise PackError(f"{path}: pack contents differ from what was written")
 
@@ -246,7 +284,8 @@ def _sweep_stale_tmp(trace_dir: Path, now: float) -> int:
 def _loose_member(path: Path) -> PackMember:
     data = path.read_bytes()
     st = path.stat()
-    return PackMember(path.name, data, st.st_mtime_ns, st.st_mode & 0o7777, _sha256(data))
+    name = _member_name(path.name) or path.name
+    return PackMember(name, data, st.st_mtime_ns, st.st_mode & 0o7777, _sha256(data))
 
 
 def pack_trace_dir(
@@ -276,7 +315,7 @@ def pack_trace_dir(
         return out
     candidates: list[Path] = []
     for path in sorted(trace_dir.iterdir()):
-        if not _OBJECT_NAME.match(path.name) or not path.is_file():
+        if _member_name(path.name) is None or not path.is_file():
             continue
         if path.name == current:
             out["skipped_current"] += 1
@@ -298,17 +337,17 @@ def pack_trace_dir(
         return out
 
     pack = pack_path(trace_dir)
-    existing = list_pack(pack) if pack.is_file() else {}
-    loose = [_loose_member(path) for path in candidates]
-    already_packed: list[PackMember] = []
+    existing = list_pack(pack) if pack.is_file() else set()
+    loose = [(path, _loose_member(path)) for path in candidates]
     new: list[PackMember] = []
-    for member in loose:
-        if member.name in existing:
-            if existing[member.name] != member.sha256:
-                raise PackError(f"{trace_dir}: {member.name} differs from its packed copy")
-            already_packed.append(member)
-        else:
+    queued: set[tuple[str, str]] = set()
+    for _path, member in loose:
+        key = (member.name, member.sha256)
+        # Same name, different bytes (same record re-written with a new
+        # envelope) is a distinct version: it is packed alongside, not refused.
+        if key not in existing and key not in queued:
             new.append(member)
+            queued.add(key)
     if new:
         new.sort(key=lambda m: (m.mtime_ns, m.name))
         old_sizes = [len(m.data) for m in new]
@@ -317,18 +356,19 @@ def pack_trace_dir(
             stream = heapq.merge(
                 iter_pack_members(pack), iter(new), key=lambda m: (m.mtime_ns, m.name)
             )
-        written = _write_pack(pack, stream, window_log(max(old_sizes)))
-        _verify_pack(pack, written)
+        written = _write_pack(
+            pack, stream, window_log(max(old_sizes)), expected=existing | queued
+        )
         out["pack_written"] = True
     else:
         written = existing
-    for member in loose:
-        if written.get(member.name) != member.sha256:
+    for path, member in loose:
+        if (member.name, member.sha256) not in written:
             raise PackError(f"{trace_dir}: {member.name} missing from pack after write")
-        if _current_object_name(trace_dir) == member.name:
+        if path.name == member.name and _current_object_name(trace_dir) == member.name:
             # Repointed at this object while we were packing; keep it loose.
             continue
-        (trace_dir / member.name).unlink()
+        path.unlink()
         out["records_packed"] += 1
     _fsync_dir(trace_dir)
     out["pack_bytes"] = pack.stat().st_size
@@ -372,7 +412,11 @@ def pack_superseded_trace_records(
     codec = None if dry_run else write_codec()
     root = trace_records_root()
     records_before, bytes_before = _tree_bytes(root)
-    totals: dict[str, int] = {}
+    totals: dict[str, int] = dict.fromkeys(
+        ("records_packable", "records_packed", "skipped_current", "skipped_young",
+         "loose_bytes_packable", "pack_bytes", "tmp_removed", "pack_written"),
+        0,
+    )
     errors: list[dict[str, str]] = []
     traces = _trace_dirs(project_slug)
     now = time.time()
@@ -413,10 +457,18 @@ def unpack_trace_dir(trace_dir: Path, *, dry_run: bool = False) -> dict[str, int
     pack = pack_path(trace_dir)
     if not pack.is_file():
         return out
-    for member in iter_pack_members(pack):
+    members = list(iter_pack_members(pack))
+    newest: dict[str, PackMember] = {}
+    for member in members:
         if _sha256(member.data) != member.sha256:
             raise PackError(f"{pack}: member {member.name} sha mismatch")
+        if member.name not in newest or member.mtime_ns >= newest[member.name].mtime_ns:
+            newest[member.name] = member
+    for member in members:
         target = trace_dir / member.name
+        canonical_taken = target.exists() and _sha256(target.read_bytes()) != member.sha256
+        if newest[member.name] is not member or canonical_taken:
+            target = trace_dir / f"{member.name[:-5]}.{member.sha256[:12]}.json"
         if target.exists():
             if _sha256(target.read_bytes()) != member.sha256:
                 raise PackError(f"{target} differs from its packed copy")

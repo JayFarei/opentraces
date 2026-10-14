@@ -25,12 +25,14 @@ OLD = time.time() - 3 * 3600
 
 
 @pytest.fixture(autouse=True, params=codecs.WRITE_PREFERENCE)
-def codec(request, monkeypatch) -> str:
+def codec(request, monkeypatch):
     """Run every test once per codec this interpreter has."""
     if request.param not in codecs.available_codecs():
         pytest.skip(f"codec {request.param} not installed")
     monkeypatch.setattr(codecs, "WRITE_PREFERENCE", (request.param,))
-    return request.param
+    _isolated_root()
+    yield request.param
+    _isolated_root()
 
 
 def _grown(turns: int, trace_id: str = "t1") -> TraceRecord:
@@ -43,7 +45,14 @@ def _grown(turns: int, trace_id: str = "t1") -> TraceRecord:
     )
 
 
+def _isolated_root() -> Path:
+    root = trace_records_root()
+    assert "pytest-" in str(root), f"refusing to touch a non-test bucket: {root}"
+    return root
+
+
 def _capture(turns: range, trace_id: str = "t1", *, age: float | None = OLD) -> Path:
+    _isolated_root()
     for n in turns:
         obj = write_trace_record(_grown(n, trace_id), project_slug="proj", source_layer="bucket")
         if age is not None:
@@ -176,7 +185,7 @@ def test_packed_object_is_readable_through_the_record_reader() -> None:
     assert obj is not None and len(obj.record.steps) == 1
 
 
-def test_verify_checks_pack_members_without_false_dangling() -> None:
+def test_verify_checks_pack_members_without_false_dangling(monkeypatch) -> None:
     from opentraces.core.bucket_store import bucket_verify
 
     trace_dir = _capture(range(1, 4))
@@ -187,6 +196,7 @@ def test_verify_checks_pack_members_without_false_dangling() -> None:
     # Corrupt one member's stored bytes by rewriting the pack with a bad sha.
     members = list(btp.iter_pack_members(btp.pack_path(trace_dir)))
     bad = [btp.PackMember(m.name, m.data + b" ", m.mtime_ns, m.mode, m.sha256) for m in members]
+    monkeypatch.setattr(btp, "_verify_pack", lambda *a, **k: None)  # let the bad pack land
     btp._write_pack(btp.pack_path(trace_dir), iter(bad), 20)
     kinds = {e["kind"] for e in bucket_verify(full=True)["errors"]}
     assert "pack_member_sha" in kinds
@@ -247,3 +257,76 @@ def test_pack_written_with_another_codec_stays_readable_and_merges(codec: str, m
     assert codecs.pack_codec(btp.pack_path(trace_dir)) == codec
     assert _versions(trace_dir) == before
 
+
+
+def test_corrupt_repack_never_replaces_old_pack_or_unlinks(monkeypatch) -> None:
+    """A re-pack that writes corrupt bytes must leave the old pack (the only
+    copy of its members) byte-identical and every loose object in place."""
+    trace_dir = _capture(range(1, 4))
+    btp.pack_superseded_trace_records()
+    old_pack = btp.pack_path(trace_dir).read_bytes()
+    _capture(range(4, 7))
+    loose_before = _objects(trace_dir)
+    real_open_writer = btp.open_writer
+
+    class _FlipByte:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def write(self, data):
+            data = bytearray(data)
+            if len(data) > 1024:
+                data[len(data) // 2] ^= 0xFF  # silent corruption inside a member
+            return self.inner.write(bytes(data))
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def corrupt_writer(fh, codec, wlog):
+        with real_open_writer(fh, codec, wlog) as inner:
+            yield _FlipByte(inner)
+
+    monkeypatch.setattr(btp, "open_writer", corrupt_writer)
+    report = btp.pack_superseded_trace_records()
+    assert not report["ok"] and report["records_packed"] == 0
+    assert btp.pack_path(trace_dir).read_bytes() == old_pack
+    assert _objects(trace_dir) == loose_before
+    assert not list(trace_dir.glob(".*.tmp"))
+
+
+def test_same_record_rewritten_with_new_envelope_packs_both_versions(monkeypatch) -> None:
+    """Real writer path: an older record hash re-captured after it was packed
+    gets a new ``written_at``; the trace must still pack, keeping both copies."""
+    from opentraces.core import bucket_trace_records as btr
+
+    trace_dir = _capture(range(1, 3))  # v1, v2
+    btp.pack_superseded_trace_records()  # v1 packed
+    # monkeypatch.context(), never monkeypatch.undo(): undo() would also drop
+    # conftest's bucket isolation and point the rest of the test at ~/.opentraces.
+    with monkeypatch.context() as m:
+        m.setattr(btr, "utc_now_str", lambda: "2099-01-01T00:00:00.000001Z")
+        _capture(range(1, 2))  # v1 again: same record hash, new envelope, now current
+    v1 = _current_name(trace_dir)
+    _capture(range(3, 4))  # v3 current; the re-written v1 is superseded
+    before = sorted(_versions_all(trace_dir))
+    assert [n for n, _ in before].count(v1) == 2
+    report = btp.pack_superseded_trace_records()
+    assert report["ok"], report["errors"]
+    assert sorted(_versions_all(trace_dir)) == before
+    assert btp.read_packed_object(trace_dir / v1).startswith(b"{")
+    # Unpack keeps both: the newest as <digest>.json, the other as a variant.
+    unpacked = btp.unpack_superseded_trace_records()
+    assert unpacked["ok"] and unpacked["records_restored"] == 3
+    assert (trace_dir / v1).exists() and len(list(trace_dir.glob(f"{v1[:-5]}.*.json"))) == 1
+    assert sorted(_versions_all(trace_dir)) == before
+    # ...and a re-pack folds the variant file back in losslessly.
+    assert btp.pack_superseded_trace_records()["ok"]
+    assert sorted(_versions_all(trace_dir)) == before
+    assert set(_objects(trace_dir)) == {_current_name(trace_dir)}
+
+
+def _versions_all(trace_dir: Path) -> list[tuple[str, str]]:
+    return [(n, hashlib.sha256(d).hexdigest()) for n, d, _ in btp.iter_trace_record_versions(trace_dir)]
