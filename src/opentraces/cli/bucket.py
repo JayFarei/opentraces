@@ -1273,3 +1273,9 @@ def bucket_connect_cmd(
         sync_policy=sync_policy,
         as_json=as_json,
     )
+
+
+from .bucket_pack import bucket_pack_cmd, bucket_unpack_cmd  # noqa: E402
+
+bucket_group.add_command(bucket_pack_cmd)
+bucket_group.add_command(bucket_unpack_cmd)
