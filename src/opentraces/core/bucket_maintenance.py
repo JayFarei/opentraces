@@ -637,9 +637,17 @@ def bucket_verify(
                     }
                 )
 
+    # --- 4. Superseded TraceRecord packs ---------------------------------
+    from .bucket_trace_pack import all_packs, verify_trace_packs
+
+    packs_checked, pack_errors, packs_skipped = verify_trace_packs(_bounded(all_packs()))
+    errors.extend(pack_errors)
+
     return {
         "ok": not errors,
         "sampled": len(sampled_blobs),
+        "packs_checked": packs_checked,
+        "packs_skipped_no_codec": packs_skipped,
         "errors": errors,
         "full": bool(full),
         # Compat keys that older callers (and Section G test) still inspect.

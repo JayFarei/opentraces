@@ -121,7 +121,7 @@ def read_trace_record_object(path: Path) -> BucketTraceRecord | None:
 
     try:
         path = _resolve_trace_record_pointer(path)
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(_read_object_text(path))
         if raw.get("schema_version") != TRACE_RECORD_BUCKET_SCHEMA:
             return None
         record = TraceRecord.model_validate(raw.get("record") or {})
@@ -430,3 +430,21 @@ def _resolve_trace_record_pointer(path: Path) -> Path:
     if not isinstance(object_path, str) or not object_path:
         return path
     return paths.bucket_dir() / object_path
+
+
+def _read_object_text(path: Path) -> str:
+    """Read a loose object, falling back to its trace's superseded pack.
+
+    The current object is never packed, so the fallback only runs when an
+    object was packed between a pointer read and this read.
+    """
+
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        from .bucket_trace_pack import read_packed_object
+
+        data = read_packed_object(path)
+        if data is None:
+            raise
+        return data.decode("utf-8")
