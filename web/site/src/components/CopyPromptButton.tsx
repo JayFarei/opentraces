@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { track } from "@vercel/analytics";
 import { ClaudeGlyph, CodexGlyph, PiGlyph } from "./AgentGlyphs";
 
 const RESET_MS = 2000;
@@ -10,6 +11,7 @@ export default function CopyPromptButton({ prompt }: { prompt: string }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleCopy = () => {
+    track("Copy Prompt");
     const flip = () => {
       setCopied(true);
       if (timer.current) clearTimeout(timer.current);

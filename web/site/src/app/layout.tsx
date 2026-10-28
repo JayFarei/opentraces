@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import { Analytics } from "@vercel/analytics/next";
 import WebMcpTools from "@/components/WebMcpTools";
 
 // OpenTraces design system: Geist (body), Geist Mono (metadata), Space Grotesk (display).
@@ -68,6 +69,7 @@ export default function RootLayout({
       <body>
         <WebMcpTools />
         {children}
+        <Analytics />
       </body>
     </html>
   );
