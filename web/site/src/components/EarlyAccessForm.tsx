@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState, type FormEvent } from "react";
+import { track } from "@vercel/analytics";
 
 type State = "idle" | "loading" | "success" | "error";
 
@@ -35,6 +36,7 @@ export default function EarlyAccessForm() {
       const data = await res.json();
       if (data.ok) {
         setState("success");
+        track("Early Access", { existing: Boolean(data.alreadyOnList) });
         setMsg(
           data.alreadyOnList
             ? "you're already on the list."
